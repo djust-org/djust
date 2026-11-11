@@ -67,9 +67,6 @@ ROOT = Path(__file__).resolve().parents[3]
 @pytest.fixture(autouse=True)
 def _bootstrap(settings, monkeypatch):
     settings.DJUST_CONFIG = {"css_framework": "bootstrap5"}
-    # the engine call and `_called` read the project's auto-call setting; another test that
-    # leaves it switched off must not decide what these tests exercise
-    monkeypatch.setattr("djust.config.template_auto_call_enabled", lambda: True)
     hybrid._WARNED.clear()
     yield
     hybrid._WARNED.clear()
@@ -124,7 +121,7 @@ def _breakout(tag: str) -> str:
 
 def _unhardened(template: str, context: dict[str, Any]) -> str:
     """What the engine prints for ``template`` with none of this module's rewriting."""
-    return components_base._render_template_with_fallback(template, context)
+    return components_base._render_template_string(template, context)
 
 
 @pytest.fixture
@@ -366,7 +363,7 @@ class TestOrdinaryTextIsUnchanged:
         for slot in ("{{ o.v }}", '{{ v|default:"-" }}'):
             template = _template("textarea", slot)
             ctx = {"v": value, "o": _Obj(value)}
-            before = components_base._render_template_with_fallback(template, ctx)
+            before = components_base._render_template_string(template, ctx)
             assert _draw(template, **ctx) == before, slot
 
     def test_a_number_or_date_in_a_dotted_slot_prints_in_its_canonical_form(self) -> None:
@@ -794,7 +791,7 @@ class TestTranslationBlocks:
         out = self._draw(drawer, template, **context)
         assert want in out, (place, out)
         # byte for byte what the engine alone prints
-        alone = _body(components_base._render_template_with_fallback(self.LOAD + template, context))
+        alone = _body(components_base._render_template_string(self.LOAD + template, context))
         assert out == alone, (place, out, alone)
 
     @pytest.mark.parametrize("kind", sorted(KINDS))
@@ -989,9 +986,7 @@ class TestInlineTemplateAttributes:
     )
     def test_an_ordinary_url_prints_as_before(self, drawer: str, url: str) -> None:
         template = '<a href="{{ url }}" title="{{ t }}">x</a>'
-        before = components_base._render_template_with_fallback(
-            template, {"url": url, "t": "a & b"}
-        )
+        before = components_base._render_template_string(template, {"url": url, "t": "a & b"})
         out = DRAWERS[drawer](template, url=url, t="a & b")
         assert _attrs(out, "a") == _attrs(before, "a"), (url, out, before)
 
@@ -1065,9 +1060,7 @@ class TestBoundComponentTemplate:
 
 #: Names that render a TEMPLATE STRING: the raw renderer of this package, Django's ``Template``,
 #: an engine's ``from_string`` and the Rust entry ``render_template``.
-SINK_NAMES = frozenset(
-    {"_render_template_with_fallback", "Template", "from_string", "render_template"}
-)
+SINK_NAMES = frozenset({"_render_template_string", "Template", "from_string", "render_template"})
 #: ... and those that render a template FILE (``template_name``), which the rule does not read (#3933).
 FILE_NAMES = frozenset({"render_to_string", "get_template", "select_template"})
 
@@ -1157,18 +1150,8 @@ CENSUS_ROOTS = ("components", "mixins/components.py")
 RENDER_SITES = {
     (
         "components/base.py",
-        "_render_template_with_fallback",
-        "render_template",
-    ): "the raw renderer itself (Rust entry)",
-    (
-        "components/base.py",
-        "_render_template_with_fallback",
-        "Template",
-    ): "the raw renderer itself (Django fallback)",
-    (
-        "components/base.py",
         "_render_inline_template",
-        "_render_template_with_fallback",
+        "_render_template_string",
     ): "THE caller: hardens the template first",
     (
         "components/gallery/views.py",
@@ -1207,9 +1190,9 @@ class TestOneSink:
     def test_no_other_module_of_the_package_reads_the_raw_renderer(self) -> None:
         """A LiveView's own templates (``live_tags``, ``streaming``, ``websocket``) are rendered
         by their own paths; none of them borrows the component renderer."""
-        found = _tree_census((".",), frozenset({"_render_template_with_fallback"}))
+        found = _tree_census((".",), frozenset({"_render_template_string"}))
         assert found == {
-            ("components/base.py", "_render_inline_template", "_render_template_with_fallback")
+            ("components/base.py", "_render_inline_template", "_render_template_string")
         }
 
     def test_the_rule_is_applied_in_that_one_place(self) -> None:
@@ -1240,14 +1223,14 @@ class TestOneSink:
     @pytest.mark.parametrize(
         "source",
         [
-            "def f(t, c):\n    return _render_template_with_fallback(t, c)\n",
-            "from .base import _render_template_with_fallback as r\n\ndef f(t, c):\n    return r(t, c)\n",
-            "from .base import _render_template_with_fallback\n\n_alias = _render_template_with_fallback\n\ndef f(t, c):\n    return _alias(t, c)\n",
-            "from . import base\n\ndef f(t, c):\n    return base._render_template_with_fallback(t, c)\n",
+            "def f(t, c):\n    return _render_template_string(t, c)\n",
+            "from .base import _render_template_string as r\n\ndef f(t, c):\n    return r(t, c)\n",
+            "from .base import _render_template_string\n\n_alias = _render_template_string\n\ndef f(t, c):\n    return _alias(t, c)\n",
+            "from . import base\n\ndef f(t, c):\n    return base._render_template_string(t, c)\n",
             "from django.template import Template\n\ndef f(t, c):\n    return Template(t).render(c)\n",
             "def f(engine, t):\n    return engine.from_string(t)\n",
             "from djust._rust import render_template as rt\n\ndef f(t, c):\n    return rt(t, c, True)\n",
-            "def f(t, c):\n    return list(map(_render_template_with_fallback, [t], [c]))\n",
+            "def f(t, c):\n    return list(map(_render_template_string, [t], [c]))\n",
         ],
         ids=[
             "name",
@@ -1264,7 +1247,7 @@ class TestOneSink:
         assert census(source, "x.py", SINK_NAMES), source
 
     def test_the_census_ignores_a_name_that_is_not_read(self) -> None:
-        source = '"""_render_template_with_fallback"""\n\ndef f():\n    return 1  # Template\n'
+        source = '"""_render_template_string"""\n\ndef f():\n    return 1  # Template\n'
         assert census(source, "x.py", SINK_NAMES) == set()
 
     def test_the_census_names_the_enclosing_function(self) -> None:

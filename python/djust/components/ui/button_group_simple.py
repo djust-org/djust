@@ -12,25 +12,13 @@ from django.utils.html import conditional_escape
 from djust.components.utils import attr_text
 
 
-# Try to import Rust implementation (will be added later)
-try:
-    from djust._rust import RustButtonGroup  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except (ImportError, AttributeError):
-    _RUST_AVAILABLE = False
-    RustButtonGroup = None  # type: ignore[assignment, misc]
-
-
 class ButtonGroup(Component):
     """
-    Simple, stateless button group component with automatic Rust optimization.
+    Simple, stateless button group component.
 
-    This component automatically uses pure Rust implementation if available,
-    otherwise falls back to hybrid rendering with Rust template engine.
+    There is no native Rust implementation; it renders through its template.
 
     Performance:
-        - Pure Rust (if available): ~1μs per render
         - Hybrid template: ~5-10μs per render
         - Pure Python fallback: ~50-100μs per render
 
@@ -91,9 +79,6 @@ class ButtonGroup(Component):
         ]
         group = ButtonGroup(buttons=buttons)
     """
-
-    # Link to Rust implementation if available
-    _rust_impl_class = RustButtonGroup if _RUST_AVAILABLE else None
 
     # Fallback: Hybrid rendering with template
     # Note: Avoiding elif due to Rust template engine bug - using separate if blocks instead

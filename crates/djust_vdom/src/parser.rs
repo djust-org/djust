@@ -520,6 +520,92 @@ fn find_root(handle: &Handle) -> Handle {
     handle.clone()
 }
 
+/// Classify registered child slots using the browser tree and the VDOM root rule.
+/// This determines location only; the caller must supply server-registered candidates.
+pub fn child_render_regions(
+    html: &str,
+    candidates: &std::collections::HashSet<String>,
+    whole_page: bool,
+    owner_wrapper: bool,
+) -> std::result::Result<std::collections::HashMap<String, String>, String> {
+    use std::rc::Rc;
+    let dom = parse_document(RcDom::default(), Default::default()).one(html);
+    let body = find_body(&dom.document);
+    let root = body.as_ref().and_then(find_liveview_root);
+    let owner = body.as_ref().filter(|_| owner_wrapper).and_then(|body| {
+        body.children
+            .borrow()
+            .iter()
+            .find(|node| matches!(node.data, NodeData::Element { .. }))
+            .cloned()
+    });
+    let mut found = std::collections::HashMap::new();
+    let mut stack = vec![(dom.document.clone(), false)];
+    while let Some((node, inside_root)) = stack.pop() {
+        let inside_root = inside_root || root.as_ref().is_some_and(|r| Rc::ptr_eq(r, &node));
+        let is_owner = owner.as_ref().is_some_and(|r| Rc::ptr_eq(r, &node));
+        if let NodeData::Element {
+            ref name,
+            ref attrs,
+            ..
+        } = node.data
+        {
+            if matches!(
+                &*name.local,
+                "template"
+                    | "script"
+                    | "style"
+                    | "textarea"
+                    | "title"
+                    | "xmp"
+                    | "iframe"
+                    | "noembed"
+                    | "noscript"
+            ) {
+                continue;
+            }
+            let attrs = attrs.borrow();
+            let get = |key: &str| {
+                attrs
+                    .iter()
+                    .find(|a| a.name.ns.is_empty() && &*a.name.local == key)
+            };
+            let view = get("dj-view").is_some();
+            let slot = if view {
+                get("data-djust-embedded").or_else(|| get("dj-sticky-slot"))
+            } else {
+                get("dj-sticky-slot")
+            };
+            if let Some(slot) = slot.filter(|a| !is_owner && candidates.contains(a.value.as_ref()))
+            {
+                let region = if !whole_page || inside_root {
+                    "root"
+                } else {
+                    "shell"
+                };
+                if found
+                    .insert(slot.value.to_string(), region.to_owned())
+                    .is_some()
+                {
+                    return Err("Duplicate rendered child slot".to_owned());
+                }
+                continue;
+            }
+            if !is_owner && is_embedded_child_wrapper(&attrs) {
+                continue;
+            }
+        }
+        stack.extend(
+            node.children
+                .borrow()
+                .iter()
+                .rev()
+                .map(|child| (child.clone(), inside_root)),
+        );
+    }
+    Ok(found)
+}
+
 /// Find the <body> element inside the document.
 fn find_body(handle: &Handle) -> Option<Handle> {
     for child in handle.children.borrow().iter() {
@@ -707,6 +793,15 @@ fn push_text(children: &mut Vec<VNode>, text: String) {
 /// predicate a property of the node, so it does not flip while a patch batch
 /// moves the node's neighbours around.
 fn build_children(parent_tag: &str, raw: &[Handle], parent_depth: usize) -> Result<Vec<VNode>> {
+    build_children_observed(parent_tag, raw, parent_depth, &mut |_, _| {})
+}
+
+fn build_children_observed<F: FnMut(&Handle, &str)>(
+    parent_tag: &str,
+    raw: &[Handle],
+    parent_depth: usize,
+    observer: &mut F,
+) -> Result<Vec<VNode>> {
     // By name, so a foreign `<svg><style>` keeps its whitespace too. That is
     // only a kept text node: the serializer escapes it as foreign text and
     // a re-parse gives the same node.
@@ -779,7 +874,7 @@ fn build_children(parent_tag: &str, raw: &[Handle], parent_depth: usize) -> Resu
                     push_text(&mut children, text);
                 }
             }
-            _ => children.push(handle_to_vnode(child, parent_depth + 1)?),
+            _ => children.push(handle_to_vnode_observed(child, parent_depth + 1, observer)?),
         }
     }
     Ok(children)
@@ -834,7 +929,15 @@ fn collapse_subtree_to_text(parent_tag: &str, handle: &Handle) -> Vec<VNode> {
     }
 }
 
-fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
+pub(crate) fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
+    handle_to_vnode_observed(handle, depth, &mut |_, _| {})
+}
+
+pub(crate) fn handle_to_vnode_observed<F: FnMut(&Handle, &str)>(
+    handle: &Handle,
+    depth: usize,
+    observer: &mut F,
+) -> Result<VNode> {
     match &handle.data {
         NodeData::Text { contents } => {
             let text = contents.borrow().to_string();
@@ -853,6 +956,7 @@ fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
 
             // Generate compact unique ID for this element
             let djust_id = next_djust_id();
+            observer(handle, &djust_id);
             parser_trace!("Assigned ID '{}' to <{}>", djust_id, tag);
 
             // Pre-size attributes HashMap: most elements have 1-2 attrs + dj-id
@@ -920,7 +1024,7 @@ fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
             let children = if depth >= MAX_VDOM_DEPTH {
                 collapse_subtree_to_text(tag_ref, raw_parent)
             } else {
-                build_children(tag_ref, &raw_parent.children.borrow(), depth)?
+                build_children_observed(tag_ref, &raw_parent.children.borrow(), depth, observer)?
             };
             drop(contents);
 
@@ -938,7 +1042,7 @@ fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
         NodeData::Document => {
             // For document nodes, process children and return first element
             for child in handle.children.borrow().iter() {
-                if let Ok(vnode) = handle_to_vnode(child, depth) {
+                if let Ok(vnode) = handle_to_vnode_observed(child, depth, observer) {
                     if !vnode.is_text() {
                         return Ok(vnode);
                     }

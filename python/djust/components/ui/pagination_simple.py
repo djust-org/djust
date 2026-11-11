@@ -1,7 +1,7 @@
 """
 Pagination component for djust.
 
-Simple stateless pagination component with automatic Rust optimization.
+Simple stateless pagination component.
 """
 
 from ..base import Component
@@ -9,21 +9,13 @@ from ..base import Component
 from django.utils.html import conditional_escape
 from typing import Any
 
-try:
-    from djust._rust import RustPagination  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
-
 
 class Pagination(Component):
     """
     Pagination component (Bootstrap 5).
 
     Features:
-    - Automatic Rust optimization (~1μs rendering)
-    - Template fallback if Rust unavailable
+    - Rendered through its template (there is no native Rust implementation)
     - Python fallback with f-strings
     - Previous/Next buttons
     - Page number buttons
@@ -49,8 +41,6 @@ class Pagination(Component):
         >>> pagination.render()
         '<nav aria-label="Page navigation">...'
     """
-
-    _rust_impl_class = RustPagination if _RUST_AVAILABLE else None
 
     # Note: Using Python fallback for simplicity with dynamic loops
 

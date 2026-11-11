@@ -9,12 +9,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-try:
-    from djust._rust import RustTextArea
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
+from djust._rust import RustTextArea
 
 
 class TextArea(Component):
@@ -55,7 +50,7 @@ class TextArea(Component):
         '<div class="mb-3">...'
     """
 
-    _rust_impl_class = RustTextArea if _RUST_AVAILABLE else None
+    _rust_impl_class = RustTextArea
 
     template = """<div class="mb-3">{% if label %}
     <label for="{{ textarea_id }}" class="form-label">{{ label }}{% if required %} <span class="text-danger">*</span>{% endif %}</label>{% endif %}

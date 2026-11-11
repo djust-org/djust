@@ -631,15 +631,12 @@ class TestLinebreaksSafeMarking:
         try:
             with open(base + "renderer.rs", encoding="utf-8") as fh:
                 block = fh.read().split("const SAFE_OUTPUT_FILTERS", 1)[1].split("];", 1)[0]
-            with open(base + "filters.rs", encoding="utf-8") as fh:
-                body = fh.read().split("fn add_linenumbers", 1)[1].split("\nfn ", 1)[0]
         except OSError:
             pytest.skip("Rust source not available next to the built extension")
         assert '"linenumbers"' in block, "the safety grant went missing"
-        assert "html_escape(line)" in body, (
-            "the escape moved out of add_linenumbers while the safe-list grant "
-            "stayed — that arrangement IS the #2291 vulnerability"
-        )
+        # 2.0 routes `linenumbers` to Django's own function, which escapes each
+        # line itself under `autoescape` — the inner half of the pair is now
+        # Django's code, and the behaviour below is what pins it.
         # And the behaviour both halves exist to produce.
         for value in ["<b>x</b>", "a\n<i>", "&", '"q"', "'s'", "<img src=x onerror=alert(1)>"]:
             for src in ("{{ p|linenumbers }}", "{{ p|linenumbers|safe }}"):
@@ -681,18 +678,14 @@ class TestKnownRemainingDivergences:
     signal to prune the entry (#1125).
     """
 
-    def test_filesizeformat_unit_names_are_not_translated(self) -> None:
-        """Django ``gettext``s the unit; the Rust engine has no catalogue.
-
-        The NUMBER half is localized correctly — this is the ``{% trans %}`` gap,
-        not a ``filesizeformat`` one.
-        """
+    def test_filesizeformat_unit_names_are_translated(self) -> None:
+        """CLOSED in 2.0: ``filesizeformat`` is Django's own function, so the
+        unit name goes through Django's ``gettext`` as well as the number."""
         with translation.override("fr"):
             apply_number_format()
             django_out, djust_out = render_both("{{ p|filesizeformat }}", 1536)
             assert django_out == f"1,5{NBSP}Kio"
-            # The digits and the separator agree; only the unit name does not.
-            assert djust_out == f"1,5{NBSP}KB"
+            assert djust_out == django_out
 
     def test_a_tuple_renders_as_a_list_before_any_filter_runs(self) -> None:
         """Not a filter gap — ``{{ p }}`` alone already disagrees.
@@ -723,7 +716,7 @@ class TestKnownRemainingDivergences:
         """
         with pytest.raises(OverflowError):
             DjangoTemplate("{{ p|filesizeformat }}").render(DjangoContext({"p": float("inf")}))
-        with pytest.raises(RuntimeError, match="calls int\\(\\) on its value"):
+        with pytest.raises(OverflowError):
             _rust.render_template(
                 "{{ p|filesizeformat }}", normalize_django_value({"p": float("inf")})
             )

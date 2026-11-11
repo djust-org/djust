@@ -111,6 +111,23 @@ It looks like the right morph-safety knob. It isn't:
 If one specific attribute really is client-owned, name it in `dj-ignore-attrs`.
 That's per-attribute and doesn't block the rest of the sync.
 
+### Skip updates for unchanged attributes
+
+By default the chart refreshes after every server update, because a Chart.js
+plugin may depend on state outside its canvas. If all inputs are represented
+by the canvas attributes, you can opt into attribute-only updates:
+
+```html
+<canvas dj-hook="Chart" dj-chart-update="attributes"
+        dj-chart-revision="{{ chart_revision }}"
+        dj-hook-value-data='{{ chart_data_json }}'></canvas>
+```
+
+Change `dj-chart-revision` whenever an external dependency such as the theme
+changes. All canvas attribute changes trigger an update, and
+`JS.ext.chart_update` can still explicitly redraw. Leave the opt-in off if
+plugin dependencies cannot be represented this way.
+
 ### JS commands
 
 The adapter pre-registers two [`JS.ext`](js-commands.md) commands, so a chart

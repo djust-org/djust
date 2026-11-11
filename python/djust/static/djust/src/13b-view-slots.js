@@ -245,7 +245,7 @@ function applySlotMount(transport, data, options = {}) {
     const htmlMode = options.html || 'replace';
     if (typeof data.html === 'string' && htmlMode !== 'none') {
         if (htmlMode === 'morph' && data.has_ids === true) {
-            _morphPrerenderedMount(container, data.html, undefined, !mountedBefore);
+            _morphPrerenderedMount(container, data.html, undefined, !mountedBefore, data.owned_children);
         } else {
             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
             teardownPollsIn(container, true);

@@ -216,3 +216,23 @@ cost regardless.
   (`sendMessage`)
 - Shared utilities: `python/djust/websocket_utils.py`
   (`_validate_event_security`, `_call_handler`)
+
+## Amendment (2026-10-19)
+
+This amendment records direction the project owner settled for 2.0. It does not rewrite the decision above, which stays as the historical record of the v0.9.2 design. It approves no API or wire format.
+
+**Direction.**
+
+- One transport-independent event, state and render runtime serves WebSocket, SSE and HTTP. Connection adapters deliver frames; they do not own the logical view state or the results of background or durable work.
+- **HTTP falls back gracefully.** HTTP actions plus polling for updates cover the case where no push connection is available.
+- Logical view state and results are kept in shared storage that outlives connections. Reconnects and node changes recover authorized state and results without sticky routing and without the original Python view object.
+- Authentication, tenant scope and authorization are checked on every action and every retrieval. Switching transports must not widen access.
+- Resource limits may refuse an operation explicitly. They may not silently discard work that was accepted.
+
+**What this changes in the text above.**
+
+- *Future transports* (line 152): long-polling was a tracker item "gated on a concrete user reporting an environment where SSE doesn't work". That gate no longer applies: an HTTP polling fallback is part of the 2.0 contract. Whether it is plain polling or long polling is open.
+- *Implementation notes*: the SSE actor-mount refusal is moot once actors are removed (Python integration first, then the Rust crate).
+- Superseded alternatives in the 2.0 transport-core plan: HTTP reject-only, HTTP unsupported with a warning, and running background work inline as a substitute for durable work.
+
+**Still open:** the common render, error and poll wire shape; the client decisions D1–D5 and D7 (D6, the SSE `layout` drop, was settled as a bug fix on main in #3527 and backported to 1.2 in #3556); the capability API; SSE subscriptions; API dispatchers as runtime turns; cursor and effect ordering; retained-history expiry; snapshot resync. See [the transport-core plan](../plans/2.0-transport-core.md) §6a and [the delivery plan](../plans/2.0-delivery-plan.md).

@@ -162,77 +162,11 @@ fn child_ns(kids: Option<ChildContext>, child: &VNode) -> Option<Namespace> {
 // Public: diff_nodes
 // ============================================================================
 
-/// Compute the patches transforming `old` into `new`. `path` is the index path
-/// from the diff root to the node pair being compared; emitted patches for this
-/// node use `path`, and child patches use `path + [child_index]`.
-use std::sync::atomic::{AtomicBool, Ordering};
-
-/// Emit KEY-addressed splice ops for `[dj-virtual]` parents (ADR-026).
-///
-/// Default ON since 1.1.0 (iteration 3). Iteration 1 shipped the differ side
-/// dark — the ops are emitted only when this is enabled — so that `main`
-/// behaviour stayed byte-identical until the client half (iteration 2) could
-/// apply them. Both landed, the browser gate passed, and the default flipped.
-///
-/// A process-global atomic rather than a threaded parameter because `diff_nodes`
-/// is a pure free function reached from several entry points; threading config
-/// through every signature would touch far more surface than the flag is worth
-/// while it is still dark. Set once at startup from
-/// a `LIVEVIEW_CONFIG` key — that wiring SHIPPED in the #2017 iteration-3 PR
-/// (`virtual_keyed_ops`, applied once by `DjustConfig.ready()`).
-///
-/// The DEFAULT is ON since 1.1.0 (ADR-026 iteration 3).
-///
-/// Getting there took four wrong mechanisms, which is worth recording because
-/// the shape repeated: #2164 filed two diagnoses that were both withdrawn
-/// (the list "is not windowed at patch time", then "the client applier ignores
-/// before_key"), and two more were added during the iteration-3 gate itself.
-/// Every one was asserted from a partial read rather than traced to a call
-/// site. The real story is duller — the flag never reached Rust (#2166), and
-/// the list was intermittently never initialised (#2185, #2194), so BOTH arms
-/// of every earlier A/B were really the OFF arm.
-///
-/// With those fixed, the A/B is finally valid. Same healthy initialised list,
-/// same start state, flag the only variable:
-///
-/// |                        | OFF                     | ON               |
-/// |------------------------|-------------------------|------------------|
-/// | insert at position 5   | pool index 60 (tail)    | pool index 5     |
-/// | remove at 3            | size unchanged, k3 kept | k3 gone, no dupes|
-/// | reverse                | not reordered           | exact reversal   |
-/// | edit a scrolled row    | correct                 | correct          |
-///
-/// Opt out with `LIVEVIEW_CONFIG['virtual_keyed_ops'] = False`.
-///
-/// NOTE the static below stays `false`, and that is deliberate — the ON default
-/// lives in Python's `_defaults` ONLY. `DjustConfig.ready()` applies
-/// `set_virtual_keyed_ops(config.get("virtual_keyed_ops"))` unconditionally on
-/// every startup, so Python is the single source of truth and flipping this
-/// static would change nothing in production.
-///
-/// What it WOULD change is every path where Python never runs: a non-Django
-/// embedding using this crate directly, a process where `ready()` did not fire,
-/// or a stale compiled `.so`. Those go from fail-safe-OFF to fail-open-ON with
-/// no way to opt out. Keeping it `false` means the unwired state is the safe
-/// one, which is also what `flag_is_off_by_default` in
-/// tests/virtual_keyed_ops_2017.rs pins.
-static VIRTUAL_KEYED_OPS: AtomicBool = AtomicBool::new(false);
-
-/// Enable/disable `[dj-virtual]` keyed splice ops. Wired from Python config.
-pub fn set_virtual_keyed_ops(enabled: bool) {
-    VIRTUAL_KEYED_OPS.store(enabled, Ordering::Relaxed);
-}
-
-/// Whether `[dj-virtual]` keyed splice ops are enabled.
-pub fn virtual_keyed_ops_enabled() -> bool {
-    VIRTUAL_KEYED_OPS.load(Ordering::Relaxed)
-}
-
-/// True when this parent is a client-windowed `[dj-virtual]` container AND the
-/// feature is enabled. Both conditions matter: the ops are meaningless for an
-/// ordinary parent, and must stay dark until the client can apply them.
+/// True when this parent is a client-windowed `[dj-virtual]` container, whose
+/// children get KEY-addressed splice ops (ADR-026). Unconditional since 2.0,
+/// which removed the `virtual_keyed_ops` kill switch.
 fn emits_virtual_ops(parent: &VNode) -> bool {
-    virtual_keyed_ops_enabled() && parent.attrs.contains_key("dj-virtual")
+    parent.attrs.contains_key("dj-virtual")
 }
 
 /// The patches transforming `old` into `new` (see the section note above).

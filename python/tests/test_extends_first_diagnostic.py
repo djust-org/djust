@@ -25,6 +25,9 @@ def test_first_tag_diagnostic(name, tag, prefix):
     with pytest.raises(TemplateSyntaxError) as rust_error:
         DjustTemplate(source, backend, origin=origin if name else None)
     assert str(django_error.value) in str(rust_error.value)
+    assert getattr(rust_error.value, "raw_error_message", None) == getattr(
+        django_error.value, "raw_error_message", None
+    )
     info = rust_error.value.template_debug
     assert info["during"] == tag
     assert info["line"] == prefix.count("\n") + 1

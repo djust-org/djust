@@ -328,9 +328,20 @@ class _TypedOperands:
         args, kwargs = self._adjust(args, kwargs)
         return self._handler.render(*args, **kwargs)
 
+    def _render_root_parts(self, *args: Any, **kwargs: Any) -> Any:
+        """The core layout protocol (2.0), with the same arguments ``render`` hands on.
+
+        The engine calls this in place of ``render`` for the four built-in layout handlers
+        when it tracks the page root. Defined here so the call does not fall through
+        ``__getattr__`` to the handler and skip ``_adjust``. A handler without the protocol
+        raises ``AttributeError``, as it would unwrapped.
+        """
+        args, kwargs = self._adjust(args, kwargs)
+        return self._handler._render_root_parts(*args, **kwargs)
+
     def _adjust(self, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
         """The arguments the wrapped handler is called with; a subclass changes them here, so
-        ``render`` keeps one signature for every wrapper."""
+        ``render`` and ``_render_root_parts`` keep one signature for every wrapper."""
         return args, kwargs
 
     def __getattr__(self, name: str) -> Any:
@@ -2505,15 +2516,10 @@ def register_with_rust_engine() -> None:
     Called from DjustComponentsConfig.ready(). Safe to call multiple times
     (subsequent calls overwrite existing registrations).
     """
-    try:
-        from djust._rust import (  # type: ignore[import]
-            register_block_tag_handler,
-            register_tag_handler,
-        )
-    except ImportError:
-        # djust not installed — skip silently (components still work via
-        # Django template engine with {% load djust_components %})
-        return
+    from djust._rust import (  # type: ignore[import]
+        register_block_tag_handler,
+        register_tag_handler,
+    )
 
     # Arguments (#3664, #3676): a native handler reads ``key=value`` strings, so
     # each one is wrapped to take exactly the arguments its Python tag takes.
@@ -2585,16 +2591,10 @@ def register_with_rust_engine() -> None:
     # not get Rust VDOM identity. Parity is the right trade for a component
     # whose entire output is the split structure — and the alternative was not
     # "render in Rust" but "raise on every use".
-    try:
-        from djust._rust import register_raw_block_tag_handler  # type: ignore[import]
-        from djust.template_libraries import LibraryRawBlockTagHandler
+    from djust._rust import register_raw_block_tag_handler  # type: ignore[import]
+    from djust.template_libraries import LibraryRawBlockTagHandler
 
-        from .templatetags import djust_components as _components_lib
-    except ImportError:
-        # `djust._rust` absent — the earlier import already returned, but the
-        # template_libraries import is separate and must not take the whole
-        # registration down if it is unavailable.
-        return
+    from .templatetags import djust_components as _components_lib
 
     register_raw_block_tag_handler(
         "split_pane",
@@ -4993,53 +4993,109 @@ def _split_app_shell_sidebar(content: str) -> tuple[str, str]:
     return content[parser.start : parser.end], content[: parser.start] + content[parser.end :]
 
 
+_RootLayoutParts = list[tuple[tuple[int, int] | None, str]]
+
+
+def _layout_body_part(
+    content: str, start: int = 0, end: int | None = None
+) -> tuple[tuple[int, int], str]:
+    if end is None:
+        end = len(content)
+    return (len(content[:start].encode()), len(content[:end].encode())), ""
+
+
+def _root_layout_html(content: str, parts: _RootLayoutParts) -> str:
+    body = content.encode()
+    return _safe(
+        "".join(
+            body[span[0] : span[1]].decode() if span is not None else text for span, text in parts
+        )
+    )
+
+
 class AppShellHandler:
-    """Block handler for {% app_shell %}...{% endapp_shell %}
+    """Responsive layout, retaining template order and direct sidebar placement."""
 
-    Wraps sidebar, header, and content regions in a responsive layout.
-    Unlike Django's node, which orders header before content and drops text
-    outside the three slots, Rust keeps template order. Scaffolds put header first.
-    """
-
-    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
+    def _render_root_parts(
+        self, args: list[str], content: str, context: dict[str, object]
+    ) -> _RootLayoutParts:
         kw = _parse_args(args, context)
         shell_id = conditional_escape(kw.get("id", "app-shell"))
-        sidebar_collapsed = kw.get("sidebar_collapsed", False)
-        custom_class = conditional_escape(kw.get("class", ""))
-
         cls = "dj-app-shell"
-        if sidebar_collapsed:
+        if kw.get("sidebar_collapsed", False):
             cls += " dj-app-shell--sidebar-collapsed"
+        custom_class = conditional_escape(kw.get("class", ""))
         if custom_class:
             cls += f" {custom_class}"
+        parser = _AppShellSlotParser(content)
+        parser.feed(content)
+        parts: _RootLayoutParts = [(None, f'<div class="{cls}" id="{shell_id}">')]
+        ranges = [(0, len(content))]
+        if parser.start is not None and parser.end is not None:
+            parts.append(_layout_body_part(content, parser.start, parser.end))
+            ranges = [(0, parser.start), (parser.end, len(content))]
+        parts.append((None, '<div class="dj-app-shell__main">'))
+        rest = "".join(content[a:b] for a, b in ranges)
+        left, right = len(rest) - len(rest.lstrip()), len(rest.rstrip())
+        cursor = 0
+        for start, end in ranges:
+            a, b = max(left, cursor), min(right, cursor + end - start)
+            if a < b:
+                parts.append(_layout_body_part(content, start + a - cursor, start + b - cursor))
+            cursor += end - start
+        parts.append((None, "</div></div>"))
+        return parts
 
-        # Keep the sidebar in the outer row and header/content in the main column.
-        sidebar, rest = _split_app_shell_sidebar(content)
-        return _safe(
-            f'<div class="{cls}" id="{shell_id}">{sidebar}'
-            f'<div class="dj-app-shell__main">{rest.strip()}</div></div>'
-        )
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
+        return _root_layout_html(content, self._render_root_parts(args, content, context))
 
 
 class AppSidebarHandler:
-    """Block handler for {% app_sidebar %}...{% endapp_sidebar %}"""
+    """Block handler for the layout sidebar."""
+
+    def _render_root_parts(
+        self, args: list[str], content: str, context: dict[str, object]
+    ) -> _RootLayoutParts:
+        return [
+            (None, '<aside class="dj-app-shell__sidebar">'),
+            _layout_body_part(content),
+            (None, "</aside>"),
+        ]
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        return _safe(f'<aside class="dj-app-shell__sidebar">{content}</aside>')
+        return _root_layout_html(content, self._render_root_parts(args, content, context))
 
 
 class AppHeaderHandler:
-    """Block handler for {% app_header %}...{% endapp_header %}"""
+    """Block handler for the layout header."""
+
+    def _render_root_parts(
+        self, args: list[str], content: str, context: dict[str, object]
+    ) -> _RootLayoutParts:
+        return [
+            (None, '<header class="dj-app-shell__header">'),
+            _layout_body_part(content),
+            (None, "</header>"),
+        ]
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        return _safe(f'<header class="dj-app-shell__header">{content}</header>')
+        return _root_layout_html(content, self._render_root_parts(args, content, context))
 
 
 class AppContentHandler:
-    """Block handler for {% app_content %}...{% endapp_content %}"""
+    """Block handler for the layout content."""
+
+    def _render_root_parts(
+        self, args: list[str], content: str, context: dict[str, object]
+    ) -> _RootLayoutParts:
+        return [
+            (None, '<main class="dj-app-shell__content">'),
+            _layout_body_part(content),
+            (None, "</main>"),
+        ]
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        return _safe(f'<main class="dj-app-shell__content">{content}</main>')
+        return _root_layout_html(content, self._render_root_parts(args, content, context))
 
 
 INLINE_HANDLERS.extend(

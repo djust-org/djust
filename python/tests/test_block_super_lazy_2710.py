@@ -369,7 +369,8 @@ class TestTheDeferralHasOneStatementPerBoundary:
         s=block.super %}` silently resolves to the empty string — which is
         exactly what the first pass of this fix did."""
         source = RENDERER_RS.read_text()
-        assert source.count("bridged_context_map(context)?") == 7, (
+        # The tracked core-layout protocol is an eighth Python boundary.
+        assert source.count("bridged_context_map(context)?") == 8, (
             "the Python-bridge caller SET moved — every builder of the flat "
             "context map must go through the one materialiser (#1646)"
         )

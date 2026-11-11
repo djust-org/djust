@@ -72,7 +72,6 @@ EXCLUDED: dict[str, str] = {
     "python/djust/tests/test_log_exposure_pin.py": _SOURCE,
     "python/djust/tests/test_module_getattr_hooks.py": _SOURCE,
     "python/djust/tests/test_property_shadow_parity_2614.py": _SOURCE,
-    "python/djust/tests/test_template_auto_call_1985.py": _SOURCE,
     "python/tests/test_decimal_converters_2239.py": _SOURCE,
     "python/tests/test_decimal_state_tag_2252.py": _SOURCE,
     "python/tests/test_passthrough_attr_policy_3818.py": _SOURCE,

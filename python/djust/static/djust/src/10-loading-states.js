@@ -266,8 +266,6 @@ const globalLoadingManager = {
 
 // Expose globalLoadingManager under djust namespace
 window.djust.globalLoadingManager = globalLoadingManager;
-// Backward compatibility (removed in 2.0.0)
-defineDeprecatedGlobal('globalLoadingManager', globalLoadingManager, 'window.djust.globalLoadingManager');
 
 // Generate unique request ID for cache tracking
 let cacheRequestCounter = 0;

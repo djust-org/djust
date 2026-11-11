@@ -13,14 +13,8 @@ Provides a component system similar to JustPy/NiceGUI but with:
 use ahash::AHashMap as HashMap;
 use djust_core::Value;
 
-pub mod complex;
 pub mod html;
-pub mod layout;
 pub mod simple;
-pub mod ui; // Simple stateless components (pure Rust PyO3)
-
-// Python bindings module
-pub mod python;
 
 pub use html::HtmlBuilder;
 pub use simple::{

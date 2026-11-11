@@ -196,13 +196,13 @@ class TestBoundComponentRender:
 class TestBoundComponentRenderCache:
     def test_unchanged_state_is_not_re_rendered(self, monkeypatch):
         calls: List[str] = []
-        original = components_base._render_template_with_fallback
+        original = components_base._render_template_string
 
         def counting(template: str, context: Dict[str, Any]) -> str:
             calls.append(template)
             return original(template, context)
 
-        monkeypatch.setattr(components_base, "_render_template_with_fallback", counting)
+        monkeypatch.setattr(components_base, "_render_template_string", counting)
         view = Page()
         first = str(view.nav)
         second = str(view.nav)

@@ -206,7 +206,13 @@ class TestProductionChecksUnderTestRunner:
             " 'APP_DIRS': True, 'OPTIONS': {}}]\n",
             encoding="utf-8",
         )
-        env = {**os.environ, "PYTHONPATH": str(tmp_path), "DJANGO_SETTINGS_MODULE": "cfg_a014"}
+        env = {
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join(
+                filter(None, (str(tmp_path), os.environ.get("PYTHONPATH", "")))
+            ),
+            "DJANGO_SETTINGS_MODULE": "cfg_a014",
+        }
         run = subprocess.run(
             [sys.executable, "-m", "django", "test"],
             cwd=tmp_path,

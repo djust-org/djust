@@ -159,7 +159,7 @@ describe('navigation', () => {
             const { window, historyCalls } = createEnv();
 
             window.djust.navigation.handleNavigation({
-                type: 'live_patch',
+                type: 'navigation', action: 'live_patch',
                 path: '/items/',
                 params: { page: '2' },
             });
@@ -174,7 +174,7 @@ describe('navigation', () => {
             const { window, historyCalls } = createEnv();
 
             window.djust.navigation.handleNavigation({
-                type: 'live_patch',
+                type: 'navigation', action: 'live_patch',
                 path: '/items/',
                 params: { page: '3' },
                 replace: true,
@@ -188,7 +188,7 @@ describe('navigation', () => {
             const { window, historyCalls } = createEnv();
 
             window.djust.navigation.handleNavigation({
-                type: 'live_patch',
+                type: 'navigation', action: 'live_patch',
                 params: { q: 'search', page: '1' },
             });
 
@@ -202,7 +202,7 @@ describe('navigation', () => {
             const { window, historyCalls } = createEnv();
 
             window.djust.navigation.handleNavigation({
-                type: 'live_patch',
+                type: 'navigation', action: 'live_patch',
                 params: { q: '', page: '1', empty: null },
             });
 
@@ -510,7 +510,7 @@ describe('navigation', () => {
 
             try {
                 window.djust.navigation.handleNavigation({
-                    type: 'live_redirect',
+                    type: 'navigation', action: 'live_redirect',
                     path: 'https://djustlive.com/',
                 });
             } catch (_e) {
@@ -529,7 +529,7 @@ describe('navigation', () => {
 
             try {
                 window.djust.navigation.handleNavigation({
-                    type: 'live_patch',
+                    type: 'navigation', action: 'live_patch',
                     path: 'https://djustlive.com/',
                 });
             } catch (_e) {
@@ -557,7 +557,7 @@ describe('navigation', () => {
             );
 
             document.defaultView.djust.navigation.handleNavigation({
-                type: 'live_redirect',
+                type: 'navigation', action: 'live_redirect',
                 path: '/dashboard/',
             });
 
@@ -595,7 +595,7 @@ describe('navigation', () => {
             try {
                 // handleLiveRedirect is internal; drive it via the public
                 // handleNavigation entry (type:'live_redirect' → handleLiveRedirect).
-                document.defaultView.djust.navigation.handleNavigation({ type: 'live_redirect', path: '/onboarding/' });
+                document.defaultView.djust.navigation.handleNavigation({ type: 'navigation', action: 'live_redirect', path: '/onboarding/' });
             } catch (_e) {
                 // JSDOM throws "Not implemented: navigation to another Document"
                 // on window.location.href assignment — that throw IS the full nav.
@@ -628,7 +628,7 @@ describe('navigation', () => {
                 },
             );
 
-            document.defaultView.djust.navigation.handleNavigation({ type: 'live_redirect', path: '/dashboard/' });
+            document.defaultView.djust.navigation.handleNavigation({ type: 'navigation', action: 'live_redirect', path: '/dashboard/' });
 
             // pushState for the new LiveView path + the live_redirect_mount frame.
             expect(historyCalls.length).toBe(1);
@@ -650,7 +650,7 @@ describe('navigation', () => {
             );
 
             try {
-                document.defaultView.djust.navigation.handleNavigation({ type: 'live_redirect', path: '/dashboard/' });
+                document.defaultView.djust.navigation.handleNavigation({ type: 'navigation', action: 'live_redirect', path: '/dashboard/' });
             } catch (_e) { /* href set throws in JSDOM */ }
 
             // Even though /dashboard/ IS a LiveView, with no WS we must do a real

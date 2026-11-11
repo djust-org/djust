@@ -33,6 +33,7 @@ from __future__ import annotations
 import dataclasses
 import re
 
+import django
 import pytest
 from django import template
 from django.template import Context, Engine
@@ -386,10 +387,12 @@ class TestIncludeInsideARawBodyTag:
         is resolved against no template -- Django's own string-template case,
         which raises (it does not render the wrong file)."""
         source = _tabs_with('{% include "./pane.html" %}')
-        # Django 5.2: `construct_relative_path(None, ...)` -> AttributeError.
-        with pytest.raises(AttributeError, match="lstrip") as django_error:
+        # Django 6.0+ diagnoses an unknown origin with TemplateSyntaxError;
+        # older releases raised AttributeError from `None.lstrip()`.
+        expected_type = template.TemplateSyntaxError if django.VERSION >= (6, 0) else AttributeError
+        with pytest.raises(expected_type) as django_error:
             _django_components(source, self.CTX, [include_dir])
-        with pytest.raises(AttributeError) as rust_error:
+        with pytest.raises(expected_type) as rust_error:
             _rust(source, self.CTX, [include_dir])
         assert str(rust_error.value) == str(django_error.value)
 

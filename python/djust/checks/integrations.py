@@ -49,27 +49,17 @@ def check_service_worker_advanced(app_configs: Any, **kwargs: Any) -> list[Check
     errors = []
     from django.conf import settings
 
-    # Resolve config values. Prefer explicit top-level settings; fall
-    # back to the nested LIVEVIEW_CONFIG['service_worker'] dict; finally
-    # fall back to the defaults shipped in ``config.py``.
+    # Resolve config values from the nested LIVEVIEW_CONFIG['service_worker']
+    # dict, falling back to the defaults shipped in ``config.py``. (The flat
+    # ``DJUST_VDOM_CACHE_*`` aliases were removed in 2.0.)
     liveview_cfg = getattr(settings, "LIVEVIEW_CONFIG", {}) or {}
     sw_cfg = liveview_cfg.get("service_worker", {}) if isinstance(liveview_cfg, dict) else {}
+    if not isinstance(sw_cfg, dict):
+        sw_cfg = {}
 
-    ttl_seconds = getattr(
-        settings,
-        "DJUST_VDOM_CACHE_TTL_SECONDS",
-        sw_cfg.get("vdom_cache_ttl_seconds", 1800),
-    )
-    max_entries = getattr(
-        settings,
-        "DJUST_VDOM_CACHE_MAX_ENTRIES",
-        sw_cfg.get("vdom_cache_max_entries", 50),
-    )
-    vdom_enabled = getattr(
-        settings,
-        "DJUST_VDOM_CACHE_ENABLED",
-        sw_cfg.get("vdom_cache_enabled", True),
-    )
+    ttl_seconds = sw_cfg.get("vdom_cache_ttl_seconds", 1800)
+    max_entries = sw_cfg.get("vdom_cache_max_entries", 50)
+    vdom_enabled = sw_cfg.get("vdom_cache_enabled", True)
 
     # C301 — TTL must be positive.
     try:
@@ -79,16 +69,16 @@ def check_service_worker_advanced(app_configs: Any, **kwargs: Any) -> list[Check
     if ttl_int <= 0:
         errors.append(
             DjustError(
-                "LIVEVIEW_CONFIG['service_worker']['vdom_cache_ttl_seconds'] must be a positive integer.",
+                "LIVEVIEW_CONFIG['service_worker']['vdom_cache_ttl_seconds'] must be "
+                "a positive integer.",
                 hint=(
                     "TTL <= 0 disables expiry and would let the SW serve "
                     "indefinitely stale HTML on back-nav."
                 ),
                 id="djust.C301",
                 fix_hint=(
-                    "Set `LIVEVIEW_CONFIG['service_worker']['vdom_cache_ttl_seconds'] "
-                    "= 1800` (30 minutes) or remove the override to use the default. "
-                    "(The flat `DJUST_VDOM_CACHE_TTL_SECONDS` setting is deprecated.)"
+                    "Set `vdom_cache_ttl_seconds` to 1800 (30 minutes) "
+                    "or remove the override to use the default."
                 ),
             )
         )
@@ -108,9 +98,7 @@ def check_service_worker_advanced(app_configs: Any, **kwargs: Any) -> list[Check
                 ),
                 id="djust.C302",
                 fix_hint=(
-                    "Set `LIVEVIEW_CONFIG['service_worker']['vdom_cache_max_entries'] "
-                    "= 50` or remove the override to use the default. "
-                    "(The flat `DJUST_VDOM_CACHE_MAX_ENTRIES` setting is deprecated.)"
+                    "Set `vdom_cache_max_entries` to 50 or remove the override to use the default."
                 ),
             )
         )
@@ -119,7 +107,8 @@ def check_service_worker_advanced(app_configs: Any, **kwargs: Any) -> list[Check
     if not vdom_enabled and not _is_check_suppressed("djust.C303"):
         errors.append(
             DjustInfo(
-                "LIVEVIEW_CONFIG['service_worker']['vdom_cache_enabled'] is False; VDOM cache disabled.",
+                "LIVEVIEW_CONFIG['service_worker']['vdom_cache_enabled'] is False; "
+                "VDOM cache disabled.",
                 hint=(
                     "Back-navigation will fall through to a fresh mount + "
                     "render instead of an instant paint. Suppress this "
@@ -127,9 +116,8 @@ def check_service_worker_advanced(app_configs: Any, **kwargs: Any) -> list[Check
                 ),
                 id="djust.C303",
                 fix_hint=(
-                    "Remove the `vdom_cache_enabled: False` override from "
-                    "`LIVEVIEW_CONFIG['service_worker']` to re-enable, or suppress "
-                    "the check. (The flat `DJUST_VDOM_CACHE_ENABLED` setting is deprecated.)"
+                    "Remove the `vdom_cache_enabled: False` override "
+                    "to re-enable, or suppress the check."
                 ),
             )
         )

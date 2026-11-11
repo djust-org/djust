@@ -19,7 +19,6 @@ pub mod filter_lexer;
 pub mod filter_registry;
 pub mod filters;
 pub mod floatformat;
-pub mod htmlparser;
 pub mod inheritance;
 pub mod lexer;
 pub mod loop_cache;
@@ -33,10 +32,8 @@ pub mod render_env;
 pub mod renderer;
 pub mod stringformat;
 pub mod tags;
-pub mod textwrap;
 pub mod timezone;
 pub mod truncate;
-mod urlquote;
 
 pub use markdown::render_markdown;
 
@@ -112,6 +109,46 @@ impl CompiledTemplate {
     }
 }
 
+#[pymethods]
+impl CompiledTemplate {
+    /// Whether this compiled template defines the requested Django partial.
+    fn _has_partial(&self, name: &str) -> bool {
+        parser::select_named_partial(&self.template.nodes, name).is_some()
+    }
+
+    /// Definition spans from the parsed AST (UTF-8 byte offsets).
+    fn _partial_spans(&self) -> std::collections::HashMap<String, Option<(usize, usize)>> {
+        let mut spans = std::collections::HashMap::new();
+        parser::named_partial_spans(&self.template.nodes, &mut spans);
+        spans
+    }
+
+    /// Retain an independently renderable partial with its original registry.
+    #[pyo3(signature = (name, template_name=None))]
+    fn _select_partial(&self, name: &str, template_name: Option<&str>) -> PyResult<Option<Self>> {
+        let mut original = self.template.nodes.clone();
+        if let Some(template_name) = template_name {
+            inheritance::set_include_origins(&mut original, template_name)?;
+            inheritance::set_ifchanged_origins(&mut original, template_name);
+            parser::bind_partials(&mut original)?;
+        }
+        let Some(nodes) = parser::select_named_partial(&original, name) else {
+            return Ok(None);
+        };
+        let node_deps = parser::extract_per_node_deps(&nodes);
+        Ok(Some(Self {
+            template: std::sync::Arc::new(Template {
+                nodes,
+                source: self.template.source.clone(),
+                node_deps,
+                resolved: OnceLock::new(),
+                flattened: OnceLock::new(),
+                is_named_partial: true,
+            }),
+        }))
+    }
+}
+
 /// A compiled Django template
 #[pyclass]
 pub struct Template {
@@ -123,6 +160,7 @@ pub struct Template {
     resolved: OnceLock<ResolvedInheritance>,
     /// Lazily flattened nodes: blocks expanded for finer partial rendering.
     flattened: OnceLock<FlattenedNodes>,
+    is_named_partial: bool,
 }
 
 impl Template {
@@ -147,6 +185,7 @@ impl Template {
             node_deps,
             resolved: OnceLock::new(),
             flattened: OnceLock::new(),
+            is_named_partial: false,
         })
     }
 
@@ -343,6 +382,9 @@ impl Template {
         loader: &L,
         template_name: Option<&str>,
     ) -> Result<R> {
+        if R::TRACKED {
+            context.begin_lazy_render();
+        }
         let _includes = inheritance::IncludeRenderGuard::new();
         // Use cached resolved nodes if available. Skipped for a RELATIVE
         // `{% extends %}`: that resolution depends on the template's name and
@@ -380,6 +422,9 @@ impl Template {
                         .template_origin(name)
                         .unwrap_or_else(|| name.to_string()),
                 );
+                if !self.is_named_partial {
+                    parser::bind_partials(&mut nodes)?;
+                }
                 renderer::render_nodes_output::<L, R>(&nodes, context, Some(loader))
             } else {
                 renderer::render_nodes_output::<L, R>(&self.nodes, context, Some(loader))

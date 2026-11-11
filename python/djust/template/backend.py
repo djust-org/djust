@@ -5,7 +5,10 @@ Provides the DjustTemplateBackend class that integrates with Django's
 template engine framework.
 """
 
+import json
 import logging
+
+import django
 from pathlib import Path
 from os.path import abspath
 from typing import Any, Dict, List
@@ -156,6 +159,10 @@ class DjustTemplateBackend(BaseEngine):
         Raises:
             TemplateDoesNotExist: If template not found
         """
+        original_name = template_name
+        partial_name = ""
+        if django.VERSION >= (6, 0):
+            template_name, _, partial_name = template_name.partition("#")
         tried = []
         for template_dir in self.template_dirs:
             try:
@@ -171,7 +178,19 @@ class DjustTemplateBackend(BaseEngine):
                         template_name=template_name,
                         loader=self,
                     )
-                    return DjustTemplate(template_code, backend=self, origin=origin)
+                    template = DjustTemplate(template_code, backend=self, origin=origin)
+                    if partial_name:
+                        if not template._compiled_template._has_partial(partial_name):
+                            raise TemplateDoesNotExist(
+                                partial_name,
+                                tried=[(origin, "Partial does not exist")],
+                                backend=self,
+                            )
+                        # Delegate rendering to the same native include/partial loader
+                        # used by template includes, keeping the file's registry.
+                        include = "{% include " + json.dumps(original_name) + " %}"
+                        return DjustTemplate(include, backend=self, origin=origin)
+                    return template
                 except OSError as e:
                     raise TemplateDoesNotExist(template_name) from e
 

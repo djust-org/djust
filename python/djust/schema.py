@@ -711,15 +711,6 @@ DIRECTIVES: List[Dict[str, Any]] = [
         "example": '<a dj-patch="?page=2" dj-patch-reload>Page 2</a>',
     },
     {
-        "name": "dj-params",
-        "category": "modifier",
-        "description": "DEPRECATED (0.3.2 -> 0.3.6+ migration): JSON blob of extra "
-        "params to send with an event. Use dj-value-* attributes instead — "
-        "data-*/dj-value-* keys take precedence over dj-params keys with the same name.",
-        "value": '\'{"key": "value"}\' JSON blob',
-        "example": '<button dj-click="save" dj-params=\'{"source": "toolbar"}\'>Save</button>',
-    },
-    {
         "name": "dj-value-*",
         "category": "modifier",
         "description": "Pass static context alongside any event directive as typed "
@@ -1046,19 +1037,6 @@ DECORATORS: List[Dict[str, Any]] = [
         },
         "usage": [
             '@permission_required("myapp.delete_item")\n@event_handler()\ndef delete_item(self, item_id: int, **kwargs):',
-        ],
-    },
-    {
-        "name": "@reactive",
-        "import": "from djust.decorators import reactive",
-        "description": "DEPRECATED (removed in 2.0) and BROKEN — LiveView has no "
-        "update() method, so @reactive on a view raises TypeError at class "
-        "definition; on other hosts the decorated function's body is never "
-        "called. Do not recommend it: use a plain attribute (djust re-renders "
-        "after every event handler) or @computed.",
-        "params": {},
-        "usage": [
-            "@reactive\ndef count(self):\n    return self._count",
         ],
     },
     {

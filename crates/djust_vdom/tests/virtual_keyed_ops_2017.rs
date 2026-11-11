@@ -5,42 +5,12 @@
 //! parent's children on the client are only the visible WINDOW — index 7 means
 //! "the 8th item" to the differ and "the 8th VISIBLE item" to the DOM.
 //!
-//! This iteration ships the differ side DARK: the flag defaults OFF, so `main`
-//! behaviour must be byte-identical until the client half lands (iteration 2)
-//! and the flag is flipped after a soak (iteration 3). The first test below is
-//! the one that matters most — it pins that darkness.
+//! The ops are unconditional since 2.0, which removed the `virtual_keyed_ops`
+//! kill switch.
 
-use djust_vdom::diff::{diff_nodes, set_virtual_keyed_ops, virtual_keyed_ops_enabled};
+use djust_vdom::diff::diff_nodes;
 use djust_vdom::{Patch, VNode};
 use std::collections::HashMap;
-
-/// Serial guard: the flag is process-global, so tests that toggle it must not
-/// interleave. Each test takes this lock for its whole body.
-static FLAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Holds the serialization lock AND guarantees the process-global flag is
-/// cleared, even if the test panics.
-///
-/// Without this, a FAILING test unwinds before its `set_virtual_keyed_ops(false)`
-/// and leaves the flag ON for every test that runs after it — turning one
-/// genuine failure into a cascade of unrelated ones. Observed while verifying
-/// a gate-off: one real failure produced three, and the two extra pointed at
-/// tests that were fine.
-struct FlagGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
-
-impl FlagGuard {
-    fn on() -> Self {
-        let g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        set_virtual_keyed_ops(true);
-        FlagGuard(g)
-    }
-}
-
-impl Drop for FlagGuard {
-    fn drop(&mut self) {
-        set_virtual_keyed_ops(false);
-    }
-}
 
 fn el(tag: &str, key: Option<&str>, attrs: &[(&str, &str)], children: Vec<VNode>) -> VNode {
     let mut map = HashMap::new();
@@ -92,53 +62,8 @@ fn kinds(patches: &[Patch]) -> Vec<&'static str> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// The flag must be DARK by default — the most important test in this file
-// ---------------------------------------------------------------------------
-
-#[test]
-fn flag_is_off_by_default() {
-    let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    assert!(
-        !virtual_keyed_ops_enabled(),
-        "the Rust static must stay OFF: Python's _defaults carries the ON default \
-         and DjustConfig.ready() applies it, so an embedder that never runs Django \
-         fails safe rather than fail-open"
-    );
-}
-
-#[test]
-fn with_flag_off_a_virtual_parent_diffs_exactly_like_a_plain_one() {
-    let _g = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-    let v_old = virtual_list(&["a", "b", "c"]);
-    let v_new = virtual_list(&["c", "a", "b"]);
-    let p_old = plain_list(&["a", "b", "c"]);
-    let p_new = plain_list(&["c", "a", "b"]);
-
-    let v = diff_nodes(&v_old, &v_new, &[]);
-    let p = diff_nodes(&p_old, &p_new, &[]);
-
-    assert_eq!(
-        kinds(&v),
-        kinds(&p),
-        "with the flag OFF a [dj-virtual] parent must produce the SAME patch \
-         kinds as an ordinary parent — otherwise the change is not dark"
-    );
-    assert!(
-        !kinds(&v).iter().any(|k| k.starts_with("Virtual")),
-        "no Virtual* op may be emitted while the flag is off"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// With the flag ON
-// ---------------------------------------------------------------------------
-
 #[test]
 fn insert_at_front_is_key_addressed_with_a_before_key() {
-    let _g = FlagGuard::on();
-
     let old = virtual_list(&["b", "c"]);
     let new = virtual_list(&["a", "b", "c"]);
     let patches = diff_nodes(&old, &new, &[]);
@@ -164,7 +89,6 @@ fn insert_at_front_is_key_addressed_with_a_before_key() {
 
 #[test]
 fn append_at_tail_has_no_before_key() {
-    let _g = FlagGuard::on();
     let patches = diff_nodes(&virtual_list(&["a"]), &virtual_list(&["a", "b"]), &[]);
 
     let insert = patches
@@ -181,7 +105,6 @@ fn append_at_tail_has_no_before_key() {
 
 #[test]
 fn a_removed_key_produces_virtual_remove() {
-    let _g = FlagGuard::on();
     let patches = diff_nodes(
         &virtual_list(&["a", "b", "c"]),
         &virtual_list(&["a", "c"]),
@@ -201,7 +124,6 @@ fn a_removed_key_produces_virtual_remove() {
 #[test]
 fn no_index_addressed_child_ops_for_a_virtual_parent() {
     // The whole point: index ops are meaningless for a windowed parent.
-    let _g = FlagGuard::on();
     let patches = diff_nodes(
         &virtual_list(&["a", "b", "c"]),
         &virtual_list(&["c", "b"]),
@@ -217,8 +139,7 @@ fn no_index_addressed_child_ops_for_a_virtual_parent() {
 }
 
 #[test]
-fn a_plain_parent_is_unaffected_even_with_the_flag_on() {
-    let _g = FlagGuard::on();
+fn a_plain_parent_is_unaffected() {
     let patches = diff_nodes(&plain_list(&["a", "b"]), &plain_list(&["b", "a"]), &[]);
 
     assert!(
@@ -303,7 +224,6 @@ fn append_to_a_large_list_emits_one_op_not_n() {
     // single append to a 50-item list produced 50 moves. On the 10k-row feeds
     // dj-virtual exists for that is 10k ops for one new row — which defeats
     // virtualising at all. LIS keeps the untouched run stable.
-    let _g = FlagGuard::on();
     let old_keys: Vec<String> = (0..50).map(|i| format!("k{i}")).collect();
     let mut new_keys = old_keys.clone();
     new_keys.push("new".to_string());
@@ -361,7 +281,6 @@ fn two_prepends_land_in_order_not_reversed() {
     // cannot resolve a missing anchor, falls back to the tail, and the list
     // came out y,a,b,x. Only a MULTI-insert can see this — every single-op
     // test passed (#1543).
-    let _g = FlagGuard::on();
     let patches = diff_nodes(
         &virtual_list(&["a", "b"]),
         &virtual_list(&["x", "y", "a", "b"]),
@@ -374,7 +293,6 @@ fn two_prepends_land_in_order_not_reversed() {
 #[test]
 fn a_scramble_replays_to_the_new_order() {
     // Moves and inserts interleaved, with the LIS leaving some keys untouched.
-    let _g = FlagGuard::on();
     let old = ["a", "b", "c", "d"];
     let new = ["d", "b", "z", "a"];
     let patches = diff_nodes(&virtual_list(&old), &virtual_list(&new), &[]);
@@ -403,7 +321,6 @@ fn a_surviving_row_whose_content_changed_still_emits_a_patch() {
     // The structural ops only reposition. Without recursing into matched
     // pairs the way reconcile_keyed does, editing a row that does not move
     // emitted NOTHING and the client would show stale text forever.
-    let _g = FlagGuard::on();
     let mut old = virtual_list(&["a", "b"]);
     let mut new = virtual_list(&["a", "b"]);
     old.children[1].children.push(text("before"));
@@ -428,7 +345,6 @@ fn clearing_a_virtual_list_stays_key_addressed() {
     // An empty new list has no keyed children, so a gate on `any_new_keyed`
     // sent it to the INDEX-addressed path and emitted RemoveChild against a
     // windowed container. The gate is now the parent.
-    let _g = FlagGuard::on();
     let patches = diff_nodes(&virtual_list(&["a", "b", "c"]), &virtual_list(&[]), &[]);
 
     assert!(
@@ -455,7 +371,6 @@ fn an_unkeyed_child_falls_back_instead_of_vanishing() {
     // (a header row, a totals row) had every change to it silently dropped —
     // no patch, no warning. It now falls back to the plain reconcilers, which
     // handle unkeyed children explicitly.
-    let _g = FlagGuard::on();
     let mut old = virtual_list(&["a"]);
     let mut new = virtual_list(&["a"]);
     old.children
@@ -475,7 +390,6 @@ fn a_duplicate_key_falls_back_instead_of_losing_a_row() {
     // `before_key` addresses a row by key, so a duplicate is unaddressable:
     // the new row collapsed into a hash set and never appeared. The plain
     // path demotes ambiguous keys to positional diffing and warns DJE-051.
-    let _g = FlagGuard::on();
     let added = diff_nodes(
         &virtual_list(&["a", "b"]),
         &virtual_list(&["a", "a", "b"]),
@@ -524,7 +438,6 @@ fn a_content_change_is_key_addressed_with_row_relative_paths() {
     // all. The dj-if boundary that used to make abs != filtered-position is
     // kept in the fixture: under the old scheme it was the shape that
     // diverged, and under this one it must simply not matter.
-    let _g = FlagGuard::on();
     let build = |second: &str| {
         let mut n = el(
             "div",
@@ -582,7 +495,6 @@ fn an_off_window_row_still_gets_its_content_update() {
     // The point of key-addressing: a row the client is holding DETACHED (out
     // of the visible window) is unreachable by path but findable by key, so
     // its update lands in the pool and appears when it scrolls back.
-    let _g = FlagGuard::on();
     let keys: Vec<String> = (0..50).map(|i| format!("k{i}")).collect();
     let kv: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
     let mut old = virtual_list(&kv);
@@ -613,7 +525,6 @@ fn ops_are_only_correct_in_emitted_order() {
     // only because Array#sort is stable and they share a phase; if iteration 2
     // gives them the natural Remove/Move/Insert phases the anchors break.
     // This pins the dependency so that change fails here first.
-    let _g = FlagGuard::on();
     let old = ["a", "b", "c"];
     let new = ["c", "x", "a", "y", "b"];
     let patches = diff_nodes(&virtual_list(&old), &virtual_list(&new), &[]);
@@ -645,8 +556,6 @@ fn exhaustive_replay_over_a_four_key_universe() {
     // The Stage 11 reviewer fuzzed this and found no counterexample; keeping
     // the sweep means a future change to the reconciler has to survive it too,
     // rather than relying on someone re-running an ad-hoc script.
-    let _g = FlagGuard::on();
-
     let universe = ["a", "b", "c", "d"];
     let subsets: Vec<Vec<&str>> = (0..(1u32 << universe.len()))
         .map(|mask| {
@@ -675,7 +584,6 @@ fn exhaustive_replay_over_a_four_key_universe() {
             }
         }
     }
-    set_virtual_keyed_ops(false);
     assert!(checked > 1000, "expected a meaningful sweep, ran {checked}");
 }
 

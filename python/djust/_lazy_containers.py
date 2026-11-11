@@ -57,6 +57,10 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
         if not getattr(parent, "_defer_lazy_registration", False):
             _log_unregistered(html, 0)
         return html
+    # Authenticated-root renders track all candidates; the authored include
+    # path carries any lexical-scope restriction for each individual child.
+    rust_view = getattr(parent, "_rust_view", None)
+    authenticated_plan = getattr(rust_view, "potential_authenticated_partial_root", lambda: False)()
     from ._rust import authored_lazy_elements
     from .templatetags.live_tags import resolve_live_view_class
 
@@ -83,6 +87,19 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
     inserts = []
     encoded = html.encode()
     for start, end, view_path, _trigger in elements:
+        origin = html.authored_identity(start, end)
+        if authenticated_plan:
+            if origin is None:
+                continue
+            identity_path = origin[1]
+            scoped_tail = identity_path.partition("/lazy-scoped/")
+            nested_scope = scoped_tail[2].partition("/include:")[2] if scoped_tail[1] else ""
+            if (
+                "/lazy-denied/" in identity_path
+                or identity_path.count("/include:") > 20
+                or "/lazy-dynamic/" in nested_scope
+            ):
+                continue
         try:
             cls = resolve_live_view_class(view_path)
             if not uses_legacy_exposure(cls):
@@ -100,7 +117,6 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
                 continue
         except (TemplateSyntaxError, PermissionDenied, Http404):
             continue
-        origin = html.authored_identity(start, end)
         if origin is None:
             # Compatibility for direct callers supplying only authored spans.
             # HTTP renderer results always supply an authored node address.

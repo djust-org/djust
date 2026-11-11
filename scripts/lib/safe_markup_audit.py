@@ -436,15 +436,16 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (RH, 'icon = self.STATUS_ICONS.get(status, "&#9711;")'),
         (RH, "STATUS_ICONS = {", "AgentStepHandler"),
     ),
-    (RH, "AppShellHandler.render"): S(
+    (RH, "_root_layout_html"): S(
         1,
-        "id and class conditional_escape'd; `sidebar` and `rest` are the two halves of `content`, the block body the engine hands a handler as an already-rendered SafeString (registry.rs, call_block_handler_with_py_sidecar, #2379; pinned by test_safe_markup_guard_3820.py), split at a parsed </aside> and emitted in the same markup, strip() only trims whitespace",
-        (RH, 'shell_id = conditional_escape(kw.get("id", "app-shell"))'),
-        (RH, "sidebar, rest = _split_app_shell_sidebar(content)"),
+        "the one renderer of the four core layout handlers (AppShell, AppSidebar, AppHeader, AppContent): it joins, in the order `_render_root_parts` lists them, byte slices of `content` and wrapper text. `content` is the block body the engine hands a handler as an already-rendered SafeString (registry.rs, call_block_handler_with_py_sidecar and call_core_root_layout, #2379; pinned by test_safe_markup_guard_3820.py), and a slice is cut where `_layout_body_part` put it: at the UTF-8 offsets of str positions, so no character is split. The wrapper text is constant markup, except AppShellHandler's opening tag, whose id and class are conditional_escape'd",
+        (RH, "body = content.encode()"),
+        (RH, 'shell_id = conditional_escape(kw.get("id", "app-shell"))', "AppShellHandler._render_root_parts"),
+        (RH, 'custom_class = conditional_escape(kw.get("class", ""))', "AppShellHandler._render_root_parts"),
         (
             RH,
-            "return content[parser.start : parser.end], content[: parser.start] + content[parser.end :]",
-            "_split_app_shell_sidebar",
+            'return (len(content[:start].encode()), len(content[:end].encode())), ""',
+            "_layout_body_part",
         ),
     ),
     (RH, "CalendarHeatmapHandler.render"): S(

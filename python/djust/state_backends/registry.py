@@ -44,16 +44,6 @@ _registry = BackendRegistry(
     default_type="memory",
     factory=_create_state_backend,
     name="state",
-    # Top-level Django setting aliases (#1354). When ``DJUST_CONFIG`` keys
-    # are absent, fall back to these top-level settings so projects that
-    # configure via ``settings.DJUST_STATE_BACKEND = "redis://..."`` aren't
-    # silently downgraded to in-memory. URL-shaped ``DJUST_STATE_BACKEND``
-    # values are translated to ``(backend_type="redis", REDIS_URL=<url>)``
-    # automatically.
-    top_level_aliases={
-        "DJUST_STATE_BACKEND": "STATE_BACKEND",
-        "DJUST_REDIS_URL": "REDIS_URL",
-    },
 )
 
 
@@ -76,12 +66,8 @@ def get_backend() -> StateBackend:
             'COMPRESSION_LEVEL': 3,  # zstd level 1-22 (higher = slower but smaller)
         }
 
-    Top-level alias form (also honoured, #1354):
-        DJUST_STATE_BACKEND = 'redis'         # or 'memory', or a redis:// URL
-        DJUST_REDIS_URL = 'redis://localhost:6379/0'
-
-    URL-shaped ``DJUST_STATE_BACKEND`` values (``redis://`` / ``rediss://``)
-    are auto-translated to ``backend_type="redis"`` plus the URL. When
+    The top-level ``DJUST_STATE_BACKEND`` / ``DJUST_REDIS_URL`` aliases were
+    removed in 2.0; startup fails if either is still set. When
     ``DEBUG=False`` and the backend defaults to in-memory (no config found),
     a warning is logged: in-memory state doesn't survive multi-process
     deployments.

@@ -86,7 +86,9 @@ def _get(view_cls):
 
 def _snapshot(view):
     blob = view._rust_view.serialize_msgpack()
-    _template, state, _vdom, _version, _ts = msgpack.unpackb(blob, raw=False, strict_map_key=False)
+    # template, state, vdom, version, timestamp, then (djust 2.0) the partial-root fields a
+    # view in authenticated-root mode appends. Only the state is read here.
+    state = msgpack.unpackb(blob, raw=False, strict_map_key=False)[1]
     return blob, state
 
 

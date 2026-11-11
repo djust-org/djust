@@ -9,12 +9,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-try:
-    from djust._rust import RustRange
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
+from djust._rust import RustRange
 
 
 class Range(Component):
@@ -55,7 +50,7 @@ class Range(Component):
         '<div class="mb-3">...'
     """
 
-    _rust_impl_class = RustRange if _RUST_AVAILABLE else None
+    _rust_impl_class = RustRange
 
     template = """<div class="mb-3">{% if label %}
     <label for="{{ range_id }}" class="form-label">{{ label }}{% if show_value %} <span class="badge bg-secondary">{{ value }}</span>{% endif %}</label>{% endif %}

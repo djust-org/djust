@@ -287,24 +287,3 @@ async def test_replaced_owner_during_actor_operation_cannot_receive_result():
     assert consumer.send_update_calls == []
     assert consumer.send_error_calls
     assert not consumer._render_lock.locked()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("manifest", [None, {"version": 1, "owners": []}])
-async def test_binary_preference_does_not_drop_contract_envelope(manifest):
-    from djust.websocket import LiveViewConsumer
-
-    consumer = LiveViewConsumer()
-    consumer.use_binary = True
-    consumer.view_instance = ActorOwner()
-    consumer.send_json = AsyncMock()
-    consumer._send_frame = AsyncMock()
-    consumer._flush_all_pending = AsyncMock()
-    consumer._attach_debug_payload = lambda *args: None
-    version = consumer._next_version_armed("<div>7</div>")
-    snapshot = {"parameter_contracts": manifest, "parameter_contract_view": "tests.ActorOwner"}
-    await consumer._send_update(patches=[], version=version, parameter_contract_snapshot=snapshot)
-    consumer._send_frame.assert_not_awaited()
-    frame = consumer.send_json.call_args.args[0]
-    assert frame["parameter_contracts"] == manifest
-    assert json.loads(consumer._recovery_contracts) == snapshot

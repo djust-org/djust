@@ -2531,10 +2531,9 @@ pub fn arm_scope_tags(names: Vec<String>) -> PyResult<()> {
 ///
 /// Arming is process-global and a `{% load i18n %}` re-arms on the next
 /// parse, so nothing in the framework's own reset path needs to call this:
-/// it exists so a test that must observe the UNARMED parse (an unloaded
+/// it exists so a Rust test that must observe the UNARMED parse (an unloaded
 /// `{% language %}` falling through to `UnsupportedTag`) can restore the
-/// process to that state.
-#[pyfunction]
+/// process to that state. Not exported to Python.
 pub fn clear_scope_tags() -> PyResult<()> {
     let _bump = BumpOnReturn;
     let mut set = ARMED_SCOPE_TAGS.write().map_err(|e| {
@@ -2736,6 +2735,152 @@ pub fn release_namespace(namespace: u64) -> PyResult<()> {
     Ok(())
 }
 
+/// Only the exact built-in layout classes may supply the root-copy protocol.
+/// A tag name, subclass or similarly named method cannot opt into it.
+pub fn is_core_root_layout(name: &str) -> Result<bool, DjangoRustError> {
+    Python::attach(|py| {
+        let handler = {
+            let registry = BLOCK_TAG_HANDLERS
+                .read()
+                .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+            let Some(entry) = registry.get(name) else {
+                return Ok(false);
+            };
+            entry.handler.clone_ref(py)
+        };
+        core_root_layout_object(py, handler.bind(py)).map_err(handler_exception)
+    })
+}
+
+fn core_root_layout_object(py: Python<'_>, handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+    // `register_with_rust_engine` registers each native handler inside the framework's two
+    // argument wrappers (the Django-checked tag handler around the typed block operands,
+    // #3676 / #3871). Each layer is peeled only when its type IS that framework class, so a
+    // subclass, a look-alike wrapper or a wrapper around anything else gains nothing, and the
+    // innermost object still has to be one of the four exact layout classes below.
+    let mut handler = handler.clone();
+    for (module, class) in [
+        ("djust._positional_args", "DjangoCheckedTagHandler"),
+        ("djust.components.rust_handlers", "_TypedBlockOperands"),
+    ] {
+        let wrapper = py.import(module)?.getattr(class)?;
+        if handler.get_type().as_any().is(&wrapper) {
+            // The wrapper's own instance attribute, read from its `__dict__`: no `__getattr__`
+            // forwarding and no descriptor can answer for it.
+            let inner = handler
+                .getattr("__dict__")?
+                .cast_into::<pyo3::types::PyDict>()?
+                .get_item("_handler")?;
+            let Some(inner) = inner else {
+                return Ok(false);
+            };
+            handler = inner;
+        }
+    }
+    let handler = &handler;
+    let ty = handler.get_type();
+    let name = ty.name()?;
+    let name = name.to_str()?;
+    if !matches!(
+        name,
+        "AppShellHandler" | "AppSidebarHandler" | "AppHeaderHandler" | "AppContentHandler"
+    ) {
+        return Ok(false);
+    }
+    let module = py.import("djust.components.rust_handlers")?;
+    let expected = module.getattr(name)?;
+    Ok(ty.as_any().is(&expected))
+}
+
+type CoreLayoutOutput = (String, Vec<(usize, usize, usize)>);
+type CoreLayoutPart = (Option<(usize, usize)>, String);
+
+/// Compose exact body slices; never recover identity by matching output bytes.
+/// All non-whitespace body bytes must occur exactly once. Root source metadata
+/// follows these copies; inserted wrapper strings never receive authority.
+pub fn call_core_root_layout(
+    name: &str,
+    args: &[TagArg],
+    content: &str,
+    context: &HashMap<String, djust_core::Value>,
+    raw: Option<&HashMap<String, Py<PyAny>>>,
+) -> Result<CoreLayoutOutput, DjangoRustError> {
+    Python::attach(|py| {
+        let handler = {
+            let registry = BLOCK_TAG_HANDLERS
+                .read()
+                .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+            registry
+                .get(name)
+                .ok_or_else(|| {
+                    DjangoRustError::TemplateError("Missing core layout handler".into())
+                })?
+                .handler
+                .clone_ref(py)
+        };
+        // Recheck after the body: rendering it may have changed the registry.
+        if !core_root_layout_object(py, handler.bind(py)).map_err(handler_exception)? {
+            return Err(DjangoRustError::TemplateError(
+                "Core layout registration changed".into(),
+            ));
+        }
+        let py_args = build_py_args(py, args).map_err(DjangoRustError::TemplateError)?;
+        let py_content = mark_safe_str(py, content).map_err(handler_exception)?;
+        let py_context =
+            build_py_context(py, context, raw).map_err(DjangoRustError::TemplateError)?;
+        let parts: Vec<CoreLayoutPart> = handler
+            .bind(py)
+            .call_method1("_render_root_parts", (py_args, py_content, py_context))
+            .map_err(handler_exception)?
+            .extract()
+            .map_err(handler_exception)?;
+        if parts.len() > 32 {
+            return Err(DjangoRustError::TemplateError(
+                "Too many core layout parts".into(),
+            ));
+        }
+        let mut html = String::new();
+        let mut copies = Vec::new();
+        for (range, text) in parts {
+            if let Some((start, end)) = range {
+                if start > end
+                    || end > content.len()
+                    || !content.is_char_boundary(start)
+                    || !content.is_char_boundary(end)
+                    || !text.is_empty()
+                {
+                    return Err(DjangoRustError::TemplateError(
+                        "Invalid core layout body slice".into(),
+                    ));
+                }
+                if start != end {
+                    copies.push((start, end, html.len()));
+                    html.push_str(&content[start..end]);
+                }
+            } else {
+                html.push_str(&text);
+            }
+        }
+        let mut sorted = copies.clone();
+        sorted.sort_unstable_by_key(|entry| entry.0);
+        let mut cursor = 0;
+        for (start, end, _) in sorted {
+            if start < cursor || !content[cursor..start].chars().all(char::is_whitespace) {
+                return Err(DjangoRustError::TemplateError(
+                    "Core layout lost or duplicated body bytes".into(),
+                ));
+            }
+            cursor = end;
+        }
+        if !content[cursor..].chars().all(char::is_whitespace) {
+            return Err(DjangoRustError::TemplateError(
+                "Core layout lost body bytes".into(),
+            ));
+        }
+        Ok((html, copies))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2772,17 +2917,17 @@ mod tests {
             tests.contains("every_registry_builds_its_args_through_the_one_builder"),
             "the split landed in the wrong place"
         );
-        // Eight call sites since #2658: tag, block, assign, the two
+        // Nine call sites: tag, block, assign, the two
         // bindings-returning variants (`call_handler_with_bindings`,
         // `call_block_handler_with_bindings`), the raw-block registry
         // (`call_raw_block_handler_with_bindings`) and the two phases of the
         // lazy-body block contract (`call_block_handler_before_body`,
-        // `call_block_handler_after_body`).
+        // `call_block_handler_after_body`) and the exact core layout protocol.
         assert_eq!(
             src.matches("build_py_args(py, args)").count(),
-            8,
+            9,
             "the tag, block, assign, both bindings, the raw-block and both lazy-body \
-             phases must all build args here"
+             phases and the core layout protocol must all build args here"
         );
         assert!(
             !src.contains("PyList::new(py, args)"),
@@ -2791,9 +2936,9 @@ mod tests {
         // And the builder is the only place `mark_safe_str` reaches an
         // ARGUMENT: the block body's own call (#2379), its bindings twin, the
         // marked-context re-mint (#2547) and the lazy-body `after_body` body
-        // (#2658 — the same `SafeData` grant on the same bytes) are the other
-        // four, and there must be exactly those five.
-        assert_eq!(src.matches("mark_safe_str(py, ").count(), 5);
+        // (#2658 — the same `SafeData` grant on the same bytes), plus the
+        // core layout's already-rendered body, are the other five grants.
+        assert_eq!(src.matches("mark_safe_str(py, ").count(), 6);
         // The context dict is built in ONE place for every registry (#2547):
         // the call paths above plus no inline copy. Eight since #2658 added
         // the two lazy-body phases.
@@ -2803,6 +2948,7 @@ mod tests {
             8,
             "every registry call path builds its context dict through the one builder"
         );
+        assert_eq!(src.matches("build_py_context(py, context, raw)").count(), 1);
         assert_eq!(
             src.matches("for (key, value) in context {").count(),
             1,

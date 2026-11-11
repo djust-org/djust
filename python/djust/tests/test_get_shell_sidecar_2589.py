@@ -99,3 +99,38 @@ class TestGetShellHasTheSidecar:
         html = _get("/")
         assert "root=[walked-2589]" in html, html
         assert "prop=[walked-2589]" in html, html
+
+
+@pytest.mark.django_db
+def test_authenticated_page_request_sidecar_is_transient_and_replaced(templates):
+    import django
+
+    if django.VERSION < (6, 0):
+        pytest.skip("authenticated partial-root mode requires Django 6")
+    view = ShellView()
+    first = _FACTORY.get("/?a=1&first=yes")
+    view.request = first
+    view.mount(first)
+    view._initialize_rust_view(first)
+    assert view._rust_view.potential_authenticated_partial_root()
+    view._sync_state_to_rust()
+    html, _, _ = view._rust_view.render_full_provenance()
+    assert "qs=[?a=2&amp;first=yes]" in html
+    assert "request" not in view._rust_view.get_state()
+
+    second = _FACTORY.get("/?a=1&second=yes")
+    view.request = second
+    view._cached_context = None
+    view._sync_state_to_rust()
+    html, _, _ = view._rust_view.render_full_provenance()
+    assert "qs=[?a=2&amp;second=yes]" in html
+    assert "first=yes" not in html
+    assert "request" not in view._rust_view.get_state()
+
+    view.request = None
+    view._cached_context = None
+    view._sync_state_to_rust()
+    # With no request, the bridge sees the current None rather than a stale
+    # request from the prior render.
+    with pytest.raises(AttributeError, match="GET"):
+        view._rust_view.render_full_provenance()

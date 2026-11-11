@@ -57,6 +57,10 @@ from .change_detection import (
 __all__ = ["NOT_CONVERTED", "fingerprint_and_convert", "convert_for_render"]
 
 
+class _BudgetExhausted(Exception):
+    """Abort the fused walk when its fingerprint budget is exhausted."""
+
+
 class _NotConverted:
     """Sentinel: this value needs the original safe-key and conversion passes."""
 
@@ -128,14 +132,18 @@ def _fused(
     t = type(value)
     if t in _EXACT_SCALARS:
         counter[0] -= 1
-        fp: Hashable = (_TAG_TRUNCATED, id(value)) if counter[0] < 0 else (_TAG_VALUE, t, value)
+        if counter[0] < 0:
+            raise _BudgetExhausted
+        fp: Hashable = (_TAG_VALUE, t, value)
         return fp, (value if t in _PLAIN_SCALARS else NOT_CONVERTED)
     if t is not dict and t is not list and t is not tuple:
-        return _walk_general(value, counter, depth, path_ids), _leaf_out(value, t, path, safe)
+        fp = _walk_general(value, counter, depth, path_ids)
+        if counter[0] < 0:
+            return fp, NOT_CONVERTED
+        return fp, _leaf_out(value, t, path, safe)
     counter[0] -= 1
     if counter[0] < 0:
-        # Budget spent: the fingerprint stops here, the conversion need not.
-        return (_TAG_TRUNCATED, id(value)), _convert(value, depth, path, safe)
+        raise _BudgetExhausted
     vid = id(value)
     if depth >= _MAX_DEPTH or vid in path_ids:
         return (_TAG_ID, vid), NOT_CONVERTED
@@ -147,12 +155,16 @@ def _fused(
     if t is dict:
         out_d: dict = {}
         for k, v in value.items():
+            if counter[0] <= 0:
+                raise _BudgetExhausted
             tk = type(k)
             if tk in _EXACT_SCALARS:
                 counter[0] -= 1
                 kf: Hashable = (_TAG_VALUE, tk, k) if counter[0] >= 0 else (_TAG_TRUNCATED, id(k))
             else:
                 kf = _walk(k, counter, child_depth, inner)
+            if counter[0] <= 0:
+                raise _BudgetExhausted
             tv = type(v)
             if tv in _EXACT_SCALARS:
                 counter[0] -= 1
@@ -170,11 +182,15 @@ def _fused(
                     out_d[k] = o
             else:
                 vf = _walk(v, counter, child_depth, inner)
+            if counter[0] < 0:
+                raise _BudgetExhausted
             append((kf, vf))
         return (_TAG_DICT, tuple(fps)), (out_d if ok else NOT_CONVERTED)
     out_l: list = []
     out_append = out_l.append
     for i, v in enumerate(value):
+        if counter[0] <= 0:
+            raise _BudgetExhausted
         tv = type(v)
         if tv in _EXACT_SCALARS:
             counter[0] -= 1
@@ -193,6 +209,8 @@ def _fused(
                 out_append(o)
         else:
             append(_walk(v, counter, child_depth, inner))
+        if counter[0] < 0:
+            raise _BudgetExhausted
     fp_tuple = (_TAG_LIST if t is list else _TAG_TUPLE, tuple(fps))
     return fp_tuple, (out_l if ok else NOT_CONVERTED)
 
@@ -248,7 +266,18 @@ def fingerprint_and_convert(
     """
     counter = [budget]
     safe: List[Any] = []
-    fp, out = _fused(value, counter, 0, (), prefix, safe)
+    try:
+        fp, out = _fused(value, counter, 0, (), prefix, safe)
+    except _BudgetExhausted:
+        # Conversion still needs the entire value. Restart it without keeping
+        # the partially traversed safe paths or a wide fingerprint.
+        safe = []
+        out = _convert(value, 0, prefix, safe)
+        return (
+            (_TAG_TRUNCATED, id(value)),
+            True,
+            (None if out is NOT_CONVERTED else (safe, out)),
+        )
     return fp, counter[0] < 0, (None if out is NOT_CONVERTED else (safe, out))
 
 

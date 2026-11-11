@@ -10,7 +10,6 @@ import pytest
 from unittest.mock import patch
 
 from djust.live_view import LiveView
-import djust.mixins.context as context_module
 
 
 class TestJITShortCircuitNonDB:
@@ -28,7 +27,6 @@ class TestJITShortCircuitNonDB:
         view = PlainView()
 
         with (
-            patch.object(context_module, "JIT_AVAILABLE", True),
             patch.object(
                 view, "_get_template_content", wraps=view._get_template_content
             ) as mock_gtc,
@@ -50,7 +48,6 @@ class TestJITShortCircuitNonDB:
         view = DictListView()
 
         with (
-            patch.object(context_module, "JIT_AVAILABLE", True),
             patch.object(
                 view, "_get_template_content", wraps=view._get_template_content
             ) as mock_gtc,
@@ -79,7 +76,6 @@ class TestJITShortCircuitWithDB:
         view = DBView()
 
         with (
-            patch.object(context_module, "JIT_AVAILABLE", True),
             patch.object(view, "_get_template_content", return_value=view.template) as mock_gtc,
         ):
             view.get_context_data()
@@ -100,7 +96,6 @@ class TestJITShortCircuitWithDB:
         view.profile = user
 
         with (
-            patch.object(context_module, "JIT_AVAILABLE", True),
             patch.object(view, "_get_template_content", return_value=view.template) as mock_gtc,
         ):
             view.get_context_data()
@@ -121,7 +116,6 @@ class TestJITShortCircuitWithDB:
         view.users = users_list
 
         with (
-            patch.object(context_module, "JIT_AVAILABLE", True),
             patch.object(view, "_get_template_content", return_value=view.template) as mock_gtc,
         ):
             view.get_context_data()
@@ -141,7 +135,6 @@ class TestJITShortCircuitEdgeCases:
         view = EmptyView()
 
         with (
-            patch.object(context_module, "JIT_AVAILABLE", True),
             patch.object(
                 view, "_get_template_content", wraps=view._get_template_content
             ) as mock_gtc,
@@ -163,7 +156,6 @@ class TestJITShortCircuitEdgeCases:
         view = MixedView()
 
         with (
-            patch.object(context_module, "JIT_AVAILABLE", True),
             patch.object(
                 view, "_get_template_content", wraps=view._get_template_content
             ) as mock_gtc,
@@ -183,7 +175,6 @@ class TestJITShortCircuitEdgeCases:
         view = EmptyListView()
 
         with (
-            patch.object(context_module, "JIT_AVAILABLE", True),
             patch.object(
                 view, "_get_template_content", wraps=view._get_template_content
             ) as mock_gtc,

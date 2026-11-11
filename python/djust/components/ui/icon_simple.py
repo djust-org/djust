@@ -11,14 +11,7 @@ from ..base import Component
 from django.utils.html import conditional_escape
 
 
-# Try to import Rust implementation
-try:
-    from djust._rust import RustIcon  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except (ImportError, AttributeError):
-    _RUST_AVAILABLE = False
-    RustIcon = None  # type: ignore[assignment, misc]
+from djust._rust import RustIcon
 
 
 class Icon(Component):
@@ -68,8 +61,8 @@ class Icon(Component):
         xl = Icon("star", size="xl")
     """
 
-    # Link to Rust implementation if available
-    _rust_impl_class = RustIcon if _RUST_AVAILABLE else None
+    # The Rust implementation
+    _rust_impl_class = RustIcon
 
     # Fallback: Hybrid rendering with template
     # Note: Using separate if blocks to avoid elif bug in Rust template engine

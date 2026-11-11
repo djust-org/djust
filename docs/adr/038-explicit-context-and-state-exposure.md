@@ -421,3 +421,25 @@ Before acceptance, prove the typed `state` extension/default factories, select t
 server-backend capability checks, and specify the full framework context-provider
 manifest. These are design gates, not permission to leave a reflective fallback
 inside explicit mode.
+
+## Amendment (2026-10-19)
+
+This amendment records direction the project owner settled for 2.0. The decisions above, including D-g and D-m, stay as the record of the 1.3 activation. They are the current behaviour, not the final contract for retained features. Nothing here approves an API.
+
+**Direction.**
+
+- **1.4** keeps `exposure_policy` defaulting to `legacy`. It adds warnings, a migration guide and checker, and one combined opt-in with strict event parameters (ADR-036) and strict-only event security.
+- **2.0** makes explicit exposure mandatory. It removes the legacy attribute walk, arbitrary private-attribute and snapshot restoration, and the legacy policy path. There is no broad compatibility mode in 2.x.
+- Keep the reduced reserved-name protection and the serialization sensitive-name floor that deliberate rendering still needs. Step R's written-account clause covers both (see the [exposure flip plan](../plans/2.0-exposure-flip.md) §5 G1, G2).
+- Declared reconnect and back-navigation state stays, with fresh authorization and explicit persistence and browser grants.
+- **Retained features are ported:** `lazy=True` children and resumable uploads move to explicit, shared-state, HTTP-compatible designs. Redacted, read-only debug history stays. Executable time-travel restore and replay are removed.
+- Actors (D-o) are removed in this order: a downstream `use_actors` inventory, the exposure changes, the Python actor integration, then the Rust actor crate.
+
+**What this changes in the text above.**
+
+- *Compatibility and rollout* ("No immediate global default flip or removal of legacy support is approved", line 265) and *Retirement (Step R)* ("Nothing here approves the flip", line 385): the flip and the removal are now the 2.0 direction. D-z's schedule applies: one deletion PR per target, with the reference inventory re-run.
+- **D-g** (upload resume refused): superseded as a final contract. Resume is ported, with the resume record in shared storage and bound to the session, user, tenant and view.
+- **D-m** (`lazy=True` explicit children refused): superseded as a final contract. Lazy fill gets an authorization path, then the port. The refusal stays until the port lands.
+- An inventory or checker must not infer client grants or persistence for a field merely because a template can see it.
+
+**Still open:** production diagnostics (D-a for server-only sinks); public-page and service-worker caching (D-b); the 1.4 combined opt-in's API. See [the exposure flip plan](../plans/2.0-exposure-flip.md) §6 and [the delivery plan](../plans/2.0-delivery-plan.md).

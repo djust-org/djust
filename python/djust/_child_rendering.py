@@ -10,8 +10,8 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import wraps
-from html.parser import HTMLParser
 from inspect import signature
+from secrets import token_hex
 from typing import Any, ParamSpec, Protocol, TypeVar
 
 from ._exposure import ExposureError, uses_legacy_exposure
@@ -26,98 +26,6 @@ class _ViewRenderer(Protocol):
     def render_full_template(self, *args: Any, **kwargs: Any) -> str: ...
 
 
-_VOID = frozenset(
-    {
-        "area",
-        "base",
-        "br",
-        "col",
-        "embed",
-        "hr",
-        "img",
-        "input",
-        "link",
-        "meta",
-        "param",
-        "source",
-        "track",
-        "wbr",
-    }
-)
-
-
-class _Slots(HTMLParser):
-    CDATA_CONTENT_ELEMENTS = (
-        *HTMLParser.CDATA_CONTENT_ELEMENTS,
-        "textarea",
-        "title",
-        "xmp",
-        "iframe",
-        "noembed",
-        "noscript",
-    )
-
-    def __init__(
-        self, *, candidates: set[str], whole_page: bool, owner_wrapper: bool, root_attribute: str
-    ) -> None:
-        super().__init__(convert_charrefs=True)
-        self.candidates = candidates
-        self.whole_page = whole_page
-        self.owner_wrapper = owner_wrapper
-        self.root_attribute = root_attribute
-        self.stack: list[tuple[str, bool, bool]] = []
-        self.slots: dict[str, str] = {}
-        self.root_found = False
-        self.first = True
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        values: dict[str, str | None] = {}
-        for name, value in attrs:
-            values.setdefault(name, value)  # HTML keeps the first duplicate attribute.
-        is_owner = self.first and self.owner_wrapper
-        self.first = False
-        slot = values.get("dj-sticky-slot")
-        if "dj-view" in values:
-            slot = values.get("data-djust-embedded", slot)
-        inert = (
-            tag == "template"
-            or tag in self.CDATA_CONTENT_ELEMENTS
-            or any(entry[0] == "template" for entry in self.stack)
-        )
-        embedded = slot in self.candidates and not is_owner and not inert
-        is_root = (
-            tag == "div"
-            and self.root_attribute in values
-            and not self.root_found
-            and not embedded
-            and not inert
-            and not any(entry[1] for entry in self.stack)
-        )
-        self.root_found = self.root_found or is_root
-        if embedded and not any(entry[1] for entry in self.stack):
-            assert slot is not None
-            if slot in self.slots:
-                raise ExposureError("Duplicate rendered child slot")
-            self.slots[slot] = (
-                "root"
-                if not self.whole_page or is_root or any(entry[2] for entry in self.stack)
-                else "shell"
-            )
-        if tag not in _VOID:
-            self.stack.append((tag, embedded, is_root))
-
-    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.handle_starttag(tag, attrs)
-        if tag not in _VOID:
-            self.handle_endtag(tag)
-
-    def handle_endtag(self, tag: str) -> None:
-        for index in range(len(self.stack) - 1, -1, -1):
-            if self.stack[index][0] == tag:
-                del self.stack[index:]
-                break
-
-
 @dataclass
 class _Render:
     owner: Any
@@ -126,37 +34,71 @@ class _Render:
     candidates: dict[str, Any] = field(default_factory=dict)
     plans: list[Any] = field(default_factory=list)
     regions: dict[str, tuple[Any, str]] = field(default_factory=dict)
+    direct_results: dict[int, tuple[str, Any]] = field(default_factory=dict)
+    issued_children: dict[str, Any] = field(default_factory=dict)
+    owned_preparing: bool = False
+    prepared_owned_html: Any = None
+    pending_owned_version: int | None = None
+    vdom_bindings: dict[str, Any] = field(default_factory=dict)
 
     def finish(self, html: str) -> None:
+        if self.owned_preparing:
+            self.finish_owned(html)
+            return
         if not self.candidates:
             return
-        parser = _Slots(
-            candidates=set(self.candidates),
-            whole_page=self.whole_page,
-            owner_wrapper=self.owner_wrapper,
-            root_attribute="dj-root",
-        )
+        from ._rust import child_render_regions
+
         try:
-            parser.feed(html)
-            parser.close()
-            if self.whole_page and not parser.root_found:
-                parser = _Slots(
-                    candidates=set(self.candidates),
-                    whole_page=True,
-                    owner_wrapper=self.owner_wrapper,
-                    root_attribute="dj-view",
-                )
-                parser.feed(html)
-                parser.close()
-        except (AssertionError, ValueError):
-            # No complete ownership graph: do not retain partially seen slots.
-            self.regions = {}
-            return
-        self.regions = {
-            slot: (self.candidates[slot], region)
-            for slot, region in parser.slots.items()
-            if slot in self.candidates
-        }
+            regions = child_render_regions(
+                html, list(self.candidates), self.whole_page, self.owner_wrapper
+            )
+        except ValueError:
+            raise ExposureError("Invalid rendered child ownership") from None
+        self.regions = {slot: (self.candidates[slot], region) for slot, region in regions.items()}
+
+    def finish_owned(self, html: str) -> None:
+        from ._render_provenance import RenderedDiffHTML
+
+        if not isinstance(html, RenderedDiffHTML) or html is not self.prepared_owned_html:
+            raise ExposureError("Pending child ownership proof was lost")
+        if html.diff_version != self.pending_owned_version:
+            raise ExposureError("Pending child ownership version changed")
+        issued = html.issued_children
+        if len(issued) != len(set(issued)) or set(issued) != set(self.issued_children):
+            raise ExposureError("Child issuance ledger is incomplete")
+        registry = getattr(self.owner, "_child_views", {})
+        previous = getattr(self.owner, "_explicit_child_vdom_bindings", {})
+        if type(registry) is not dict or type(previous) is not dict:
+            raise ExposureError("Invalid child binding registry")
+        self.regions = {}
+        self.vdom_bindings = {}
+        for key, node_id in html.fresh_child_ids:
+            child = self.issued_children.get(key)
+            slot = getattr(child, "_view_id", None)
+            if (
+                child is None
+                or type(slot) is not str
+                or registry.get(slot) is not child
+                or slot in self.regions
+                or node_id in self.vdom_bindings
+            ):
+                raise ExposureError("Fresh child binding changed")
+            self.regions[slot] = (child, "root")
+            self.vdom_bindings[node_id] = child
+        for old_id, node_id in html.retained_child_ids:
+            child = previous.get(old_id)
+            slot = getattr(child, "_view_id", None)
+            if (
+                child is None
+                or type(slot) is not str
+                or registry.get(slot) is not child
+                or slot in self.regions
+                or node_id in self.vdom_bindings
+            ):
+                raise ExposureError("Retained child binding changed")
+            self.regions[slot] = (child, "root")
+            self.vdom_bindings[node_id] = child
 
     def release(self) -> None:
         """Drop the view and its children once the render is over (#3116).
@@ -165,15 +107,23 @@ class _Render:
         copy of the context taken then (a task, or a thread on 3.14+) keeps it;
         emptying it here stops such a copy from keeping the session alive.
         """
+        if self.owned_preparing and self.owner is not None:
+            self.owner._rust_view.discard_authenticated_page()
         self.owner = None
+        self.prepared_owned_html = None
+        self.vdom_bindings.clear()
         self.candidates.clear()
         self.plans.clear()
         self.regions.clear()
+        self.direct_results.clear()
+        self.issued_children.clear()
 
     def commit(self) -> None:
         from ._child_lifecycle import dispose_child_subtree
 
         if getattr(self.owner, "_djust_child_disposed", False):
+            if self.owned_preparing:
+                raise ExposureError("Pending child owner was disposed")
             return
         registry = getattr(self.owner, "_child_views", {})
         if type(registry) is not dict:
@@ -186,6 +136,16 @@ class _Render:
                     keep[slot] = (child, region)
         if any(registry.get(slot) is not child for slot, (child, _) in keep.items()):
             raise ExposureError("Rendered child ownership changed")
+        if self.owned_preparing:
+            if self.pending_owned_version is None:
+                raise ExposureError("Pending child version is unavailable")
+            self.owner._rust_view.commit_owned_diff(self.pending_owned_version)
+            self.owned_preparing = False
+            self.owner._explicit_child_vdom_bindings = dict(self.vdom_bindings)
+            self.owner._explicit_child_vdom_tracking = True
+            self.owner._pending_authenticated_page = False
+            self.owner._refresh_cached_rust_view()
+            self.owner._record_dj_model_fields_from_rust(self.owner._rust_view)
         self.owner._explicit_child_render_regions = keep
         self.owner._explicit_child_render_scope = "full" if self.whole_page else "root"
         if self.whole_page:
@@ -214,6 +174,75 @@ def record_rendered_child(child: Any) -> None:
     if type(slot) is not str or type(registry) is not dict or registry.get(slot) is not child:
         raise ExposureError("Rendered child is not registered")
     active.candidates[slot] = child
+
+
+def owned_diff_active(view: Any) -> bool:
+    active = _active.get()
+    return active is not None and active.owner is view and not active.whole_page
+
+
+def prepare_owned_child_diff(view: Any) -> tuple[str, str | None, int]:
+    from ._render_provenance import RenderedDiffHTML
+
+    active = _active.get()
+    if active is None or active.owner is not view or active.whole_page:
+        raise ExposureError("Child diff scope is unavailable")
+    previous = getattr(view, "_explicit_child_vdom_bindings", {})
+    if type(previous) is not dict:
+        raise ExposureError("Invalid previous child bindings")
+    active.owned_preparing = True
+    html, patches, version, (fresh, retained, issued) = view._rust_view.prepare_owned_diff(
+        list(previous)
+    )
+    result = RenderedDiffHTML(html, tuple(fresh), tuple(retained), tuple(issued), version)
+    active.prepared_owned_html = result
+    active.pending_owned_version = version
+    return result, patches, version
+
+
+def record_direct_child_result(child: Any, html: Any) -> None:
+    """Retain the exact direct result, never a later string copy or slot lookup."""
+    active = _active.get()
+    if (
+        active is None
+        or getattr(child, "_parent_view", None) is not active.owner
+        or uses_legacy_exposure(child)
+    ):
+        return
+    if not isinstance(html, str):
+        raise ExposureError("Invalid direct child render result")
+    active.direct_results[id(html)] = (html, child)
+
+
+def consume_direct_child_result(parent: Any, html: str) -> tuple[str, int] | None:
+    """Issue a location capability only for the exact registered callback result."""
+    active = _active.get()
+    if active is None or active.owner is not parent:
+        return None
+    entry = active.direct_results.pop(id(html), None)
+    if entry is None:
+        return None  # A legacy child does not acquire an explicit binding.
+    original, child = entry
+    registry = getattr(parent, "_child_views", None)
+    slot = getattr(child, "_view_id", None)
+    if (
+        original is not html
+        or type(registry) is not dict
+        or type(slot) is not str
+        or registry.get(slot) is not child
+    ):
+        raise ExposureError("Direct child render ownership changed")
+    from ._rust import child_wrapper_opening_end
+
+    try:
+        end = child_wrapper_opening_end(html, slot)
+    except ValueError:
+        raise ExposureError("Invalid direct child wrapper") from None
+    key = token_hex(16)
+    while key in active.issued_children:
+        key = token_hex(16)
+    active.issued_children[key] = child
+    return key, end
 
 
 def reconcile_child_render(
@@ -271,6 +300,7 @@ def reconcile_child_render(
                         plan.release()
             if owner_wrapper:
                 record_rendered_child(view)
+                record_direct_child_result(view, result)
             return result
 
         return rendered

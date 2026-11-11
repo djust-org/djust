@@ -113,8 +113,8 @@ class TestTheKillSwitchIsGone2628:
         from djust.config import LiveViewConfig
 
         assert "template_resolve_lazy" not in LiveViewConfig._defaults
-        assert "template_auto_call" in LiveViewConfig._defaults, (
-            "control: the neighbouring ADR-024 key is still seeded"
+        assert "loop_render_cache_enabled" in LiveViewConfig._defaults, (
+            "control: a neighbouring render key is still seeded"
         )
 
     def test_the_rust_module_exports_no_setter_or_getter(self) -> None:

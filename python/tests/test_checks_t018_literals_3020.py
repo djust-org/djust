@@ -48,16 +48,6 @@ class TestIfExpressionScan:
         assert _extract_referenced_names(src) == [("a", 2), ("b", 3)]
 
 
-def _liveview_available():
-    try:
-        from djust.live_view import LiveView  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
-
-@pytest.mark.skipif(not _liveview_available(), reason="Rust extension not available")
 def test_t018_fires_only_on_the_undefined_name_3020():
     """The djustlive shape end to end: literals, a filter name and a filter
     argument around one genuinely undefined name."""

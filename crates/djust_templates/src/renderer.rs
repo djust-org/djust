@@ -6,8 +6,6 @@ use crate::inheritance::TemplateLoader;
 use crate::parser::Node;
 use crate::provenance::RenderOutput;
 use crate::registry::TagArg;
-#[cfg(feature = "liveview")]
-use djust_components::Component;
 use djust_core::decimal::python_float_repr;
 use djust_core::{Context, DjangoRustError, Encoded, EqClass, Result, Value};
 use once_cell::sync::Lazy;
@@ -15,6 +13,103 @@ use pyo3::types::PyAnyMethods;
 use pyo3::{Py, PyAny, Python};
 use regex::Regex;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// Dynamic include operands are resolved by the renderer, after JIT field
+// extraction. Track their nested include scope on this thread so a literal
+// include inside a dynamically selected template is also checked.
+thread_local! {
+    static DYNAMIC_INCLUDE_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+struct DynamicIncludeGuard(bool);
+
+impl DynamicIncludeGuard {
+    fn enter(active: bool) -> Self {
+        if active {
+            DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        }
+        Self(active)
+    }
+}
+
+impl Drop for DynamicIncludeGuard {
+    fn drop(&mut self) {
+        if self.0 {
+            DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.set(depth.get() - 1));
+        }
+    }
+}
+
+/// Whether executed partial calls can reach a cycle. Uncalled definitions do
+/// not execute. Registry identity distinguishes same-named helpers in files.
+fn contains_recursive_partial(nodes: &[Node]) -> bool {
+    analyze_recursive_partials(nodes).0
+}
+
+fn analyze_recursive_partials(nodes: &[Node]) -> (bool, usize) {
+    fn walk(
+        nodes: &[Node],
+        active: &mut HashSet<(usize, String)>,
+        completed: &mut HashSet<(usize, String)>,
+    ) -> bool {
+        for node in nodes {
+            match node {
+                Node::PartialCall { name, registry, .. } => {
+                    let Some(registry) = registry.as_ref().and_then(|r| r.upgrade()) else {
+                        return true; // Cannot prove that an unbound call is safe.
+                    };
+                    let key = (std::sync::Arc::as_ptr(&registry) as usize, name.clone());
+                    if completed.contains(&key) {
+                        continue;
+                    }
+                    if !active.insert(key.clone()) {
+                        return true;
+                    }
+                    let recursive = registry
+                        .bodies
+                        .get(name)
+                        .is_none_or(|body| walk(body, active, completed));
+                    active.remove(&key);
+                    if recursive {
+                        return true;
+                    }
+                    completed.insert(key);
+                }
+                Node::PartialDef { inline: false, .. } => {}
+                _ => {
+                    if node
+                        .child_lists()
+                        .into_iter()
+                        .flatten()
+                        .any(|child| walk(child, active, completed))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+    let mut completed = HashSet::new();
+    let found = walk(nodes, &mut HashSet::new(), &mut completed);
+    (found, completed.len())
+}
+
+// Python sets this process-wide flag when loading the extension. Django's
+// installed version is fixed for the process; pure Rust users default to the
+// earlier Django-compatible behavior.
+static DJANGO_6_OR_LATER: AtomicBool = AtomicBool::new(false);
+
+/// Configure template behavior for the installed Django version.
+pub fn set_django_forloop_length(enabled: bool) {
+    DJANGO_6_OR_LATER.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether to match the Django 6+ template semantics.
+pub(crate) fn django_6_or_later() -> bool {
+    DJANGO_6_OR_LATER.load(Ordering::Relaxed)
+}
 
 /// `{% djust_audio %}` markup around the escaped manifest. Must stay
 /// byte-identical to `djust_audio` in `python/djust/templatetags/live_tags.py`
@@ -554,9 +649,10 @@ fn node_is_element_bearing(node: &Node) -> bool {
         // as element-bearing. Includes templates, components, and
         // any custom-rendered output the framework can't introspect.
         Node::Static(_)
+        | Node::PartialCall { .. }
+        | Node::PartialDef { .. }
         | Node::Include { .. }
         | Node::ReactComponent { .. }
-        | Node::RustComponent { .. }
         | Node::CustomTag { .. }
         | Node::BlockCustomTag { .. }
         | Node::RawBlockCustomTag { .. }
@@ -633,6 +729,14 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
     {
         let _namespace = crate::registry_scope::NamespaceGuard::enter(*registry_namespace);
         let previous = context.replace_node_identity(Some((source.as_ptr() as usize, span.0)));
+        // Inspect syntax against render-owned mutation names before executing
+        // the include. This does not resolve selectors or call application code.
+        let upward_tainted = R::TRACKED
+            && matches!(nodes.first(),
+                Some(Node::Include { template, with_vars, .. })
+                    if context.lazy_selector_is_tainted(template)
+                        || with_vars.iter().any(|(_, expr)| context.lazy_selector_is_tainted(expr))
+            );
         let mut rendered = if let (Some(metadata), Node::Text(text)) = (lazy_text, &nodes[0]) {
             let mut output = R::source_text(text, metadata);
             if R::TRACKED {
@@ -647,9 +751,25 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
                 if lazy_text.is_some() {
                     output.identify(lazy_origin.as_deref().unwrap_or("inline"));
                 } else if let Some(site) = lazy_site {
+                    let restricted =
+                        upward_tainted || site & crate::provenance::LAZY_RESTRICTED_SITE != 0;
+                    let scoped = site & crate::provenance::LAZY_SCOPED_SITE != 0;
+                    let dynamic = site & crate::provenance::LAZY_DYNAMIC_SITE != 0;
+                    let site = site
+                        & !(crate::provenance::LAZY_RESTRICTED_SITE
+                            | crate::provenance::LAZY_SCOPED_SITE
+                            | crate::provenance::LAZY_DYNAMIC_SITE);
                     output.identify(&format!(
-                        "{}/site{site}",
-                        lazy_origin.as_deref().unwrap_or("inline")
+                        "{}/{}{}site{site}",
+                        lazy_origin.as_deref().unwrap_or("inline"),
+                        if restricted {
+                            "lazy-denied/"
+                        } else if scoped {
+                            "lazy-scoped/"
+                        } else {
+                            ""
+                        },
+                        if dynamic { "lazy-dynamic/" } else { "" },
                     ));
                 }
             }
@@ -661,6 +781,19 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
                 .with_template_source(source, origin.as_deref().unwrap_or("<unknown source>"))
         });
     }
+    if R::TRACKED
+        && matches!(
+            node,
+            Node::CustomTag { .. }
+                | Node::BlockCustomTag { .. }
+                | Node::RawBlockCustomTag { .. }
+                | Node::AssignTag { .. }
+        )
+    {
+        // Tags may execute arbitrary application code even without returning
+        // bindings. The deny-only mark persists for this render.
+        context.note_lazy_unknown_effect();
+    }
     let result = match sibling_updates(node, context, loader)? {
         Some(effect) => {
             for binding in effect.bindings {
@@ -671,6 +804,7 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
                     context.bind(binding.name, binding.value, binding.safe);
                 }
                 if R::TRACKED {
+                    context.note_lazy_sibling_binding(&name);
                     if let Some(capture) = binding.capture {
                         context.mark_captured_literals(&name, capture);
                     }
@@ -1084,6 +1218,18 @@ pub(crate) fn compiled_template_operand(value: &Value) -> Result<Option<Compiled
     Python::attach(|py| {
         py.import("djust.template.operands")?
             .getattr("template_source")?
+            .call1((handle.bind(py),))?
+            .extract()
+    })
+    .map_err(DjangoRustError::PythonException)
+}
+
+/// Python template objects execute their actual nodes and render method, so
+/// source parsing cannot prove they are safe. Accept only verified built-in output nodes.
+fn dynamic_template_object_is_safe(handle: &Py<PyAny>) -> Result<bool> {
+    Python::attach(|py| {
+        py.import("djust.template.operands")?
+            .getattr("is_safe_dynamic_template_object")?
             .call1((handle.bind(py),))?
             .extract()
     })
@@ -2882,7 +3028,7 @@ fn bridged_context_map(context: &Context) -> Result<BridgedContextMap> {
 
 /// The flat map a bridged tag is called with, plus the [`LazyBlockGuard`] that
 /// ends the lazy `block`'s snapshot when this drops — after the call, on every
-/// path. Derefs to the map, so the seven callers pass `&context_map` as before.
+/// path. Derefs to the map, so callers pass `&context_map` as before.
 struct BridgedContextMap {
     map: std::collections::HashMap<String, Value>,
     _guard: Option<djust_core::LazyBlockGuard>,
@@ -3784,6 +3930,12 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         let mut loop_dict: indexmap::IndexMap<djust_core::ObjectKey, Value> =
                             indexmap::IndexMap::with_capacity(7);
                         loop_dict.insert("parentloop".into(), parentloop);
+                        // Django 6.0+ adds `length` after `parentloop`, before
+                        // the counters. Insertion order is observable when the
+                        // whole forloop dict is rendered.
+                        if django_6_or_later() {
+                            loop_dict.insert("length".into(), Value::Integer(len_values));
+                        }
 
                         // Save outer dj-if loop path for nested-loop composition
                         // and per-iteration uniqueness of `{% if %}` marker ids
@@ -4314,17 +4466,39 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 let empty_candidates = candidates.is_empty();
                 let mut not_found = Vec::new();
                 let mut selected = None;
+                // Django 6 treats most non-string names as missing and tries later
+                // candidates. If none succeed, join(not_found) raises for the
+                // first non-string entry, with its index among unique names.
+                let mut first_invalid: Option<(usize, String)> = None;
                 for candidate in candidates {
                     // Validate each candidate only when it is reached; a later
                     // invalid name cannot invalidate an earlier successful one.
                     let name = match candidate {
                         Value::String(name) | Value::SafeString(name) => name,
-                        other => return Err(DjangoRustError::PythonException(
-                            pyo3::exceptions::PyTypeError::new_err(format!(
-                                "join() argument must be str, bytes, or os.PathLike object, not '{}'",
-                                filters::python_type_name(&other),
-                            )),
-                        )),
+                        other => {
+                            let kind = filters::python_type_name(&other).to_owned();
+                            if kind == "bytes" {
+                                let message = if django_6_or_later() {
+                                    "a bytes-like object is required, not 'str'"
+                                } else {
+                                    "Can't mix strings and bytes in path components"
+                                };
+                                return Err(DjangoRustError::PythonException(
+                                    pyo3::exceptions::PyTypeError::new_err(message),
+                                ));
+                            }
+                            if django_6_or_later() {
+                                if first_invalid.is_none() {
+                                    first_invalid = Some((not_found.len(), kind));
+                                }
+                                continue;
+                            }
+                            return Err(DjangoRustError::PythonException(
+                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "join() argument must be str, bytes, or os.PathLike object, not '{kind}'",
+                                )),
+                            ));
+                        }
                     };
                     // Preserve cached node allocation identity for loop caches.
                     match loader.load_template_cached(&name) {
@@ -4341,6 +4515,15 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         Err(error) => return Err(error),
                     }
                 }
+                if selected.is_none() {
+                    if let Some((index, kind)) = first_invalid {
+                        return Err(DjangoRustError::PythonException(
+                            pyo3::exceptions::PyTypeError::new_err(format!(
+                                "sequence item {index}: expected str instance, {kind} found"
+                            )),
+                        ));
+                    }
+                }
                 let (name, nodes) = if object.is_some() {
                     (String::new(), std::sync::Arc::from(Vec::<Node>::new()))
                 } else {
@@ -4353,6 +4536,8 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     })?
                 };
                 let name = name.as_str();
+                let live_dynamic = !literal && context.guard_dynamic_recursive_partials();
+                let _dynamic_guard = DynamicIncludeGuard::enter(live_dynamic);
 
                 // An included template may itself `{% extends %}` — Django
                 // renders it as a template in its own right, so its inheritance
@@ -4391,7 +4576,11 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         // here either — pre-existing, tracked in the #2519
                         // follow-up issue.)
                         let mut fresh = Context::new();
+                        fresh.inherit_lazy_unknown_effect(context);
                         fresh.set_emit_dj_if_markers(context.emit_dj_if_markers());
+                        fresh.set_guard_dynamic_recursive_partials(
+                            context.guard_dynamic_recursive_partials(),
+                        );
                         // The included body renders INSIDE the enclosing
                         // iteration, so its `{% if %}` ids must carry the same
                         // per-iteration suffix (#1832, #2529).
@@ -4467,6 +4656,14 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     }
                     register_binding_aliases(include_context, pending, &bound);
                     if let Some(object) = &object {
+                        if include_context.guard_dynamic_recursive_partials()
+                            && DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.get() > 0)
+                            && !dynamic_template_object_is_safe(object)?
+                        {
+                            return Err(DjangoRustError::TemplateError(
+                                "Dynamic template object cannot be verified free of recursive partials for LiveViews".to_string(),
+                            ));
+                        }
                         return render_template_object(object, include_context).map(R::from);
                     }
                     // Resolve the parent only after `with` and `only` establish
@@ -4488,6 +4685,14 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                             nodes
                         };
 
+                    if include_context.guard_dynamic_recursive_partials()
+                        && DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.get() > 0)
+                        && contains_recursive_partial(&nodes)
+                    {
+                        return Err(DjangoRustError::TemplateError(
+                            "Recursive named partials selected by dynamic includes are unsupported for LiveViews".to_string(),
+                        ));
+                    }
                     let mut output =
                         render_nodes_output::<L, R>(&nodes, include_context, Some(loader))?;
                     if R::TRACKED && output.has_origin() {
@@ -4575,18 +4780,6 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             output.push_str("</div>");
             Ok(output)
         }
-
-        #[cfg(feature = "liveview")]
-        Node::RustComponent { name, props } => {
-            // Deprecated in 1.3, removed in 2.0.0: warn, then render as before.
-            warn_rust_component_tag(name)?;
-            render_rust_component(name, props, context).map(R::from)
-        }
-
-        #[cfg(not(feature = "liveview"))]
-        Node::RustComponent { name, .. } => Err(DjangoRustError::TemplateError(format!(
-            "<{name} /> components require the `liveview` feature of djust_templates (#2519)"
-        ))),
 
         Node::CsrfToken => {
             // Render CSRF token hidden input if a real token is available.
@@ -4987,11 +5180,107 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             ))
         }
 
+        Node::PartialCall {
+            name,
+            registry,
+            site_id,
+        } => {
+            thread_local! {
+                static DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+                static LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(1000) };
+            }
+            // Django's recursion is bounded by the interpreter's configurable
+            // recursion limit, not a fixed template-specific limit. Read it once
+            // per outermost partial call, including detached LiveView renders.
+            if DEPTH.with(|d| d.get()) == 0 {
+                let limit = Python::try_attach(|py| {
+                    py.import("sys")
+                        .and_then(|sys| sys.call_method0("getrecursionlimit"))
+                        .and_then(|limit| limit.extract::<usize>())
+                        .unwrap_or(1000)
+                })
+                .unwrap_or(1000);
+                LIMIT.with(|l| l.set(limit));
+            }
+            struct PartialRecursionGuard;
+            impl Drop for PartialRecursionGuard {
+                fn drop(&mut self) {
+                    DEPTH.with(|d| d.set(d.get() - 1));
+                }
+            }
+            if DEPTH.with(|d| d.get()) >= LIMIT.with(|l| l.get()) {
+                return Err(DjangoRustError::TemplateRecursion);
+            }
+            DEPTH.with(|d| d.set(d.get() + 1));
+            let _guard = PartialRecursionGuard;
+            let registry = registry.as_ref().and_then(|r| r.upgrade()).ok_or_else(|| {
+                DjangoRustError::TemplateError(format!(
+                    "Partial '{name}' is not defined in the current template."
+                ))
+                .into_template_syntax()
+            })?;
+            let nodes = registry.bodies.get(name).ok_or_else(|| {
+                DjangoRustError::TemplateError(format!(
+                    "Partial '{name}' is not defined in the current template."
+                ))
+                .into_template_syntax()
+            })?;
+            let parent_path = context.dj_if_include_path().to_string();
+            let path = match site_id {
+                Some(site) => format!("{parent_path}-i{site}"),
+                None => parent_path,
+            };
+            // Rust template frames are substantially larger than Python frames.
+            // Grow on this same thread before recursing; the larger red zone also
+            // leaves room for context-value cloning between partial calls. This
+            // does not bound unrelated recursive Value clones or drops.
+            stacker::maybe_grow(2 * 1024 * 1024, 8 * 1024 * 1024, || {
+                context.with_dj_if_include_path(path, |context| {
+                    context.with_template_render(|inner| {
+                        render_nodes_output::<L, R>(nodes, inner, loader)
+                    })
+                })
+            })
+        }
+        Node::PartialDef {
+            inline, children, ..
+        } => {
+            if *inline {
+                render_nodes_output::<L, R>(children, context, loader)
+            } else {
+                // A definition is known to produce no output, so it must not
+                // introduce an opaque placeholder into source projections.
+                Ok(R::context_neutral(String::new()))
+            }
+        }
         Node::BlockCustomTag {
             name,
             args,
             children,
         } => {
+            if R::TRACKED && crate::registry::is_core_root_layout(name)? {
+                let body = render_nodes_output::<L, R>(children, context, loader)?;
+                context.take_provenance_flatten();
+                let resolved = resolve_block_tag_args(name, args, context);
+                context.take_provenance_flatten();
+                let mut values = bridged_context_map(context)?;
+                // The same typed-operand channel the ordinary block call gets (#3768): the
+                // layout handlers are registered inside the typed-operand wrapper, which
+                // blanks an operand the engine could not resolve (#3871) by reading it.
+                if crate::registry::block_handler_wants_typed_args(name) {
+                    let only = crate::registry::block_handler_typed_standins_only(name);
+                    add_typed_operands(&mut values, args, context, only);
+                }
+                let raw = context.render_raw_py_objects();
+                let (html, copies) = crate::registry::call_core_root_layout(
+                    name,
+                    &resolved,
+                    &body.to_string(),
+                    &values,
+                    raw.as_deref(),
+                )?;
+                return Ok(body.core_root_layout(html, &copies));
+            }
             // Body render + arg resolution + the registry call live in ONE
             // helper shared with `sibling_updates` (#2547). Arg resolution
             // goes through the SAME shared `resolve_tag_arg` as
@@ -5113,549 +5402,6 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             render_nodes_output::<L, R>(children, context, loader)
         }
     }
-}
-
-/// The standard djust deprecation for a JSX-style `<RustX …/>` tag (removed in
-/// 2.0.0). The same route as the dict-style `block["super"]` read
-/// (`djust_core::context::warn_dict_style`): `djust._deprecation.warn_deprecated`.
-///
-/// No interpreter (a pure-Rust test) or no `djust` package (a bare embedded
-/// interpreter) is not an error; a warning the caller's filters promote to an
-/// exception is, and crosses whole.
-#[cfg(feature = "liveview")]
-fn warn_rust_component_tag(name: &str) -> Result<()> {
-    use pyo3::prelude::*;
-
-    let warned = Python::try_attach(|py| -> PyResult<()> {
-        let Ok(module) = py.import("djust._deprecation") else {
-            return Ok(());
-        };
-        let kwargs = pyo3::types::PyDict::new(py);
-        kwargs.set_item("since", "1.3")?;
-        kwargs.set_item("removed_in", "2.0.0")?;
-        kwargs.set_item("instead", "a djust.components.ui component")?;
-        module.getattr("warn_deprecated")?.call(
-            (format!("The JSX-style `<{name} />` template tag"),),
-            Some(&kwargs),
-        )?;
-        Ok(())
-    });
-    match warned {
-        Some(Err(err)) => Err(DjangoRustError::PythonException(err)),
-        _ => Ok(()),
-    }
-}
-
-/// Render a Rust component by instantiating it and calling its render method
-#[cfg(feature = "liveview")]
-fn render_rust_component(
-    name: &str,
-    props: &[(String, String)],
-    context: &Context,
-) -> Result<String> {
-    // Get framework from context or default to Bootstrap5
-    let framework = context
-        .get("_framework")
-        .and_then(|v| {
-            if let Value::String(s) | Value::SafeString(s) = v {
-                Some(s.as_str())
-            } else {
-                None
-            }
-        })
-        .unwrap_or("bootstrap5");
-
-    let fw = framework.parse().unwrap();
-
-    // Match component name and instantiate
-    match name {
-        "RustButton" => {
-            // Extract required props
-            let id = get_prop("id", props, context)?;
-            let label = get_prop("label", props, context)?;
-
-            // Create button with basic props
-            let mut button = djust_components::ui::Button::new(id, label);
-
-            // Apply optional props
-            if let Ok(variant_str) = get_prop("variant", props, context) {
-                let variant = match variant_str.as_str() {
-                    "secondary" => djust_components::ui::button::ButtonVariant::Secondary,
-                    "success" => djust_components::ui::button::ButtonVariant::Success,
-                    "danger" => djust_components::ui::button::ButtonVariant::Danger,
-                    "warning" => djust_components::ui::button::ButtonVariant::Warning,
-                    "info" => djust_components::ui::button::ButtonVariant::Info,
-                    "light" => djust_components::ui::button::ButtonVariant::Light,
-                    "dark" => djust_components::ui::button::ButtonVariant::Dark,
-                    "link" => djust_components::ui::button::ButtonVariant::Link,
-                    _ => djust_components::ui::button::ButtonVariant::Primary,
-                };
-                button.variant = variant;
-            }
-
-            if let Ok(size_str) = get_prop("size", props, context) {
-                let size = match size_str.as_str() {
-                    "sm" | "small" => djust_components::ui::button::ButtonSize::Small,
-                    "lg" | "large" => djust_components::ui::button::ButtonSize::Large,
-                    _ => djust_components::ui::button::ButtonSize::Medium,
-                };
-                button.size = size;
-            }
-
-            if let Ok(outline) = get_prop("outline", props, context) {
-                button.outline = outline == "true" || outline == "True";
-            }
-
-            if let Ok(disabled) = get_prop("disabled", props, context) {
-                button.disabled = disabled == "true" || disabled == "True";
-            }
-
-            if let Ok(full_width) = get_prop("fullWidth", props, context) {
-                button.full_width = full_width == "true" || full_width == "True";
-            }
-
-            if let Ok(icon) = get_prop("icon", props, context) {
-                button.icon = Some(icon);
-            }
-
-            if let Ok(on_click) = get_prop("onClick", props, context) {
-                button.on_click = Some(on_click);
-            }
-
-            // Render the component
-            button.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustButton: {e}"))
-            })
-        }
-
-        "RustInput" => {
-            // Extract required props
-            let id = get_prop("id", props, context)?;
-
-            // Create input with basic props
-            let mut input = djust_components::ui::Input::new(id);
-
-            // Apply optional props
-            if let Ok(input_type_str) = get_prop("inputType", props, context) {
-                let input_type = match input_type_str.as_str() {
-                    "email" => djust_components::ui::input::InputType::Email,
-                    "password" => djust_components::ui::input::InputType::Password,
-                    "number" => djust_components::ui::input::InputType::Number,
-                    "tel" => djust_components::ui::input::InputType::Tel,
-                    "url" => djust_components::ui::input::InputType::Url,
-                    "search" => djust_components::ui::input::InputType::Search,
-                    "date" => djust_components::ui::input::InputType::Date,
-                    "time" => djust_components::ui::input::InputType::Time,
-                    "datetime" => djust_components::ui::input::InputType::DateTime,
-                    "color" => djust_components::ui::input::InputType::Color,
-                    "file" => djust_components::ui::input::InputType::File,
-                    _ => djust_components::ui::input::InputType::Text,
-                };
-                input.input_type = input_type;
-            }
-
-            if let Ok(size_str) = get_prop("size", props, context) {
-                let size = match size_str.as_str() {
-                    "sm" | "small" => djust_components::ui::input::InputSize::Small,
-                    "lg" | "large" => djust_components::ui::input::InputSize::Large,
-                    _ => djust_components::ui::input::InputSize::Medium,
-                };
-                input.size = size;
-            }
-
-            if let Ok(name) = get_prop("name", props, context) {
-                input.name = Some(name);
-            }
-
-            if let Ok(value) = get_prop("value", props, context) {
-                input.value = Some(value);
-            }
-
-            if let Ok(placeholder) = get_prop("placeholder", props, context) {
-                input.placeholder = Some(placeholder);
-            }
-
-            if let Ok(disabled) = get_prop("disabled", props, context) {
-                input.disabled = disabled == "true" || disabled == "True";
-            }
-
-            if let Ok(readonly) = get_prop("readonly", props, context) {
-                input.readonly = readonly == "true" || readonly == "True";
-            }
-
-            if let Ok(required) = get_prop("required", props, context) {
-                input.required = required == "true" || required == "True";
-            }
-
-            if let Ok(on_input) = get_prop("onInput", props, context) {
-                input.on_input = Some(on_input);
-            }
-
-            if let Ok(on_change) = get_prop("onChange", props, context) {
-                input.on_change = Some(on_change);
-            }
-
-            // Render the component
-            input.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustInput: {e}"))
-            })
-        }
-
-        "RustText" => {
-            // Extract required content prop
-            let content = get_prop("content", props, context)?;
-
-            // Create text with basic props
-            let mut text = djust_components::ui::Text::new(content);
-
-            // Apply optional props
-            if let Ok(element_str) = get_prop("element", props, context) {
-                let element = match element_str.as_str() {
-                    "p" | "paragraph" => djust_components::ui::text::TextElement::Paragraph,
-                    "span" => djust_components::ui::text::TextElement::Span,
-                    "label" => djust_components::ui::text::TextElement::Label,
-                    "div" => djust_components::ui::text::TextElement::Div,
-                    "h1" => djust_components::ui::text::TextElement::H1,
-                    "h2" => djust_components::ui::text::TextElement::H2,
-                    "h3" => djust_components::ui::text::TextElement::H3,
-                    "h4" => djust_components::ui::text::TextElement::H4,
-                    "h5" => djust_components::ui::text::TextElement::H5,
-                    "h6" => djust_components::ui::text::TextElement::H6,
-                    _ => djust_components::ui::text::TextElement::Span,
-                };
-                text.element = element;
-            }
-
-            if let Ok(color_str) = get_prop("color", props, context) {
-                let color = match color_str.as_str() {
-                    "primary" => djust_components::ui::text::TextColor::Primary,
-                    "secondary" => djust_components::ui::text::TextColor::Secondary,
-                    "success" => djust_components::ui::text::TextColor::Success,
-                    "danger" => djust_components::ui::text::TextColor::Danger,
-                    "warning" => djust_components::ui::text::TextColor::Warning,
-                    "info" => djust_components::ui::text::TextColor::Info,
-                    "light" => djust_components::ui::text::TextColor::Light,
-                    "dark" => djust_components::ui::text::TextColor::Dark,
-                    "muted" => djust_components::ui::text::TextColor::Muted,
-                    _ => djust_components::ui::text::TextColor::Dark,
-                };
-                text.color = Some(color);
-            }
-
-            if let Ok(weight_str) = get_prop("weight", props, context) {
-                let weight = match weight_str.as_str() {
-                    "bold" => djust_components::ui::text::FontWeight::Bold,
-                    "light" => djust_components::ui::text::FontWeight::Light,
-                    _ => djust_components::ui::text::FontWeight::Normal,
-                };
-                text.weight = weight;
-            }
-
-            if let Ok(for_input) = get_prop("forInput", props, context) {
-                text.for_input = Some(for_input);
-            }
-
-            if let Ok(id) = get_prop("id", props, context) {
-                text.id = Some(id);
-            }
-
-            // Render the component
-            text.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustText: {e}"))
-            })
-        }
-
-        "RustCard" => {
-            // Extract required body prop
-            let body = get_prop("body", props, context)?;
-
-            // Create card with basic props
-            let mut card = djust_components::ui::Card::new(body);
-
-            // Apply optional props
-            if let Ok(variant_str) = get_prop("variant", props, context) {
-                let variant = match variant_str.as_str() {
-                    "primary" => djust_components::ui::card::CardVariant::Primary,
-                    "secondary" => djust_components::ui::card::CardVariant::Secondary,
-                    "success" => djust_components::ui::card::CardVariant::Success,
-                    "danger" => djust_components::ui::card::CardVariant::Danger,
-                    "warning" => djust_components::ui::card::CardVariant::Warning,
-                    "info" => djust_components::ui::card::CardVariant::Info,
-                    "light" => djust_components::ui::card::CardVariant::Light,
-                    "dark" => djust_components::ui::card::CardVariant::Dark,
-                    _ => djust_components::ui::card::CardVariant::Default,
-                };
-                card.variant = variant;
-            }
-
-            if let Ok(header) = get_prop("header", props, context) {
-                card.header = Some(header);
-            }
-
-            if let Ok(footer) = get_prop("footer", props, context) {
-                card.footer = Some(footer);
-            }
-
-            if let Ok(border) = get_prop("border", props, context) {
-                card.border = border == "true" || border == "True";
-            }
-
-            if let Ok(shadow) = get_prop("shadow", props, context) {
-                card.shadow = shadow == "true" || shadow == "True";
-            }
-
-            if let Ok(id) = get_prop("id", props, context) {
-                card.id = Some(id);
-            }
-
-            // Render the component
-            card.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustCard: {e}"))
-            })
-        }
-
-        "RustAlert" => {
-            // Extract required message prop
-            let message = get_prop("message", props, context)?;
-
-            // Create alert with basic props
-            let mut alert = djust_components::ui::Alert::new(message);
-
-            // Apply optional props
-            if let Ok(variant_str) = get_prop("variant", props, context) {
-                let variant = match variant_str.as_str() {
-                    "primary" => djust_components::ui::alert::AlertVariant::Primary,
-                    "secondary" => djust_components::ui::alert::AlertVariant::Secondary,
-                    "success" => djust_components::ui::alert::AlertVariant::Success,
-                    "danger" => djust_components::ui::alert::AlertVariant::Danger,
-                    "warning" => djust_components::ui::alert::AlertVariant::Warning,
-                    "info" => djust_components::ui::alert::AlertVariant::Info,
-                    "light" => djust_components::ui::alert::AlertVariant::Light,
-                    "dark" => djust_components::ui::alert::AlertVariant::Dark,
-                    _ => djust_components::ui::alert::AlertVariant::Info,
-                };
-                alert.variant = variant;
-            }
-
-            if let Ok(dismissible) = get_prop("dismissible", props, context) {
-                alert.dismissible = dismissible == "true" || dismissible == "True";
-            }
-
-            if let Ok(icon) = get_prop("icon", props, context) {
-                alert.icon = Some(icon);
-            }
-
-            if let Ok(id) = get_prop("id", props, context) {
-                alert.id = Some(id);
-            }
-
-            // Render the component
-            alert.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustAlert: {e}"))
-            })
-        }
-
-        "RustModal" => {
-            // Extract required props
-            let id = get_prop("id", props, context)?;
-            let body = get_prop("body", props, context)?;
-
-            // Create modal with basic props
-            let mut modal = djust_components::ui::Modal::new(id, body);
-
-            // Apply optional props
-            if let Ok(title) = get_prop("title", props, context) {
-                modal.title = Some(title);
-            }
-
-            if let Ok(footer) = get_prop("footer", props, context) {
-                modal.footer = Some(footer);
-            }
-
-            if let Ok(size_str) = get_prop("size", props, context) {
-                let size = match size_str.as_str() {
-                    "small" | "sm" => djust_components::ui::modal::ModalSize::Small,
-                    "medium" | "md" => djust_components::ui::modal::ModalSize::Medium,
-                    "large" | "lg" => djust_components::ui::modal::ModalSize::Large,
-                    "xl" | "extralarge" => djust_components::ui::modal::ModalSize::ExtraLarge,
-                    _ => djust_components::ui::modal::ModalSize::Medium,
-                };
-                modal.size = size;
-            }
-
-            if let Ok(centered) = get_prop("centered", props, context) {
-                modal.centered = centered == "true" || centered == "True";
-            }
-
-            if let Ok(scrollable) = get_prop("scrollable", props, context) {
-                modal.scrollable = scrollable == "true" || scrollable == "True";
-            }
-
-            // Render the component
-            modal.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustModal: {e}"))
-            })
-        }
-
-        "RustDropdown" => {
-            // Extract required id prop
-            let id = get_prop("id", props, context)?;
-
-            // Create dropdown with basic props
-            let mut dropdown = djust_components::ui::Dropdown::new(id);
-
-            // Parse items from template
-            // Expected format: items="[{'label': 'Option 1', 'value': 'opt1'}, ...]"
-            if let Ok(items_str) = get_prop("items", props, context) {
-                // Try to parse as JSON
-                if let Ok(items_json) = serde_json::from_str::<Vec<serde_json::Value>>(&items_str) {
-                    let mut items = Vec::new();
-                    for item in items_json {
-                        if let (Some(label), Some(value)) = (
-                            item.get("label").and_then(|v| v.as_str()),
-                            item.get("value").and_then(|v| v.as_str()),
-                        ) {
-                            items.push(djust_components::ui::dropdown::DropdownItem {
-                                label: label.to_string(),
-                                value: value.to_string(),
-                            });
-                        }
-                    }
-                    dropdown.items = items;
-                }
-            }
-
-            // Apply optional props
-            if let Ok(selected) = get_prop("selected", props, context) {
-                dropdown.selected = Some(selected);
-            }
-
-            if let Ok(variant_str) = get_prop("variant", props, context) {
-                let variant = match variant_str.as_str() {
-                    "primary" => djust_components::ui::dropdown::DropdownVariant::Primary,
-                    "secondary" => djust_components::ui::dropdown::DropdownVariant::Secondary,
-                    "success" => djust_components::ui::dropdown::DropdownVariant::Success,
-                    "danger" => djust_components::ui::dropdown::DropdownVariant::Danger,
-                    "warning" => djust_components::ui::dropdown::DropdownVariant::Warning,
-                    "info" => djust_components::ui::dropdown::DropdownVariant::Info,
-                    "light" => djust_components::ui::dropdown::DropdownVariant::Light,
-                    "dark" => djust_components::ui::dropdown::DropdownVariant::Dark,
-                    _ => djust_components::ui::dropdown::DropdownVariant::Primary,
-                };
-                dropdown.variant = variant;
-            }
-
-            if let Ok(size_str) = get_prop("size", props, context) {
-                let size = match size_str.as_str() {
-                    "sm" | "small" => djust_components::ui::dropdown::DropdownSize::Small,
-                    "lg" | "large" => djust_components::ui::dropdown::DropdownSize::Large,
-                    _ => djust_components::ui::dropdown::DropdownSize::Medium,
-                };
-                dropdown.size = size;
-            }
-
-            if let Ok(disabled) = get_prop("disabled", props, context) {
-                dropdown.disabled = disabled == "true" || disabled == "True";
-            }
-
-            if let Ok(placeholder) = get_prop("placeholder", props, context) {
-                dropdown.placeholder = Some(placeholder);
-            }
-
-            // Render the component
-            dropdown.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustDropdown: {e}"))
-            })
-        }
-
-        "RustTabs" => {
-            // Extract required id prop
-            let id = get_prop("id", props, context)?;
-
-            // Create tabs with basic props
-            let mut tabs = djust_components::ui::Tabs::new(id);
-
-            // Parse tabs from template
-            // Expected format: tabs="[{'id': 'tab1', 'label': 'Tab 1', 'content': 'Content 1'}, ...]"
-            if let Ok(tabs_str) = get_prop("tabs", props, context) {
-                // Try to parse as JSON
-                if let Ok(tabs_json) = serde_json::from_str::<Vec<serde_json::Value>>(&tabs_str) {
-                    let mut tabs_vec = Vec::new();
-                    for tab in tabs_json {
-                        if let (Some(tab_id), Some(label), Some(content)) = (
-                            tab.get("id").and_then(|v| v.as_str()),
-                            tab.get("label").and_then(|v| v.as_str()),
-                            tab.get("content").and_then(|v| v.as_str()),
-                        ) {
-                            tabs_vec.push(djust_components::ui::tabs::TabItem {
-                                id: tab_id.to_string(),
-                                label: label.to_string(),
-                                content: content.to_string(),
-                            });
-                        }
-                    }
-                    if !tabs_vec.is_empty() && tabs.active.is_empty() {
-                        tabs.active = tabs_vec[0].id.clone();
-                    }
-                    tabs.tabs = tabs_vec;
-                }
-            }
-
-            // Apply optional props
-            if let Ok(active) = get_prop("active", props, context) {
-                tabs.active = active;
-            }
-
-            if let Ok(variant_str) = get_prop("variant", props, context) {
-                let variant = match variant_str.as_str() {
-                    "pills" => djust_components::ui::tabs::TabVariant::Pills,
-                    "underline" => djust_components::ui::tabs::TabVariant::Underline,
-                    _ => djust_components::ui::tabs::TabVariant::Default,
-                };
-                tabs.variant = variant;
-            }
-
-            if let Ok(vertical) = get_prop("vertical", props, context) {
-                tabs.vertical = vertical == "true" || vertical == "True";
-            }
-
-            // Render the component
-            tabs.render(fw).map_err(|e| {
-                DjangoRustError::TemplateError(format!("Failed to render RustTabs: {e}"))
-            })
-        }
-
-        _ => Err(DjangoRustError::TemplateError(format!(
-            "Unknown Rust component: {name}"
-        ))),
-    }
-}
-
-/// Get a prop value, resolving template variables if needed
-#[cfg(feature = "liveview")]
-fn get_prop(key: &str, props: &[(String, String)], context: &Context) -> Result<String> {
-    for (k, v) in props {
-        if k == key {
-            // Resolve Django template variable syntax: {{ var.path }}
-            if v.starts_with("{{") && v.ends_with("}}") {
-                let var_name = v.trim_start_matches("{{").trim_end_matches("}}").trim();
-
-                if let Some(ctx_value) = context.get(var_name) {
-                    return Ok(ctx_value.to_string());
-                }
-            } else if let Some(ctx_value) = context.get(v) {
-                // Direct variable reference (no {{ }})
-                return Ok(ctx_value.to_string());
-            } else {
-                // Literal value
-                return Ok(v.clone());
-            }
-        }
-    }
-
-    Err(DjangoRustError::TemplateError(format!(
-        "Missing required prop: {key}"
-    )))
 }
 
 /// [`evaluate_condition`] with Django's `IfNode.render` error policy.
@@ -7339,6 +7085,39 @@ mod asvar_standalone_tests {
     }
 
     #[test]
+    fn recursive_partial_analysis_memoizes_shared_acyclic_graph() {
+        use crate::parser::{PartialRegistry, PartialRegistryRef};
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let registry: Arc<PartialRegistry> = Arc::new_cyclic(|weak| {
+            let mut bodies = HashMap::new();
+            for index in 0..40 {
+                let child = || Node::PartialCall {
+                    name: format!("part{}", index + 1),
+                    registry: Some(PartialRegistryRef::Weak(weak.clone())),
+                    site_id: None,
+                };
+                bodies.insert(
+                    format!("part{index}"),
+                    if index == 39 {
+                        vec![]
+                    } else {
+                        vec![child(), child()]
+                    },
+                );
+            }
+            PartialRegistry { bodies }
+        });
+        let root = [Node::PartialCall {
+            name: "part0".into(),
+            registry: Some(PartialRegistryRef::Strong(registry)),
+            site_id: None,
+        }];
+        assert_eq!(analyze_recursive_partials(&root), (false, 40));
+    }
+
+    #[test]
     fn widthratio_with_asvar_renders_nothing_when_rendered_alone() {
         let mut context = Context::new();
         context.set("p".to_string(), Value::Integer(5));
@@ -7734,6 +7513,98 @@ mod tests {
             only: false,
             site_id: None,
         }
+    }
+
+    struct NestedDynamicPanicLoader;
+
+    impl TemplateLoader for NestedDynamicPanicLoader {
+        fn shared_handle(&self) -> std::sync::Arc<dyn TemplateLoader + Send + Sync> {
+            std::sync::Arc::new(NestedDynamicPanicLoader)
+        }
+
+        fn load_template(&self, name: &str) -> Result<Vec<Node>> {
+            match name {
+                "outer.html" => Ok(vec![Node::Include {
+                    origin: None,
+                    template: "inner_target".to_string(),
+                    with_vars: Vec::new(),
+                    only: false,
+                    site_id: None,
+                }]),
+                "inner.html" => Ok(vec![panicking_child()]),
+                _ => panic!(
+                    "nested dynamic include child panicked at depth {}",
+                    DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.get())
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn nested_dynamic_include_guards_restore_depth_on_unwind() {
+        let mut context = Context::new();
+        context.set_guard_dynamic_recursive_partials(true);
+        context.set(
+            "outer_target".to_owned(),
+            Value::String("outer.html".to_owned()),
+        );
+        context.set(
+            "inner_target".to_owned(),
+            Value::String("inner.html".to_owned()),
+        );
+        let outer = Node::Include {
+            origin: None,
+            template: "outer_target".to_owned(),
+            with_vars: Vec::new(),
+            only: false,
+            site_id: None,
+        };
+        let before = DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.get());
+        assert_eq!(
+            before, 0,
+            "each test thread must begin without an include scope"
+        );
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_node_with_loader_mut(&outer, &mut context, Some(&NestedDynamicPanicLoader))
+        }));
+        let payload = panicked.expect_err("the child panic must propagate");
+        assert_eq!(
+            payload.downcast_ref::<String>().map(String::as_str),
+            Some("nested dynamic include child panicked at depth 2"),
+            "both dynamic guards must be active at the panicking child"
+        );
+        assert_eq!(DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.get()), before);
+    }
+
+    #[test]
+    fn partial_panic_restores_marker_path_and_recursion_depth() {
+        use crate::parser::{PartialRegistry, PartialRegistryRef};
+        let registry = std::sync::Arc::new(PartialRegistry {
+            bodies: std::collections::HashMap::from([
+                ("bad".to_owned(), vec![panicking_child()]),
+                ("good".to_owned(), vec![Node::Text("OK".to_owned())]),
+            ]),
+        });
+        let call = |name: &str| Node::PartialCall {
+            name: name.to_owned(),
+            registry: Some(PartialRegistryRef::Strong(registry.clone())),
+            site_id: Some("abcd_1".to_owned()),
+        };
+        let mut context = Context::new();
+        context.set_dj_if_include_path("-iabcd_0");
+        for _ in 0..65 {
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                render_node_with_loader_mut(&call("bad"), &mut context, Some(&PanickingLoader))
+            }));
+            assert!(panicked.is_err(), "the child panic must propagate");
+            assert_eq!(context.dj_if_include_path(), "-iabcd_0");
+        }
+        assert_eq!(
+            render_node_with_loader_mut(&call("good"), &mut context, Some(&PanickingLoader))
+                .unwrap(),
+            "OK"
+        );
+        assert_eq!(context.dj_if_include_path(), "-iabcd_0");
     }
 
     /// Drives `Node::Localize` through `render_node_with_loader` with a
@@ -8785,31 +8656,6 @@ mod tests {
         context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "<b>hi</b>");
-    }
-
-    #[test]
-    fn test_cycle_urlize_filter_not_double_escaped() {
-        // {% cycle x|urlize y %} — urlize produces its own <a href=...> HTML; it
-        // must not be re-escaped (urlize is a name-based safe_output_filter).
-        // Two operands: a one-operand `{% cycle x|urlize %}` is Django's
-        // REFERENCE form and raises `No named cycles in template` (#2556).
-        let tokens = tokenize("{% cycle x|urlize y %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set(
-            "x".to_string(),
-            Value::String("Visit https://example.com".to_string()),
-        );
-        let result = render_nodes(&nodes, &context).unwrap();
-        // urlize's <a href="..."> must survive verbatim, not become &lt;a ...
-        assert!(
-            result.contains("<a href=\"https://example.com\""),
-            "urlize output was re-escaped: {result}"
-        );
-        assert!(
-            !result.contains("&lt;a"),
-            "urlize output was double-escaped: {result}"
-        );
     }
 
     #[test]

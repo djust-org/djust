@@ -26,7 +26,7 @@ from decimal import Decimal
 
 import pytest
 
-pytest.importorskip("django")
+django = pytest.importorskip("django")
 
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
@@ -394,17 +394,18 @@ def test_decimals_differing_beyond_f64_do_not_collide_in_one_loop() -> None:
 
 
 def test_django_raises_on_a_non_finite_decimal_and_djust_renders_it() -> None:
-    """A stated divergence, in djust's favour, found by a randomized sweep.
+    """Djust's permissive rendering agrees with Django 6.1's upstream fix.
 
-    Django's `numberformat.format` calls `abs()` on an already-stringified
-    value for `NaN`/`Infinity` and raises `TypeError`. djust renders the form
-    `str()` gives. Pinned so the difference is known rather than discovered.
+    Django 5.2/6.0 raises `TypeError` on the same values (#2460).
     """
     for form in ("NaN", "Infinity", "-Infinity"):
         ctx = {"p": Decimal(form)}
-        with pytest.raises(TypeError):
-            DjangoTemplate("{{ p }}").render(DjangoContext(ctx))
         assert _rust.render_template("{{ p }}", ctx) == form
+        if django.VERSION >= (6, 1):
+            assert DjangoTemplate("{{ p }}").render(DjangoContext(ctx)) == form
+        else:
+            with pytest.raises(TypeError):
+                DjangoTemplate("{{ p }}").render(DjangoContext(ctx))
 
 
 @pytest.mark.parametrize(
@@ -674,11 +675,10 @@ def test_a_positive_scientific_exponent_keeps_its_sign() -> None:
 
 
 def test_a_non_finite_decimal_passes_through_rather_than_raising() -> None:
-    """A DIVERGENCE from Django, in djust's favour, and now pinned.
+    """Non-finite values pass through; Django 6.1 now renders them too.
 
-    Django's `numberformat.format` calls `abs()` on an already-stringified value
-    and raises `TypeError` for `NaN`/`Infinity`. djust renders the form `str()`
-    gives.
+    Django 5.2/6.0's `numberformat.format` raises `TypeError` for these values.
+    Djust renders the form `str()` gives, as does Django 6.1.
 
     This pins the BEHAVIOUR. The guards that produce it are pinned separately in
     `crates/djust_core/tests/test_decimal_value_2214.rs`, and an earlier version
@@ -688,8 +688,11 @@ def test_a_non_finite_decimal_passes_through_rather_than_raising() -> None:
     for form in ("NaN", "sNaN", "Infinity", "-Infinity"):
         ctx = {"p": Decimal(form)}
         assert _rust.render_template("{{ p }}", ctx) == form
-        with pytest.raises(TypeError):
-            DjangoTemplate("{{ p }}").render(DjangoContext(ctx))
+        if django.VERSION >= (6, 1):
+            assert DjangoTemplate("{{ p }}").render(DjangoContext(ctx)) == form
+        else:
+            with pytest.raises(TypeError):
+                DjangoTemplate("{{ p }}").render(DjangoContext(ctx))
 
 
 def test_a_tagged_decimal_escapes_backslashes_and_control_characters() -> None:

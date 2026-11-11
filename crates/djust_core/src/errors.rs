@@ -1,6 +1,6 @@
 //! Error types for djust
 
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRecursionError, PyRuntimeError};
 use pyo3::prelude::*;
 use thiserror::Error;
 
@@ -85,10 +85,14 @@ pub enum DjangoRustError {
     /// unparseable argument, so a single "template error" kind cannot express
     /// the distinction and `{% if %}` would swallow real failures with it.
     ///
-    /// Crosses to Python as a `RuntimeError` like every other variant; the
-    /// distinction is consumed inside the renderer.
+    /// The Python boundary converts this to Django's `VariableDoesNotExist`
+    /// so callers can catch the same exception as with the Django renderer.
     #[error("Template error: {0}")]
     VariableDoesNotExist(String),
+
+    /// Partial recursion exhaustion, representable even without Python initialized.
+    #[error("maximum recursion depth exceeded while rendering template partial")]
+    TemplateRecursion,
 
     #[error("Context error: {0}")]
     ContextError(String),
@@ -150,6 +154,22 @@ impl From<DjangoRustError> for PyErr {
                 });
                 error
             }
+
+            DjangoRustError::TemplateRecursion => PyRecursionError::new_err(
+                "maximum recursion depth exceeded while rendering template partial",
+            ),
+            DjangoRustError::VariableDoesNotExist(message) => Python::attach(|py| {
+                // Keep the native engine usable even when Django is unavailable;
+                // its Python exception class is loaded only on this error path.
+                let django_error = py
+                    .import("django.template")
+                    .and_then(|module| module.getattr("VariableDoesNotExist"))
+                    .and_then(|class| class.call1((message.as_str(),)))
+                    .map(PyErr::from_value);
+                django_error.unwrap_or_else(|_| {
+                    PyRuntimeError::new_err(format!("Template error: {message}"))
+                })
+            }),
 
             // Hand the caller back the exception user code actually raised,
             // so Django's handler chain still sees `PermissionDenied` /

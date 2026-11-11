@@ -200,7 +200,8 @@ async def test_a_deferred_save_does_not_hold_a_sync_bridge_thread(blocked_store)
     assert post.result().status_code == 200
 
 
-async def test_a_long_lived_worker_slot_keeps_its_saves():
+@pytest.mark.parametrize("slot_name", ["websocket", "http"])
+async def test_a_long_lived_worker_slot_keeps_its_saves(slot_name):
     """A WebSocket worker-pool slot (#3074) or a ``PooledHTTP`` slot is never
     shut down, so a save made there stays on the slot's thread."""
     from concurrent.futures import ThreadPoolExecutor
@@ -208,11 +209,9 @@ async def test_a_long_lived_worker_slot_keeps_its_saves():
     from asgiref.sync import SyncToAsync
 
     from djust.runtime import _spawn_save
+    from djust.worker_pool import _HTTPSlot, _Slot
 
-    class Slot:
-        pass
-
-    slot = Slot()
+    slot = _Slot(0) if slot_name == "websocket" else _HTTPSlot(0)
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="slot-3212")
     SyncToAsync.context_to_thread_executor[slot] = executor
     token = SyncToAsync.thread_sensitive_context.set(slot)

@@ -2,8 +2,6 @@
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use djust_core::{Context, DjangoRustError, Result, Value};
-use once_cell::sync::Lazy;
-use regex::Regex;
 
 use crate::filter_registry;
 
@@ -956,7 +954,7 @@ pub(crate) fn apply_filter_with_literal(
             }
             None if !is_literal_filter_arg(a) => {
                 return Err(DjangoRustError::VariableDoesNotExist(format!(
-                    "filter '{filter_name}' argument {a:?} does not resolve — Django \
+                    "Failed lookup: filter '{filter_name}' argument {a:?} does not resolve — Django \
                      raises VariableDoesNotExist here"
                 )));
             }
@@ -1185,6 +1183,11 @@ fn apply_resolved_filter(
     // `autoescape and not isinstance(value, SafeData)` could never take its
     // second branch. `filter_registry::mark_input_safety` restores the marker
     // on the way in — for the CONTAINER and, for a sequence, per ITEM.
+    // All builtins have already returned. Mark before the registry lookup:
+    // registration may change concurrently, and unknown filters abort anyway.
+    if let Some(context) = context.filter(|ctx| ctx.provenance_flatten_tracking()) {
+        context.note_lazy_unknown_effect();
+    }
     if let Some(result) = filter_registry::apply_custom_filter(
         filter_name,
         value,
@@ -1301,6 +1304,14 @@ pub fn is_string_filter(filter_name: &str) -> bool {
 pub fn is_known_filter(name: &str) -> bool {
     crate::filter_arity::builtin_arity(name).is_some()
         || filter_registry::is_registered_custom_filter(name)
+}
+
+/// The argument a Django-routed built-in receives: the typed value when the
+/// argument resolved (a context binding or a numeric literal), else its text.
+fn django_filter_arg(arg: Option<&str>, resolved_arg: Option<&Value>) -> Option<Value> {
+    resolved_arg
+        .cloned()
+        .or_else(|| arg.map(|text| Value::String(text.to_string())))
 }
 
 /// Dispatch table for all built-in filters. Returns ``None`` when
@@ -1633,21 +1644,20 @@ fn apply_builtin_filter(
             )
         }
         "pluralize" => Ok(Value::String(pluralize(value, arg.unwrap_or("s")))),
-        "slugify" => {
-            // slugify filter: converts to URL-friendly slug
-            Ok(Value::String(crate::truncate::slugify(&value.to_string())))
-        }
-        "capfirst" => {
-            // capfirst filter: capitalizes first character
-            let s = value.to_string();
-            let mut chars = s.chars();
-            match chars.next() {
-                None => Ok(Value::String(String::new())),
-                Some(first) => Ok(Value::String(
-                    first.to_uppercase().collect::<String>() + chars.as_str(),
-                )),
-            }
-        }
+        "slugify" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        "capfirst" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         // Django's body, statement for statement (#2401):
         //
         //     if arg is None:      arg = gettext("yes,no,maybe")
@@ -1705,22 +1715,20 @@ fn apply_builtin_filter(
             };
             Ok(Value::String(chosen.to_string()))
         }
-        "linebreaks" => {
-            // linebreaks filter: converts newlines to <p> and <br> tags.
-            // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
-            Ok(Value::String(linebreaks(
-                &value.to_string(),
-                autoescape && !input_safety.container,
-            )))
-        }
-        "linebreaksbr" => {
-            // linebreaksbr filter: converts newlines to <br> tags.
-            // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
-            Ok(Value::String(linebreaksbr(
-                &value.to_string(),
-                autoescape && !input_safety.container,
-            )))
-        }
+        "linebreaks" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        "linebreaksbr" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         "cut" => {
             // cut filter: removes all occurrences of arg from string
             let remove_str = arg.unwrap_or("");
@@ -1798,22 +1806,13 @@ fn apply_builtin_filter(
             // value first and a value that fails never reaches `int(arg)`.
             crate::floatformat::floatformat(value, arg, arg_was_quoted, arg_int_is_type_error)
         }
-        "filesizeformat" => {
-            // Django coerces with `int(bytes_)` and formats EVERY input,
-            // falling back to `0 bytes` rather than echoing the value (#2264).
-            // #2260's own arm here is superseded by that rewrite, which already
-            // routes every variant through one `filesize_to_int` — so `BigInt`
-            // belongs there, next to `Decimal`, and that is where it is.
-            //
-            // `except (TypeError, ValueError, UnicodeDecodeError)` does NOT
-            // name `OverflowError`, so `int(±inf)` 500s the page while
-            // `int(nan)` — a ValueError — is caught and renders `0 bytes`
-            // (#2435). This arm answered `0 bytes` for both.
-            if let Err(IntValueError::Overflow) = python_int_value(value) {
-                return Some(Err(int_value_error(filter_name, IntValueError::Overflow)));
-            }
-            Ok(Value::String(format_filesize(value)))
-        }
+        "filesizeformat" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         // `random` is `lambda value: random.choice(value)` — it INDEXES, so a
         // string yields one CHARACTER and a dict one key (#2283). Returning
         // the whole string was not "a random pick of one element", it was the
@@ -2127,44 +2126,34 @@ fn apply_builtin_filter(
                 _ => Ok(value.clone()),
             }
         }
-        "wordcount" => {
-            // wordcount filter: count the number of words
-            let count = value.to_string().split_whitespace().count();
-            Ok(Value::Integer(count as i64))
-        }
-        "wordwrap" => {
-            // Django is `wrap(value, int(arg))`, and `int()` raises for a
-            // non-numeric argument. #2293 recorded djust's historical 75
-            // default here as a deliberate divergence; #2328 closed it — the
-            // argument goes through the one chokepoint and raises, as Django
-            // does. A PARSED width of <= 0 is a different case again: that is
-            // Django's own `_wrap_chunks` guard, inside `textwrap::wrap`.
-            let width = int_arg!(
-                filter_name,
-                arg,
-                arg_was_quoted,
-                arg_int_is_type_error,
-                75,
-                BadArg::Raise
-            )
-            .unwrap_or(75);
-            crate::textwrap::wrap(&value.to_string(), width)
-                .map(Value::String)
-                .map_err(|e| DjangoRustError::TemplateError(e.to_string()))
-        }
-        "striptags" => {
-            // striptags filter: strip HTML tags from string
-            Ok(Value::String(strip_tags(&value.to_string())))
-        }
-        "addslashes" => {
-            // addslashes filter: escape \, ', " with backslashes
-            let s = value.to_string();
-            let escaped = s
-                .replace('\\', "\\\\")
-                .replace('\'', "\\'")
-                .replace('"', "\\\"");
-            Ok(Value::String(escaped))
-        }
+        "wordcount" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        "wordwrap" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        "striptags" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        "addslashes" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         "ljust" => {
             // `value.ljust(int(arg))` — `int()` raises, so the argument takes
             // the chokepoint's `Raise` arm (#2328).
@@ -2227,11 +2216,11 @@ fn apply_builtin_filter(
             }))
         }
         "center" => {
-            // center filter: `value.center(int(arg))`.
+            // Django <6 uses `value.center(int(arg))`; Django 6+ uses
+            // format-style center alignment, which puts the smaller half of
+            // an odd margin on the left.
             //
-            // NOT `format!("{s:^width$}")`, which was here: Rust's `^` puts the
-            // SMALLER half of an odd margin on the left, unconditionally.
-            // CPython's `str.center` is
+            // CPython's `str.center` uses:
             //
             //     marg = width - len(self)
             //     left = marg / 2 + (marg & width & 1)
@@ -2262,16 +2251,21 @@ fn apply_builtin_filter(
                 s
             } else {
                 let marg = width - len;
-                let left = marg / 2 + (marg & width & 1);
+                let left = if crate::renderer::django_6_or_later() {
+                    marg / 2
+                } else {
+                    marg / 2 + (marg & width & 1)
+                };
                 format!("{}{s}{}", " ".repeat(left), " ".repeat(marg - left))
             }))
         }
-        "make_list" => {
-            // make_list filter: split string into list of characters
-            let s = value.to_string();
-            let chars: Vec<Value> = s.chars().map(|c| Value::String(c.to_string())).collect();
-            Ok(Value::List(chars))
-        }
+        "make_list" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         "json_script" => {
             // `json.dumps(d.keys())` raises `TypeError`. Same treatment as
             // `random` above (#2340).
@@ -2359,119 +2353,34 @@ fn apply_builtin_filter(
             // escapejs filter: escape string for use in JavaScript
             Ok(Value::String(escape_js(&value.to_string())))
         }
-        "linenumbers" => {
-            // linenumbers filter: prepend line numbers to each line.
-            // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
-            Ok(Value::String(add_linenumbers(
-                &value.to_string(),
-                autoescape && !input_safety.container,
-            )))
-        }
-        "get_digit" => {
-            // Django indexes `str(int(value))`, NOT the rendered value:
-            //
-            //     arg = int(arg); value = int(value)   # ValueError -> value
-            //     if arg < 1: return value
-            //     try: return int(str(value)[-arg])
-            //     except IndexError: return 0
-            //
-            // Which is why `{{ 1e-200|get_digit:3 }}` is `0` and not a digit of
-            // the rendering: `int(1e-200)` is `0`, so there is no third digit.
-            // Reading the rendered string instead was invisible while `Display`
-            // expanded every float — it answered `0` from the 200 zeros — and
-            // became wrong the moment #2258 made `{{ 1e-200 }}` render `1e-200`,
-            // whose third-from-last character is `2`. The #2260 differential
-            // caught it as a regression against `main`.
-            //
-            // `except ValueError: return value` and `if arg < 1: return value`
-            // are NOT the same answer, and an earlier version of this comment
-            // said they were (#2403). `value = int(value)` runs INSIDE the
-            // `try`, BEFORE the `arg < 1` test, so:
-            //
-            //   * `int(arg)` raised   -> `value` was never rebound; the INPUT
-            //                            OBJECT comes back, `SafeData` and all;
-            //   * `int(value)` raised -> same, the input object;
-            //   * `arg < 1`           -> the CONVERTED int comes back, so
-            //                            `{{ False|get_digit:0 }}` is `0` and
-            //                            not `False`, and `{{ 1.5|get_digit:0 }}`
-            //                            is `1` and not `1.5`. Measured.
-            //
-            // The distinction decides the safety grant as well as the text —
-            // an `int` is never `SafeData` — so the two exits are spelled
-            // separately here and `builtin_produced_safe`'s `yesno`-shaped
-            // two-branch arm answers off the same split.
-            let Some(n) = int_arg!(
-                filter_name,
-                arg,
-                arg_was_quoted,
-                arg_int_is_type_error,
-                0,
-                BadArg::ReturnInput
-            ) else {
-                return Some(Ok(value.clone()));
-            };
-            // `int(value)` raised — and WHICH exception decides the answer
-            // (#2435). Django's `except ValueError: return value` catches
-            // exactly one of the three: a `TypeError` (`None`, a list, a dict)
-            // and an `OverflowError` (`±inf`) both escape it and 500 the page.
-            // This returned the value for all three.
-            let d = match python_int_value(value) {
-                Ok(digits) => digits,
-                Err(IntValueError::Value) => return Some(Ok(value.clone())),
-                Err(err) => return Some(Err(int_value_error(filter_name, err))),
-            };
-            if n < 1 {
-                return Some(Ok(int_value_of(&d)));
-            }
-            let n = n as usize;
-            // `str(value)` INCLUDES the sign, and Django indexes into that,
-            // so `-123` has four characters. Out of range is `0`; landing on
-            // the `-` raises in Django (`int('-')`) and returns the value
-            // unchanged here, the same fail-soft posture the rest of this
-            // module takes rather than 500ing (documented divergence).
-            //
-            // Both numeric exits are an `int` and not a one-character STRING
-            // (#2459). Django's are `int(str(value)[-arg])` and
-            // `except IndexError: return 0`, and its own docstring says so in
-            // as many words — *"output is always an integer"*. The type is the
-            // whole of the divergence, because a `str` ITERATES and
-            // SUBSCRIPTS and an `int` does neither: with a string here,
-            // `{{ p|get_digit:"1"|first }}` rendered where Django raises
-            // `TypeError: 'int' object is not subscriptable`, and the #2451
-            // chokepoint was right about every one of those cells — it was
-            // being handed the wrong subject. Three more divergences ride on
-            // the same type and are not sequence filters at all:
-            // `{% if p|get_digit:"5" %}` took the TRUE branch because `"0"` is
-            // truthy and `0` is not, `|length` answered 1 where Django's
-            // `len(int)` raises into its own `except` and answers 0, and
-            // `|stringformat:"d"` answered `""` because `"%d" % "2"` is a
-            // TypeError.
-            //
-            // `int_value_of` is deliberately NOT called: it exists to parse an
-            // arbitrary digit STRING (and to widen past `i64` into
-            // `Value::BigInt`), and neither question arises for a single ASCII
-            // digit, which is 0..=9 by construction of the `is_ascii_digit`
-            // guard above.
-            Ok(match d.as_bytes().get(d.len().wrapping_sub(n)) {
-                Some(b) if b.is_ascii_digit() => Value::Integer(i64::from(b - b'0')),
-                Some(_) => value.clone(),
-                None => Value::Integer(0),
-            })
-        }
-        "iriencode" => {
-            // iriencode filter: like urlencode but preserves non-ASCII chars
-            Ok(Value::String(iriencode(&value.to_string())))
-        }
-        // `"".join(char2number.get(c, c) for c in phone.lower())` — a
-        // `@keep_lazy_text` function, NOT a `@stringfilter`, so Django never
-        // coerces the value and `.lower()` on anything but a string is an
-        // `AttributeError` it does not catch (#2451). `str(value)` here meant
-        // `{{ p|phone2numeric }}` over `None` rendered `6663`, and over a list
-        // rendered the keypad spelling of its repr.
-        "phone2numeric" => match python_lower(value) {
-            Ok(lowered) => Ok(Value::String(phone2numeric(&lowered))),
-            Err(err) => Err(value_op_error(filter_name, value, &err)),
-        },
+        "linenumbers" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        "get_digit" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        "iriencode" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        "phone2numeric" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         "pprint" => {
             // Django's `pprint` filter is `pprint.pformat(value)` — which WRAPS
             // at width 80. The single-line builder this replaced diverged by
@@ -2560,105 +2469,54 @@ fn apply_builtin_filter(
             )),
             Ok(Err(err)) => Err(value_op_error(filter_name, value, &err)),
         },
-        "urlize" => {
-            // urlize filter: convert URLs and emails to clickable links.
-            // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
-            Ok(Value::String(urlize(
-                &value.to_string(),
-                None,
-                autoescape && !input_safety.container,
-            )))
-        }
-        "urlizetrunc" => {
-            // urlizetrunc filter: like urlize but truncates displayed URL.
-            // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
-            //
-            // Django is `urlize(value, trim_url_limit=int(limit))`, a bare
-            // `int()`, so the argument takes the chokepoint's `Raise` arm
-            // (#2328). A NEGATIVE limit reaches `Truncator.chars(-3)`, which
-            // keeps nothing — clamping to 0 is the same answer. Before this,
-            // `parse::<usize>` refused a negative and the URL was not truncated
-            // at all.
-            //
-            // Deliberately NOT `pad_width`: this limit is a COMPARISON bound,
-            // never an allocation, so the `MAX_PAD_WIDTH` cap that stops the
-            // pad filters from asking for an unbounded `repeat` would be a
-            // divergence here for nothing. A huge limit simply means "do not
-            // truncate", which is what Django does too.
-            //
-            // NOT `arg.map(|_| int_arg!(..))`: the macro's `return` would leave
-            // the CLOSURE, not the filter, so the error would be swallowed into
-            // the `Option`. Same trap as the `?`-in-a-match-arm one above.
-            let parsed = int_arg!(
+        "urlize" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        "urlizetrunc" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        // Routed to Django's own function (2.0), with one case answered here first: a
+        // serialized model is a map on the wire and NOT iterable (`iter_values` says so for
+        // `safeseq` / `escapeseq`). Handed to Django it would be walked as a dict and print the
+        // model's field names, where Django itself raises `TypeError` for a model. This is the
+        // rule main's native arm applied before the routing replaced that arm. Every other
+        // value goes to Django unchanged, so its own `TypeError` for an `int` or `None` is kept.
+        "unordered_list" => match value {
+            Value::Object(_) if value.model_str().is_some() => Err(value_op_error(
                 filter_name,
-                arg,
-                arg_was_quoted,
-                arg_int_is_type_error,
-                0,
-                BadArg::Raise
-            );
-            let limit = arg.map(|_| parsed.unwrap_or(0).max(0) as usize);
-            Ok(Value::String(urlize(
-                &value.to_string(),
-                limit,
-                autoescape && !input_safety.container,
-            )))
-        }
-        // Django's `list_formatter` wraps each item in `<li>` through
-        // `conditional_escape`, so a string becomes one `<li>` per CHARACTER
-        // (#2283) and `|safeseq` upstream suppresses the per-item escape.
-        //
-        // The non-iterable arm was #2274's escape, load-bearing for the scalar
-        // shapes because `unordered_list` holds an unconditional grant in
-        // `SAFE_OUTPUT_FILTERS` and a value producing no `<li>` at all must not
-        // ride it raw. It REFUSES now (#2451) — `walk_items` opens with a bare
-        // `iter(item_list)` under no `try`, so the `TypeError` is the filter's
-        // answer and there is no output left to protect.
-        "unordered_list" => match python_iter(value) {
-            Err(err) => return Some(Err(err)),
-            // `escaper = conditional_escape if autoescape else lambda x: x`
-            // (#2556): items already safe OR the block policy off → identity.
-            Ok(Ok(items)) => Ok(Value::String(unordered_list(
-                &items,
-                1,
-                input_safety.items || !autoescape,
-            ))),
-            Ok(Err(err)) => Err(value_op_error(filter_name, value, &err)),
+                value,
+                &ValueOpError::NotIterable,
+            )),
+            _ => filter_registry::apply_django_builtin_filter(
+                filter_name,
+                value,
+                django_filter_arg(arg, resolved_arg),
+                autoescape,
+                input_safety,
+            ),
         },
-        "truncatechars_html" => {
-            match int_arg!(
-                filter_name,
-                arg,
-                arg_was_quoted,
-                arg_int_is_type_error,
-                20,
-                BadArg::ReturnInput
-            ) {
-                Some(n) => Ok(Value::String(crate::truncate::html_chars(
-                    &value.to_string(),
-                    n,
-                    None,
-                ))),
-                None => Ok(value.clone()),
-            }
-        }
-        "truncatewords_html" => {
-            match int_arg!(
-                filter_name,
-                arg,
-                arg_was_quoted,
-                arg_int_is_type_error,
-                10,
-                BadArg::ReturnInput
-            ) {
-                Some(n) => Ok(Value::String(crate::truncate::html_words(
-                    &value.to_string(),
-                    n,
-                    Some(WORDS_TRUNCATE),
-                ))),
-                None => Ok(value.clone()),
-            }
-        }
+        "truncatechars_html" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        "truncatewords_html" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         // Not a built-in — signal the caller to try the custom-filter
         // registry. (The custom fallback lives in ``apply_filter_full_safe``
         // so it can capture the result's runtime safeness, #1660.)
@@ -3817,167 +3675,6 @@ fn timesince_or_until(
     Ok(Value::String(django_timesince(now, then)))
 }
 
-/// The NON-BREAKING SPACE Django joins a file size to its unit with.
-///
-/// Spelled as an escape rather than as a literal U+00A0 in the source on
-/// purpose: the two are visually identical, so a literal one is silently
-/// destroyed by an editor that normalises whitespace, by a copy-paste through a
-/// terminal, or by a well-meaning "trailing whitespace" fixer — and the
-/// resulting output looks *exactly right* while being the wrong bytes. Same
-/// character, same reasoning, as `timesince` (#2228).
-const NBSP: &str = "\u{00A0}";
-
-/// `{{ value|filesizeformat }}`, as `django/template/defaultfilters.py` writes
-/// it (#2264).
-///
-/// The previous implementation diverged on EVERY value, on five independent
-/// axes, of which the `as_f64` parse the issue was filed against is the only one
-/// that needs an unusual input to see:
-///
-/// 1. **The separator.** Django ends with `avoid_wrapping(value)`, which is
-///    `value.replace(" ", "\xa0")` — the number and the unit are joined by a
-///    NON-BREAKING space. Every cell differed by this one byte, and a test
-///    written with an ordinary space passes while shipping the wrong one. See
-///    [`NBSP`].
-/// 2. **Pluralization.** `ngettext("%(size)d byte", "%(size)d bytes", bytes_)`
-///    says `1 byte`, not `1 bytes`.
-/// 3. **Negatives.** Django takes the absolute value, formats that, and puts the
-///    `-` back — so `-1024` is `-1.0 KB`. The old signed `bytes < KB` comparison
-///    sent every negative into the bytes branch, rendering `-1024 bytes`.
-/// 4. **Coercion.** Django's first statement is `int(bytes_)`, catching
-///    `TypeError`/`ValueError`/`UnicodeDecodeError` into `0 bytes`. So `"1024"`
-///    is `1.0 KB`, `None` and `"abc"` and a list are `0 bytes`, and `True` is
-///    `1 byte`. The old version returned the value UNCHANGED for every
-///    non-numeric type, so `{{ p|filesizeformat }}` rendered `None`.
-/// 5. **Localization.** The `KB`-and-up branch formats through
-///    `formats.number_format(round(value, 1), 1)`, which honours the active
-///    locale's decimal separator AND `USE_THOUSAND_SEPARATOR` grouping —
-///    measured: `de` gives `1,5 GB`, and grouping gives `1,024.0 KB`. The
-///    `bytes` branch does NOT: it is a raw `%d`.
-///
-/// ## Two divergences that remain, deliberately
-///
-/// * **The unit names are translated by Django** and not here: `fr` renders
-///   `1,5 Gio`, not `1,5 GB`. That is `gettext`, which the Rust engine has no
-///   catalogue for; it is the same gap `{% trans %}` has and is not specific to
-///   this filter.
-/// * **Past `i128`** — about 1.7e38 bytes — this gives up and renders
-///   `0 bytes`, where Python's unbounded ints keep counting. The same ceiling
-///   `add` documents, reached only by a `Decimal` with a huge exponent.
-fn format_filesize(value: &Value) -> String {
-    let Some(bytes) = filesize_to_int(value) else {
-        // `except (TypeError, ValueError, UnicodeDecodeError)` — Django formats
-        // ZERO here, it does not echo the input.
-        return avoid_wrapping(&format!("0 {}", byte_unit(0)));
-    };
-
-    const KB: u128 = 1 << 10;
-    const MB: u128 = 1 << 20;
-    const GB: u128 = 1 << 30;
-    const TB: u128 = 1 << 40;
-    const PB: u128 = 1 << 50;
-
-    // `negative = bytes_ < 0; if negative: bytes_ = -bytes_`. `unsigned_abs`
-    // rather than `-bytes` because `i128::MIN` has no positive counterpart.
-    let negative = bytes < 0;
-    let magnitude = bytes.unsigned_abs();
-
-    let scaled = |unit: u128| filesize_number_format(magnitude as f64 / unit as f64);
-    let formatted = if magnitude < KB {
-        format!("{magnitude} {}", byte_unit(magnitude))
-    } else if magnitude < MB {
-        format!("{} KB", scaled(KB))
-    } else if magnitude < GB {
-        format!("{} MB", scaled(MB))
-    } else if magnitude < TB {
-        format!("{} GB", scaled(GB))
-    } else if magnitude < PB {
-        format!("{} TB", scaled(TB))
-    } else {
-        format!("{} PB", scaled(PB))
-    };
-
-    let signed = if negative {
-        format!("-{formatted}")
-    } else {
-        formatted
-    };
-    avoid_wrapping(&signed)
-}
-
-/// `django.utils.html.avoid_wrapping` — `value.replace(" ", "\xa0")`.
-///
-/// EVERY space, not just the one before the unit. Django applies it to the whole
-/// rendered string, so mirroring the whole-string replace (rather than
-/// formatting an [`NBSP`] directly into the one place it is currently needed)
-/// stays correct if the value ever grows a second space.
-fn avoid_wrapping(value: &str) -> String {
-    value.replace(' ', NBSP)
-}
-
-/// `ngettext("%(size)d byte", "%(size)d bytes", n)` for the English catalogue.
-fn byte_unit(n: u128) -> &'static str {
-    if n == 1 {
-        "byte"
-    } else {
-        "bytes"
-    }
-}
-
-/// Python's `int(x)` over a [`Value`], or `None` for what Django catches.
-///
-/// `i128`, not `i64`: `int(Decimal('12345678901234567890.123456789'))` is the
-/// exact 20-digit integer, and routing it through `as_f64() as i64` saturated at
-/// `i64::MAX` and rendered `8192.0 PB` where Django renders `10965.2 PB` — the
-/// third cause #2264 reported. The `Decimal` arm delegates to
-/// `decimal::to_i128_trunc` rather than re-deriving the truncation (#1646).
-fn filesize_to_int(value: &Value) -> Option<i128> {
-    match value {
-        Value::Integer(n) => Some(*n as i128),
-        // `int(True)` is 1. Django reaches this before any string handling.
-        Value::Bool(b) => Some(i128::from(*b)),
-        Value::Float(f) => {
-            // `int(float)` truncates toward zero. `int(nan)` raises ValueError,
-            // which Django's `except (TypeError, ValueError, UnicodeDecodeError)`
-            // CATCHES, so a NaN lands on the `0 bytes` fallback below.
-            // `int(inf)` raises OverflowError, which it does not catch — and
-            // that raise is made at the dispatch arm before this is reached
-            // (#2435). An earlier version of this comment said both propagate;
-            // measured, only the infinity does.
-            // The bound is `i128::MAX` as a double — the largest magnitude the
-            // `as i128` below can carry without saturating. NaN fails the range
-            // test on its own, so `is_finite` is not spelled separately.
-            const I128_MAX_AS_F64: f64 = 1.7014118346046923e38;
-            let truncated = f.trunc();
-            if (-I128_MAX_AS_F64..=I128_MAX_AS_F64).contains(&truncated) {
-                Some(truncated as i128)
-            } else {
-                None
-            }
-        }
-        Value::Decimal(d) => djust_core::decimal::parse_decimal_parts(d.trim())?.to_i128_trunc(),
-        // `int()` of an int is itself (#2260). Without this arm a `BigInt` fell
-        // to the wildcard and every value past `i64` rendered `0 bytes`, where
-        // before the variant it had arrived as a `Float` and got a real answer.
-        //
-        // Past `i128` — 39 digits — the digits do not fit either, and falling
-        // straight to `0 bytes` there is a regression at exactly `2**127`, which
-        // a set comparison against `main` caught as two cells. So the overflow
-        // delegates to the `Float` arm above, which is what the value used to
-        // take: one definition of that bound rather than a second copy of the
-        // constant (#1646). Beyond what a double can carry, both give up
-        // together, as they did before.
-        Value::BigInt(d) => d.parse::<i128>().ok().or_else(|| {
-            d.parse::<f64>()
-                .ok()
-                .and_then(|f| filesize_to_int(&Value::Float(f)))
-        }),
-        Value::String(s) | Value::SafeString(s) => python_int_from_str(s),
-        // `int(None)`, `int([1, 2])`, `int({'a': 1})` — all TypeError.
-        _ => None,
-    }
-}
-
 /// Python's `int(str)`: surrounding whitespace, an optional sign, then digits
 /// that may be separated by single underscores (`int("1_024")` is 1024).
 ///
@@ -3988,40 +3685,6 @@ fn python_int_from_str(raw: &str) -> Option<i128> {
     // the whitespace/sign/underscore loop, which is exactly the drift #2328
     // fixed on the argument axis and this fixes on the value axis.
     python_int_str(raw)?.parse::<i128>().ok()
-}
-
-/// Django's inner `filesize_number_format`:
-/// `formats.number_format(round(value, 1), 1)`.
-///
-/// Three steps, each of which the naive `format!("{v:.1}")` gets wrong for some
-/// input:
-///
-/// 1. `round(value, 1)` — correctly rounded to one decimal, ties to EVEN
-///    (`2.25` KB is `2.2`, not `2.3`). Rust's `{:.1}` agrees on the rule, so a
-///    round trip through a formatted parse is the cheapest faithful spelling.
-/// 2. `str(...)` — Python's float repr, which switches to an EXPONENT for large
-///    magnitudes; `numberformat.format` then re-reads that through
-///    `Decimal(str(number))` and expands it with `"{:f}"`. The distinction is
-///    real rather than theoretical: `{:.1}` prints the double's EXACT binary
-///    expansion (`151115727451828646838272.0`) where Python prints the shortest
-///    repr expanded (`151115727451828650000000.0`). `Value::Decimal`'s `Display`
-///    IS that `"{:f}"` expansion, so it is reused rather than re-derived.
-/// 3. `decimal_pos=1` — truncate the fraction to one place, then pad it to one.
-///
-/// Finally the digits go through the active locale, which is what makes `de`
-/// render `1,5 GB` and `USE_THOUSAND_SEPARATOR` render `1,024.0 KB`.
-fn filesize_number_format(value: f64) -> String {
-    let rounded: f64 = format!("{value:.1}").parse().unwrap_or(value);
-    let expanded = Value::Decimal(djust_core::decimal::python_float_repr(rounded)).to_string();
-
-    let (int_part, dec_part) = match expanded.split_once('.') {
-        Some((i, d)) => (i, d),
-        None => (expanded.as_str(), ""),
-    };
-    // `dec_part = dec_part[:1]`, then `+= "0" * (1 - len(dec_part))` — take the
-    // first decimal digit, or pad with a zero when there is none.
-    let fraction = dec_part.chars().next().unwrap_or('0');
-    djust_core::locale::localize_number(&format!("{int_part}.{fraction}"))
 }
 
 /// Format a datetime or date string using Django-style format codes.
@@ -4904,139 +4567,6 @@ fn get_dict_value(value: &Value, key: &str) -> Value {
         Value::Encoded(encoded) => encoded.live_attr(key).unwrap_or(Value::Missing),
         _ => Value::Missing,
     }
-}
-
-/// `django.utils.text.normalize_newlines` — `re.sub(r"\r\n|\r|\n", "\n", ...)`.
-///
-/// Both `linebreaks` and `linebreaksbr` call it first, so `a\r\nb` renders
-/// `a<br>b` and not `a\r<br>b` (#2259). `linenumbers` deliberately does NOT —
-/// Django splits it on a bare `"\n"`.
-fn normalize_newlines(s: &str) -> String {
-    s.replace("\r\n", "\n").replace('\r', "\n")
-}
-
-/// `re.split(r"\n{2,}", value)` — split on a run of TWO OR MORE newlines.
-///
-/// Not `split("\n\n")`: `a\n\n\nb` is ONE separator to Django and two to a
-/// literal split, which is how the old implementation grew a spurious
-/// `<p><br>b</p>`. Runs are consumed whole, and empty pieces are KEPT (Django
-/// does not filter them — `""` is one empty paragraph, and `"\n\n"` is two).
-///
-/// Byte indexing is safe because `\n` is ASCII, so every boundary it produces is
-/// a `char` boundary.
-fn split_on_blank_lines(s: &str) -> Vec<&str> {
-    let bytes = s.as_bytes();
-    let mut out = Vec::new();
-    let mut start = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i] != b'\n' {
-            i += 1;
-            continue;
-        }
-        let run_start = i;
-        while i < bytes.len() && bytes[i] == b'\n' {
-            i += 1;
-        }
-        if i - run_start >= 2 {
-            out.push(&s[start..run_start]);
-            start = i;
-        }
-    }
-    out.push(&s[start..]);
-    out
-}
-
-/// `{{ value|linebreaks }}` — `django.utils.html.linebreaks`, then `mark_safe`
-/// (#2259), with the `autoescape` argument #2284 made real.
-///
-/// **This filter escapes its own input UNLESS that input was already
-/// `SafeData`, and that is what earns it a place in
-/// `renderer::SAFE_OUTPUT_FILTERS`.** (Read the `# autoescape` section below
-/// before changing either half — the exemption rests on both arms, not on the
-/// escape alone.) Django's registration is
-/// `@register.filter("linebreaks", is_safe=True, needs_autoescape=True)`, whose
-/// body is `mark_safe(linebreaks(value, autoescape))` — the markup it builds is
-/// exempt from escaping precisely BECAUSE `escape(p)` has already been applied
-/// to every paragraph of the user's text. Marking the output safe without that
-/// inner escape would turn `{{ comment|linebreaks }}` into an XSS sink; the two
-/// halves are one change and must never be separated.
-///
-/// # `autoescape` (#2284)
-///
-/// Django's registration is `needs_autoescape=True`, and the filter body opens
-/// `autoescape = autoescape and not isinstance(value, SafeData)`. The engine has
-/// no `{% autoescape %}` block (the tag is rejected by the parser), so the first
-/// term is pinned true and the caller passes `!input_safety.container` — Django's
-/// `SafeData` clause, which #2259 left unreproduced and #2284 closed. When it is
-/// `false` the paragraph text is emitted verbatim, exactly as
-/// `django.utils.html.linebreaks(value, autoescape=False)` does, so
-/// `{{ p|safe|linebreaks }}` on `<b>x</b>` renders `<p><b>x</b></p>` rather than
-/// escaping markup the view deliberately marked safe.
-///
-/// **The `SAFE_OUTPUT_FILTERS` membership survives that**, and the reason it
-/// does is worth stating because it changed: the output is exempt from
-/// auto-escaping because it is safe under BOTH arms — either this filter
-/// escaped the input itself (`autoescape = true`, the hostile-input case), or
-/// the input was already `SafeData` and the caller took responsibility for it
-/// (`autoescape = false`). A value that was never marked safe still takes the
-/// escape, so nothing that reaches a page unescaped today reaches it unescaped
-/// after #2284.
-///
-/// Four defects beyond the escaping, all of which made `''` and multi-paragraph
-/// text render wrong:
-///
-/// * paragraphs were split on a literal `"\n\n"` rather than `\n{2,}`;
-/// * they were joined with `"\n"` where Django joins with `"\n\n"`;
-/// * empty paragraphs were FILTERED OUT, so `''` rendered `''` where Django
-///   renders `<p></p>`;
-/// * `\r\n` was not normalized.
-fn linebreaks(s: &str, autoescape: bool) -> String {
-    let normalized = normalize_newlines(s);
-    split_on_blank_lines(&normalized)
-        .iter()
-        // `"<p>%s</p>" % escape(p).replace("\n", "<br>")`. Escape FIRST, as
-        // Django does — `escape` leaves `\n` alone, so the order is not
-        // load-bearing, but mirroring it keeps the two readable side by side.
-        .map(|p| {
-            let body = if autoescape {
-                html_escape(p)
-            } else {
-                (*p).to_string()
-            };
-            format!("<p>{}</p>", body.replace('\n', "<br>"))
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-/// `{{ value|linebreaksbr }}` — the same contract as [`linebreaks`] (#2259),
-/// including its `needs_autoescape` handling (#2284).
-///
-/// The issue listed this one as a neighbour to *check* rather than to fix; it
-/// diverges too, on both axes. It escapes its input and is `is_safe=True` in
-/// Django exactly like `linebreaks`, and it needs the same
-/// `normalize_newlines` — a single-line differential misses it only because it
-/// emits no tag at all until the input contains a newline.
-fn linebreaksbr(s: &str, autoescape: bool) -> String {
-    let normalized = normalize_newlines(s);
-    let body = if autoescape {
-        html_escape(&normalized)
-    } else {
-        normalized
-    };
-    body.replace('\n', "<br>")
-}
-
-/// `django.utils.html.strip_tags`, ported in `crate::htmlparser` (#2273).
-///
-/// The scan this replaced treated EVERY `<` as opening a tag, so `a < b`
-/// rendered as `a ` -- everything from the `<` to the next `>` (or to the end
-/// of the input) was deleted. Django runs a real `HTMLParser`, which emits a
-/// `<` that is not followed by a letter / `/` / `!` / `?` as data, and repeats
-/// the strip until the tag count stops falling.
-fn strip_tags(s: &str) -> String {
-    crate::htmlparser::strip_tags(s)
 }
 
 /// Django's `_json_script_escapes`, applied to the assembled JSON document —
@@ -6173,12 +5703,6 @@ mod float_sink_set {
 
         let found = stringifying_arms(&files);
         let expected: Vec<(String, String)> = [
-            // `Display`'s legacy_display arm: the frozen pre-#2203 rendering,
-            // reached only when `django_value_repr()` is OFF. Rust's `{}` is
-            // the WRONG spelling and is the point — the flag exists to restore
-            // the old bytes. The one RUST_DISPLAY entry this set allows; a
-            // second one is the #2258/#2270 defect.
-            ("djust_core/src/lib.rs", "RUST_DISPLAY"),
             // `py_str` (#2324), `py_repr` (#2258) and `Display`'s live arm —
             // the three places a `Value::Float` becomes text in djust_core.
             ("djust_core/src/lib.rs", "python_float_repr"),
@@ -6384,57 +5908,6 @@ fn escape_js(s: &str) -> String {
         }
     }
     result
-}
-
-/// `{{ value|linenumbers }}` — Django's `("%0" + width + "d. %s")`.
-///
-/// **ZERO padding, not space padding** (#2259). Django builds the format string
-/// as `"%0" + width + "d"`, so an 11-line input numbers `01.` through `11.`; the
-/// previous `{:>width$}` produced ` 1.`, which is invisible until the input
-/// crosses ten lines. Checked as a neighbour of `linebreaks` because the issue
-/// asked for it — and the escaping half of that check came back clean while this
-/// one did not.
-///
-/// **Deliberately NOT added to `renderer::SAFE_OUTPUT_FILTERS`,** even though
-/// Django registers it `is_safe=True`. Django escapes each line and marks the
-/// join safe; this escapes the whole rendered string afterwards. The two are
-/// byte-identical, because everything this filter ADDS — digits, `.`, a space,
-/// the `\n` join — is escape-invariant, and `escape` operates per character.
-/// Verified against Django over `<`, `&`, `"`, `'` and a multi-line mix. Adding
-/// it to the safe list WITHOUT moving the escape inside would stop the input
-/// being escaped at all and open an XSS hole for a one-cell cosmetic gain.
-fn add_linenumbers(s: &str, autoescape: bool) -> String {
-    let lines: Vec<&str> = s.split('\n').collect();
-    let width = lines.len().to_string().len();
-    lines
-        .iter()
-        .enumerate()
-        .map(|(i, line)| {
-            // Escape each LINE inside the filter, as Django does, rather than
-            // leaving it to the render-time auto-escape (#2291).
-            //
-            // The previous version relied on that render-time escape and
-            // `SAFE_OUTPUT_FILTERS` documented the exclusion deliberately,
-            // arguing the two were byte-identical "because everything it adds
-            // is escape-invariant". True — and beside the point: the argument
-            // holds only while the render-time escape actually RUNS. A later
-            // `|safe` suppresses it, and then nothing had escaped the input at
-            // all, so `{{ p|linenumbers|safe }}` emitted attacker markup live.
-            //
-            // Same shape as `linebreaks` (#2269): the escape moves inside and
-            // the name joins `SAFE_OUTPUT_FILTERS` as ONE inseparable change.
-            // Doing either alone is a bug in opposite directions — the escape
-            // without the grant double-escapes, the grant without the escape is
-            // the XSS.
-            let body = if autoescape {
-                html_escape(line)
-            } else {
-                (*line).to_string()
-            };
-            format!("{:0width$}. {body}", i + 1)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// `str(int(value))`, or `None` where Python's `int()` would raise.
@@ -6849,11 +6322,6 @@ pub(crate) enum ValueOpError {
     NotSubscriptable,
     /// `d[i]` on a mapping that has no such key — `KeyError: i`.
     MissingKey(i64),
-    /// `x.<name>()` on a value without it — `AttributeError: 'X' object has no
-    /// attribute '<name>'`. `phone2numeric`'s `phone.lower()` is the only
-    /// caller, and it is a `@keep_lazy_text` function rather than a
-    /// `@stringfilter`, so Django never coerces its input first.
-    NoAttribute(&'static str),
 }
 
 impl ValueOpError {
@@ -6863,7 +6331,6 @@ impl ValueOpError {
         match self {
             ValueOpError::NotIterable | ValueOpError::NotSubscriptable => "TypeError",
             ValueOpError::MissingKey(_) => "KeyError",
-            ValueOpError::NoAttribute(_) => "AttributeError",
         }
     }
 
@@ -6875,9 +6342,6 @@ impl ValueOpError {
             ValueOpError::NotIterable => format!("'{ty}' object is not iterable"),
             ValueOpError::NotSubscriptable => format!("'{ty}' object is not subscriptable"),
             ValueOpError::MissingKey(k) => format!("{k}"),
-            ValueOpError::NoAttribute(name) => {
-                format!("'{ty}' object has no attribute '{name}'")
-            }
         }
     }
 }
@@ -7039,22 +6503,6 @@ fn index_error_answer() -> Value {
     Value::String(String::new())
 }
 
-/// Python's `value.lower()`, which only a `str` has (#2451).
-///
-/// `phone2numeric` is the one built-in that calls a string METHOD on a value
-/// Django never coerced — it is `@keep_lazy_text`, not `@stringfilter` — so
-/// anything but a string is an `AttributeError` there and was `str(value)`
-/// here. That made `{{ p|phone2numeric }}` over `None` render `6663`, the
-/// keypad spelling of the word "None".
-pub(crate) fn python_lower(value: &Value) -> std::result::Result<String, ValueOpError> {
-    match value {
-        Value::String(s) | Value::SafeString(s) => Ok(s.to_lowercase()),
-        // `string_if_invalid` is a `str`; `"".lower()` is `""`.
-        Value::Missing => Ok(String::new()),
-        _ => Err(ValueOpError::NoAttribute("lower")),
-    }
-}
-
 enum DecimalSpecial {
     Nan,
     Infinite,
@@ -7141,320 +6589,6 @@ pub(crate) fn strip_python_underscores(body: &str) -> Option<String> {
         }
     }
     Some(out)
-}
-
-/// The `Value` a `str(int(x))` digit string denotes — Python's `int` object.
-///
-/// [`int_digits_of`] answers `str(int(value))` because that is what every
-/// digit-INDEXING caller needs. A caller that must hand back the CONVERTED
-/// NUMBER instead (`get_digit`'s `if arg < 1: return value`, #2403) needs the
-/// int itself, so the rest of the chain sees a number rather than its spelling:
-/// `{{ p|get_digit:0|add:1 }}` is arithmetic in Django, not concatenation.
-///
-/// `BigInt` for anything past `i64`, which is the variant that already carries
-/// an out-of-range Python int as its digits.
-fn int_value_of(digits: &str) -> Value {
-    match digits.parse::<i64>() {
-        Ok(n) => Value::Integer(n),
-        Err(_) => Value::BigInt(digits.to_string()),
-    }
-}
-
-fn iriencode(s: &str) -> String {
-    // Like urlencode but preserves non-ASCII characters (for IRIs).
-    // Matches Django's iri_to_uri: preserves RFC 3986 unreserved + reserved chars.
-    let mut result = String::with_capacity(s.len() * 3);
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric()
-            || matches!(c, '-' | '_' | '.' | '~')  // unreserved
-            || matches!(c, '/' | ':' | '?' | '#' | '[' | ']' | '@')  // gen-delims
-            || matches!(c, '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '=')  // sub-delims
-            || !c.is_ascii()
-        // non-ASCII preserved for IRIs
-        {
-            result.push(c);
-        } else {
-            let mut buf = [0u8; 4];
-            let encoded = c.encode_utf8(&mut buf);
-            for byte in encoded.bytes() {
-                result.push_str(&format!("%{:02X}", byte));
-            }
-        }
-    }
-    result
-}
-
-fn phone2numeric(s: &str) -> String {
-    s.chars()
-        .map(|c| match c.to_ascii_uppercase() {
-            'A' | 'B' | 'C' => '2',
-            'D' | 'E' | 'F' => '3',
-            'G' | 'H' | 'I' => '4',
-            'J' | 'K' | 'L' => '5',
-            'M' | 'N' | 'O' => '6',
-            'P' | 'Q' | 'R' | 'S' => '7',
-            'T' | 'U' | 'V' => '8',
-            'W' | 'X' | 'Y' | 'Z' => '9',
-            other => other,
-        })
-        .collect()
-}
-
-static URLIZE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r#"(?x)
-        (?:
-            (?:https?://|ftp://|www\.)   # URL starting with http(s)://, ftp://, or www.
-            [^\s<>"']+                   # URL body
-        )
-        |
-        (?:
-            [a-zA-Z0-9._%+\-]+          # email local part
-            @
-            [a-zA-Z0-9.\-]+             # email domain
-            \.[a-zA-Z]{2,}              # TLD
-        )
-    "#,
-    )
-    .unwrap()
-});
-
-/// `{{ value|urlize }}` / `{{ value|urlizetrunc:n }}`.
-///
-/// # `autoescape` (#2284)
-///
-/// Django registers both `needs_autoescape=True` and threads the flag into
-/// `django.utils.html.Urlizer`, which reads it as `autoescape and not
-/// safe_input`. Everything the filter *quotes from the user* — the text between
-/// matches, the trailing punctuation, the anchor's display text — is escaped
-/// only when that is true.
-///
-/// The one escape that is **unconditional** is the `href`. Django writes
-/// `self.url_template % {"href": escape(url), ...}` outside the `if autoescape`
-/// branch, because the attribute value has to survive being placed inside
-/// `href="…"` whatever the surrounding policy is. Making it conditional would
-/// let a `mark_safe`d `http://x/"onmouseover=alert(1)` break out of the
-/// attribute — a genuine XSS that Django does not have. It is kept
-/// unconditional here for exactly that reason.
-///
-/// As with [`linebreaks`], `autoescape=false` is reachable only when the value
-/// was already `SafeData`, so the `SAFE_OUTPUT_FILTERS` membership stays
-/// earned: hostile input that nothing marked safe still takes every escape.
-fn urlize(text: &str, trunc_limit: Option<usize>, autoescape: bool) -> String {
-    // Django's `escape(...)` applied only where its `if autoescape and not
-    // safe_input:` branch applies. One helper rather than an `if` at each of
-    // the four sites, so a future site cannot forget the flag (#1646).
-    let maybe_escape = |s: &str| -> String {
-        if autoescape {
-            html_escape(s)
-        } else {
-            s.to_string()
-        }
-    };
-
-    let mut result = String::new();
-    let mut last_end = 0;
-
-    for m in URLIZE_RE.find_iter(text) {
-        // Non-URL text between matches — user text, so it follows the flag.
-        result.push_str(&maybe_escape(&text[last_end..m.start()]));
-
-        let matched = m.as_str();
-
-        // Django's simple_url_re requires a word character after the scheme
-        // and optional '['. In particular, http://[::1] remains plain text.
-        if let Some(host) = matched
-            .strip_prefix("http://")
-            .or_else(|| matched.strip_prefix("https://"))
-        {
-            let host = host.strip_prefix('[').unwrap_or(host);
-            if !host
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_alphanumeric() || c == '_')
-            {
-                result.push_str(&maybe_escape(matched));
-                last_end = m.end();
-                continue;
-            }
-        }
-
-        // Determine if this is an email or a URL
-        if matched.contains('@') && !matched.starts_with("http") {
-            // Email — the href is ALWAYS escaped (attribute context); the
-            // display text follows the flag.
-            let safe_href = html_escape(matched);
-            let display = maybe_escape(&truncate_url_display(matched, trunc_limit));
-            result.push_str(&format!("<a href=\"mailto:{safe_href}\">{display}</a>"));
-        } else {
-            // URL
-            let href = if matched.starts_with("www.") {
-                format!("http://{matched}")
-            } else {
-                matched.to_string()
-            };
-            // Strip trailing punctuation from href/display that's not part of URL
-            let (href_clean, display_raw, trailing) = strip_url_trailing(&href, matched);
-            // ALWAYS escaped — attribute context, as Django does.
-            let decoded_href = crate::htmlparser::unescape(&href_clean);
-            let quoted_href = crate::urlquote::smart_urlquote(&decoded_href);
-            let safe_href = html_escape(&quoted_href);
-            let display = maybe_escape(&truncate_url_display(&display_raw, trunc_limit));
-            let safe_trailing = maybe_escape(&trailing);
-            result.push_str(&format!(
-                "<a href=\"{safe_href}\" rel=\"nofollow\">{display}</a>{safe_trailing}"
-            ));
-        }
-
-        last_end = m.end();
-    }
-
-    // Remaining text after the last match — user text, so it follows the flag.
-    result.push_str(&maybe_escape(&text[last_end..]));
-    result
-}
-
-fn strip_url_trailing<'a>(href: &'a str, display: &'a str) -> (String, String, String) {
-    // Strip trailing punctuation that's likely not part of the URL.
-    // Only strip ')' if parentheses are unbalanced (preserves Wikipedia-style URLs).
-    let trailing_chars: &[char] = &['.', ',', '!', '?', ';', ':'];
-    let mut href_s = href.to_string();
-    let mut display_s = display.to_string();
-    let mut trailing = String::new();
-
-    loop {
-        // A semicolon that terminates an HTML entity belongs to the URL.
-        // Strip extra punctuation first, then stop at the entity boundary.
-        if href_s.ends_with(';') {
-            if let Some(amp) = href_s.rfind('&') {
-                let candidate = &href_s[amp..];
-                let decoded = crate::htmlparser::unescape(candidate);
-                if decoded != candidate && !decoded.ends_with(';') {
-                    break;
-                }
-            }
-        }
-        if href_s.ends_with(trailing_chars) {
-            let c = href_s.pop().unwrap();
-            display_s.pop();
-            trailing.insert(0, c);
-        } else if href_s.ends_with(')') {
-            // Only strip ')' if there are more closing than opening parens
-            let open = href_s.chars().filter(|&c| c == '(').count();
-            let close = href_s.chars().filter(|&c| c == ')').count();
-            if close > open {
-                href_s.pop();
-                display_s.pop();
-                trailing.insert(0, ')');
-            } else {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-
-    (href_s, display_s, trailing)
-}
-
-/// `Urlizer.trim_url`, which is NOT `Truncator` (#2346).
-///
-/// ```python
-/// def trim_url(self, x, *, limit):
-///     if limit is None or len(x) <= limit:
-///         return x
-///     return "%s…" % x[: max(0, limit - 1)]
-/// ```
-///
-/// Two things this got wrong, and they compound: it appended three ASCII dots
-/// where Django appends one `…`, and it reserved THREE characters for them
-/// where Django reserves one. So `urlizetrunc:"5"` on `http://example.com/aaaa`
-/// gave `ht...` where Django gives `http…` — every `urlizetrunc` cell in the
-/// differential's sweep differed, for this reason alone.
-///
-/// Same ellipsis fix that landed for `truncatechars` in #2203; it never reached
-/// `urlize`, which is parallel-path drift on a CONSTANT (#1646). The two are
-/// deliberately not sharing a code path even so: `Truncator.chars` normalizes
-/// to NFC, skips combining characters and subtracts the truncation text's own
-/// visible length (`calculate_truncate_chars_length`), while `trim_url` is a
-/// plain code-point slice. Routing this through `truncate::text_chars` would be
-/// tidier and would not be Django.
-fn truncate_url_display(s: &str, limit: Option<usize>) -> String {
-    match limit {
-        Some(n) if s.chars().count() > n => {
-            let truncated: String = s.chars().take(n.saturating_sub(1)).collect();
-            format!("{truncated}{URL_TRUNCATE}")
-        }
-        _ => s.to_string(),
-    }
-}
-
-/// The single character `Urlizer.trim_url` appends, spelled as an escape.
-///
-/// A literal `…` and a literal `...` are hard to tell apart in a diff, which is
-/// how the three-dot spelling survived #2203's fix to the neighbouring filter.
-const URL_TRUNCATE: &str = "\u{2026}";
-
-fn unordered_list(items: &[Value], depth: usize, items_are_safe: bool) -> String {
-    let indent = "\t".repeat(depth);
-    let mut result = Vec::new();
-
-    let mut i = 0;
-    while i < items.len() {
-        let item = &items[i];
-
-        // Is the next item this item's sublist? Django's `walk_items` asks
-        // `isinstance(next_item, (list, tuple, types.GeneratorType))` — BOTH
-        // sequence types, not just a list (#2317). Matching `Value::List`
-        // alone rendered a tuple as its own `<li>` holding the escaped tuple
-        // repr, where Django nests a `<ul>`.
-        //
-        // The generator arm has no djust equivalent: a generator does not
-        // survive the crossing into Rust as anything but its elements, so
-        // there is no third variant to match.
-        let sublist = if i + 1 < items.len() {
-            match &items[i + 1] {
-                Value::List(sub) | Value::Tuple(sub) | Value::NamedTuple { items: sub, .. } => {
-                    i += 1; // consume the sublist
-                    Some(sub)
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-
-        let escaped_item = conditional_escape(item, items_are_safe);
-        match sublist {
-            Some(sub) if !sub.is_empty() => {
-                let sub_content = unordered_list(sub, depth + 1, items_are_safe);
-                // Django's `list_formatter` (`defaultfilters.py`) builds the
-                // wrapper from the PARENT's `indent` and passes `tabs + 1` only
-                // to the recursive call, so the `<ul>`/`</ul>` sit at the
-                // parent's depth and only the `<li>`s inside step in:
-                //
-                //     sublist = "\n%s<ul>\n%s\n%s</ul>\n%s" % (
-                //         indent, list_formatter(children, tabs + 1), indent, indent)
-                //
-                // Every one of the four `%s` indents is the parent's, which is
-                // also why the closing `</li>` below already used `indent`.
-                //
-                // Fixed in #2306 (#2301) by @alexsmolya; the randomised sweep
-                // in `python/tests/test_unordered_list_indent_2301.py` is what
-                // pins it across nesting shapes.
-                result.push(format!(
-                    "{indent}<li>{escaped_item}\n{indent}<ul>\n{sub_content}\n{indent}</ul>\n{indent}</li>"
-                ));
-            }
-            _ => {
-                result.push(format!("{indent}<li>{escaped_item}</li>"));
-            }
-        }
-
-        i += 1;
-    }
-
-    result.join("\n")
 }
 
 pub mod tags {
@@ -7994,11 +7128,12 @@ mod tests {
             ("upper", "1E-9"),
             ("lower", "1e-9"),
             ("truncatechars", "1E-9"),
-            ("addslashes", "1E-9"),
+            ("cut", "1E9"),
             ("center", "        1E-9        "),
         ] {
             let arg = match name {
                 "truncatechars" => Some("8"),
+                "cut" => Some("-"),
                 "center" => Some("20"),
                 _ => None,
             };
@@ -8663,20 +7798,6 @@ mod tests {
     }
 
     #[test]
-    fn test_slugify_filter() {
-        let value = Value::String("Hello World Test!".to_string());
-        let result = apply_filter("slugify", &value, None).unwrap();
-        assert_eq!(result.to_string(), "hello-world-test");
-    }
-
-    #[test]
-    fn test_capfirst_filter() {
-        let value = Value::String("hello world".to_string());
-        let result = apply_filter("capfirst", &value, None).unwrap();
-        assert_eq!(result.to_string(), "Hello world");
-    }
-
-    #[test]
     fn test_yesno_filter() {
         let value = Value::Bool(true);
         let result = apply_filter("yesno", &value, Some("yeah,nope,dunno")).unwrap();
@@ -8712,25 +7833,6 @@ mod tests {
         assert_eq!(result.to_string(), "b");
         let result = apply_filter("yesno", &value, Some("a,b")).unwrap();
         assert_eq!(result.to_string(), "b");
-    }
-
-    #[test]
-    fn test_get_digit_below_one_returns_the_converted_int() {
-        // `value = int(value)` runs BEFORE `if arg < 1`, so this exit hands
-        // back the CONVERTED number and not the input (#2403).
-        let result = apply_filter("get_digit", &Value::Bool(false), Some("0")).unwrap();
-        assert_eq!(result.to_string(), "0");
-        let result = apply_filter("get_digit", &Value::Float(1.5), Some("0")).unwrap();
-        assert_eq!(result.to_string(), "1");
-        let result = apply_filter("get_digit", &Value::Float(1.5), Some("-1")).unwrap();
-        assert_eq!(result.to_string(), "1");
-        // …and it is a NUMBER, so the rest of a chain does arithmetic.
-        let result = apply_filter("get_digit", &Value::Float(1.5), Some("0")).unwrap();
-        assert!(matches!(result, Value::Integer(1)));
-        // `int(value)` raising is the OTHER exit: the input, unchanged.
-        let value = Value::String("abc".to_string());
-        let result = apply_filter("get_digit", &value, Some("0")).unwrap();
-        assert_eq!(result.to_string(), "abc");
     }
 
     #[test]
@@ -8775,114 +7877,6 @@ mod tests {
     }
 
     #[test]
-    fn test_linebreaks_filter() {
-        // Was `contains("<p>")` + `contains("<br>")`, which is true of the old
-        // output too — it passed while the paragraph JOIN was `\n` instead of
-        // Django's `\n\n` (#2259). Exact bytes, so the join is pinned.
-        let value = Value::String("Line 1\nLine 2\n\nParagraph 2".to_string());
-        let result = apply_filter("linebreaks", &value, None).unwrap();
-        assert_eq!(
-            result.to_string(),
-            "<p>Line 1<br>Line 2</p>\n\n<p>Paragraph 2</p>"
-        );
-    }
-
-    #[test]
-    fn test_linebreaksbr_filter() {
-        let value = Value::String("Line 1\nLine 2\nLine 3".to_string());
-        let result = apply_filter("linebreaksbr", &value, None).unwrap();
-        assert_eq!(result.to_string(), "Line 1<br>Line 2<br>Line 3");
-    }
-
-    /// The half that makes the `SAFE_OUTPUT_FILTERS` membership safe (#2259).
-    ///
-    /// `linebreaks`/`linebreaksbr` are exempt from the renderer's auto-escape
-    /// ONLY because they escape their own input. If this test goes red, the
-    /// name must come out of `renderer::SAFE_OUTPUT_FILTERS` in the same commit
-    /// — the two are one change.
-    #[test]
-    fn linebreaks_escapes_its_input_which_is_what_makes_marking_it_safe_safe() {
-        let attack = Value::String("<img src=x onerror=alert(1)>\n</script><script>".to_string());
-        for name in ["linebreaks", "linebreaksbr"] {
-            let out = apply_filter(name, &attack, None).unwrap().to_string();
-            assert!(
-                !out.contains("<img") && !out.contains("<script") && !out.contains("</script"),
-                "{name} leaked live markup: {out:?}"
-            );
-            assert!(
-                out.contains("&lt;img src=x onerror=alert(1)&gt;"),
-                "{name} did not escape the payload: {out:?}"
-            );
-            // The tags the FILTER generates stay live — that is the point.
-            assert!(out.contains("<br>"), "{name} lost its own markup: {out:?}");
-        }
-    }
-
-    /// The SECOND arm of that contract, added with #2284.
-    ///
-    /// The test above proves the escape happens; since #2284 the escape is
-    /// CONDITIONAL, so proving it happens is only half of what
-    /// `SAFE_OUTPUT_FILTERS` membership now rests on. This pins the other half
-    /// in both directions: `autoescape=false` really does emit the input
-    /// verbatim (or the flag is dead and #2284 is a no-op), and it is
-    /// reachable ONLY through the flag — `apply_filter`, the entry point with
-    /// no view of the chain, still escapes.
-    ///
-    /// If either assertion goes red, the four names must come out of
-    /// `renderer::SAFE_OUTPUT_FILTERS` in the same commit.
-    #[test]
-    fn the_needs_autoescape_filters_skip_the_escape_only_when_told_to() {
-        let attack = "<img src=x onerror=alert(1)>\nsecond line";
-
-        // autoescape = false: verbatim. Django's `linebreaks(v, False)`.
-        assert!(linebreaks(attack, false).contains("<img src=x onerror=alert(1)>"));
-        assert!(linebreaksbr(attack, false).contains("<img src=x onerror=alert(1)>"));
-        assert!(urlize(attack, None, false).contains("<img src=x onerror=alert(1)>"));
-
-        // autoescape = true: escaped, and no live payload survives.
-        for out in [
-            linebreaks(attack, true),
-            linebreaksbr(attack, true),
-            urlize(attack, None, true),
-        ] {
-            assert!(!out.contains("<img"), "leaked live markup: {out:?}");
-            assert!(
-                out.contains("&lt;img src=x onerror=alert(1)&gt;"),
-                "did not escape the payload: {out:?}"
-            );
-        }
-
-        // And the flag is the ONLY way in: the chain-blind entry point escapes.
-        let value = Value::String(attack.to_string());
-        for name in ["linebreaks", "linebreaksbr", "urlize"] {
-            let out = apply_filter(name, &value, None).unwrap().to_string();
-            assert!(
-                !out.contains("<img"),
-                "{name} via apply_filter leaked: {out:?}"
-            );
-        }
-    }
-
-    /// `urlize`'s href escape is NOT conditional, because it lands inside
-    /// `href="…"`. Django writes `escape(url)` outside its `if autoescape`
-    /// branch for exactly this reason, and making it conditional along with
-    /// the display text is the obvious way to write #2284 and an XSS Django
-    /// does not have.
-    #[test]
-    fn urlize_escapes_the_href_even_when_autoescape_is_off() {
-        let out = urlize("http://ex.com/?a=1&b=2", None, false);
-        let href = out
-            .split("href=\"")
-            .nth(1)
-            .and_then(|s| s.split('"').next())
-            .unwrap_or_default();
-        assert!(
-            href.contains("&amp;"),
-            "the href carried a raw & under autoescape=false: {out:?}"
-        );
-    }
-
-    #[test]
     fn test_cut_filter() {
         let value = Value::String("hello world".to_string());
         let result = apply_filter("cut", &value, Some(" ")).unwrap();
@@ -8909,53 +7903,6 @@ mod tests {
         let value = Value::Integer(42);
         let result = apply_filter("floatformat", &value, Some("2")).unwrap();
         assert_eq!(result.to_string(), "42.00");
-    }
-
-    #[test]
-    fn test_filesizeformat_filter() {
-        // The separator is U+00A0, spelled as an escape so it survives an
-        // editor (#2264). These three cells asserted a PLAIN space and passed
-        // for the whole life of the filter while every rendered byte was wrong.
-        let cases = [
-            (Value::Integer(1024), "1.0\u{a0}KB"),
-            (Value::Integer(1048576), "1.0\u{a0}MB"),
-            (Value::Integer(500), "500\u{a0}bytes"),
-            // Pluralization, and the negative that used to skip every unit.
-            (Value::Integer(1), "1\u{a0}byte"),
-            (Value::Integer(0), "0\u{a0}bytes"),
-            (Value::Integer(-1), "-1\u{a0}byte"),
-            (Value::Integer(-1024), "-1.0\u{a0}KB"),
-            // `int(bytes_)` coercion: a string parses, everything else is 0.
-            (Value::String("1024".into()), "1.0\u{a0}KB"),
-            (Value::String("19.99".into()), "0\u{a0}bytes"),
-            (Value::None, "0\u{a0}bytes"),
-            (Value::Bool(true), "1\u{a0}byte"),
-            (Value::List(vec![Value::Integer(1)]), "0\u{a0}bytes"),
-            // Exact `i128` truncation, where `as_f64() as i64` saturated to
-            // `8192.0 PB`.
-            (
-                Value::Decimal("12345678901234567890.123456789".into()),
-                "10965.2\u{a0}PB",
-            ),
-        ];
-        for (value, expected) in cases {
-            let got = apply_filter("filesizeformat", &value, None)
-                .unwrap()
-                .to_string();
-            assert_eq!(got, expected, "filesizeformat({value:?})");
-        }
-    }
-
-    /// The nbsp is a distinct byte from a space — asserted structurally so a
-    /// future edit cannot re-introduce the plain space and stay green (#2264).
-    #[test]
-    fn filesizeformat_joins_with_a_non_breaking_space_not_a_plain_one() {
-        let out = apply_filter("filesizeformat", &Value::Integer(2048), None)
-            .unwrap()
-            .to_string();
-        assert!(!out.contains(' '), "found a PLAIN space in {out:?}");
-        assert!(out.contains('\u{a0}'), "no U+00A0 in {out:?}");
-        assert_eq!(out.chars().filter(|c| *c == '\u{a0}').count(), 1);
     }
 
     #[test]
@@ -9376,27 +8323,6 @@ mod tests {
     }
 
     #[test]
-    fn test_wordcount_filter() {
-        let value = Value::String("one two three four".to_string());
-        let result = apply_filter("wordcount", &value, None).unwrap();
-        assert!(matches!(result, Value::Integer(4)));
-    }
-
-    #[test]
-    fn test_wordcount_filter_empty() {
-        let value = Value::String("".to_string());
-        let result = apply_filter("wordcount", &value, None).unwrap();
-        assert!(matches!(result, Value::Integer(0)));
-    }
-
-    #[test]
-    fn test_wordwrap_filter() {
-        let value = Value::String("this is a long string that should wrap".to_string());
-        let result = apply_filter("wordwrap", &value, Some("15")).unwrap();
-        assert!(result.to_string().contains('\n'));
-    }
-
-    #[test]
     fn test_wordwrap_filter_default() {
         // Same as `test_stringformat_filter_default`: `wordwrap`'s argument is
         // required, so there is no no-argument behaviour to pin (#2400).
@@ -9405,30 +8331,6 @@ mod tests {
         assert!(
             format!("{err:?}").contains("wordwrap requires 2 arguments, 1 provided"),
             "{err:?}"
-        );
-    }
-
-    #[test]
-    fn test_striptags_filter() {
-        let value = Value::String("<b>Hello</b> <i>world</i>".to_string());
-        let result = apply_filter("striptags", &value, None).unwrap();
-        assert_eq!(result.to_string(), "Hello world");
-    }
-
-    #[test]
-    fn test_striptags_filter_nested() {
-        let value = Value::String("<div><p>Text</p></div>".to_string());
-        let result = apply_filter("striptags", &value, None).unwrap();
-        assert_eq!(result.to_string(), "Text");
-    }
-
-    #[test]
-    fn test_addslashes_filter() {
-        let value = Value::String("it's a \"test\" with \\ backslash".to_string());
-        let result = apply_filter("addslashes", &value, None).unwrap();
-        assert_eq!(
-            result.to_string(),
-            "it\\'s a \\\"test\\\" with \\\\ backslash"
         );
     }
 
@@ -9607,21 +8509,6 @@ mod tests {
                 .to_string(),
             "0"
         );
-    }
-
-    #[test]
-    fn test_make_list_filter() {
-        let value = Value::String("abc".to_string());
-        let result = apply_filter("make_list", &value, None).unwrap();
-        match result {
-            Value::List(items) | Value::Tuple(items) => {
-                assert_eq!(items.len(), 3);
-                assert_eq!(items[0].to_string(), "a");
-                assert_eq!(items[1].to_string(), "b");
-                assert_eq!(items[2].to_string(), "c");
-            }
-            _ => panic!("Expected List value"),
-        }
     }
 
     #[test]
@@ -10132,111 +9019,6 @@ mod tests {
     }
 
     #[test]
-    fn test_linenumbers_filter() {
-        let value = Value::String("first\nsecond\nthird".to_string());
-        let result = apply_filter("linenumbers", &value, None).unwrap();
-        assert_eq!(result.to_string(), "1. first\n2. second\n3. third");
-    }
-
-    #[test]
-    fn test_linenumbers_filter_alignment() {
-        // Django's format is `"%0" + width + "d. %s"` — ZERO padded, not space
-        // padded (#2259). This asserted ` 1. line`, which is what djust used to
-        // emit and what Django never emits.
-        let lines: Vec<&str> = (0..12).map(|_| "line").collect();
-        let value = Value::String(lines.join("\n"));
-        let result = apply_filter("linenumbers", &value, None).unwrap();
-        let output = result.to_string();
-        assert!(output.starts_with("01. line"), "{output:?}");
-        assert!(output.contains("\n12. line"), "{output:?}");
-        assert!(
-            !output.contains(" 1. line"),
-            "space padding is back: {output:?}"
-        );
-    }
-
-    #[test]
-    fn test_get_digit_filter() {
-        // 1 = rightmost digit
-        let value = Value::String("12345".to_string());
-        let result = apply_filter("get_digit", &value, Some("1")).unwrap();
-        assert_eq!(result.to_string(), "5");
-
-        let result = apply_filter("get_digit", &value, Some("3")).unwrap();
-        assert_eq!(result.to_string(), "3");
-
-        // Out of range is `0`, NOT the original: Django's `except IndexError`
-        // arm returns 0, and the `return value` arm is only for the `int(value)`
-        // ValueError. Corrected in #2260 — this case had pinned djust's own
-        // pre-fix behaviour, and a live Django render disagrees:
-        // `{{ "12345"|get_digit:10 }}` is `0`.
-        let result = apply_filter("get_digit", &value, Some("10")).unwrap();
-        assert_eq!(result.to_string(), "0");
-
-        // 0 returns original (Django behavior)
-        let result = apply_filter("get_digit", &value, Some("0")).unwrap();
-        assert_eq!(result.to_string(), "12345");
-    }
-
-    #[test]
-    fn test_get_digit_answers_an_int_on_both_numeric_exits() {
-        // Django's docstring: *"output is always an integer"* (#2459). Every
-        // assertion above this one reads `.to_string()`, which is exactly how
-        // a one-character STRING went unnoticed for so long: the TEXT is
-        // identical and the TYPE is not, and the type is what a consumer that
-        // iterates, subscripts or asks for truthiness reads.
-        let value = Value::String("12345".to_string());
-        let result = apply_filter("get_digit", &value, Some("1")).unwrap();
-        assert!(matches!(result, Value::Integer(5)), "{result:?}");
-        // The `except IndexError: return 0` exit is an `int` too, and it is
-        // the one `{% if p|get_digit:"9" %}` reads: `0` is falsy, `"0"` is not.
-        let result = apply_filter("get_digit", &value, Some("10")).unwrap();
-        assert!(matches!(result, Value::Integer(0)), "{result:?}");
-        // …and the two exits that hand back the INPUT still do. Landing on the
-        // `-` of a negative is the documented divergence (Django raises on
-        // `int('-')`), and it must not become an integer with the rest.
-        let neg = Value::Integer(-42);
-        let result = apply_filter("get_digit", &neg, Some("3")).unwrap();
-        assert!(matches!(result, Value::Integer(-42)), "{result:?}");
-        let text = Value::String("abc".to_string());
-        let result = apply_filter("get_digit", &text, Some("1")).unwrap();
-        assert!(
-            matches!(result, Value::String(ref s) if s == "abc"),
-            "{result:?}"
-        );
-    }
-
-    #[test]
-    fn test_iriencode_filter() {
-        // Preserves non-ASCII chars (unlike urlencode)
-        let value = Value::String("café".to_string());
-        let result = apply_filter("iriencode", &value, None).unwrap();
-        assert_eq!(result.to_string(), "café");
-
-        // Encodes ASCII specials (spaces)
-        let value = Value::String("hello world".to_string());
-        let result = apply_filter("iriencode", &value, None).unwrap();
-        assert!(result.to_string().contains("%20"));
-
-        // Preserves / and :
-        let value = Value::String("http://example.com/path".to_string());
-        let result = apply_filter("iriencode", &value, None).unwrap();
-        assert_eq!(result.to_string(), "http://example.com/path");
-
-        // Preserves # and ? (query/fragment)
-        let value = Value::String("http://example.com/path?q=1&p=2#frag".to_string());
-        let result = apply_filter("iriencode", &value, None).unwrap();
-        assert_eq!(result.to_string(), "http://example.com/path?q=1&p=2#frag");
-    }
-
-    #[test]
-    fn test_phone2numeric_filter() {
-        let value = Value::String("1-800-COLLECT".to_string());
-        let result = apply_filter("phone2numeric", &value, None).unwrap();
-        assert_eq!(result.to_string(), "1-800-2655328");
-    }
-
-    #[test]
     fn test_pprint_filter() {
         // String value
         let value = Value::String("hello".to_string());
@@ -10294,130 +9076,5 @@ mod tests {
         } else {
             panic!("Expected List value");
         }
-    }
-
-    #[test]
-    fn test_urlize_filter() {
-        // URL detection
-        let value = Value::String("Visit https://example.com for info".to_string());
-        let result = apply_filter("urlize", &value, None).unwrap();
-        let s = result.to_string();
-        assert!(s.contains("<a href=\"https://example.com\""));
-        assert!(s.contains("rel=\"nofollow\""));
-
-        // Email detection
-        let value = Value::String("Email user@example.com for help".to_string());
-        let result = apply_filter("urlize", &value, None).unwrap();
-        let s = result.to_string();
-        assert!(s.contains("<a href=\"mailto:user@example.com\">"));
-
-        // www prefix
-        let value = Value::String("Go to www.example.com today".to_string());
-        let result = apply_filter("urlize", &value, None).unwrap();
-        let s = result.to_string();
-        assert!(s.contains("<a href=\"http://www.example.com\""));
-
-        // ftp:// support
-        let value = Value::String("Download from ftp://files.example.com/pub".to_string());
-        let result = apply_filter("urlize", &value, None).unwrap();
-        let s = result.to_string();
-        assert!(s.contains("<a href=\"ftp://files.example.com/pub\""));
-
-        // Balanced parentheses preserved (Wikipedia-style URLs)
-        let value =
-            Value::String("See https://en.wikipedia.org/wiki/Foo_(bar) for details".to_string());
-        let result = apply_filter("urlize", &value, None).unwrap();
-        let s = result.to_string();
-        assert!(s.contains("href=\"https://en.wikipedia.org/wiki/Foo_(bar)\""));
-
-        // Unbalanced trailing paren still stripped
-        let value = Value::String("(visit https://example.com) for info".to_string());
-        let result = apply_filter("urlize", &value, None).unwrap();
-        let s = result.to_string();
-        assert!(s.contains("href=\"https://example.com\""));
-        assert!(s.contains("</a>)"));
-    }
-
-    #[test]
-    fn test_urlizetrunc_filter() {
-        let value = Value::String("Visit https://example.com/very/long/path for info".to_string());
-        let result = apply_filter("urlizetrunc", &value, Some("15")).unwrap();
-        let s = result.to_string();
-        // ONE `…`, and it costs ONE of the fifteen characters (#2346). This
-        // read `s.contains("...")` and was the only test the three-dot
-        // spelling had; `Urlizer.trim_url` appends `"%s…" % x[:max(0, limit-1)]`,
-        // so the displayed text is `https://example` truncated to 14 plus the
-        // ellipsis.
-        assert!(s.contains(">https://exampl\u{2026}</a>"), "{s}");
-        assert!(!s.contains("..."), "{s}");
-        assert!(s.contains("href=\"https://example.com/very/long/path\""));
-    }
-
-    #[test]
-    fn test_unordered_list_filter() {
-        // Flat list
-        let value = Value::List(vec![
-            Value::String("one".to_string()),
-            Value::String("two".to_string()),
-        ]);
-        let result = apply_filter("unordered_list", &value, None).unwrap();
-        let s = result.to_string();
-        assert!(s.contains("<li>one</li>"));
-        assert!(s.contains("<li>two</li>"));
-
-        // Nested list: ["item", ["sub1", "sub2"]]
-        let value = Value::List(vec![
-            Value::String("parent".to_string()),
-            Value::List(vec![
-                Value::String("child1".to_string()),
-                Value::String("child2".to_string()),
-            ]),
-        ]);
-        let result = apply_filter("unordered_list", &value, None).unwrap();
-        let s = result.to_string();
-        assert!(s.contains("<li>parent"));
-        assert!(s.contains("<ul>"));
-        assert!(s.contains("<li>child1</li>"));
-        assert!(s.contains("<li>child2</li>"));
-        assert!(s.contains("</ul>"));
-    }
-
-    #[test]
-    fn test_truncatechars_html_filter() {
-        // Truncate and close tags
-        let value = Value::String("<p>Hello <b>world</b> this is long</p>".to_string());
-        let result = apply_filter("truncatechars_html", &value, Some("11")).unwrap();
-        let s = result.to_string();
-        // Should preserve tags, count only visible chars, and close open tags
-        assert!(s.contains("<p>"));
-        // `…` not `...` — #2203. Django renders
-        // `<p>Hello <b>worl…</b></p>` for this input.
-        assert!(s.contains("…"));
-        // Open tags should be closed
-        assert!(s.ends_with("</p>") || s.ends_with("</b></p>"));
-
-        // Short text unchanged
-        let value = Value::String("<b>Hi</b>".to_string());
-        let result = apply_filter("truncatechars_html", &value, Some("20")).unwrap();
-        assert_eq!(result.to_string(), "<b>Hi</b>");
-    }
-
-    #[test]
-    fn test_truncatewords_html_filter() {
-        // Truncate by words, preserving tags
-        let value = Value::String("<p>one two <b>three four</b> five six</p>".to_string());
-        let result = apply_filter("truncatewords_html", &value, Some("3")).unwrap();
-        let s = result.to_string();
-        assert!(s.contains("one"));
-        assert!(s.contains("two"));
-        assert!(s.contains("three"));
-        // `…` not `...` — #2203. Django renders
-        // `<p>one two <b>three …</b></p>` for this input.
-        assert!(s.contains("…"));
-
-        // Short text unchanged
-        let value = Value::String("<b>one two</b>".to_string());
-        let result = apply_filter("truncatewords_html", &value, Some("10")).unwrap();
-        assert_eq!(result.to_string(), "<b>one two</b>");
     }
 }

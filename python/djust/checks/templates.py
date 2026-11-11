@@ -186,7 +186,6 @@ _T012_EXEMPT_ATTRIBUTES = frozenset(
         "dj-lock",
         "dj-no-recover",
         "dj-no-submit",
-        "dj-params",
         "dj-paste-suppress",
         "dj-poll-interval",
         "dj-shortcut-in-input",
@@ -494,19 +493,6 @@ _DJ_NAVIGATE_RE = re.compile(r"dj-navigate\s*=")
 # whitespace) to silence T012 without introducing a global suppression.
 _DJ_PARTIAL_MARKER_RE = re.compile(r"\{#\s*djust\s*:\s*partial\s*#\}", re.IGNORECASE)
 _DEPRECATED_DATA_DJ_ID_RE = re.compile(r"""data-dj-id\s*=\s*["'][^"']*["']""")
-# T015 (#1602) — pre-1.0 legacy root attributes. djust 1.0 renamed the root
-# markers from `data-djust-root` / `data-djust-view` to `dj-root` / `dj-view`
-# (the `data-` prefix is no longer required). The negative-lookahead
-# `(?![\w-])` scopes the match to EXACTLY `data-djust-root` / `data-djust-view`
-# so legitimate sibling attributes (`data-djust-embedded`, `data-djust-activity`,
-# `data-djust-view-model`, `data-djust-rooted`, ...) never false-match.
-_LEGACY_ROOT_ATTR_RE = re.compile(r"data-djust-(root|view)(?![\w-])")
-# T027 (1.3 deprecations) -- a JSX-style ``<RustButton ... />`` component tag. The
-# tag renders through a Rust component path djust 2.0 removes; rendering one
-# warns at runtime, and this finds it before the page is requested. The
-# lookahead keeps ``<RustyThing>`` and ``<Rust>`` out: the name is ``Rust`` plus
-# a capital letter, then whitespace, ``/`` or ``>``.
-_RUST_JSX_TAG_RE = re.compile(r"<(Rust[A-Z]\w*)(?=[\s/>])")
 # A090 — scanner for {% djust_markdown %} (v0.7.0). Fires info-level once
 # per project when the tag is detected, confirming the Rust-side safe
 # renderer is in use (raw HTML escaped, provisional-line splitter active).
@@ -967,12 +953,6 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # T014 -- deprecated data-dj-id attribute (renamed to dj-id in v1.0)
         _check_deprecated_data_dj_id(content, relpath, filepath, errors)
-
-        # T015 -- legacy data-djust-root / data-djust-view root attributes
-        _check_legacy_root_attrs(content, relpath, filepath, errors)
-
-        # T027 -- JSX-style <Rust.../> component tags (deprecated in 1.3)
-        _check_rust_jsx_tags(content, relpath, filepath, errors)
 
         # T017 -- dj-view / dj-root on a table-section element (#1837)
         _check_table_section_root(content, relpath, filepath, errors)
@@ -1614,107 +1594,6 @@ def _check_deprecated_data_dj_id(
                 id="djust.T014",
                 fix_hint=(
                     "Replace 'data-dj-id=' with 'dj-id=' at line %d in `%s`." % (lineno, relpath)
-                ),
-                file_path=filepath,
-                line_number=lineno,
-            )
-        )
-
-
-def _check_legacy_root_attrs(
-    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
-) -> None:
-    """T015 (#1602): Detect the pre-1.0 legacy root attributes.
-
-    djust 1.0 renamed the LiveView root markers from ``data-djust-root`` /
-    ``data-djust-view`` to ``dj-root`` / ``dj-view`` (the ``data-`` prefix is
-    no longer required). When a template still uses the old spelling, the
-    generic T012 ("dj-* directives but no dj-root or dj-view") doesn't recognise that a
-    view IS declared — just with the deprecated name — so the path from symptom
-    (the LiveView never connects over WebSocket) to fix is non-obvious. T015
-    names the rename explicitly.
-
-    SCOPE: this is a static system check only. It does NOT make the runtime
-    accept the legacy attributes (that's a separate, larger change).
-    """
-    if _is_check_suppressed("djust.T015"):
-        return
-    _line_counter = LineCounter(content)
-    for match in _LEGACY_ROOT_ATTR_RE.finditer(content):
-        lineno = _line_counter.line_at(match.start())
-        old_attr = match.group(0)  # e.g. "data-djust-view"
-        new_attr = old_attr.replace("data-djust-", "dj-")  # -> "dj-view"
-        errors.append(
-            DjustWarning(
-                "%s:%d -- legacy '%s' attribute detected." % (relpath, lineno, old_attr),
-                hint=(
-                    "djust 1.0 renamed root attributes — change 'data-djust-view' to "
-                    "'dj-view' and 'data-djust-root' to 'dj-root'. The leading 'data-' "
-                    "prefix is no longer required. Suppress this check with "
-                    "DJUST_CONFIG = {'suppress_checks': ['T015']}."
-                ),
-                id="djust.T015",
-                fix_hint=(
-                    "Replace '%s' with '%s' at line %d in `%s`."
-                    % (old_attr, new_attr, lineno, relpath)
-                ),
-                file_path=filepath,
-                line_number=lineno,
-            )
-        )
-
-
-def _check_rust_jsx_tags(
-    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
-) -> None:
-    """T027: Detect a JSX-style ``<Rust.../>`` component tag (deprecated in 1.3).
-
-    Template syntax cannot emit a Python warning at import, so API_STABILITY's
-    policy asks for a system check beside the runtime ``DeprecationWarning``
-    the renderer emits when the tag is rendered. djust 2.0 turns the tag into
-    a template error.
-
-    The check follows the renderer. The renderer's lexer is blind to HTML context:
-    it turns any ``<`` followed by a capital letter into a component, so a tag
-    inside an HTML comment or a ``<script>`` body IS rendered and warned about,
-    and in 2.0 is a template error. Those are reported. Only text the renderer
-    does not render as a tag is skipped: a ``{% verbatim %}`` region (and the
-    ``{# #}`` / ``{% comment %}`` the caller already blanked), which is how a
-    template shows an example of the tag (#3691;
-    ``test_the_check_flags_exactly_the_tags_the_renderer_warns_about``).
-
-    SCOPE: a verbatim region is found with ``_strip_verbatim_blocks``' regex, which
-    closes on the first ``{% endverbatim %}`` of any name and does not know a
-    ``{{ '...' }}`` string literal, so an exotic template (a named block closed by
-    another name, a verbatim marker inside a string literal) can read differently
-    from the renderer. A tag written inside another tag's attribute value is
-    reported once per tag; the renderer warns once.
-
-    The scan is one pass; each tag's line number counts only the newlines since the
-    previous tag, so a template with very many tags costs O(template + tags), not
-    O(template x tags).
-    """
-    if _is_check_suppressed("djust.T027"):
-        return
-    scan = _strip_verbatim_blocks(content)
-    _line_counter = LineCounter(scan)
-    for match in _RUST_JSX_TAG_RE.finditer(scan):
-        lineno = _line_counter.line_at(match.start())
-        tag = match.group(1)
-        errors.append(
-            DjustWarning(
-                "%s:%d -- JSX-style '<%s />' template tag is deprecated (removed in djust 2.0.0)."
-                % (relpath, lineno, tag),
-                hint=(
-                    "The <Rust.../> component tags render through a Rust component path "
-                    "that djust 2.0.0 removes; in 2.0 the tag is a template error. Render "
-                    "the matching djust.components.ui component instead. Suppress this "
-                    "check with DJUST_CONFIG = {'suppress_checks': ['T027']}."
-                ),
-                id="djust.T027",
-                fix_hint=(
-                    "Replace '<%s />' at line %d in `%s` with a djust.components.ui "
-                    "component rendered from the view." % (tag, lineno, relpath)
                 ),
                 file_path=filepath,
                 line_number=lineno,

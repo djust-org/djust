@@ -202,8 +202,8 @@ LIVEVIEW_CONFIG = {
 }
 ```
 
-(The flat `DJUST_VDOM_CACHE_*` settings still work but are deprecated: they
-warn at startup, and 2.0 removes them.)
+(The flat `DJUST_VDOM_CACHE_*` settings were removed in 2.0; startup fails if
+one is still set.)
 
 Three system checks guard the configuration ranges so a typo (e.g.
 negative TTL) fails fast at `manage.py check`:

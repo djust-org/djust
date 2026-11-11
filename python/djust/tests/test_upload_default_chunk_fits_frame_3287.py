@@ -57,7 +57,6 @@ def _make_consumer(view):
 
     consumer = LiveViewConsumer()
     consumer.view_instance = view
-    consumer.use_binary = False
     consumer.send = AsyncMock()
     consumer.send_error = AsyncMock()
     consumer.send_json = AsyncMock()

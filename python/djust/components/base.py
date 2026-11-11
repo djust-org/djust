@@ -47,13 +47,16 @@ def _is_debug_mode() -> bool:
         return True
 
 
-def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -> str:
+def _render_template_string(template_str: str, context: Dict[str, Any]) -> str:
     """
-    Render a template string with Rust acceleration, falling back to Django templates.
+    Render a component template string through the Rust engine.
 
-    Tries Rust template rendering first for performance. Falls back to Django's
-    Template engine if Rust is unavailable or encounters an error (e.g., for
-    {% include %} tags that Rust doesn't support).
+    The project's template directories are passed in, so ``{% include %}`` and
+    ``{% extends %}`` resolve in Rust. A Rust render error propagates. Before
+    2.0 it was caught here and the template was rendered again with Django's
+    ``Template`` (which is how ``{% include %}`` used to work in a component),
+    so a template the Rust engine rejected rendered differently, silently,
+    instead of failing.
 
     Args:
         template_str: Template string to render
@@ -62,35 +65,24 @@ def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -
     Returns:
         Rendered HTML string (not marked as safe - caller should mark_safe if needed)
     """
-    try:
-        from djust._rust import render_template
+    from djust._rust import render_template_with_dirs
 
-        from ..config import template_auto_call_enabled
-        from ..render_env import apply_render_env_once
+    from ..render_env import apply_render_env_once
+    from ..utils import get_template_dirs
 
-        # The FOURTH framework render entry, and it was the one missing from
-        # the ambient-settings handoff (#2209 / #2221 / #2539): a component
-        # rendered on a thread that had not already rendered a page got UTC
-        # timestamps, unlocalized numbers and — since ADR-027 — a resolution
-        # flag stuck at its default.
-        #
-        # `_once`, not `apply_render_env`, and the difference is N+1: this
-        # runs once per component INSTANCE, so a parent with N components paid
-        # N pushes at ~12us each inside a render whose own push already set
-        # every thread-local correctly. See that function for what the first
-        # push still buys and what the sentinel deliberately does not cover.
-        apply_render_env_once()
-        # A framework render path, so the project's auto-call setting governs
-        # rather than the Rust entry point's Django-matching default (#2508).
-        return render_template(template_str, context, template_auto_call_enabled())
-    except (ImportError, AttributeError, RuntimeError):
-        # Rust not available or template error, fall back to Django templates
-        from django.template import Context, Template
-
-        template = Template(template_str)
-        django_context = Context(context)
-        with include_guard_scope():  # Django's engine renders this fallback (#3880)
-            return cast(str, template.render(django_context))
+    # The FOURTH framework render entry, and it was the one missing from
+    # the ambient-settings handoff (#2209 / #2221 / #2539): a component
+    # rendered on a thread that had not already rendered a page got UTC
+    # timestamps, unlocalized numbers and — since ADR-027 — a resolution
+    # flag stuck at its default.
+    #
+    # `_once`, not `apply_render_env`, and the difference is N+1: this
+    # runs once per component INSTANCE, so a parent with N components paid
+    # N pushes at ~12us each inside a render whose own push already set
+    # every thread-local correctly. See that function for what the first
+    # push still buys and what the sentinel deliberately does not cover.
+    apply_render_env_once()
+    return cast(str, render_template_with_dirs(template_str, context, get_template_dirs()))
 
 
 def _render_inline_template(template_str: str, context: Dict[str, Any], owner: str = "") -> str:
@@ -108,7 +100,7 @@ def _render_inline_template(template_str: str, context: Dict[str, Any], owner: s
     and ``{% extends %}``) and a LiveView's own template.
     """
     template_str, context = harden_context(template_str, context, owner)
-    return _render_template_with_fallback(template_str, context)
+    return _render_template_string(template_str, context)
 
 
 def _load_template_source(template_name: str) -> Optional[str]:
@@ -160,17 +152,14 @@ def _render_template_name_with_markers(
     state, ``SafeString`` paths marked safe, raw objects (models behind the
     serialization floor) on the ``set_raw_py_values`` sidecar.
     """
-    try:
-        from djust._rust import RustLiveView
-    except ImportError:
-        return None
+    from djust._rust import RustLiveView
+
     try:
         source = _load_template_source(template_name)
     except Exception:
         return None
     if source is None or "{% extends" in source:
         return None
-    from ..config import template_auto_call_enabled
     from ..mixins.rust_bridge import _collect_safe_keys
     from ..render_env import apply_render_env_once
     from ..serialization import build_render_sidecar, normalize_django_value, without_form_values
@@ -178,10 +167,8 @@ def _render_template_name_with_markers(
 
     apply_render_env_once()
     rust_view = RustLiveView(source, get_template_dirs())
-    if hasattr(rust_view, "set_template_auto_call"):
-        rust_view.set_template_auto_call(template_auto_call_enabled())
-    # ADR-029 (#2741): snapshot the pushed environment onto this view, beside
-    # the auto-call flag, so every render entry applies it on any thread.
+    # ADR-029 (#2741): snapshot the pushed environment onto this view, so
+    # every render entry applies it on any thread.
     if hasattr(rust_view, "capture_render_env"):
         rust_view.capture_render_env()
     # #2686: give this instance its own dj-if id namespace, so two instances of

@@ -738,7 +738,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("sse.py", "SSESession._mount_slot", "page_request"): plumbing(_SESSION),
     ("sse.py", "SSESession._untrack_replaced_presence", "untrack_view_presence"): leaf(),
     ("sse.py", "DjustSSEStreamView.get", "page_request"): plumbing(_SESSION),
-    ("sse.py", "DjustSSEEventView.post", "_request_owns_session"): plumbing(_SESSION),
     ("sse.py", "DjustSSEMessageView.post", "_request_owns_session"): plumbing(_SESSION),
     ("sse.py", "SSESession._release_slot", "release_root_view"): leaf(),
     ("sse.py", "DjustSSEStreamView.get", "django_session.save"): plumbing(_SESSION),
@@ -917,7 +916,10 @@ HOOKS: Dict[str, str] = {
     "Component.render": "stepped:render",
     "TemplateMixin.get_template": "unwrapped:template-time:read by the template build at template/render-plumbing time with no step open (an HTTP GET shows none); only the actor mount and hot reload call it inside a render step, and the hand-off pin covers those two sites",
     # ---- cursor / presence ----
-    "LiveCursorMixin.handle_cursor_move": "stepped:hook",
+    "LiveCursorMixin.handle_cursor_move": (
+        "unwrapped:not-threaded:djust 2.0 removed the socket's cursor_move frame (#3515), so the "
+        "framework never calls it; it runs where the app calls it"
+    ),
     "PresenceMixin.update_presence_heartbeat": "stepped:hook",
     "PresenceMixin.get_presence_key": "stepped:hook",
     "TenantMixin.get_presence_key": "stepped:hook",
@@ -2014,7 +2016,7 @@ def test_a_leaf_name_is_not_a_free_pass_in_a_new_function():
             "undeclared step",
         ),
         (
-            "LiveCursorMixin.handle_cursor_move",
+            "PresenceMixin.update_presence_heartbeat",
             "unwrapped:not-threaded:" + "x" * 30,
             "it IS threaded",
         ),

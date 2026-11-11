@@ -35,25 +35,13 @@ def _js_str(value: Any) -> str:
     return str(value).translate(_JS_STR_TRANSLATION)
 
 
-# Try to import Rust implementation (will be added later)
-try:
-    from djust._rust import RustNavBar  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except (ImportError, AttributeError):
-    _RUST_AVAILABLE = False
-    RustNavBar = None  # type: ignore[assignment, misc]
-
-
 class NavBar(Component):
     """
-    Simple, stateless navbar component with automatic Rust optimization.
+    Simple, stateless navbar component.
 
-    This component automatically uses pure Rust implementation if available,
-    otherwise falls back to Python rendering.
+    There is no native Rust implementation; it renders in Python.
 
     Performance:
-        - Pure Rust (if available): ~1μs per render
         - Python fallback: ~50-100μs per render (uses loops)
 
     Use Cases:
@@ -135,9 +123,6 @@ class NavBar(Component):
             container="fluid"
         )
     """
-
-    # Link to Rust implementation if available
-    _rust_impl_class = RustNavBar if _RUST_AVAILABLE else None
 
     # Note: Not using template because loops are needed for items
     # Using Python _render_custom() which is still fast (~50-100μs)

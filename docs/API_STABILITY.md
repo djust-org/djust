@@ -23,8 +23,9 @@ the public API of djust 1.0 will keep working across every 1.x release.
 4. [Deprecation Policy](#deprecation-policy)
 5. [The Support Window](#the-support-window)
 6. [Currently Deprecated Symbols](#currently-deprecated-symbols)
-7. [Template-Syntax Deprecations](#template-syntax-deprecations)
-8. [Known Documented Items](#known-documented-items)
+7. [Removed in 2.0.0](#removed-in-200)
+8. [Template-Syntax Deprecations](#template-syntax-deprecations)
+9. [Known Documented Items](#known-documented-items)
 
 ---
 
@@ -57,15 +58,14 @@ document takes effect at **1.0.0**.
 The **public API** — the surface SemVer covers — is exactly the following:
 
 1. **Top-level package exports.** Every name in `djust.__init__.py`'s `__all__`
-   (65 symbols as of 1.3). `from djust import X` for any such `X` is a
+   (61 symbols as of 2.0). `from djust import X` for any such `X` is a
    supported, stable import.
 
 2. **The documented decorators.** Every name in `djust.decorators.__all__`
-   (23 names as of 1.3). These include the core decorators (`event_handler`,
-   `action`, `server_function`, `push_handler`, `permission_required`, `rate_limit`, `reactive`,
+   (21 names as of 2.0). These include the core decorators (`event_handler`,
+   `action`, `server_function`, `push_handler`, `permission_required`, `rate_limit`,
    `state`, `computed`, `debounce`, `throttle`, `optimistic`, `cache`,
-   `client_state`, `background`, `on_mount`), the deprecated alias `event`
-   (see [Currently Deprecated Symbols](#currently-deprecated-symbols)), and the
+   `client_state`, `background`, `on_mount`) and the
    introspection predicates `is_event_handler`, `is_action`,
    `is_server_function` and `is_push_handler`. Two names are deliberately in
    `djust.decorators.__all__` only, not at the top level: `StateProperty` (the
@@ -204,53 +204,51 @@ This is the core stability promise:
   (`@event`, `LiveViewForm`, and the `_legacy` theming module — see below).
   SemVer permitted removing them in any `0.x` release. Rather than yank them at
   `1.0.0`, the policy gives 1.0 adopters one full minor cycle of overlap:
-  **these three symbols were scheduled for removal no earlier than `1.1.0`.**
-  djust `2.0.0` removes them, and their warnings name `2.0.0` from 1.3 on.
+  **these three symbols were scheduled for removal no earlier than `1.1.0`**,
+  and djust `2.0.0` removed them (see [Removed in 2.0.0](#removed-in-200)).
+
+### The 1.4 bridge and 2.x (direction, 2026-10-19)
+
+The project owner settled this direction for the 1.4 → 2.0 transition. The
+SemVer rules above are unchanged by it.
+
+- **1.4 keeps compatibility.** It keeps every existing import, every default,
+  and the current `djust.__all__` and `djust.decorators.__all__`, so the
+  star-import surface (`from djust import *`) is the same as 1.3's. 1.4 adds
+  warnings that name each 2.0 removal and its concrete replacement, a
+  migration guide and checker, and an opt-in for the strict contracts. Every
+  new warning names the release it was deprecated in, its replacement and its
+  removal floor, as [the migration-path rule](#the-migration-path-rule)
+  requires.
+- **Removing a name from `__all__` is a removal.** It changes what
+  `from djust import *` binds, so it counts as removing a public symbol and
+  may only happen in a MAJOR release. Moving a name out of `__all__` in 1.4
+  is not allowed, even if the name stays importable.
+- **2.x has no broad compatibility mode.** 2.0 removes the announced legacy
+  surfaces. It does not ship a `djust.compat` module or setting that keeps
+  the legacy runtime available through 2.x. A narrow, non-behavioural alias
+  needs its own review and must not keep a legacy code path reachable.
 
 ---
 
 ## Currently Deprecated Symbols
 
-Every symbol below is removed in djust **`2.0.0`**, and each one warns that it
-is: a Python `DeprecationWarning`, or for the rows marked "Client:" a one-time
-`console.warn` in the browser. The three `0.x` symbols carried the 0.x
-carve-out floor of `>= 1.1.0`; the rest carry the standard floor of `2.0.0`.
+None. The one access pattern deprecated during the `1.x` series (dict-style
+`block.super` reads in a bridged tag) was removed in `2.0.0`; see below.
 
-| Symbol | Deprecated since | Removed no earlier than | Replacement |
-| --- | --- | --- | --- |
-| `@event` decorator | 0.3 | **2.0.0** | `@event_handler` |
-| `LiveViewForm` | 0.3 | **2.0.0** | `django.forms.Form` |
-| `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | 0.5 | **2.0.0** | `DESIGN_SYSTEMS` / `get_design_system` / `get_all_design_systems` from `djust.theming.theme_packs` |
-| `@reactive` (raises `TypeError` on a `LiveView`, which has no `update()`; elsewhere the decorated body is never called) | 1.3 | **2.0.0** | A plain attribute, or `@computed` |
-| `djust.auth.social.social_auth_providers` context processor | 1.3 | **2.0.0** | `{% auth_providers auth %}` from `{% load djust_auth %}` |
-| `AccordionMixin`, `TabsMixin`, `ModalMixin`, `CollapsibleMixin`, `SheetMixin`, `DropdownMixin`, `TooltipMixin`, `CarouselMixin` (subclassing warns) | 1.3 | **2.0.0** | The matching component in `djust.components.descriptors` (`Accordion`, `Tabs`, …) |
-| `djust.template_backend` module (and `'djust.template_backend.DjustTemplateBackend'` in `TEMPLATES`) | 1.3 | **2.0.0** | `djust.template` / `'djust.template.backend.DjustTemplateBackend'` |
-| `djust.state_backend` module | 1.3 | **2.0.0** | `djust.state_backends` |
-| `djust.simple_live_view.LiveView` | 1.3 | **2.0.0** | `djust.simple_live_view.SimpleLiveView` |
-| `djust.rust_components.Button` | 1.3 | **2.0.0** | `djust.components.ui.Button` |
-| `StreamingMixin.stream_insert` / `stream_delete` (the async pair, reachable on a `LiveView` only as `StreamingMixin.stream_insert(self, ...)`) | 1.3 | **2.0.0** | `await self.astream_insert(...)` / `await self.astream_delete(...)` |
-| `DjustSSEEventView` (the SSE `sse/<id>/event/` endpoint) | 1.3 | **2.0.0** | `{"type": "event", ...}` posted to `sse/<id>/message/` |
-| Dict-style reads of `block` in a Python-bridged tag (`block["super"]`, `block.get("super")`, `block.values()`, `block.items()`, `dict(block)`) | 1.3 | **2.0.0** | `context["block"].super()` |
-| JSX-style Rust component template tags (`<RustButton …/>`, `<RustInput …/>` and the other `<Rust…/>` tags) | 1.3 | **2.0.0** | a `djust.components.ui` component |
-| Defining `_drain_announcements` or `_drain_focus` on a `LiveView` (duck-typed accessibility hooks the WebSocket and SSE transports drain; nothing in djust defines them) | 1.3 | **2.0.0** | A `role="status"` live region the view renders, and `JS.focus()` through `push_commands()` |
-| Client: the `dj-params` JSON attribute (warns once per page in the browser console) | 1.3 | **2.0.0** | `dj-value-*` attributes |
-| Client: the `data-djust-root` marker in a `dj-layout` swap (warns once per page) | 1.3 | **2.0.0** | `dj-root` |
-| Client: `window.LiveViewWebSocket`, `window.setCacheConfig`, `window.globalLoadingManager` (each warns once, on first read) | 1.3 | **2.0.0** | `window.djust.LiveViewWebSocket`, `window.djust.setCacheConfig`, `window.djust.globalLoadingManager` |
+---
 
-Deprecated **settings** warn once at startup, from `DjustConfig.ready()`
-(`python/djust/_deprecated_settings.py`); djust 2.0 refuses to start while one is set:
+## Removed in 2.0.0
 
-| Setting | Deprecated since | Removed no earlier than | Replacement |
-| --- | --- | --- | --- |
-| `DJUST_WS_COMPRESSION` | 1.3 | **2.0.0** | `LIVEVIEW_CONFIG['websocket_compression']` |
-| `DJUST_VDOM_CACHE_ENABLED` / `_TTL_SECONDS` / `_MAX_ENTRIES` | 1.3 | **2.0.0** | `LIVEVIEW_CONFIG['service_worker']['vdom_cache_enabled' / 'vdom_cache_ttl_seconds' / 'vdom_cache_max_entries']` |
-| `DJUST_STATE_BACKEND` / `DJUST_REDIS_URL` | 1.3 | **2.0.0** | `DJUST_CONFIG['STATE_BACKEND']` (`'memory'` or `'redis'`) / `DJUST_CONFIG['REDIS_URL']` |
-| `LIVEVIEW_CONFIG` keys `template_auto_call`, `virtual_keyed_ops`, `django_value_repr` | 1.3 | **2.0.0** | None: 2.0 always enables what each one could switch off. Delete the key. |
+The three symbols that carried the 0.x carve-out floor were removed in
+djust `2.0.0`. Importing them now raises `ImportError` (or `AttributeError` for
+`djust.event` / `djust.LiveViewForm`). The dict-style `block.super` reads,
+deprecated in 1.3, were removed too.
 
 ### `@event` → `@event_handler`
 
-`@event` is a deprecated alias for `@event_handler`. It has identical behavior;
-only the name differs. Migration is a mechanical rename:
+`@event` was a deprecated alias for `@event_handler`, with identical behavior.
+Migration is a mechanical rename:
 
 ```python
 # Before
@@ -270,9 +268,12 @@ def increment(self):
 
 ### `LiveViewForm` → `django.forms.Form`
 
-`LiveViewForm` adds no functionality over Django's own `forms.Form`. djust's
-form reactivity comes from `FormMixin` on the `LiveView`, not from a special
-form base class. Migrate by subclassing `django.forms.Form` directly:
+djust's form reactivity comes from `FormMixin` on the `LiveView`, not from a
+special form base class; `LiveViewForm` only added two helpers to Django's
+`forms.Form`. Migrate by subclassing `django.forms.Form` directly. If you called
+`form.get_field_errors_json()`, use `json.dumps(form.errors)`; for
+`form.get_field_value(name)`, read `form.cleaned_data` (or `form.data` before
+validation):
 
 ```python
 # Before
@@ -288,17 +289,13 @@ class ContactForm(forms.Form):
     name = forms.CharField()
 ```
 
-> **Note on the corrected warning text.** Before djust 1.0, the `LiveViewForm`
-> deprecation warning said it would be "removed in djust 0.4" — a version
-> already long past. That stale text was corrected to the policy-compliant
-> `>= 1.1.0` floor, and from 1.3 the warning names `2.0.0`, the release that
-> removes it.
-
 ### The `_legacy` theming module
 
 The `djust.theming.themes._legacy` module — its `THEMES` dict and the
-`get_theme()` / `list_themes()` functions — is wholly deprecated. Every access
-emits a `DeprecationWarning`. Migrate to the design-system API:
+`get_theme()` / `list_themes()` functions, and the `Theme`, `Typography`,
+`Spacing`, `BorderRadius`, `Shadows`, `Animations` and `ComponentStyles` classes
+that `djust.theming.themes` re-exported from it — is gone. Migrate to the
+design-system API:
 
 ```python
 # Before
@@ -335,13 +332,15 @@ save_button = Button("Save", variant="primary")  # template: {{ save_button }}
 Before `{{ block.super }}` became lazy, a Python-bridged tag received `block` as a
 `dict` (`{"super": "<rendered parent>"}`). It now receives a lazy object with Django's
 own `BlockNode` shape, whose `super()` method renders the parent when it is read.
-The dict-style reads keep working as a deprecated compatibility path: each emits a
-`DeprecationWarning` pointing at the tag's own line, renders the parent once per
-read (no memoization), and lets the parent's own exception propagate. They are
-deprecated since 1.3 and removed no earlier than 2.0.0. Django's own resolution
-(`Variable("block.super")`, `{% blocktranslate with s=block.super %}`) is not
-affected and never warns. Under `-W error::DeprecationWarning` the legacy read raises
-the warning at the tag, before the parent runs.
+The dict-style reads were deprecated in 1.3 and removed in 2.0.0:
+
+- `block["super"]` raises `TypeError` (not subscriptable), with a message naming
+  `block.super()`, and `dict(block)` raises the same error;
+- `block.get("super")`, `block.values()` and `block.items()` raise `AttributeError`.
+
+None of them renders the parent. Django's own resolution (`Variable("block.super")`,
+`{% blocktranslate with s=block.super %}`) is unaffected: it falls through the
+`TypeError` to `super()` exactly as it does for a `BlockNode`.
 
 ```python
 # Before
@@ -403,14 +402,11 @@ announced via a Python warning (templates are not Python), so they are surfaced
 through djust's system-check framework and reported by
 `manage.py djust_check`.
 
-Three such template-syntax deprecations exist today:
+Two such template-syntax deprecations exist today:
 
 - **T001** — the `@click` / `@input` event-attribute shorthand. Migrate to the
   `dj-click` / `dj-input` directive form.
 - **T014** — the `data-dj-id` attribute form. Migrate to `dj-id`.
-- **T027** — the JSX-style `<RustButton … />` component tags (deprecated since
-  1.4, removed no earlier than 2.0.0). Migrate to a `djust.components.ui`
-  component. The tag also emits a runtime `DeprecationWarning` when rendered.
 
 All are reported as system-check warnings with a `fix_hint` naming the
 replacement syntax, mirroring the migration-path rule above. This is documented

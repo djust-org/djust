@@ -27,7 +27,6 @@ if TYPE_CHECKING:
 
 from asgiref.sync import iscoroutinefunction
 
-from ._deprecation import warn_deprecated
 from ._state import StateProperty as StateProperty
 from ._state import state as state
 from .change_detection import deep_fingerprint, fingerprints_by_content
@@ -221,8 +220,6 @@ def event_handler(
             "optional": ["value"],
             "coerce_types": True
         }
-
-    Note: The @event alias is deprecated. Use @event_handler directly.
     """
 
     if parameter_policy not in (None, "legacy", "strict"):
@@ -310,28 +307,6 @@ def event_handler(
 
     # Called as @event_handler() or @event_handler(params=..., description=...)
     return decorator
-
-
-# Shorter alias for event_handler (deprecated)
-def event(func: F) -> F:
-    """
-    Deprecated alias for @event_handler. Use @event_handler instead.
-
-    .. deprecated:: 0.3
-        ``@event`` is deprecated and is removed in
-        djust 2.0.0. Use ``@event_handler`` instead.
-    """
-    warn_deprecated(
-        "@event",
-        since="0.3",
-        removed_in="2.0.0",
-        instead="@event_handler",
-        # stacklevel=3: warnings.warn -> warn_deprecated -> event -> user.
-        # Empirically verified (scratch sweep): 3 points the warning at the
-        # caller's file, not decorators.py.
-        stacklevel=3,
-    )
-    return event_handler(func)
 
 
 def is_event_handler(func: Any) -> bool:
@@ -827,94 +802,6 @@ def is_push_only(owner: Any, name: str, handler: Any = None) -> bool:
     return False
 
 
-class _ReactiveProperty:
-    """Descriptor for @reactive properties with __set_name__ validation (#1287).
-
-    Validates at class-definition time that the host class has an ``update()``
-    method, rather than silently no-opping at runtime when it doesn't.
-    """
-
-    def __init__(
-        self,
-        fget: Callable[[Any], Any],
-        fset: Optional[Callable[[Any, Any], None]] = None,
-    ) -> None:
-        self.fget = fget
-        self.fset = fset
-
-    def __set_name__(self, owner: type, name: str) -> None:
-        if not hasattr(owner, "update"):
-            raise TypeError(
-                f"@reactive property '{name}' on {owner.__name__} requires "
-                f"the host class to have an 'update()' method (typically "
-                f"inherited from LiveView)."
-            )
-
-    def __get__(self, obj: Any, objtype: Optional[type] = None) -> Any:
-        if obj is None:
-            return self
-        return self.fget(obj)
-
-    def __set__(self, obj: Any, value: Any) -> None:
-        if self.fset is None:
-            raise AttributeError("can't set attribute")
-        old_value = self.fget(obj)
-        self.fset(obj, value)
-        if old_value != value:
-            obj.update()
-
-    def setter(self, fset: Callable[[Any, Any], None]) -> "_ReactiveProperty":
-        return type(self)(self.fget, fset)
-
-
-def reactive(func: Callable[..., Any]) -> "_ReactiveProperty":
-    """
-    Create a reactive property that triggers re-render on change.
-
-    Usage::
-
-        class MyView(LiveView):
-            @reactive
-            def count(self):
-                return self._count
-
-            @count.setter
-            def count(self, value):
-                self._count = value
-
-    The host class must have an ``update()`` method.  A ``TypeError`` is
-    raised at class-definition time if it doesn't, rather than silently
-    no-opping at runtime.
-
-    .. deprecated:: 1.3
-        Removed in djust 2.0. ``LiveView`` has no ``update()`` method, so
-        ``@reactive`` on a view raises ``TypeError``; on a ``LiveComponent``
-        the decorated function's body is never called and the setter's
-        ``update()`` call re-renders nothing. Use a plain attribute (djust
-        re-renders after every event handler) or ``@computed``.
-    """
-    warn_deprecated(
-        "@reactive",
-        since="1.3",
-        removed_in="2.0.0",
-        instead="a plain attribute (djust re-renders after every handler) or @computed",
-        # stacklevel=3: warnings.warn -> warn_deprecated -> reactive -> the
-        # class body applying the decorator.
-        stacklevel=3,
-    )
-    internal_name = f"_{func.__name__}_reactive"
-
-    def _getter(self: Any) -> Any:
-        return getattr(self, internal_name, None)
-
-    def _setter(self: Any, value: Any) -> None:
-        setattr(self, internal_name, value)
-
-    prop = _ReactiveProperty(_getter, _setter)
-    prop.__doc__ = func.__doc__
-    return prop
-
-
 def computed(*deps: Any) -> Any:
     """
     Decorator to mark a method as a computed property.
@@ -989,7 +876,8 @@ def computed(*deps: Any) -> Any:
                 elif fingerprints_by_content(v):
                     # Structural (#2664): an in-place edit of a dep invalidates;
                     # a class-level component's State likewise (#2900).
-                    parts.append((name, "c", id(v), deep_fingerprint(v)[0]))
+                    fp, truncated = deep_fingerprint(v)
+                    parts.append((name, "c", id(v), object() if truncated else fp))
                 else:
                     parts.append((name, "id", id(v)))
             return tuple(parts)
@@ -1459,7 +1347,6 @@ from .hooks import on_mount  # noqa: E402 — re-export for public API
 
 __all__ = [
     "event_handler",
-    "event",
     "is_event_handler",
     "action",
     "is_action",
@@ -1469,7 +1356,6 @@ __all__ = [
     "is_push_handler",
     "permission_required",
     "rate_limit",
-    "reactive",
     "state",
     "StateProperty",
     "computed",

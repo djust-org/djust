@@ -31,14 +31,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-# Try to import Rust implementation
-try:
-    from djust._rust import RustCard  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
-    RustCard = None  # type: ignore[assignment, misc]
+from djust._rust import RustCard
 
 
 class Card(Component):
@@ -57,7 +50,7 @@ class Card(Component):
         variant: Style variant (default, outlined, elevated)
     """
 
-    _rust_impl_class = RustCard if _RUST_AVAILABLE else None
+    _rust_impl_class = RustCard
 
     # Template for hybrid rendering
     template = """<div class="card{% if variant == "outlined" %} border{% endif %}{% if variant == "elevated" %} shadow{% endif %}">{% if header %}

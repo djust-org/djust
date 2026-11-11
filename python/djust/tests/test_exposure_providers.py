@@ -33,6 +33,37 @@ from djust.wizard import WizardMixin
 
 
 @pytest.fixture
+async def close_provider_worker_connections(transactional_db):
+    """Close DB connections opened by these async tests on the shared worker.
+
+    Django deliberately keeps an in-memory SQLite connection open on close;
+    pytest later blocks DB access, so Channels' connection cleanup in an
+    unrelated test fails against that leftover connection. The main test DB
+    connection remains alive until transactional_db tears down.
+    """
+    from django.db import connections
+    from django.db.backends.base.base import BaseDatabaseWrapper
+
+    def snapshot():
+        return {
+            id(conn): conn.connection is not None for conn in connections.all(initialized_only=True)
+        }
+
+    def close_new_connections(before):
+        for conn in connections.all(initialized_only=True):
+            if conn.connection is None or before.get(id(conn), False):
+                continue
+            if conn.vendor == "sqlite" and conn.is_in_memory_db():
+                BaseDatabaseWrapper.close(conn)
+            else:
+                conn.close()
+
+    before = await sync_to_async(snapshot)()
+    yield
+    await sync_to_async(close_new_connections)(before)
+
+
+@pytest.fixture
 def staged(monkeypatch):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
 
@@ -300,6 +331,7 @@ async def _mount(request, view_class, **extra):
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("close_provider_worker_connections")
 async def test_provider_change_invalidates_the_stored_envelope(staged, monkeypatch):
     request = await sync_to_async(make_request)()
     runtime, transport = await _mount(request, BadgeView)
@@ -386,6 +418,7 @@ def test_explicit_provider_keys_are_reserved_from_context_processors(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("key", ["csrf_token", "DATE_FORMAT"])
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
+@pytest.mark.usefixtures("close_provider_worker_connections")
 async def test_rust_render_keys_are_framework_providers(staged, monkeypatch, key, policy):
     class Supplier(RustRenderView):
         count = state(0, persist="server")
@@ -421,6 +454,7 @@ def _stored(request):
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("mixin", sorted(MIXIN_VIEWS) + ["rust_render"])
+@pytest.mark.usefixtures("close_provider_worker_connections")
 async def test_explicit_provider_values_never_reach_state_destinations(staged, mixin, rf):
     from djust._exposure import explicit_debug_projection
     from djust._exposure_snapshots import snapshot_codec
@@ -590,6 +624,7 @@ def test_tenant_processor_supplying_another_value(staged, monkeypatch, rf, polic
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("processor", ["identical", "other"])
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
+@pytest.mark.usefixtures("close_provider_worker_connections")
 async def test_tenant_view_with_a_tenant_context_processor(staged, monkeypatch, processor, policy):
     from django.conf import settings
 

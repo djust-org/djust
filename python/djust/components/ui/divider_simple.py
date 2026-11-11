@@ -11,14 +11,7 @@ from ..base import Component
 from django.utils.html import conditional_escape
 
 
-# Try to import Rust implementation
-try:
-    from djust._rust import RustDivider  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except (ImportError, AttributeError):
-    _RUST_AVAILABLE = False
-    RustDivider = None  # type: ignore[assignment, misc]
+from djust._rust import RustDivider
 
 
 class Divider(Component):
@@ -62,8 +55,8 @@ class Divider(Component):
         {{ divider.render }}  # or just {{ divider }}
     """
 
-    # Link to Rust implementation if available
-    _rust_impl_class = RustDivider if _RUST_AVAILABLE else None
+    # The Rust implementation
+    _rust_impl_class = RustDivider
 
     # Fallback: Hybrid rendering with template
     # Note: This will use Rust template engine if available, Django templates otherwise

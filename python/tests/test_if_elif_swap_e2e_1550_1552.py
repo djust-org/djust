@@ -44,13 +44,7 @@ import queue
 
 import pytest
 
-try:
-    from djust._rust import RustLiveView
-except ImportError:  # pragma: no cover
-    RustLiveView = None
-
-
-pytestmark = pytest.mark.skipif(RustLiveView is None, reason="Rust extensions not built")
+from djust._rust import RustLiveView
 
 
 _IF_ELIF_TEMPLATE = """<div class="wizard-content">

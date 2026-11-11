@@ -99,6 +99,16 @@ pip install redis
 
 ### Deploy-time state invalidation
 
+**Mixed-version deployments:** The 2.0 partial-root renderer may store an
+extended Rust view snapshot when a template contains partials, includes, or
+inheritance. A 2.0 worker can read the earlier five-field snapshot, but an
+older worker must not consume an extended snapshot from a newer worker. During
+a rolling upgrade or rollback, use different `REDIS_KEY_PREFIX` values for
+incompatible versions and drain existing connections as needed. The versioned
+prefix gives each release a separate render-baseline cache; reconnects that miss
+their version's cache build a fresh baseline. This separation does not itself
+migrate application session data.
+
 Each session's `RustLiveView` is cached in Redis (default TTL 1 hour) and used as the diff baseline on WebSocket reconnect. When you deploy a new release that changes a template's structure, attributes, or whitespace, a reconnecting client's cached pre-deploy view will not match the new render — the resulting patches target text-node positions that no longer exist, the patch fails, recovery HTML may be unavailable on a fresh consumer, and the user is forced through a `window.location.reload()`.
 
 **Since v0.9.4 this is handled automatically.** Per PR [#1367](https://github.com/johnrtipton/djust/pull/1367), the Redis cache key includes an 8-hex template-source hash:
@@ -143,7 +153,7 @@ When a VDOM patch fails on the client, djust falls back to the server-rendered "
 
 | Concern | Setting | What it does |
 |---|---|---|
-| **State backend** | `DJUST_CONFIG['STATE_BACKEND']` and `DJUST_CONFIG['REDIS_URL']` (the flat `DJUST_STATE_BACKEND` / `DJUST_REDIS_URL` are deprecated, removed in 2.0) | Caches each session's compiled view (`RustLiveView`) as the diff baseline for its next WebSocket mount. It does not restore a view's state (its assigns) on another process: that needs `enable_state_snapshot` or `state(..., persist="server")` plus a session store every process shares (see [Option B](scaling.md#option-b-redis-between-processes)). |
+| **State backend** | `DJUST_CONFIG['STATE_BACKEND']` (and `DJUST_CONFIG['REDIS_URL']`) | Caches each session's compiled view (`RustLiveView`) as the diff baseline for its next WebSocket mount. It does not restore a view's state (its assigns) on another process: that needs `enable_state_snapshot` or `state(..., persist="server")` plus a session store every process shares (see [Option B](scaling.md#option-b-redis-between-processes)). |
 | **Channel layer** | `CHANNEL_LAYERS` (Django Channels) | Carries messages between sessions: `push_to_view()`, presence, cursor tracking and DB-change notifications. Messages between processes need a Redis layer. |
 
 **Required configuration** any time more than one process serves WebSockets, **or** any code calls [`push_to_view` / `apush_to_view`](../advanced/server-push.md) from another process (Celery workers, management commands, cron jobs):
@@ -415,7 +425,7 @@ LIVEVIEW_CONFIG = {
 }
 ```
 
-(The flat `DJUST_WS_COMPRESSION` setting still works but is deprecated: it warns at startup, and 2.0 removes it.)
+(The flat `DJUST_WS_COMPRESSION` setting was removed in 2.0; startup fails if it is still set.)
 
 Note that disabling compression in djust's config is **advisory** — the actual wire-level compression is negotiated by the ASGI server. To enforce the no-compression decision at the server level, pass the appropriate flag to Uvicorn / Daphne (e.g. Uvicorn's `--ws-per-message-deflate=false` when using `websockets`). See the [Deployment Checklist](#deployment-checklist) for the full set of ASGI-server flags.
 

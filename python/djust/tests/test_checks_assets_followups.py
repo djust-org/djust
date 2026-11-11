@@ -189,6 +189,7 @@ def _run_b008_checks(*, include_deployment_checks=False):
     return scoped.run_checks(include_deployment_checks=include_deployment_checks)
 
 
+@pytest.mark.django_db
 def test_b008_does_not_walk_static_files_on_ordinary_check_runs(monkeypatch):
     """djust listed above staticfiles: runserver, migrate and a plain `check`
     run the non-deploy checks, and none of them may list every static file."""
@@ -200,6 +201,7 @@ def test_b008_does_not_walk_static_files_on_ordinary_check_runs(monkeypatch):
     assert _b008(messages) == []
 
 
+@pytest.mark.django_db
 def test_b008_runs_under_deploy_checks_when_djust_owns_collectstatic(monkeypatch):
     _collectstatic_owner(monkeypatch, "djust")
     with override_settings(STATICFILES_FINDERS=[_FINDER]):
@@ -208,6 +210,7 @@ def test_b008_runs_under_deploy_checks_when_djust_owns_collectstatic(monkeypatch
 
 
 @pytest.mark.parametrize("deploy", [False, True], ids=["check", "check-deploy"])
+@pytest.mark.django_db
 def test_b008_keeps_running_on_every_check_when_djust_does_not_own_collectstatic(
     monkeypatch, deploy
 ):

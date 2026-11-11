@@ -64,8 +64,8 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 >   container is floor-filtered too. A djust proxy's `__djust_serialize__` hook
 >   is preferred first.
 >
-> A refused name raises `AttributeError` → empty render. The floor is **not**
-> gated on the `template_auto_call` kill-switch.
+> A refused name raises `AttributeError` → empty render. Auto-call itself is
+> always on: 2.0 removed the `template_auto_call` kill switch.
 >
 > **A model form holds the model's values behind a plain `dict` (#3790).**
 > `ModelForm.initial` is `model_to_dict(instance)`, so by the time a template

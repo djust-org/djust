@@ -138,9 +138,8 @@ the next render.
 await self.astream_insert("messages", '<div class="msg">New message</div>', at="append")
 ```
 
-(`astream_insert` is new in 1.4. The async method used to be reachable only by calling the
-mixin's `stream_insert` on the class with `self`; that spelling is deprecated and removed in
-2.0.)
+(Before 2.0 the async method was also named `stream_insert`, the sync one shadowed it on a
+`LiveView`, and the only way to reach it was to call it on the mixin class with `self`.)
 
 `at` is `"append"` or `"prepend"`. The HTML is inserted as-is, so escape any user
 content you interpolate into it.
@@ -164,7 +163,7 @@ Signal stream lifecycle. Sets `data-stream-active="true"` on start, removes it o
 ### Removing an element by selector
 
 `await self.astream_delete(stream_name, selector)` removes a DOM element by CSS selector
-now (new in 1.4). `self.stream_delete(name, item_or_id)` is the sync collection-stream method.
+now. `self.stream_delete(name, item_or_id)` is the sync collection-stream method.
 
 ```python
 await self.astream_delete("messages", "#msg-42")

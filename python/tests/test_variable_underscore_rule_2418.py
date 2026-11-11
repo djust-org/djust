@@ -505,9 +505,9 @@ class TestTheCallerSetIsPinned:
 class TestTheOneDocumentedPatternThisBreaks:
     """``Component.render`` injected ``_component_key`` and its own docstring
     told authors to read it as ``{{ _component_key }}``. That template never
-    compiled on Django's engine — ``_render_template_with_fallback`` falls back
-    to ``django.template.Template`` on a Rust error — so the documented shape
-    only ever worked on the Rust path, and this rule closes it there too.
+    compiled on Django's engine (which component rendering fell back to on a
+    Rust error before 2.0), so the documented shape only ever worked on the
+    Rust path, and this rule closes it there too.
 
     The replacement is the same value under a name the rule admits. Both keys
     are injected; only the non-underscore one is readable, which is exactly

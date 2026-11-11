@@ -10,8 +10,6 @@ no public state was actually changed (identity check).
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
 import pytest
 
 from djust.mixins.push_events import PushEventMixin
@@ -75,31 +73,6 @@ class TestDynamicFlushCallback:
         # No push_event called
         await view.flush_push_events()
         assert not consumer.flush_called
-
-    @pytest.mark.asyncio
-    async def test_legacy_callback_still_works(self):
-        """Stored _push_events_flush_callback is used as fallback."""
-        view = _PushView()
-        mock_flush = AsyncMock()
-        view._push_events_flush_callback = mock_flush
-        view.push_event("test", {"data": 1})
-
-        await view.flush_push_events()
-        mock_flush.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_consumer_takes_priority_over_legacy(self):
-        """_ws_consumer._flush_push_events takes priority over stored callback."""
-        view = _PushView()
-        consumer = _FakeConsumer()
-        view._ws_consumer = consumer
-        legacy_mock = AsyncMock()
-        view._push_events_flush_callback = legacy_mock
-        view.push_event("test", {"data": 1})
-
-        await view.flush_push_events()
-        assert consumer.flush_called
-        legacy_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_reconnect_simulation(self):

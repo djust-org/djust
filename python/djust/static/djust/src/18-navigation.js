@@ -17,11 +17,9 @@
      * after a handler calls live_patch() or live_redirect().
      */
     function handleNavigation(data) {
-        // Use data.action (set by server alongside type:"navigation") to distinguish
-        // live_patch from live_redirect. Falls back to data.type for any legacy messages
-        // that were sent without an action field.
-        // TODO(deprecation): data.type fallback for pre-#307 clients — remove in next minor release
-        const action = data.action || data.type;
+        // data.action (sent alongside type:"navigation") distinguishes
+        // live_patch from live_redirect.
+        const action = data.action;
         if (action === 'live_patch') {
             handleLivePatch(data);
         } else if (action === 'live_redirect') {

@@ -158,7 +158,11 @@ class StreamingMixin:
         target: Optional[str] = None,
     ) -> None:
         """
-        Insert HTML into a stream container.
+        Insert HTML into a stream container, sent now (not with the next render).
+
+        Named ``astream_insert`` (2.0) so it does not collide with the sync
+        collection-stream ``StreamsMixin.stream_insert``, which comes first in
+        ``LiveView``'s bases and used to shadow it.
 
         Args:
             stream_name: Logical name for the stream
@@ -278,7 +282,8 @@ class StreamingMixin:
         selector: str,
     ) -> None:
         """
-        Remove an element from the DOM.
+        Remove an element from the DOM, sent now. ``astream_delete`` for the
+        same reason as :meth:`astream_insert`.
 
         Args:
             stream_name: Logical name for the stream
@@ -292,50 +297,6 @@ class StreamingMixin:
             "target": selector,
         }
         await self._send_stream_ops(stream_name, [op])
-
-    async def stream_insert(
-        self,
-        stream_name: str,
-        html: str,
-        at: str = "append",
-        target: Optional[str] = None,
-    ) -> None:
-        """Deprecated name of :meth:`astream_insert` (removed in djust 2.0).
-
-        On a ``LiveView`` this name is shadowed by the sync
-        ``StreamsMixin.stream_insert``, so it was only reachable as
-        ``StreamingMixin.stream_insert(self, ...)``.
-
-        .. deprecated:: 1.3
-            Use ``await self.astream_insert(...)``. Removed in djust 2.0.0.
-        """
-        from ._deprecation import warn_deprecated
-
-        warn_deprecated(
-            "StreamingMixin.stream_insert",
-            since="1.3",
-            removed_in="2.0.0",
-            instead="await self.astream_insert(...)",
-            stacklevel=3,
-        )
-        await self.astream_insert(stream_name, html, at=at, target=target)
-
-    async def stream_delete(self, stream_name: str, selector: str) -> None:
-        """Deprecated name of :meth:`astream_delete` (removed in djust 2.0).
-
-        .. deprecated:: 1.3
-            Use ``await self.astream_delete(...)``. Removed in djust 2.0.0.
-        """
-        from ._deprecation import warn_deprecated
-
-        warn_deprecated(
-            "StreamingMixin.stream_delete",
-            since="1.3",
-            removed_in="2.0.0",
-            instead="await self.astream_delete(...)",
-            stacklevel=3,
-        )
-        await self.astream_delete(stream_name, selector)
 
     async def push_state(self) -> None:
         """

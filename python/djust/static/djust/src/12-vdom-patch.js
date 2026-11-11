@@ -1,6 +1,57 @@
 
 // === VDOM Patch Application ===
 
+// Present only during an explicit, authenticated cold-mount morph. This is
+// server-issued location metadata, never a client event-routing authority.
+let _ownedChildMount = null;
+
+function _withOwnedChildMount(bindings, callback) {
+    const previous = _ownedChildMount;
+    _ownedChildMount = null;
+    if (Array.isArray(bindings) && bindings.length <= 256 && bindings.every(
+        (pair) => Array.isArray(pair) && pair.length === 2 && pair.every(
+            (value) => typeof value === 'string' && value.length > 0 && value.length <= 128))) {
+        const current = new Map(bindings);
+        if (current.size === bindings.length) _ownedChildMount = current;
+    }
+    try { return callback(); }
+    finally { _ownedChildMount = previous; }
+}
+
+function _reconcileIgnoredOwnedChildren(existing, desired) {
+    if (_ownedChildMount === null) return;
+    const belongs = (node, host) => {
+        for (let parent = node.parentElement; parent && parent !== host; parent = parent.parentElement) {
+            if (parent.hasAttribute('dj-view')) return false;
+        }
+        return true;
+    };
+    const selector = '[dj-view][data-djust-embedded]';
+    const current = new Map();
+    for (const child of desired.querySelectorAll(selector)) {
+        const slot = child.getAttribute('data-djust-embedded');
+        if (belongs(child, desired) && _ownedChildMount.get(slot) === child.getAttribute('dj-id')) {
+            current.set(slot, child);
+        }
+    }
+    // Old parent IDs inside ignored client DOM cannot address the new server
+    // baseline. Child-view interiors have their own ID scope and are excluded.
+    for (const node of existing.querySelectorAll('[dj-id]')) {
+        if (belongs(node, existing) && !node.hasAttribute('dj-view')) node.removeAttribute('dj-id');
+    }
+    const rootId = desired.getAttribute('dj-id');
+    if (rootId) existing.setAttribute('dj-id', rootId);
+    else existing.removeAttribute('dj-id');
+    for (const child of existing.querySelectorAll(selector)) {
+        if (!belongs(child, existing)) continue;
+        const replacement = current.get(child.getAttribute('data-djust-embedded'));
+        teardownPollsIn(child);
+        _cleanupScopedListeners(child);
+        if (replacement) child.replaceWith(replacement.cloneNode(true));
+        else child.remove();
+    }
+}
+
 /**
  * Sanitize a djust ID for safe logging (defense-in-depth).
  * @param {*} id - The ID to sanitize
@@ -1346,6 +1397,7 @@ function _morphElementInner(existing, desired) {
 
     // dj-update="ignore" — skip entirely
     if (existing.getAttribute('dj-update') === 'ignore') {
+        _reconcileIgnoredOwnedChildren(existing, desired);
         return;
     }
 
@@ -1509,7 +1561,8 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
             }
 
             case 'ignore':
-                // Don't update this element at all
+                _reconcileIgnoredOwnedChildren(existingElement, newElement);
+                // Client-owned contents remain untouched outside cold child reconciliation.
                 if (globalThis.djustDebug) {
                     djLog(`[LiveView:dj-update] Ignoring #${elementId}`);
                 }

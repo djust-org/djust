@@ -8,7 +8,18 @@ functions and classes.
 Generated for djust framework - see crates/djust_live/src/lib.rs
 """
 
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    NoReturn,
+    Optional,
+    Tuple,
+    overload,
+)
 
 # ============================================================================
 # Core Template Rendering Functions
@@ -43,8 +54,8 @@ def render_template(
         context: Template context variables as a dictionary
         auto_call: Django-parity auto-call of callables reached through the
             sidecar (ADR-024). ``None`` means ON, which is Django's behaviour;
-            ``DjustTemplate.render`` passes the project's
-            ``LIVEVIEW_CONFIG['template_auto_call']``.
+            djust's own render paths always pass ON (the
+            ``template_auto_call`` kill switch was removed in 2.0).
         string_if_invalid: Django's ``Engine.string_if_invalid`` — what a
             MISSING variable renders. ``None``/absent means the empty string
             (render nothing). A non-empty value also SKIPS the filter chain,
@@ -67,7 +78,11 @@ def render_template(
 class CompiledTemplate:
     """Immutable native template handle returned on request by compile_template."""
 
-    ...
+    def _has_partial(self, name: str) -> bool: ...
+    def _partial_spans(self) -> dict[str, tuple[int, int] | None]: ...
+    def _select_partial(
+        self, name: str, template_name: str | None = None
+    ) -> CompiledTemplate | None: ...
 
 class LazyBlock:
     """The ``block`` a bridged Django tag handler receives while a
@@ -80,36 +95,21 @@ class LazyBlock:
     for the keys, renders nothing. It has Django's shape
     (``context["block"].super()``, and ``Variable("block.super")``).
 
-    .. deprecated:: 1.3
-        The dict-style reads ``block["super"]``, ``get("super")``, ``values()``,
-        ``items()`` and ``dict(block)`` (the shape of the ``dict`` this replaced)
-        still work but emit a ``DeprecationWarning``; they are removed no
-        earlier than 2.0.0. Use ``block.super()``. Django's own resolver never
-        reaches them: ``__getitem__`` answers it ``TypeError`` (not
-        subscriptable) exactly as a ``BlockNode`` does.
+    The dict-style reads of the ``dict`` this replaced were removed in 2.0
+    (deprecated since 1.3): ``block["super"]`` raises ``TypeError`` (not
+    subscriptable), exactly as a ``BlockNode`` does, so Django's resolver falls
+    through to ``super()``. Use ``block.super()``.
     """
 
     def super(self) -> str: ...
-    def get(self, key: object, default: object = None) -> object:
-        """.. deprecated:: 1.3  Reading ``"super"`` this way; use ``super()``."""
-        ...
-
-    def __getitem__(self, key: object) -> str:
-        """.. deprecated:: 1.3  Use ``super()``."""
+    def __getitem__(self, key: object) -> NoReturn:
+        """Always raises ``TypeError``; use ``super()``."""
         ...
 
     def __contains__(self, key: object) -> bool: ...
     def __len__(self) -> int: ...
     def __iter__(self) -> object: ...
     def keys(self) -> list[str]: ...
-    def values(self) -> list[str]:
-        """.. deprecated:: 1.3  Use ``super()``."""
-        ...
-
-    def items(self) -> list[tuple[str, str]]:
-        """.. deprecated:: 1.3  Use ``super()``."""
-        ...
-
     def __copy__(self) -> LazyBlock: ...
     def __deepcopy__(self, memo: object) -> LazyBlock: ...
 
@@ -131,9 +131,10 @@ class TemplateObject:
     def __len__(self) -> int: ...
     def __bool__(self) -> bool: ...
 
+@overload
 def compile_template(
-    template_source: str, template_name: str | None = None, *, return_template: bool = False
-) -> CompiledTemplate | None:
+    template_source: str, template_name: str | None = None, *, return_template: Literal[True]
+) -> CompiledTemplate:
     """
     Parse a template without rendering it (#2549).
 
@@ -152,6 +153,17 @@ def compile_template(
     """
     ...
 
+@overload
+def compile_template(
+    template_source: str,
+    template_name: str | None = None,
+    *,
+    return_template: Literal[False] = False,
+) -> None: ...
+@overload
+def compile_template(
+    template_source: str, template_name: str | None = None, *, return_template: bool
+) -> CompiledTemplate | None: ...
 def registry_generation() -> int:
     """Current tag/filter registry generation (test-support probe, #2668)."""
     ...
@@ -316,6 +328,23 @@ def collapse_provenance_whitespace(
     block_tags: List[str],
 ) -> Tuple[str, List[Tuple[int, int]], List[Tuple[int, int, int, str]]]:
     """Drop inter-tag whitespace, remapping authored intervals."""
+    ...
+
+def template_needs_authenticated_partial_root(
+    source: str, dirs: List[str], template_name: Optional[str] = None
+) -> bool:
+    """Whether a template may render an authenticated partial root."""
+    ...
+
+def child_wrapper_opening_end(html: str, slot: str) -> int: ...
+def set_deferred_child_scope(enabled: bool) -> bool: ...
+def child_render_regions(
+    html: str, candidates: List[str], whole_page: bool, owner_wrapper: bool
+) -> Dict[str, str]: ...
+def authenticated_root_shell(
+    html: str, spans: List[Tuple[int, int]], exact_range: bool = True
+) -> Tuple[int, int]:
+    """Return the authenticated root's character offsets in rendered HTML."""
     ...
 
 def template_needs_provenance(source: str, dirs: List[str]) -> bool:
@@ -519,30 +548,6 @@ MAX_MD_NESTING: int
 :func:`render_markdown` keeps open at once. A container that starts deeper is
 rendered without its own tags; its content stays in place."""
 
-def set_virtual_keyed_ops(enabled: bool) -> None:
-    """Enable/disable `[dj-virtual]` keyed splice ops in the differ (ADR-026).
-
-    Process-global, unlike the per-view `set_loop_render_cache_enabled`.
-    Django applies it once at startup from
-    `LIVEVIEW_CONFIG['virtual_keyed_ops']`; see `DjustConfig.ready`.
-    """
-
-def virtual_keyed_ops_enabled() -> bool:
-    """Current `[dj-virtual]` keyed-splice-ops setting."""
-
-def set_django_value_repr(enabled: bool) -> None:
-    """Enable/disable Django-parity value rendering (#2203).
-
-    When True (the default), `{{ }}` renders values as Python's `str()` does:
-    `True`, `None`, `1.0`, `[1, 2]`, `{'a': 1}`, `(1, 2)`. Process-global, for
-    the same reason as `set_virtual_keyed_ops` — `impl Display for Value` has
-    nowhere to thread per-render config. Django applies it once at startup from
-    `LIVEVIEW_CONFIG['django_value_repr']`; see `DjustConfig.ready`.
-    """
-
-def django_value_repr_enabled() -> bool:
-    """Current Django-parity value-rendering setting."""
-
 def set_active_timezone(name: Optional[str] = None) -> bool:
     """Set the active render timezone for the CALLING THREAD (#2209).
 
@@ -550,8 +555,7 @@ def set_active_timezone(name: Optional[str] = None) -> bool:
     which is what `USE_TZ = False` wants. Returns False if the name is not a
     zone the bundled tz database knows, leaving the previous value in place.
 
-    Thread-local rather than process-global — unlike `set_django_value_repr`
-    above — because djust renders run in `sync_to_async` worker threads and two
+    Thread-local rather than process-global because djust renders run in `sync_to_async` worker threads and two
     connections can have activated different zones. Mirrors Django, whose own
     `timezone._active` is a `Local()`. Applied per render by
     `RustBridgeMixin._apply_active_timezone`, not once at startup: a zone
@@ -600,6 +604,10 @@ def active_unlocalized_number_format() -> Optional[Tuple[str, str, List[int], bo
     Exposed so the Python side can ASSERT the second format reached Rust
     rather than assume it (#2017). Its `use_grouping` is always False.
     """
+
+def resolve_relative_template_includes(source: str, template_name: str) -> str:
+    """Resolve parsed literal relative includes against a template name."""
+    ...
 
 def clear_dj_model_fields_cache() -> None:
     """Forget every cached ``RustLiveView.dj_model_fields(cache=True)`` result."""
@@ -778,6 +786,7 @@ def register_library_loader(callable: Callable[[List[str]], None]) -> None:
 def register_raw_block_tag_handler(tag_name: str, end_tag: str, handler: Any) -> None: ...
 def unregister_raw_block_tag_handler(tag_name: str) -> bool: ...
 def has_raw_block_tag_handler(tag_name: str) -> bool: ...
+def raw_block_end_tag(name: str) -> str | None: ...
 def clear_raw_block_tag_handlers() -> None: ...
 def register_translator(
     callable: Callable[[str], str],
@@ -786,7 +795,6 @@ def register_translator(
 ) -> None: ...
 def clear_translator() -> None: ...
 def arm_scope_tags(names: List[str]) -> None: ...
-def clear_scope_tags() -> None: ...
 def register_language_scope_hooks(
     enter: Callable[[str], Any], exit: Callable[[Any], None]
 ) -> None: ...
@@ -1180,6 +1188,11 @@ class RustLiveView:
         """
         ...
 
+    def set_authenticated_partial_root(self, enabled: bool) -> None: ...
+    def authenticated_partial_root(self) -> bool: ...
+    def potential_authenticated_partial_root(self) -> bool: ...
+    def set_authenticated_view_path(self, path: str) -> None: ...
+    def set_template_origin(self, origin: Optional[str]) -> None: ...
     def set_template_dirs(self, dirs: List[str]) -> None:
         """
         Set template directories for {% include %} tag support.
@@ -1195,8 +1208,7 @@ class RustLiveView:
         (ADR-029, #2741) — the timezone, number formats and ADR-027 flag
         ``djust.render_env.apply_render_env`` just pushed. Every render entry
         then installs it, on whatever thread the render runs, under a guard
-        that restores the previous cell values afterwards. The per-view twin
-        of ``set_template_auto_call``.
+        that restores the previous cell values afterwards.
         """
         ...
 
@@ -1379,6 +1391,30 @@ class RustLiveView:
         """
         ...
 
+    def render_full_provenance(
+        self,
+    ) -> Tuple[str, List[Tuple[int, int]], List[Tuple[int, int, int, str]]]: ...
+    def prepare_authenticated_page(
+        self,
+    ) -> Tuple[
+        str, List[Tuple[int, int]], List[Tuple[int, int, int, str]], Optional[Tuple[int, int]]
+    ]: ...
+    def prepare_owned_diff(
+        self, previous_owned_ids: List[str]
+    ) -> Tuple[
+        str, Optional[str], int, Tuple[List[Tuple[str, str]], List[Tuple[str, str]], List[str]]
+    ]: ...
+    def commit_owned_diff(self, expected_version: int) -> None: ...
+    def prepared_page_has_root(self) -> bool: ...
+    def prepared_page_root_spans(self) -> List[Tuple[int, int]]: ...
+    def validate_prepared_page(self, html: str, spans: List[Tuple[int, int]]) -> None: ...
+    def render_full_root_provenance(
+        self,
+    ) -> Tuple[
+        str, List[Tuple[int, int]], List[Tuple[int, int, int, str]], List[Tuple[int, int]]
+    ]: ...
+    def discard_authenticated_page(self) -> None: ...
+    def commit_authenticated_page(self) -> Tuple[str, Optional[str], int]: ...
     def render_with_provenance(self) -> Tuple[str, List[Tuple[int, int]]]:
         """Render HTML and result-local, disjoint authored UTF-8 intervals."""
         ...
@@ -1592,7 +1628,13 @@ __all__ = [
     "root_element_span",
     "dj_root_stamp_offsets",
     "template_needs_provenance",
+    "template_needs_authenticated_partial_root",
+    "child_wrapper_opening_end",
+    "set_deferred_child_scope",
+    "child_render_regions",
+    "authenticated_root_shell",
     "resolve_template_inheritance",
+    "resolve_relative_template_includes",
     # Serialization
     "fast_json_dumps",
     "extract_template_variables",
@@ -1615,11 +1657,11 @@ __all__ = [
     "register_raw_block_tag_handler",
     "unregister_raw_block_tag_handler",
     "has_raw_block_tag_handler",
+    "raw_block_end_tag",
     "clear_raw_block_tag_handlers",
     "register_translator",
     "clear_translator",
     "arm_scope_tags",
-    "clear_scope_tags",
     "register_language_scope_hooks",
     "register_timezone_scope_hooks",
     "register_tag_handler",
@@ -1668,15 +1710,11 @@ __all__ = [
     "RustTextArea",
     "RustToast",
     "RustTooltip",
-    "set_virtual_keyed_ops",
-    "set_django_value_repr",
-    "django_value_repr_enabled",
     "set_active_timezone",
     "active_timezone_name",
     "set_number_format",
     "active_number_format",
     "active_unlocalized_number_format",
-    "virtual_keyed_ops_enabled",
 ]
 
 def new_registry_namespace() -> int: ...

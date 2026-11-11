@@ -117,7 +117,7 @@ function createEnv() {
         },
     });
     window.eval(CLIENT_SRC);
-    const ws = new window.LiveViewWebSocket();
+    const ws = new window.djust.LiveViewWebSocket();
     ws.primaryViewPath = VIEW;
     return {
         window,

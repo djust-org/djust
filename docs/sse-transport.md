@@ -7,19 +7,18 @@ happens, djust automatically falls back to **Server-Sent Events (SSE)**.
 
 ## How it works
 
-SSE is a unidirectional push protocol (HTTP/1.1). djust uses three
+SSE is a unidirectional push protocol (HTTP/1.1). djust uses two
 complementary endpoints to achieve full bidirectional communication:
 
 | Direction        | Mechanism              | URL pattern                            |
 |------------------|------------------------|----------------------------------------|
 | Server → Client  | `EventSource` (SSE)    | `GET /djust/sse/<session_id>/`         |
 | Client → Server  | HTTP POST (canonical)  | `POST /djust/sse/<session_id>/message/` |
-| Client → Server  | HTTP POST (legacy)     | `POST /djust/sse/<session_id>/event/`  |
 
 The client generates a random UUID session ID, opens an SSE stream, and sends
 user events / mount frames / `url_change` frames as JSON POST bodies to the
-canonical `/message/` endpoint. The legacy `/event/` endpoint is preserved for
-back-compat (it now proxies through the same dispatch path).
+`/message/` endpoint. djust 2.0 removed the legacy `/event/` endpoint
+(`DjustSSEEventView`); only clients older than #1237 posted to it.
 
 ## Bidirectional message protocol
 
@@ -122,11 +121,10 @@ urlpatterns = [
 ]
 ```
 
-This registers three routes:
+This registers two routes:
 
 - `GET  /djust/sse/<session_id>/`            — server-push event stream
 - `POST /djust/sse/<session_id>/message/`    — canonical client-to-server frame endpoint (mount, event, url_change, …)
-- `POST /djust/sse/<session_id>/event/`      — legacy alias kept for back-compat; new code should target `/message/`
 
 ### 2. Use the shipped client bundle
 

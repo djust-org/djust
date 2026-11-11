@@ -181,10 +181,8 @@ TOKENS = {
     "djust.A075": ("live_render",),
     "djust.A070": ("dj_activity",),
     "djust.T014": ("data-dj-id",),
-    "djust.T015": ("data-djust-root",),
     "djust.T017": ("<tbody",),
     "djust.T010": ("dj-click",),
-    "djust.T027": ("RustButton",),
     "djust.Y001": ("<button",),
     "djust.Y002": ("<img",),
     "djust.Y003": ("<input",),
@@ -339,7 +337,6 @@ MULTILINE_MAIN = {
     ),
     "a075": ('{% live_render "a.B"\n  sticky=True\n  lazy=True %}', {"djust.A075": 0}),
     "a070": ("{% dj_activity\n  %}x{% enddj_activity %}", {"djust.A070": 0}),
-    "t027": ('<RustButton\n  id="b"\n  />', {"djust.T027": 0}),
     "t013": ('<div\n  class="a"\n  dj-view="nodot"></div>', {"djust.T013": 2}),
     "t014": ('<span\n  class="a"\n  data-dj-id="1"></span>', {"djust.T014": 2}),
 }

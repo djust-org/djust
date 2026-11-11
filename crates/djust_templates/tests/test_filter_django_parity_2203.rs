@@ -350,36 +350,3 @@ fn truncatechars_zero_yields_nothing() {
     // Guard the neighbour, which Django DOES render as a lone ellipsis.
     assert_eq!(render("{{ v|truncatechars:1 }}", &ctx), "…");
 }
-
-#[test]
-fn the_html_truncators_use_the_same_ellipsis_as_their_plain_twins() {
-    // #1646: `truncatechars` and `truncatechars_html` are the same filter for
-    // different input, and disagreed on the same page — the _html pair kept
-    // both halves of the bug (wrong glyph AND a three-character reservation).
-    //
-    // The reservation is the subtle one: `"…".len()` is 3 BYTES, exactly like
-    // `"..."`, so swapping the constant alone silently preserves the old
-    // arithmetic. This asserts the CHARACTER count, which is what would catch
-    // that.
-    let ctx = ctx_with(
-        "v",
-        Value::String("<p>Hello <b>world</b> this is long</p>".into()),
-    );
-    let out = render("{{ v|truncatechars_html:11 }}", &ctx);
-    assert!(out.contains('…'), "expected the ellipsis char in {out:?}");
-    assert!(
-        !out.contains("..."),
-        "three-dot ellipsis survived in {out:?}"
-    );
-
-    let ctx2 = ctx_with(
-        "v",
-        Value::String("<p>one two <b>three four</b> five six</p>".into()),
-    );
-    let out2 = render("{{ v|truncatewords_html:3 }}", &ctx2);
-    assert!(out2.contains('…'), "expected the ellipsis char in {out2:?}");
-    assert!(
-        !out2.contains("..."),
-        "three-dot ellipsis survived in {out2:?}"
-    );
-}

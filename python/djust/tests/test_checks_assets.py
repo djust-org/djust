@@ -140,15 +140,22 @@ def test_b005_external_needs_opt_in(tmp_path):
         assert "djust.B005" not in ids(check_asset_files(None))
 
 
-def test_b007_undeclared_required_asset(tmp_path):
+def test_b007_undeclared_required_asset(tmp_path, monkeypatch):
     from djust.components.base import Component
 
     class NeedsGhost(Component):
-        requires_assets = ("ghost-lib",)
+        # Component subclasses remain discoverable until garbage collected.
+        # Restore a harmless declaration even if the test fails, so another
+        # startup check cannot see this test's temporary missing asset.
+        requires_assets = ()
         template = "<div></div>"
 
-    (b007,) = [m for m in check_required_assets(None) if "ghost-lib" in m.msg]
-    assert b007.id == "djust.B007" and "NeedsGhost" in b007.msg
+    with monkeypatch.context() as patch:
+        patch.setattr(NeedsGhost, "requires_assets", ("ghost-lib",))
+        (b007,) = [m for m in check_required_assets(None) if "ghost-lib" in m.msg]
+        assert b007.id == "djust.B007" and "NeedsGhost" in b007.msg
+    # Check while the subclass is still strongly referenced; no GC dependence.
+    assert not any("ghost-lib" in message.msg for message in check_required_assets(None))
 
 
 def test_b008_sbom_in_static_dirs(tmp_path):

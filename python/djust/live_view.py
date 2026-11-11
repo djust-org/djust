@@ -18,7 +18,6 @@ from django.views import View
 
 from ._class_snapshot import namespace as _class_namespace
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
-from ._deprecation import class_statement_stacklevel, warn_deprecated
 from .change_detection import deep_fingerprint, fingerprints_by_content
 from .serialization import (  # noqa: F401
     DjangoJSONEncoder,
@@ -63,23 +62,14 @@ from .mixins import (
 )
 from .mixins.request import UNDECLARED_STATUS_MAP
 
+from ._rust import (
+    RustLiveView,
+    SessionActorHandle,
+    extract_template_variables,  # noqa: F401 — re-exported, used by JIT and template tests
+)
+
 # Configure logger
 logger = logging.getLogger(__name__)
-
-try:
-    from ._rust import (
-        RustLiveView,
-        SessionActorHandle,
-        extract_template_variables,  # noqa: F401 — re-exported, used by JIT and template tests
-    )
-except ImportError:
-    # Optional PyO3 fallback: when the Rust extension is absent these names
-    # become None at runtime. mypy follows the try-branch (the classes), so
-    # ``Optional[RustLiveView]`` stays a valid annotation; the None rebinds
-    # below are masked from static typing via a narrow ignore.
-    RustLiveView = None  # type: ignore[assignment,misc]
-    SessionActorHandle = None  # type: ignore[assignment,misc]
-    extract_template_variables = None  # type: ignore[assignment]  # noqa: F401 — fallback re-export
 
 __all__ = [
     "LiveView",
@@ -130,6 +120,8 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_explicit_child_schema",
         "_explicit_child_reuse_identity",
         "_explicit_child_render_regions",
+        "_explicit_child_vdom_bindings",
+        "_explicit_child_vdom_tracking",
         "_explicit_child_render_scope",
         "_explicit_child_rendered_full",
         "_explicit_child_state_tracked",
@@ -140,7 +132,6 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_async_task_handles",
         "_tracked_tasks",
         "_async_tasks",
-        "_async_pending",
         "_async_task_counter",
         "_async_cancelled",
         "_async_work_generation",
@@ -211,6 +202,9 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_prev_context_refs",
         "_prev_context_immutables",
         "_prev_context_fingerprints",
+        "_djust_computed_cache",
+        "_djust_computed_deps",
+        "_djust_computed_lock",
         # The context names that are a form or hold one (#3767): the sidecar answers
         # for them, and a name not sent this sync keeps this answer.
         "_form_held_keys",
@@ -541,17 +535,7 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
     return protected
 
 
-#: The two duck-typed accessibility hooks the socket and the runtime still drain
-#: behind ``hasattr``. Nothing in the framework defines them, and the shipped
-#: client has no ``window.djust.accessibility`` to receive their frames, so they
-#: are deprecated (#3629); the 2.0 line has already deleted the flush (#3539).
-_DEPRECATED_ACCESSIBILITY_HOOKS = {
-    "_drain_announcements": 'a role="status" live region the view renders',
-    "_drain_focus": "JS.focus() through push_commands()",
-}
-
-
-class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(async) intentionally co-define stream_insert/stream_delete; see live_view.pyi overloads
+class LiveView(
     ContextProviderMixin,
     StreamsMixin,
     StreamingMixin,
@@ -1003,20 +987,6 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         from ._component_subscriptions import compile_subscriptions
 
         cls._component_subscriptions = compile_subscriptions(cls)
-        for hook in _DEPRECATED_ACCESSIBILITY_HOOKS:
-            # Warn once, on the first LiveView class that has the hook (defined
-            # in its own body or reached through a plain mixin), not again on
-            # every subclass of that class.
-            if hasattr(cls, hook) and not any(
-                issubclass(base, LiveView) and hasattr(base, hook) for base in cls.__bases__
-            ):
-                warn_deprecated(
-                    "Defining %s on a LiveView" % hook,
-                    since="1.3",
-                    removed_in="2.0.0",
-                    instead=_DEPRECATED_ACCESSIBILITY_HOOKS[hook],
-                    stacklevel=class_statement_stacklevel(),
-                )
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -1137,12 +1107,23 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         # _framework_attrs snapshot-order invariant (#1393):
         #   BEFORE this snapshot → framework state (excluded from
         #   user-private serialization, reset on reconnect). Examples:
-        #   self._object cache (v0.9.5-1a), self._async_pending.
+        #   self._object cache (v0.9.5-1a), self._async_tasks.
         #   AFTER this snapshot → user state (included in change tracking,
         #   persisted across reconnects). Examples: self._action_state
         #   (PR #1324), self._<user_attr>.
         # Any new framework slot must be assigned BEFORE this line.
         self._defer_lazy_registration = False
+        # Root planning and pending page renders are framework-owned and must
+        # never be serialized as application private state.
+        self._authenticated_partial_root = False
+        self._authenticated_partial_root_origin = None
+        self._authenticated_template_source = None
+        self._named_partial_jit_source = None
+        self._prepared_authenticated_partial_root = False
+        self._prepared_authenticated_page_root = False
+        self._pending_authenticated_page = False
+        self._explicit_child_vdom_bindings: dict[str, Any] = {}
+        self._explicit_child_vdom_tracking = False
         self._http_lazy_containers = {}
         self._http_lazy_validated_html = None
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())
@@ -1206,7 +1187,8 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         if fingerprints_by_content(v):
             # Structural (#2664): ``self.items[0]["qty"] = 2`` is dirty;
             # a class-level component's State likewise (#2900).
-            return ("c", id(v), deep_fingerprint(v)[0])
+            fp, truncated = deep_fingerprint(v)
+            return ("c", id(v), object() if truncated else fp)
         return ("id", id(v))
 
     def _capture_dirty_baseline(self) -> None:

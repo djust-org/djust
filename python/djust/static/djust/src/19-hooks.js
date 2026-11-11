@@ -281,13 +281,39 @@ function updateHooks(root) {
         currentElements.add(elId);
 
         const hookName = el.getAttribute('dj-hook');
-        const existing = _activeHooks.get(elId);
+        let existing = _activeHooks.get(elId);
+        if (existing && (existing.el !== el || existing.hookName !== hookName)) {
+            // A replacement node or changed hook definition needs a fresh
+            // instance; dispose resources belonging to the old one first.
+            if (typeof existing.instance.destroyed === 'function') {
+                _safeCallHook(existing.instance.destroyed.bind(existing.instance),
+                    `${existing.hookName}.destroyed()`);
+            }
+            _activeHooks.delete(elId);
+            existing = null;
+        }
 
         if (existing) {
-            // Element still exists — call updated()
-            existing.el = el; // Update reference in case DOM was replaced
-            existing.instance.el = el;
-            if (typeof existing.instance.updated === 'function') {
+            // Element still exists — call updated() if requested.
+            let update = true;
+            if (typeof existing.instance.updated === 'function' &&
+                typeof existing.instance.shouldUpdate === 'function') {
+                try {
+                    // Only an explicit synchronous false suppresses the callback.
+                    // Exceptions and async predicates fail open so an update is
+                    // never silently lost; observe rejected promises as well.
+                    const decision = existing.instance.shouldUpdate();
+                    if (decision === false) update = false;
+                    if (decision && typeof decision.then === 'function') {
+                        Promise.resolve(decision).catch((e) =>
+                            console.error('[dj-hook] Error in %s:', `${hookName}.shouldUpdate()`, e),
+                        );
+                    }
+                } catch (e) {
+                    console.error('[dj-hook] Error in %s:', `${hookName}.shouldUpdate()`, e);
+                }
+            }
+            if (update && typeof existing.instance.updated === 'function') {
                 _safeCallHook(
                     existing.instance.updated.bind(existing.instance),
                     `${hookName}.updated()`,

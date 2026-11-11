@@ -4,14 +4,13 @@ Tests for the SSE (Server-Sent Events) fallback transport.
 Covers:
 - SSESession state management
 - DjustSSEStreamView: session registration, invalid inputs, streaming response
-- DjustSSEEventView: event dispatch, missing session, malformed body
 - Mount flow: view path validation, queue messages
 - Event dispatch: handler security, renders patch/html_update
 """
 
 import json
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -45,7 +44,6 @@ from django.test import RequestFactory
 from djust.sse import (
     SSESession,
     DjustSSEStreamView,
-    DjustSSEEventView,
     _get_session,
     _sse_sessions,
 )
@@ -204,128 +202,6 @@ class TestDjustSSEStreamViewGet:
 
 
 # ------------------------------------------------------------------ #
-# DjustSSEEventView.post — HTTP-level checks
-# ------------------------------------------------------------------ #
-
-
-class TestDjustSSEEventViewPost:
-    def setup_method(self):
-        _sse_sessions.clear()
-        self.factory = RequestFactory()
-
-    def teardown_method(self):
-        _sse_sessions.clear()
-
-    @pytest.mark.asyncio
-    async def test_returns_404_for_unknown_session(self):
-        sid = str(uuid.uuid4())
-        request = self.factory.post(
-            f"/djust/sse/{sid}/event/",
-            data=json.dumps({"event": "increment", "params": {}}),
-            content_type="application/json",
-        )
-        view = DjustSSEEventView()
-        response = await view.post(request, session_id=sid)
-        assert response.status_code == 404
-
-    @pytest.mark.asyncio
-    async def test_returns_503_when_view_not_mounted(self):
-        session = make_session()
-        # session.view_instance is None (not mounted)
-        request = self.factory.post(
-            f"/djust/sse/{session.session_id}/event/",
-            data=json.dumps({"event": "increment", "params": {}}),
-            content_type="application/json",
-        )
-        _attach_owner(request)
-        view = DjustSSEEventView()
-        response = await view.post(request, session_id=session.session_id)
-        assert response.status_code == 503
-
-    @pytest.mark.asyncio
-    async def test_returns_400_for_non_json_body(self):
-        session = make_session()
-        session.view_instance = MagicMock()  # Mark as mounted
-        request = self.factory.post(
-            f"/djust/sse/{session.session_id}/event/",
-            data="not json",
-            content_type="application/json",
-        )
-        _attach_owner(request)
-        view = DjustSSEEventView()
-        response = await view.post(request, session_id=session.session_id)
-        assert response.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_returns_400_when_event_name_missing(self):
-        session = make_session()
-        session.view_instance = MagicMock()
-        request = self.factory.post(
-            f"/djust/sse/{session.session_id}/event/",
-            data=json.dumps({"params": {}}),
-            content_type="application/json",
-        )
-        _attach_owner(request)
-        view = DjustSSEEventView()
-        response = await view.post(request, session_id=session.session_id)
-        assert response.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_dispatches_event_and_returns_ok(self):
-        session = make_session()
-        session.view_instance = MagicMock()
-
-        request = self.factory.post(
-            f"/djust/sse/{session.session_id}/event/",
-            data=json.dumps({"event": "increment", "params": {}}),
-            content_type="application/json",
-        )
-        _attach_owner(request)
-        view = DjustSSEEventView()
-
-        # Post-#1887 the /event/ endpoint dispatches through the shared runtime
-        # (``session.runtime.dispatch_event``) with the WS-shaped event frame.
-        # Post-#1891 the frame also carries a top-level ``ref`` (the runtime reads
-        # it from the top level to echo it); ``ref`` is ``None`` when the body
-        # omits one, matching ``data.get("ref")``.
-        session.runtime.dispatch_event = AsyncMock(return_value=None)
-        response = await view.post(request, session_id=session.session_id)
-
-        assert response.status_code == 200
-        data = json.loads(response.content)
-        assert data == {"ok": True}
-        session.runtime.dispatch_event.assert_called_once_with(
-            {"type": "event", "event": "increment", "params": {}, "ref": None}
-        )
-
-    @pytest.mark.asyncio
-    async def test_forwards_ref_to_dispatch_event(self):
-        """The /event/ alias forwards a client-sent top-level ``ref`` into the
-        dispatch frame so the runtime can echo it (#560 ref echo, #1891).
-
-        Before #1891 the rebuild was ``{type,event,params}`` and dropped ``ref``,
-        so the end-to-end echo worked only via the ``/message/`` endpoint."""
-        session = make_session()
-        session.view_instance = MagicMock()
-
-        request = self.factory.post(
-            f"/djust/sse/{session.session_id}/event/",
-            data=json.dumps({"event": "increment", "params": {"a": 1}, "ref": 42}),
-            content_type="application/json",
-        )
-        _attach_owner(request)
-        view = DjustSSEEventView()
-
-        session.runtime.dispatch_event = AsyncMock(return_value=None)
-        response = await view.post(request, session_id=session.session_id)
-
-        assert response.status_code == 200
-        session.runtime.dispatch_event.assert_called_once_with(
-            {"type": "event", "event": "increment", "params": {"a": 1}, "ref": 42}
-        )
-
-
-# ------------------------------------------------------------------ #
 # Mount flow
 # ------------------------------------------------------------------ #
 
@@ -402,7 +278,7 @@ class TestSSEMountView:
 class TestSSEHandleEvent:
     """Event-dispatch errors over the converged runtime event path (#1887).
 
-    Post-#1887 the /event/ endpoint dispatches via ``session.runtime
+    An ``event`` frame posted to /message/ dispatches via ``session.runtime
     .dispatch_event``; the runtime reads ``runtime.view_instance`` (not the
     session attr), so these tests set that and assert the same error frames the
     legacy ``_sse_handle_event`` produced (not-mounted, unsafe event name).
@@ -449,12 +325,10 @@ class TestSSEUrlPatterns:
     def test_urlpatterns_exported(self):
         from djust.sse import sse_urlpatterns
 
-        # 3 routes after #1237: stream, legacy event, new message endpoint.
-        assert len(sse_urlpatterns) == 3
+        # Stream + message; the legacy /event/ alias was removed in 2.0.
+        assert len(sse_urlpatterns) == 2
         names = {p.name for p in sse_urlpatterns}
-        assert "djust-sse-stream" in names
-        assert "djust-sse-event" in names
-        assert "djust-sse-message" in names
+        assert names == {"djust-sse-stream", "djust-sse-message"}
 
 
 # ------------------------------------------------------------------ #
@@ -680,31 +554,6 @@ class TestSSEMessageEndpoint:
         messages = drain_queue(session)
         types = [m.get("type") for m in messages]
         assert "error" in types
-
-    @pytest.mark.asyncio
-    async def test_legacy_event_endpoint_still_works(self):
-        """The pre-#1237 ``/event/`` endpoint must keep working as a
-        deprecated alias so existing clients aren't broken."""
-        session = make_session()
-        session.view_instance = MagicMock()
-
-        request = self.factory.post(
-            f"/djust/sse/{session.session_id}/event/",
-            data=json.dumps({"event": "increment", "params": {}}),
-            content_type="application/json",
-        )
-        _attach_owner(request)
-
-        view = DjustSSEEventView()
-        # Post-#1887 the legacy /event/ endpoint delegates to the shared runtime
-        # (``session.runtime.dispatch_event``); we only assert the deprecated
-        # alias stays reachable + returns the {"ok": true} ack.
-        session.runtime.dispatch_event = AsyncMock(return_value=None)
-        response = await view.post(request, session_id=session.session_id)
-
-        assert response.status_code == 200
-        data = json.loads(response.content)
-        assert data == {"ok": True}
 
 
 # ------------------------------------------------------------------ #

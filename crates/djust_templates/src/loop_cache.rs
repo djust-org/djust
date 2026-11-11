@@ -792,7 +792,7 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
 /// * a nested `Node::For` — composes the dj-if loop path from the outer index.
 /// * a `{{ forloop.* }}` variable reference (defensive — see module docs).
 /// * `Node::CustomTag` / `Node::BlockCustomTag` / `Node::AssignTag` /
-///   `Node::Include` / `Node::RustComponent` / `Node::ReactComponent` /
+///   `Node::Include` / `Node::ReactComponent` /
 ///   `Node::UnsupportedTag` — opaque Python/component-backed output we cannot
 ///   prove is position-independent, so treat as non-cacheable
 ///   (conservative = correct).
@@ -818,7 +818,9 @@ fn node_is_position_dependent(node: &Node) -> bool {
         Node::BlockSuperScope { .. } => true,
         Node::For { .. } => true, // nested loop composes the if-loop-path
         // Opaque / Python-backed nodes — we cannot prove position-independence.
-        Node::CustomTag { .. }
+        Node::PartialCall { .. }
+        | Node::PartialDef { .. }
+        | Node::CustomTag { .. }
         | Node::BlockCustomTag { .. }
         | Node::RawBlockCustomTag { .. }
         | Node::Language { .. }
@@ -827,7 +829,6 @@ fn node_is_position_dependent(node: &Node) -> bool {
         | Node::LocalTime { .. }
         | Node::AssignTag { .. }
         | Node::Include { .. }
-        | Node::RustComponent { .. }
         | Node::ReactComponent { .. }
         | Node::UnsupportedTag { .. } => true,
         // `{{ forloop.* }}` reference (defensive).

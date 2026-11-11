@@ -216,6 +216,7 @@ import inspect
 import itertools
 import json
 import ast
+import textwrap
 import pathlib
 import re
 import sys
@@ -1500,6 +1501,11 @@ def cells():
 #: goes red the day someone implements the tag and gets its escaping wrong.
 TAG_SHAPES = {
     "for": "{% for x in p|@EXPR@ %}[{{ x }}]{% empty %}E{% endfor %}",
+    **(
+        {"csp-nonce-media": "{% csp_nonce_attr p|@EXPR@ %}"}
+        if "csp_nonce_attr" in _django_template.defaulttags.register.tags
+        else {}
+    ),
     "with": "{% with q=p|@EXPR@ %}[{{ q }}]{% endwith %}",
     "if": "{% if p|@EXPR@ %}Y{% else %}N{% endif %}",
     # --- the #2355 six ---
@@ -1696,6 +1702,7 @@ PATH_SHAPES = {
     # have), `first`/`last` are the two boundaries, and `parentloop` is the
     # only one whose value is a dict — at the outermost level Django's own
     # empty dict, which renders `{}` and is NOT the same answer as missing.
+    "forloop-length": "{% for x in p %}[{{ forloop.length }}]{% empty %}E{% endfor %}",
     "forloop-counter": "{% for x in p %}[{{ forloop.counter }}]{% empty %}E{% endfor %}",
     "forloop-counter0": "{% for x in p %}[{{ forloop.counter0 }}]{% empty %}E{% endfor %}",
     "forloop-revcounter": "{% for x in p %}[{{ forloop.revcounter }}]{% empty %}E{% endfor %}",
@@ -2609,10 +2616,9 @@ def _required_chain_filters() -> dict[str, str]:
 def _required_whitespace() -> dict[str, str]:
     """Every character the engine's own whitespace predicates branch on."""
     out = {}
-    for module, predicate in (
-        ("pprint", "py_is_line_break"),
-        ("textwrap", "is_textwrap_space"),
-    ):
+    # `textwrap.rs::is_textwrap_space` was a second entry until 2.0 routed
+    # `wordwrap` to Django's own `textwrap`, which removed the module.
+    for module, predicate in (("pprint", "py_is_line_break"),):
         for char in _rust_char_set(module, predicate):
             out.setdefault(f"U+{ord(char):04X}", f"{module}.rs::{predicate}")
     # `truncate::py_is_space` is a RANGE, not a literal set, so it cannot be
@@ -2855,6 +2861,8 @@ def _swept_argument_errors() -> set[str]:
 #: request, or the wall clock. `autoescape` is the one row that is a real
 #: unmeasured surface rather than a non-question, and it says so.
 TAGS_NOT_SWEPT = {
+    "partial": "renders a named partial; takes a name, not a filter-expression operand",
+    "partialdef": "defines a named partial, optionally inline; its name is not a filter expression",
     "autoescape": (
         "changes the ESCAPING POLICY for a block. Every cell renders under the "
         "engine's pinned autoescape=on, so `{% autoescape off %}` is a real "
@@ -2877,22 +2885,6 @@ TAGS_NOT_SWEPT = {
     "spaceless": "whitespace-strips its body; no operand",
     "resetcycle": "names a `{% cycle %}`; no filter expression of its own",
 }
-
-
-#: The member names Django's own `ForNode.render` writes into `forloop`.
-#:
-#: Parsed out of the REFERENCE implementation's source, not transcribed and not
-#: read out of djust's — a transcription is a second copy that drifts, and
-#: reading djust's own source would make the requirement satisfiable by the
-#: very omission it exists to detect. The day Django adds a member, this axis
-#: reports it MISSING until the corpus builds a cell for it.
-#:
-#: Two spellings because `ForNode.render` has two: six members are assigned
-#: `loop_dict["<name>"] = …` per iteration, while `parentloop` is written once,
-#: in the dict literal `context["forloop"] = {"parentloop": parentloop}`.
-_FORLOOP_MEMBER = re.compile(
-    r"""loop_dict\[\s*["'](\w+)["']\s*\]|\{\s*["'](\w+)["']\s*:\s*parentloop\s*\}"""
-)
 
 
 def _required_arities() -> dict[str, str]:
@@ -3401,21 +3393,42 @@ def _swept_value_truthiness() -> set[str]:
 
 
 def _required_forloop_members() -> dict[str, str]:
+    """Read the keys Django writes to its loop dictionary from its source.
+
+    Django initializes the dictionary with one or more keys, then assigns
+    individual keys each iteration. Parsing both shapes avoids coupling the
+    manifest to formatting or to a transcription of Django's current keys.
+    """
     source = inspect.getsource(_django_template.defaulttags.ForNode.render)
-    out: dict[str, str] = {}
-    for assigned, in_literal in _FORLOOP_MEMBER.findall(source):
-        out.setdefault(assigned or in_literal, "django defaulttags.ForNode.render")
-    # A source the parse can silently stop matching is the failure this axis
-    # exists to prevent, one level in (the `_ARG_ERROR_MARK` lesson). Django
-    # has had exactly these seven since 1.0; fewer means the regex stopped
-    # reading `ForNode.render`, not that Django removed a member.
-    if len(out) < 7:
+    tree = ast.parse(textwrap.dedent(source))
+    members: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if isinstance(node.value, ast.Dict) and any(
+            isinstance(target, ast.Name) and target.id == "loop_dict" for target in node.targets
+        ):
+            members.update(
+                key.value
+                for key in node.value.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            )
+        for target in node.targets:
+            if (
+                isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "loop_dict"
+                and isinstance(target.slice, ast.Constant)
+                and isinstance(target.slice.value, str)
+            ):
+                members.add(target.slice.value)
+    if len(members) < 7:
         raise AssertionError(
-            f"_FORLOOP_MEMBER matched {len(out)} members in ForNode.render "
-            f"({sorted(out)}) — expected at least 7. The parse has drifted "
-            f"from Django's source; fix the regex rather than the assertion."
+            f"ForNode.render parser matched {len(members)} members ({sorted(members)}) "
+            "— expected at least 7. The parse has drifted from Django's source; "
+            "fix the parser rather than the assertion."
         )
-    return out
+    return dict.fromkeys(sorted(members), "django defaulttags.ForNode.render")
 
 
 def _swept_forloop_members() -> set[str]:
@@ -3603,17 +3616,17 @@ def _swept_name_positions() -> set[str]:
 #:
 #: An unexercised entry point needs a reason here.
 ENTRY_POINTS_NOT_SWEPT = {
+    "set_deferred_child_scope": (
+        "render-local scalar scope switch; it stores a bool and returns the previous bool, "
+        "never enters the template engine. Scope restoration and actual mount selection "
+        "are covered by test_partial_root_child_execution.py"
+    ),
     "set_number_format": (
         "the localization channel (#2221). Every cell renders under the default "
         "English format; a localized sweep is a second corpus, not a spelling"
     ),
     "set_active_timezone": "the timezone channel (#2227); same reason as set_number_format",
-    "set_django_value_repr": (
-        "the #2203 value-repr flag. Cells render under the shipped default; both "
-        "settings would double the corpus for one boolean"
-    ),
     "set_registry_namespace": "internal engine selection; covered by test_backend_registry_isolation_2709.py, not a filter semantic flag",
-    "set_virtual_keyed_ops": "a VDOM keyed-ops flag; nothing to do with template rendering",
     "register_library_loader": (
         "the `{% load %}` hook (#2547). A parse-time registry action rather than a "
         "render crossing: the `@i18n` cells go THROUGH the loader the framework "

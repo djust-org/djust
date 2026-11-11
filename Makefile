@@ -799,8 +799,8 @@ endif
 	@echo "$(GREEN)Bumping version to $(VERSION)...$(NC)"
 	@# Update pyproject.toml (portable sed - works on both macOS and Linux)
 	@sed 's/^version = ".*"/version = "$(VERSION)"/' pyproject.toml > pyproject.toml.tmp && mv pyproject.toml.tmp pyproject.toml
-	@# Convert Python version to Cargo version (0.2.0a1 -> 0.2.0-alpha.1)
-	@CARGO_VERSION=$$(echo "$(VERSION)" | sed 's/a/-alpha./; s/b/-beta./; s/rc/-rc./'); \
+	@# Convert Python version to Cargo version (0.2.0a1 -> 0.2.0-alpha.1, 2.0.0.dev0 -> 2.0.0-dev.0)
+	@CARGO_VERSION=$$(echo "$(VERSION)" | sed 's/\.dev/-dev./; s/a/-alpha./; s/b/-beta./; s/rc/-rc./'); \
 	sed 's/^version = ".*"/version = "'$$CARGO_VERSION'"/' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
 	@# Update __version__ in Python source files
 	@sed 's/^__version__ = ".*"/__version__ = "$(VERSION)"/' python/djust/__init__.py > python/djust/__init__.py.tmp && mv python/djust/__init__.py.tmp python/djust/__init__.py
@@ -816,7 +816,7 @@ endif
 	@cargo update --workspace --offline 2>/dev/null || cargo update --workspace
 	@# The distribution SBOM's root version comes from pyproject.toml (ADR-040).
 	@echo "$(GREEN)Regenerating python/djust/djust.cdx.json...$(NC)"
-	@PYTHONPATH=python $(PYTHON) -m djust.assets.sbom --distribution
+	@PYTHONPATH=python/djust $(PYTHON) -m assets.sbom --distribution
 	@echo "$(YELLOW)Don't forget to update CHANGELOG.md!$(NC)"
 	@echo "$(YELLOW)Commit uv.lock + Cargo.lock + python/djust/djust.cdx.json alongside the manifest bump.$(NC)"
 
@@ -943,7 +943,9 @@ VENDOR_OUTPUTS := python/djust/components/djust_assets.json python/djust/admin_e
 
 vendor: ## Build vendored third-party browser assets, their manifests and python/djust/djust.cdx.json (ADR-040)
 	cd js/vendor && npm ci && npm run build
-	PYTHONPATH=python $(PYTHON) -m djust.assets.sbom --distribution
+	# Run as the top-level package `assets`, not `djust.assets`: importing `djust` needs the
+	# compiled extension (mandatory in 2.0), and this target runs in CI with no build.
+	PYTHONPATH=python/djust $(PYTHON) -m assets.sbom --distribution
 
 vendor-check: vendor ## Fail when committed vendored assets, manifests or djust.cdx.json differ from a rebuild
 	@git diff --exit-code -- $(VENDOR_OUTPUTS) || { echo "Vendored outputs are stale: run 'make vendor' and commit."; exit 1; }

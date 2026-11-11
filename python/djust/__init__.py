@@ -49,9 +49,7 @@ if TYPE_CHECKING:
     from .components.assigns import Assign, AssignValidationError, Slot
     from .components.function_component import component, clear_components
     from .decorators import (
-        reactive,
         event_handler,
-        event,
         is_event_handler,
         action,
         is_action,
@@ -73,7 +71,7 @@ if TYPE_CHECKING:
     )
     from .auth import LoginRequiredMixin, PermissionRequiredMixin
     from .react import react_components, register_react_component, ReactMixin
-    from .forms import FormMixin, LiveViewForm
+    from .forms import FormMixin
     from .wizard import WizardMixin
     from .drafts import DraftModeMixin
     from .push import push_to_view, apush_to_view
@@ -86,21 +84,11 @@ if TYPE_CHECKING:
     from .mixins.notifications import NotificationMixin
     from .db import notify_on_save, send_pg_notify
     from .markdown import render_markdown as render_markdown
-    from . import rust_components  # noqa: F401
 
-__version__ = "1.3.3"
+__version__ = "2.0.0.dev0"
 
-# Import Rust functions
-try:
-    from ._rust import render_template, diff_html, RustLiveView
-except ImportError as e:
-    # Fallback for when Rust extension isn't built
-    import warnings
-
-    warnings.warn(f"Could not import Rust extension: {e}. Performance will be degraded.")
-    render_template = None  # type: ignore[assignment]
-    diff_html = None  # type: ignore[assignment]
-    RustLiveView = None  # type: ignore[assignment,misc]
+# The Rust extension is required (2.0): a missing build fails here, loudly.
+from ._rust import render_template, diff_html, RustLiveView  # noqa: E402
 
 # Register template tag handlers (url, static, etc.)
 # This imports the template_tags module which auto-registers handlers with
@@ -127,9 +115,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "Slot": ("djust.components.assigns", "Slot"),
     "component": ("djust.components.function_component", "component"),
     "clear_components": ("djust.components.function_component", "clear_components"),
-    "reactive": ("djust.decorators", "reactive"),
     "event_handler": ("djust.decorators", "event_handler"),
-    "event": ("djust.decorators", "event"),
     "is_event_handler": ("djust.decorators", "is_event_handler"),
     "action": ("djust.decorators", "action"),
     "is_action": ("djust.decorators", "is_action"),
@@ -154,7 +140,6 @@ _LAZY: dict[str, tuple[str, str]] = {
     "register_react_component": ("djust.react", "register_react_component"),
     "ReactMixin": ("djust.react", "ReactMixin"),
     "FormMixin": ("djust.forms", "FormMixin"),
-    "LiveViewForm": ("djust.forms", "LiveViewForm"),
     "WizardMixin": ("djust.wizard", "WizardMixin"),
     "DraftModeMixin": ("djust.drafts", "DraftModeMixin"),
     "push_to_view": ("djust.push", "push_to_view"),
@@ -174,8 +159,6 @@ _LAZY: dict[str, tuple[str, str]] = {
     "notify_on_save": ("djust.db", "notify_on_save"),
     "send_pg_notify": ("djust.db", "send_pg_notify"),
     "render_markdown": ("djust.markdown", "render_markdown"),
-    # The optional Rust-components submodule itself; ``None`` when not built.
-    "rust_components": ("djust.rust_components", ""),
 }
 
 
@@ -184,14 +167,6 @@ def __getattr__(name: str):  # PEP 562
         module_name, attr = _LAZY[name]
     except KeyError:
         raise AttributeError(f"module 'djust' has no attribute {name!r}") from None
-    if not attr:
-        # ``rust_components``: the submodule is the export; optional build.
-        try:
-            value = importlib.import_module(module_name)
-        except ImportError:
-            value = None
-        globals()[name] = value
-        return value
     module = importlib.import_module(module_name)
     value = getattr(module, attr)
     globals()[name] = value
@@ -445,9 +420,7 @@ __all__ = [
     # Function components
     "component",
     "clear_components",
-    "reactive",
     "event_handler",
-    "event",
     "is_event_handler",
     "action",
     "is_action",
@@ -469,7 +442,6 @@ __all__ = [
     "ReactMixin",
     "FormMixin",
     "WizardMixin",
-    "LiveViewForm",
     "DraftModeMixin",
     "push_to_view",
     "apush_to_view",
@@ -504,8 +476,6 @@ __all__ = [
     "cache",
     "client_state",
     "background",
-    # Rust components (optional)
-    "rust_components",
     # Database change notifications (pg_notify bridge)
     "NotificationMixin",
     "notify_on_save",

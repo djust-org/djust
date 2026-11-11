@@ -2,8 +2,8 @@ import { readScript } from './coverage-support/instrument.js';
 /**
  * Tests for the shared client-side navigation scheme/origin guard
  * (src/02b-safe-nav.js) and its application at every location.href sink:
- *   - SSE `navigate` handler          (src/03b-sse.js)
- *   - WS  `navigate`/`nav.to` fallback (src/03-websocket.js)
+ *   - the `navigate` frame both transports share (src/02c-frame-dispatch.js)
+ *   - WS  `nav.to` mount_batch fallback (src/03-websocket.js)
  *   - handleLivePatch  cross-origin fallback (src/18-navigation.js)
  *   - handleLiveRedirect cross-origin + unresolved-view fallbacks
  *
@@ -28,6 +28,7 @@ const SRC = resolve(__dirname, '../../python/djust/static/djust/src');
 const safeNavSrc = readScript(resolve(SRC, '02b-safe-nav.js'));
 const navSrc = readScript(resolve(SRC, '18-navigation.js'));
 const sseSrc = readScript(resolve(SRC, '03b-sse.js'));
+const frameDispatchSrc = readScript(resolve(SRC, '02c-frame-dispatch.js'));
 const wsSrc = readScript(resolve(SRC, '03-websocket.js'));
 
 const ORIGIN = 'https://app.example.com';
@@ -218,7 +219,9 @@ describe('SSE navigate handler — scheme guard (finding #16)', () => {
 
         // Install the shared helper first, then the SSE class, in this scope.
         runModule(safeNavSrc, scope);
-        runModule(sseSrc, scope);
+        // SSE's `navigate` is in the frame handling it shares with the
+        // WebSocket transport; both run in one scope, as in the bundle.
+        runModule(frameDispatchSrc + '\n' + sseSrc, scope);
 
         const SSE = window.djust.LiveViewSSE;
         const sse = new SSE();
@@ -367,11 +370,15 @@ describe('18-navigation handleLivePatch / handleLiveRedirect — scheme guard', 
 // ===========================================================================
 describe('WS and SSE navigate route through the same helper (#1646)', () => {
     it('both transports reject a javascript: target via window.djust.safeNavigationTarget', () => {
-        // The WS fallback (03-websocket.js) and the SSE handler (03b-sse.js)
-        // both call window.djust.safeNavigationTarget(...). Grep-pin the shared
-        // call site so a future edit that re-inlines a divergent guard fails.
+        // The WS mount_batch fallback (03-websocket.js) and the `navigate`
+        // frame both transports share (02c-frame-dispatch.js) call
+        // window.djust.safeNavigationTarget(...). Grep-pin the shared call
+        // sites so a future edit that re-inlines a divergent guard fails.
         expect(wsSrc).toContain('window.djust.safeNavigationTarget(nav.to)');
-        expect(sseSrc).toContain('window.djust.safeNavigationTarget(data.to)');
+        expect(frameDispatchSrc).toContain('window.djust.safeNavigationTarget(data.to)');
+        // Neither transport keeps a navigate handler of its own.
+        expect(sseSrc).not.toContain("case 'navigate'");
+        expect(wsSrc).not.toContain("case 'navigate'");
 
         // Neither path keeps a divergent inline same-origin guard (the pre-fix
         // WS shape used `isSameOriginPath`); the helper is the single source.

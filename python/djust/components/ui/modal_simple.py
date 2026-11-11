@@ -9,12 +9,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-try:
-    from djust._rust import RustModal
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
+from djust._rust import RustModal
 
 
 class Modal(Component):
@@ -46,7 +41,7 @@ class Modal(Component):
         '<div class="modal fade">...'
     """
 
-    _rust_impl_class = RustModal if _RUST_AVAILABLE else None
+    _rust_impl_class = RustModal
 
     template = """<div class="modal fade{% if show %} show{% endif %}" id="{{ id }}" tabindex="-1" aria-labelledby="{{ id }}Label" aria-hidden="true">
     <div class="modal-dialog{% if size != "md" %} modal-{{ size }}{% endif %}{% if centered %} modal-dialog-centered{% endif %}">

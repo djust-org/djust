@@ -1,0 +1,1 @@
+- **Django 6.1:** Add compatibility coverage, template parity improvements, and an opt-in `FETCH_PEERS` integration benchmark.

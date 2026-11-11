@@ -87,7 +87,7 @@ describe('prefetch cleared on SPA navigation', () => {
         // Trigger a live_redirect navigation — this calls handleLiveRedirect internally,
         // which should invoke window.djust._prefetch.clear()
         window.djust.navigation.handleNavigation({
-            type: 'live_redirect',
+            type: 'navigation', action: 'live_redirect',
             path: '/new-view/',
         });
 

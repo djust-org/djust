@@ -7,6 +7,7 @@ URL tag resolution, JIT serialization, and Rust-based rendering.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import logging
 import re
@@ -16,44 +17,96 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from django.db import models
 from django.db.models import QuerySet
-from django.template import Context, TemplateDoesNotExist, Origin
+from django.template import Context, TemplateDoesNotExist, Origin, VariableDoesNotExist
 from django.template.backends.utils import csrf_input_lazy, csrf_token_lazy
 from django.utils.safestring import SafeString
+from django.utils.functional import cached_property
 
 if TYPE_CHECKING:
     from .backend import DjustTemplateBackend
 
+from djust._rust import extract_template_variables, serialize_queryset
+from djust.optimization.codegen import all_row_cap
+from djust.optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
+from djust.serialization import normalize_django_value
+
+# Import from the true source module (re-exported via djust.live_view for
+# back-compat) so the type checker resolves the symbols directly.
+from djust.session_utils import (
+    _get_model_hash,
+    _jit_serializer_cache,  # Shared cache - cleared by clear_jit_cache()
+)
+
 from .serialization import serialize_context
 
-# OUTSIDE the JIT try-block below on purpose (#2322): the two sites that call
-# this are the JIT-unavailable and serialization-raised fallbacks, so importing
-# it alongside `DjangoJSONEncoder` would leave it undefined in exactly the two
-# cases that need it. `djust.serialization` is pure Python and is already a
-# hard dependency of this module's happy path.
+# The identity map the serialization-raised fallback returns (#2322).
 from ..serialization import model_identity
 
 logger = logging.getLogger(__name__)
 
-# Try to import JIT optimization utilities
-try:
-    from djust._rust import extract_template_variables, serialize_queryset
-    from djust.optimization.codegen import all_row_cap
-    from djust.optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
-    from djust.serialization import DjangoJSONEncoder, normalize_django_value
 
-    # Import from the true source module (re-exported via djust.live_view for
-    # back-compat) so the type checker resolves the symbols directly.
-    from djust.session_utils import (
-        _get_model_hash,
-        _jit_serializer_cache,  # Shared cache - cleared by clear_jit_cache()
-    )
+class _DjustPartialTemplate:
+    """Django-compatible metadata and an independently renderable native partial."""
 
-    JIT_AVAILABLE = True
-except ImportError:
-    JIT_AVAILABLE = False
-    DjangoJSONEncoder = None  # type: ignore[misc,assignment]
-    _get_model_hash = None  # type: ignore[assignment]
-    _jit_serializer_cache = {}  # Fallback empty cache when JIT not available
+    def __init__(
+        self, template: "DjustTemplate", name: str, start: Optional[int], end: Optional[int]
+    ):
+        self._parent = template
+        self.name = name
+        self.origin = template.origin
+        self.engine = template.engine
+        self._source_start = start
+        self._source_end = end
+
+    def find_partial_source(self, full_source: str) -> str:
+        if (
+            self._source_start is not None
+            and self._source_end is not None
+            and 0 <= self._source_start <= self._source_end <= len(full_source)
+        ):
+            return full_source[self._source_start : self._source_end]
+        return ""
+
+    @property
+    def source(self) -> str:
+        import warnings
+
+        if not self.engine.debug:
+            warnings.warn(
+                "PartialTemplate.source is only available when template debugging is enabled.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return self.find_partial_source(self._parent.source)
+
+    def get_exception_info(self, exception: Exception, token: Any) -> dict:
+        from django.template.base import Template
+
+        return cast(dict, Template.get_exception_info(self._parent, exception, token))
+
+    def render(self, context: Any) -> SafeString:
+        selected = copy.copy(self._parent)
+        name = getattr(self.origin, "template_name", None)
+        compiled = self._parent._compiled_template._select_partial(self.name, name)
+        if compiled is None:
+            raise TemplateDoesNotExist(self.name)
+        selected._compiled_template = compiled
+        return selected.render(context)
+
+
+def _partial_metadata(template: "DjustTemplate") -> dict:
+    """Expose only partials recognized by the native parser, with Django offsets."""
+    definitions = template._compiled_template._partial_spans()
+    source_bytes = template.source.encode("utf-8")
+    result = {}
+    for name, span in definitions.items():
+        if span is None or not template.engine.debug:
+            start = end = None
+        else:
+            start = len(source_bytes[: span[0]].decode("utf-8"))
+            end = len(source_bytes[: span[1]].decode("utf-8"))
+        result[name] = _DjustPartialTemplate(template, name, start, end)
+    return {"partials": result} if result else {}
 
 
 class _TemplateSourceWrapper:
@@ -190,6 +243,13 @@ class DjustTemplate:
 
         self._compile()
 
+    @cached_property
+    def extra_data(self) -> dict:
+        """Django 6 template partial metadata, computed only when requested."""
+        import django
+
+        return _partial_metadata(self) if django.VERSION >= (6, 0) else {}
+
     def _compile(self) -> None:
         """Parse the source now, where Django's ``Engine.from_string`` /
         ``get_template`` parse (#2549).
@@ -250,6 +310,15 @@ class DjustTemplate:
                 message = message[: -len(first_tag_suffix)] + (
                     f" must be the first tag in {template_name!r}."
                 )
+            if (
+                not user_raised
+                and template_name
+                and "is already defined in the template." in message
+            ):
+                message = message.replace(
+                    "is already defined in the template.",
+                    f"is already defined in the {template_name!r} template.",
+                )
             exc = e if user_raised else DjustTemplateSyntaxError(message, origin=self.origin)
             span = getattr(e, "djust_token_span", None)
             if span is not None:
@@ -264,6 +333,23 @@ class DjustTemplate:
                         message,
                     ),
                 )
+            # Django 6.0+ annotates TemplateSyntaxError on named template
+            # compilation with the loader origin and retains the raw message.
+            import django
+            from django.template import TemplateSyntaxError
+            from .exceptions import UNKNOWN_SOURCE
+
+            if (
+                django.VERSION >= (6, 0)
+                and isinstance(exc, TemplateSyntaxError)
+                and self.origin.name != UNKNOWN_SOURCE
+                and exc.args
+            ):
+                raw_message = exc.args[0]
+                if not user_raised and isinstance(raw_message, str):
+                    raw_message = raw_message.removeprefix("Template error: ")
+                exc.raw_error_message = raw_message
+                exc.args = (f"Template: {self.origin.name}, {raw_message}", *exc.args[1:])
             if user_raised:
                 raise
             raise exc from e
@@ -309,11 +395,6 @@ class DjustTemplate:
         Returns:
             List of serialized dictionaries
         """
-        if not JIT_AVAILABLE:
-            # Fallback to DjangoJSONEncoder
-            logger.debug("[JIT] Not available, using DjangoJSONEncoder for '%s'", variable_name)
-            return [normalize_django_value(obj) for obj in queryset]
-
         try:
             # Extract variable paths from template
             variable_paths_map = extract_template_variables(self.template_string)
@@ -403,13 +484,6 @@ class DjustTemplate:
         Returns:
             Serialized dictionary with 'id' and 'pk' keys (both native types)
         """
-        if not JIT_AVAILABLE or DjangoJSONEncoder is None:
-            # Fallback to the identity map — one producer for it (#2322), so
-            # this answers exactly what the main path does. Before that, whether
-            # a serialized model carried `__model__` depended on whether the JIT
-            # extension happened to be importable.
-            return model_identity(model_instance)
-
         try:
             return cast(dict, normalize_django_value(model_instance))
         except Exception as e:
@@ -577,16 +651,6 @@ class DjustTemplate:
 
             _ensure_custom_filters_bridged()
             template_dirs = [str(d) for d in self.backend.template_dirs]
-            # ADR-024 auto-call kill-switch. The Rust entry point defaults it
-            # ON (Django's behaviour) for a caller that reaches it directly;
-            # this path is a project's render, so the project's
-            # `LIVEVIEW_CONFIG['template_auto_call']` governs it — the same
-            # flag `_apply_template_auto_call_flag` wires on the LiveView path
-            # (#2501). One shared reader, called by all three framework render
-            # paths (#2508 review).
-            from ..config import template_auto_call_enabled
-
-            auto_call = template_auto_call_enabled()
             # The backend a bridged `inclusion_tag` renders its template
             # through, and the library map a `{% load %}` in THIS parse
             # resolves against (#2547). A ContextVar, NOT a context-dict
@@ -606,7 +670,9 @@ class DjustTemplate:
                     context_dict,
                     template_dirs,
                     safe_keys or None,
-                    auto_call,
+                    # Django's nullary auto-call is always on (ADR-024); the
+                    # `template_auto_call` kill switch was removed in 2.0.
+                    True,
                     getattr(self.backend, "string_if_invalid", "") or None,
                     # This template's own name, for relative `{% extends %}`
                     # (#2517). `Origin.template_name` is what Django's
@@ -646,7 +712,7 @@ class DjustTemplate:
             # below is worth nothing next to losing the status code. A real
             # ENGINE failure (unsupported tag, parse error) still gets the
             # hint, which is what it was written for.
-            if _is_user_raised(e):
+            if _is_user_raised(e) or isinstance(e, (VariableDoesNotExist, RecursionError)):
                 self._annotate_loaded_error(e, e)
                 raise
 

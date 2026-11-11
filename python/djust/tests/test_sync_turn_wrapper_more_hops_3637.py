@@ -300,27 +300,10 @@ async def test_a_url_change_object_permission_check_runs_inside_the_wrapper(prob
     assert set(SEEN["has_object_permission"]) == {"auth"}, SEEN
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_a_socket_cursor_move_runs_inside_the_wrapper(probe):
-    async with socket() as comm:
-        ENTERED.clear()
-        await comm.send_json_to({"type": "cursor_move", "x": 1, "y": 2})
-        await _until(lambda: SEEN.get("cursor"))
-
-    assert set(SEEN["cursor"]) == {"hook"}, SEEN
-    assert "hook" in steps()
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_a_socket_presence_heartbeat_runs_inside_the_wrapper(probe):
-    async with socket() as comm:
-        ENTERED.clear()
-        await comm.send_json_to({"type": "presence_heartbeat"})
-        await _until(lambda: SEEN.get("heartbeat"))
-
-    assert set(SEEN["heartbeat"]) == {"hook"}, SEEN
+# djust 2.0 has no ``cursor_move`` or ``presence_heartbeat`` socket frame (#3515): the cursor
+# handler is app-called, and the client's ``ping`` is the heartbeat. The two tests main carries
+# for those frames are therefore absent here; the heartbeat hook's step is pinned statically in
+# ``test_sync_turn_structural_pin_3646.py`` (``PresenceMixin.update_presence_heartbeat``).
 
 
 @pytest.mark.django_db(transaction=True)

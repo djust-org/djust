@@ -133,7 +133,7 @@ class TestTheHelperIsTheDefinition:
 
 
 class TestEverySiteIsExercised:
-    """All six producers, driven and asserted — the behavioural half.
+    """Every producer, driven and asserted — the behavioural half.
 
     The #2294 pin greps the source and says so ("deliberately a source grep").
     That catches a site that forgets the key; it cannot catch a site whose dict
@@ -179,16 +179,6 @@ class TestEverySiteIsExercised:
         assert list(got) == IDENTITY_ORDER, got
         assert got["__model__"] == "User"
 
-    def test_5_the_rendering_fallback_when_jit_is_unavailable(self, monkeypatch) -> None:
-        from djust.template import rendering
-
-        monkeypatch.setattr(rendering, "JIT_AVAILABLE", False)
-        got = rendering.DjustTemplate("{{ u }}", backend=None)._jit_serialize_model(
-            _make_user(), "u"
-        )
-        assert list(got) == IDENTITY_ORDER, got
-        assert got["__model__"] == "User"
-
     def test_6_the_rendering_fallback_when_serialization_raises(self, monkeypatch) -> None:
         from djust.template import rendering
 
@@ -227,11 +217,6 @@ class TestEverySiteIsExercised:
             ),
             "jit.py:identity-only": subset(JITMixin()._jit_serialize_model(user, "{{ u }}", "u")),
         }
-        monkeypatch.setattr(rendering, "JIT_AVAILABLE", False)
-        answers["rendering.py:jit-unavailable"] = subset(
-            rendering.DjustTemplate("{{ u }}", backend=None)._jit_serialize_model(user, "u")
-        )
-        monkeypatch.undo()
 
         def _boom(*args: Any, **kwargs: Any):
             raise RuntimeError("boom")
@@ -416,13 +401,14 @@ class TestOneProducerNotSix:
         }
         # serialization.py: the def, the main path, the FK shorthand, the
         # max-depth shorthand. jit.py: the identity-only subset.
-        # rendering.py: the two fallbacks.
+        # rendering.py: the serialization-raised fallback (the JIT-unavailable
+        # one went with the optional extension in 2.0).
         assert callers == {
             "serialization.py": 4,
             "jit.py": 1,
-            "rendering.py": 2,
+            "rendering.py": 1,
         }, (
-            f"the `model_identity` call sites moved: {callers}. Six producers "
+            f"the `model_identity` call sites moved: {callers}. Five producers "
             f"call it (plus its own `def`); a producer that stopped calling it "
             f"is a hand-rolled literal coming back."
         )

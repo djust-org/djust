@@ -1,4 +1,5 @@
 renderer.rs
+.flatten()
 if !context.is_safe(&format!("{prefix}.{key_text}")) {
 let text = output.to_string();
 Ok(context.record_provenance_flatten(output.into_authored_output(), text))
@@ -103,6 +104,7 @@ let mut wrapped = R::context_neutral(format!(
 wrapped.append(&R::context_neutral("<!--/dj-if-->".to_owned()));
 Value::List(s.chars().map(|c| Value::String(c.to_string())).collect()),
 loop_dict.insert("parentloop".into(), parentloop);
+loop_dict.insert("length".into(), Value::Integer(len_values));
 let parent_if_loop_path = ctx.dj_if_loop_path().to_string();
 ctx.set_dj_if_loop_path(format!("{parent_if_loop_path}-{index}"));
 loop_dict.insert("counter0".into(), Value::Integer(counter as i64));
@@ -121,12 +123,16 @@ cache.insert(hash, html.to_string())
 item_html.to_string(),
 other => Err(DjangoRustError::TemplateError(format!(
 format!(
+let kind = filters::python_type_name(&other).to_owned();
+pyo3::exceptions::PyTypeError::new_err(format!(
 pyo3::exceptions::PyTypeError::new_err(format!(
 (String::new(), std::sync::Arc::from(Vec::<Node>::new()))
 "No template names provided".to_string()
 let parent_include_path = context.dj_if_include_path().to_string();
 Some(site) => format!("{parent_include_path}-i{site}"),
+"Dynamic template object cannot be verified free of recursive partials for LiveViews".to_string(),
 std::sync::Arc::from(resolved_nodes.as_slice())
+"Recursive named partials selected by dynamic includes are unsupported for LiveViews".to_string(),
 output.identify(&format!("include:{}", name));
 Ok((String::new()).into())
 output.push_str(&format!("<div data-react-component=\"{name}\""));
@@ -134,7 +140,6 @@ ctx_value.to_string()
 ctx_value.to_string()
 format!(
 output.push_str(&filters::html_escape_attr(&format!(
-Node::RustComponent { name, .. } => Err(DjangoRustError::TemplateError(format!(
 .map(|v| v.to_string())
 Ok((format!(
 .into())
@@ -181,28 +186,18 @@ scoped.mark_safe("block.super".to_string());
 (body.to_string(), Some(body))
 Ok((String::new()).into())
 Ok((django_date_format(&now, format)).into())
+DjangoRustError::TemplateError(format!(
+DjangoRustError::TemplateError(format!(
+let parent_path = context.dj_if_include_path().to_string();
+Some(site) => format!("{parent_path}-i{site}"),
+if R::TRACKED && crate::registry::is_core_root_layout(name)? {
+let (html, copies) = crate::registry::call_core_root_layout(
+&body.to_string(),
+return Ok(body.core_root_layout(html, &copies));
 Ok((html).into())
 Ok((String::new()).into())
 Ok((html).into())
 Ok((html).into())
-(format!("The JSX-style `<{name} />` template tag"),),
-DjangoRustError::TemplateError(format!("Failed to render RustButton: {e}"))
-DjangoRustError::TemplateError(format!("Failed to render RustInput: {e}"))
-DjangoRustError::TemplateError(format!("Failed to render RustText: {e}"))
-DjangoRustError::TemplateError(format!("Failed to render RustCard: {e}"))
-DjangoRustError::TemplateError(format!("Failed to render RustAlert: {e}"))
-DjangoRustError::TemplateError(format!("Failed to render RustModal: {e}"))
-label: label.to_string(),
-value: value.to_string(),
-DjangoRustError::TemplateError(format!("Failed to render RustDropdown: {e}"))
-id: tab_id.to_string(),
-label: label.to_string(),
-content: content.to_string(),
-DjangoRustError::TemplateError(format!("Failed to render RustTabs: {e}"))
-_ => Err(DjangoRustError::TemplateError(format!(
-return Ok(ctx_value.to_string());
-return Ok(ctx_value.to_string());
-Err(DjangoRustError::TemplateError(format!(
 .replace(&format!("\\{quote}"), &quote.to_string())
 .replace(&format!("\\{quote}"), &quote.to_string())
 Some(format!("{sign}{body}"))
@@ -221,6 +216,9 @@ let text = val.to_string();
 return Ok("0".to_string());
 let text = format!("{rounded:.0}");
 Some(if text == "-0" { "0".to_string() } else { text })
+name: format!("part{}", index + 1),
+format!("part{index}"),
+name: "part0".into(),
 context.set("p".to_string(), Value::Integer(5));
 value: "p".into(),
 max_value: "10".into(),
@@ -281,6 +279,19 @@ display: "u0".to_string().into(),
 repr: "u0".to_string(),
 context.set("value_arg".into(), Value::String("-->".into()));
 template: "\"boom.html\"".to_string(),
+"outer.html" => Ok(vec![Node::Include {
+template: "inner_target".to_string(),
+"inner.html" => Ok(vec![panicking_child()]),
+"outer_target".to_owned(),
+Value::String("outer.html".to_owned()),
+"inner_target".to_owned(),
+Value::String("inner.html".to_owned()),
+template: "outer_target".to_owned(),
+bodies: std::collections::HashMap::from([
+("bad".to_owned(), vec![panicking_child()]),
+("good".to_owned(), vec![Node::Text("OK".to_owned())]),
+name: name.to_owned(),
+site_id: Some("abcd_1".to_owned()),
 Err(DjangoRustError::TemplateError("exit blew up".to_string()))
 context.set("lang".to_string(), Value::String("fr".to_string()));
 context.set("nothing".to_string(), Value::None);
@@ -412,8 +423,6 @@ Value::String("y".to_string()),
 user.insert("name".into(), Value::String("Alice".to_string()));
 context.set("user".to_string(), Value::Object(user));
 context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
-"x".to_string(),
-Value::String("Visit https://example.com".to_string()),
 context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
 context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
 context.set("active".to_string(), Value::Bool(false));
@@ -572,6 +581,41 @@ context.set("dynamic".to_string(), Value::String("v2".to_string()));
 let changed_keys: HashSet<String> = ["dynamic".to_string()].into_iter().collect();
 Template::new("{% extends \"base.html\" %}{% block content %}X{% endblock %}").unwrap();
 djust_live/src/provenance_edits.rs
+djust_live/src/deferred_children.rs
+.literal_offsets
+.blank_offsets
+rendered.html = value;
+let mut proof = if output.prefix.literal_blocked || output.root_channel {
+proof.html = output.normal.html.clone();
+let root = djust_vdom::lazy_provenance::authenticated_live_root(&proof.html, &spans);
+&proof.html,
+|| proof.literal_only.is_none()
+|| proof.blank_only.is_none()
+|| [&proof.literal_only, &proof.blank_only]
+.flatten()
+.call1((&output.normal.html, page_root))?
+let html = output.normal.html.clone();
+rendered.append(&Rendered::from("TOKEN".to_owned()));
+let html = rendered.html.clone();
+let original = rendered.literal_only.clone();
+let root_projection = rendered.literal_offsets.last().map(|(_, p)| *p);
+assert!(rendered.html.starts_with("é<div>保全</div><main"));
+assert_eq!(rendered.literal_only, original);
+rendered.literal_offsets.last().copied(),
+djust_live/src/child_bindings.rs
+result.djust_id = Some(id.into());
+result.attrs.insert("dj-update".into(), "ignore".into());
+let fresh = HashMap::from([
+("6".into(), "discarded".into()),
+("7".into(), "fresh".into()),
+let previous = HashSet::from(["2".into(), "3".into()]);
+&HashSet::from(["5".into()]),
+vec![("fresh".into(), "3".into())]
+vec![("2".into(), "2".into())]
+&HashSet::from(["1".into()]),
+new.tag = "article".into();
+&HashSet::from(["1".into()]),
+&HashMap::from([("1".into(), "key".into())]),
 djust_live/src/model_serializer.rs
 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
 return Ok(JsonValue::Number(i.into()));
@@ -585,10 +629,18 @@ djust_live/src/lib.rs
 .map(|s| (*s).to_string())
 .unwrap_or_else(|| "panic with a non-string payload".to_string());
 Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+.flatten()
+.flatten()
 self.dj_if_id_namespace = namespace.to_string();
 let prefix = format!("{key}.");
 Ok(dict.into())
+page.rendered.html,
+let html = page.rendered.html.clone();
+.map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+let (start, end) = page.range.unwrap_or((0, page.rendered.html.len()));
+return Ok((rendered.html[start..end].to_owned(), spans, origins));
 Ok((result.html, spans, result.origins))
+patches.map(|bytes| PyBytes::new(py, &bytes).into()),
 return Err(e.into());
 let open = format!("<{sentinel_tag} ");
 reduced_html.clone()
@@ -613,6 +665,22 @@ m.insert("serialize_ms".to_string(), t.serialize_ms);
 m.insert("total_ms".to_string(), t.total_ms);
 m.insert("html_len".to_string(), t.html_len as f64);
 m.insert("fast_path".to_string(), t.fast_path);
+let root_spans: Vec<_> = if cutoff || output.root_channel {
+output.prefix.html = output.normal.html.clone();
+&rendered.html,
+djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &observed)
+let range = authenticated_source_range(&rendered.html, &root)?;
+root.vdom.attrs.insert("dj-view".to_string(), path.clone());
+&rendered.html,
+|| rendered.literal_only.is_none()
+|| rendered.blank_only.is_none()
+|| [&rendered.literal_only, &rendered.blank_only]
+.flatten()
+parse_html_continue_with_namespace(&rendered.html)
+parse_html_with_namespace(&rendered.html)
+.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+.map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+.map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
 return Err(e.into());
 let open = format!("<{sentinel_tag} ");
 reduced_html.clone()
@@ -639,9 +707,11 @@ std::fs::metadata(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_st
 let source: Arc<str> = Arc::from(
 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
 LAZY_SOURCE_FILES.insert(path.to_owned(), (modified, metadata.len(), source.clone()));
+.flatten()
 for list in children.into_iter().flatten() {
 format!("{values:?}")
 keys.insert(operand.to_owned());
+let identity = current.unwrap_or(source).to_owned();
 source.to_owned(),
 let identity = current_name.unwrap_or(source).to_owned();
 source.to_owned(),
@@ -649,6 +719,7 @@ let path = std::path::PathBuf::from(origin);
 for children in node.child_lists().into_iter().flatten() {
 Value::List(values) => values.iter().map(|v| v.to_string()).collect(),
 selectors.insert(format!("{expression}.{suffix}"));
+let message = format!("Unable to identify the authored LiveView root: {error}");
 template_source.to_owned(),
 return Ok(entry.0.clone());
 let py_err: PyErr = err.into();
@@ -759,6 +830,9 @@ s.insert("highlight_id".to_string(), Value::Integer(highlight_id));
 "rows".to_string(),
 let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
 view.set_changed_keys(vec!["label".to_string()]);
+view.update_template(TEMPLATE.to_string());
+view.set_changed_keys(vec!["label".to_string()]);
+view.set_changed_keys(vec!["label".to_string()]);
 view.set_changed_keys(vec!["label".to_string()]);
 let mut view = RustLiveViewBackend::new_rust(template.to_string());
 s.insert("x".to_string(), Value::String(x.to_string()));
@@ -814,6 +888,7 @@ assert_eq!(selectors, ["tpl".to_owned()].into_iter().collect());
 let memo = &walk.memo[&(source.to_owned(), 0)][0];
 context.set("rows".into(), Value::List(vec![Value::Integer(2); 5000]));
 source.to_owned(),
+"<main dj-root>hi</main>".to_owned(),
 djust_live/src/actors/view.rs
 .map_err(|e| ActorError::template(e.to_string()));
 .map_err(|e| ActorError::template(e.to_string()))?;
@@ -1120,6 +1195,19 @@ PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: 
 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
 .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
 .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+pub fn is_core_root_layout(name: &str) -> Result<bool, DjangoRustError> {
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+core_root_layout_object(py, handler.bind(py)).map_err(handler_exception)
+fn core_root_layout_object(py: Python<'_>, handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+pub fn call_core_root_layout(
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+DjangoRustError::TemplateError("Missing core layout handler".into())
+if !core_root_layout_object(py, handler.bind(py)).map_err(handler_exception)? {
+"Core layout registration changed".into(),
+"Too many core layout parts".into(),
+"Invalid core layout body slice".into(),
+"Core layout lost or duplicated body bytes".into(),
+"Core layout lost body bytes".into(),
 arm_scope_tags(vec!["language".to_string(), "timezone".to_string()]).unwrap();
 arm_scope_tags(vec!["localize".to_string()]).unwrap();
 arm_scope_tags(vec!["language".to_string()]).unwrap();
@@ -1142,10 +1230,10 @@ let blank_html = if output.0 == text {
 output.3.blank_html
 blank_html,
 blank_openings: Vec::new(),
-_ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
 let path = path.into();
 let namespace = namespace.into();
 let path = path.into();
+let previous = self.dj_if_include_path().to_owned();
 format!("{}:{id}", self.render_scope())
 format!("{}/{:?}", self.include_instance(), identity)
 self.string_if_invalid = value.into();
@@ -1160,6 +1248,7 @@ type_name: "LazyBlock".to_string(),
 display: String::new().into(),
 repr: LAZY_BLOCK_REPR.to_string(),
 self.set("block".to_owned(), Value::Object(Default::default()));
+std::sync::Arc::make_mut(bindings).insert(name.to_owned());
 frame.safe_keys_mut().insert(name.to_string());
 frame.unsafe_keys_mut().insert(name.to_string());
 let prefix = format!("{key}.");
@@ -1183,6 +1272,12 @@ key.to_string()
 .map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
 .map_err(|e| format!("Failed to merge frame: {e}"))?;
 if !guard.insert(path.to_string()) {
+"selected".into(),
+crate::Value::String("plain.html".into()),
+"selected".into(),
+crate::Value::String("lazy.html".into()),
+other.bind_upward("another".into(), crate::Value::None, false);
+assert!(!inner.lazy_selector_is_tainted("'literal.html'"));
 ctx.bind("o".into(), Value::String("<!--".into()), true);
 clone.set("o".into(), Value::String("-->".into()));
 inner.bind("o".into(), Value::String("-->".into()), true);
@@ -1296,11 +1391,14 @@ ctx.mark_safe("pp".to_string());
 ctx.mark_safe("p.a".to_string());
 fn render_block_super(&self, _ctx: &Context) -> crate::Result<String> {
 Ok(format!("p{n}"))
+assert!(err.to_string().contains("block.super()"), "{err}");
 provenance.rs
 text.into()
 text.into()
 Self::captured(text, literal.html)
 text.into()
+fn core_root_layout(self, html: String, _copies: &[(usize, usize, usize)]) -> Self {
+html.into()
 text.into()
 fn into_authored_output(self) -> djust_core::context::AuthoredOutput;
 text.to_owned()
@@ -1320,10 +1418,14 @@ blank_openings: self.blank_offsets,
 openings: self.literal_offsets,
 .literal_only
 .blank_only
+let (root_openings, literal_attributes) = projected_root(&self.literal_only);
+let (blank_root_openings, blank_attributes) = projected_root(&self.blank_only);
 let blank_offsets: std::collections::HashMap<_, _> =
 self.blank_offsets.iter().copied().collect();
 self.literal_offsets.iter().copied().collect();
 || !blank_offsets
+for attr in root_live_attributes(&self.html, &spans) {
+let blank = matches_projection(&blank_offsets, &blank_attributes);
 literal_only: Some("\u{fffd}".to_owned()),
 blank_only: Some(String::new()),
 blank_offsets: Vec::new(),
@@ -1340,6 +1442,7 @@ result.blank_only = literal.clone();
 result.literal_only = literal;
 let mut result = Self::captured(text, literal.html);
 result.blank_only = literal.blank_html;
+fn core_root_layout(self, html: String, _copies: &[(usize, usize, usize)]) -> Self {
 let mut result = Self::from(text);
 result.literal_only = Some(result.html.clone());
 result.blank_only = Some(result.html.clone());
@@ -1371,9 +1474,70 @@ self.html.push_str(&child.html);
 self.append(&Self::from(text.to_owned()));
 *id = format!("{identity}/{id}");
 self.identify(&format!("loop{}", context.dj_if_loop_path()));
+pub root_channel: bool,
+root_channel: false,
+normal: text.clone().into(),
+prefix: text.into(),
+&self.normal.html
+f.write_str(&self.normal.html)
+b.html.clear();
+root_channel: false,
+} else if out.literal_only.is_none()
+|| child.literal_only.is_none()
+|| out.blank_only.is_none()
+|| child.blank_only.is_none()
+if let (Some(target), Some(source)) = (&mut out.literal_only, &child.literal_only) {
+out.literal_offsets.extend(
+.literal_offsets
+if let (Some(target), Some(source)) = (&mut out.blank_only, &child.blank_only) {
+out.blank_offsets.extend(
+.blank_offsets
+self.prefix.html = self.normal.html.clone();
+let channel = self.root_channel;
+let mut result = Self::pair(self.normal.flatten(t.clone()), self.prefix.flatten(t));
+result.root_channel = channel;
+fn core_root_layout(self, html: String, copies: &[(usize, usize, usize)]) -> Self {
+for offsets in [&mut prefix.literal_offsets, &mut prefix.blank_offsets] {
+result.root_channel = true;
+fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
+self.normal.into_authored_output()
+self.root_channel |= child.root_channel;
+let offset = self.normal.html.len();
+self.append(&Self::from(text.to_owned()));
+out.append(&DualRendered::captured("opaque".to_owned(), None));
+out.normal.html,
+assert!(out.normal.literal_only.is_none());
+assert_eq!(out.prefix.literal_only.as_deref(), Some("<main dj-root>"));
+blank_html: None,
+blank_openings: Vec::new(),
+assert!(out.normal.literal_only.is_none());
+assert_eq!(out.prefix.literal_only.as_deref(), Some("<main dj-root>"));
 ctx.set("flag".into(), Value::Bool(true));
 "xs".into(),
 ctx.set("extra".into(), Value::String("Δ".into()));
+for children in node.child_lists().into_iter().flatten() {
+"nested.html" => "{% include item %}",
+"nested_static.html" => "{% include \"lazy.html\" %}",
+"sets.html" => "{% cycle \"lazy.html\" as selected silent %}",
+"base.html" => "{% block body %}{% include selected %}{% endblock %}",
+"empty.html" => "plain",
+ctx.set("target".into(), Value::String("lazy.html".into()));
+"items".into(),
+Value::List(vec![Value::String("lazy.html".into())]),
+"items".into(),
+Value::List(vec![Value::String("lazy.html".into())]),
+Template::new("{% for item in items %}{% include \"nested.html\" %}{% endfor %}")
+"{% for item in items %}{% include \"nested_static.html\" %}{% endfor %}",
+for (first, denied) in [("sets.html", true), ("empty.html", false)] {
+ctx.set("selected".into(), Value::String("lazy.html".into()));
+let source = format!("{{% include \"{first}\" %}}{{% include selected %}}");
+ctx.set("selected".into(), Value::String("lazy.html".into()));
+let result = Template::new("{% include \"sets.html\" only %}{% include selected %}")
+ctx.set("selected".into(), Value::String("plain.html".into()));
+ctx.set("chosen".into(), Value::String("lazy.html".into()));
+let source = "{% extends \"base.html\" %}{% block body %}{% firstof chosen as selected %}{{ block.super }}{% endblock %}";
+ctx.set("target".into(), Value::String("lazy.html".into()));
+let result = Template::new("{% include target|default:\"lazy.html\" %}")
 output.append(&Rendered::from("é😀".to_owned()));
 output.append(&Rendered::from(String::new()));
 assert_eq!(output.literal_offsets, vec![(6, 6)]);
@@ -1398,6 +1562,8 @@ flattened.literal_only.as_deref(),
 ".flatten(",
 "into_authored_output(",
 "flatten_authored_output(",
+"core_root_layout",
+"root_channel",
 "render_nodes_with_loader_mut(",
 "render_block_super(",
 "record_provenance_flatten(",
@@ -1437,6 +1603,23 @@ format!("{{% block body %}}{parent_source}{{% endblock %}}"),
 let source = format!("{{% extends 'base' %}}{{% block body %}}{body}{{% endblock %}}");
 &output.html,
 live(&output.html),
+ctx.set("left".into(), Value::String("\"".into()));
+ctx.set("right".into(), Value::String("x=\"".into()));
+let attrs = djust_vdom::lazy_provenance::root_live_attributes(&rendered.html, &spans);
+ctx.set("left".into(), Value::String("\"".into()));
+ctx.set("right".into(), Value::String("x=\"".into()));
+ctx.set("field".into(), Value::String("is_admin".into()));
+let attrs = djust_vdom::lazy_provenance::root_live_attributes(&rendered.html, &spans);
+ctx.set("a".into(), Value::String("<textarea>".into()));
+ctx.set("b".into(), Value::String("</textarea>".into()));
+let attrs = djust_vdom::lazy_provenance::root_live_attributes(&rendered.html, &spans);
+ctx.set("a".into(), Value::String("<textarea>".into()));
+ctx.set("b".into(), Value::String("</textarea>".into()));
+let attrs = djust_vdom::lazy_provenance::root_live_attributes(&rendered.html, &spans);
+name: "page".into(),
+assert_eq!(output.html, "");
+assert_eq!(output.literal_only.as_deref(), Some(""));
+assert_eq!(output.blank_only.as_deref(), Some(""));
 assert_eq!(r.literal_only.as_deref(), Some(r.html.as_str()));
 assert!(live.html.starts_with("<!---->"));
 ctx.set("flag".into(), Value::Bool(true));
@@ -1445,8 +1628,10 @@ assert!(!r.literal_only.as_ref().unwrap().contains("dj-if"));
 let text: String = r.authored.iter().map(|s| &r.html[s.clone()]).collect();
 assert!(r.html.is_char_boundary(span.start) && r.html.is_char_boundary(span.end));
 let r = render(&format!(
+for children in node.child_lists().into_iter().flatten() {
+scoped.push("forloop".to_owned());
 for children in node.child_lists_mut().into_iter().flatten() {
 (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
-(start, end, format!("container{index}:{hash:016x}"))
+(start, end, format!("{kind}{index}:{hash:016x}"))
 for children in node.child_lists_mut().into_iter().flatten() {
 &std::sync::Arc::from(source),

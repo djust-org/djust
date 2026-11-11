@@ -24,9 +24,9 @@ so a later in-place mutation cannot retroactively change it. Leaves:
   reassignment is seen, an in-place attribute write on such an object is not
   (the Phoenix LiveView contract; ``set_changed_keys`` remains the hatch).
 
-Cost is bounded by ``budget`` visited nodes (default 20 000). Past it the
-remaining subtrees collapse to ``id()`` and the caller is told, so it can emit
-the one-shot "fingerprint truncated" warning naming the attribute; the walk
+Cost is bounded by ``budget`` visited nodes (default 20 000). On exhaustion
+the fingerprint collapses to the root identity and callers must conservatively
+invalidate it; the walk
 is also depth-capped and cycle-safe. Measured on the model-backed WS
 benchmark (50 rows × 6 columns, ``tests/benchmarks/``) the deep walk is
 within noise of the shallow one because the rows are model instances — leaves.
@@ -74,8 +74,8 @@ def warn_fingerprint_truncated(cls: type, name: str, value: Any) -> None:
         cls,
         "fingerprint_truncated_%s" % name,
         "[djust] %s: %s '%s' has %d items and exceeds the change-detection "
-        "budget (%d nodes) — content fingerprint truncated. In-place mutations "
-        "inside it will NOT be detected by auto-diff. Use "
+        "budget (%d nodes) — content fingerprint truncated; change detection will "
+        "conservatively treat it as changed. Narrow the state or use "
         "self.set_changed_keys({'%s'}) or assign a new %s reference.",
         cls.__qualname__,
         type(value).__name__,
@@ -128,7 +128,7 @@ def deep_fingerprint(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Hashable
 
     ``fingerprint`` is hashable and shares no reference with *value*;
     ``truncated`` is True when *budget* ran out and part of the structure was
-    reduced to ``id()`` (in-place mutations inside that part are invisible).
+    reduced to root identity. Callers must conservatively invalidate it.
     """
     counter: List[int] = [budget]
     fp = _walk(value, counter, 0, ())
@@ -181,24 +181,32 @@ def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...])
             tk = type(k)
             if tk in _EXACT_SCALARS:
                 counter[0] -= 1
-                kf: Hashable = (_TAG_VALUE, tk, k) if counter[0] >= 0 else (_TAG_TRUNCATED, id(k))
+                kf: Hashable = (_TAG_VALUE, tk, k)
             else:
                 kf = _walk(k, counter, child_depth, inner)
+            if counter[0] < 0:
+                return (_TAG_TRUNCATED, vid)
             tv = type(v)
             if tv in _EXACT_SCALARS:
                 counter[0] -= 1
-                vf: Hashable = (_TAG_VALUE, tv, v) if counter[0] >= 0 else (_TAG_TRUNCATED, id(v))
+                vf: Hashable = (_TAG_VALUE, tv, v)
             else:
                 vf = _walk(v, counter, child_depth, inner)
+            if counter[0] < 0:
+                return (_TAG_TRUNCATED, vid)
             append((kf, vf))
         return (_TAG_DICT, tuple(out))
     for v in value:
         tv = type(v)
         if tv in _EXACT_SCALARS:
             counter[0] -= 1
-            append((_TAG_VALUE, tv, v) if counter[0] >= 0 else (_TAG_TRUNCATED, id(v)))
+            if counter[0] < 0:
+                return (_TAG_TRUNCATED, vid)
+            append((_TAG_VALUE, tv, v))
         else:
             append(_walk(v, counter, child_depth, inner))
+            if counter[0] < 0:
+                return (_TAG_TRUNCATED, vid)
     return (_TAG_LIST if t is list else _TAG_TUPLE, tuple(out))
 
 
@@ -208,7 +216,7 @@ def _walk_general(
     fields: Any = None
     if getattr(type(value), STATE_MARKER, False):
         fields = getattr(type(value), FINGERPRINT_FIELDS, None)
-        if isinstance(fields, str):  # ``fingerprint_fields = "columns"`` — one key, not chars
+        if isinstance(fields, str):
             fields = (fields,)
         value = getattr(value, "state", value)
     counter[0] -= 1
@@ -219,37 +227,47 @@ def _walk_general(
     if isinstance(value, (dict, list, tuple, set, frozenset)):
         vid = id(value)
         if depth >= _MAX_DEPTH or vid in path_ids:
-            # Too deep, or a cycle back onto an ancestor: identity only.
             return (_TAG_ID, vid)
         inner = path_ids + (vid,)
+        out: List[Hashable] = []
         if isinstance(value, dict):
-            if fields is not None:
-                # ADR-033 D3: a narrowed component state — the declared keys
-                # are walked, the rest are one-node leaves.
-                return (
-                    _TAG_DICT,
-                    tuple(
-                        (
-                            _walk(k, counter, depth + 1, inner),
-                            _walk(v, counter, depth + 1, inner) if k in fields else _leaf(v),
-                        )
-                        for k, v in dict.items(value)
-                    ),
-                )
-            return (
-                _TAG_DICT,
-                tuple(
-                    (_walk(k, counter, depth + 1, inner), _walk(v, counter, depth + 1, inner))
-                    # ``dict.items(value)``, not ``value.items()``: a TypedState
-                    # field named ``items`` is a property shadowing the method.
-                    for k, v in dict.items(value)
-                ),
-            )
+            for k, v in dict.items(value):
+                if counter[0] <= 0:
+                    counter[0] = -1
+                    return (_TAG_TRUNCATED, vid)
+                kf = _walk(k, counter, depth + 1, inner)
+                if counter[0] < 0:
+                    return (_TAG_TRUNCATED, vid)
+                if fields is not None and k not in fields:
+                    vf = _leaf(v)
+                else:
+                    if counter[0] <= 0:
+                        counter[0] = -1
+                        return (_TAG_TRUNCATED, vid)
+                    vf = _walk(v, counter, depth + 1, inner)
+                if counter[0] < 0:
+                    return (_TAG_TRUNCATED, vid)
+                out.append((kf, vf))
+            return (_TAG_DICT, tuple(out))
         if isinstance(value, (set, frozenset)):
             try:
-                return (_TAG_SET, frozenset(_walk(v, counter, depth + 1, inner) for v in value))
-            except TypeError:  # pragma: no cover — every branch returns hashables
+                for v in value:
+                    if counter[0] <= 0:
+                        counter[0] = -1
+                        return (_TAG_TRUNCATED, vid)
+                    out.append(_walk(v, counter, depth + 1, inner))
+                    if counter[0] < 0:
+                        return (_TAG_TRUNCATED, vid)
+                return (_TAG_SET, frozenset(out))
+            except TypeError:
+                # Preserve identity fallback for unhashable child fingerprints.
                 return (_TAG_ID, vid)
-        tag = _TAG_LIST if isinstance(value, list) else _TAG_TUPLE
-        return (tag, tuple(_walk(v, counter, depth + 1, inner) for v in value))
+        for v in value:
+            if counter[0] <= 0:
+                counter[0] = -1
+                return (_TAG_TRUNCATED, vid)
+            out.append(_walk(v, counter, depth + 1, inner))
+            if counter[0] < 0:
+                return (_TAG_TRUNCATED, vid)
+        return (_TAG_LIST if isinstance(value, list) else _TAG_TUPLE, tuple(out))
     return (_TAG_ID, id(value))

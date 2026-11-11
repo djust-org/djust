@@ -19,6 +19,7 @@ could not find them.
 import pytest
 
 pytest_plugins = [
+    "tests.worker_database",  # close handles at the DB-enabled async test that opens them
     "pytester",  # pytest's plugin-testing fixture, for tests/test_lost_items_guard.py
     "tests.lost_items_guard",  # #2746: a run that loses collected items goes red
     "tests.corpus_shards",  # share the full differential sweep within one CI shard

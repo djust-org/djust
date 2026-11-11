@@ -122,6 +122,10 @@ NON_ITERABLE_FILTERS = (
     "phone2numeric",
 )
 
+#: The refusal texts. `phone2numeric` is Django's own function since 2.0, so
+#: its `AttributeError` crosses as Django raised it.
+REFUSAL = "not iterable|not subscriptable|raises|has no attribute 'lower'"
+
 
 class _BaseView(LiveView):
     """The mount body is shared; the template and the value vary per subclass.
@@ -234,7 +238,7 @@ class TestTheTwelvePermissivenessCells:
         """Before this change djust iterated the thirteen CHARACTERS of the
         flattened `"P0DT00H00M00S"` and put them on the page — thirteen `<li>`s
         for `unordered_list`, `7038004006007` for `phone2numeric`."""
-        with pytest.raises(Exception, match="not iterable|not subscriptable|raises"):
+        with pytest.raises(Exception, match=REFUSAL):
             _rust.render_template("{{ p|%s }}" % name, normalize_django_value({"p": value}))
 
     @pytest.mark.parametrize("name", NON_ITERABLE_FILTERS)
@@ -242,7 +246,7 @@ class TestTheTwelvePermissivenessCells:
         """The other half of the asymmetry, kept as the control: the raw path
         was correct throughout, which is what made this the LiveView path's
         bug rather than a hole in #2451's chokepoint."""
-        with pytest.raises(Exception, match="not iterable|not subscriptable|raises"):
+        with pytest.raises(Exception, match=REFUSAL):
             _rust.render_template("{{ p|%s }}" % name, {"p": dt.timedelta(0)})
 
 

@@ -3,10 +3,9 @@ Demo forms for showcasing Django Rust Live forms integration
 """
 
 from django import forms
-from djust import LiveViewForm
 
 
-class RegistrationForm(LiveViewForm):
+class RegistrationForm(forms.Form):
     """User registration form with real-time validation"""
 
     username = forms.CharField(
@@ -99,7 +98,7 @@ class RegistrationForm(LiveViewForm):
         return cleaned_data
 
 
-class ContactForm(LiveViewForm):
+class ContactForm(forms.Form):
     """Contact form with various field types"""
 
     name = forms.CharField(
@@ -181,7 +180,7 @@ class ContactForm(LiveViewForm):
         return message
 
 
-class ProfileForm(LiveViewForm):
+class ProfileForm(forms.Form):
     """User profile form with various field types"""
 
     first_name = forms.CharField(
@@ -279,7 +278,7 @@ class ProfileForm(LiveViewForm):
         return phone
 
 
-class SimpleContactForm(LiveViewForm):
+class SimpleContactForm(forms.Form):
     """Simplified contact form with just name, email, and message"""
 
     name = forms.CharField(
@@ -322,7 +321,7 @@ class SimpleContactForm(LiveViewForm):
         return message
 
 
-class SearchForm(LiveViewForm):
+class SearchForm(forms.Form):
     """Simple search form"""
 
     query = forms.CharField(

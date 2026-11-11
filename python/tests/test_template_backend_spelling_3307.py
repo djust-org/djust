@@ -3,7 +3,7 @@
 ``ContextMixin._get_context_processors`` compared ``BACKEND`` against a literal,
 so ``djust.template.backend.DjustTemplateBackend`` (the canonical path, and the
 one ``djust new`` historically emitted) silently got no context processors while
-``djust.template_backend.DjustTemplateBackend`` (the shim) did.
+the ``djust.template_backend`` shim spelling did. The shim was removed in 2.0.
 """
 
 import pytest
@@ -16,7 +16,6 @@ from djust.utils import is_app_dirs_template_backend
 
 PROCESSOR = "python.tests.test_template_backend_spelling_3307.marker_processor"
 CANONICAL = "djust.template.backend.DjustTemplateBackend"
-SHIM = "djust.template_backend.DjustTemplateBackend"
 DJANGO = "django.template.backends.django.DjangoTemplates"
 SUBCLASS = __name__ + ".MyDjustBackend"
 
@@ -40,16 +39,10 @@ def _templates(backend):
     ]
 
 
-@pytest.mark.parametrize("backend", [CANONICAL, SHIM, SUBCLASS, DJANGO])
+@pytest.mark.parametrize("backend", [CANONICAL, SUBCLASS, DJANGO])
 def test_context_processors_found_for_every_spelling(backend):
     with override_settings(TEMPLATES=_templates(backend)):
         assert ContextMixin._get_context_processors(LiveView()) == [PROCESSOR]
-
-
-def test_canonical_and_shim_resolve_to_one_class():
-    from django.utils.module_loading import import_string
-
-    assert import_string(CANONICAL) is import_string(SHIM)
 
 
 def test_unrelated_and_unimportable_backends_are_ignored():
@@ -71,7 +64,7 @@ def test_first_recognised_entry_with_processors_wins_regardless_of_spelling():
         assert ContextMixin._get_context_processors(LiveView()) == [PROCESSOR]
 
 
-@pytest.mark.parametrize("backend", [CANONICAL, SHIM, SUBCLASS, DJANGO])
+@pytest.mark.parametrize("backend", [CANONICAL, SUBCLASS, DJANGO])
 def test_app_dirs_gate_recognises_every_spelling(backend):
     assert is_app_dirs_template_backend(backend)
 

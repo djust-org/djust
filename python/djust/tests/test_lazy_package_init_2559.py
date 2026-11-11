@@ -36,6 +36,7 @@ import subprocess
 import sys
 
 import pytest
+from django.template.defaulttags import register as django_default_tags
 
 import djust
 
@@ -69,7 +70,10 @@ ALLOWLIST_PACKAGE = frozenset(
         "djust.utils",
     }
 )
-assert len(ALLOWLIST_PACKAGE) == 23
+HAS_CSP_NONCE_TAG = "csp_nonce_attr" in django_default_tags.tags
+if HAS_CSP_NONCE_TAG:
+    ALLOWLIST_PACKAGE |= {"djust.template_tags.csp_nonce_attr"}
+assert len(ALLOWLIST_PACKAGE) == 23 + HAS_CSP_NONCE_TAG
 
 ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
     {
@@ -89,12 +93,8 @@ ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
         "djust.template.serialization",
     }
 )
-assert len(ALLOWLIST_BACKEND) == 35
+assert len(ALLOWLIST_BACKEND) == 35 + HAS_CSP_NONCE_TAG
 
-
-# The compat shim (``djust/template_backend.py``) adds itself and the
-# deprecation helper it warns through (removed in 2.0).
-ALLOWLIST_BACKEND_SHIM = ALLOWLIST_BACKEND | {"djust.template_backend", "djust._deprecation"}
 
 # After ``django.setup()`` on a templates-only project: ``DjustConfig.ready()``
 # registers the system checks, applies the differ flags, warms the filter
@@ -102,8 +102,7 @@ ALLOWLIST_BACKEND_SHIM = ALLOWLIST_BACKEND | {"djust.template_backend", "djust._
 # and installs the ``{% load %}`` hooks. Exact, like the rows above.
 ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
     {
-        "djust._deprecated_settings",  # 1.3 startup warnings for 2.0 removals
-        "djust._deprecation",
+        "djust._removed_settings",  # 2.0 removed-settings startup guard (#3500)
         "djust.apps",
         "djust.assets",  # ADR-040 asset registry (setting_changed receiver)
         "djust.checks",
@@ -138,7 +137,7 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.template_filters",
     }
 )
-assert len(ALLOWLIST_SETUP) == 69
+assert len(ALLOWLIST_SETUP) == 68 + HAS_CSP_NONCE_TAG
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).
@@ -258,16 +257,9 @@ class TestImportFootprint:
             f"missing={sorted(ALLOWLIST_BACKEND - set(report['djust']))}"
         )
 
-    def test_backend_shim_import_loads_exactly_the_allowlist(self):
-        report = _fresh_import("import djust.template_backend")
-        assert set(report["djust"]) == ALLOWLIST_BACKEND_SHIM, (
-            f"extra={sorted(set(report['djust']) - ALLOWLIST_BACKEND_SHIM)} "
-            f"missing={sorted(ALLOWLIST_BACKEND_SHIM - set(report['djust']))}"
-        )
-
     @pytest.mark.parametrize(
         "stmt",
-        ["import djust", "import djust.template.backend", "import djust.template_backend"],
+        ["import djust", "import djust.template.backend"],
     )
     def test_import_never_loads_the_liveview_stack(self, stmt):
         _assert_none_forbidden(_fresh_import(stmt), stmt)

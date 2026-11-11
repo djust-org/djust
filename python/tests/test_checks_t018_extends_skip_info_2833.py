@@ -19,24 +19,11 @@ real discovery union would make the emitted skip COUNT environment-
 dependent, and an absence assertion can't tolerate pollution).
 """
 
-import pytest
-
-
-def _liveview_available():
-    """Return True if LiveView can be imported (Rust extension built)."""
-    try:
-        from djust.live_view import LiveView  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
 
 def _t018(errors):
     return [e for e in errors if e.id == "djust.T018"]
 
 
-@pytest.mark.skipif(not _liveview_available(), reason="Rust extension not available")
 class TestT018ExtendsSkipInfo2833:
     def test_extends_skip_emits_info_message(self, monkeypatch):
         """An app whose LiveView uses an extends template gets an Info-level

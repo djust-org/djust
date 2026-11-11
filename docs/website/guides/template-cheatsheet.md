@@ -574,9 +574,8 @@ Set `alters_data = True` on your own mutating model methods, as in Django.
 event, so `{{ qs.count }}` in a template is a DB query *per event* —
 not once per request like classic Django. For hot views, precompute in
 `get_context_data()` (djust warns once per path in `DEBUG` when a
-template auto-calls an ORM method). Kill-switch:
-`LIVEVIEW_CONFIG["template_auto_call"] = False` restores the old
-no-call behavior; it is deprecated, and 2.0 removes the switch.
+template auto-calls an ORM method). Auto-call is always on; 2.0 removed
+the `template_auto_call` kill switch.
 
 ### Objects resolve like Django (ADR-027)
 
@@ -823,7 +822,7 @@ Pass them via `context` / `self.*`; the serializer handles the rest.
 | `safe` | `{{ html\|safe }}` | Mark pre-escaped HTML safe |
 | `escape` | `{{ text\|escape }}` | Force HTML escaping |
 | `force_escape` | `{{ text\|force_escape }}` | Escape even in `{% autoescape off %}` |
-| `striptags` | `{{ html\|striptags }}` | Remove all HTML tags (differs from Django on malformed markup on newer CPython: [details](../core-concepts/templates.md#striptags-and-the-python-version)) |
+| `striptags` | `{{ html\|striptags }}` | Remove all HTML tags (Django's own `strip_tags`: [details](../core-concepts/templates.md#striptags-and-the-python-version)) |
 
 ---
 

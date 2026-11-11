@@ -24,10 +24,6 @@ class AsyncBatch:
         self.queued = list(getattr(owner, "_async_tasks", {}).items())
         if hasattr(owner, "_async_tasks"):
             owner._async_tasks = {}
-        pending = getattr(owner, "_async_pending", None)
-        if pending:
-            self.queued.append(("_default", pending))
-            owner._async_pending = None
         self.token = uuid4().hex if self.queued else None
         self._completion_task: asyncio.Future[None] | None = None
 

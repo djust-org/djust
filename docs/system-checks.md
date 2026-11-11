@@ -22,7 +22,6 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C014 | Config | Warning | Multi-tenant ASGI without TENANT_LIMIT_SET_CALLS |
 | C015 | Config | Error | Unknown adapter name in DJUST_CONFIG['extensions'] |
 | C016 | Config | Warning | DjangoTemplates listed before DjustTemplateBackend, no DjangoTemplates fallback for admin, or a djust-first entry lacking the admin's context processors |
-| C018 | Config | Warning | A LIVEVIEW_CONFIG key removed in 1.3 (never read) is still set |
 | C019 | Config | Error | Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (the first presence call raises `ImproperlyConfigured`) |
 | C020 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
 | C021 | Config | Error | `LIVEVIEW_CONFIG['worker_threads']` is not `None`, `False`, `True`, `"auto"` or an integer >= 0 |
@@ -77,7 +76,6 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T012 | Templates | Warning | Template with dj-* directives but no `dj-root` or `dj-view`, so the page never connects (`dj-root` accepted since #3171; every client directive covered since #3225) |
 | T013 | Templates | Warning | dj-view with empty or dynamic value |
 | T014 | Templates | Warning | Deprecated data-dj-id attribute |
-| T015 | Templates | Warning | Legacy data-djust-root / data-djust-view root attributes |
 | T017 | Templates | Warning | dj-view / dj-root on a table-section element (foster-parented to silent garbage) |
 | T018 | Templates | Warning | Template references a variable that resolves nowhere (renders blank, no error) |
 | T019 | Templates | Warning | An event binding names no browser-callable handler on its owner (ADR-037) |
@@ -87,7 +85,6 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T023 | Templates | Info | T019-T022 were skipped: no usable template engine (none configured, or it could not be built) |
 | T024 | Templates | Warning | A template an owner renders reads `is_staff`, `is_superuser` or `password` through a `user` variable; djust never serializes them |
 | T025 | Templates | Warning | `dj-view` / `dj-root` on `<html>` or `<head>`: unsupported and ignored, no live view is mounted and the page stays a plain HTTP page (`<body>` is a supported root) |
-| T027 | Templates | Warning | A JSX-style `<RustButton … />` (any `<Rust…/>`) component tag: deprecated in 1.3, a template error in 2.0.0 |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -801,25 +798,6 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: Fix the templates; or `SILENCED_SYSTEM_CHECKS = ["djust.T014"]`
 - **False positives**: None; the old attribute name is deprecated
 
-### T015 — Legacy data-djust-root / data-djust-view root attributes
-- **Severity**: Warning
-- **Method**: Regex (template scan)
-- **What it detects**: The pre-1.0 root attributes `data-djust-root` and
-  `data-djust-view`, renamed in djust 1.0 to `dj-root` / `dj-view` (the
-  `data-` prefix is no longer required). The generic T012 ("dj-* directives
-  but no dj-root or dj-view") doesn't recognise that a view IS declared when it uses the
-  deprecated spelling, so the path from symptom (the LiveView never connects
-  over WebSocket) to fix is non-obvious — T015 names the rename explicitly.
-- **Suppression**: Fix the templates (`data-djust-view` → `dj-view`,
-  `data-djust-root` → `dj-root`); or
-  `DJUST_CONFIG = {"suppress_checks": ["T015"]}`
-- **False positives**: None; the match is scoped to exactly `data-djust-root`
-  / `data-djust-view`, so other `data-djust-*` attributes
-  (`data-djust-embedded`, `data-djust-activity`, `data-djust-view-model`, …)
-  are never flagged.
-- **Scope**: Static check only — djust 1.0's runtime does not accept the
-  legacy attributes; the template must be migrated to the `dj-` spelling.
-
 ### T017 — dj-view / dj-root on a table-section element
 - **Severity**: Warning
 - **Method**: Regex (template scan)
@@ -930,23 +908,6 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   `<style>` body or a `<textarea>` is not skipped; use the `noqa` comment there.
 - **Scope**: Static check only; it does not change how the mount finds the root.
 
-### T027 — JSX-style `<Rust…/>` component tag
-- **Severity**: Warning
-- **Method**: Regex (template scan)
-- **What it detects**: A JSX-style Rust component tag such as
-  `<RustButton id="b" label="Go" />`: the name is `Rust` plus a capital letter,
-  followed by whitespace, `/` or `>`. These tags render through a Rust component
-  path that djust 2.0.0 removes (in 2.0 the tag is a template error). Rendering
-  one also emits a runtime `DeprecationWarning`; this check finds it before the
-  page is requested, as the [deprecation policy](API_STABILITY.md#how-a-deprecation-is-announced)
-  asks of template-syntax deprecations.
-- **Fix**: Render the matching `djust.components.ui` component from the view
-  instead (for `<RustButton />`, `Button`).
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T027"]}`
-- **Not reported**: A tag inside `{% verbatim %}`, or a `{# #}` / `{% comment %}`
-  comment. The renderer does not render those as a tag, so an example shown that
-  way is not a use (wrap a documentation example in `{% verbatim %}`). Line numbers
-  are those of the template.
 - **Still reported**: A tag inside an HTML comment (`<!-- ... -->`) or a `<script>`
   body. The renderer does not look at HTML context: it renders the component and
   emits the `DeprecationWarning` there too, and in 2.0 it is a template error.

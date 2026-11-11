@@ -61,11 +61,8 @@ def _global_registry_namespace() -> Iterator[None]:
     LiveView's included) they were bridged: ``Invalid filter: 'field_value'``
     for the rest of the process.
     """
-    try:
-        from djust._rust import set_registry_namespace
-    except ImportError:
-        yield
-        return
+    from djust._rust import set_registry_namespace
+
     previous = set_registry_namespace(0)
     try:
         yield
@@ -88,10 +85,8 @@ def _library_filters() -> dict:
 def _registered_globally(name: str) -> bool:
     """Whether ``name`` is a filter in the active Rust registry namespace
     (callers hold ``_global_registry_namespace``); False without Rust."""
-    try:
-        from djust._rust import registry_entry_is_local
-    except ImportError:
-        return False
+    from djust._rust import registry_entry_is_local
+
     return bool(registry_entry_is_local(name, "filter"))
 
 
@@ -123,10 +118,8 @@ def _restore_missing_bridged_filters() -> None:
     only after the registry moved.
     """
     global _BRIDGED_AT_GENERATION
-    try:
-        from djust._rust import registry_generation
-    except ImportError:
-        return
+    from djust._rust import registry_generation
+
     generation = registry_generation()
     if generation == _BRIDGED_AT_GENERATION:
         return
@@ -298,8 +291,7 @@ def register_django_filter(
     """Forward a single Django filter callable to the Rust filter registry.
 
     Returns ``True`` if the filter was registered, ``False`` if skipped
-    (e.g. because the name is a built-in or the Rust extension isn't
-    available in this environment).
+    (e.g. because the name is a built-in).
 
     :param name: filter name as used in templates (``{{ x|name }}``).
     :param callable_obj: the Django filter callable
@@ -321,14 +313,7 @@ def register_django_filter(
         is_safe = attr_safe if is_safe is None else is_safe
         needs_autoescape = attr_ae if needs_autoescape is None else needs_autoescape
 
-    try:
-        from djust._rust import register_custom_filter
-    except ImportError:
-        logger.warning(
-            "djust._rust extension not available; custom filter '%s' will not work in Rust render",
-            name,
-        )
-        return False
+    from djust._rust import register_custom_filter
 
     register_custom_filter(name, callable_obj, is_safe, needs_autoescape)
     return True

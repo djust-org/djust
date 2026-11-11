@@ -16,8 +16,7 @@
 //!   the flag).
 //! - **The feature** (`liveview`, default on) gates compilation. Without it the
 //!   helper the `Node::If` arm consults is a constant `false`, so even a
-//!   default `Context` emits nothing, and `<RustX …/>` components are a
-//!   `TemplateError`.
+//!   default `Context` emits nothing.
 //!
 //! The default-`Context` tests are the LiveView pin: with the feature on, the
 //! bytes must be byte-identical to today's (the expected strings are lifted
@@ -444,17 +443,11 @@ mod feature_on_default_context {
             "got {rendered:?}"
         );
     }
-
-    #[test]
-    fn rust_component_renders_with_the_feature() {
-        let out = render("<RustButton id=\"a\" label=\"b\"/>", &ctx_with(&[]));
-        assert!(out.contains("<button"), "got {out:?}");
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Without the feature: the engine is the plain Django backend. A DEFAULT
-// `Context` emits nothing and `<RustX …/>` is a template error.
+// `Context` emits nothing.
 // ---------------------------------------------------------------------------
 
 #[cfg(not(feature = "liveview"))]
@@ -476,15 +469,17 @@ mod feature_off {
             ""
         );
     }
+}
 
-    #[test]
-    fn rust_component_is_a_template_error_without_the_feature() {
-        let t = Template::new("<RustButton id=\"a\" label=\"b\"/>").expect("parses");
-        let err = t.render(&ctx_with(&[])).expect_err("must not render");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("liveview"),
-            "error should name the feature: {msg}"
-        );
+// `<RustX …/>` tags were removed in 2.0. With or without the feature they are
+// a parse error that says so, not a React placeholder.
+#[test]
+fn rust_component_tag_is_a_parse_error() {
+    match Template::new("<RustButton id=\"a\" label=\"b\"/>") {
+        Ok(_) => panic!("<RustButton/> must not parse"),
+        Err(err) => {
+            let msg = err.to_string();
+            assert!(msg.contains("removed in djust 2.0"), "got {msg}");
+        }
     }
 }

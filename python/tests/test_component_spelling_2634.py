@@ -9,9 +9,9 @@ the prose):
    #1947/#1952).
 2. Through a LiveView's HTTP GET, ``{{ c }}`` and ``{{ c.render }}`` land
    byte-identical in the page.
-3. With ``LIVEVIEW_CONFIG['template_auto_call'] = False``, ``{{ c }}`` still
-   renders while ``{{ c.render }}`` degrades to the bound-method repr — the
-   reason ``{{ c }}`` is what the docs teach.
+
+(A third claim, about ``LIVEVIEW_CONFIG['template_auto_call'] = False``, went
+with that kill switch in 2.0.)
 """
 
 from __future__ import annotations
@@ -129,28 +129,3 @@ class TestLiveViewGetDifferential:
         bare, dotted = _slot(html, "bare"), _slot(html, "dotted")
         assert "via-get" in bare, f"{{{{ c }}}} rendered nothing useful: {bare!r}"
         assert bare == dotted, f"{{{{ c }}}} != {{{{ c.render }}}}:\n{bare!r}\n{dotted!r}"
-
-
-class TestAutoCallOffIsWhyBareIsCanonical:
-    def test_bare_survives_but_dotted_degrades(self, monkeypatch):
-        from djust import config as djust_config
-        from djust.template import DjustTemplateBackend
-
-        class _Cfg:
-            def get(self, key, default=None):
-                return False if key == "template_auto_call" else default
-
-        monkeypatch.setattr(djust_config, "get_config", lambda: _Cfg())
-        backend = DjustTemplateBackend(
-            params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}
-        )
-
-        def render(source: str) -> str:
-            return backend.from_string(source).render(context={"c": Box("off")}, request=None)
-
-        assert "off" in render("{{ c|safe }}")
-        assert "bound method" in render("{{ c.render|safe }}")
-        # Non-vacuity: with the default config the dotted form renders markup.
-        monkeypatch.undo()
-        assert render("{{ c.render|safe }}") == render("{{ c|safe }}")
-        assert "bound method" not in render("{{ c.render|safe }}")

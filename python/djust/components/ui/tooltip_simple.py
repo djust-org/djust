@@ -11,14 +11,7 @@ from django.utils.html import conditional_escape
 from typing import Any
 
 
-# Try to import Rust implementation
-try:
-    from djust._rust import RustTooltip  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except (ImportError, AttributeError):
-    _RUST_AVAILABLE = False
-    RustTooltip = None  # type: ignore[assignment, misc]
+from djust._rust import RustTooltip
 
 
 class Tooltip(Component):
@@ -73,8 +66,8 @@ class Tooltip(Component):
         icon_tip = Tooltip('<i class="bi bi-info-circle"></i>', text="Help information")
     """
 
-    # Link to Rust implementation if available
-    _rust_impl_class = RustTooltip if _RUST_AVAILABLE else None
+    # The Rust implementation
+    _rust_impl_class = RustTooltip
 
     # Fallback: Hybrid rendering with template
     # Using Bootstrap 5 tooltip structure with data attributes

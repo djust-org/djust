@@ -102,7 +102,9 @@ def record_child_mount_inputs(child: Any, mount_inputs: dict[str, Any]) -> None:
     child._explicit_child_schema = ExposureContract.from_view_class(type(child)).schema
 
 
-def child_event_adapter(child: Any, root: Any, request: Any) -> "ChildStateSession | None":
+def child_event_adapter(
+    child: Any, root: Any, request: Any, *, require_delivered: bool = False
+) -> "ChildStateSession | None":
     """Resolve a mounted child only through current ownership and mount binding."""
     try:
         if request is None:
@@ -118,6 +120,20 @@ def child_event_adapter(child: Any, root: Any, request: Any) -> "ChildStateSessi
             registry = getattr(parent, "_child_views", None)
             if type(registry) is not dict or registry.get(slot) is not current:
                 raise ExposureError("Child event owner is not registered")
+            if require_delivered and getattr(parent, "_explicit_child_vdom_tracking", False):
+                bindings = getattr(parent, "_explicit_child_vdom_bindings", None)
+                regions = getattr(parent, "_explicit_child_render_regions", None)
+                shell = regions.get(slot) if type(regions) is dict else None
+                known_shell = (
+                    type(shell) is tuple
+                    and len(shell) == 2
+                    and shell[0] is current
+                    and shell[1] == "shell"
+                )
+                if type(bindings) is not dict or (
+                    not known_shell and not any(bound is current for bound in bindings.values())
+                ):
+                    raise ExposureError("Child event owner has no delivered binding")
             current = parent
         contract = ExposureContract.from_view_class(type(child))
         if contract.schema != getattr(child, "_explicit_child_schema", None):

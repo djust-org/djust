@@ -140,9 +140,6 @@ BREAKOUT = 'md" onclick="alert(1)" x="'
 @pytest.fixture(autouse=True)
 def _bootstrap(settings, monkeypatch):
     settings.DJUST_CONFIG = {"css_framework": "bootstrap5"}
-    # Auto-call is the project's setting, read by the engine call and by `slot_text`; another test
-    # that leaves the global config switched off must not decide what these tests exercise.
-    monkeypatch.setattr("djust.config.template_auto_call_enabled", lambda: True)
 
 
 class TestTheIssue:

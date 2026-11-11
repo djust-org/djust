@@ -599,8 +599,7 @@ describe('#2721 — a sibling mount is not a view-replacement boundary', () => {
      * `case 'mount'` is the reply to EVERY mount request on the socket, not
      * only the page view's. `13-lazy-hydration.js` mounts each `dj-lazy`
      * element through `liveViewWS.mount()` on the SAME socket by design
-     * (`:146`), and so do `hydrateAll()` and the `mount_batch` fallback
-     * (#1031). Resetting the whole client config on any of those wiped the
+     * (`:146`), and so does `hydrateAll()`. Resetting the whole client config on any of those wiped the
      * PAGE view's `@debounce` / `@throttle` / `@cache` gate and its optimistic
      * rules — silently, with no error and no warning.
      *

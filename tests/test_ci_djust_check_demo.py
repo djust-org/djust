@@ -7,7 +7,7 @@ SYNTHETIC ``djust_check --json`` payloads straight into the extracted
 ``evaluate()`` decision function so BOTH gate arms run end-to-end:
 
   * error-severity finding            -> exit 1 (error arm)
-  * deprecated-attr T001/T014/T015    -> exit 1 (deprecated-attr ID-set arm)
+  * deprecated-attr T001/T014        -> exit 1 (deprecated-attr ID-set arm)
   * clean (benign warnings/info only) -> exit 0
 
 This synthetic-error-trigger IS the empirical canary (#252) for the
@@ -85,16 +85,6 @@ def test_deprecated_t014_blocks():
     payload = _payload(
         [
             _check("djust.T014", "warning", "deprecated data-dj-id attribute"),
-        ]
-    )
-    assert evaluate(payload) == 1
-
-
-def test_deprecated_t015_blocks():
-    """A T015 legacy-root-attribute finding at warning severity fails (ID-set arm)."""
-    payload = _payload(
-        [
-            _check("djust.T015", "warning", "legacy root attribute"),
         ]
     )
     assert evaluate(payload) == 1

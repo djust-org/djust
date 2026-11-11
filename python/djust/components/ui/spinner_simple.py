@@ -33,14 +33,7 @@ from ..base import Component
 from django.utils.html import conditional_escape
 from typing import Any
 
-# Try to import Rust implementation
-try:
-    from djust._rust import RustSpinner  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
-    RustSpinner = None  # type: ignore[assignment, misc]
+from djust._rust import RustSpinner
 
 
 class Spinner(Component):
@@ -59,7 +52,7 @@ class Spinner(Component):
         sr_text: Screen reader text for accessibility
     """
 
-    _rust_impl_class = RustSpinner if _RUST_AVAILABLE else None
+    _rust_impl_class = RustSpinner
 
     # Template for hybrid rendering
     template = """<div class="spinner-{{ animation }} text-{{ variant }}{% if size == "sm" %} spinner-{{ animation }}-sm{% endif %}" role="status">

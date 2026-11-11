@@ -31,7 +31,6 @@ async def setup(full_html=False, view_class=ContractView):
         view._rust_view.reset()
     consumer = LiveViewConsumer()
     consumer.view_instance = view
-    consumer.use_binary = False
     consumer.send_json = AsyncMock()
     consumer.send_error = AsyncMock()
     consumer._flush_all_pending = AsyncMock()
@@ -270,16 +269,6 @@ async def test_real_debug_error_is_redacted(source, monkeypatch, settings, caplo
     assert frame["source"] == "async"
     assert "traceback" not in frame
     assert "SECRET_CONTRACT_FAILURE" not in json.dumps(frame) + caplog.text
-
-
-@pytest.mark.asyncio
-async def test_strict_background_uses_json_envelope_even_with_binary_transport():
-    consumer, _, _ = await setup()
-    consumer.use_binary = True
-    consumer._send_frame = AsyncMock()
-    await produce(consumer, "tick")
-    consumer._send_frame.assert_not_awaited()
-    assert consumer.send_json.call_args.args[0]["parameter_contracts"] is not None
 
 
 @pytest.mark.asyncio

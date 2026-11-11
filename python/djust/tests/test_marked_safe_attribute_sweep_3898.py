@@ -77,16 +77,6 @@ from scripts.lib.template_library_parity import harness, url_sweep
 pytestmark = pytest.mark.components
 
 
-@pytest.fixture(autouse=True, scope="module")
-def _auto_call_on():
-    """Auto-call is the project's setting. The claims that are callables are only a claim while
-    the engine calls what it is given (it prints a function's repr otherwise), so another test
-    that leaves the global config switched off must not decide what this module exercises."""
-    with pytest.MonkeyPatch.context() as patch_:
-        patch_.setattr("djust.config.template_auto_call_enabled", lambda: True)
-        yield
-
-
 ROOT = Path(__file__).resolve().parents[3]
 
 

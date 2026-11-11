@@ -1105,16 +1105,6 @@ class TestC012ManualClientJs:
 # ---------------------------------------------------------------------------
 
 
-def _liveview_available():
-    """Return True if LiveView can be imported (Rust extension built)."""
-    try:
-        from djust.live_view import LiveView  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
-
 def _force_gc():
     """Force garbage collection to clean up dynamically created subclasses."""
     import gc
@@ -1218,10 +1208,6 @@ class TestV001MissingTemplateName:
 
     def test_v001_no_template_name(self):
         """V001 fires for a LiveView subclass missing template_name."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1238,10 +1224,6 @@ class TestV001MissingTemplateName:
 
     def test_v001_passes_with_template_name(self):
         """V001 should not fire when template_name is present."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1266,10 +1248,6 @@ class TestV002MissingMount:
 
     def test_v002_no_mount(self):
         """V002 fires for a LiveView subclass without mount()."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1290,10 +1268,6 @@ class TestV002MissingMount:
 
     def test_v002_passes_with_mount(self):
         """V002 should not fire when mount() is defined."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1321,10 +1295,6 @@ class TestV003MountSignature:
 
     def test_v003_mount_missing_request_param(self):
         """V003 fires when mount() does not accept 'request' as second param."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1348,10 +1318,6 @@ class TestV003MountSignature:
 
     def test_v003_mount_wrong_second_param_name(self):
         """V003 fires when second param is not named 'request'."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1375,10 +1341,6 @@ class TestV003MountSignature:
 
     def test_v003_passes_correct_signature(self):
         """V003 should not fire when mount(self, request, **kwargs) is correct."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1406,10 +1368,6 @@ class TestV004MissingEventHandlerDecorator:
 
     def test_v004_handler_like_prefix_without_decorator(self):
         """V004 fires for a submit_* method without @event_handler."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1443,10 +1401,6 @@ class TestV004MissingEventHandlerDecorator:
         """#3002: an undecorated handle_* method is the server-push-only
         pattern (server_push calls it; browsers cannot). Both V004 fixes
         break it, so V004 does not flag handle_*."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1478,10 +1432,6 @@ class TestV004MissingEventHandlerDecorator:
 
     def test_v004_passes_with_decorator(self):
         """V004 should not fire for a properly decorated method."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.decorators import event_handler
@@ -1515,10 +1465,6 @@ class TestV004MissingEventHandlerDecorator:
 
     def test_v004_private_method_ignored(self):
         """V004 should not fire for _private methods."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1554,10 +1500,6 @@ class TestV005AllowedModules:
 
     def test_v005_module_not_allowed(self, settings):
         """V005 fires when module is not in LIVEVIEW_ALLOWED_MODULES."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1584,10 +1526,6 @@ class TestV005AllowedModules:
 
     def test_v005_module_allowed(self, settings):
         """V005 should not fire when module is in LIVEVIEW_ALLOWED_MODULES."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1613,10 +1551,6 @@ class TestV005AllowedModules:
 
     def test_v005_no_setting_configured(self, settings):
         """V005 should not fire when LIVEVIEW_ALLOWED_MODULES is not set."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1653,10 +1587,6 @@ class TestS005UnauthenticatedViews:
 
     def test_s005_fires_when_auth_not_addressed(self):
         """S005 fires when neither login_required nor permission_required is set."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_configuration
@@ -1684,10 +1614,6 @@ class TestS005UnauthenticatedViews:
 
     def test_s005_suppressed_with_login_required_true(self):
         """S005 should not fire when login_required = True."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_configuration
@@ -1716,10 +1642,6 @@ class TestS005UnauthenticatedViews:
 
     def test_s005_suppressed_with_login_required_false(self):
         """S005 should not fire when login_required = False (intentionally public)."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_configuration
@@ -2719,10 +2641,6 @@ class TestV007Retired:
     encouraged, not suspicious. The ID is never emitted and never reused."""
 
     def test_closed_legacy_signature_is_not_reported(self):
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.decorators import event_handler
@@ -4128,10 +4046,6 @@ class TestV004LifecycleMethods:
     """V004 must not fire on known djust lifecycle methods."""
 
     def _make_view_with_methods(self, method_names):
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -4295,335 +4209,6 @@ class TestT013TemplateVariableDjView:
         assert len(t013) == 1
 
 
-class TestT015LegacyRootAttrs:
-    """T015 must detect the pre-1.0 legacy root attributes
-    ``data-djust-root`` / ``data-djust-view`` and emit a migration hint."""
-
-    def _set_templates(self, tpl_dir, settings):
-        settings.TEMPLATES = [
-            {
-                "DIRS": [str(tpl_dir)],
-                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
-            }
-        ]
-
-    def test_t015_fires_for_legacy_data_djust_view(self, tmp_path, settings):
-        """A template using data-djust-view must trigger exactly one T015."""
-        tpl_dir = tmp_path / "templates"
-        tpl_dir.mkdir()
-        (tpl_dir / "foo.html").write_text(
-            '<div data-djust-root data-djust-view="app.views.MyView"></div>'
-        )
-        self._set_templates(tpl_dir, settings)
-
-        from djust.checks import check_templates
-
-        errors = check_templates(None)
-        t015 = [e for e in errors if e.id == "djust.T015"]
-        # One finding per legacy attr occurrence (root + view).
-        assert len(t015) == 2
-        attrs = {e.msg for e in t015}
-        assert any("data-djust-view" in m for m in attrs)
-        assert any("data-djust-root" in m for m in attrs)
-
-    def test_t015_fires_for_legacy_data_djust_root_only(self, tmp_path, settings):
-        """data-djust-root on its own must trigger T015."""
-        tpl_dir = tmp_path / "templates"
-        tpl_dir.mkdir()
-        (tpl_dir / "bar.html").write_text("<div data-djust-root>content</div>")
-        self._set_templates(tpl_dir, settings)
-
-        from djust.checks import check_templates
-
-        errors = check_templates(None)
-        t015 = [e for e in errors if e.id == "djust.T015"]
-        assert len(t015) == 1
-        assert "data-djust-root" in t015[0].msg
-
-    def test_t015_migration_hint_names_the_rename(self, tmp_path, settings):
-        """The hint must explicitly name the dj-view / dj-root rename."""
-        tpl_dir = tmp_path / "templates"
-        tpl_dir.mkdir()
-        (tpl_dir / "foo.html").write_text('<div data-djust-view="app.views.V"></div>')
-        self._set_templates(tpl_dir, settings)
-
-        from djust.checks import check_templates
-
-        errors = check_templates(None)
-        t015 = [e for e in errors if e.id == "djust.T015"]
-        assert len(t015) == 1
-        hint = t015[0].hint
-        assert "dj-view" in hint
-        assert "dj-root" in hint
-        assert "data-" in hint
-
-    def test_t015_reports_relpath_attr_and_line(self, tmp_path, settings):
-        """The message must include the file relpath, the offending attr, and the line number."""
-        tpl_dir = tmp_path / "templates"
-        tpl_dir.mkdir()
-        (tpl_dir / "page.html").write_text(
-            '<html>\n<body>\n<div data-djust-view="app.views.V"></div>\n</body>\n</html>'
-        )
-        self._set_templates(tpl_dir, settings)
-
-        from djust.checks import check_templates
-
-        errors = check_templates(None)
-        t015 = [e for e in errors if e.id == "djust.T015"]
-        assert len(t015) == 1
-        e = t015[0]
-        assert "page.html" in e.msg
-        assert "data-djust-view" in e.msg
-        # data-djust-view is on the third line.
-        assert ":3" in e.msg
-        assert e.line_number == 3
-
-    def test_t015_passes_for_modern_dj_view_dj_root(self, tmp_path, settings):
-        """Modern dj-view / dj-root must NOT trigger T015."""
-        tpl_dir = tmp_path / "templates"
-        tpl_dir.mkdir()
-        (tpl_dir / "modern.html").write_text('<div dj-root dj-view="app.views.MyView"></div>')
-        self._set_templates(tpl_dir, settings)
-
-        from djust.checks import check_templates
-
-        errors = check_templates(None)
-        t015 = [e for e in errors if e.id == "djust.T015"]
-        assert len(t015) == 0
-
-    def test_t015_does_not_false_match_other_data_djust_attrs(self, tmp_path, settings):
-        """Other legitimate data-djust-* attributes (and longer suffixes of
-        root/view) must NOT trigger T015."""
-        tpl_dir = tmp_path / "templates"
-        tpl_dir.mkdir()
-        (tpl_dir / "ok.html").write_text(
-            "<div data-djust-embedded data-djust-activity "
-            'data-djust-view-model="x" data-djust-rooted></div>'
-        )
-        self._set_templates(tpl_dir, settings)
-
-        from djust.checks import check_templates
-
-        errors = check_templates(None)
-        t015 = [e for e in errors if e.id == "djust.T015"]
-        assert len(t015) == 0, (
-            "T015 must scope to exactly data-djust-root / data-djust-view, "
-            "not other data-djust-* attributes or longer suffixes"
-        )
-
-    def test_t015_suppressed_via_suppress_checks(self, tmp_path, settings):
-        """Suppression via DJUST_CONFIG suppress_checks must silence T015."""
-        tpl_dir = tmp_path / "templates"
-        tpl_dir.mkdir()
-        (tpl_dir / "foo.html").write_text(
-            '<div data-djust-root data-djust-view="app.views.V"></div>'
-        )
-        self._set_templates(tpl_dir, settings)
-        settings.DJUST_CONFIG = {"suppress_checks": ["T015"]}
-
-        from djust.checks import check_templates
-
-        errors = check_templates(None)
-        t015 = [e for e in errors if e.id == "djust.T015"]
-        assert len(t015) == 0
-
-
-class TestT027RustJsxTags:
-    """T027: a JSX-style ``<Rust.../>`` component tag is deprecated (1.4)."""
-
-    def _run(self, tmp_path, settings, html, **config):
-        tpl_dir = tmp_path / "templates"
-        tpl_dir.mkdir()
-        (tpl_dir / "page.html").write_text(html)
-        settings.TEMPLATES = [
-            {
-                "DIRS": [str(tpl_dir)],
-                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
-            }
-        ]
-        if config:
-            settings.DJUST_CONFIG = config
-
-        from djust.checks import check_templates
-
-        return [e for e in check_templates(None) if e.id == "djust.T027"]
-
-    def test_fires_for_a_self_closing_tag_with_the_line_and_name(self, tmp_path, settings):
-        found = self._run(tmp_path, settings, '<div>\n  <RustButton id="b" label="Go" />\n</div>\n')
-        assert len(found) == 1
-        assert "page.html:2" in found[0].msg
-        assert "<RustButton />" in found[0].msg
-        assert "2.0.0" in found[0].msg
-        assert "djust.components.ui" in found[0].hint
-
-    def test_fires_once_per_tag(self, tmp_path, settings):
-        found = self._run(
-            tmp_path, settings, '<RustInput id="a"/><RustText content="x"></RustText>'
-        )
-        assert [e.msg.split("'")[1] for e in found] == ["<RustInput />", "<RustText />"]
-
-    def test_does_not_flag_look_alike_markup(self, tmp_path, settings):
-        found = self._run(
-            tmp_path,
-            settings,
-            "<Rusty>a</Rusty><Rust>b</Rust><rustButton/><div>Rust</div><RustButton-like>x</RustButton-like>",
-        )
-        assert found == []
-
-    def test_is_suppressed_via_suppress_checks(self, tmp_path, settings):
-        found = self._run(
-            tmp_path, settings, '<RustButton id="b" label="Go" />', suppress_checks=["T027"]
-        )
-        assert found == []
-
-    def test_is_a_warning_not_an_error_or_info(self, tmp_path, settings):
-        """The tag still works in 1.x: Warning. In 2.0 it is a template error, which
-        is the runtime's job, not this check's (#3691)."""
-        from django.core import checks as django_checks
-
-        (found,) = self._run(tmp_path, settings, '<RustButton id="b" />')
-        assert found.level == django_checks.WARNING
-
-    @staticmethod
-    def _names(found):
-        return [(e.msg.split("'")[1].strip("<> /"), e.line_number) for e in found]
-
-    def test_an_example_in_a_verbatim_block_is_documentation_not_a_use(self, tmp_path, settings):
-        """``{% verbatim %}`` is how a template shows the tag as text: the renderer
-        never lexes it as a component, so it is not a use (#3691)."""
-        html = (
-            "{% verbatim %}\n<RustButton id='a' />\n{% endverbatim %}\n<RustCard id=\"real\" />\n"
-        )
-        assert self._names(self._run(tmp_path, settings, html)) == [("RustCard", 4)]
-
-    def test_an_example_in_a_template_comment_is_not_a_use(self, tmp_path, settings):
-        html = (
-            "{# <RustButton id='a' /> #}\n"
-            "{% comment %}\n<RustInput id='b' />\n{% endcomment %}\n"
-            '<RustCard id="real" />\n'
-        )
-        assert self._names(self._run(tmp_path, settings, html)) == [("RustCard", 5)]
-
-    def test_a_tag_in_an_html_comment_or_script_body_is_still_a_use(self, tmp_path, settings):
-        """The renderer's lexer is blind to HTML context, so these ARE rendered and
-        warned about (and are a template error in 2.0): reporting them is correct, and
-        skipping them would let a project pass T027 and break on upgrade (#3691)."""
-        html = (
-            "<!-- <RustButton id='a' /> -->\n"
-            "<script>var s = \"<RustInput id='b' />\";</script>\n"
-            '<RustCard id="real" />\n'
-        )
-        assert self._names(self._run(tmp_path, settings, html)) == [
-            ("RustButton", 1),
-            ("RustInput", 2),
-            ("RustCard", 3),
-        ]
-
-    def test_line_numbers_survive_the_blanking(self, tmp_path, settings):
-        """A verbatim block and a template comment that span lines must not shift the
-        lines of the tags after them."""
-        html = (
-            "{% verbatim %}\n\n{% endverbatim %}\n{% comment %}\n\n{% endcomment %}\n"
-            "<RustA />\n\n<RustB />\n"
-        )
-        assert self._names(self._run(tmp_path, settings, html)) == [("RustA", 7), ("RustB", 9)]
-
-    @pytest.mark.parametrize(
-        "html",
-        [
-            "<RustButton id='a' label='x' />",
-            "{% verbatim %}<RustButton id='a' label='x' />{% endverbatim %}",
-            "{# <RustButton id='a' label='x' /> #}",
-            "{% comment %}<RustButton id='a' label='x' />{% endcomment %}",
-            "<!-- <RustButton id='a' label='x' /> -->",
-            "<script>var s = \"<RustButton id='a' label='x' />\";</script>",
-            "<!-- {% verbatim %} --><RustButton id='a' label='x' /><!-- {% endverbatim %} -->",
-            "{% verbatim %}<RustButton id='a' />{% endverbatim %}<RustButton id='b' label='y' />",
-        ],
-        ids=[
-            "plain",
-            "verbatim",
-            "template-comment",
-            "comment-block",
-            "html-comment",
-            "script-body",
-            "verbatim-markers-in-html-comments",
-            "verbatim-then-real",
-        ],
-    )
-    def test_the_check_flags_exactly_the_tags_the_renderer_warns_about(
-        self, tmp_path, settings, html
-    ):
-        """A differential against the real renderer, so the check cannot drift from
-        what it is a check for: the tags T027 reports are the tags that make the
-        renderer emit its ``DeprecationWarning`` (#3691)."""
-        import re
-        import warnings
-
-        from djust import _rust
-
-        with warnings.catch_warnings(record=True) as record:
-            warnings.simplefilter("always")
-            try:
-                _rust.render_template(html, {})
-            except Exception:  # noqa: BLE001 - a render error after the warning is irrelevant here
-                pass
-        warned = sorted(
-            re.search(r"`<(Rust\w+) />`", str(w.message)).group(1)
-            for w in record
-            if issubclass(w.category, DeprecationWarning) and "JSX-style" in str(w.message)
-        )
-        flagged = sorted(name for name, _line in self._names(self._run(tmp_path, settings, html)))
-        assert flagged == warned, html
-
-    def test_the_line_count_reads_the_template_once_not_once_per_tag(self, monkeypatch):
-        """Linear in the template, asserted without a clock (#3691).
-
-        Reporting a tag at line N needs the newlines before it. Counting them from the
-        start for every tag reads ~n/2 characters per tag: the characters read grow
-        with the square of the template. The scan text is a ``str`` that tallies the
-        characters read through ``count`` and slicing; quadrupling the template (and
-        its tags) must roughly quadruple the tally, not grow it sixteen-fold.
-        """
-        from djust.checks import templates as templates_module
-
-        class Spy(str):
-            reads = 0
-
-            @classmethod
-            def _span(cls, size, start, stop):
-                return len(range(*slice(start, stop).indices(size)))
-
-            def count(self, sub, start=None, end=None):
-                Spy.reads += self._span(len(self), start, end)
-                return str.count(self, sub, start, end)
-
-            def __getitem__(self, key):
-                if isinstance(key, slice):
-                    Spy.reads += self._span(len(self), key.start, key.stop)
-                return str.__getitem__(self, key)
-
-        real = templates_module._strip_verbatim_blocks
-        monkeypatch.setattr(
-            templates_module, "_strip_verbatim_blocks", lambda content: Spy(real(content))
-        )
-
-        def reads_for(tags):
-            Spy.reads = 0
-            text = "".join(
-                '<div class="row">\n<RustButton id="b%d" />\n</div>\n' % i for i in range(tags)
-            )
-            errors: list = []
-            templates_module._check_rust_jsx_tags(text, "page.html", "/tmp/page.html", errors)
-            assert len(errors) == tags  # every tag still reported
-            assert errors[-1].line_number == 3 * tags - 1  # on the right line
-            return Spy.reads
-
-        small, large = reads_for(1000), reads_for(4000)
-        assert small > 0, "the check no longer reads the scan text through the spy"
-        assert large < 6 * small, (small, large)  # linear ~4x; the per-tag count is ~16x
-
-
 # ---------------------------------------------------------------------------
 # V008 — primitive return type annotation suppresses warning (issue #393)
 # ---------------------------------------------------------------------------
@@ -4735,10 +4320,6 @@ class TestV009OnMountValidation:
 
     def test_v009_non_list_on_mount(self):
         """V009 fires when on_mount is not a list."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -4767,10 +4348,6 @@ class TestV009OnMountValidation:
 
     def test_v009_non_callable_item(self):
         """V009 fires when on_mount list contains a non-callable."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -4799,10 +4376,6 @@ class TestV009OnMountValidation:
 
     def test_v009_valid_on_mount_no_warning(self):
         """V009 should not fire for a valid on_mount list of callables."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.hooks import on_mount

@@ -1,0 +1,1 @@
+- **Template partials:** Revalidate ordinary prepared-page roots after wrapper and client processing before committing their diff baseline, preserving authored root and model-binding provenance during normalization.

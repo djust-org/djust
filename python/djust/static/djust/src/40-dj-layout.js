@@ -4,7 +4,7 @@
 // Handles the {"type": "layout", "path": ..., "html": ...} WebSocket
 // frame emitted by LayoutMixin.set_layout(). Swaps the document body
 // with the new layout while physically moving the live
-// [dj-root] / [data-djust-root] element into the new layout's
+// [dj-root] element into the new layout's
 // root-shaped slot — preserving all inner LiveView state (form values,
 // scroll position, focused element, dj-hook bookkeeping, third-party
 // widget instances hanging off live nodes).
@@ -17,29 +17,16 @@
 //     stylesheets or scripts, add them to the original layout's <head>.
 //   - Dispatches djust:layout-changed on document for app-level hooks.
 
-// The pre-1.0 [data-djust-root] marker warns once per page (removed in 2.0.0).
-let _legacyRootWarned = false;
-
 function _findRoot(scope) {
     // Sticky LiveViews (Phase B): exclude [dj-sticky-root] wrappers so
     // a sticky child embedded via {% live_render ... sticky=True %}
     // does not masquerade as the layout root. Sticky subtrees carry
     // [dj-sticky-root] on their outermost [dj-view]; the parent view's
     // [dj-root] is always outside of them.
-    const root = (
-        scope.querySelector('[data-djust-root]:not([dj-sticky-root])')
-        || scope.querySelector('[dj-root]:not([dj-sticky-root])')
-        || scope.querySelector('[data-djust-root]')
+    return (
+        scope.querySelector('[dj-root]:not([dj-sticky-root])')
         || scope.querySelector('[dj-root]')
     );
-    if (root && !_legacyRootWarned && root.hasAttribute('data-djust-root') && !root.hasAttribute('dj-root')) {
-        _legacyRootWarned = true;
-        console.warn(
-            '[djust:layout] The data-djust-root marker is deprecated and removed in djust 2.0.0. ' +
-            'Use dj-root instead.'
-        );
-    }
-    return root;
 }
 
 function _applyLayout(payload) {
@@ -59,7 +46,7 @@ function _applyLayout(payload) {
     const currentRoot = _findRoot(document);
     if (!newRoot || !currentRoot) {
         console.warn(
-            '[djust:layout] could not locate dj-root / data-djust-root in ' +
+            '[djust:layout] could not locate dj-root in ' +
             (newRoot ? 'current document' : 'incoming layout') + '; ignoring swap'
         );
         return;

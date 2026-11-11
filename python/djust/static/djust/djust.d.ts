@@ -140,6 +140,8 @@ interface DjustHook {
    * Use this to re-initialize or update third-party widgets with new data.
    */
   updated?(this: DjustHookContext & this): void;
+  /** Return false synchronously to skip updated(); errors fail open. */
+  shouldUpdate?(this: DjustHookContext & this): boolean | void;
 
   /**
    * Called when the element is removed from the DOM.

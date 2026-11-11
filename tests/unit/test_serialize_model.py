@@ -135,48 +135,6 @@ class TestSerializeModelSafelyShallowRepr:
 
 
 # ---------------------------------------------------------------------------
-# Path 3: _jit_serialize_model() with JIT_AVAILABLE=False
-# ---------------------------------------------------------------------------
-
-
-class TestJitSerializeModelNoJit:
-    """When JIT is unavailable, _jit_serialize_model returns native-type id and pk."""
-
-    def test_fallback_id_is_native_int(self, monkeypatch):
-        import djust.template.rendering as rendering_module
-        from djust.template.rendering import DjustTemplate
-
-        monkeypatch.setattr(rendering_module, "JIT_AVAILABLE", False)
-        monkeypatch.setattr(rendering_module, "DjangoJSONEncoder", None)
-
-        tmpl = object.__new__(DjustTemplate)
-
-        obj = _make_obj(42)
-        result = tmpl._jit_serialize_model(obj, "todo")
-
-        assert result["id"] == 42
-        assert isinstance(result["id"], int), (
-            f"Expected int for JIT-fallback 'id', got {type(result['id']).__name__!r}"
-        )
-
-    def test_fallback_pk_present_and_native_int(self, monkeypatch):
-        import djust.template.rendering as rendering_module
-        from djust.template.rendering import DjustTemplate
-
-        monkeypatch.setattr(rendering_module, "JIT_AVAILABLE", False)
-        monkeypatch.setattr(rendering_module, "DjangoJSONEncoder", None)
-
-        tmpl = object.__new__(DjustTemplate)
-
-        obj = _make_obj(42)
-        result = tmpl._jit_serialize_model(obj, "todo")
-
-        assert "pk" in result
-        assert result["pk"] == 42
-        assert isinstance(result["pk"], int)
-
-
-# ---------------------------------------------------------------------------
 # Path 4: _jit_serialize_model() serialization-error fallback
 # ---------------------------------------------------------------------------
 
@@ -187,14 +145,10 @@ class TestJitSerializeModelErrorFallback:
     def test_error_fallback_id_is_native_int(self, monkeypatch):
         import djust.template.rendering as rendering_module
         from djust.template.rendering import DjustTemplate
-        from djust.serialization import DjangoJSONEncoder as _RealEncoder
 
         def _raise(*args, **kwargs):
             raise RuntimeError("simulated serialization error")
 
-        # Ensure the JIT branch is entered (not the early-exit fallback)
-        monkeypatch.setattr(rendering_module, "JIT_AVAILABLE", True)
-        monkeypatch.setattr(rendering_module, "DjangoJSONEncoder", _RealEncoder)
         monkeypatch.setattr(rendering_module, "normalize_django_value", _raise)
 
         tmpl = object.__new__(DjustTemplate)
@@ -210,13 +164,10 @@ class TestJitSerializeModelErrorFallback:
     def test_error_fallback_pk_present_and_native_int(self, monkeypatch):
         import djust.template.rendering as rendering_module
         from djust.template.rendering import DjustTemplate
-        from djust.serialization import DjangoJSONEncoder as _RealEncoder
 
         def _raise(*args, **kwargs):
             raise RuntimeError("simulated serialization error")
 
-        monkeypatch.setattr(rendering_module, "JIT_AVAILABLE", True)
-        monkeypatch.setattr(rendering_module, "DjangoJSONEncoder", _RealEncoder)
         monkeypatch.setattr(rendering_module, "normalize_django_value", _raise)
 
         tmpl = object.__new__(DjustTemplate)

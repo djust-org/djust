@@ -177,6 +177,13 @@ def django_render(source: str, ctx: dict) -> str:
 ENGINES = [
     pytest.param(plain_render, id="DjustTemplateBackend"),
     pytest.param(raw_render, id="render_template"),
+]
+
+# djust 2.0: a LiveView refuses to include ANY template object it cannot prove is a stock,
+# built-in-only Django template (``template/operands.py::is_safe_dynamic_template_object``), so
+# on these three entries an object with its own ``render`` never reaches the #3815 guard: the
+# render fails before the method is read. Stricter than the guard, and still "not called".
+LIVE_ENGINES = [
     pytest.param(rust_live_view_render, id="RustLiveView"),
     pytest.param(liveview_render, id="LiveView-WS"),
     pytest.param(http_get_render, id="LiveView-GET", marks=pytest.mark.django_db),
@@ -193,6 +200,15 @@ def test_include_of_a_flagged_render_is_not_called(engine, kind):
     out = engine("[{% include obj %}]", {"obj": obj})
     assert type(obj).calls == 0, f"render() ran {type(obj).calls} time(s) on {engine.__name__}"
     assert out == "[]"
+
+
+@pytest.mark.parametrize("engine", LIVE_ENGINES)
+@pytest.mark.parametrize("kind", KINDS_REFUSED + KINDS_ALLOWED)
+def test_a_liveview_refuses_an_object_with_its_own_render_before_calling_it(engine, kind):
+    obj = _payload(kind)()
+    with pytest.raises(Exception, match="Dynamic template object cannot be verified"):
+        engine("[{% include obj %}]", {"obj": obj})
+    assert type(obj).calls == 0, f"render() ran {type(obj).calls} time(s) on {engine.__name__}"
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -1280,14 +1296,14 @@ def suspense_site(source: str, ctx: dict) -> str:
 
 
 def component_fallback_site(source: str, ctx: dict) -> str:
-    """``_render_template_with_fallback`` when the Rust entry is unavailable."""
+    """``_render_template_string`` when the Rust entry is unavailable."""
     from unittest.mock import patch
 
     from djust import _rust
-    from djust.components.base import _render_template_with_fallback
+    from djust.components.base import _render_template_string
 
     with patch.object(_rust, "render_template", side_effect=RuntimeError("no rust")):
-        return str(_render_template_with_fallback(source, dict(ctx)))
+        return str(_render_template_string(source, dict(ctx)))
 
 
 def live_component_extends_site(source: str, ctx: dict) -> str:

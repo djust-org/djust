@@ -15,7 +15,7 @@ class FakeView(AsyncWorkMixin):
 
 class TestStartAsync:
     def test_stores_callback_and_args(self):
-        """Legacy behavior: start_async without name stores in _async_pending."""
+        """start_async without a name stores under the default task name."""
         view = FakeView()
         callback = MagicMock()
         view.start_async(callback, "arg1", key="val")

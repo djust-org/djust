@@ -24,8 +24,8 @@ and the second is the real corruption:
   would silently read ``index`` where it expected ``d``.
 
 It affected EVERY variant, and went unnoticed because nothing deserializes this
-yet (``LiveViewConsumer.use_binary`` is hardcoded ``False``, "MessagePack
-support TODO").
+(the consumer's ``use_binary`` flag was always ``False``, and 2.0 removed the
+branch it guarded).
 
 Fixed at the producer with ``to_vec_named``, which emits a map — an omitted
 optional is simply an absent key. No change to the JSON path, which is what the

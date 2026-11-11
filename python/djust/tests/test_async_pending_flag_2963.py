@@ -4,8 +4,8 @@
 ``_async_tasks``, but every site that set the ``async_pending`` wire flag read
 only the legacy ``_async_pending`` attribute, which nothing sets. So
 ``dj-loading`` / ``dj-disable-with`` / ``dj-lock`` ended at the event's first
-reply while the work was still running. The flag now reads both, through one
-helper, and the work's ``source="async"`` result frame (which carries
+reply while the work was still running. The flag now reads ``_async_tasks``
+through one helper (2.0 removed the legacy attribute's readers), and the work's ``source="async"`` result frame (which carries
 ``event_name``) ends the loading state, including when the work raises and the
 view has no ``handle_async_result``.
 
@@ -177,16 +177,13 @@ class _Bare:
     pass
 
 
-def test_helper_reads_both_formats():
+def test_helper_reads_the_task_queue():
     view = _Bare()
     assert has_pending_async_work(None) is False
     assert has_pending_async_work(view) is False
     view._async_tasks = {}
     assert has_pending_async_work(view) is False
     view._async_tasks = {"t": (lambda: None, (), {})}
-    assert has_pending_async_work(view) is True
-    view._async_tasks = {}
-    view._async_pending = (lambda: None, (), {})
     assert has_pending_async_work(view) is True
 
 

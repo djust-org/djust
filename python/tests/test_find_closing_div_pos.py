@@ -263,10 +263,11 @@ class TestEveryRootLocatorUsesTheMaskedSearch:
         }
         # _extract_liveview_content; arender_chunks, the streaming splitter,
         # _strip_liveview_root_in_html, render_full_template step 3 and
-        # _root_poll_attrs (the mount frame's root_poll); _stamp_dj_view.
+        # _root_poll_attrs (the mount frame's root_poll), prepared ordinary-page
+        # normalization; _stamp_dj_view.
         assert rust == {
             "root_content_range": 1,
-            "root_element_span": 5,
+            "root_element_span": 6,
             "dj_root_stamp_offsets": 1,
         }, rust
 

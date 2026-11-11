@@ -8,8 +8,31 @@ from itertools import accumulate
 from typing import Any
 
 
+class RenderedDiffHTML(str):
+    """A pending native diff and its immutable, server-only ownership proof."""
+
+    fresh_child_ids: tuple
+    retained_child_ids: tuple
+    issued_children: tuple
+    diff_version: int
+
+    def __new__(
+        cls, html: str, fresh: tuple, retained: tuple, issued: tuple, version: int
+    ) -> RenderedDiffHTML:
+        obj = super().__new__(cls, html)
+        object.__setattr__(obj, "fresh_child_ids", tuple(fresh))
+        object.__setattr__(obj, "retained_child_ids", tuple(retained))
+        object.__setattr__(obj, "issued_children", tuple(issued))
+        object.__setattr__(obj, "diff_version", version)
+        return obj
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("Pending diff proof is immutable")
+
+
 class RenderedHTML(str):
     spans: tuple
+    root_spans: tuple
     held: tuple
     origins: tuple
     byte_length: int
@@ -22,9 +45,12 @@ class RenderedHTML(str):
         origins: tuple = (),
         *,
         byte_length: int | None = None,
+        root_spans: tuple = (),
     ) -> RenderedHTML:
         obj = super().__new__(cls, html)
         object.__setattr__(obj, "spans", tuple(spans))
+        object.__setattr__(obj, "root_spans", tuple(root_spans))
+        object.__setattr__(obj, "_root_index", None)
         object.__setattr__(obj, "held", tuple(held))
         object.__setattr__(obj, "origins", tuple(origins))
         # Sparse UTF-8 index: ASCII costs nothing, and slices never encode a
@@ -117,7 +143,20 @@ class RenderedHTML(str):
             (max(a, left) - left, min(b, right) - left, c + max(a, left) - a, id)
             for a, b, c, id in self.origins[begin:finish]
         )
-        return RenderedHTML(value, spans, held, origins, byte_length=right - left)
+        if self._root_index is None:
+            object.__setattr__(
+                self,
+                "_root_index",
+                (tuple(a for a, b in self.root_spans), tuple(b for a, b in self.root_spans)),
+            )
+        starts, ends = self._root_index
+        begin, finish = bisect_left(ends, left + 1), bisect_left(starts, right)
+        root_spans = tuple(
+            (max(a, left) - left, min(b, right) - left) for a, b in self.root_spans[begin:finish]
+        )
+        return RenderedHTML(
+            value, spans, held, origins, byte_length=right - left, root_spans=root_spans
+        )
 
     def _origin_range(self, left: int, right: int) -> tuple[int, int]:
         if self._origin_index is None:
@@ -159,16 +198,22 @@ class RenderedHTML(str):
 def join(parts: Any) -> RenderedHTML:
     """One allocation and one offset pass for a sequence of rendered parts."""
     parts = list(parts)
-    spans, held, origins, offset = [], [], [], 0
+    spans, held, origins, root_spans, offset = [], [], [], [], 0
     for part in parts:
         spans.extend((a + offset, b + offset) for a, b in getattr(part, "spans", ()))
+        root_spans.extend((a + offset, b + offset) for a, b in getattr(part, "root_spans", ()))
         held.extend((a + offset, b + offset, block) for a, b, block in getattr(part, "held", ()))
         origins.extend(
             (a + offset, b + offset, c, id) for a, b, c, id in getattr(part, "origins", ())
         )
         offset += part.byte_length if isinstance(part, RenderedHTML) else len(part.encode())
     return RenderedHTML(
-        "".join(parts), tuple(spans), tuple(held), tuple(origins), byte_length=offset
+        "".join(parts),
+        tuple(spans),
+        tuple(held),
+        tuple(origins),
+        byte_length=offset,
+        root_spans=tuple(root_spans),
     )
 
 
@@ -198,6 +243,11 @@ def _needs_provenance(source: str, dirs: tuple = ()) -> bool:
 
 def render_html(rust_view: Any, source: str) -> str:
     """Plan from compiled authored nodes and resolved template dependencies."""
+    if getattr(rust_view, "potential_authenticated_partial_root", lambda: False)():
+        html, spans, origins, root_spans = rust_view.render_full_root_provenance()
+        return RenderedHTML(
+            html, tuple(spans), origins=tuple(origins), root_spans=tuple(root_spans)
+        )
     if not _needs_provenance(source):
         return rust_view.render()
     html, spans, origins = rust_view.render_lazy_html()
@@ -238,7 +288,11 @@ def fold(html: str) -> str:
         value, spans, origins = normalize_provenance_whitespace(
             html, list(html.spans), list(html.origins)
         )
-        return RenderedHTML(value, tuple(spans), origins=tuple(origins))
+        root_spans = ()
+        if html.root_spans:
+            _, mapped, _ = normalize_provenance_whitespace(html, list(html.root_spans), [])
+            root_spans = tuple(mapped)
+        return RenderedHTML(value, tuple(spans), origins=tuple(origins), root_spans=root_spans)
     from ._rust import fold_html_whitespace_edits
 
     parts, cursor = [], 0
@@ -260,7 +314,13 @@ def collapse(html: str, block_tags: list[str]) -> str:
         value, spans, origins = collapse_provenance_whitespace(
             html, list(html.spans), list(html.origins), block_tags
         )
-        return RenderedHTML(value, tuple(spans), origins=tuple(origins))
+        root_spans = ()
+        if html.root_spans:
+            _, mapped, _ = collapse_provenance_whitespace(
+                html, list(html.root_spans), [], block_tags
+            )
+            root_spans = tuple(mapped)
+        return RenderedHTML(value, tuple(spans), origins=tuple(origins), root_spans=root_spans)
     # Held placeholders are few; preserve their owner intervals through the
     # same batched slices as other normalizer edits.
     from ._rust import inter_tag_whitespace_edits

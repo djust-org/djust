@@ -1,7 +1,7 @@
 """
 Checkbox component for djust.
 
-Simple stateless checkbox with automatic Rust optimization.
+Simple stateless checkbox.
 """
 
 from typing import Any, Optional
@@ -9,21 +9,13 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-try:
-    from djust._rust import RustCheckbox  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
-
 
 class Checkbox(Component):
     """
     Checkbox component (Bootstrap 5).
 
     Features:
-    - Automatic Rust optimization (~1μs rendering)
-    - Template fallback if Rust unavailable
+    - Rendered through its template (there is no native Rust implementation)
     - Python fallback with f-strings
     - Label, help text support
     - Switch style option
@@ -48,8 +40,6 @@ class Checkbox(Component):
         >>> checkbox.render()
         '<div class="mb-3">...'
     """
-
-    _rust_impl_class = RustCheckbox if _RUST_AVAILABLE else None
 
     template = """<div class="mb-3">
     <div class="form-check{% if switch %} form-check-switch{% endif %}{% if inline %} form-check-inline{% endif %}">
@@ -80,7 +70,7 @@ class Checkbox(Component):
         # Use name as ID if not provided
         checkbox_id = id or name
 
-        # Pass kwargs to parent to create Rust instance
+        # Pass kwargs to the parent Component
         super().__init__(
             name=name,
             label=label,

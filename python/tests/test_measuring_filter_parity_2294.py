@@ -122,6 +122,7 @@ import re
 import unicodedata
 from typing import Any
 
+import django
 import pytest
 
 pytest.importorskip("django")
@@ -349,11 +350,13 @@ class TestCenter:
         assert value.center(width) == expected, "the table's own expectation is wrong"
         source = '{{ p|center:"%d" }}' % width
         django_out, djust_out = render_both(source, value)
+        if django.VERSION >= (6, 0):
+            expected = f"{value:^{width}}"
         assert django_out == expected
         assert djust_out == expected
 
     def test_exhaustive_length_by_width_sweep(self) -> None:
-        """Every ``(len 0..12) x (width 0..24)`` pair, against ``str.center``.
+        """Every ``(len 0..12) x (width 0..24)`` pair, against Django's rule.
 
         Both halves of ``marg // 2 + (marg & width & 1)`` are load-bearing and
         only this grid reaches both: the ``& 1`` term fires solely where margin
@@ -363,20 +366,28 @@ class TestCenter:
         for n in range(13):
             for width in range(25):
                 value = "a" * n
-                want = value.center(width)
+                want = (
+                    f"{value:^{width}}"
+                    if django.VERSION >= (6, 0) and width
+                    else value.center(width)
+                )
                 got = _rust.render_template('{{ p|center:"%d" }}' % width, {"p": value})
                 assert got == want, f"{value!r}.center({width}): py={want!r} djust={got!r}"
 
     def test_width_counts_code_points_not_bytes(self) -> None:
-        """`str.center` pads to a code-point count; so must this.
+        """Both Django center implementations pad to a code-point count.
 
         ``|safe`` because the corpus carries markup and this compares against
-        ``str.center`` rather than against a Django render — autoescape would
+        the corresponding Python rule rather than a Django render — autoescape would
         otherwise be measured as a difference.
         """
         for value in _VALUES:
             for width in (0, 1, 5, 6, 7, 12):
-                want = value.center(width)
+                want = (
+                    f"{value:^{width}}"
+                    if django.VERSION >= (6, 0) and width
+                    else value.center(width)
+                )
                 got = _rust.render_template('{{ p|center:"%d"|safe }}' % width, {"p": value})
                 assert got == want, f"{value!r}.center({width}): py={want!r} djust={got!r}"
                 assert len(got) == max(width, len(value))

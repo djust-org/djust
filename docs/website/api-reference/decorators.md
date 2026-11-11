@@ -27,7 +27,7 @@ from djust.decorators import (
 )
 ```
 
-The module also exports `reactive`, `state`, `computed` and `on_mount`, which are covered in their own guides.
+The module also exports `state`, `computed` and `on_mount`, which are covered in their own guides.
 
 ---
 

@@ -730,8 +730,8 @@ parameter with that name, or has a `**` catch-all:
 `search(value)` therefore receives just `value`, and `save` receives every
 field through `**fields`. `dj-value-*` arguments are always sent, and one that
 reuses a generated name is rejected. `_target` is never sent. Only
-`dj-value-*` names become arguments: `data-*` attributes and `dj-params` are
-ignored for strict handlers.
+`dj-value-*` names become arguments: `data-*` attributes are ignored for strict
+handlers. (The JSON `dj-params` attribute is not read at all since 2.0.)
 
 ### Conversion rules
 
@@ -778,7 +778,7 @@ parameter and expected type, never the submitted value.
 
 1. Annotate every named parameter, removing defaults that only existed to
    hide missing input.
-2. Replace `data-*` and `dj-params` arguments with `dj-value-*`, and
+2. Replace `data-*` arguments (and any leftover `dj-params`) with `dj-value-*`, and
    `_target` with `field` or a `dj-value-*` argument.
 3. Add `parameter_policy="strict"`, drop `**kwargs` unless the handler
    really takes an open payload, and run `manage.py check`: C022 and

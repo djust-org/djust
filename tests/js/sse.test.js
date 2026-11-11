@@ -72,12 +72,16 @@ const src = readFileSync(
     resolve(__dirname, '../../python/djust/static/djust/src/03b-sse.js'),
     'utf8'
 );
+// The frame handling SSE shares with the WebSocket transport.
+const frameDispatchSource = readFileSync(
+    resolve(__dirname, '../../python/djust/static/djust/src/02c-frame-dispatch.js'), 'utf8'
+);
 const requestSource = readFileSync(
     resolve(__dirname, '../../python/djust/static/djust/src/04-cache.js'), 'utf8'
 );
 // Use the real shared registry rather than mocking acknowledgement semantics.
 eval(requestSource.slice(requestSource.indexOf('// Event sequencing'),
-    requestSource.indexOf('// State management')) + '\n' + src); // eslint-disable-line no-eval
+    requestSource.indexOf('// State management')) + '\n' + frameDispatchSource + '\n' + src); // eslint-disable-line no-eval
 
 const { LiveViewSSE } = global.window.djust;
 

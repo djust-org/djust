@@ -313,6 +313,9 @@ pub type SharedValues = std::sync::Arc<AHashMap<String, Value>>;
 /// One lexical binding scope, including the provenance of its values.
 #[derive(Clone, Debug, Default)]
 struct ScopeFrame {
+    /// Names assigned by render-time sibling tags in this lexical frame.
+    /// This is deny-only lazy provenance, not a value or an authority grant.
+    lazy_bindings: Option<std::sync::Arc<AHashSet<String>>>,
     /// Template-literal bindings, independent of HTML safety or registration authority.
     literal_keys: std::sync::Arc<AHashSet<String>>,
     captured_literals: std::sync::Arc<AHashMap<String, LiteralOutput>>,
@@ -527,6 +530,9 @@ impl ScopeFrame {
 #[derive(Debug)]
 pub struct Context {
     stack: Vec<ScopeFrame>,
+    /// Custom tag effects can outlive lexical frames, so this flag is shared
+    /// by the contexts of one render, including `include ... only`.
+    lazy_unknown_effect: std::sync::Arc<std::sync::atomic::AtomicBool>,
     node_identity: Option<(usize, usize)>,
     /// Optional sidecar of raw Python objects keyed by top-level
     /// context name. Used only as a fallback when `get()` misses —
@@ -539,11 +545,9 @@ pub struct Context {
     /// sidecar is logically immutable after construction.
     raw_py_objects: Option<std::sync::Arc<HashMap<String, Py<PyAny>>>>,
     /// Django-parity auto-call of callables during sidecar `getattr`
-    /// resolution (ADR-024). Default `true`; the Python side wires
-    /// `LIVEVIEW_CONFIG["template_auto_call"]` through
-    /// `RustLiveView::set_template_auto_call` (mirroring the #1967
-    /// `loop_render_cache_enabled` flag plumbing). `false` restores the
-    /// pre-ADR plain-getattr walk (kill-switch).
+    /// resolution (ADR-024). Default `true`. Only the `auto_call` argument of
+    /// the plain `render_template*` entries and the actor component config
+    /// set it; `false` is the pre-ADR plain-getattr walk.
     auto_call: bool,
     /// Emit the `<!--dj-if-->` placeholder (#295) and the
     /// `<!--dj-if id="if-…"-->…<!--/dj-if-->` boundary pair (#1358/#1832)
@@ -557,6 +561,8 @@ pub struct Context {
     /// whichever path parsed first decide for both. Mirrors `auto_call`;
     /// `{% include … only %}` builds a fresh `Context` and must copy it.
     emit_dj_if_markers: bool,
+    /// LiveView serialization safety is independent of temporary marker flags.
+    guard_dynamic_recursive_partials: bool,
     /// The per-iteration `{% for %}` path suffix a `<!--dj-if id="…">`
     /// marker appends (#1832) — `-<index>` per enclosing loop, composed
     /// (`-3-2` two loops deep), empty outside any loop.
@@ -699,12 +705,14 @@ impl Clone for Context {
     fn clone(&self) -> Self {
         Self {
             stack: self.stack.clone(),
+            lazy_unknown_effect: self.lazy_unknown_effect.clone(),
             node_identity: self.node_identity,
             // Arc::clone is cheap and does not require the GIL —
             // the contained `Py<PyAny>` refcount is not touched.
             raw_py_objects: self.raw_py_objects.clone(),
             auto_call: self.auto_call,
             emit_dj_if_markers: self.emit_dj_if_markers,
+            guard_dynamic_recursive_partials: self.guard_dynamic_recursive_partials,
             dj_if_loop_path: self.dj_if_loop_path.clone(),
             dj_if_id_namespace: self.dj_if_id_namespace.clone(),
             dj_if_include_path: self.dj_if_include_path.clone(),
@@ -842,35 +850,11 @@ pub fn flatten_authored_output(output: AuthoredOutput, text: String) -> Authored
 /// `"super" in block`, `len` and the keys alongside, none of which evaluates
 /// anything.
 ///
-/// **Dict-style reads are a DEPRECATED compatibility path** (deprecated in 1.3,
-/// removed no earlier than 2.0; replacement `block.super()`): the `dict` this
-/// object replaced allowed `block["super"]`, and `get("super")`, `values()` and
-/// `items()` read it too. Each such read emits the standard djust
-/// `DeprecationWarning` (`djust._deprecation.warn_deprecated`, attributed to the
-/// tag's own line), renders the parent once, and lets the parent's own
-/// exception propagate unchanged — so `except ValueError` around it works as it
-/// did against the dict.
-///
-/// The one hard part is `__getitem__`. Django's `Variable._resolve_lookup`
-/// tries `current[bit]` FIRST and CATCHES the five exception classes a mapping
-/// access may raise (`TypeError`, `AttributeError`, `KeyError`, `ValueError`,
-/// `IndexError`), then walks on to `getattr` — which for Django's own
-/// `BlockNode` is the `super()` method, because a `BlockNode` is not
-/// subscriptable. An evaluating `__getitem__` would therefore run the parent,
-/// have its error swallowed, and run it a second time; re-wrapping the error
-/// changes the class a tag's `except` sees; a "pending exception" slot leaves a
-/// stale error for the next read. So `__getitem__` asks WHO is calling: when the
-/// immediate Python caller is Django's own `_resolve_lookup` frame (matched by
-/// file and name, so a wrapped method still counts and a look-alike in user code
-/// does not), or djust's own Rust resolver is subscripting this very object, it
-/// answers exactly what a `BlockNode` answers
-/// (`TypeError: not subscriptable`, no evaluation, no warning) and the resolver
-/// falls through to `super()` as it always has. Anyone else is user code reading
-/// the legacy way. If a future Django moved the subscript out of
-/// `_resolve_lookup`, the resolver would take the legacy path (a warning, and a
-/// double run only when the parent raises one of the five classes); the
-/// differential tests run the resolver paths under
-/// `-W error::DeprecationWarning`, so that fails loudly when the lock moves.
+/// **Dict-style reads were removed in 2.0** (deprecated since 1.3):
+/// `block["super"]` is a `TypeError`, exactly what a Django `BlockNode`
+/// answers, so Django's `Variable._resolve_lookup` (and djust's own Rust
+/// resolver) fall through to the `super()` method with the parent evaluated
+/// once. The message names `block.super()` for a tag that subscripts it.
 ///
 /// What it returns is a `SafeString`: rendered template output, already
 /// escaped by whatever produced it, which is the grant Django makes too.
@@ -890,106 +874,6 @@ pub struct LazyBlock {
 }
 
 const LAZY_BLOCK_REPR: &str = "<LazyBlock super=<deferred>>";
-
-/// Is the immediate Python caller Django's `Variable._resolve_lookup`?
-///
-/// Matched by the frame's MODULE and NAME: `f_globals` is the namespace of
-/// `django.template.base` and `co_name == "_resolve_lookup"`. The
-/// first version compared the code object with the one `Variable._resolve_lookup`
-/// holds NOW, which fails the moment anything wraps or replaces that method (a
-/// profiler, a decorator, a monkeypatch): the wrapper calls the original, whose
-/// frame is still Django's own but whose code object is no longer the one the
-/// attribute reads back. A user function that merely shares the name lives in
-/// another module and still reads as user code, and a subclass reaching the base
-/// implementation through `super()` is still Django's frame.
-///
-/// `sys._getframe(0)` is the Python frame that performed the subscript (a
-/// pymethod pushes no frame of its own). False when Django's template module
-/// was never imported, when there is no Python frame at all (an embedded unit
-/// test), or when anything about the probe fails: the caller is then treated as
-/// user code.
-fn called_by_django_resolver(py: Python<'_>) -> bool {
-    let probe = || -> PyResult<bool> {
-        let sys = py.import("sys")?;
-        let Some(base) = sys
-            .getattr("modules")?
-            .get_item("django.template.base")
-            .ok()
-        else {
-            return Ok(false);
-        };
-        let frame = sys.call_method1("_getframe", (0,))?;
-        if frame
-            .getattr("f_code")?
-            .getattr("co_name")?
-            .extract::<String>()?
-            != "_resolve_lookup"
-        {
-            return Ok(false);
-        }
-        // The frame's globals ARE the module's namespace. (`co_filename` is not
-        // `__file__` for a sourceless, `.pyc`-only Django.)
-        Ok(frame.getattr("f_globals")?.is(&base.getattr("__dict__")?))
-    };
-    probe().unwrap_or(false)
-}
-
-thread_local! {
-    /// The object this thread's RUST resolver is currently subscripting as
-    /// Django's step 1 (`0` = none). See [`step1_get_item`].
-    static RUST_STEP1_TARGET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// Django's resolution step 1 (`current[bit]`) as the RUST resolvers perform
-/// it ([`Context::walk_live`] and the sidecar walk).
-///
-/// They have no Python frame of their own, so [`called_by_django_resolver`]
-/// cannot recognise them: a template rendered in Rust that holds a `block`
-/// (`_rust.render_template("{{ block.super }}", {"block": context["block"]})`)
-/// reached a lazy block's `__getitem__` as if it were legacy user code, warned,
-/// and, over a parent raising one of the five classes this step swallows, ran
-/// the parent twice. So the object being subscripted is recorded here for the
-/// duration of the call and [`LazyBlock::__getitem__`] answers it as Django's
-/// resolver is answered. Keyed by OBJECT, not a bare flag, so nested user code
-/// that happens to subscript some other lazy block is still user code.
-fn step1_get_item<'py, K>(current: &Bound<'py, PyAny>, key: K) -> PyResult<Bound<'py, PyAny>>
-where
-    K: pyo3::conversion::IntoPyObject<'py>,
-{
-    struct Restore(usize);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            RUST_STEP1_TARGET.with(|cell| cell.set(self.0));
-        }
-    }
-    let _restore = Restore(RUST_STEP1_TARGET.with(|cell| cell.replace(current.as_ptr() as usize)));
-    current.get_item(key)
-}
-
-/// The standard djust deprecation for a dict-style read of the lazy `block`.
-///
-/// Through `djust._deprecation.warn_deprecated` like every other djust
-/// deprecation; its default `stacklevel=2` lands on the Python frame that made
-/// the read (the Rust frames in between do not exist for `warnings`). A failure
-/// to IMPORT the helper (a bare embedded interpreter) is not an error; a
-/// warning promoted to an exception by the caller's filters is, and propagates.
-fn warn_dict_style(py: Python<'_>) -> PyResult<()> {
-    let Ok(module) = py.import("djust._deprecation") else {
-        return Ok(());
-    };
-    let kwargs = pyo3::types::PyDict::new(py);
-    kwargs.set_item("since", "1.3")?;
-    kwargs.set_item("removed_in", "2.0.0")?;
-    kwargs.set_item("instead", "block.super()")?;
-    module.getattr("warn_deprecated")?.call(
-        (
-            "Dict-style access to `block.super` (`block['super']`, `block.get('super')`, \
-             `block.values()`, `block.items()`) on the context a template tag receives",
-        ),
-        Some(&kwargs),
-    )?;
-    Ok(())
-}
 
 impl LazyBlock {
     /// One read: render the parent now, exactly as `Context::resolve` does.
@@ -1044,50 +928,14 @@ impl LazyBlock {
         self.read(py)
     }
 
-    /// `block["super"]` — the legacy dict-style read (deprecated since 1.3,
-    /// removed no earlier than 2.0; use [`LazyBlock::super_call`]).
-    ///
-    /// From Django's own resolver this is a `TypeError`, exactly what a
-    /// `BlockNode` answers, so the resolver falls through to `super()` with the
-    /// parent evaluated once and its own exception propagating. From anything
-    /// else it warns, renders the parent once, and propagates the parent's own
-    /// exception unwrapped. See the type's docs for why it must ask.
-    fn __getitem__<'py>(
-        slf: &Bound<'py, Self>,
-        key: &Bound<'py, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let py = slf.py();
-        if called_by_django_resolver(py)
-            || RUST_STEP1_TARGET.with(|cell| cell.get()) == slf.as_ptr() as usize
-        {
-            return Err(pyo3::exceptions::PyTypeError::new_err(
-                "'LazyBlock' object is not subscriptable",
-            ));
-        }
-        match key.extract::<String>() {
-            Ok(name) if name == "super" => {
-                warn_dict_style(py)?;
-                slf.borrow().read(py)
-            }
-            _ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
-        }
-    }
-
-    /// Deprecated like [`LazyBlock::__getitem__`] when it reads `super`.
-    #[pyo3(signature = (key, default=None))]
-    fn get<'py>(
-        &self,
-        py: Python<'py>,
-        key: &Bound<'py, PyAny>,
-        default: Option<Bound<'py, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        match key.extract::<String>() {
-            Ok(name) if name == "super" => {
-                warn_dict_style(py)?;
-                self.read(py)
-            }
-            _ => Ok(default.unwrap_or_else(|| py.None().into_bound(py))),
-        }
+    /// `block["super"]` — the dict-style read, removed in 2.0. A `TypeError`,
+    /// as for a Django `BlockNode`, so a resolver falls through to `super()`;
+    /// evaluates nothing.
+    fn __getitem__(&self, _key: &Bound<'_, PyAny>) -> PyResult<()> {
+        Err(pyo3::exceptions::PyTypeError::new_err(
+            "'LazyBlock' object is not subscriptable: dict-style block reads \
+             (block['super']) were removed in djust 2.0; call block.super()",
+        ))
     }
 
     fn __contains__(&self, key: &Bound<'_, PyAny>) -> bool {
@@ -1107,21 +955,6 @@ impl LazyBlock {
 
     fn keys<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         Ok(pyo3::types::PyList::new(py, ["super"])?.into_any())
-    }
-
-    /// Reads `super`: a read per call, not a cached pair. Deprecated like
-    /// [`LazyBlock::__getitem__`].
-    fn values<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        warn_dict_style(py)?;
-        Ok(pyo3::types::PyList::new(py, [self.read(py)?])?.into_any())
-    }
-
-    /// Reads `super`; deprecated like [`LazyBlock::__getitem__`].
-    fn items<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        warn_dict_style(py)?;
-        let name = "super".into_pyobject(py)?.into_any();
-        let pair = pyo3::types::PyTuple::new(py, [name, self.read(py)?])?;
-        Ok(pyo3::types::PyList::new(py, [pair])?.into_any())
     }
 
     /// `copy.copy` / `copy.deepcopy` of a context (`context.flatten()`,
@@ -1219,10 +1052,12 @@ impl Context {
     pub fn new() -> Self {
         Self {
             stack: vec![ScopeFrame::default()],
+            lazy_unknown_effect: std::sync::Arc::default(),
             node_identity: None,
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
+            guard_dynamic_recursive_partials: false,
             dj_if_loop_path: String::new(),
             dj_if_id_namespace: String::new(),
             dj_if_include_path: String::new(),
@@ -1274,10 +1109,12 @@ impl Context {
                 stamp: next_frame_stamp(),
                 ..ScopeFrame::default()
             }],
+            lazy_unknown_effect: std::sync::Arc::default(),
             node_identity: None,
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
+            guard_dynamic_recursive_partials: false,
             dj_if_loop_path: String::new(),
             dj_if_id_namespace: String::new(),
             dj_if_include_path: String::new(),
@@ -1308,6 +1145,16 @@ impl Context {
     /// Should the renderer emit `<!--dj-if-->` markers under this context?
     pub fn emit_dj_if_markers(&self) -> bool {
         self.emit_dj_if_markers
+    }
+
+    /// Whether this render must reject dynamically selected recursive partials.
+    pub fn guard_dynamic_recursive_partials(&self) -> bool {
+        self.guard_dynamic_recursive_partials
+    }
+
+    /// Configure the LiveView-only dynamic partial serialization guard.
+    pub fn set_guard_dynamic_recursive_partials(&mut self, enabled: bool) {
+        self.guard_dynamic_recursive_partials = enabled;
     }
 
     /// Set the dj-if loop-path suffix for renders under this context
@@ -1381,6 +1228,31 @@ impl Context {
                 "dj-if include path is not `(-i<hex>_<digits>)*`: {path:?}"
             );
         }
+    }
+
+    /// Temporarily set the include-site path, including on panic unwinding.
+    pub fn with_dj_if_include_path<T>(
+        &mut self,
+        path: impl Into<String>,
+        render: impl FnOnce(&mut Context) -> T,
+    ) -> T {
+        struct PathGuard<'a> {
+            context: &'a mut Context,
+            previous: String,
+        }
+        impl Drop for PathGuard<'_> {
+            fn drop(&mut self) {
+                self.context
+                    .set_dj_if_include_path(std::mem::take(&mut self.previous));
+            }
+        }
+        let previous = self.dj_if_include_path().to_owned();
+        self.set_dj_if_include_path(path);
+        let guard = PathGuard {
+            context: self,
+            previous,
+        };
+        render(&mut *guard.context)
     }
 
     /// The dj-if include-site path (#2689) — empty outside any `{% include %}`.
@@ -1508,6 +1380,26 @@ impl Context {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             + 1;
         self.stack.last_mut().unwrap().render_scope = Some(id);
+    }
+
+    /// Run a partial with its own render-context state, preserving variable bindings.
+    pub fn with_template_render<T>(&mut self, render: impl FnOnce(&mut Context) -> T) -> T {
+        struct Guard<'a> {
+            context: &'a mut Context,
+            previous: Option<u64>,
+        }
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                self.context.stack.last_mut().unwrap().render_scope = self.previous;
+            }
+        }
+        let previous = self.stack.last().unwrap().render_scope;
+        self.begin_template_render();
+        let guard = Guard {
+            context: self,
+            previous,
+        };
+        render(&mut *guard.context)
     }
 
     /// Set Django's `string_if_invalid` for this render.
@@ -1893,7 +1785,112 @@ impl Context {
             .iter()
             .rposition(|frame| frame.contains_key(&name))
             .unwrap_or(self.stack.len() - 1);
+        let bindings = self.stack[index]
+            .lazy_bindings
+            .get_or_insert_with(Default::default);
+        std::sync::Arc::make_mut(bindings).insert(name.clone());
         self.bind_at(index, name, value, safe);
+    }
+
+    /// Mark a sibling-tag assignment in the current lexical frame. The mark
+    /// disappears when that frame is popped and is copied on context clones.
+    pub fn note_lazy_sibling_binding(&mut self, name: &str) {
+        if let Some(frame) = self.stack.last_mut() {
+            let bindings = frame.lazy_bindings.get_or_insert_with(Default::default);
+            std::sync::Arc::make_mut(bindings).insert(name.to_owned());
+        }
+    }
+
+    /// Start a distinct tracked render without carrying a prior render's
+    /// deny-only side-effect signals. Nested node renders do not call this.
+    pub fn begin_lazy_render(&mut self) {
+        self.lazy_unknown_effect = std::sync::Arc::default();
+        for frame in &mut self.stack {
+            frame.lazy_bindings = None;
+        }
+    }
+
+    /// Share the deny-only tag-effect signal with a fresh include-only context.
+    pub fn inherit_lazy_unknown_effect(&mut self, parent: &Context) {
+        self.lazy_unknown_effect = parent.lazy_unknown_effect.clone();
+    }
+
+    /// Record an executed application tag's potentially global effects.
+    pub fn note_lazy_unknown_effect(&self) {
+        self.lazy_unknown_effect
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Check render-created binding names without resolving any values.
+    /// Quoted text is ignored; ambiguous names and filters may over-deny.
+    pub fn lazy_selector_is_tainted(&self, expression: &str) -> bool {
+        if !self
+            .lazy_unknown_effect
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && self.stack.iter().all(|frame| frame.lazy_bindings.is_none())
+        {
+            return false;
+        }
+        let trimmed = expression.trim();
+        let simple_name =
+            !trimmed.is_empty() && trimmed.chars().all(|ch| ch.is_alphanumeric() || ch == '_');
+        if simple_name
+            && self
+                .lazy_unknown_effect
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            match self.get(trimmed) {
+                Some(Value::Encoded(_)) => return true,
+                None if self
+                    .raw_py_objects
+                    .as_ref()
+                    .is_some_and(|raw| raw.contains_key(trimmed)) =>
+                {
+                    return true
+                }
+                _ => {}
+            }
+        }
+        let contains = |word: &str| {
+            self.stack.iter().any(|frame| {
+                frame
+                    .lazy_bindings
+                    .as_ref()
+                    .is_some_and(|bindings| bindings.contains(word))
+            })
+        };
+        let mut word = String::new();
+        let mut quote = None;
+        let mut escaped = false;
+        for ch in expression.chars().chain(std::iter::once(' ')) {
+            if let Some(delimiter) = quote {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == delimiter {
+                    quote = None;
+                }
+            } else if ch == '|' || ch == '.' {
+                // Filters and dotted lookups can execute application code;
+                // after a sibling effect, their independence is unknown.
+                return true;
+            } else if ch == '\'' || ch == '"' {
+                if contains(&word) {
+                    return true;
+                }
+                word.clear();
+                quote = Some(ch);
+            } else if ch.is_alphanumeric() || ch == '_' {
+                word.push(ch);
+            } else {
+                if contains(&word) {
+                    return true;
+                }
+                word.clear();
+            }
+        }
+        false
     }
 
     fn bind_at(&mut self, index: usize, name: String, value: Value, safe: bool) {
@@ -2728,6 +2725,9 @@ impl Context {
         let Some(obj) = raw.get(first) else {
             return Ok(None);
         };
+        if self.provenance_flatten_tracking() {
+            self.note_lazy_unknown_effect();
+        }
 
         Python::attach(|py| -> crate::Result<Option<Value>> {
             let mut current: pyo3::Bound<'_, pyo3::PyAny> = obj.bind(py).clone();
@@ -2784,7 +2784,7 @@ impl Context {
                 // when its failure is spelled as an exception. `maybe_call`
                 // one step below already propagates a real exception raised
                 // INSIDE a nullary method; this makes the getattr half agree.
-                let next = match step1_get_item(&current, *part) {
+                let next = match current.get_item(*part) {
                     Ok(v) => Ok(v),
                     // Django step 1: `except (TypeError, AttributeError,
                     // KeyError, ValueError, IndexError)` — the last two are
@@ -3054,6 +3054,9 @@ impl Context {
             let Some(handle) = encoded.live.clone() else {
                 continue;
             };
+            if self.provenance_flatten_tracking() {
+                self.note_lazy_unknown_effect();
+            }
             let rest = &parts[consumed..];
             return Python::attach(|py| -> crate::Result<Option<Option<Value>>> {
                 match self.walk_live(py, handle.bind(py).clone(), rest, key)? {
@@ -3240,7 +3243,7 @@ impl Context {
         // Django's own `hasattr` (which swallows) would.
         let has_getitem = current.get_type().hasattr("__getitem__").unwrap_or(false);
         if has_getitem {
-            match step1_get_item(current, part) {
+            match current.get_item(part) {
                 Ok(found) => return Ok(Walked::Object(found)),
                 // Django step 1: `except (TypeError, AttributeError, KeyError,
                 // ValueError, IndexError)` — the last two its own numpy
@@ -3742,6 +3745,56 @@ fn warn_once_on_orm_autocall(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>,
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lazy_upward_binding_taint_is_context_local_and_survives_scope_unwind() {
+        let mut context = super::Context::new();
+        context.bind(
+            "selected".into(),
+            crate::Value::String("plain.html".into()),
+            false,
+        );
+        let failure: Result<(), ()> = context.with_scope(|inner| {
+            inner.bind_upward(
+                "selected".into(),
+                crate::Value::String("lazy.html".into()),
+                false,
+            );
+            Err(())
+        });
+        assert!(failure.is_err());
+        assert!(context.lazy_selector_is_tainted("selected|default:fallback"));
+        assert!(context.lazy_selector_is_tainted("fallback|default:selected"));
+        assert!(!context.lazy_selector_is_tainted("other"));
+        assert!(!context.lazy_selector_is_tainted("'selected'"));
+        assert!(context.clone().lazy_selector_is_tainted("selected"));
+        assert!(!super::Context::new().lazy_selector_is_tainted("selected"));
+        let mut other = context.clone();
+        other.bind_upward("another".into(), crate::Value::None, false);
+        assert!(!context.lazy_selector_is_tainted("another"));
+        context.with_scope(|inner| {
+            inner.note_lazy_sibling_binding("local");
+            assert!(inner.lazy_selector_is_tainted("local"));
+        });
+        assert!(!context.lazy_selector_is_tainted("local"));
+        let mut fresh = super::Context::new();
+        fresh.with_scope(|inner| {
+            inner.note_lazy_unknown_effect();
+            assert!(inner.lazy_selector_is_tainted("chooser.selected"));
+            assert!(inner.lazy_selector_is_tainted("plain|default:fallback"));
+            assert!(!inner.lazy_selector_is_tainted("plain"));
+            assert!(!inner.lazy_selector_is_tainted("'literal.html'"));
+        });
+        assert!(fresh.lazy_selector_is_tainted("chooser.selected"));
+        let mut only = super::Context::new();
+        only.inherit_lazy_unknown_effect(&fresh);
+        assert!(only.lazy_selector_is_tainted("chooser.selected"));
+        assert!(!super::Context::new().lazy_selector_is_tainted("chooser.selected"));
+        let caller = super::Context::new();
+        let mut only = super::Context::new();
+        only.inherit_lazy_unknown_effect(&caller);
+        only.note_lazy_unknown_effect();
+        assert!(caller.lazy_selector_is_tainted("chooser.selected"));
+    }
     use super::*;
     use indexmap::IndexMap;
 
@@ -4904,16 +4957,12 @@ mod tests {
             // Each read renders once; the result is ignored (see above).
             let _ = block.call_method0("super");
             let _ = block.call_method0("super");
-            let _ = block.call_method1("get", ("super",));
-            // The legacy dict-style read (deprecated): no Python frame calls
-            // it here, so it is user code, not Django's resolver — it renders.
-            let _ = block.get_item("super");
-            assert_eq!(calls.load(Ordering::SeqCst), 4, "one render per read");
-            assert!(
-                block.get_item("other").is_err(),
-                "a key other than `super` is a KeyError, and renders nothing"
-            );
-            assert_eq!(calls.load(Ordering::SeqCst), 4);
+            assert_eq!(calls.load(Ordering::SeqCst), 2, "one render per read");
+            // The dict-style read was removed in 2.0: a TypeError, no render.
+            let err = block.get_item("super").expect_err("not subscriptable");
+            assert!(err.is_instance_of::<pyo3::exceptions::PyTypeError>(py));
+            assert!(err.to_string().contains("block.super()"), "{err}");
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
         });
 
         drop(guard);
@@ -4922,7 +4971,7 @@ mod tests {
         });
         assert_eq!(
             calls.load(Ordering::SeqCst),
-            4,
+            2,
             "the call is over: a retained handle renders nothing"
         );
     }

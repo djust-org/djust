@@ -63,7 +63,8 @@ One error enum plus one message constructor — [`ValueOpError`] /
 ``value_op_error`` — mirroring #2435's ``IntValueError`` / ``int_value_error``,
 because the question is the same one: WHICH exception does Python raise, since
 Django's ``except`` clauses catch different subsets. Three thin probes name the
-three operations (``python_iter`` / ``python_getitem`` / ``python_lower``), and
+three operations (``python_iter`` / ``python_getitem`` / ``python_lower``; the
+last went with ``phone2numeric``'s port in 2.0), and
 they share one ``python_type_name`` — which the ``{% for %}`` refusal arm in
 ``renderer.rs`` now reads too, retiring the four-arm copy it carried (#1646).
 """
@@ -77,7 +78,7 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("django")
+django = pytest.importorskip("django")
 
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
@@ -313,11 +314,14 @@ class TestTheReferenceTableIsRunNotTranscribed:
         six filters, refused through the normalizer AND through the raw entry
         point. Before #2467 only the second half held.
         """
+        # `phone2numeric` is Django's own function since 2.0: its
+        # `AttributeError` crosses as Django raised it.
+        refusal = "not iterable|not subscriptable|raises|has no attribute 'lower'"
         for name in ("escapeseq", "safeseq", "unordered_list", "first", "last", "phone2numeric"):
             for key in ("td-zero", "td-plain"):
-                with pytest.raises(Exception, match="not iterable|not subscriptable|raises"):
+                with pytest.raises(Exception, match=refusal):
                     _rust.render_template("{{ p|%s }}" % name, {"p": CORPUS[key]})
-                with pytest.raises(Exception, match="not iterable|not subscriptable|raises"):
+                with pytest.raises(Exception, match=refusal):
                     _rust.render_template(
                         "{{ p|%s }}" % name, normalize_django_value({"p": CORPUS[key]})
                     )
@@ -566,13 +570,14 @@ class TestPhone2numericCallsAStringMethod:
     def test_a_non_string_refuses(self, value) -> None:
         with pytest.raises(AttributeError):
             DjangoTemplate("{{ p|phone2numeric }}").render(DjangoContext({"p": value}))
-        with pytest.raises(Exception, match="AttributeError.*'lower'"):
+        # Django's own function since 2.0, so its `AttributeError` crosses whole.
+        with pytest.raises(AttributeError, match="'lower'"):
             _rust.render_template("{{ p|phone2numeric }}", normalize_django_value({"p": value}))
 
     def test_the_none_case_by_name(self) -> None:
         """`str(None).lower()` is `"none"`, whose keypad spelling is `6663` —
         which is what djust rendered, on a page, for a missing value."""
-        with pytest.raises(Exception, match="AttributeError"):
+        with pytest.raises(AttributeError):
             _rust.render_template("{{ p|phone2numeric }}", normalize_django_value({"p": None}))
 
     @pytest.mark.parametrize("value", ["CALL-NOW", "abc", "", "Ärger"])
@@ -631,7 +636,7 @@ class TestOneChokepointAnswersWhichExceptionPythonRaises:
         subscripts has to join one of them rather than growing an eighth
         bespoke arm."""
         source = production(FILTERS_RS)
-        for probe in ("python_iter", "python_getitem", "python_lower"):
+        for probe in ("python_iter", "python_getitem"):
             assert self.callers(source, probe) == {"apply_builtin_filter"}, probe
 
     def test_the_type_name_readers_cover_filters_loops_and_include_candidates(self) -> None:
@@ -660,28 +665,34 @@ class TestOneChokepointAnswersWhichExceptionPythonRaises:
         [
             ("{% for x in p %}{{ x }}{% endfor %}", 5, "'int' object is not iterable"),
             ("{% include p %}", 5, "'int' object is not iterable"),
-            ("{% include p %}", [5], "not 'int'"),
+            ("{% include p %}", [5], "int found" if django.VERSION >= (6, 0) else "not 'int'"),
         ],
     )
     def test_plain_and_provenance_refusals_share_python_type_names(
         self, entry, source, value, message, tmp_path
     ) -> None:
+        with pytest.raises(TypeError) as expected:
+            DjangoTemplate(source).render(DjangoContext({"p": value}))
+        assert message in str(expected.value)
         view = _rust.RustLiveView(source, [str(tmp_path)])
         view.update_state({"p": value})
         with pytest.raises((TypeError, RuntimeError)) as exc:
             getattr(view, entry)()
-        assert message in str(exc.value)
+        assert str(expected.value) in str(exc.value)
 
     def test_the_constructor_is_reached_from_every_arm_that_can_refuse(self) -> None:
         """The COUNT, so an arm that grows a bespoke `Err` is visible.
 
-        Seven filters and eight call sites: `first`, `last`, the three
-        iterators and `phone2numeric` have one each, and `random` has two —
-        one for the subscript and one for the missing `len()`.
+        Six filters and seven call sites: `first`, `last` and the two native
+        iterators have one each, and `random` has two — one for the subscript
+        and one for the missing `len()`. `unordered_list` is Django's own
+        function since 2.0, with one native refusal ahead of the routing: a
+        serialized model is not iterable, and Django must not be handed the
+        map it was serialized to. (`phone2numeric` is Django's own function.)
         """
         source = production(FILTERS_RS)
         arm = source.split("fn apply_builtin_filter", 1)[1].split("\n}\n", 1)[0]
-        assert arm.count("value_op_error(") == 8, arm.count("value_op_error(")
+        assert arm.count("value_op_error(") == 7, arm.count("value_op_error(")
 
     def test_the_pin_goes_red_when_an_arm_stops_using_the_constructor(self) -> None:
         """Canary, direction one: a bespoke ``Err`` in every arm."""
@@ -802,10 +813,10 @@ class TestTheResidueThisDoesNotTouch:
         with pytest.raises(TypeError):
             DjangoTemplate('{{ p|get_digit:"1" }}').render(DjangoContext({"p": value}))
         for context in (normalize_django_value({"p": value}), {"p": value}):
-            with pytest.raises(RuntimeError) as exc:
+            # `get_digit` is Django's own function since 2.0: the TypeError
+            # itself crosses.
+            with pytest.raises(TypeError):
                 _rust.render_template('{{ p|get_digit:"1" }}', context)
-            assert "TypeError" in str(exc.value), str(exc.value)
-            assert "calls int() on its value" in str(exc.value), str(exc.value)
             # The control: both paths carry the real Python type, which is what
             # #2448 established for the raw path and #2467 for the normalized
             # one. Without this the reason above is prose again.
@@ -851,7 +862,7 @@ class TestTheResidueThisDoesNotTouch:
         The issue attributes 2 cells each to `default`, `default_if_none`,
         `join`, `slice` and a custom-filter probe. All ten are one thing, and
         no filter is involved: `{{ p }}` over `Decimal("Infinity")` raises
-        `TypeError: bad operand type for abs(): 'str'` in Django's
+        `TypeError: bad operand type for abs(): 'str'` in Django 5.2/6.0's
         `numberformat.format`. The filter merely passes the value through to a
         render that was already going to refuse. Filed as #2460, as a DECISION
         issue in the shape of #2429 rather than a fix.
@@ -862,19 +873,27 @@ class TestTheResidueThisDoesNotTouch:
         >200-digit performance guard, and `"{:f}".format(Decimal("Infinity"))`
         (the arm one line below it) computes exactly the text djust emits. The
         argument and its four measured facts live in
-        `python/tests/test_decimal_special_render_decision_2460.py`; this stays
-        as the premise it always was, and remains true.
+        `python/tests/test_decimal_special_render_decision_2460.py`. Django 6.1
+        fixed the crash and now renders the same text as djust.
         """
         from decimal import Decimal
 
         for value in (Decimal("Infinity"), Decimal("NaN")):
-            with pytest.raises(TypeError, match="abs"):
-                DjangoTemplate("{{ p }}").render(DjangoContext({"p": value}))
             args = (
                 ':"D"' if name.startswith("default") else (':", "' if name == "join" else ':"1:"')
             )
-            with pytest.raises(TypeError, match="abs"):
-                DjangoTemplate("{{ p|%s%s }}" % (name, args)).render(DjangoContext({"p": value}))
+            source = "{{ p|%s%s }}" % (name, args)
+            if django.VERSION >= (6, 1):
+                expected = DjangoTemplate("{{ p }}").render(DjangoContext({"p": value}))
+                assert DjangoTemplate(source).render(DjangoContext({"p": value})) == expected
+                assert (
+                    _rust.render_template(source, normalize_django_value({"p": value})) == expected
+                )
+            else:
+                with pytest.raises(TypeError, match="abs"):
+                    DjangoTemplate("{{ p }}").render(DjangoContext({"p": value}))
+                with pytest.raises(TypeError, match="abs"):
+                    DjangoTemplate(source).render(DjangoContext({"p": value}))
 
     def test_json_script_stays_permissive_by_decision(self) -> None:
         """The 2 remaining widthratio cells, decided in #2429 and not reopened."""

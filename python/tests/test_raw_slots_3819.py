@@ -281,26 +281,3 @@ class TestOtherScriptBlobs:
             'Object.assign(window.handlerMetadata, {"my_handler": {"lock": true, "debounce": 300}});'
             in out
         )
-
-    def test_loading_grouping_classes_cannot_end_the_config_script(self):
-        class _View(LiveView):
-            template = "<div>x</div>"
-
-        classes = [BREAKOUT, "a&b", "ok"]
-        with override_settings(LIVEVIEW_CONFIG={"loading_grouping_classes": classes}):
-            out = _View()._inject_client_script("<html><head></head><body></body></html>")
-        line = next(ln for ln in out.splitlines() if "DJUST_LOADING_GROUPING_CLASSES" in ln)
-        value = line.split("=", 1)[1].strip().rstrip(";")
-        assert "<" not in value and ">" not in value and "&" not in value
-        assert json.loads(value) == classes
-        assert out.count("</script>") == out.count("<script")
-
-    def test_default_loading_grouping_classes_are_byte_identical(self):
-        class _View(LiveView):
-            template = "<div>x</div>"
-
-        out = _View()._inject_client_script("<html><head></head><body></body></html>")
-        assert (
-            'window.DJUST_LOADING_GROUPING_CLASSES = ["d-flex", "btn-group", "input-group", '
-            '"form-group", "btn-toolbar"];' in out
-        )

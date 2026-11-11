@@ -36,7 +36,6 @@ under — so the gate-off (unfixed code) fails fragment-only.
 
 from __future__ import annotations
 
-import logging
 import os
 import shutil
 from importlib import import_module
@@ -328,25 +327,17 @@ class TestCollectorIsDirGuard:
 
 
 @pytest.mark.django_db
-def test_resolution_failure_is_logged_not_silent(rf, _djust_backend_app_templates, caplog):
-    """When the template-inheritance resolution path genuinely fails, the
-    fallback must LOG at WARNING (not swallow at DEBUG) — so a render-path
-    error can never again degrade to fragment-only without a trace (#1801).
-    We force a failure by monkeypatching the Rust resolver to raise.
-    """
+def test_resolution_failure_raises(rf, _djust_backend_app_templates):
+    """2.0: a template-inheritance resolution failure RAISES. It used to log a
+    warning and serve the dj-root fragment without the base template's <head>
+    (#1801)."""
     import djust._rust as _rust
-    import djust.mixins.template as template_mod
 
     view = ExtendsHeadView()
     view.mount(rf.get("/"))
 
-    # NOTE: this monkeypatch target works ONLY because
-    # ``from djust._rust import resolve_template_inheritance`` lives INSIDE
-    # ``get_template()`` in mixins/template.py (the import-inside-try). If that
-    # import is ever hoisted to module top, ``mixins.template`` binds its own
-    # name and patching ``_rust.resolve_template_inheritance`` has no effect —
-    # the patch target must then become
-    # ``djust.mixins.template.resolve_template_inheritance`` (#1804/#1805).
+    # The import lives inside ``get_template()``, so patching the module
+    # attribute reaches it (#1804/#1805).
     orig = _rust.resolve_template_inheritance
 
     def _boom(*args, **kwargs):
@@ -354,19 +345,8 @@ def test_resolution_failure_is_logged_not_silent(rf, _djust_backend_app_template
 
     _rust.resolve_template_inheritance = _boom
     try:
-        with caplog.at_level(logging.WARNING, logger=template_mod.logger.name):
+        with pytest.raises(RuntimeError, match="could not resolve template inheritance") as info:
             view.get_template()
     finally:
         _rust.resolve_template_inheritance = orig
-
-    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert any(
-        "resolution failed" in r.getMessage().lower()
-        or "forced resolution failure for #1801 test" in r.getMessage()
-        for r in warnings
-    ), (
-        "A failure in the template-inheritance resolution path must be logged "
-        "at WARNING/ERROR (no silent swallow) so the fragment-only degradation "
-        "is never invisible again (#1801). WARNING records: "
-        f"{[r.getMessage() for r in warnings]}"
-    )
+    assert "forced resolution failure for #1801 test" in str(info.value)

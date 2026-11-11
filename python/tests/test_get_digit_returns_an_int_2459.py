@@ -539,14 +539,12 @@ class TestTheInputExitsAreUntouched:
         source = '{{ p|get_digit:"0"|pprint }}'
         assert dj(source, value) == du(source, value), value
 
-    def test_landing_on_the_minus_sign_is_STILL_the_documented_divergence(self) -> None:
-        """Django raises on ``int('-')``; djust hands the value back.
-
-        Unchanged by this fix, and asserted rather than assumed: this arm is
-        the neighbour of both exits that changed.
-        """
+    def test_landing_on_the_minus_sign_raises_as_django_does(self) -> None:
+        """Django raises on ``int('-')``. The Rust port handed the value back
+        (a documented divergence); since 2.0 ``get_digit`` is Django's own
+        function, so djust raises too."""
         assert dj('{{ p|get_digit:"3" }}', -42) == "<<ValueError>>"
-        assert du('{{ p|get_digit:"3" }}', -42) == "-42"
+        assert du('{{ p|get_digit:"3" }}', -42) == "<<ValueError>>"
 
     def test_a_negative_still_indexes_past_the_sign_correctly(self) -> None:
         """``str(-42)`` is four characters and Django indexes into that."""
@@ -611,20 +609,11 @@ class TestNoSecondMechanismWasAdded:
     was added anywhere.
     """
 
-    def _arm(self) -> str:
+    def test_the_arm_is_djangos_own_function(self) -> None:
+        """2.0 routes ``get_digit`` to ``django.template.defaultfilters``, so the
+        integer exit is Django's by construction rather than a port of it."""
         source = production(FILTERS_RS)
-        start = source.index('        "get_digit" => {')
-        return source[start : source.index('\n        "iriencode" => {', start)]
-
-    def test_the_arm_builds_an_Integer_and_no_longer_a_String(self) -> None:
-        arm = self._arm()
-        assert "Value::Integer(i64::from(b - b'0'))" in arm, arm[-900:]
-        assert "Value::Integer(0)" in arm, arm[-900:]
-        # The two spellings the fix removed. Their absence is what stops the
-        # `to_string()`-only assertions elsewhere passing for the wrong reason
-        # again.
-        assert "Value::String((*b as char).to_string())" not in arm
-        assert 'Value::String("0".to_string())' not in arm
+        assert '"get_digit" => filter_registry::apply_django_builtin_filter(' in source
 
     def test_no_new_get_digit_special_case_exists_in_the_crate(self) -> None:
         """The RENDERER does not know this filter by name.

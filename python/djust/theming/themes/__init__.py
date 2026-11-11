@@ -4,26 +4,7 @@ Per-theme modules — one file per built-in theme.
 Each theme file (e.g., bauhaus.py, dracula.py) contains all pieces for
 that theme: color preset (PRESET), design system (DESIGN_SYSTEM), and
 theme pack (PACK).
-
-This package also re-exports the deprecated Theme/THEMES API from
-_legacy.py for backward compatibility.
 """
-
-# Re-export legacy themes.py API so that existing code like
-# `from djust.theming.themes import Theme, get_theme, THEMES`
-# continues to work now that themes/ is a package.
-from ._legacy import (  # noqa: F401
-    Theme,
-    Typography,
-    Spacing,
-    BorderRadius,
-    Shadows,
-    Animations,
-    ComponentStyles,
-    THEMES,
-    get_theme,
-    list_themes,
-)
 
 # Import all per-theme modules for convenient access
 from . import (  # noqa: F401

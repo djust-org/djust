@@ -963,7 +963,7 @@ class TestResidualFoldObservability:
 
     # -- #1908 item 1 + 3: on_event_frame DEBUG residual fold (unit) --------------
 
-    def _make_attaching_transport(self, *, debug_panel_active=True, populate_tracker=False):
+    def _make_attaching_transport(self, *, populate_tracker=False):
         """A transport whose fake consumer carries the REAL ``_attach_debug_payload``
         + a view with ``get_debug_update`` so ``on_event_frame`` exercises the true
         attach path. Returns ``(transport, consumer)``."""
@@ -975,7 +975,6 @@ class TestResidualFoldObservability:
 
         class _FakeConsumer:
             view_instance = view
-            _debug_panel_active = debug_panel_active
             # Borrow the real consumer method (unbound) so the production attach logic
             # is what runs, not a stub (#1037 greenwashing-catcher).
             _attach_debug_payload = LiveViewConsumer._attach_debug_payload
@@ -1025,20 +1024,6 @@ class TestResidualFoldObservability:
         assert "performance" not in frame, "top-level performance must be absent in production."
         assert "_timing_render_ms" not in frame, (
             "the internal render-timing marker must never leak onto the wire frame."
-        )
-
-    def test_on_event_frame_no_debug_when_panel_closed(self):
-        """GATE-OFF (#1468): even in DEBUG, a CLOSED debug panel
-        (``_debug_panel_active = False``) must suppress the _debug payload — matching
-        the bespoke ``_attach_debug_payload`` panel gate (websocket.py:1649)."""
-        from django.test import override_settings
-
-        t, _ = self._make_attaching_transport(debug_panel_active=False)
-        frame = {"type": "patch", "patches": [], "version": 8, "event_name": "bump"}
-        with override_settings(DEBUG=True):
-            t.on_event_frame(t._consumer.view_instance, frame, event_name="bump", event_ref=1)
-        assert "_debug" not in frame, (
-            "a closed debug panel must suppress the _debug payload even in DEBUG (#1908)."
         )
 
     def test_on_event_frame_timing_under_expose_timing(self):

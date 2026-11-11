@@ -1,0 +1,1 @@
+- **Django partials:** Improve recursion and missing-variable exception parity.

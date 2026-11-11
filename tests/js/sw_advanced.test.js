@@ -387,7 +387,7 @@ describe('client: mount_batch handler', () => {
         if (!handler) {
             // Try to grab the class via the globals installed by client.js
             // Most builds expose LiveViewWebSocket on window.
-            const LiveViewWebSocket = window.LiveViewWebSocket;
+            const LiveViewWebSocket = window.djust.LiveViewWebSocket;
             if (LiveViewWebSocket) {
                 handler = new LiveViewWebSocket();
             }
@@ -505,7 +505,7 @@ describe('client: state snapshot capture wiring (Fix #1, Fix #9)', () => {
 
     it('case mount stashes state_snapshot_signed verbatim into djust._clientState[view]', async () => {
         const { window } = createEnv();
-        const LiveViewWebSocket = window.LiveViewWebSocket;
+        const LiveViewWebSocket = window.djust.LiveViewWebSocket;
         expect(LiveViewWebSocket).toBeTruthy();
         const handler = new LiveViewWebSocket();
         await handler.handleMessage({
@@ -523,7 +523,7 @@ describe('client: state snapshot capture wiring (Fix #1, Fix #9)', () => {
 
     it('case mount ignores legacy public_state (no longer trusted)', async () => {
         const { window } = createEnv();
-        const handler = new window.LiveViewWebSocket();
+        const handler = new window.djust.LiveViewWebSocket();
         await handler.handleMessage({
             type: 'mount',
             session_id: 's-1',
@@ -605,7 +605,7 @@ describe('client: mount_batch navigate passthrough (Fix #4)', () => {
         const navCalls = [];
         window.djust.navigation = window.djust.navigation || {};
         window.djust.navigation.handleNavigation = (d) => { navCalls.push(d); };
-        const handler = new window.LiveViewWebSocket();
+        const handler = new window.djust.LiveViewWebSocket();
         await handler.handleMessage({
             type: 'mount_batch',
             session_id: 's-1',

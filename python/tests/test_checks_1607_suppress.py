@@ -7,17 +7,6 @@ V/C/T/Y check in the file uses. This file pins the fix. V007 has since been
 retired (ADR-037 D3); ``test_checks.py::TestV007Retired`` pins that.
 """
 
-import pytest
-
-
-def _liveview_available():
-    try:
-        from djust.live_view import LiveView  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
 
 def _force_gc():
     import gc
@@ -29,12 +18,6 @@ def _check_liveviews_errors():
     from djust.checks import check_liveviews
 
     return check_liveviews(None)
-
-
-@pytest.fixture(autouse=True)
-def _skip_if_no_liveview():
-    if not _liveview_available():
-        pytest.skip("Rust extension not available")
 
 
 class TestV002Suppress:

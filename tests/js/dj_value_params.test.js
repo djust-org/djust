@@ -181,15 +181,6 @@ describe('dj-value-* static event parameters', () => {
             expect(params.id).toBe('from-dj-value');
         });
 
-        it('dj-value-* takes precedence over dj-params', () => {
-            const el = document.createElement('button');
-            el.setAttribute('dj-params', '{"id": "from-dj-params"}');
-            el.setAttribute('dj-value-id', 'from-dj-value');
-
-            const params = extractTypedParams(el);
-
-            expect(params.id).toBe('from-dj-value');
-        });
     });
 
     describe('typical usage patterns', () => {

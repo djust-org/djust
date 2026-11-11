@@ -153,7 +153,6 @@ Both columns render through the same Rust crate, `djust_templates`. The parts of
 
 - No `<!--dj-if-->` boundary markers around `{% if %}` blocks. They are the VDOM differ's keyed boundaries and mean nothing without a differ.
 - No parsed-VNode loop cache. That cache is what `render_with_diff` splices into the diff baseline; without the feature `djust_vdom` leaves the dependency graph.
-- No Rust UI components. A `<RustButton />`-style tag still parses, but rendering one raises a template error naming the feature; `djust_components` leaves the graph.
 
 It is still a PyO3 crate. The tag and filter registries that serve `{% url %}` and `@register.filter` callables are Python-backed, and a plain Django project needs them more than LiveView does; cutting that dependency is a separate, larger change. The loop-cache manifest and its placeholder string are also left in place, since they are inert unless a LiveView installs a cache guard.
 
@@ -205,7 +204,6 @@ The feature is a compile-time boundary, not the reason backend output is clean. 
 ⚠️ **Not all Django features supported yet:**
 - Several Django built-in tags and the `cache` library are not implemented; the generated lists below are the authority
 - Django's `i18n`, `l10n` and `tz` libraries are bridged on `{% load %}` (#2558): their tags and filters resolve on any `TEMPLATES` shape once the template loads the library — see "Internationalization" below for what that covers and the residues it does not. The three `tz` *filters* (`localtime`, `timezone`, `utc`) bridge verbatim too (#2541): a datetime crosses the boundary as a typed value carrying the object, and the converted result keeps Django's `convert_to_local_time = False` so a following `date` filter formats it in the zone the filter chose, not the active one
-- `striptags` is pinned to one `html.parser` behaviour and differs from Django's `strip_tags` on malformed input on some CPython releases (the interpreter's parser moved in 3.12.12, 3.13.10, 3.14.1, 3.13.15 and 3.14.7); the measured differences, the eight values added by 3.13.15 / 3.14.7 and how to get Django's exact result are in [Templates: `striptags` and the Python version](website/core-concepts/templates.md#striptags-and-the-python-version)
 - `{% debug %}` renders `""` unless `settings.DEBUG` (Django's own gate), and what it dumps has already been through djust's serialization floor and sidecar proxies — protected model fields never reach it. On the plain backend a model shows as its serialized dict rather than its repr (#2590)
 - `{% querystring %}` reads `request.GET` from the render: the plain backend carries a `RequestContext`'s request or the `request=` argument, and the LiveView WebSocket path carries the mount-time request; the LiveView GET page-shell wires no request into the render (pre-existing, #2589), so pass an explicit `QueryDict` there. `{% querystring … as var %}` binds the name and emits nothing, as Django's `simple_tag` does (#2591)
 - A project's own `{% load %}` tag libraries ARE loaded (#2547, see "Loading a project's template libraries" below); a raw `@register.tag` that consumes a body is bridged when it is a plain wrapper and refused, with the reason, otherwise (ADR-030)
@@ -285,7 +283,61 @@ Residues, all of them named tests rather than silent gaps:
 | `{% localtime on %}` under `USE_TZ = False` | no conversion | Django's `on` forces conversion even with `USE_TZ` off; djust's `on` keeps whatever the render env pushed. `off` and the whole `USE_TZ = True` matrix agree |
 | `OPTIONS['string_if_invalid']` | not honoured by the plain backend | engine-wide (#2518), not i18n-specific: the raw-block handler reads the value it is given, and the scoreboard's engine (a real Django `Engine`) does carry it |
 
+### Django 6 template partials in LiveViews
+
+Django 6 template partials can be used inside LiveView roots, and a partial can
+also render the root itself. Invocations retain their caller's context, including
+`{% with %}`, conditionals, loops, inheritance, and relative includes. A page
+that renders a root-bearing partial must render exactly one eligible LiveView
+root; missing, competing, or unauthored roots are rejected with
+`ImproperlyConfigured` rather than becoming a diff baseline. Ordinary rootless
+fragments retain their existing behavior when no loaded partial could own a
+root. Model bindings are authorized only when their authored attributes remain
+inside the selected root and their original child-view boundary.
+
+The root must survive HTML5 parsing in a form compatible with the client's
+fragment parser. Markup that would be moved or reconstructed differently, such
+as some table and select contexts, is rejected; put the root on an enclosing
+ordinary container in those cases. Dynamic or otherwise unresolvable lazy
+include plans remain unregistered under the existing fail-closed lazy policy.
+Django 6 templates with includes or inheritance may use the provenance-aware
+rendering path, which does more work than ordinary fragment rendering.
+
+For named partials (`template_name="page.html#name"` or a static include of
+`"page.html#name"`), recursive ORM serialization supports a direct model or
+model-collection root following a self-referential foreign key or one-to-one
+field with `{% if node.child %}` and `{% with node=node.child %}`. Unsupported
+recursive control flow and nested ORM contexts are rejected
+when detected, rather than silently truncating model data. Dynamically selected
+recursive named partials are rejected; unusual aliasing is not covered by
+this scoped serializer. In LiveViews, dynamic Django template objects are
+accepted only when their render behavior and static content can be verified;
+use a template name for more complex dynamic includes. Recursive ORM values
+also require JIT
+serialization and the default context-exposure mode. Non-ORM recursive values
+continue to use the normal template behavior.
+
+LiveViews that may resolve partial roots, including some templates with
+includes or inheritance, store additional snapshot metadata. During a rolling
+upgrade, older djust workers cannot resume those snapshots; upgrade all workers
+before serving those views, or keep them on upgraded workers until the rollout
+is complete.
+
+Partial calls are bounded by the Python interpreter's configured recursion
+limit rather than a fixed 64-call limit; exceeding the djust limit raises
+`RecursionError`. Django's precise threshold can differ because it counts Python
+frames, while djust counts partial calls. Sequential calls do not accumulate the
+count. Rust-only callers use a limit of 1,000 when Python is unavailable. Deeply
+nested Rust context values can separately exhaust a small native thread stack,
+even outside partials.
+
+Unresolved filter arguments raise Django's `VariableDoesNotExist`, including
+inside partials. djust's diagnostic identifies the filter and argument; its
+message need not match Django's exact wording.
+
 ### Supported and unsupported tags and filters
+
+**Nineteen built-in filters run Django's own function (2.0).** `addslashes`, `capfirst`, `filesizeformat`, `get_digit`, `iriencode`, `linebreaks`, `linebreaksbr`, `linenumbers`, `make_list`, `phone2numeric`, `slugify`, `striptags`, `truncatechars_html`, `truncatewords_html`, `unordered_list`, `urlize`, `urlizetrunc`, `wordcount` and `wordwrap` are still built-ins of the Rust engine: they need no `{% load %}`, and the parse-time name and arity checks still apply. Each call runs `django.template.defaultfilters.<name>`, so its output, its escaping and the exceptions it raises are Django's own. These filters are rarely used, and none of them appears in a loop in the djust or djust.org templates. Running Django's code costs a Python call per value.
 
 <!-- generated:template-backend-lists -->
 _This block is generated by `scripts/generate-template-backend-lists.py` from the engine's own registries. Do not edit it by hand; run `make template-backend-lists`._

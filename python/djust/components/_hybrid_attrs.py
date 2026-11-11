@@ -1022,32 +1022,29 @@ def slot_text(value: Any) -> str:
 
 
 def _called(value: Any) -> Any:
-    """``value`` after the engine's auto-call: a callable is called (when the project's setting
-    is on, and the value does not opt out), a callable that ``alters_data`` or needs arguments
+    """``value`` after the engine's auto-call: a callable is called (unless the
+    value opts out), a callable that ``alters_data`` or needs arguments
     gives ``""``. Anything else comes back as it is."""
     if (
         callable(value)
         and not isinstance(value, type)
         and not getattr(value, "do_not_call_in_templates", False)
     ):
-        from djust.config import template_auto_call_enabled
-
         if getattr(value, "alters_data", False):
             return ""
-        if template_auto_call_enabled():
+        try:
+            value = value()
+        except TypeError:
+            # Django's rule: a TypeError because the callable NEEDS arguments prints nothing
+            # (``string_if_invalid``); any other TypeError is the callable's own and goes on.
             try:
-                value = value()
+                inspect.signature(value).bind()
             except TypeError:
-                # Django's rule: a TypeError because the callable NEEDS arguments prints nothing
-                # (``string_if_invalid``); any other TypeError is the callable's own and goes on.
-                try:
-                    inspect.signature(value).bind()
-                except TypeError:
-                    return ""
-                except ValueError:
-                    # no signature to bind (a builtin, say): it is the callable's own TypeError
-                    pass
-                raise
+                return ""
+            except ValueError:
+                # no signature to bind (a builtin, say): it is the callable's own TypeError
+                pass
+            raise
     return value
 
 

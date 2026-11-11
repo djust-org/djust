@@ -75,6 +75,31 @@ class _ScopeSession:
         self.session_key = key
 
 
+@pytest.fixture
+async def close_filter_worker_connections(db):
+    """Release connections opened by session creation on the shared async worker."""
+    from django.db import connections
+    from django.db.backends.base.base import BaseDatabaseWrapper
+
+    def snapshot():
+        return {
+            id(conn): conn.connection is not None for conn in connections.all(initialized_only=True)
+        }
+
+    def close_new_connections(before):
+        for conn in connections.all(initialized_only=True):
+            if conn.connection is None or before.get(id(conn), False):
+                continue
+            if conn.vendor == "sqlite" and conn.is_in_memory_db():
+                BaseDatabaseWrapper.close(conn)
+            else:
+                conn.close()
+
+    before = await sync_to_async(snapshot)()
+    yield
+    await sync_to_async(close_new_connections)(before)
+
+
 async def _connect_and_mount(view_path: str, url: str = "/t/"):
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
@@ -255,6 +280,7 @@ def _body_rows(html: str) -> list:
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("close_filter_worker_connections")
 class TestFilterOverWebSocket:
     @pytest.mark.parametrize("framework", _FRAMEWORKS)
     async def test_global_query_narrows_then_clearing_restores(self, framework):

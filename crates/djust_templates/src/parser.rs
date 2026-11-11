@@ -5,6 +5,37 @@ use djust_core::{DjangoRustError, Result};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Weak};
+
+/// Per-template partial bodies, shared by calls without forming reference cycles.
+#[derive(Debug)]
+pub struct PartialRegistry {
+    pub bodies: HashMap<String, Vec<Node>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum PartialRegistryRef {
+    Strong(Arc<PartialRegistry>),
+    Weak(Weak<PartialRegistry>),
+}
+
+impl PartialRegistryRef {
+    pub fn upgrade(&self) -> Option<Arc<PartialRegistry>> {
+        match self {
+            Self::Strong(registry) => Some(registry.clone()),
+            Self::Weak(registry) => registry.upgrade(),
+        }
+    }
+}
+
+static DJANGO_PARTIALS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Configure Django 6+ built-in partial tags at Python extension initialization.
+pub fn set_django_partials(enabled: bool) {
+    DJANGO_PARTIALS.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+pub fn django_partials_enabled() -> bool {
+    DJANGO_PARTIALS.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone)]
 pub enum Node {
@@ -18,6 +49,19 @@ pub enum Node {
         lazy_origin: Option<String>,
         lazy_site: Option<usize>,
         lazy_text: Option<crate::provenance::SourceText>,
+    },
+    /// A named Django template partial resolved within its owning template.
+    PartialCall {
+        name: String,
+        registry: Option<PartialRegistryRef>,
+        site_id: Option<String>,
+    },
+    /// A declared Django template partial; metadata spans cover opening and closing tags.
+    PartialDef {
+        name: String,
+        inline: bool,
+        children: Vec<Node>,
+        span: Option<Span>,
     },
     Text(String),
     /// Variable expression `{{ var|filter:arg }}`.
@@ -101,10 +145,6 @@ pub enum Node {
         name: String,
         props: Vec<(String, String)>,
         children: Vec<Node>,
-    },
-    RustComponent {
-        name: String,
-        props: Vec<(String, String)>,
     },
     /// Custom template tag handled by a Python callback.
     ///
@@ -538,6 +578,7 @@ macro_rules! child_lists {
             | Node::Filter { nodes, .. } => [Some(nodes), None],
             Node::ReactComponent { children, .. }
             | Node::BlockCustomTag { children, .. }
+            | Node::PartialDef { children, .. }
             | Node::Language { children, .. }
             | Node::Timezone { children, .. }
             | Node::Localize { children, .. }
@@ -551,8 +592,8 @@ macro_rules! child_lists {
             | Node::CsrfToken
             | Node::DjustAudio
             | Node::Static(_)
-            | Node::RustComponent { .. }
             | Node::CustomTag { .. }
+            | Node::PartialCall { .. }
             | Node::WidthRatio { .. }
             | Node::FirstOf { .. }
             | Node::TemplateTag(_)
@@ -728,7 +769,95 @@ fn parse_internal(
         crate::inheritance::set_node_sources(&mut nodes, &std::sync::Arc::from(source), None);
     }
     crate::provenance::annotate_source(&mut nodes, tokens, spans, source);
+    bind_partials(&mut nodes)?;
     Ok(nodes)
+}
+
+/// Bind calls to definitions in this template, including forward references.
+/// Stored bodies use weak references to avoid cycles through recursive partials.
+pub fn bind_partials(nodes: &mut [Node]) -> Result<()> {
+    fn collect(nodes: &[Node], bodies: &mut HashMap<String, Vec<Node>>) -> Result<()> {
+        for node in nodes {
+            if let Node::PartialDef { name, children, .. } = node {
+                if bodies.insert(name.clone(), children.clone()).is_some() {
+                    return Err(DjangoRustError::TemplateError(format!(
+                        "Partial '{name}' is already defined in the template."
+                    )));
+                }
+            }
+            for children in child_lists!(node).into_iter().flatten() {
+                collect(children, bodies)?;
+            }
+        }
+        Ok(())
+    }
+    fn bind(nodes: &mut [Node], reference: &PartialRegistryRef) {
+        for node in nodes {
+            if let Node::PartialCall { registry, .. } = node {
+                *registry = Some(reference.clone());
+            }
+            for children in child_lists!(node).into_iter().flatten() {
+                bind(children, reference);
+            }
+        }
+    }
+    let mut bodies = HashMap::new();
+    collect(nodes, &mut bodies)?;
+    fn has_calls(nodes: &[Node]) -> bool {
+        nodes.iter().any(|node| {
+            matches!(node, Node::PartialCall { .. })
+                || child_lists!(node)
+                    .into_iter()
+                    .flatten()
+                    .any(|children| has_calls(children))
+        })
+    }
+    if !has_calls(nodes) {
+        return Ok(());
+    }
+    let registry = Arc::new_cyclic(|weak| {
+        let reference = PartialRegistryRef::Weak(weak.clone());
+        for body in bodies.values_mut() {
+            bind(body, &reference);
+        }
+        PartialRegistry { bodies }
+    });
+    bind(nodes, &PartialRegistryRef::Strong(registry));
+    Ok(())
+}
+
+/// Find a named partial in a parsed template, including nested definitions.
+pub fn select_named_partial(nodes: &[Node], name: &str) -> Option<Vec<Node>> {
+    for node in nodes {
+        if let Node::PartialDef {
+            name: partial,
+            children,
+            ..
+        } = node
+        {
+            if partial == name {
+                return Some(children.clone());
+            }
+        }
+        for children in child_lists!(node).into_iter().flatten() {
+            if let Some(result) = select_named_partial(children, name) {
+                return Some(result);
+            }
+        }
+    }
+    None
+}
+
+/// Source spans for actual parsed partial definitions, in UTF-8 byte offsets.
+pub fn named_partial_spans(nodes: &[Node], result: &mut HashMap<String, Option<Span>>) {
+    for node in nodes {
+        if let Node::PartialDef { name, span, .. } = node {
+            result.insert(name.clone(), *span);
+        }
+        for children in child_lists!(node).into_iter().flatten() {
+            named_partial_spans(children, result);
+        }
+    }
 }
 
 /// Compute a stable identity hash from a template source string.
@@ -819,7 +948,7 @@ fn assign_marker_ids_inner(
     for node in nodes.iter_mut() {
         match node {
             // Its own tag identity, for `Context::dj_if_include_path` (#2689).
-            Node::Include { site_id, .. } => {
+            Node::Include { site_id, .. } | Node::PartialCall { site_id, .. } => {
                 *site_id = Some(format!("{prefix}_{includes}"));
                 *includes += 1;
             }
@@ -869,7 +998,7 @@ fn assign_marker_ids_inner(
                 assign_marker_ids_inner(super_nodes, prefix, counter, includes);
                 assign_marker_ids_inner(nodes, prefix, counter, includes);
             }
-            Node::BlockCustomTag { children, .. } => {
+            Node::BlockCustomTag { children, .. } | Node::PartialDef { children, .. } => {
                 assign_marker_ids_inner(children, prefix, counter, includes);
             }
             // Scope nodes (#2558) carry children; `RawBlockCustomTag` does
@@ -1010,7 +1139,9 @@ fn resolve_cycle_nodes(
             | Node::LocalTime { children, .. } => {
                 resolve_cycle_nodes(children, prefix, state)?;
             }
-            Node::BlockCustomTag { children, .. } | Node::ReactComponent { children, .. } => {
+            Node::BlockCustomTag { children, .. }
+            | Node::PartialDef { children, .. }
+            | Node::ReactComponent { children, .. } => {
                 resolve_cycle_nodes(children, prefix, state)?;
             }
             // `{% ifchanged %}` is BOTH an id consumer and a container, so it
@@ -1423,6 +1554,66 @@ fn parse_token_inner(
                         reversed,
                         nodes,
                         empty_nodes,
+                    }))
+                }
+
+                "partialdef" if django_partials_enabled() => {
+                    if args.is_empty() {
+                        return Err(DjangoRustError::TemplateError(
+                            "'partialdef' tag requires a name".to_string(),
+                        ));
+                    }
+                    if args.len() > 2 {
+                        return Err(DjangoRustError::TemplateError(
+                            "'partialdef' tag takes at most 2 arguments".to_string(),
+                        ));
+                    }
+                    if args.len() == 2 && args[1] != "inline" {
+                        return Err(DjangoRustError::TemplateError("The 'inline' argument does not have any parameters; either use 'inline' or remove it completely.".to_string()));
+                    }
+                    let (children, end, _) = parse_block_until_any(
+                        block_names,
+                        tokens,
+                        spans,
+                        source,
+                        *i + 1,
+                        &["endpartialdef"],
+                    )?;
+                    if let Token::Tag(_, end_args) = &tokens[end] {
+                        if !end_args.is_empty() && (end_args.len() != 1 || end_args[0] != args[0]) {
+                            let actual = format!("endpartialdef {}", end_args.join(" "));
+                            let named_end = format!("endpartialdef {}", args[0]);
+                            return Err(invalid_block_tag_error(
+                                spans,
+                                source,
+                                end,
+                                &actual,
+                                &["endpartialdef", &named_end],
+                            ));
+                        }
+                    }
+                    let span = spans
+                        .get(*i)
+                        .zip(spans.get(end))
+                        .map(|(start, finish)| (start.0, finish.1));
+                    *i = end;
+                    Ok(Some(Node::PartialDef {
+                        name: args[0].clone(),
+                        inline: args.get(1).is_some_and(|s| s == "inline"),
+                        children,
+                        span,
+                    }))
+                }
+                "partial" if django_partials_enabled() => {
+                    if args.len() != 1 {
+                        return Err(DjangoRustError::TemplateError(
+                            "'partial' tag requires a single argument".to_string(),
+                        ));
+                    }
+                    Ok(Some(Node::PartialCall {
+                        name: args[0].clone(),
+                        registry: None,
+                        site_id: None,
                     }))
                 }
 
@@ -1882,12 +2073,17 @@ fn parse_token_inner(
                         .map(|s| s.trim().to_string())
                         .collect();
                     let filters = parse_filter_specs(&parts[1..], &token)?;
-                    // `"filter escape"` / `"filter safe"` are refused with
-                    // Django's message (two spaces after the period, sic).
+                    // Django 6 removed a space from these diagnostics; the
+                    // installed Django version determines the expected text.
                     for (name, _) in &filters {
                         if name == "escape" || name == "safe" {
+                            let spacing = if crate::renderer::django_6_or_later() {
+                                " "
+                            } else {
+                                "  "
+                            };
                             return Err(DjangoRustError::TemplateError(format!(
-                                "\"filter {name}\" is not permitted.  Use the \"autoescape\" tag instead."
+                                "\"filter {name}\" is not permitted.{spacing}Use the \"autoescape\" tag instead."
                             )));
                         }
                     }
@@ -2292,28 +2488,28 @@ fn parse_token_inner(
             children,
             ..
         } => {
-            // Check if this is a Rust component (starts with "Rust")
+            // `<RustButton …/>`-style tags rendered `djust_components::ui`
+            // server-side until 2.0. Refuse them by name rather than turning
+            // them into React placeholders that render as an empty div.
             if name.starts_with("Rust") {
-                // Rust components are rendered server-side, no children support
-                Ok(Some(Node::RustComponent {
-                    name: name.clone(),
-                    props: props.clone(),
-                }))
-            } else {
-                // Convert token children to Node children for React components
-                let mut child_nodes = Vec::new();
-                for child in children {
-                    if let Token::Text(text) = child {
-                        child_nodes.push(Node::Text(text.clone()));
-                    }
-                }
-
-                Ok(Some(Node::ReactComponent {
-                    name: name.clone(),
-                    props: props.clone(),
-                    children: child_nodes,
-                }))
+                return Err(DjangoRustError::TemplateError(format!(
+                    "<{name} /> component tags were removed in djust 2.0. \
+                     Use a djust component template tag or a Python component instead."
+                )));
             }
+            // Convert token children to Node children for React components
+            let mut child_nodes = Vec::new();
+            for child in children {
+                if let Token::Text(text) = child {
+                    child_nodes.push(Node::Text(text.clone()));
+                }
+            }
+
+            Ok(Some(Node::ReactComponent {
+                name: name.clone(),
+                props: props.clone(),
+                children: child_nodes,
+            }))
         }
 
         // Inline comments create no Django node. Block comments do, and
@@ -3040,7 +3236,7 @@ fn collect_dj_model_fields_depth<L: crate::inheritance::TemplateLoader>(
             }
 
             // Leaf / non-child variants carry no template Text. Note
-            // `RustComponent`, `CustomTag`, `AssignTag`, `Variable`, etc. never
+            // `CustomTag`, `AssignTag`, `Variable`, etc. never
             // hold raw `dj-model=` markup, so there is nothing to scan.
             _ => {
                 for children in node.child_lists().into_iter().flatten() {
@@ -3158,6 +3354,8 @@ pub fn extract_per_node_deps(nodes: &[Node]) -> Vec<HashSet<String>> {
             if matches!(
                 node,
                 Node::CustomTag { .. }
+                    | Node::PartialCall { .. }
+                    | Node::PartialDef { .. }
                     | Node::BlockCustomTag { .. }
                     | Node::RawBlockCustomTag { .. }
                     | Node::Language { .. }
@@ -3191,6 +3389,10 @@ pub fn body_root_var_names(nodes: &[Node]) -> HashSet<String> {
     let mut variables: HashMap<String, Vec<String>> = HashMap::new();
     extract_from_nodes(nodes, &mut variables);
     variables.into_keys().collect()
+}
+
+thread_local! {
+    static PARTIAL_DEPENDENCY_STACK: std::cell::RefCell<HashSet<(usize, String)>> = std::cell::RefCell::new(HashSet::new());
 }
 
 /// Recursively extract variable paths from AST nodes
@@ -3356,12 +3558,6 @@ fn extract_from_nodes(
                 // Recurse into children
                 extract_from_nodes(children, variables);
             }
-            Node::RustComponent { props, name: _ } => {
-                // Extract from component props
-                for (_prop_name, prop_value) in props {
-                    extract_from_operand(prop_value, variables);
-                }
-            }
             Node::AssignTag { args, name: _ } => {
                 // Extract variable references from the assign tag's
                 // arguments so the partial renderer knows the tag
@@ -3389,6 +3585,26 @@ fn extract_from_nodes(
                     }
                 }
                 variables.entry("*".to_string()).or_default();
+            }
+            Node::PartialDef { children, .. } => {
+                extract_from_nodes(children, variables);
+                variables.entry("*".to_string()).or_default();
+            }
+            Node::PartialCall { name, registry, .. } => {
+                variables.entry("*".to_string()).or_default();
+                if let Some(registry) = registry.as_ref().and_then(|r| r.upgrade()) {
+                    let key = (Arc::as_ptr(&registry) as usize, name.clone());
+                    let entered = PARTIAL_DEPENDENCY_STACK
+                        .with(|stack| stack.borrow_mut().insert(key.clone()));
+                    if entered {
+                        if let Some(body) = registry.bodies.get(name) {
+                            extract_from_nodes(body, variables);
+                        }
+                        PARTIAL_DEPENDENCY_STACK.with(|stack| {
+                            stack.borrow_mut().remove(&key);
+                        });
+                    }
+                }
             }
             Node::CustomTag { args, name }
             | Node::BlockCustomTag {
@@ -6414,8 +6630,9 @@ mod dep_tests {
             Node::Static(_) => "Static",
             Node::With { .. } => "With",
             Node::ReactComponent { .. } => "ReactComponent",
-            Node::RustComponent { .. } => "RustComponent",
             Node::CustomTag { .. } => "CustomTag",
+            Node::PartialCall { .. } => "PartialCall",
+            Node::PartialDef { .. } => "PartialDef",
             Node::BlockCustomTag { .. } => "BlockCustomTag",
             Node::RawBlockCustomTag { .. } => "RawBlockCustomTag",
             Node::Language { .. } => "Language",
@@ -6445,6 +6662,17 @@ mod dep_tests {
     /// allow-listed variants).
     fn sample_nodes() -> Vec<Node> {
         vec![
+            Node::PartialCall {
+                name: "p".into(),
+                registry: None,
+                site_id: None,
+            },
+            Node::PartialDef {
+                name: "p".into(),
+                inline: false,
+                children: vec![],
+                span: None,
+            },
             Node::Located {
                 nodes: vec![Node::Variable("a".into(), vec![], false)],
                 span: (0, 7),
@@ -6496,10 +6724,6 @@ mod dep_tests {
                 name: "MyComp".into(),
                 props: vec![("foo".into(), "bar".into())],
                 children: vec![],
-            },
-            Node::RustComponent {
-                name: "MyRust".into(),
-                props: vec![("foo".into(), "bar".into())],
             },
             Node::CustomTag {
                 name: "url".into(),

@@ -315,11 +315,9 @@ class TestARaisingAllIsNotSilent3777:
         else:
             assert groups["all"] == []
 
-    def test_the_jit_handler_logs_it_and_falls_back(self, world_users, monkeypatch, caplog) -> None:
-        """Through the real LiveView render: the failure reaches the existing
-        ``[JIT ERROR]`` handler (which logs through the exposure diagnostics),
-        and the page is NOT silently rendered as 'this user has no groups' by
-        the traversal."""
+    def test_the_jit_handler_logs_it(self, world_users, monkeypatch, caplog) -> None:
+        """Through the real LiveView render: the failure is logged, and the page is NOT
+        silently rendered as 'this user has no groups' by the traversal."""
 
         def boom(self):
             raise OperationalError("statement timeout")
@@ -328,8 +326,10 @@ class TestARaisingAllIsNotSilent3777:
         source = "{% for u in users %}{{ u.username }}[{% for g in u.groups.all %}{{ g.name }},{% endfor %}]{% endfor %}"
         with caplog.at_level(logging.DEBUG):
             _liveview_render(source, {"users": User.objects.order_by("pk")})
-        logged = [r for r in caplog.records if r.levelno >= logging.ERROR]
-        assert any("[JIT ERROR]" in r.getMessage() for r in logged), [
+        # djust 2.0 does not fall back to another serializer (#3546): the failure is reported
+        # as "JIT auto-serialization failed" at WARNING, with the database error chained.
+        logged = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("JIT auto-serialization failed" in r.getMessage() for r in logged), [
             (r.name, r.levelname, r.getMessage()) for r in caplog.records
         ]
 

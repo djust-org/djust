@@ -516,6 +516,39 @@ class TestTheCorpusGapThatHidThisFromTheDifferential:
         swept_at_two = {name for name, provided, _key in mod.arity_cells() if provided == 2}
         assert swept_at_two == set(register.filters)
 
+    def test_forloop_requirement_reads_multiline_dict_and_future_members(self, monkeypatch) -> None:
+        """The reference, not a fixed seven-key transcription, owns the axis."""
+        from types import SimpleNamespace
+
+        mod = self._differential()
+        source = """def render(self, context):
+    unrelated = {'not_a_member': 3}
+    loop_dict = context['forloop'] = {
+        'parentloop': parentloop,
+        'length': len_values,
+        'future_member': 5,
+    }
+    loop_dict['counter0'] = 0
+    loop_dict['counter'] = 1
+    loop_dict['revcounter'] = 2
+    loop_dict['revcounter0'] = 1
+    loop_dict['first'] = True
+    loop_dict['last'] = False
+"""
+        monkeypatch.setattr(mod, "inspect", SimpleNamespace(getsource=lambda _: source))
+        required = mod._required_forloop_members()
+        assert set(required) == {
+            "parentloop",
+            "length",
+            "future_member",
+            "counter0",
+            "counter",
+            "revcounter",
+            "revcounter0",
+            "first",
+            "last",
+        }
+
     def test_the_axis_is_declared_and_reports_no_missing_member(self) -> None:
         mod = self._differential()
         rows = {row["axis"]: row for row in mod.manifest()["axes"]}

@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 type Origins = Vec<(usize, usize, usize, String)>;
 type Output = (String, Vec<(usize, usize)>, Origins);
 
-fn apply(
+pub(crate) fn apply(
     html: &str,
     spans: &[(usize, usize)],
     origins: &Origins,

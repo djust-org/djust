@@ -8,30 +8,6 @@
 // Create djust namespace at the top to ensure it's available for all exports
 window.djust = window.djust || {};
 
-/**
- * Publish a deprecated window global that warns once, on first read, that
- * djust 2.0.0 removes it. Assigning it replaces the alias with a plain value.
- */
-function defineDeprecatedGlobal(name, value, replacement) {
-    let warned = false;
-    Object.defineProperty(window, name, {
-        configurable: true,
-        enumerable: true,
-        get() {
-            if (!warned) {
-                warned = true;
-                console.warn(`[LiveView] window.${name} is deprecated and removed in djust 2.0.0. Use ${replacement} instead.`);
-            }
-            return value;
-        },
-        set(newValue) {
-            Object.defineProperty(window, name, {
-                value: newValue, writable: true, configurable: true, enumerable: true,
-            });
-        },
-    });
-}
-
 // ============================================================================
 // API prefix resolution (#987) — FORCE_SCRIPT_NAME / sub-path mount support
 // ============================================================================
@@ -739,7 +715,8 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             // When no dj-update elements exist, applyDjUpdateElements falls back
             // to morphChildren internally, which preserves JS state (canvas contexts,
             // event listeners, hook properties) better than innerHTML replacement.
-            applyDjUpdateElements(liveviewRoot, newRoot);
+            _withOwnedChildMount(data.owned_children,
+                () => applyDjUpdateElements(liveviewRoot, newRoot));
 
             clearOptimisticPending();
 
@@ -987,6 +964,179 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
 
     window.djust.fallBackToFullLoadOnShellChange = fallBackToFullLoadOnShellChange;
 })();
+
+// ============================================================================
+// Shared inbound frame handling (WebSocket + SSE)
+// ============================================================================
+//
+// The two socket transports receive the same wire frames. What they handle the
+// same way lives here, once, so a fix reaches both (#1646): the receipt-time
+// routing every frame passes through, the application of a frame addressed to
+// a view mounted beside the page view (#3252), and the side-channel frames.
+// Each transport keeps only what is specific to its wire: connection and
+// session frames, mount, event replies (the WebSocket buffers server-initiated
+// patches, #560) and errors.
+
+/**
+ * Receipt-time routing shared by the socket transports. Returns true when the
+ * frame was handled here and the transport must not dispatch it again.
+ */
+async function routeInboundFrame(transport, data) {
+    // #3036: a live navigation to a page with a different page shell is a
+    // full page load; the destination's root is not applied.
+    if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return true;
+    // ADR-038 D-n: compared before anything from this mount is cached.
+    if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
+    storeSignedSnapshot(data, transport.primaryViewPath);
+
+    // A frame addressed to a view mounted beside the page view (#3252)
+    // is applied to that view's container, in its own context.
+    if (typeof data.target_id === 'string' && data.target_id &&
+        _SLOT_FRAME_TYPES.has(data.type)) {
+        await transport._handleSlotFrame(data);
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Apply a frame the server addressed to a view mounted beside the page view
+ * (``target_id``, #3252). A ``mount`` reply fills the view's container; any
+ * other frame is handled by the code that handles the page view's frames, run
+ * in the view's context (``withSlot``), so it patches the view's container
+ * against the view's own VDOM version.
+ *
+ * ``markMounted``: the WebSocket counts a slot's mount reply as its own
+ * ``viewMounted``; the SSE session is mounted by the page view alone.
+ */
+async function handleSlotFrame(transport, data, markMounted) {
+    if (data.type === 'mount') {
+        if (markMounted) transport.viewMounted = true;
+        const container = slotContainer(data.target_id);
+        const hadContent = !!container && container.innerHTML.trim().length > 0;
+        applySlotMount(transport, data, { html: hadContent ? 'morph' : 'replace' });
+        document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
+        return;
+    }
+    const applied = await withSlot(data.target_id, () => transport._handleMessageImpl(data, true));
+    if (applied === undefined) {
+        // The view's container is gone (the page replaced it): its frames
+        // have nowhere to go, but an event reply must still settle its request.
+        const event = acknowledgeEventRequest(transport, data);
+        if (event && event.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
+    }
+}
+
+/**
+ * Handle a frame both socket transports apply the same way. Returns false for
+ * a frame type this does not know, so the caller can report it.
+ *
+ * @param {Object} transport  The receiving transport.
+ * @param {Object} data       The inbound frame.
+ * @param {string} logPrefix  The transport's console prefix.
+ */
+async function dispatchCommonFrame(transport, data, logPrefix) {
+    switch (data.type) {
+        case 'view_refused':
+            // A view beside the page view is refused (login, permission, an
+            // `on_mount` redirect): its container shows it, the page does
+            // not navigate (#3252).
+            applyViewRefusal(data);
+            return true;
+
+        case 'async_complete':
+            completeAsyncBatch(transport, data.async_batch);
+            return true;
+
+        case 'stream':
+            // Streaming partial DOM updates (LLM chat, live feeds)
+            if (window.djust.handleStreamMessage) {
+                window.djust.handleStreamMessage(data);
+            }
+            return true;
+
+        case 'push_event':
+            // Server-pushed event for JS hooks
+            window.dispatchEvent(new CustomEvent('djust:push_event', {
+                detail: { event: data.event, payload: data.payload }
+            }));
+            // Dispatch to dj-hook instances that registered via handleEvent
+            dispatchPushEventToHooks(data.event, data.payload);
+            // Clear loading state — when _skip_render is used, this is the
+            // only response the client gets (no patch/html_update follows).
+            globalLoadingManager.stopLoading(transport.lastEventName, transport.lastTriggerElement);
+            return true;
+
+        case 'embedded_update':
+            // Scoped HTML update for an embedded child LiveView
+            await handleEmbeddedResponse(data, transport);
+            return true;
+
+        case 'navigate': {
+            // Auth redirect (sent by the server when an auth check fails).
+            // Validate scheme/origin via the shared guard so this sink can't
+            // pivot to open-redirect / javascript: DOM-XSS (#1646, finding #16).
+            const navTarget = window.djust.safeNavigationTarget(data.to);
+            if (navTarget) {
+                window.location.href = navTarget; // codeql[js/xss] -- validated via safeNavigationTarget
+            } else if (globalThis.djustDebug) {
+                console.warn(logPrefix + ' navigate target rejected: %s', String(data.to));
+            }
+            return true;
+        }
+
+        case 'navigation':
+            // Server-side live_patch or live_redirect
+            if (window.djust.navigation) {
+                window.djust.navigation.handleNavigation(data);
+            }
+            return true;
+
+        case 'accessibility':
+            // Screen reader announcements from server
+            if (window.djust.accessibility) {
+                window.djust.accessibility.processAnnouncements(data.announcements);
+            }
+            return true;
+
+        case 'focus':
+            // Focus command from server
+            if (window.djust.accessibility) {
+                window.djust.accessibility.processFocus([data.selector, data.options]);
+            }
+            return true;
+
+        case 'flash':
+            // Flash message from server (put_flash / clear_flash)
+            if (window.djust.flash) {
+                window.djust.flash.handleFlash(data);
+            }
+            return true;
+
+        case 'page_metadata':
+            // Page metadata from server (page_title / page_meta)
+            if (window.djust.pageMetadata) {
+                window.djust.pageMetadata.handlePageMetadata(data);
+            }
+            return true;
+
+        case 'layout':
+            // Runtime layout switch (set_layout). The server sends it from the
+            // shared turn end, so it reaches both transports.
+            if (window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
+                window.djust.djLayout.applyLayout(data);
+            }
+            return true;
+
+        case 'reload':
+            // Hot reload: file changed, refresh the page
+            window.location.reload();
+            return true;
+
+        default:
+            return false;
+    }
+}
 
 // ============================================================================
 // WebSocket LiveView Client
@@ -1269,7 +1419,7 @@ function storeSignedSnapshot(data, primaryViewPath) {
 // mount-context state (per-connection values, and ADR-034's per-instance
 // component identities) reaches the page. Shared by the WebSocket and SSE
 // mount paths (#1646: one path, not two).
-function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDraft) {
+function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDraft, ownedChildren) {
     // Parsed as the page parses the container's children: an SVG / MathML
     // root keeps its children SVG / MathML (_parseRootHtmlLive).
     const temp = _parseRootHtmlLive(html, container);
@@ -1277,7 +1427,7 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDr
     // alone cannot distinguish parser-executed scripts from inert ones.
     const retainedBefore = (container === document.body && pageRootIsBody())
         ? new Set(_containerScripts(container)) : null;
-    morphChildren(container, temp);
+    _withOwnedChildMount(ownedChildren, () => morphChildren(container, temp));
     if (retainedBefore) markBodyStamped();
     // The morph resets form fields to the server's values; put a saved draft
     // back into this container before form recovery, which restores what the
@@ -1700,20 +1850,9 @@ class LiveViewWebSocket {
         // the context of the slot it is addressed to (`_handleSlotFrame`).
         if (!inSlot) {
             if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
-            // #3036: a live navigation to a page with a different page shell is a
-            // full page load; the destination's root is not applied.
-            if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return;
-            // ADR-038 D-n: compared before anything from this mount is cached.
-            if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
-            storeSignedSnapshot(data, this.primaryViewPath);
-
-            // A frame addressed to a view mounted beside the page view (#3252)
-            // is applied to that view's container, in its own context.
-            if (typeof data.target_id === 'string' && data.target_id &&
-                _SLOT_FRAME_TYPES.has(data.type)) {
-                await this._handleSlotFrame(data);
-                return;
-            }
+            // Shell-change fallback, mount metadata, signed snapshot and the
+            // views mounted beside the page view (02c-frame-dispatch.js).
+            if (await routeInboundFrame(this, data)) return;
         }
 
         switch (data.type) {
@@ -1806,7 +1945,7 @@ class LiveViewWebSocket {
                         const _morphContainer = findPageViewContainer()
                                             || document.querySelector('[dj-root]:not(html):not(head)');
                         if (_morphContainer) {
-                            _morphPrerenderedMount(_morphContainer, data.html, formRecoverySnapshot);
+                            _morphPrerenderedMount(_morphContainer, data.html, formRecoverySnapshot, undefined, data.owned_children);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
                         } else {
                             // Fallback: no [dj-view]/[dj-root] container found
@@ -1963,24 +2102,12 @@ class LiveViewWebSocket {
                 break;
             }
 
-            case 'view_refused':
-                // A view beside the page view is refused (login, permission, an
-                // `on_mount` redirect): its container shows it, the page does
-                // not navigate (#3252).
-                applyViewRefusal(data);
-                break;
-
             case 'mount_batch': {
                 // Mount-batch response (v0.6.0) — carries N per-view payloads.
                 // Apply each to [data-djust-target="<target_id>"] within a
                 // [dj-view] element, track per-target VDOM versions, and run
                 // reinitAfterDOMUpdate() ONCE after the batch is applied.
                 this.viewMounted = true;
-                // #1031: clear the lazy-hydration in-flight batch so a late
-                // arriving error frame doesn't trigger a phantom fallback.
-                if (window.djust && window.djust.lazyHydration) {
-                    window.djust.lazyHydration.inFlightBatch = null;
-                }
                 const views = Array.isArray(data.views) ? data.views : [];
                 const failed = Array.isArray(data.failed) ? data.failed : [];
                 if (!window.djust._clientVdomVersions) {
@@ -2187,19 +2314,6 @@ class LiveViewWebSocket {
                     console.error('Traceback:', data.traceback);
                 }
 
-                // #1031: if the error is about mount_batch (older server
-                // doesn't recognize the frame type), fall back to per-view
-                // mounts so the lazy-hydrated views still come up.
-                if (
-                    typeof data.error === 'string'
-                    && /mount_batch|unknown\s+message\s+type/i.test(data.error)
-                    && window.djust && window.djust.lazyHydration
-                    && typeof window.djust.lazyHydration.handleMountBatchFallback === 'function'
-                ) {
-                    window.djust.lazyHydration.handleMountBatchFallback();
-                    break;
-                }
-
                 // Non-recoverable errors (e.g. server restart lost state) — auto-reload
                 if (data.recoverable === false) {
                     console.warn('[LiveView] Non-recoverable error, reloading page...');
@@ -2242,10 +2356,6 @@ class LiveViewWebSocket {
                 }
                 break;
 
-            case 'async_complete':
-                completeAsyncBatch(this, data.async_batch);
-                break;
-
             case 'pong':
                 // Heartbeat response
                 break;
@@ -2272,13 +2382,6 @@ class LiveViewWebSocket {
                 }
                 break;
 
-            case 'stream':
-                // Streaming partial DOM updates (LLM chat, live feeds)
-                if (window.djust.handleStreamMessage) {
-                    window.djust.handleStreamMessage(data);
-                }
-                break;
-
             case 'noop': {
                 // Server acknowledged event but no DOM changes needed (auto-detected
                 // or explicit _skip_render). Clear loading state unless async pending.
@@ -2301,18 +2404,6 @@ class LiveViewWebSocket {
                 break;
             }
 
-            case 'push_event':
-                // Server-pushed event for JS hooks
-                window.dispatchEvent(new CustomEvent('djust:push_event', {
-                    detail: { event: data.event, payload: data.payload }
-                }));
-                // Dispatch to dj-hook instances that registered via handleEvent
-                dispatchPushEventToHooks(data.event, data.payload);
-                // Clear loading state — when _skip_render is used, this is the
-                // only response the client gets (no patch/html_update follows).
-                globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
-                break;
-
             case 'presence_event':
                 // broadcast_to_presence() (and LiveCursorMixin's cursor_move)
                 // fanned out to every session in the presence group (#3501).
@@ -2321,11 +2412,6 @@ class LiveViewWebSocket {
                 window.dispatchEvent(new CustomEvent('djust:presence', {
                     detail: { event: data.event, payload: data.payload }
                 }));
-                break;
-
-            case 'embedded_update':
-                // Scoped HTML update for an embedded child LiveView
-                await handleEmbeddedResponse(data, this);
                 break;
 
             case 'child_update':
@@ -2380,64 +2466,6 @@ class LiveViewWebSocket {
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
-                break;
-
-            case 'navigate': {
-                // Auth redirects use the same URL policy as the SSE transport.
-                const navTarget = window.djust.safeNavigationTarget(data.to);
-                if (navTarget) {
-                    window.location.href = navTarget; // codeql[js/xss] -- validated via safeNavigationTarget
-                } else if (globalThis.djustDebug) {
-                    console.warn('[LiveView] navigate target rejected: %s', String(data.to));
-                }
-                break;
-            }
-
-            case 'navigation':
-                // Server-side live_patch or live_redirect
-                if (window.djust.navigation) {
-                    window.djust.navigation.handleNavigation(data);
-                }
-                break;
-
-            case 'accessibility':
-                // Screen reader announcements from server
-                if (window.djust.accessibility) {
-                    window.djust.accessibility.processAnnouncements(data.announcements);
-                }
-                break;
-
-            case 'focus':
-                // Focus command from server
-                if (window.djust.accessibility) {
-                    window.djust.accessibility.processFocus([data.selector, data.options]);
-                }
-                break;
-
-            case 'flash':
-                // Flash message from server (put_flash / clear_flash)
-                if (window.djust.flash) {
-                    window.djust.flash.handleFlash(data);
-                }
-                break;
-
-            case 'page_metadata':
-                // Page metadata from server (page_title / page_meta)
-                if (window.djust.pageMetadata) {
-                    window.djust.pageMetadata.handlePageMetadata(data);
-                }
-                break;
-
-            case 'layout':
-                // Runtime layout switch (v0.6.0) — set_layout() on the server.
-                if (window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
-                    window.djust.djLayout.applyLayout(data);
-                }
-                break;
-
-            case 'reload':
-                // Hot reload: file changed, refresh the page
-                window.location.reload();
                 break;
 
             case 'hvr-applied':
@@ -2513,33 +2541,16 @@ class LiveViewWebSocket {
                     }
                 }
                 break;
+
+            default:
+                // The frames both transports apply alike (02c-frame-dispatch.js).
+                await dispatchCommonFrame(this, data, '[LiveView]');
         }
     }
 
-    /**
-     * Apply a frame the server addressed to a view mounted beside the page view
-     * (``target_id``, #3252). A ``mount`` reply fills the slot's container; any
-     * other frame is handled by the code that handles the page view's frames,
-     * run in the slot's context (``withSlot``), so it patches the slot's
-     * container against the slot's own VDOM version.
-     */
+    /** A frame addressed to a view mounted beside the page view (#3252); see handleSlotFrame. */
     async _handleSlotFrame(data) {
-        if (data.type === 'mount') {
-            this.viewMounted = true;
-            const container = slotContainer(data.target_id);
-            const hadContent = !!container && container.innerHTML.trim().length > 0;
-            applySlotMount(this, data, { html: hadContent ? 'morph' : 'replace' });
-            document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
-            return;
-        }
-        const applied = await withSlot(data.target_id, () => this._handleMessageImpl(data, true));
-        if (applied === undefined) {
-            // The slot's container is gone (the page replaced it): its frames
-            // have nowhere to go, but an event reply must still settle its request.
-            const event = acknowledgeEventRequest(this, data);
-            if (event && event.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
-        }
-        return;
+        return handleSlotFrame(this, data, true);
     }
 
     /**
@@ -2906,8 +2917,6 @@ window.djust._runInsertedScripts = _runInsertedScripts;
 // #2058: exposed so every insertion path (and tests) can warn about a
 // classic <script> a morph/patch left dead.
 window.djust._warnDeadScripts = _warnDeadScripts;
-// Backward compatibility (removed in 2.0.0)
-defineDeprecatedGlobal('LiveViewWebSocket', LiveViewWebSocket, 'window.djust.LiveViewWebSocket');
 
 // Global WebSocket instance.
 // `let` (NOT const) — 14-init.js reassigns this when switching transports
@@ -3207,20 +3216,9 @@ class LiveViewSSE {
         // the context of the view it is addressed to (`_handleSlotFrame`).
         if (!inSlot) {
             if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
-            // #3036: a live navigation to a page with a different page shell is a
-            // full page load; the destination's root is not applied.
-            if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return;
-            // ADR-038 D-n: compared before anything from this mount is cached.
-            if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
-            storeSignedSnapshot(data, this.primaryViewPath);
-
-            // A frame addressed to a view mounted beside the page view (#3252)
-            // is applied to that view's container, in its own context.
-            if (typeof data.target_id === 'string' && data.target_id &&
-                _SLOT_FRAME_TYPES.has(data.type)) {
-                await this._handleSlotFrame(data);
-                return;
-            }
+            // Shell-change fallback, mount metadata, signed snapshot and the
+            // views mounted beside the page view (02c-frame-dispatch.js).
+            if (await routeInboundFrame(this, data)) return;
         }
 
         switch (data.type) {
@@ -3272,7 +3270,7 @@ class LiveViewSSE {
                             // against the mount HTML, as the WebSocket mount
                             // does (#1610), so mount-time state such as
                             // ADR-034 component identities reaches the DOM.
-                            _morphPrerenderedMount(container, data.html, null);
+                            _morphPrerenderedMount(container, data.html, null, undefined, data.owned_children);
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             replaceContainerHtml(container, data.html);
@@ -3317,10 +3315,6 @@ class LiveViewSSE {
                 break;
             }
 
-            case 'embedded_update':
-                await handleEmbeddedResponse(data, this);
-                break;
-
             case 'error':
                 console.error('[SSE] Server error:', data.error);
                 // The view that frame names is not mounted on the server (its
@@ -3360,90 +3354,11 @@ class LiveViewSSE {
                 break;
             }
 
-            case 'view_refused':
-                // A view beside the page view is refused: its container shows it
-                // and the page does not navigate (#3252).
-                applyViewRefusal(data);
-                break;
-
-            case 'async_complete':
-                completeAsyncBatch(this, data.async_batch);
-                break;
-
-            case 'push_event':
-                window.dispatchEvent(new CustomEvent('djust:push_event', {
-                    detail: { event: data.event, payload: data.payload }
-                }));
-                dispatchPushEventToHooks(data.event, data.payload);
-                globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
-                break;
-
-            case 'navigation':
-                if (window.djust.navigation) {
-                    window.djust.navigation.handleNavigation(data);
-                }
-                break;
-
-            case 'navigate': {
-                // Auth redirect (sent by server when auth check fails).
-                // Validate scheme/origin via the shared guard so the SSE
-                // transport can't pivot to open-redirect / javascript: DOM-XSS
-                // and can't drift from the WS `navigate` path (#1646, finding #16).
-                const sseTarget = window.djust.safeNavigationTarget(data.to);
-                if (sseTarget) {
-                    window.location.href = sseTarget; // codeql[js/xss] -- validated via safeNavigationTarget
-                } else if (globalThis.djustDebug) {
-                    console.warn('[SSE] navigate target rejected: %s', String(data.to));
-                }
-                break;
-            }
-
-            case 'stream':
-                if (window.djust.handleStreamMessage) {
-                    window.djust.handleStreamMessage(data);
-                }
-                break;
-
-            case 'accessibility':
-                if (window.djust.accessibility) {
-                    window.djust.accessibility.processAnnouncements(data.announcements);
-                }
-                break;
-
-            case 'focus':
-                if (window.djust.accessibility) {
-                    window.djust.accessibility.processFocus([data.selector, data.options]);
-                }
-                break;
-
-            case 'flash':
-                // Flash message from server (put_flash / clear_flash)
-                if (window.djust.flash) {
-                    window.djust.flash.handleFlash(data);
-                }
-                break;
-
-            case 'page_metadata':
-                // Page metadata from server (page_title / page_meta)
-                if (window.djust.pageMetadata) {
-                    window.djust.pageMetadata.handlePageMetadata(data);
-                }
-                break;
-
-            case 'layout':
-                // Runtime layout switch (set_layout). The server sends it from the
-                // shared turn end, on this transport too.
-                if (window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
-                    window.djust.djLayout.applyLayout(data);
-                }
-                break;
-
-            case 'reload':
-                window.location.reload();
-                break;
-
             default:
-                if (globalThis.djustDebug) console.log('[SSE] Unknown message type:', data.type);
+                // The frames both transports apply alike (02c-frame-dispatch.js).
+                if (!(await dispatchCommonFrame(this, data, '[SSE]')) && globalThis.djustDebug) {
+                    console.log('[SSE] Unknown message type:', data.type);
+                }
         }
     }
 
@@ -3511,27 +3426,9 @@ class LiveViewSSE {
         return request.promise;
     }
 
-    /**
-     * Apply a frame the server addressed to a view mounted beside the page view
-     * (``target_id``, #3252): a ``mount`` reply fills the view's container, any
-     * other frame is handled by the code that handles the page view's frames,
-     * run in the view's context (``withSlot``).
-     */
+    /** A frame addressed to a view mounted beside the page view (#3252); see handleSlotFrame. */
     async _handleSlotFrame(data) {
-        if (data.type === 'mount') {
-            const container = slotContainer(data.target_id);
-            const hadContent = !!container && container.innerHTML.trim().length > 0;
-            applySlotMount(this, data, { html: hadContent ? 'morph' : 'replace' });
-            document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
-            return;
-        }
-        const applied = await withSlot(data.target_id, () => this._handleMessageImpl(data, true));
-        if (applied === undefined) {
-            // The container is gone (the page replaced it): its frames have
-            // nowhere to go, but an event reply must still settle its request.
-            const event = acknowledgeEventRequest(this, data);
-            if (event && event.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
-        }
+        return handleSlotFrame(this, data, false);
     }
 
     /**
@@ -3928,8 +3825,6 @@ function setCacheConfig(config) {
 
 // Expose setCacheConfig under djust namespace
 window.djust.setCacheConfig = setCacheConfig;
-// Backward compatibility (removed in 2.0.0)
-defineDeprecatedGlobal('setCacheConfig', setCacheConfig, 'window.djust.setCacheConfig');
 
 /**
  * Build a cache key from event name and parameters.
@@ -4840,11 +4735,6 @@ function initReactCounters() {
     });
 }
 
-// Stub function for todo items initialization (reserved for future use)
-function initTodoItems() {
-    // Currently no-op - todo functionality handled via LiveView events
-}
-
 // Smart default rate limiting by input type
 // Prevents VDOM version mismatches from high-frequency events.
 // Click-fired widgets (radio/checkbox/select) commit one value per user
@@ -5043,17 +4933,9 @@ window.djust.initReactCounters = initReactCounters;
  *   data-items:list="a,b,c"     -> { items: ["a", "b", "c"] }
  *   data-name="John"            -> { name: "John" } (default: string)
  *
- * Backward compatibility: Also reads dj-params='{"key": value}' JSON blob
- * for 0.3.2 → 0.3.6+ migration. The dj-params attribute is deprecated;
- * use individual data-* attributes instead. data-* attributes take
- * precedence over dj-params keys with the same name.
- *
  * @param {HTMLElement} element - Element to extract params from
  * @returns {Object} - Parameters with coerced types
  */
-// dj-params warns once per page (removed in 2.0.0).
-let _djParamsWarned = false;
-
 function extractTypedParams(element) {
     const params = Object.create(null); // null prototype prevents prototype-pollution
 
@@ -5169,40 +5051,8 @@ function extractTypedParams(element) {
         params[key] = value;
     }
 
-    // dj-params backward compatibility: merge JSON blob into params.
-    // data-* attributes take precedence over dj-params keys.
-    const djParamsAttr = element.getAttribute('dj-params');
-    if (djParamsAttr !== null) {
-        if (!_djParamsWarned) {
-            _djParamsWarned = true;
-            console.warn(
-                '[LiveView] dj-params is deprecated and removed in djust 2.0.0. ' +
-                'Use dj-value-* attributes instead, e.g. dj-value-todo-id:int="{{ todo.id }}" ' +
-                '(dj-params carried JSON types; a :int, :bool or :list hint keeps them).'
-            );
-        }
-        if (djParamsAttr !== '') {
-            try {
-                const parsed = JSON.parse(djParamsAttr);
-                if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                    for (const [k, v] of Object.entries(parsed)) {
-                        // Prevent prototype pollution
-                        if (UNSAFE_KEYS.includes(k)) continue;
-                        // data-* attributes win; only fill in missing keys
-                        if (!(k in params)) {
-                            // eslint-disable-next-line security/detect-object-injection
-                            params[k] = v;
-                        }
-                    }
-                }
-            } catch {
-                if (globalThis.djustDebug) console.warn('[LiveView] Failed to parse dj-params JSON: "' + djParamsAttr + '"');
-            }
-        }
-    }
-
-    // Merge dj-value-* attributes. dj-value-* takes precedence over data-*
-    // and dj-params, matching Phoenix's phx-value-* semantics.
+    // Merge dj-value-* attributes. dj-value-* takes precedence over data-*,
+    // matching Phoenix's phx-value-* semantics.
     const djValues = collectDjValues(element);
     for (const [k, v] of Object.entries(djValues)) {
         // eslint-disable-next-line security/detect-object-injection
@@ -7959,7 +7809,7 @@ function clearOptimisticState(eventName) {
  *
  * Call this after any operation that replaces or morphs DOM content
  * (html_update, html_recovery, TurboNav, embedded view update, etc.)
- * instead of manually calling initReactCounters + initTodoItems +
+ * instead of manually calling initReactCounters +
  * bindLiveViewEvents + updateHooks + bindModelElements individually.
  */
 // WeakSet to track elements that have already been scrolled into view.
@@ -7969,7 +7819,6 @@ const _scrolledElements = new WeakSet();
 
 function reinitAfterDOMUpdate(scope) {
     initReactCounters();
-    initTodoItems();
     bindLiveViewEvents(scope);
     // A clear_draft() from an event handler arrives in a patch (#2971).
     applyDraftClearFlag();
@@ -8548,8 +8397,6 @@ const globalLoadingManager = {
 
 // Expose globalLoadingManager under djust namespace
 window.djust.globalLoadingManager = globalLoadingManager;
-// Backward compatibility (removed in 2.0.0)
-defineDeprecatedGlobal('globalLoadingManager', globalLoadingManager, 'window.djust.globalLoadingManager');
 
 // Generate unique request ID for cache tracking
 let cacheRequestCounter = 0;
@@ -9067,6 +8914,57 @@ window.djust._strictBinding = _strictBinding;
 window.djust._resolveParameterContract = _resolveParameterContract;
 
 // === VDOM Patch Application ===
+
+// Present only during an explicit, authenticated cold-mount morph. This is
+// server-issued location metadata, never a client event-routing authority.
+let _ownedChildMount = null;
+
+function _withOwnedChildMount(bindings, callback) {
+    const previous = _ownedChildMount;
+    _ownedChildMount = null;
+    if (Array.isArray(bindings) && bindings.length <= 256 && bindings.every(
+        (pair) => Array.isArray(pair) && pair.length === 2 && pair.every(
+            (value) => typeof value === 'string' && value.length > 0 && value.length <= 128))) {
+        const current = new Map(bindings);
+        if (current.size === bindings.length) _ownedChildMount = current;
+    }
+    try { return callback(); }
+    finally { _ownedChildMount = previous; }
+}
+
+function _reconcileIgnoredOwnedChildren(existing, desired) {
+    if (_ownedChildMount === null) return;
+    const belongs = (node, host) => {
+        for (let parent = node.parentElement; parent && parent !== host; parent = parent.parentElement) {
+            if (parent.hasAttribute('dj-view')) return false;
+        }
+        return true;
+    };
+    const selector = '[dj-view][data-djust-embedded]';
+    const current = new Map();
+    for (const child of desired.querySelectorAll(selector)) {
+        const slot = child.getAttribute('data-djust-embedded');
+        if (belongs(child, desired) && _ownedChildMount.get(slot) === child.getAttribute('dj-id')) {
+            current.set(slot, child);
+        }
+    }
+    // Old parent IDs inside ignored client DOM cannot address the new server
+    // baseline. Child-view interiors have their own ID scope and are excluded.
+    for (const node of existing.querySelectorAll('[dj-id]')) {
+        if (belongs(node, existing) && !node.hasAttribute('dj-view')) node.removeAttribute('dj-id');
+    }
+    const rootId = desired.getAttribute('dj-id');
+    if (rootId) existing.setAttribute('dj-id', rootId);
+    else existing.removeAttribute('dj-id');
+    for (const child of existing.querySelectorAll(selector)) {
+        if (!belongs(child, existing)) continue;
+        const replacement = current.get(child.getAttribute('data-djust-embedded'));
+        teardownPollsIn(child);
+        _cleanupScopedListeners(child);
+        if (replacement) child.replaceWith(replacement.cloneNode(true));
+        else child.remove();
+    }
+}
 
 /**
  * Sanitize a djust ID for safe logging (defense-in-depth).
@@ -10413,6 +10311,7 @@ function _morphElementInner(existing, desired) {
 
     // dj-update="ignore" — skip entirely
     if (existing.getAttribute('dj-update') === 'ignore') {
+        _reconcileIgnoredOwnedChildren(existing, desired);
         return;
     }
 
@@ -10576,7 +10475,8 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
             }
 
             case 'ignore':
-                // Don't update this element at all
+                _reconcileIgnoredOwnedChildren(existingElement, newElement);
+                // Client-owned contents remain untouched outside cold child reconciliation.
                 if (globalThis.djustDebug) {
                     djLog(`[LiveView:dj-update] Ignoring #${elementId}`);
                 }
@@ -12442,12 +12342,6 @@ const lazyHydrationManager = {
     // Queue of elements waiting for WebSocket connection
     pendingMounts: [],
 
-    // In-flight mount_batch — populated when a mount_batch frame is sent, cleared
-    // when the server responds (success or known error). #1031: enables fallback
-    // to per-view mount when an old server returns "Unknown message type:
-    // mount_batch" instead of handling the batch frame.
-    inFlightBatch: null,
-
     // Initialize lazy hydration
     init() {
         // Clear pending mounts on reinit (e.g., TurboNav navigation)
@@ -12659,10 +12553,6 @@ const lazyHydrationManager = {
             try {
                 clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
             } catch (_e) { /* tz detect failure — omit */ }
-            // #1031: stash the original mounts so the websocket error
-            // handler can fall back to per-view mounts if the server
-            // returns "Unknown message type: mount_batch".
-            this.inFlightBatch = mounts;
             liveViewWS.sendMessage({
                 type: 'mount_batch',
                 views: viewEntries,
@@ -12672,27 +12562,6 @@ const lazyHydrationManager = {
         }
 
         mounts.forEach(({ element, viewPath }) => {
-            this.mountElement(element, viewPath);
-        });
-    },
-
-    // #1031: invoked from the websocket error handler when the server
-    // doesn't recognize the mount_batch frame. Falls back to per-view
-    // mount calls so older servers (pre-v0.6.0) keep working with newer
-    // clients. Idempotent — clears inFlightBatch before iterating so a
-    // late mount_batch response can't double-trigger.
-    handleMountBatchFallback() {
-        if (!this.inFlightBatch) return;
-        const mounts = this.inFlightBatch;
-        this.inFlightBatch = null;
-        if (globalThis.djustDebug) {
-            console.warn('[LiveView:lazy] mount_batch unsupported by server — falling back to %d per-view mounts', mounts.length);
-        }
-        mounts.forEach(({ element, viewPath }) => {
-            // Reset the data-live-hydrated attr that processPendingMounts
-            // set optimistically; mountElement will set it again on success.
-            element.removeAttribute('data-live-hydrated');
-            element.setAttribute('dj-lazy', '');
             this.mountElement(element, viewPath);
         });
     },
@@ -12990,7 +12859,7 @@ function applySlotMount(transport, data, options = {}) {
     const htmlMode = options.html || 'replace';
     if (typeof data.html === 'string' && htmlMode !== 'none') {
         if (htmlMode === 'morph' && data.has_ids === true) {
-            _morphPrerenderedMount(container, data.html, undefined, !mountedBefore);
+            _morphPrerenderedMount(container, data.html, undefined, !mountedBefore, data.owned_children);
         } else {
             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
             teardownPollsIn(container, true);
@@ -14863,11 +14732,9 @@ window.djust.getActiveStreams = getActiveStreams;
      * after a handler calls live_patch() or live_redirect().
      */
     function handleNavigation(data) {
-        // Use data.action (set by server alongside type:"navigation") to distinguish
-        // live_patch from live_redirect. Falls back to data.type for any legacy messages
-        // that were sent without an action field.
-        // TODO(deprecation): data.type fallback for pre-#307 clients — remove in next minor release
-        const action = data.action || data.type;
+        // data.action (sent alongside type:"navigation") distinguishes
+        // live_patch from live_redirect.
+        const action = data.action;
         if (action === 'live_patch') {
             handleLivePatch(data);
         } else if (action === 'live_redirect') {
@@ -15979,13 +15846,39 @@ function updateHooks(root) {
         currentElements.add(elId);
 
         const hookName = el.getAttribute('dj-hook');
-        const existing = _activeHooks.get(elId);
+        let existing = _activeHooks.get(elId);
+        if (existing && (existing.el !== el || existing.hookName !== hookName)) {
+            // A replacement node or changed hook definition needs a fresh
+            // instance; dispose resources belonging to the old one first.
+            if (typeof existing.instance.destroyed === 'function') {
+                _safeCallHook(existing.instance.destroyed.bind(existing.instance),
+                    `${existing.hookName}.destroyed()`);
+            }
+            _activeHooks.delete(elId);
+            existing = null;
+        }
 
         if (existing) {
-            // Element still exists — call updated()
-            existing.el = el; // Update reference in case DOM was replaced
-            existing.instance.el = el;
-            if (typeof existing.instance.updated === 'function') {
+            // Element still exists — call updated() if requested.
+            let update = true;
+            if (typeof existing.instance.updated === 'function' &&
+                typeof existing.instance.shouldUpdate === 'function') {
+                try {
+                    // Only an explicit synchronous false suppresses the callback.
+                    // Exceptions and async predicates fail open so an update is
+                    // never silently lost; observe rejected promises as well.
+                    const decision = existing.instance.shouldUpdate();
+                    if (decision === false) update = false;
+                    if (decision && typeof decision.then === 'function') {
+                        Promise.resolve(decision).catch((e) =>
+                            console.error('[dj-hook] Error in %s:', `${hookName}.shouldUpdate()`, e),
+                        );
+                    }
+                } catch (e) {
+                    console.error('[dj-hook] Error in %s:', `${hookName}.shouldUpdate()`, e);
+                }
+            }
+            if (update && typeof existing.instance.updated === 'function') {
                 _safeCallHook(
                     existing.instance.updated.bind(existing.instance),
                     `${hookName}.updated()`,
@@ -20609,7 +20502,7 @@ globalThis.djust.djTrackStatic = {
 // Handles the {"type": "layout", "path": ..., "html": ...} WebSocket
 // frame emitted by LayoutMixin.set_layout(). Swaps the document body
 // with the new layout while physically moving the live
-// [dj-root] / [data-djust-root] element into the new layout's
+// [dj-root] element into the new layout's
 // root-shaped slot — preserving all inner LiveView state (form values,
 // scroll position, focused element, dj-hook bookkeeping, third-party
 // widget instances hanging off live nodes).
@@ -20622,29 +20515,16 @@ globalThis.djust.djTrackStatic = {
 //     stylesheets or scripts, add them to the original layout's <head>.
 //   - Dispatches djust:layout-changed on document for app-level hooks.
 
-// The pre-1.0 [data-djust-root] marker warns once per page (removed in 2.0.0).
-let _legacyRootWarned = false;
-
 function _findRoot(scope) {
     // Sticky LiveViews (Phase B): exclude [dj-sticky-root] wrappers so
     // a sticky child embedded via {% live_render ... sticky=True %}
     // does not masquerade as the layout root. Sticky subtrees carry
     // [dj-sticky-root] on their outermost [dj-view]; the parent view's
     // [dj-root] is always outside of them.
-    const root = (
-        scope.querySelector('[data-djust-root]:not([dj-sticky-root])')
-        || scope.querySelector('[dj-root]:not([dj-sticky-root])')
-        || scope.querySelector('[data-djust-root]')
+    return (
+        scope.querySelector('[dj-root]:not([dj-sticky-root])')
         || scope.querySelector('[dj-root]')
     );
-    if (root && !_legacyRootWarned && root.hasAttribute('data-djust-root') && !root.hasAttribute('dj-root')) {
-        _legacyRootWarned = true;
-        console.warn(
-            '[djust:layout] The data-djust-root marker is deprecated and removed in djust 2.0.0. ' +
-            'Use dj-root instead.'
-        );
-    }
-    return root;
 }
 
 function _applyLayout(payload) {
@@ -20664,7 +20544,7 @@ function _applyLayout(payload) {
     const currentRoot = _findRoot(document);
     if (!newRoot || !currentRoot) {
         console.warn(
-            '[djust:layout] could not locate dj-root / data-djust-root in ' +
+            '[djust:layout] could not locate dj-root in ' +
             (newRoot ? 'current document' : 'incoming layout') + '; ignoring swap'
         );
         return;

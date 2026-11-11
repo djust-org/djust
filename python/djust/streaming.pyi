@@ -125,20 +125,6 @@ class StreamingMixin:
         """
         ...
 
-    async def stream_insert(
-        self,
-        stream_name: str,
-        html: str,
-        at: str = "append",
-        target: Optional[str] = None,
-    ) -> None:
-        """Deprecated name of ``astream_insert`` (removed in djust 2.0)."""
-        ...
-
-    async def stream_delete(self, stream_name: str, selector: str) -> None:
-        """Deprecated name of ``astream_delete`` (removed in djust 2.0)."""
-        ...
-
     async def push_state(self) -> None:
         """
         Send current state to the client immediately (full re-render).

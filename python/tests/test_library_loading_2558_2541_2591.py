@@ -279,7 +279,7 @@ QS_ROWS = [
     ("{% querystring a=2 as qs %}", "a=1", {}, ""),
     ("{% querystring a=None as qs %}[{{ qs }}]", "a=1&b=2", {}, "[?b=2]"),
     ("{% querystring a=None as qs %}[{{ qs }}]", "a=1", {}, "[?]"),
-    ("{% querystring as qs %}[{{ qs }}]", "", {}, "[]"),
+    ("{% querystring as qs %}[{{ qs }}]", "", {}, "[?]" if django.VERSION >= (6, 0) else "[]"),
     ("{% querystring a=my_list as qs %}[{{ qs }}]", "", {"my_list": [2, 3]}, "[?a=2&amp;a=3]"),
     (
         "{% querystring qd page=4 as qs %}[{{ qs }}]",

@@ -57,7 +57,6 @@ async def setup(full_html=False):
         view._rust_view.reset()
     consumer = LiveViewConsumer()
     consumer.view_instance = view
-    consumer.use_binary = False
     consumer.send_json = AsyncMock()
     consumer.send_error = AsyncMock()
     consumer._flush_all_pending = AsyncMock()
@@ -310,18 +309,6 @@ async def test_debug_strict_removal_clears_and_legacy_session_omits_metadata(
     frame = legacy_consumer.send_json.call_args_list[0].args[0]
     assert "parameter_contracts" not in frame
     assert "parameter_contract_view" not in frame
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", OPERATIONS)
-async def test_debug_strict_frames_use_json_when_binary_is_negotiated(operation, settings):
-    settings.DEBUG = True
-    consumer, _ = await setup()
-    consumer.use_binary = True
-    consumer._send_frame = AsyncMock()
-    await produce(consumer, operation)
-    consumer._send_frame.assert_not_awaited()
-    assert consumer.send_json.call_args_list[0].args[0]["parameter_contracts"] is not None
 
 
 @pytest.mark.asyncio

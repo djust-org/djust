@@ -33,7 +33,7 @@ Any template that renders through Django's template loader works — `set_layout
 
 1. `self.set_layout(path)` stores the path on the view (overwrites any prior pending layout — last write wins).
 2. After the event handler returns, the WebSocket consumer drains the pending path, renders the template with the view's current context, and emits a `{"type": "layout", "path": ..., "html": ...}` frame alongside the usual VDOM patches.
-3. The client parses the new HTML, finds the `[data-djust-root]` (or `[dj-root]`) placeholder inside it, and **physically moves the live root element** from the current body into the new layout. The document `<body>` is then replaced with the reconstructed body.
+3. The client parses the new HTML, finds the `[dj-root]` placeholder inside it, and **physically moves the live root element** from the current body into the new layout. The document `<body>` is then replaced with the reconstructed body.
 
 Because the live `[dj-root]` element is the **same DOM node** before and after the swap, everything attached to it survives:
 

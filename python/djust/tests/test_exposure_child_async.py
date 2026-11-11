@@ -14,6 +14,14 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
 
 @pytest.fixture(autouse=True)
+async def release_owned_worker_connections(transactional_db):
+    from djust.tests._worker_database import owned_worker_database_connections
+
+    async with owned_worker_database_connections():
+        yield
+
+
+@pytest.fixture(autouse=True)
 def staged(monkeypatch, settings):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     settings.DJUST_LIVE_RENDER_ALLOWED_MODULES = ["djust.tests.test_exposure_child_events"]
@@ -141,10 +149,9 @@ async def test_background_batch_acknowledges_only_after_all_child_tasks(monkeypa
 
 
 @pytest.mark.parametrize("shape", ["sync", "async", "returned-coroutine"])
-@pytest.mark.parametrize("queue", ["named", "legacy"])
 @pytest.mark.parametrize("strict", [False, True])
 async def test_child_event_runs_its_queue_and_persists_a_scoped_completion(
-    monkeypatch, shape, queue, strict
+    monkeypatch, shape, strict
 ):
     calls = []
     root_calls = []
@@ -163,10 +170,7 @@ async def test_child_event_runs_its_queue_and_persists_a_scoped_completion(
             "async": async_finish,
             "returned-coroutine": lambda: async_finish(),
         }[shape]
-        if queue == "legacy":
-            self._async_pending = (callback, (), {})
-        else:
-            self.start_async(callback, name="child-job")
+        self.start_async(callback, name="child-job")
 
     monkeypatch.setattr(EventChild, "begin", begin, raising=False)
     runtime, transport, request = await mount()

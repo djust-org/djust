@@ -33,14 +33,7 @@ from typing import Any
 
 from django.utils.html import conditional_escape
 
-# Try to import Rust implementation
-try:
-    from djust._rust import RustAlert  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
-    RustAlert = None  # type: ignore[assignment, misc]
+from djust._rust import RustAlert
 
 
 class Alert(Component):
@@ -58,7 +51,7 @@ class Alert(Component):
         dismissable: Whether alert can be dismissed
     """
 
-    _rust_impl_class = RustAlert if _RUST_AVAILABLE else None
+    _rust_impl_class = RustAlert
 
     # Template for hybrid rendering
     # Note: Using separate if blocks instead of elif (Rust template engine bug)

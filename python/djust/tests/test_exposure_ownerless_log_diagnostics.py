@@ -42,7 +42,6 @@ def _turn(where):
 
 
 def _jit_queryset(monkeypatch):
-    monkeypatch.setattr(rendering, "JIT_AVAILABLE", True)
     monkeypatch.setattr(rendering, "extract_template_variables", _boom, raising=False)
     template = object.__new__(rendering.DjustTemplate)
     template.template_string = "{{ rows }}"
@@ -50,8 +49,6 @@ def _jit_queryset(monkeypatch):
 
 
 def _jit_model(monkeypatch):
-    monkeypatch.setattr(rendering, "JIT_AVAILABLE", True)
-    monkeypatch.setattr(rendering, "DjangoJSONEncoder", object)
     monkeypatch.setattr(rendering, "normalize_django_value", _boom)
     template = object.__new__(rendering.DjustTemplate)
     row = type("Row", (), {"pk": 1})()

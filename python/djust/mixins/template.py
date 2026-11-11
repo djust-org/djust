@@ -10,7 +10,7 @@ import os
 import re
 import threading
 from html import escape as _html_escape
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING, cast
 
 from .._child_rendering import reconcile_child_render
 from ..template_libraries import library_render_scope
@@ -658,6 +658,7 @@ class TemplateMixin:
         template: Optional[str]
         template_name: Optional[str]
         _full_template: Optional[str]
+        _named_partial_jit_source: Optional[str]
         _rust_view: Any
         _current_html_size: Optional[int]
         _previous_html_size: Optional[int]
@@ -705,13 +706,56 @@ class TemplateMixin:
         for VDOM tracking to avoid tracking the entire document.
         """
         if self.template:
-            return self.template
+            source = self.template
+            needs_root = self._needs_authenticated_partial_root(source)
+            if needs_root:
+                self._full_template = source
+            elif getattr(self, "_authenticated_partial_root", False):
+                self._full_template = None
+            self._authenticated_partial_root = needs_root
+            self._authenticated_partial_root_origin = None
+            self._authenticated_template_source = source if needs_root else None
+            return source
         elif self.template_name:
             # Load the raw template source
             from django.template import loader
 
             template = loader.get_template(self.template_name)
+            # Django's named-partial source is empty when template debugging is
+            # off. Validate the requested partial first, then use the owning
+            # backend's base source for extraction and the native include loader
+            # to execute only that partial with its defining origin.
+            import django
+
+            base_name, separator, partial_name = self.template_name.partition("#")
+            if django.VERSION >= (6, 0) and separator and partial_name:
+                from .._named_partials import selected_partial_source
+
+                base = template.backend.get_template(base_name)
+                base_source = base.template.source
+                extraction_source = selected_partial_source(base_source, base_name, partial_name)
+                include = "{% include " + json.dumps(self.template_name) + " %}"
+                self._full_template = include
+                self._authenticated_partial_root = True
+                self._authenticated_partial_root_origin = base_name
+                self._authenticated_template_source = include
+                self._named_partial_jit_source = extraction_source
+                return extraction_source
+            self._named_partial_jit_source = None
             template_source = template.template.source
+
+            # A root reached through a partial needs its caller's actual control
+            # flow. Keep inheritance intact and let the Rust renderer select the
+            # authenticated root after rendering, rather than slicing its source.
+            self._authenticated_partial_root = self._needs_authenticated_partial_root(
+                template_source, self.template_name
+            )
+            self._authenticated_partial_root_origin = (
+                self.template_name if self._authenticated_partial_root else None
+            )
+            self._authenticated_template_source = (
+                template_source if self._authenticated_partial_root else None
+            )
 
             # Check if template uses {% extends %} - if so, resolve inheritance in Rust
             if "{% extends" in template_source or "{%extends" in template_source:
@@ -734,42 +778,20 @@ class TemplateMixin:
                 )
 
                 # --- Resolve template inheritance in Rust ---
-                # This is the ONLY step that legitimately needs the raw-template
-                # fallback (a template that genuinely can't be resolved as a
-                # standalone inheritance document). It is scoped to a tight
-                # try/except that LOGS at WARNING so a resolution error can never
-                # again silently degrade an ``{% extends %}`` page to
-                # fragment-only without a trace (#1801). Post-resolution work
-                # (VDOM extraction / whitespace strip) is OUTSIDE this try — if
-                # that raises it is an unexpected framework bug that must surface,
-                # not be swallowed.
-                try:
-                    from djust._rust import resolve_template_inheritance
+                # A resolution error RAISES (2.0). Before, it logged a warning
+                # and served the dj-root fragment WITHOUT the base template's
+                # <head> (#1801), which hid a misconfigured template dir behind
+                # a page that half-worked.
+                from djust._rust import resolve_template_inheritance
 
+                try:
                     resolved = resolve_template_inheritance(self.template_name, template_dirs_str)
                 except Exception as e:
-                    logger.warning(
-                        "[LiveView] Template inheritance resolution failed for %s "
-                        "(searched %d dirs); falling back to raw template source — "
-                        "the initial HTTP GET will render the dj-root fragment "
-                        "WITHOUT the base template <head> (#1801). Error: %s",
-                        self.template_name,
-                        len(template_dirs_str),
-                        e,
-                    )
-                    # Set to None so render_full_template won't try to render a
-                    # template that contains {% extends %} tags as a standalone
-                    # document.
-                    self._full_template = None
-                    extracted = self._extract_liveview_root_with_wrapper(template_source)
-                    extracted = self._normalize_source_for_render(extracted)
-
-                    logger.debug(
-                        "[LiveView] Extracted and stripped liveview-root: %d chars (from %d chars)",
-                        len(extracted),
-                        len(template_source),
-                    )
-                    return extracted
+                    raise RuntimeError(
+                        f"djust could not resolve template inheritance for "
+                        f"{self.template_name!r} (searched {len(template_dirs_str)} template "
+                        f"dirs: {template_dirs_str}): {e}"
+                    ) from e
 
                 # Verify Rust found the same template as Django
                 if django_resolved_path:
@@ -838,6 +860,24 @@ class TemplateMixin:
             return extracted
         else:
             raise ValueError("Either template_name or template must be set")
+
+    @staticmethod
+    def _needs_authenticated_partial_root(source: str, template_name: Optional[str] = None) -> bool:
+        # Django's built-in partials start in 6.0. Older Django versions retain
+        # the existing render and lazy-registration paths unchanged.
+        import django
+
+        if django.VERSION < (6, 0):
+            return False
+        # The planner follows includes and inheritance conservatively, including
+        # dynamic references. Only template syntax can lead to a partial root.
+        if "{%" not in source or not any(
+            tag in source for tag in ("partial", "include", "extends")
+        ):
+            return False
+        from .._rust import template_needs_authenticated_partial_root
+
+        return template_needs_authenticated_partial_root(source, get_template_dirs(), template_name)
 
     def _normalize_source_for_render(self, source: str) -> str:
         from .._render_provenance import _needs_provenance
@@ -1037,12 +1077,22 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         from .._render_provenance import sub, collapse, fold, RenderedHTML
 
         if isinstance(html, RenderedHTML):
-            from .._rust import lazy_authority_spans
+            # Authenticated-root pages need both root and binding provenance,
+            # already filtered by the template renderer. Ordinary pages retain
+            # the smaller lazy-only projection used by this hot path.
+            rust_view = getattr(self, "_rust_view", None)
+            authenticated = (
+                getattr(self, "_prepared_authenticated_page_root", False)
+                or getattr(self, "_prepared_authenticated_partial_root", False)
+                or getattr(rust_view, "authenticated_partial_root", lambda: False)()
+            )
+            if not authenticated:
+                from .._rust import lazy_authority_spans
 
-            spans = tuple(lazy_authority_spans(html, list(html.spans)))
-            if not spans:
-                return RenderedHTML(self._strip_comments_and_whitespace(str(html)))
-            html = RenderedHTML(html, spans, html.held, html.origins)
+                spans = tuple(lazy_authority_spans(html, list(html.spans)))
+                if not spans:
+                    return RenderedHTML(self._strip_comments_and_whitespace(str(html)))
+                html = RenderedHTML(html, spans, html.held, html.origins)
 
         from .._render_provenance import join
 
@@ -1545,14 +1595,83 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         opening_match = _search_dj_root_open(masked, _DJ_ROOT_RE, _DJ_VIEW_RE)
 
         if not opening_match:
-            return template
+            return self._retain_root_partial_definitions(template, template, 0, len(template))
 
         start_pos = opening_match.start()
 
         result = _find_root_close(masked, opening_match)
         if result[1] is not None:
-            return template[start_pos : result[1]]
+            end_pos = result[1]
+            root = template[start_pos:end_pos]
+            return self._retain_root_partial_definitions(template, root, start_pos, end_pos)
         return template
+
+    def _retain_root_partial_definitions(
+        self, source: str, root: str, root_start: int, root_end: int
+    ) -> str:
+        """Keep authored Django 6 partials needed after discarding page layout.
+
+        Only source parsed by the Rust template engine can contribute a
+        definition. Outside inline definitions become non-inline so extracting
+        the root cannot create extra DOM output. A definition surrounding the
+        root cannot safely be split, so reject it instead of changing its
+        execution semantics or broadening the live DOM to the page layout.
+        """
+        import django
+
+        if django.VERSION < (6, 0) or not re.search(r"{%\s*partialdef\s+", source):
+            return root
+
+        from django.template.base import DebugLexer
+        from djust._rust import compile_template
+
+        with library_render_scope():
+            compiled = compile_template(
+                source, getattr(self, "template_name", None), return_template=True
+            )
+        spans = compiled._partial_spans()
+        encoded = source.encode("utf-8")
+        definitions = []
+        for span in spans.values():
+            if span is None:
+                continue
+            start = len(encoded[: span[0]].decode("utf-8"))
+            end = len(encoded[: span[1]].decode("utf-8"))
+            if root_start <= start and end <= root_end:
+                continue
+            if start < root_end and end > root_start:
+                if getattr(self, "_authenticated_partial_root", False):
+                    return self._authenticated_template_source or source
+                from django.core.exceptions import ImproperlyConfigured
+
+                raise ImproperlyConfigured(
+                    "A LiveView root cannot be inside a Django template partial definition. "
+                    "Move dj-root outside the partial so extraction cannot change whether "
+                    "the partial renders or discard its invocation context."
+                )
+            definitions.append((start, end))
+
+        if not re.search(r"{%\s*partial(?:def)?\s+", root):
+            return root
+
+        prefixes = []
+        covered_until = -1
+        for start, end in sorted(definitions, key=lambda pair: (pair[0], -pair[1])):
+            if end <= covered_until:
+                continue  # Nested definition is already part of its outer body.
+            original = source[start:end]
+            opening = DebugLexer(original).tokenize()[0]
+            bits = opening.split_contents()
+            # The compiled parser already validated tag grammar and name.
+            prefixes.append("{% partialdef " + bits[1] + " %}" + original[opening.position[1] :])
+            covered_until = end
+        retained = "".join(prefixes) + root
+        template_name = getattr(self, "template_name", None)
+        if template_name:
+            from djust._rust import resolve_relative_template_includes
+
+            retained = resolve_relative_template_includes(retained, template_name)
+        return retained
 
     def _extract_liveview_template_content(self, template: str) -> str:
         """
@@ -1740,6 +1859,55 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             # the dj-root replacement, so it lives OUTSIDE the diffed subtree.
             self._initialize_rust_view(request)
             self._sync_state_to_rust()
+            if getattr(self._rust_view, "potential_authenticated_partial_root", lambda: False)():
+                # Prepare page, selected root and pending VDOM from one template
+                # evaluation. A stateful include selector must not be read again
+                # between the delivered page and its future diff baseline.
+                from .._render_provenance import RenderedHTML
+                from .._lazy_containers import register_lazy_containers
+
+                self._pending_authenticated_page = False
+                self._prepared_authenticated_partial_root = False
+                self._prepared_authenticated_page_root = False
+                with library_render_scope():
+                    rendered, spans, origins, root_range = (
+                        self._rust_view.prepare_authenticated_page()
+                    )
+                page = RenderedHTML(
+                    rendered,
+                    tuple(spans),
+                    origins=tuple(origins),
+                    root_spans=tuple(self._rust_view.prepared_page_root_spans()),
+                )
+                self._pending_authenticated_page = True
+                self._prepared_authenticated_partial_root = root_range is not None
+                self._prepared_authenticated_page_root = self._rust_view.prepared_page_has_root()
+                if root_range is not None:
+                    start, end = (page.char_offset(offset) for offset in root_range)
+                    root = self._hydrate_react_components(page[start:end])
+                    root = self._strip_comments_and_whitespace(root)
+                    rendered_page = page[:start] + root + page[end:]
+                else:
+                    rendered_page = self._hydrate_react_components(page)
+                    from .._rust import root_element_span
+
+                    ordinary_span = root_element_span(rendered_page)
+                    if ordinary_span is None:
+                        self._warn_unmatched_root(rendered_page, found=False)
+                    elif ordinary_span[3] is None:
+                        self._warn_unmatched_root(rendered_page, found=True)
+                    else:
+                        start, end = ordinary_span[0], ordinary_span[3]
+                        root = self._strip_comments_and_whitespace(rendered_page[start:end])
+                        rendered_page = rendered_page[:start] + root + rendered_page[end:]
+                rendered_page = register_lazy_containers(self, request, rendered_page)
+                rendered_page = self._inject_handler_metadata(rendered_page, request=request)
+                if request is None:
+                    self._rust_view.commit_authenticated_page()
+                    self._pending_authenticated_page = False
+                    self._refresh_cached_rust_view()
+                    self._record_dj_model_fields_from_rust(self._rust_view)
+                return rendered_page
             with library_render_scope():
                 from .._render_provenance import render_html
 
@@ -1771,6 +1939,10 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
 
             template_dirs = get_template_dirs()
             temp_rust = RustLiveView(self._full_template, template_dirs)
+            if self._rust_view.authenticated_partial_root():
+                temp_rust.set_template_origin(
+                    getattr(self, "_authenticated_partial_root_origin", None)
+                )
 
             safe_keys = []
             context_for_sidecar: Optional[Dict[str, Any]] = None
@@ -1860,8 +2032,17 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             # serialization floor. ``request`` is request-scoped: it rides
             # the sidecar only and never enters ``update_state``.
             self._set_shell_sidecar(temp_rust, request, serialized_context, context_for_sidecar)
+            shell_html: str
             with library_render_scope():
-                shell_html = render_html(temp_rust, self._full_template)
+                if self._rust_view.authenticated_partial_root():
+                    from .._render_provenance import RenderedHTML
+
+                    rendered, spans, origins, root_spans = temp_rust.render_full_root_provenance()
+                    shell_html = RenderedHTML(
+                        rendered, tuple(spans), origins=tuple(origins), root_spans=tuple(root_spans)
+                    )
+                else:
+                    shell_html = render_html(temp_rust, self._full_template)
 
             # --- Step 3: Replace the ENTIRE dj-root div in the shell ---
             # liveview_html already includes its own <div dj-root>...</div>
@@ -1889,11 +2070,27 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             # rendered-HTML root locator, so the shell, the WS frame and the
             # VDOM cannot pick different roots (#1646, #3031). ``{% %}`` left in
             # the rendered shell is text.
-            span = root_element_span(shell_html)
+            if self._rust_view.authenticated_partial_root():
+                from .._rust import authenticated_root_shell
+
+                authenticated_shell = cast("RenderedHTML", shell_html)
+                start_byte, end_byte = authenticated_root_shell(
+                    authenticated_shell, list(authenticated_shell.root_spans)
+                )
+                tag_start = authenticated_shell.char_offset(start_byte)
+                close_end = authenticated_shell.char_offset(end_byte)
+                span: tuple[int, int | None, int | None, int | None] | None = (
+                    tag_start,
+                    None,
+                    None,
+                    close_end,
+                )
+            else:
+                span = root_element_span(shell_html)
             if span is not None:
-                tag_start, close_end = span[0], span[3]
-                if close_end is not None:
-                    result = shell_html[:tag_start] + liveview_html + shell_html[close_end:]
+                root_start, root_end = span[0], span[3]
+                if root_end is not None:
+                    result = shell_html[:root_start] + liveview_html + shell_html[root_end:]
                     from .._lazy_containers import register_lazy_containers
 
                     result = register_lazy_containers(self, request, result)
@@ -1914,7 +2111,7 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             return self.render(request)
 
     @staticmethod
-    def _stamp_dj_view(html: str, view_path: str) -> str:
+    def _stamp_dj_view(html: str, view_path: str, *, trusted: bool = False) -> str:
         """Add ``dj-view="<view_path>"`` to every real ``dj-root`` open tag that
         has no ``dj-view`` of its own, so the client knows what to mount (#2981).
 
@@ -1933,6 +2130,12 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         # child's, not this view's (#3155) — stamping this view's path there
         # would tell the client to mount the page a second time inside the
         # child — and `<body dj-root>` only when it IS the page's root (#3302).
+        from .._render_provenance import RenderedHTML
+
+        # A generated attribute is authoritative only after the caller has
+        # authenticated the page root. Other output retains its own provenance.
+        if trusted:
+            attr = RenderedHTML(attr, root_spans=((0, len(attr.encode("utf-8"))),))
         parts: list[str] = []
         last = 0
         for insert_at in dj_root_stamp_offsets(html):
@@ -1942,8 +2145,6 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         if not parts:
             return html
         parts.append(html[last:])
-        from .._render_provenance import RenderedHTML
-
         if isinstance(html, RenderedHTML):
             result = RenderedHTML("")
             for part in parts:
@@ -2066,7 +2267,24 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         ):
             logger.debug("[LiveView] template is a property - updating template")
             new_template = self.get_template()
+            if getattr(self, "_authenticated_partial_root", False):
+                new_template = self._authenticated_template_source or new_template
             self._rust_view.update_template(new_template)
+            needs_root = getattr(self, "_authenticated_partial_root", False)
+            if (
+                needs_root
+                or getattr(self._rust_view, "potential_authenticated_partial_root", lambda: False)()
+            ):
+                self._rust_view.set_authenticated_partial_root(needs_root)
+                if needs_root:
+                    self._rust_view.set_authenticated_view_path(
+                        f"{getattr(type(self), '__module__', '<unknown>')}.{type(self).__name__}"
+                    )
+                self._rust_view.set_template_origin(
+                    getattr(self, "_authenticated_partial_root_origin", None)
+                    if needs_root
+                    else None
+                )
 
         logger.debug("[LiveView] _rust_view after init: %s", self._rust_view)
 
@@ -2101,7 +2319,17 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         from ..templatetags.live_tags import active_parent_view
 
         renderer = getattr(self, "_djust_renderer", None) or HtmlRenderer(self)
-        with active_parent_view(self), library_render_scope():
+        from .._deferred_children import defer_root_children
+
+        defer_children = (
+            isinstance(renderer, HtmlRenderer)
+            and getattr(self._rust_view, "potential_authenticated_partial_root", lambda: False)()
+        )
+        with (
+            active_parent_view(self),
+            library_render_scope(),
+            defer_root_children(self, defer_children),
+        ):
             result = renderer.render_with_diff(
                 request=None,
                 extract_liveview_root=False,
@@ -2115,7 +2343,11 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         release_render_baseline(self)
         # The state backend holds a snapshot, not this object; record the
         # render so the next reader of the key starts from it.
-        self._refresh_cached_rust_view()
+        from .._render_provenance import RenderedDiffHTML
+
+        pending_owned = isinstance(html, RenderedDiffHTML)
+        if not pending_owned:
+            self._refresh_cached_rust_view()
 
         # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
         # mass-assignment guard). This is the dominant render path — HTTP-GET
@@ -2125,7 +2357,8 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         # (Text-node literals only via ``dj_model_fields()``), which reflects any
         # ``update_template`` done above for dynamic templates; immune to
         # rendered-output poisoning (text nodes, interpolated attrs, ``|safe``).
-        self._record_dj_model_fields_from_rust(self._rust_view)
+        if not pending_owned:
+            self._record_dj_model_fields_from_rust(self._rust_view)
 
         # Capture per-phase Rust timing (render, parse, diff, serialize)
         self._rust_render_timing = self._rust_view.get_render_timing()

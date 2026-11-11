@@ -54,10 +54,8 @@ def apply_active_timezone() -> None:
     rather than raised — a settings typo should not take a page down, and Django
     itself would have rejected such a value long before here.
     """
-    try:
-        from ._rust import set_active_timezone
-    except ImportError:  # pragma: no cover - Rust build predates #2209
-        return
+    from ._rust import set_active_timezone
+
     try:
         from django.conf import settings
         from django.utils import timezone as dj_timezone
@@ -105,10 +103,8 @@ def apply_number_format() -> None:
     with ``DECIMAL_SEPARATOR="!"`` and ``Decimal("6666.6666")``, Django renders
     ``{{ p|floatformat:"2u" }}`` as ``6666!67``.
     """
-    try:
-        from ._rust import set_number_format
-    except ImportError:  # pragma: no cover - Rust build predates #2221
-        return
+    from ._rust import set_number_format
+
     try:
         from django.conf import settings
         from django.utils import formats
@@ -197,16 +193,14 @@ def install_scope_hooks() -> bool:
     what makes ``{{ n }}`` inside ``{% language "de" %}`` format as ``de``
     while the outer render stays put.
 
-    Idempotent in effect (re-registering the same closures); ``False``
-    without the Rust extension.
+    Idempotent in effect (re-registering the same closures). Always ``True``
+    since the extension is required (2.0).
     """
-    try:
-        from djust._rust import (
-            register_language_scope_hooks,
-            register_timezone_scope_hooks,
-        )
-    except ImportError:  # pragma: no cover - Rust build predates #2558
-        return False
+    from djust._rust import (
+        register_language_scope_hooks,
+        register_timezone_scope_hooks,
+    )
+
     register_language_scope_hooks(language_scope_enter, language_scope_exit)
     register_timezone_scope_hooks(timezone_scope_enter, timezone_scope_exit)
     return True

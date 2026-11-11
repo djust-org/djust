@@ -1,0 +1,1 @@
+- Defer embedded child mounts during full-page live-root updates until their authenticated HTML5 location is known. Skip page-shell and inert children, reject changed render occurrences, and recheck sibling locations after each child renders.

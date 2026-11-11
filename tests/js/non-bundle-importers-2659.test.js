@@ -25,7 +25,6 @@ const BUNDLE_OUTPUTS = new Set([
     'client.js',
     'client.min.js',
     'debug-panel.js',
-    'debug-panel.min.js',
 ]);
 
 // Standalone assets: NOT in the bundle, but each has a real loader.
