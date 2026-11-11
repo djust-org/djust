@@ -295,6 +295,28 @@ were scheduled rather than conditional) nor fired. It fires when a
 compatibility decision makes strict the default. Citations above were
 refreshed at acceptance.
 
+## Addendum (2026-11-11): the pressed submit button (#3958)
+
+Q2 removes `_target` under strict and points to `field` or an explicit `dj-value-*`. Neither names the
+button a `dj-submit` form was submitted with, so under strict a handler could not tell two submit
+buttons apart. Decision: the pressed button's own `name=value` is a **generated form field**, as it is
+on a native post, so it is governed by Q1 like every other generated key (sent only to a handler that
+declares that parameter or has a `**` catch-all; a `dj-value-*` of the same name is rejected; the server
+still rejects a hand-crafted extra key). This extends the strict generated-value set for `dj-submit`
+from "the form fields" to "the form fields and the pressed button"; it does not change Q2 (no `_target`).
+
+Not sent, rather than rejected: an unnamed or disabled button, a submit with no submitter, a name that is
+not an ASCII identifier starting with a letter, and a name the transports read as protocol (`event`,
+`params`, `component_id`, `view_id`, `csrfmiddlewaretoken`, `constructor`, `prototype`; `event` / `params`
+because the HTTP fallback reads a flat body containing `event` as its `{event, params}` envelope).
+Rejecting would break a strict page that worked before the button was a field. Legacy bindings are
+unchanged: they keep `_target` and gain no field, because a legacy closed signature rejects an unexpected
+parameter.
+
+The same change makes a repeated name, a checkbox group and a `<select multiple>` a `list` on
+`dj-submit` (and the `value` of `dj-change` / `dj-input` / `dj-blur` / `dj-focus` on a group or
+`<select multiple>`), which D2's `list[T]` row already accepts and a `str` annotation rejects.
+
 ## Consequences and non-goals
 
 New examples become simpler while the server contract becomes stricter. This needs

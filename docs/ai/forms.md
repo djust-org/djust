@@ -143,7 +143,9 @@ def save(self, **form_data):
 ```
 
 Rules:
-- Strict policy (opt-in, ADR-036): a strict `dj-submit` handler receives only the form fields it declares, or all of them through `**form_data`, and never `_target`
+- Strict policy (opt-in, ADR-036): a strict `dj-submit` handler receives only the form fields it declares (the pressed submit button's `name=value` is one of them), or all of them through `**form_data`, and never `_target`
+- Several values: a checkbox group (2+ same-named checkboxes in one form), a `<select multiple>` and any repeated name reach `dj-submit` as a list (`tags=["x", "y"]`; `[]` when a group is unticked), and `dj-change` on a group/`<select multiple>` sends `value` as that list. A lone checkbox stays scalar, so a per-row `dj-change` toggle whose boxes share a name now gets the list (read it as a list, or give the boxes distinct names). Declare `list[str]` under the strict policy
+- Pressed button: under the strict policy a `dj-submit` handler declaring `intent` receives the pressed `<button name="intent" value="...">`; legacy handlers keep `_target` and get no new field
 - Set `_model_instance` BEFORE calling `super().mount()` for edit forms
 - FormMixin provides `submit_form` handler automatically
 - `form_valid`/`form_invalid` are called after validation

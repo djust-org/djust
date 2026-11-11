@@ -252,6 +252,27 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P2**~~ | ~~#3666 — `Form` / `BoundField` arguments reach the native Rust component handlers (`{% field_error field=form.name %}` renders the same under both engines)~~ ✅ (#3753) | v1.3.0 |
 | ~~**P2**~~ | ~~#3667 — Native Rust handlers raise the errors the Python tags raise for invalid input, and the leaked method repr in `notification_popover` is fixed~~ ✅ (#3753) | v1.3.0 |
 
+### v1.3.0-19 — accessibility semantics and live form paths, from a downstream app on 1.3.0 (drain bucket → ships in 1.3)
+
+*Kind:* fourteen issues filed 2026-11-10/11 from one downstream app's accessibility and forms work, all re-checked against `main` at 1.3.2. Three groups, each one PR: **A, component and flash ARIA/CSP** (the template-engine markup and the Y005 check), **B, server-side form paths** (`WizardMixin`, formsets, `ModelFormMixin`), **C, client-side form events** (`dj-submit`, multi-value fields, `dj-disable-with`). **#3972 is not drained here:** its opt-in form mode (`form_field=True`) is delivered by the open PR #3962, which also carries the `type="button"` fix; it closes with that PR. PRs #3960 and #3962 are the downstream author's own and stay theirs.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P2** | **A.** #3971 — `{% status_indicator %}` renders `role="status"`, making every indicator a live region | v1.3.0 |
+| **P2** | **A.** #3968 — Flash messages are announced through nested live regions (`role="alert"` inside `role="status"`) | v1.3.0 |
+| **P2** | **A.** #3970 — `{% stepper %}` steps are click-only divs: not keyboard operable, no `aria-current`, not a list | v1.3.0 |
+| **P2** | **A.** #3969 — `{% progress %}` fill is an inline style (blocked by a strict CSP) and the bar has no `progressbar` role | v1.3.0 |
+| **P2** | **A.** #3961 — Radio components have no group semantics (`dj_radio`, `live_input type="radio"`) | v1.3.0 |
+| **P3** | **A.** #3973 — `djust.Y005` flags an `<svg>` inside an `aria-hidden="true"` ancestor | v1.3.0 |
+| **P1** | **B.** #3964 — `WizardMixin.next_step` ignores the submitted step form, and `validate_field` does not validate | v1.3.0 |
+| **P1** | **B.** #3966 — `FormSetHelpersMixin.add_row` / `remove_row` drop `instance`, `queryset` and the other formset kwargs | v1.3.0 |
+| **P2** | **B.** #3965 — `WizardMixin.mount` always restarts at step 0, with no hook to resume stored progress | v1.3.0 |
+| **P2** | **B.** #3967 — `ModelFormMixin`: let read-only events reuse the authorized object, and take the lookup from params (design call: ADR-017 guarantee for writes stays) | v1.3.0 |
+| **P1** | **C.** #3959 — Multi-value form fields lose values: `dj-submit` keeps only the last `FormData` entry, `dj-change` on a checkbox sends its checked state | v1.3.0 |
+| **P2** | **C.** #3958 — `dj-submit`: the pressed submit button is lost under strict event parameters (ADR-036) | v1.3.0 |
+| **P2** | **C.** #3963 — `dj-disable-with` restores a button's old text over the text the server just rendered | v1.3.0 |
+| ~~**P2**~~ | ~~#3972 — `{% toggle_group %}` form mode~~ covered by open PR #3962 (`form_field=True`); closes with it | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).
