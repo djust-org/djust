@@ -158,7 +158,7 @@ async def _connect():
     communicator.scope["tenant"] = None
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)
+    await communicator.receive_json_from()
     return communicator
 
 

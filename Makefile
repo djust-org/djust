@@ -271,6 +271,18 @@ security-audit-deps: ## Run the release audit's dependency gates locally: pip-au
 django-template-suite: ## Run Django's own template_tests against DjustTemplateBackend (scoreboard, closes #2517)
 	@$(PYTHON) scripts/run-django-template-suite.py --parsed-output .django-src/last-run.txt --json .django-src/last-run.json $(if $(VERBOSE),,--quiet)
 
+.PHONY: template-library-parity
+template-library-parity: ## Check djust_components/theme_tags, Django engine vs Rust engine, against the parity baseline (#3663)
+	@$(PYTHON) scripts/template-library-parity.py
+
+.PHONY: template-library-parity-baseline
+template-library-parity-baseline: ## Regenerate scripts/template-library-parity-baseline.csv after parity changed (#3663)
+	@$(PYTHON) scripts/template-library-parity.py --write-baseline
+
+.PHONY: template-library-url-sweep
+template-library-url-sweep: ## Drive script-capable URLs through every parameter of every djust tag/component, both engines (#3665)
+	@$(PYTHON) scripts/template-library-url-sweep.py --components --quick
+
 .PHONY: check-lockfile-versions
 check-lockfile-versions: ## Verify Cargo.lock/uv.lock self-entries and the SBOM version match manifests (#1498, #3184)
 	@$(PYTHON) scripts/check-lockfile-versions.py $(if $(VERBOSE),--verbose,)
@@ -291,7 +303,7 @@ gen-vdom-fixtures: ## Regenerate client-faithful VDOM diff fixtures (CI gates fr
 test: ## Full integration gate: Python + JavaScript + Rust in parallel
 	@echo "$(GREEN)Running all tests in parallel...$(NC)"
 	@PY_EXIT=0; RS_EXIT=0; JS_EXIT=0; \
-	PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto -q > /tmp/djust-test-py.log 2>&1 & PY_PID=$$!; \
+	DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto -q > /tmp/djust-test-py.log 2>&1 & PY_PID=$$!; \
 	PYO3_PYTHON=$(EMBEDDABLE_PYTHON) sh -c "cargo test --workspace --exclude djust_live -q && cargo test -p djust_live --no-default-features -q" > /tmp/djust-test-rs.log 2>&1 & RS_PID=$$!; \
 	npm test > /tmp/djust-test-js.log 2>&1 & JS_PID=$$!; \
 	wait $$PY_PID || PY_EXIT=$$?; \
@@ -316,13 +328,22 @@ test-sequential: test-python test-js test-rust ## Run all tests sequentially (fa
 
 # The same selector/fallback wrapper as the Python pre-push hook. This target
 # is an edit-loop convenience, never a replacement for test/CI/release gates.
+.PHONY: flow-metrics
+flow-metrics: ## Time per PR / issue against budgets (DAYS=3; CHECK=1 exits non-zero on a breach)
+	@$(PYTHON) scripts/flow-metrics.py --days $(or $(DAYS),3) $(if $(CHECK),--check,)
+
+.PHONY: gate-off-batch
+gate-off-batch: ## Batch gate-off: SPEC=mutations.json [ARGS="--jobs 2 --survivors-only"]; one full run per batch, attributed by failure text (#3905)
+	@test -n "$(SPEC)" || { echo "usage: make gate-off-batch SPEC=mutations.json [ARGS='--jobs 2']"; exit 2; }
+	@$(PYTHON) scripts/gate_off_batch.py $(SPEC) $(ARGS)
+
 .PHONY: test-selected
 test-selected: ## Run affected Python tests (FROM/TO optional; unknown/shared changes run full)
 	@PRE_COMMIT_FROM_REF='$(FROM)' PRE_COMMIT_TO_REF='$(TO)' bash scripts/pre-push-pytest.sh
 
 .PHONY: test-fast
 test-fast: ## Python fast tier: everything except `slow` (>1s in .test_durations, tests/slow_tier.py) and `nightly`
-	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto --dist loadfile -q -m "not slow and not nightly" --benchmark-disable
+	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto --dist loadfile -q -m "not slow and not nightly" --benchmark-disable
 
 .PHONY: test-integration
 test-integration: test ## Run the unchanged full integration gate before declaring a milestone ready
@@ -348,7 +369,7 @@ check-no-default-features: ## Build + test djust_templates without the liveview 
 .PHONY: test-python
 test-python: ## Run Python tests
 	@echo "$(GREEN)Running Python tests...$(NC)"
-	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/
+	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/
 
 .PHONY: test-security
 test-security: ## Run security, XSS, auth and CSRF test files across all Python test roots
@@ -359,18 +380,46 @@ test-security: ## Run security, XSS, auth and CSRF test files across all Python 
 .PHONY: test-python-parallel
 test-python-parallel: ## Run Python tests in parallel (requires pytest-xdist)
 	@echo "$(GREEN)Running Python tests in parallel...$(NC)"
-	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto
+	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto
 
 .PHONY: test-nightly
 test-nightly: ## Run nightly/exhaustive differential tests (-m nightly)
 	@echo "$(GREEN)Running nightly differential tests...$(NC)"
-	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -m nightly
+	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -m nightly
+
+# The whole-tree meta tests: gates that read every test file (or the shard and
+# parity configuration built from them), so they pass on a PR's own tree and can
+# fail on the merge of two PRs (#3757; main went red on a54278ebd after a
+# hand-picked list left tests/test_git_env_guard_3179.py out). This is the ONE
+# place the list lives. tests/test_merge_gates_3757.py derives the tree scanners
+# from the test files and fails when one is neither listed here nor excluded, with
+# a reason, in that module. Run it on a scratch merge of the PR with main, before
+# merging (CLAUDE.md, "merge").
+MERGE_GATES := \
+	tests/test_changelog_fragment_references.py \
+	tests/test_ci_python_test_shards.py \
+	tests/test_corpus_shards.py \
+	tests/test_git_env_guard_3179.py \
+	tests/test_merge_gates_3757.py \
+	tests/test_reset_fixture_hygiene_2234.py \
+	python/djust/tests/test_communicator_timeouts_ratchet_3709.py \
+	python/djust/tests/test_marked_safe_attribute_sweep_3898.py \
+	python/djust/tests/test_no_absolute_time_bounds_3711.py \
+	python/tests/test_no_override_settings_with_fixture_3728.py \
+	python/tests/test_no_reported_crash_signals_2701.py \
+	python/tests/test_safe_markup_gate_3848.py \
+	python/tests/test_template_library_parity_3663.py \
+	python/tests/test_user_rows_do_not_leak_between_tests.py
+
+.PHONY: merge-gates
+merge-gates: ## Run the whole-tree meta tests (run on a scratch merge of a PR with main before merging; #3757)
+	@PYTHONPATH=python:. $(PYTHON) -m pytest $(MERGE_GATES) -q -p no:cacheprovider --durations=5
 
 .PHONY: test-harness
 test-harness: ## Validate and time doctor scenarios and CI shard collection
 	@PYTHONPATH=. $(PYTHON) -m pytest python/djust/tests/test_make_doctor_2061.py \
 		tests/test_ci_python_test_shards.py tests/test_collect_test_shards.py \
-		tests/test_corpus_shards.py -q --durations=10
+		tests/test_corpus_shards.py tests/test_corpus_shards_url_sweep_3781.py -q --durations=10
 
 # CI runs python-tests as four pytest-split shards balanced by the durations
 # recorded in .test_durations (committed). pytest-split falls back to
@@ -383,7 +432,7 @@ test-harness: ## Validate and time doctor scenarios and CI shard collection
 test-durations: ## Regenerate .test_durations for the CI pytest-split shards (one full suite run)
 	@echo "$(GREEN)Recording per-test durations into .test_durations (full suite, ~7-10 min)...$(NC)"
 	@$(PYTHON) -c "import pytest_split" 2>/dev/null || { echo "$(YELLOW)pytest-split missing — install the [dev] extra$(NC)"; exit 1; }
-	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto -q \
+	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto -q \
 		--store-durations --clean-durations --durations-path .test_durations
 	@echo "$(YELLOW)NOTE: these are THIS machine's times. CI balances on the runner's —$(NC)"
 	@echo "$(YELLOW)prefer 'make test-durations-from-ci RUN=<id>' (#2584).$(NC)"
@@ -435,7 +484,7 @@ test-collected-floor: ## Regenerate .test_collected_floor from a real collection
 GROUP ?= 1
 .PHONY: test-shard
 test-shard: ## Run one of the 4 CI pytest-split shards locally (GROUP=N)
-	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto \
+	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto \
 		--splits 4 --group $(GROUP) --splitting-algorithm least_duration \
 		--durations-path .test_durations
 
@@ -531,7 +580,7 @@ ci-mirror: ## Mirror exact CI pytest invocations locally — catches coverage/xd
 	@$(PYTHON) -c "import xdist, pytest_cov" 2>/dev/null || uv pip install pytest-xdist pytest-cov
 	@echo ""
 	@echo "$(YELLOW)Step 1/2: full parallel Python suite (pytest-xdist)$(NC)"
-	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto
+	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto
 	@echo ""
 	@echo "$(YELLOW)Step 2/2: security-tests with coverage (--cov-fail-under=75)$(NC)"
 	@PYTHONPATH=. $(PYTHON) -m pytest \

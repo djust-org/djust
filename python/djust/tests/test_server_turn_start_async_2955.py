@@ -127,11 +127,11 @@ async def _mounted(view_class):
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=await sync_to_async(_session)(), user=AnonymousUser(), tenant=None)
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     await socket.send_json_to(
         {"type": "mount", "view": __name__ + "." + view_class.__name__, "url": "/w/"}
     )
-    assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+    assert (await socket.receive_json_from())["type"] == "mount"
     return socket
 
 

@@ -100,17 +100,17 @@ async def _drive(cls_name: str) -> Dict[str, Any]:
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await comm.connect()
     assert connected
-    await comm.receive_json_from(timeout=5)
+    await comm.receive_json_from()
     out: Dict[str, Any] = {}
     try:
         await comm.send_json_to({"type": "mount", "view": f"{MOD}.{cls_name}", "url": "/x/"})
-        out["mount"] = await comm.receive_json_from(timeout=5)
+        out["mount"] = await comm.receive_json_from()
         await comm.send_json_to(
             {"type": "event", "event": "submit_form", "params": {}, "ref": 2667}
         )
         frames: List[Dict[str, Any]] = []
         for _ in range(6):
-            frame = await comm.receive_json_from(timeout=5)
+            frame = await comm.receive_json_from()
             frames.append(frame)
             if frame.get("type") in _TERMINAL:
                 break

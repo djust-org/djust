@@ -131,7 +131,7 @@ _TERMINAL = {"noop", "html_update", "error", "patch"}
 async def _recv_until(comm: Any, wanted: str, *, ref: Any = None) -> Dict[str, Any]:
     last: Dict[str, Any] = {}
     for _ in range(8):
-        last = await comm.receive_json_from(timeout=5)
+        last = await comm.receive_json_from()
         if (last.get("type") == wanted or last.get("type") in _TERMINAL) and (
             ref is None or last.get("ref") == ref
         ):
@@ -147,7 +147,7 @@ async def _drive(cls_name: str, events: List[str]) -> Dict[str, Any]:
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await comm.connect()
     assert connected
-    await comm.receive_json_from(timeout=5)
+    await comm.receive_json_from()
     out: Dict[str, Any] = {"queries": {}, "frames": {}}
     try:
         SQL_LOG.clear()

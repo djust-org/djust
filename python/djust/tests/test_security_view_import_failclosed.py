@@ -14,7 +14,6 @@ runs) or it is explicitly allowlisted on a module-segment boundary.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 
@@ -22,6 +21,7 @@ import pytest
 from django.test import override_settings
 
 from djust.security.mount import is_view_path_allowed as is_view_import_allowed
+from djust.tests._ws_frames import has_type, receive_until
 
 
 # --------------------------------------------------------------------------
@@ -114,19 +114,17 @@ async def test_ws_mount_does_not_import_arbitrary_module(sentinel_module):
     assert connected, "WS connects without authentication (mount-time auth only)"
 
     await comm.send_json_to({"type": "mount", "view": f"{name}.NotAView", "url": "/"})
-    # Give the consumer time to process (and, pre-fix, to import the sentinel).
-    for _ in range(3):
-        try:
-            await asyncio.wait_for(comm.receive_from(timeout=1), timeout=1)
-        except BaseException:  # noqa: BLE001 — TimeoutError / CancelledError teardown noise
-            break
+    # The refusal is an ``error`` frame, sent only after the consumer finished resolving the
+    # view, i.e. after the import (pre-fix) would have run. Wait for that frame, not for a
+    # fixed time, so a slow runner cannot make the assertions below run too early (#3726).
+    await receive_until(comm, has_type("error"), what="the error frame refusing the mount")
 
     # Capture THE INVARIANT before teardown (asgiref disconnect can raise
     # CancelledError, which is a BaseException, not an Exception).
     imported = name in sys.modules
     marker_ran = os.path.exists(marker)
     try:
-        await asyncio.wait_for(comm.disconnect(), timeout=1)
+        await comm.disconnect()
     except BaseException:  # noqa: BLE001 — teardown noise must not mask the assertion
         pass
 
@@ -195,17 +193,15 @@ async def test_ws_mount_does_not_trigger_module_getattr(getattr_sentinel_module)
     # attacker-chosen.
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[name]):
         await comm.send_json_to({"type": "mount", "view": f"{name}.AnyAttr", "url": "/"})
-        for _ in range(3):
-            try:
-                await asyncio.wait_for(comm.receive_from(), timeout=1)
-            except BaseException:  # noqa: BLE001
-                break
+        # Resolution fails for a name that is not a view: the answer is an ``error`` frame,
+        # sent after ``vars(module)`` was consulted. Wait for it (#3726).
+        await receive_until(comm, has_type("error"), what="the error frame refusing the mount")
 
     # Resolution must use vars()/__dict__, NOT getattr — so __getattr__ never ran.
     # (With the pre-fix getattr, _DJ_GETATTR_HIT would be set to "AnyAttr".)
     hit = getattr(builtins, "_DJ_GETATTR_HIT", None)
     try:
-        await asyncio.wait_for(comm.disconnect(), timeout=1)
+        await comm.disconnect()
     except BaseException:  # noqa: BLE001
         pass
 

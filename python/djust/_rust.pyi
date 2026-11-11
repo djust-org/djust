@@ -396,6 +396,11 @@ def diff_html(old_html: str, new_html: str) -> str:
     """
     ...
 
+WALK_FLOOR_COVERS_FORMS: bool
+"""``True`` in a build that asks ``djust.serialization._protect_sidecar_walk`` (the leaf
+floor plus the model forms) after every segment of a template path (#3790). Absent from an
+older extension, which asks the leaf floor only."""
+
 MAX_VDOM_DEPTH: int
 """How many element levels the VDOM parser keeps, counted from the LiveView
 root (256). An element at the limit keeps its tag and attributes; everything
@@ -637,6 +642,7 @@ def dj_model_fields_from_template(
 def serialize_queryset(
     objects: List[Any],
     field_paths: List[str],
+    all_row_cap: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Serialize Django QuerySet objects efficiently.
@@ -657,6 +663,13 @@ def serialize_queryset(
     Args:
         objects: List of Django model instances
         field_paths: List of field paths to serialize (e.g., ["id", "user.name"])
+        all_row_cap: At most this many rows are read through a called ``all``
+            (a related manager's ``.all``): a SQL ``LIMIT`` on an unevaluated
+            QuerySet. ``None`` (the default for a direct call) reads every row;
+            ``djust.mixins.jit`` passes ``LIVEVIEW_CONFIG['queryset_all_row_cap']``.
+            A path ``X.all.count`` / ``X.all.exists`` / ``X.all.first`` /
+            ``X.all.last`` -- ``all`` read only through QuerySet methods -- is
+            shipped as ``{"count": n, ...}`` and never materializes the rows.
 
     Returns:
         List of dictionaries containing serialized objects
@@ -672,27 +685,42 @@ def serialize_queryset(
 
 def serialize_context(
     context: Dict[str, Any],
-    field_paths: Dict[str, List[str]],
 ) -> Dict[str, Any]:
     """
-    Serialize template context with field paths.
+    Convert a context dict's values to JSON-compatible form.
 
-    Efficiently serializes Django models and QuerySets in template context
-    using the provided field paths (from template variable extraction).
+    Nothing in djust's own render path calls this (the Python helper of the same
+    name in ``djust.template.serialization`` is a different function). It takes
+    exactly one argument; there is no ``field_paths`` parameter.
+
+    Lists, tuples and dicts are walked; ``datetime`` / ``date`` / ``time`` become
+    ISO strings, ``Decimal`` and ``UUID`` become strings, a ``QuerySet`` becomes a
+    list, and any other object becomes ``str(obj)``. Two arms call into the value:
+
+    - An object with a callable ``render`` is replaced by ``{"render": <result>}``.
+    - A Django model becomes ``model_to_dict`` plus ``get_full_name``,
+      ``get_short_name``, ``get_absolute_url`` and ``get_username`` as strings.
+
+    Both calls follow the template rule: a callable carrying ``alters_data`` or
+    ``do_not_call_in_templates`` is not called (a refused ``render`` falls back to
+    ``str(obj)``; a refused ``get_*`` is left out). Every model field and method
+    name also passes the serialization floor (``password``, ``is_superuser``,
+    ``is_staff``, ``DJUST_SENSITIVE_FIELDS``, per-model allow and deny lists); if
+    that gate is missing or raises the model is returned as ``str(obj)``; if the gate itself
+    fails internally it permits no names, so the model ships as an empty dict (still no field
+    leaves).
+
+    The walk is bounded (#3814). A container, or a model row (class and primary key), that the
+    walk is already inside of becomes ``str(obj)``, so a list that holds itself and a
+    ``ManyToManyField("self")`` that comes back to where it started end at the first return;
+    nesting past 128 levels (a chain of distinct rows) becomes ``str(obj)`` too. A ``render()``
+    that returns something other than a ``str`` falls back to ``str(obj)``.
 
     Args:
         context: Template context dictionary
-        field_paths: Mapping of variable names to field paths
 
     Returns:
         Serialized context dictionary
-
-    Example::
-
-        serialized = serialize_context(
-            {"user": user_obj, "articles": articles_qs},
-            {"user": ["name", "email"], "articles": ["id", "title"]}
-        )
     """
     ...
 
@@ -806,6 +834,16 @@ def register_tag_handler(tag_name: str, handler: Any) -> None:
     template compilation, before any context resolution or rendering, and
     may raise to reject invalid syntax. It must not render application code.
     Django library bridges use this hook to run Django's argument validation.
+
+    An INLINE handler may also implement ``rewrite_args_at_parse(args) ->
+    list[str]`` (#3664). It receives the same original tokens, once, at
+    compilation, and returns the argument list the tag keeps; raising refuses
+    the template. It exists for the one distinction a handler cannot recover
+    after resolution: a positional operand and a keyword one are both just
+    text by then (``{% tag v %}`` with ``v = "k=v"`` looks like the keyword
+    ``k``). djust's own components use it to name positional operands after
+    the Python tag's parameters (``djust._positional_args``). A handler
+    without the method gets its tokens unchanged.
 
     The return value is ESCAPED unless it is already HTML (#2379), mirroring
     Django's ``SimpleNode.render``, which runs ``conditional_escape`` over a
@@ -1390,6 +1428,17 @@ class RustLiveView:
         """
         ...
 
+    def release_baseline(self) -> None:
+        """
+        Drop the diff baseline (rendered tree, last HTML, render caches) and keep
+        the version counter (``static_render``, #3626).
+
+        The next ``render_with_diff`` returns full HTML and no patches; its
+        version is the next one in sequence, unlike after ``reset``. The state
+        is kept (``retain_state_keys([])`` clears it).
+        """
+        ...
+
     def serialize_msgpack(self) -> bytes:
         """
         Serialize the view state to MessagePack bytes (with embedded timestamp).
@@ -1565,6 +1614,7 @@ __all__ = [
     "render_markdown",
     "diff_html",
     "MAX_VDOM_DEPTH",
+    "WALK_FLOOR_COVERS_FORMS",
     "collapse_inter_tag_whitespace",
     "inter_tag_whitespace_edits",
     "authored_lazy_elements",

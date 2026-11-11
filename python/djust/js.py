@@ -350,7 +350,7 @@ class JSChain:
         quote), which would close a ``"``-delimited attribute. Use the normal
         auto-escaped ``{{ cmd }}`` path for attribute contexts.
         """
-        from .security import escape_json_for_script
+        from .security.json_script import escape_json_for_script  # the defining module (#3820)
 
         return str(mark_safe(escape_json_for_script(self.to_json())))
 

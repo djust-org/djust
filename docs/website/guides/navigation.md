@@ -45,6 +45,9 @@ class ProductListView(LiveView):
         self.page = int(params.get("page", 1))
         self.products = self.fetch_products()
 
+    def fetch_products(self):
+        return []  # your query, filtered by self.category and self.page
+
     @event_handler()
     def filter_by_category(self, category="all", **kwargs):
         self.live_patch(params={"category": category, "page": 1})
@@ -94,8 +97,241 @@ Callback invoked when URL params change. Override this to update view state base
 ```python
 def handle_params(self, params, uri):
     self.category = params.get("category", "all")
-    self.page = int(params.get("page", 1))
-    self.results = self.search(self.category, self.page)
+    self.results = self.search(self.category)
+```
+
+By default `params` holds raw strings from the query string (a repeated key is a
+list). Reading one with `int(...)` raises on `?page=abc` and answers 500, so a view
+that reads typed or restricted values should declare them with
+[`params_form`](#declared-parameters-params_form).
+
+### Declared parameters: `params_form`
+
+Set `params_form` to a Django form and djust binds the URL's query parameters to
+it and cleans them before `handle_params()` runs. `params` is then the form's
+`cleaned_data`: `page` is an `int`, `category` one of the declared choices, and a
+field the URL left out or empty (a `BooleanField` too) takes its `initial` value.
+
+```python
+from django import forms
+
+from djust import LiveView
+
+
+class ListParams(forms.Form):
+    category = forms.ChoiceField(
+        choices=[("all", "All"), ("books", "Books")], required=False, initial="all"
+    )
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+
+
+class ListView(LiveView):
+    template_name = "demo/list.html"
+    params_form = ListParams
+
+    def mount(self, request, **kwargs):
+        self.category = "all"
+        self.page = 1
+
+    def handle_params(self, params, uri):
+        self.category = params["category"]
+        self.page = params["page"]
+```
+
+`GET /list/?page=2` answers 200 with `page == 2`. `GET /list/?page=abc` also
+answers 200: the form rejects the value, `handle_params()` receives the declared
+initial values (`category="all"`, `page=1`) and the template gets the messages:
+
+```html
+{% if params_errors.page %}<p class="error">{{ params_errors.page.0 }}</p>{% endif %}
+```
+
+`params_errors` is a plain dict, `{field: [messages]}`, with errors that belong to
+no field under `"__all__"`. It is `{}` when the URL is valid, so a message never
+outlives the URL that caused it. (A form instance placed in a template context is
+rendered to `{field: html}`, so it has no `.errors` to read; that is why the
+messages are a separate dict.)
+
+**Invalid input.** djust calls `handle_invalid_params(form, uri)` instead of
+`handle_params()`. The default hands `handle_params()` the initial values for every
+field, so one bad value means the declared defaults and not a half-applied URL.
+Override it to refuse the URL:
+
+```python
+from django.http import Http404
+
+
+class ListView(LiveView):
+    params_form = ListParams
+
+    def handle_invalid_params(self, form, uri):
+        raise Http404("No such page.")
+```
+
+`Http404` is a Django 404 on the HTTP render; over a WebSocket or SSE mount it
+fails the mount like any exception from `handle_params()`. To answer 400 and keep
+the page, set a flag in the override (calling `super().handle_invalid_params(form,
+uri)` keeps the default) and return 400 from `get_http_status()`.
+
+**Keeping what validated.** The default is the conservative one: `?page=abc&sort=name`
+hands `handle_params()` the initial value of `page` *and* of `sort`, so the valid
+`sort=name` is lost with the bad `page`. Set `params_form_fallback = "fields"` to keep
+it:
+
+```python
+class ListView(LiveView):
+    params_form = ListParams
+    params_form_fallback = "fields"  # the default is "initial"
+```
+
+Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) and
+`sort="name"` (what the URL said). The rules:
+
+- A field is kept when it has no entry in `form.errors` and is in `form.cleaned_data`.
+  Every other field takes its initial value: **a failed field's own entry is always its
+  initial value.** `"initial"` is the mode that never hands over any raw request value; in
+  `"fields"` a kept field is `clean()`'s output, handed over verbatim as on a valid URL.
+- A kept field is the value the valid path would hand over: a field the URL left out
+  or empty takes its `initial`, exactly as on a valid URL. An optional field the URL
+  omitted is valid by the form's own say-so; a required one is an error and is replaced.
+  **The order is the valid path's.** The `initial` fill comes *after* `clean()`, so a kept
+  field the URL left out or empty takes its `initial` over whatever `clean()` wrote into it
+  (a `clean()` that sets a default into such a field loses to the field's `initial`, as it
+  does on a valid URL). The extra `clean()` call described below is given the combination
+  that would be handed over, so that field is already filled with its `initial` when
+  `clean()` sees it, and the fill is applied again to that call's output. A field with no
+  `initial` (`None`) is never filled, on either path.
+- Only the declared fields are handed over, in the form's order. A key `clean()` derived
+  and added to `cleaned_data` is not carried into the fallback (the valid path keeps it).
+- A form-level error keeps nothing. If `clean()` raises a plain `ValidationError` (the
+  `"__all__"` entry of `params_errors`), the fields that passed one by one are the
+  combination the form refused, so all of them take their initial values. A `clean()` that
+  names the field (`self.add_error("hi", ...)`) is a field error, and the siblings are kept
+  **if the combination still passes `clean()`**: a kept field is now paired with the initial
+  value of a replaced one, a pair `clean()` never saw (`?lo=9&hi=2` keeps `lo=9` next to
+  `hi`'s initial `3`, which breaks `lo <= hi`). So `clean()` runs once more on exactly the
+  merged values, on a copy of the form, and if it raises `ValidationError`, reports an error
+  with `add_error()` or fails any other way (it compared with the `None` an initial can be),
+  nothing is kept and the view gets the plain initial values. **The result is always a
+  combination `clean()` accepts, or the plain initials.** What `clean()` repairs in a
+  **kept** field it repairs here as on the valid path (a `clean()` that sets `lo = hi` for an
+  inverted range hands back the repaired pair). A write to a **replaced** field is not adopted:
+  that field is its initial value whatever `clean()` wrote. The values `clean()` is given are
+  the first pass's output for the kept fields (a `clean()` that wrote a kept field on the
+  first pass is re-run on what it wrote), with each kept field the URL left out or empty
+  filled with its `initial`, and the `initial` value of every replaced field. A default
+  `start` next to a supplied `end` is such a pair: `?page=abc&end=2019-01-01` with
+  `start` defaulting to `2020-01-01` is refused by a `clean()` that wants `end >= start`,
+  so the view gets the plain initial values. This
+  is one extra call of `clean()` and only on this path; **the fields' own `clean_<field>()`
+  validators are not run again on the merged values**: a `clean_end()` that checks
+  `end >= start` was skipped when `start` failed, so `?start=zz&end=1` hands over `start` at
+  its initial value `10` next to `end=1`. Put a rule that spans fields in `clean()`. A
+  replaced field's own validity is not asked either (a required field with no initial is
+  `None`). Make `clean()` tolerate a missing or `None` field, as it must for the first pass.
+  **`clean()` must be idempotent to use `params_form_fallback = "fields"`.** The contract is
+  that `clean()` is re-run on values it already cleaned: a kept field is `clean()`'s own
+  first-pass output, and a replaced field's initial value passes through it too. A `clean()`
+  that is not idempotent hands `handle_params()` a silently different value than the valid
+  path: `cleaned["price"] *= 100` gives `500` for `?price=5` and `50000` from the fallback
+  for `?price=5&page=zz`; a LIKE-wrap (`"%" + name + "%"`) gives `%bob%` and `%%bob%%`; a
+  `page - 1` conversion gives `3` and `2`. Keep such conversions in `handle_params()`, or
+  leave the view on the default `"initial"`.
+- `clean()`'s output is adopted only for the fields the fallback **kept**. A replaced field
+  is its initial value whatever `clean()` wrote, so a failed field's own entry is never the
+  raw value. A `clean()` that copies raw request data into a **kept** field (`c["a"] =
+  self.data.get("q")` with `q` failed) hands it over through that field, as it does on the
+  valid path for a field the URL supplied; that is `clean()`'s trust boundary, not the
+  fallback's. For a kept field the URL left out or empty **that has an `initial`**, both paths
+  apply the `initial` after `clean()`, so the copy does not get out through that field. It
+  can still get out through: a field with no `initial` (nothing is filled); a `clean()` that
+  also writes the field into `self.data` (the field then counts as supplied); and a
+  multi-select field (`MultipleChoiceField`, `CheckboxSelectMultiple`) the URL left out,
+  which both paths treat as supplied ([#3922](https://github.com/djust-org/djust/issues/3922)).
+- A kept field the URL left out that the fallback fills with its `initial` gets a **copy** of
+  a mutable `initial` (a list, a dict), so a `handle_params()` that mutates it does not
+  change the form class's default for later requests. That is not so everywhere: the valid
+  path, `params_form_fallback = "initial"`, and in `"fields"` mode a replaced field's
+  `initial` (and the plain initial values) hand over the object stored on the form class, so
+  a `handle_params()` that mutates a mutable `initial` there changes the default for later
+  requests ([#3926](https://github.com/djust-org/djust/issues/3926)). Copy it in
+  `handle_params()` before changing it.
+- A kept `ModelChoiceField` value is a deep copy of the instance the first pass produced: equal
+  by primary key, not the same object.
+  Anything else going wrong in the second call (a `None` comparison, a value that cannot be
+  deep-copied, `PermissionDenied` or `Http404` that `clean()` raises only on the second call)
+  is logged as a warning and gives the plain initials, never a 500.
+- **An `async def handle_invalid_params` that calls `super()` runs that second `clean()` on the
+  event loop.** A `clean()` that uses the ORM raises `SynchronousOnlyOperation` there, and the
+  view silently gets the plain initial values, with a warning that says so. Call `super()` from
+  a sync override (the default and a sync override run off the loop), or keep ORM work out of
+  `clean()`.
+- A URL past the form-data bounds (`max_form_fields` and the others) is bound to nothing
+  and reports its reason under `"__all__"`; nothing of it was validated, so nothing is kept.
+- `params_errors` is the same in either mode: one entry per failed field, so the template
+  shows the same messages. Only what `handle_params()` receives differs.
+- It is read from the class, on every request of a view that declares `params_form`. A value
+  other than `"initial"` or `"fields"` raises `ImproperlyConfigured` (V023 reports it first),
+  so a typo cannot silently mean the default.
+- A view that overrides `handle_invalid_params()` without calling `super()` never *uses*
+  it, but a malformed value is still refused on every request (the check runs before the hook).
+- A callable `initial` is evaluated at most once and only for a field that needs it: never
+  for a field the URL supplied and that was kept.
+- Put a mixin that sets `params_form_fallback` (or `params_form`) **before** `LiveView` in the
+  bases: `LiveView` defines both names, so a mixin listed after it is shadowed by the default.
+
+**Every transport.** The same form decides on the HTTP GET, the WebSocket and SSE
+mount, `live_patch` and back/forward (`url_change`), and the HTTP fallback POST.
+The page is rendered by the same template engine as any other render; the form
+only changes what `handle_params()` receives.
+
+Things to know:
+
+- It is opt-in. A view without `params_form` keeps receiving the raw dict.
+- Only the declared fields reach `handle_params()`; any other query key is dropped.
+- The form is built with `data=` only, so it cannot take required constructor arguments;
+  `manage.py check` reports one that does (V023).
+- A `ModelChoiceField` is fine: validation runs on a worker thread on the socket paths.
+- With `exposure_policy = "explicit"` the view declares what it renders, so declare
+  `params_errors = state(default_factory=dict)` and pass it to `get_context_data()`.
+- A `params_form` that is not a form class raises `ImproperlyConfigured` on the first
+  request; `manage.py check` reports it first (V023).
+- `params_form`, `params_form_fallback`, `http_status_of_state` and `state_attribute` are
+  framework class attributes: an `exposure_policy = "explicit"` view cannot declare a `state()` field
+  under those names, and a legacy view that assigns one on the instance does not publish
+  it as state.
+
+**Testing a view with `params_form`.** `LiveViewTestClient` calls `handle_params()` after
+`mount()` the way the transports do, through the same form. Give the first call a query
+string with `query_params`, and step to another URL with `url_change()`:
+
+```python
+from django import forms
+
+from djust import LiveView
+from djust.testing import LiveViewTestClient
+
+
+class PageParams(forms.Form):
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+
+
+class PagedView(LiveView):
+    template = "<div dj-root>{{ page }}</div>"
+    params_form = PageParams
+
+    def mount(self, request, **kwargs):
+        self.page = 0
+
+    def handle_params(self, params, uri):
+        self.page = params["page"]
+
+
+client = LiveViewTestClient(PagedView).mount(query_params={"page": "3"})
+assert client.view_instance.page == 3
+client.url_change({"page": "abc"})  # a bad value: the initial values, plus the message
+assert client.view_instance.page == 1
+assert "page" in client.view_instance.params_errors
 ```
 
 ## Template Directives
@@ -601,6 +837,9 @@ class DashboardView(LiveView):  # navigation is built in — no NavigationMixin 
         if tab in self.VALID_TABS:
             self.active_tab = tab
         self._load_tab_data()
+
+    def _load_tab_data(self):
+        pass  # load what the active tab shows
 ```
 
 **Why it works:**

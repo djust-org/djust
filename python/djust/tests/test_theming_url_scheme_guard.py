@@ -5,7 +5,9 @@ Two policies, by where the URL comes from:
 * A URL from app data (nav / sidebar / breadcrumb items, ``url_pattern``, an
   avatar ``src``, the auth and error pages' links) is *neutralised*: a
   ``javascript:`` / ``vbscript:`` / ``data:`` value renders as ``"#"`` and the
-  rest of the component renders as before, using the theming denylist.
+  rest of the component renders as before. A scheme is refused when the shared
+  ``djust.components.utils.url_allowed`` allowlist (the rule ``djust_components`` uses)
+  rejects it (#3677); the theming package keeps no list of its own.
   One stored bad link must not turn every viewer's page into an error.
 * A developer-supplied literal (``theme_button href=``, the ``**attrs``
   passthrough) still raises ``ValueError``: a loud error at development time.
@@ -271,10 +273,19 @@ class TestPageUrlsNeutralised:
         assert 'href="/"' in html
 
 
-@pytest.mark.parametrize("url", ["sms:+15551234567", "geo:40,-70", "myapp://record/42"])
-def test_non_script_schemes_are_preserved(url):
+@pytest.mark.parametrize("url", ["tel:+15551234567", "mailto:a@example.com", "ftp://h/x"])
+def test_allowlisted_schemes_are_preserved(url):
     html = _render_list_url("{% theme_nav items=items %}", url)
     assert f'href="{url}"' in html
+
+
+@pytest.mark.parametrize("url", ["sms:+15551234567", "geo:40,-70", "myapp://record/42"])
+def test_other_schemes_are_neutralised_like_the_components_allowlist_does(url):
+    """#3677: theming used to pass these (a denylist); it now uses the shared allowlist,
+    so a theme author who linked to an app scheme or ``sms:`` gets ``#``."""
+    html = _render_list_url("{% theme_nav items=items %}", url)
+    assert 'href="#"' in html
+    assert url not in html
 
 
 def test_data_image_is_neutralised_for_links():
@@ -328,10 +339,10 @@ def test_nav_through_rust_template_engine():
 
     html = render_template(
         "{% load theme_components %}{% theme_nav items=items %}",
-        {"items": [{"label": "Bad", "url": BAD}, {"label": "App", "url": "myapp://home"}]},
+        {"items": [{"label": "Bad", "url": BAD}, {"label": "App", "url": "https://app.example/"}]},
     )
     assert_neutralised(html)
-    assert "Bad" in html and 'href="myapp://home"' in html
+    assert "Bad" in html and 'href="https://app.example/"' in html
 
 
 @pytest.mark.parametrize(

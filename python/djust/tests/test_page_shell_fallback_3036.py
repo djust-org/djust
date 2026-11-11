@@ -400,7 +400,7 @@ async def _redirect(target: str):
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=await sync_to_async(_session)(), user=AnonymousUser(), tenant=None)
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     try:
         await socket.send_json_to(
             {"type": "mount", "view": f"{__name__}.SourcePage", "url": "/src/"}

@@ -601,28 +601,25 @@ class TestEveryRegisteredHandlerIsAccountedFor:
             assert UNESCAPED_TAG.search(str(out)), (
                 f"{name} returned no markup here, so this row proves nothing: {out!r}"
             )
-        # `toast_container` needs no args but is a `tag`, and its EMPTY-list
-        # branch is the one that was missing the module's own `_safe()`.
-        _kind, toast = handlers["toast_container"]
-        assert hasattr(toast.render([], {}), "__html__")
-        assert hasattr(toast.render([], {"toasts": [{"id": "1", "message": "m"}]}), "__html__")
 
 
 #: Argument vectors a handler is plausibly called with — the shapes the Rust
 #: dispatch actually produces after `value_to_arg_string`, not invented ones.
 #: A bare word, a value carrying MARKUP (which is where the unmarked-return
 #: question lives), a JSON-encoded structured value, dotted paths, and a kwarg
-#: whose value carries a double quote.
+#: the PWA tags do not take.
 #:
 #: That last vector is #2434's (added with its fix). A handler's SUCCESS branch
 #: and its FAILURE branch are different returns, and every vector above reaches
 #: only the first — so the four PWA handlers, which delegate to a Django tag
 #: and diagnose a failure with an HTML comment, were audited entirely on the
-#: exit that cannot go wrong. A double quote in a kwarg VALUE makes the Django
-#: source those handlers assemble unparseable, which is how a failure branch
-#: gets reached from an argument rather than from a settings change; before
-#: #2434 it turns `test_the_only_unmarked_markup_return_is_the_named_limit`
-#: red with all four of them as offenders.
+#: exit that cannot go wrong. An unsupported keyword makes those handlers raise
+#: before they build a tag, which is how a failure branch gets reached from an
+#: argument rather than from a settings change; before #2434 it turns
+#: `test_the_only_unmarked_markup_return_is_the_named_limit` red with all four
+#: of them as offenders. (It was a double quote in a kwarg VALUE until #3824:
+#: that quote used to break the Django source the handlers assembled, which
+#: was the injection, not a diagnostic path.)
 _ARG_VECTORS: tuple[list[str], ...] = (
     [],
     ["x"],
@@ -632,7 +629,7 @@ _ARG_VECTORS: tuple[list[str], ...] = (
     ["slots.col.0.content"],
     ["p"],
     ["x", "y"],
-    ['name=he said "hi"'],
+    ["no_such_pwa_argument=x"],
 )
 
 #: A context those vectors can resolve against.

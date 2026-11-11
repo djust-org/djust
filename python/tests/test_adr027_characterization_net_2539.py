@@ -1429,7 +1429,10 @@ class TestTheHandleNeverReachesTheWire2539:
         core = self._core()
         body = core.split("pub fn opaque_value", 1)[1].split("\n/// ", 1)[0]
         assert "resolve_lazy" not in body, "the deleted ADR-027 gate is back (#2628)"
-        producer = "Some(std::sync::Arc::new(ob.clone().unbind()))"
+        # The handle is BUILT in one expression. `opaque_value` binds it before wrapping it in
+        # `Some(..)` because the deferred text of a form shares the same `Arc` (#3769), so the
+        # pin counts the construction, which is what a "producer" is.
+        producer = "std::sync::Arc::new(ob.clone().unbind())"
         # FOUR producers since #2628: `opaque_value` (unconditional since
         # #2628), `handle_only_encoded` (the terminal arm for an object one of
         # `opaque_value`'s probes refused — #2628, replacing the deleted
@@ -1596,8 +1599,9 @@ class TestTheRenderEnvReachesEveryRenderEntry2539:
 class TestTheAliasFallbackStays2628:
     """The by-name sidecar's alias fallback (`Context::resolve_alias` in
     `resolve_without_builtins`) is a Django-parity mechanism for a value that
-    carries NO live handle — a model crosses as a floored dict (ADR-027
-    (b)(1)) — and ADR-027 Step 5 kept it for that reason. Until this pin the
+    carries NO live handle. A raw model crossed as a floored dict (ADR-027
+    (b)(1)) and ADR-027 Step 5 kept the fallback for that reason; since #3888 a
+    raw model is a handle, and the fallback still serves a value that is not. Until this pin the
     only thing that went red without it was an incidental benchmark cell.
 
     Gate-off (verified): `match self.resolve_alias(key)` →
@@ -1619,17 +1623,35 @@ class TestTheAliasFallbackStays2628:
         assert render(source, {"user": u}) == "1"
 
     @pytest.mark.parametrize("render", ALL_FOUR)
-    def test_the_filtered_rebinding_is_a_recorded_gap_not_a_regression(self, render) -> None:
-        """A FILTERED operand registers no alias (`context.rs`, #2504 — the
-        guards are `Context::is_safe`'s XSS boundary), and a model has no
-        handle to fall back on, so this cell renders `''` where Django renders
-        `1`. Pre-existing on every entry; recorded so the row above cannot be
-        "fixed" by widening the alias guards without this going green — and
-        so a future change that closes it is noticed."""
+    def test_the_filtered_rebinding_reaches_its_reverse_relation_since_3888(
+        self, render, request
+    ) -> None:
+        """Was `..._is_a_recorded_gap_not_a_regression`: a FILTERED operand registers no alias
+        (`context.rs`, #2504 — the guards are `Context::is_safe`'s XSS boundary), and a raw model had
+        no handle to fall back on, so this cell rendered `''` where Django renders `1`. Recorded so
+        the row above could not be "fixed" by widening the alias guards.
+
+        #3888 closed it where the model reaches the Rust conversion RAW: it is a floored live
+        handle there, so the filtered rebinding keeps the model and the handle answers the read
+        (`render_template`, `render_template_with_dirs`). The alias guards are untouched.
+
+        #3902 closed `DjustTemplateBackend` the same way: `DjustTemplate.render` no longer replaces a
+        top-level single model with `_jit_serialize_model(...)`, it carries it raw like a list row
+        (a plain render is not state).
+
+        It stays a recorded gap on `LiveView` ONLY: the view holds the model as STATE (ADR-027
+        "models stay eager": client payload, msgpack, change detection), so `normalize_django_value`
+        still makes a dict of it and the Rust conversion has no handle to keep. Making it a handle
+        there is a design decision, not a fix (#3936, the LiveView half of #3902); delete the `''`
+        branch when it closes."""
         source = "{% with q=user|default:user %}{{ q.groups.count }}{% endwith %}"
         u = self._alice()
         assert django_render(source, {"user": u}) == "1"
-        assert render(source, {"user": u}) == ""
+        got = render(source, {"user": u})
+        if request.node.callspec.id == "LiveView":
+            assert got == "", "LiveView: a state-held top-level model is a dict, with no handle"
+        else:
+            assert got == "1"
 
 
 class TestStringIfInvalidReachesTheLiveWalk2628:

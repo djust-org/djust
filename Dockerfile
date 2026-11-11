@@ -35,7 +35,7 @@ RUN apt-get update && apt-get install -y \
 # Install Python dependencies first
 RUN pip install --no-cache-dir \
     Django>=3.2 \
-    channels[daphne]>=4.0.0 \
+    channels>=4.0.0 \
     msgpack>=1.0.0 \
     uvicorn[standard]>=0.30.0 \
     gunicorn>=21.0.0

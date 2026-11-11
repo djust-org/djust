@@ -386,6 +386,45 @@ _ENDCOMMENT = re.compile(r"\{%\s*endcomment\s*%\}")
 _LINE_BREAKS = frozenset("\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
 
 
+def _count_newlines(text: str, start: int, end: int) -> int:
+    """Newlines in ``text[start:end]`` -- the ONLY place :class:`LineCounter` reads ``text``.
+
+    A module-level function so a test can tally how many characters a scan reads
+    (``end - start``) without a clock (#3705)."""
+    return text.count("\n", start, end)
+
+
+class LineCounter:
+    """The 1-based line of a character offset, for a scan that reports one per match.
+
+    ``text[:offset].count("\n") + 1`` re-reads the text from the start for every
+    match, so a template with many matches costs O(template x matches) (#3705).
+    This reads only the characters between the previous query and this one: a scan
+    that visits matches in order (every ``finditer`` loop) reads the text once in
+    total. An out-of-order query is still correct, at the cost of the distance moved.
+
+    One counter per text. The text the counter reads must be the text the offsets
+    index into (or one that keeps every newline in place, as the ``_blank_*`` /
+    ``_strip_*`` helpers do).
+    """
+
+    __slots__ = ("_text", "_offset", "_line")
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self._offset = 0
+        self._line = 1
+
+    def line_at(self, offset: int) -> int:
+        """The line ``offset`` falls on; the same as ``text[:offset].count("\\n") + 1``."""
+        if offset >= self._offset:
+            self._line += _count_newlines(self._text, self._offset, offset)
+        else:
+            self._line -= _count_newlines(self._text, offset, self._offset)
+        self._offset = offset
+        return self._line
+
+
 def _blank_template_comments(content: str) -> str:
     """Replace every ``{# #}`` and ``{% comment %}...{% endcomment %}`` region
     with whitespace, keeping line breaks so line numbers stay aligned (#3283).
@@ -396,7 +435,9 @@ def _blank_template_comments(content: str) -> str:
     the original source.
 
     Linear in the template: a search that fails once cannot succeed later, so an
-    unterminated opener is remembered rather than re-searched for each repeat.
+    unterminated opener is remembered rather than re-searched for each repeat, and
+    the end of the opener's line is found by a cursor that only moves forward
+    rather than by a search to the end of the template for every opener (#3723).
     """
     if "{#" not in content and "{%" not in content:
         return content
@@ -406,6 +447,10 @@ def _blank_template_comments(content: str) -> str:
     no_endcomment = False
     # Per opener kind: no closer exists on the current line before this offset.
     dead_until = {True: -1, False: -1}
+    # The first "\n" at or after the last place it was searched from: -2 before the
+    # first search, -1 when there is none. ``position`` never moves back, so a hit at
+    # or past it is still the first newline after it, and a miss stays a miss.
+    newline = -2
     while True:
         opener = _COMMENT_OPENER.search(content, position)
         if opener is None:
@@ -414,9 +459,9 @@ def _blank_template_comments(content: str) -> str:
         inline = opener.group(0) == "{#"
         if position <= dead_until[inline]:
             continue
-        line_end = content.find("\n", position)
-        if line_end == -1:
-            line_end = len(content)
+        if newline != -1 and newline < position:
+            newline = content.find("\n", position)
+        line_end = len(content) if newline == -1 else newline
         closer = content.find("#}" if inline else "%}", position, line_end)
         if closer == -1:
             dead_until[inline] = line_end

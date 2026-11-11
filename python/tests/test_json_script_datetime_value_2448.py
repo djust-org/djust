@@ -721,11 +721,18 @@ class TestTheSinkHasExactlyTheCallersItClaims:
         """
         filters = self._production(FILTERS_RS.read_text(encoding="utf-8"))
         core = self._production(CORE_RS.read_text(encoding="utf-8"))
+        # Read through `Encoded::json()` since #3769, not as a field: for an opaque carrier the
+        # encoder spelling IS `display` (`json: None`), and `display` may be unasked-for text, so a
+        # direct field read would see "no spelling" where the accessor forces the text. The pin is
+        # the same pin on the accessor: exactly one reader per file, and a second one still has to
+        # come here.
         # `filters.rs`: the one `value_to_json` arm, and nothing else.
-        assert filters.count("e.json") == 1, filters.count("e.json")
-        assert 'format!("\\"{}\\"", json_string_body(&e.json))' in filters
+        assert filters.count("e.json()") == 1, filters.count("e.json()")
+        assert 'format!("\\"{}\\"", json_string_body(e.json()))' in filters
         # `lib.rs`: exactly one, the binary tag's payload. The tag TRANSPORTS
         # the spelling; it does not decide it, and the round-trip test above is
         # what proves the two agree.
-        assert core.count("e.json") == 1, core.count("e.json")
-        assert "e.json.as_str()" in core
+        assert core.count("e.json()") == 1, core.count("e.json()")
+        assert "e.json()," in core
+        # and nothing reads the FIELD around the accessor (a `.json` that is not a call)
+        assert not re.search(r"\be\.json\b(?!\()", filters + core)

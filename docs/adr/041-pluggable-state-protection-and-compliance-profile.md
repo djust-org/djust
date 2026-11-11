@@ -280,12 +280,14 @@ use `PersistentLiveView`.
 
 ## Rollout
 
-1. **1.3:** `snapshot_backend` and the two shipped backends, `snapshot_transport`,
+Steps 1 to 3 were planned for 1.3 and did not ship in it (v1.3.0, v1.3.1); they move to 1.4 (#3952). The decision sections above still say "1.3" for the opt-in changes: read that as the first minor release that ships them.
+
+1. **1.4:** `snapshot_backend` and the two shipped backends, `snapshot_transport`,
    `djust[crypto]`, `PersistentLiveView` (already in review) with the
    readable-by-the-client caveat.
-2. **1.3:** `revoke_user`, `close_sockets_on_logout`, `idle_timeout`,
+2. **1.4:** `revoke_user`, `close_sockets_on_logout`, `idle_timeout`,
    `djust.auth_refused`.
-3. **1.3:** `compliance_profile` checks and documentation, `djust_audit`
+3. **1.4:** `compliance_profile` checks and documentation, `djust_audit`
    reporting of the profile and attestation.
 4. **2.0:** the removals and default flips in Decision 5.
 

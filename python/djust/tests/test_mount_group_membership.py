@@ -104,13 +104,13 @@ async def _connect():
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect ack
+    await communicator.receive_json_from()  # connect ack
     return communicator
 
 
 async def _receive_type(communicator, wanted: str, *, tries: int = 6):
     for _ in range(tries):
-        frame = await communicator.receive_json_from(timeout=3)
+        frame = await communicator.receive_json_from()
         if frame.get("type") == wanted:
             return frame
     raise AssertionError(f"no {wanted!r} frame received")

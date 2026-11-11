@@ -15,9 +15,12 @@ from typing import Callable, ClassVar, Dict, Any, List, Optional, Tuple, Type, c
 from abc import ABC
 from django.utils.safestring import SafeString, mark_safe
 
+from djust._html import attr_name
+from djust._include_guard import include_guard_scope
 from djust._template_guards import TemplateMutatorGuard, alters_data
 from djust.decorators import is_event_handler
 
+from ._hybrid_attrs import harden_context
 from .assigns import (
     Assign,
     AssignValidationError,
@@ -82,6 +85,24 @@ def _render_template_string(template_str: str, context: Dict[str, Any]) -> str:
     return cast(str, render_template_with_dirs(template_str, context, get_template_dirs()))
 
 
+def _render_inline_template(template_str: str, context: Dict[str, Any], owner: str = "") -> str:
+    """Render a component's INLINE ``template`` string: the one place it is done (#3900, #3913).
+
+    ``Component`` (the hybrid path), ``LiveComponent`` and ``BoundComponent`` all draw their
+    ``template`` here. The template is first read once for the slots that decide what lands in the
+    page (``djust.components._hybrid_attrs``): the attribute slots are escaped whatever the value
+    is marked as and a URL is checked against the scheme allowlist, and the text of a raw-text
+    element (``<textarea>``, ``<title>``, ``<script>`` ...) is escaped because the text there can
+    end the element. Every other text slot keeps a marked-safe value's markup.
+
+    ``owner`` is the component's class name, for the warning about what could not be made safe.
+    Not applied: a ``template_name`` file (loaded by the project's loaders, with ``{% include %}``
+    and ``{% extends %}``) and a LiveView's own template.
+    """
+    template_str, context = harden_context(template_str, context, owner)
+    return _render_template_string(template_str, context)
+
+
 def _load_template_source(template_name: str) -> Optional[str]:
     """The source of ``template_name`` as the project's loaders find it, or
     ``None`` when the configured backend does not expose one (#2530)."""
@@ -141,7 +162,7 @@ def _render_template_name_with_markers(
         return None
     from ..mixins.rust_bridge import _collect_safe_keys
     from ..render_env import apply_render_env_once
-    from ..serialization import build_render_sidecar, normalize_django_value
+    from ..serialization import build_render_sidecar, normalize_django_value, without_form_values
     from ..utils import get_template_dirs
 
     apply_render_env_once()
@@ -155,9 +176,12 @@ def _render_template_name_with_markers(
     namespace = _dj_if_id_namespace(context.get("component_id"))
     if namespace and hasattr(rust_view, "set_dj_if_id_namespace"):
         rust_view.set_dj_if_id_namespace(namespace)
-    rust_view.update_state(normalize_django_value(context))
+    # #3767: a form (or a container holding one) is not state; the sidecar built from the
+    # same context below answers for it, so the flattened copy must not be found first.
+    state_context = without_form_values(context)
+    rust_view.update_state(normalize_django_value(state_context))
     safe_keys: List[str] = []
-    for key, value in context.items():
+    for key, value in state_context.items():
         safe_keys.extend(_collect_safe_keys(value, key))
     if safe_keys:
         rust_view.mark_safe_keys(safe_keys)
@@ -425,7 +449,7 @@ class Component(TemplateMutatorGuard, ABC):
         """
         if not event:
             return ""
-        parts = [f'dj-{trigger}="{_html.escape(str(event), quote=True)}"']
+        parts = [f'{attr_name("dj-" + str(trigger))}="{_html.escape(str(event), quote=True)}"']
         instance_name = self.__dict__.get("_identity")
         if instance_name and "name" not in params:
             params["name"] = instance_name
@@ -447,7 +471,7 @@ class Component(TemplateMutatorGuard, ABC):
                 # rendered before — untyped, so the handler receives the string
                 # it always did (review 🔴3).
                 suffix, text = "", str(value)
-            attr = "dj-value-" + str(key).replace("_", "-")
+            attr = attr_name("dj-value-" + str(key).replace("_", "-"))
             parts.append(f'{attr}{suffix}="{_html.escape(text, quote=True)}"')
         return " ".join(parts)
 
@@ -592,7 +616,13 @@ class Component(TemplateMutatorGuard, ABC):
             # admits.
             context["component_key"] = self._component_key
             context["_component_key"] = self._component_key
-            return cast(str, mark_safe(_render_template_string(self.template, context)))
+            # #3900: the attribute slots of this template follow the rule the Rust instance
+            # and `_render_custom()` follow (escaped whatever the value is marked as; a URL
+            # checked against the scheme allowlist). See `_render_inline_template`.
+            return cast(
+                str,
+                mark_safe(_render_inline_template(self.template, context, type(self).__name__)),
+            )
 
         # 3. Fall back to custom Python rendering (flexible)
         return cast(str, mark_safe(self._render_custom()))
@@ -851,14 +881,17 @@ class BoundComponent:
         context = dict(state)
         context["component_id"] = self.component_id
         if template:
-            html: Optional[str] = _render_template_string(template, context)
+            html: Optional[str] = _render_inline_template(
+                template, context, type(self._descriptor).__name__
+            )
         else:
             assert template_name is not None
             html = _render_template_name_with_markers(template_name, context)
             if html is None:
                 from django.template.loader import render_to_string
 
-                html = render_to_string(template_name, context)
+                with include_guard_scope():
+                    html = render_to_string(template_name, context)
         wrapped = cast(
             str,
             format_html('<div data-component-id="{}">{}</div>', self.component_id, mark_safe(html)),
@@ -1315,7 +1348,7 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         if self.template:
             from django.utils.html import format_html
 
-            html = _render_template_string(self.template, context)
+            html = _render_inline_template(self.template, context, type(self).__name__)
             # Wrap with component ID for LiveComponent tracking (html is already safe from template engine)
             return cast(
                 str,
@@ -1336,7 +1369,8 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
                 return cast(str, mark_safe(engine_html))
             from django.template.loader import render_to_string
 
-            return cast(str, mark_safe(render_to_string(self.template_name, context)))
+            with include_guard_scope():
+                return cast(str, mark_safe(render_to_string(self.template_name, context)))
 
         raise ValueError(
             f"{self.__class__.__name__} must define 'template' attribute or set 'template_name'"

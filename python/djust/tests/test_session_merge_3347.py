@@ -854,14 +854,14 @@ async def _connect(engine):
     communicator.scope["user"] = AnonymousUser()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect ack
+    await communicator.receive_json_from()  # connect ack
     return communicator, key
 
 
 async def _until(communicator, pred):
     with _ALLOWLIST:
         for _ in range(12):
-            msg = await communicator.receive_json_from(timeout=3)
+            msg = await communicator.receive_json_from()
             if pred(msg):
                 return msg
     raise AssertionError("expected frame never arrived")

@@ -90,7 +90,7 @@ from djust import LiveView
 from djust.decorators import optimistic, debounce
 
 class SliderView(LiveView):
-    template_string = """
+    template = """
     <input type="range" min="0" max="100"
            value="{{ value }}" dj-input="update_value" />
     <div>{{ value }}</div>
@@ -277,7 +277,7 @@ from djust import LiveView
 from djust.decorators import debounce
 
 class SearchView(LiveView):
-    template_string = """
+    template = """
     <input type="text" dj-input="search" value="{{ query }}" />
     <div>
         {% for product in results %}
@@ -367,7 +367,7 @@ from djust import LiveView
 from djust.decorators import optimistic
 
 class CounterView(LiveView):
-    template_string = """
+    template = """
     <div>
         <span>{{ count }}</span>
         <button dj-click="increment">+1</button>
@@ -478,7 +478,7 @@ from djust import LiveView
 from djust.decorators import client_state, debounce, optimistic
 
 class DashboardView(LiveView):
-    template_string = """
+    template = """
     <input type="range" dj-input="update_temperature" value="{{ temperature }}" />
 
     <!-- Components auto-subscribe to 'temperature' -->
@@ -577,7 +577,7 @@ class CommentFormView(DraftModeMixin, LiveView):
     draft_fields = ["comment_text"]  # Auto-saved to localStorage
     draft_restore = True
 
-    template_string = """
+    template = """
     <form dj-submit="save_comment">
         <textarea name="comment_text">{{ comment_text }}</textarea>
         <button type="submit">Save</button>
@@ -673,7 +673,7 @@ from djust import LiveView
 from djust.decorators import cache, debounce
 
 class AutocompleteView(LiveView):
-    template_string = """
+    template = """
     <input type="text" dj-input="search" value="{{ query }}" />
     <ul>
         {% for result in results %}
@@ -755,7 +755,7 @@ document.addEventListener('liveview:error', () => {
 
 ```python
 class FormView(LiveView):
-    template_string = """
+    template = """
     <form dj-submit="save_data">
         <input type="text" name="title" />
         <button type="submit" @loading-text="Saving...">Save</button>
@@ -853,7 +853,7 @@ from djust.mixins import DraftModeMixin
 class ProductSearchView(DraftModeMixin, LiveView):
     draft_fields = ["query", "category", "min_price"]  # Auto-saved
 
-    template_string = """
+    template = """
     <div>
         <input type="text" dj-input="search" value="{{ query }}"
                placeholder="Search products..." />

@@ -72,10 +72,10 @@ async def _follow_then_disconnect(view_path):
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await comm.connect()
     assert connected
-    await comm.receive_json_from(timeout=3)
+    await comm.receive_json_from()
     await comm.send_json_to({"type": "mount", "view": view_path, "url": "/follow/"})
     for _ in range(8):
-        if (await comm.receive_json_from(timeout=5)).get("type") == "mount":
+        if (await comm.receive_json_from()).get("type") == "mount":
             break
     await comm.send_json_to({"type": "event", "event": "follow", "params": {}})
     await _until(lambda: "following" in EVENTS, "the follower to start")

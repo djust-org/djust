@@ -27,6 +27,7 @@ from typing import List, Tuple
 import pytest
 from django.template import Context, Template, TemplateSyntaxError
 from django.test import override_settings
+from django.utils.safestring import mark_safe
 
 from djust import LiveView
 
@@ -219,7 +220,8 @@ class TestLazyPlaceholder:
                 {
                     "view": parent,
                     "request": parent.request,
-                    "lazy_cfg": {"placeholder": "<div>Loading...</div>"},
+                    # A placeholder that is markup says so (#3819): a plain str is text.
+                    "lazy_cfg": {"placeholder": mark_safe("<div>Loading...</div>")},
                 },
             )
         assert "<div>Loading...</div>" in out

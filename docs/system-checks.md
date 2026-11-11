@@ -1,6 +1,6 @@
 # djust System Checks Reference
 
-Quick reference for all 42 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 43 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 Run checks with: `python manage.py check --deploy` or `python manage.py djust_check`
 
@@ -31,6 +31,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C025 | Config | Error | `DJUST_WS_PATH` is not a path starting with a single `/` (#3186) |
 | C026 | Config | Error | `LIVEVIEW_MIDDLEWARE` has an entry that is not an importable `async def mw(turn, next)` (ADR-044) |
 | C027 | Config | Error | `LIVEVIEW_CONFIG['view_state_in_session']` is not `True` or `False` |
+| C028 | Config | Error | `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is not `None` or a number of seconds greater than 0 |
+| C029 | Config | Error | `LIVEVIEW_CONFIG['query_budget']` is not `None`, `"off"`, `"warn"` or `"error"` |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -49,6 +51,10 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V019 | LiveView | Warning | A `dj-auto-recover` handler declares `parameter_policy="strict"`; recovery always runs under legacy policy |
 | V020 | LiveView | Error | A `use_actors = True` view declares an interactive component (`djust.components.interactive`); actor views do not support them |
 | V021 | LiveView | Info / Warning | A subclass overrides a `@push_handler` method without the marker (Info; still push-only), or gives the override `@event_handler` (Warning; browsers are still refused) |
+| V022 | LiveView | Warning | View code assigns an attribute djust's `LiveView` keeps its own state under (`self._streams = ...`) |
+| V023 | LiveView | Error | A `params_form` the request path cannot use: not a form class, or a form whose `__init__` needs arguments beyond `data=`; or a `params_form_fallback` that is not `"initial"` or `"fields"` |
+| V024 | LiveView | Error | A `query_budget` nothing can enforce: an unknown key, a bool or negative number, a handler named in `events` that the view lacks or that is `async def` / `@background` |
+| V025 | LiveView | Warning | A class defines `get_http_status()` while `LIVEVIEW_CONFIG['http_status_of_state']` is configured: the override replaces the project-wide map |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -59,6 +65,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | S011 | Security | Warning | Inline executable `<script>` inside a `dj-root` with no CSP configured (#1848) |
 | S012 | Security | Error | A LiveView the runtime refuses on live transports because access control that only the HTTP request runs is not covered by its declared djust auth: a custom `AccessMixin` subclass's `dispatch()`, a `setup()`/`dispatch()`/`get()`/`post()` override, decorator or URLconf wrapper that checks the user and denies, and unknown decorators and URLconf wrappers. Django's own auth decorators, wrappers and mixins are replayed; the rest is V013 (#14; reallocated from a duplicate S004, #2070) |
 | S013 | Security | Warning | A `ModelFormMixin` edit view overrides neither `get_queryset()` nor `has_object_permission()` (ADR-035) |
+| S014 | Security | Warning | A `ModelForm` with an editable SECRET-LIKE floor field (`password`, `api_token`, `secret_key`, ...): djust draws it without its stored value, so an unchanged re-post saves it as empty (#3797) |
 | T001 | Templates | Warning | Deprecated @click/@input syntax |
 | T002 | Templates | Info | Template declares `dj-view` but no `dj-root` (the root is inferred; the page connects) |
 | T003 | Templates | Info | wrapper_template uses {% include %} instead of liveview_content |
@@ -88,6 +95,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | Y002 | Accessibility | Warning | `<img>` tag missing an `alt` attribute (WCAG 1.1.1) |
 | Y003 | Accessibility | Warning | Form control (`<input>`/`<select>`/`<textarea>`) with no associated label (WCAG 1.3.1 / 3.3.2) |
 | Y004 | Accessibility | Warning | Positive `tabindex` value — a focus-order anti-pattern (WCAG 2.4.3) |
+| Y005 | Accessibility | Warning | `role="img"` element or inline `<svg>` with no accessible name (WCAG 1.1.1) |
+| Y006 | Accessibility | Warning | Legend item with no text — series told apart by colour alone (WCAG 1.4.1) |
 | B001 | Vendored Assets | Error | Manifest unparseable or fails schema |
 | B002 | Vendored Assets | Error | Package purl missing `@version`, or missing a license |
 | B003 | Vendored Assets | Error | Vendored file not found by staticfiles finders |
@@ -151,6 +160,7 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: `daphne` is not listed before `django.contrib.staticfiles` in `INSTALLED_APPS`
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.C003"]`
 - **False positives**: Projects not using daphne as the ASGI server (e.g. uvicorn)
+- **Note**: djust does not install daphne; projects that use it install `djust[daphne]`
 
 ### C004 — 'djust' not in INSTALLED_APPS
 - **Severity**: Error
@@ -241,6 +251,20 @@ console.log("debug info"); // noqa: Q003
 - **Method**: Settings inspection
 - **What it detects**: `LIVEVIEW_CONFIG['view_state_in_session']` (or the same key in `DJUST_CONFIG`) is set to something other than a bool, such as `"false"`, `0` or `None`. Only `False` keeps view state out of the Django session; any other value keeps the default and saves each view's state there. See [Keeping view state out of the session](website/guides/http-only-mode.md#keeping-view-state-out-of-the-session).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C027"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C027"]` (the runtime still keeps the default)
+- **False positives**: None
+
+### C028 — Invalid `http_fallback_background_timeout`
+- **Severity**: Error
+- **Method**: Settings inspection
+- **What it detects**: `LIVEVIEW_CONFIG['http_fallback_background_timeout']` (or the same key in `DJUST_CONFIG`) is set to something other than `None` or a number of seconds greater than 0 and at most `threading.TIMEOUT_MAX` (about 9.2e9), such as `"30"`, `0`, `True`, `float("nan")` or `1e10`. Any other value is read as no deadline, so the page-POST fallback keeps waiting for a `start_async` task that never returns. See [Deadline](website/guides/http-only-mode.md#what-the-page-post-fallback-keeps-between-events).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C028"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C028"]` (the runtime still applies no deadline)
+- **False positives**: None
+
+### C029 — Invalid `query_budget` mode
+- **Severity**: Error
+- **Method**: Settings inspection
+- **What it detects**: `LIVEVIEW_CONFIG['query_budget']` (or the same key in `DJUST_CONFIG`) is set to something other than `None`, `"off"`, `"warn"` or `"error"`, such as `True`, `"WARN"`, `1` or `"errors"`. The request path never fails over it: it reads the value as `"warn"` and logs that once, so a project that meant `"error"` would not learn it otherwise. See [Per-view query budgets](website/testing/index.md#per-view-query-budgets).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C029"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C029"]` (the runtime still reads it as `"warn"`)
 - **False positives**: None
 
 ---
@@ -437,6 +461,29 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: a LiveView class whose effective definition of a method name is not marked, while another class in its MRO (a base or mixin) defines the same name with `@push_handler`. That covers an override and the multiple-inheritance case where one base's unmarked or `@event_handler` method comes first in the MRO and another base's marked method comes later. The marker is inherited by method name, so the override is still refused to browsers in every `event_security` mode; the check makes that visible. With `@event_handler` on the override it is a Warning: the decorator cannot make the name browser-callable, so the event handler is dead code.
 - **Fix**: add `@push_handler` to the override. For the Warning, remove `@event_handler`, or rename the method if a browser should call it.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V021"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V021"]`
+
+### V023 — `params_form` the request path cannot use
+- **Severity**: Error
+- **Method**: Runtime (class inspection; no view is constructed and no form is instantiated)
+- **What it detects**: a LiveView whose `params_form` (read from the class, so an inherited declaration counts) will fail on the first request. djust binds the URL's query parameters with `form_class(data=...)` and nothing else, so two declarations fail there: a `params_form` that is not a Django form class (a dotted-path string, a form instance, another class) raises `ImproperlyConfigured`, and a form whose `__init__` requires another argument (a user, a queryset, a tenant) or cannot take `data=` raises `TypeError`. The verdicts are the request path's own (`djust._params_form.form_class_problem` and `construction_problem`), so every failure visible in the signature is judged as the request path judges it. It reads signatures only: it does not instantiate the form, so an `__init__` that raises, a positional-only `data` (`__init__(self, data=None, /, **kw)`) that the form's own `super().__init__` then rejects, or a lazy object wrapping a form class passes the check and still fails on the first request. A signature that cannot be read is not reported.
+- **Also detects**: a view that declares a `params_form` and a `params_form_fallback` (also read from the class) that is not `"initial"` or `"fields"` (`djust._params_form.fallback_problem`). The request path reads it on every request of such a view and raises `ImproperlyConfigured`, so a typo such as `"field"` never silently keeps the default. A view with no `params_form` never reads the attribute and is not reported. Reported as a second message when both declarations are wrong.
+- **Fix**: set `params_form` to a form class, and `params_form_fallback` to `"initial"` or `"fields"`; give every other `__init__` argument a default, or read it from the view in `handle_params()` instead.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V023"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V023"]`
+
+### V024 — Invalid `query_budget`
+- **Severity**: Error
+- **Method**: Runtime (class inspection; no view is constructed)
+- **What it detects**: a LiveView whose `query_budget` (read from the class) is a declaration nothing can enforce: a dict key other than `mount`, `render`, `event`, `events`; a `bool`, a non-int, a negative number or one over 1,000,000; an `events` that is not a `{handler: n}` dict; a handler named in `events` that the view does not have; or one that a budget cannot be enforced on, an `async def` handler (it runs on the event loop) or a `@background` handler (its work runs later, in `start_async`). The verdict is `djust._query_budget.declared_budget`, the one reader that `LiveViewSmokeTest`, the run-time meter and `djust_audit` also use: the smoke test raises `ValueError` on the same declaration, the run-time meter logs it once and measures nothing, and `djust_audit` lists it as invalid.
+- **Fix**: use an int, or a dict with those keys; name only synchronous `@event_handler` methods of the view in `events`.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V024"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V024"]`
+
+### V025 — `get_http_status()` overridden under a project-wide status map
+- **Severity**: Warning
+- **Method**: Runtime (class inspection; no view is constructed). Silent unless `LIVEVIEW_CONFIG['http_status_of_state']` (or the same key in `DJUST_CONFIG`) holds a map.
+- **What it detects**: a class that defines `get_http_status()` itself, reported once for the class whose body holds the method, wherever the views that use it inherit it from (a view, an abstract base or a mixin). The default `get_http_status()` is what reads the project-wide map, so an override replaces the map for every view that uses it, which is how per-view copies of the same status logic creep back. djust's own classes are not reported.
+- **Fix**: delete the override and set `self.state` to a state the map names; or, for a real special case, have the override call `super().get_http_status()` first so the map still applies. It is a Warning because an override can be right (a status that is not a function of one state), and the check cannot see a `super()` call.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V025"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V025"]`
+- **False positives**: an override that calls `super().get_http_status()`
 
 ---
 
@@ -640,6 +687,30 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   `DJUST_CONFIG = {'suppress_checks': ['S013']}`.
 - **Availability**: `ModelFormMixin` is not in a released version yet.
 
+### S014 — Editable secret field on the serialization floor
+- **Severity**: Warning
+- **Method**: Class inspection of imported `ModelForm` subclasses (`base_fields`; nothing is
+  constructed, mounted or queried). Django's own forms and test modules are skipped.
+- **What it detects**: A `ModelForm` whose class has an editable field that is both on the
+  serialization floor and SECRET-LIKE: a `password` column, a name with a `password` / `secret` /
+  `token` / `key` / `hash` / `salt` / `pwd` / `otp` word (`api_token`, `secret_key`), a
+  `sensitive_field_types` column, or a password-widget field. djust draws such a field WITHOUT its stored
+  value, and a browser posts an empty control as `""`, so submitting the form unchanged overwrites the
+  column. A password-widget field is not reported (Django draws it empty by design, and a person types a
+  new value into it). Privilege flags (`is_staff`, `is_superuser`), selects and ordinary declared-sensitive
+  text (`email`) keep rendering their real value and are not reported.
+- **Fix**: Declare the form field `disabled=True` (Django then ignores what is posted and keeps the stored
+  value; a `FormMixin` view that edits an existing row does it for you, so this reports forms a classic
+  view uses), leave the field out of `Meta.fields`, or opt the model field out of the floor with
+  `djust_serialize_sensitive_fields`. HTML `disabled` / `readonly` and leaving the control out of the page do
+  NOT protect the column.
+- **Limits**: A field added in `__init__` is not seen (the check reads `base_fields`). A form used only
+  from a `FormMixin` view is protected at runtime (`get_form()` sets `disabled=True`) and is still
+  reported: the check cannot tell which view uses a class. A `get_form()` / `_create_form()` override that
+  does not call `super()` is not protected and is why the class is reported.
+- **Suppression**: `# noqa: S014` on the `class` line, or
+  `DJUST_CONFIG = {'suppress_checks': ['S014']}`.
+
 ---
 
 ## Template Checks (T)
@@ -837,6 +908,16 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   `<style>` body or a `<textarea>` is not skipped; use the `noqa` comment there.
 - **Scope**: Static check only; it does not change how the mount finds the root.
 
+- **Still reported**: A tag inside an HTML comment (`<!-- ... -->`) or a `<script>`
+  body. The renderer does not look at HTML context: it renders the component and
+  emits the `DeprecationWarning` there too, and in 2.0 it is a template error.
+- **False positives**: Rare, and only in exotic templates. A verbatim region is
+  found with the regex that A070/A071 use, so a named block closed by a different
+  name (`{% verbatim a %}...{% endverbatim b %}`) is read differently from the
+  renderer, and a `{% verbatim %}` written inside a `{{ '...' }}` string literal can
+  hide a real tag. A tag written inside another tag's attribute value is reported
+  once per tag; the renderer warns once.
+
 ### T019–T022 — Template event bindings (ADR-037)
 - **Severity**: Warning (all four, in 1.3)
 - **Method**: Each LiveView's and LiveComponent's template is compiled with
@@ -988,6 +1069,20 @@ the full narrative.
 - **What it detects**: A `tabindex` attribute with a positive value (`tabindex="1"`+), which overrides the natural DOM focus order (WCAG 2.4.3, Level A). `tabindex="0"` (focusable in natural order) and `tabindex="-1"` (focusable only programmatically) are valid and not flagged
 - **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y004']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y004"]`
 - **False positives**: Near zero — `tabindex="0"` / `tabindex="-1"` are valid and not flagged; an interpolated value (`tabindex="{{ ... }}"` / `{% ... %}`) is treated conservatively and not flagged; a `data-tabindex` attribute is not mistaken for `tabindex`
+
+### Y005 — `role="img"` element or `<svg>` with no accessible name
+- **Severity**: Warning
+- **Method**: Tag scan (template file scan)
+- **What it detects**: An element with `role="img"`, or an inline `<svg>`, with no non-blank `aria-label` / `aria-labelledby` / `title` attribute and (for an `<svg>`) no non-empty `<title>` child (WCAG 1.1.1, Level A) — a screen reader announces a hand-built chart as just "image"
+- **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y005']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y005"]`
+- **False positives**: Low — `aria-hidden="true"`, `role="presentation"`/`"none"` on an `<svg>`, an `<svg>` inside a `<button>` or `<a href>`, a nested `<svg>`, a hidden sprite sheet, an opening tag with `{{ }}`/`{% %}` between its attributes, `<img>` (Y002's), HTML comments and `<script>`/`<style>` bodies are not flagged. So is a graphic inside an element with `aria-hidden="true"` (the wrapper carries the size and colour, the `<svg>` is a plain child); `aria-hidden="false"` on the wrapper hides nothing, and a wrapper with no closing tag is not guessed to cover the rest of the file. A purely decorative icon `<svg>` with no `aria-hidden` on it or on an ancestor, outside a control, is flagged by design: mark it `aria-hidden="true"`
+
+### Y006 — legend item told apart by colour alone
+- **Severity**: Warning
+- **Method**: Tag scan (template file scan)
+- **What it detects**: An `<li>` inside an element whose `class` has a `legend` token (`legend`, `chart-legend`, `legend__list`), with no text, no `{{ }}`/`{% %}`, no `<img alt>`, and no `aria-label` / `aria-labelledby` / `title` on it or inside it (WCAG 1.4.1, Level A)
+- **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y006']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y006"]`
+- **False positives**: Low — only `<li>` items inside a legend are checked; text, interpolation or a name attribute clears an item; the form `<legend>` element is not a chart legend
 
 ---
 

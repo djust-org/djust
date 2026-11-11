@@ -444,6 +444,7 @@ class ExposureContract:
                 or not _NAME.fullmatch(name)
                 or name in framework_names
                 or name in _UNSAFE_KEYS
+                or name in _RESERVED_CONTEXT_KEYS
             ):
                 raise ExposureError("Invalid or reserved state field name")
             if type(policy) is not FieldExposure:

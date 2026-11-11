@@ -4,19 +4,26 @@ JSON serialization utilities for Django models and Python types.
 Extracted from live_view.py for modularity.
 """
 
+import copy
+import functools
 import importlib.util
+import inspect
 import json
 import logging
+import re
 import threading
 from datetime import datetime, date, time, timedelta
+from datetime import timezone as _dt_timezone, tzinfo as _dt_tzinfo
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Union, cast
+from types import ModuleType as _ModuleType
 from uuid import UUID
 
 from django.core.serializers.json import DjangoJSONEncoder as _DjangoJSONEncoder
 from django.db import models
 from django.utils.datastructures import MultiValueDict
 from django.utils.functional import Promise
+from django.utils.safestring import SafeData
 from ._class_snapshot import attribute_names, namespace
 
 logger = logging.getLogger(__name__)
@@ -44,8 +51,8 @@ HAS_ORJSON = importlib.util.find_spec("orjson") is not None
 # Since #2685 it ALSO covers a template that *explicitly* references a field:
 # ``{{ user.password }}`` flows through the compiled JIT serializer (and, for a
 # QuerySet, through Rust's ``serialize_object_with_paths``), and both now
-# consult this floor via ``optimization/codegen.py::emittable_names`` before
-# emitting a name. Naming a field in a template is not consent to ship a
+# consult this floor via ``optimization/codegen.py::emittable_names`` (the name
+# rules, then the column-TYPE floor below it) before emitting a name. Naming a field in a template is not consent to ship a
 # password hash — the value renders as ``string_if_invalid`` (empty) instead.
 # The match is name-EXACT: it covers ``password`` but not a ``get_password()``
 # accessor or a differently-named ``@property`` — use ``DJUST_SENSITIVE_FIELDS``
@@ -192,6 +199,26 @@ def _field_type_is_excluded(field: Any) -> bool:
     return result
 
 
+def _model_class_of(obj: Any) -> type:
+    """The model class whose per-model settings govern *obj*: ``type(obj)`` for a model instance, else
+    the model class *obj* reports through ``__class__`` (a lazy wrapper does).
+
+    ONE function for every reader of a per-model setting (``djust_exclude_fields``,
+    ``djust_serializable_fields``, ``djust_serialize_sensitive_fields``, ``to_dict``, the column types of
+    ``_meta``), so the eager serializer, the sidecar proxy, the JIT gate and the form floor cannot
+    disagree (#1646). Asking ``__class__`` evaluates a lazy wrapper once and follows a wrapper of a
+    wrapper; a wrapper that cannot be evaluated raises, and no setting is guessed. The common case costs
+    one ``issubclass``. A floor handle reports an opaque ``__class__`` and is never taken for a model.
+    """
+    cls = type(obj)
+    if issubclass(cls, models.Model):
+        return cls
+    claimed = getattr(obj, "__class__", None)
+    if isinstance(claimed, type) and issubclass(claimed, models.Model):
+        return claimed
+    return cls
+
+
 def _field_type_excluded_for(model_class: Any, field_name: str) -> bool:
     """Sidecar-path helper for the #1987 TYPE floor: resolve *field_name* on
     *model_class* and apply :func:`_field_type_is_excluded`. Non-fields
@@ -241,6 +268,23 @@ def model_identity(obj: Any) -> Dict[str, Any]:
         "__str__": str(obj),
         "__model__": obj.__class__.__name__,
     }
+
+
+def is_serialized_model_map(value: Any) -> bool:
+    """Whether ``value`` is the map :func:`model_identity` produced for a model.
+
+    The READER of the shape :func:`model_identity` writes, kept beside it so the two cannot drift:
+    a dict with a text ``__str__``, a text ``__model__`` and a ``pk`` key. This is the same shape
+    the Rust engine reads (``Value::model_str``). A dict carrying only some of those keys is an
+    ordinary dict. Any dict can carry all three, so this narrows the accident and does not make
+    the marker unforgeable.
+    """
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("__str__"), str)
+        and isinstance(value.get("__model__"), str)
+        and "pk" in value
+    )
 
 
 #: Memoized result of :func:`_resolve_sensitive_fields` (#2685 perf). ``None``
@@ -600,7 +644,7 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         """
         # Model-level to_dict() override — developer takes full ownership of the
         # client-bound payload (intentional opt-out from the denylist).
-        to_dict = getattr(type(obj), "to_dict", None)
+        to_dict = getattr(_model_class_of(obj), "to_dict", None)
         if callable(to_dict):
             try:
                 return obj.to_dict()
@@ -699,14 +743,14 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         and the per-model ``djust_exclude_fields`` iterable, if defined.
         """
         denied = _resolve_sensitive_fields()
-        per_model = getattr(type(obj), "djust_exclude_fields", None)
+        per_model = getattr(_model_class_of(obj), "djust_exclude_fields", None)
         if per_model:
             try:
                 denied = denied | frozenset(per_model)
             except TypeError:
                 logger.warning(
                     "%s.djust_exclude_fields is not iterable; ignoring it.",
-                    type(obj).__name__,
+                    _model_class_of(obj).__name__,
                 )
         return denied
 
@@ -718,7 +762,7 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         serialized. Returns ``None`` when no allowlist is defined (the common
         case — denylist semantics apply instead).
         """
-        allowlist = getattr(type(obj), "djust_serializable_fields", None)
+        allowlist = getattr(_model_class_of(obj), "djust_serializable_fields", None)
         if not allowlist:
             return None
         try:
@@ -726,7 +770,7 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         except TypeError:
             logger.warning(
                 "%s.djust_serializable_fields is not iterable; ignoring it.",
-                type(obj).__name__,
+                _model_class_of(obj).__name__,
             )
             return None
 
@@ -741,7 +785,7 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         per-model ``djust_serializable_fields`` allowlist alone can NOT re-expose
         a floor field. Returns an empty ``frozenset`` when unset (default deny).
         """
-        optout = getattr(type(obj), "djust_serialize_sensitive_fields", None)
+        optout = getattr(_model_class_of(obj), "djust_serialize_sensitive_fields", None)
         if not optout:
             return frozenset()
         try:
@@ -749,7 +793,7 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         except TypeError:
             logger.warning(
                 "%s.djust_serialize_sensitive_fields is not iterable; ignoring it.",
-                type(obj).__name__,
+                _model_class_of(obj).__name__,
             )
             return frozenset()
 
@@ -799,7 +843,9 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         Every channel that decides whether a model attribute ships — the eager
         field loop, the eager ``get_*`` method loop, the eager ``@property``
         loop and the template sidecar proxy (``_SidecarModelProxy``) — calls
-        this and nothing else, so the channels cannot drift (#1646). Before
+        this and nothing else for the NAME decision, so the channels cannot
+        drift (#1646); the JIT gate reaches it through :meth:`_attr_is_readable`,
+        which adds the column-TYPE floor. Before
         #2614 the property loop consulted only ``_field_is_serializable`` while
         the sidecar also refused ``_SENSITIVE_MODEL_METHODS``; a ``@property``
         that *shadowed* ``get_session_auth_hash`` was serialized eagerly and
@@ -826,6 +872,51 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         if name in _SENSITIVE_MODEL_METHODS or name.startswith(_SENSITIVE_MODEL_METHOD_PREFIXES):
             return False
         return DjangoJSONEncoder._field_is_serializable(name, denied, allowed, optout)
+
+    @staticmethod
+    def _model_class_behind(obj: Any) -> Optional[type]:
+        """The Django model class governing *obj*, else ``None`` for an object that is not a model.
+
+        :func:`_model_class_of` (the one reader of "which class's settings apply", which
+        sees through a lazy wrapper) narrowed to a model: the JIT gate keys its memo on this
+        class and asks it for column types, and a non-model has no columns. A wrapper that
+        cannot be evaluated raises here, as it does in :func:`_model_class_of`.
+        """
+        cls = _model_class_of(obj)
+        return cls if issubclass(cls, models.Model) else None
+
+    @staticmethod
+    def _configured_sensitive_types() -> FrozenSet[str]:
+        """The configured field-class names the TYPE floor drops (an input to its verdict)."""
+        return _sensitive_field_types()
+
+    @staticmethod
+    def _attr_is_readable(
+        name: str,
+        model_class: Optional[type],
+        denied: FrozenSet[str],
+        allowed: Optional[FrozenSet[str]],
+        optout: FrozenSet[str] = frozenset(),
+    ) -> bool:
+        """May a template read *name* off an instance of *model_class*? (the JIT gate's verdict)
+
+        The name rules (:meth:`_attr_is_serializable`) AND the column-TYPE floor
+        (:func:`_field_type_excluded_for`, #1987): the two checks the eager field loop
+        makes one after the other and the sidecar proxy makes in the same order. Until
+        this existed the JIT attribute gate made only the first, so a column the type
+        floor drops (a ``BinaryField``, a configured or encrypted-named type) was read by
+        a template that named it. The type floor is unconditional: an allowlist or an
+        opt-out names a COLUMN, and neither lifts a column's type.
+
+        *model_class* is ``None`` for an object that is not a model, which has no
+        columns to type. The type floor governs COLUMNS: a name that is not a column
+        (a property, a method, an annotation, a reverse relation) or whose field
+        cannot be resolved is not type-excluded, as in :func:`_field_type_excluded_for`
+        on the eager path, so a value carried by one of those is outside this floor.
+        """
+        if not DjangoJSONEncoder._attr_is_serializable(name, denied, allowed, optout):
+            return False
+        return model_class is None or not _field_type_excluded_for(model_class, name)
 
     def _is_relation_prefetched(self, obj: models.Model, field_name: str) -> bool:
         """Check if a relation was loaded via select_related/prefetch_related.
@@ -1184,8 +1275,10 @@ def decode_state_roundtrip(obj: Any) -> Any:
             if isinstance(payload, str):
                 try:
                     return Decimal(payload)
-                except InvalidOperation:
-                    # A colliding user dict whose payload is not a number.
+                except (InvalidOperation, ValueError):
+                    # A colliding user dict whose payload is not a number, or is a digit string
+                    # past the interpreter's int-conversion limit (the pure-Python ``_pydecimal``
+                    # raises ``ValueError``, not ``InvalidOperation``, for it).
                     # Leave it alone rather than raise — see the docstring.
                     return dict(obj)
         if STATE_COMPONENT_TAG in obj and "state" in obj and len(obj) <= 3:
@@ -1609,7 +1702,125 @@ def _protect_sidecar_value(value: Any) -> Any:
         return _SidecarModelProxy(value)
     if isinstance(value, (models.Manager, models.QuerySet)):
         return _SidecarQuerySetProxy(value)
+    if isinstance(value, _FORM_PROXIES):
+        # A form proxy is for a template PATH (#3790). The leaf floor is what Python code that is not a
+        # path is handed (a bridged tag's or filter's operand, a loop variable in its context), and a
+        # tag is the application's own code: it gets the real form, and the real BoundField, except
+        # that the BoundField of a SECRET-LIKE floor field is a blank copy (#3797).
+        return unwrap_form_proxy_for_tag(value)
     return value
+
+
+# -- the closed set of kinds a floor proxy answers (#3888 review round 2) --------------------------
+#
+# A per-name blacklist kept leaking (`_obj`, then a bound method's `__self__`, then...). The
+# structural cure is to decide by the KIND of what a read returns, in ONE function, and to keep the
+# wrapped instance where no attribute read reaches it:
+#
+#   plain data ........ returned as it is (and a list / tuple / dict / set / frozenset of it, rebuilt)
+#   model / manager / queryset .... only as its floor proxy
+#   a callable ........ only as `_FlooredCall` (it exposes `alters_data`, `do_not_call_in_templates`
+#                       and the ORM-call flag, and its result goes back through this function)
+#   any other instance  only as `_FlooredObject` (a file field, an enum member, a presenter...)
+#   a class, a module, a descriptor ... not at all (the read is refused)
+_PLAIN_TYPES = frozenset({str, int, float, bool, type(None), Decimal, bytes, date, timedelta})
+
+
+def _c_tzinfo_types() -> frozenset:
+    """The tzinfo classes that are implemented in C (no Python function behind a method):
+    ``datetime.timezone`` and, when the C accelerator is present, ``zoneinfo.ZoneInfo``."""
+    found: set[type] = {_dt_timezone}
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:  # pragma: no cover - zoneinfo is in the standard library since 3.9
+        return frozenset(found)
+    if not hasattr(ZoneInfo.utcoffset, "__globals__"):
+        found.add(ZoneInfo)
+    return frozenset(found)
+
+
+_C_TZINFO_TYPES = _c_tzinfo_types()
+
+
+class _Opaque:
+    """What a floor wrapper reports as ``__class__``: a class with no Python-level methods, so a reader
+    that walks attributes from a wrapper finds no function (and no module namespace behind one). It
+    carries nothing of the wrapped object; ``isinstance`` / ``collections.abc`` checks also consult the
+    wrapper's real type, so they still work."""
+
+    __slots__ = ()
+
+
+class _OpaqueCall:
+    """:class:`_Opaque` for a wrapper that is callable (``__call__`` is a C-level slot wrapper)."""
+
+    __slots__ = ()
+    __call__ = int.__add__  # type: ignore[assignment]
+
+
+def _slot_accessors(cls: type, name: str) -> Any:
+    """The member descriptor's own C accessors ``(get, set)`` for slot ``name`` of ``cls``.
+
+    The wrapped object lives in a real slot (one fast read) and the class refuses EVERY
+    underscore-prefixed name in its ``__getattribute__``, so the slot is reachable only through these
+    two callables, which this module's own code keeps.
+    """
+    member = cls.__dict__[name]
+    return member.__get__, member.__set__
+
+
+def _floored_result(value: Any) -> Any:
+    """What a floor proxy may hand back for ``value``: see the table above. ONE function."""
+    kind = type(value)
+    if kind in _PLAIN_TYPES:
+        return value
+    if kind is datetime or kind is time:
+        tz = value.tzinfo
+        if tz is None or type(tz) in _C_TZINFO_TYPES or type(tz) is _FloorTz:
+            return value
+        # a Python-defined tzinfo (pytz, dateutil...) has methods whose function carries its module's
+        # namespace: the same datetime, with a tzinfo that answers the same questions and shows none
+        # (the class defines its answers through ``__getattribute__``, which mypy cannot see)
+        return value.replace(tzinfo=cast(Any, _FloorTz)(tz))
+    if kind is UUID:
+        # a UUID is a Python-defined class (its methods reach the ``uuid`` namespace); its text is
+        # what a template renders
+        return str(value)
+    if kind is _FloorSafeText:
+        return value
+    if isinstance(value, SafeData) and isinstance(value, str):
+        # markup that is already safe stays safe (Rust asks `isinstance(.., SafeData)`), as a str
+        # whose class and methods a reader cannot reach
+        return _FloorSafeText(value)
+    if isinstance(value, models.Model):
+        return _SidecarModelProxy(value)
+    if isinstance(value, (models.Manager, models.QuerySet)):
+        return _SidecarQuerySetProxy(value)
+    if isinstance(value, _FORM_PROXIES):
+        # a form proxy is for a template PATH; same answer the leaf floor gives (#3790)
+        return unwrap_form_proxy_for_tag(value)
+    if isinstance(value, models.Choices):
+        # a TextChoices / IntegerChoices member renders as its value (`Choices.__str__`)
+        return _floored_result(value.value)
+    if isinstance(value, type) or isinstance(value, _ModuleType):
+        raise AttributeError("a class or a module is not readable through a model")
+    if kind is list:
+        return [_floored_result(item) for item in value]
+    if kind is tuple:
+        return tuple(_floored_result(item) for item in value)
+    if kind is dict:
+        return {_floored_result(key): _floored_result(item) for key, item in value.items()}
+    if kind is set or kind is frozenset:
+        return kind(_floored_result(item) for item in value)
+    if isinstance(
+        value, _FlooredCall | _FlooredObject | _SidecarModelProxy | _SidecarQuerySetProxy
+    ):
+        return value
+    if callable(value):
+        return _FlooredCall(value)
+    if hasattr(type(value), "__get__") or hasattr(type(value), "__set__"):
+        raise AttributeError("a descriptor is not readable through a model")
+    return _FlooredObject(value)
 
 
 class _SidecarModelProxy:
@@ -1655,59 +1866,305 @@ class _SidecarModelProxy:
 
     Type-based field exclusion (e.g. always-drop ``BinaryField``) is a
     separate follow-up (#1987) that hardens both serialization paths.
+
+    **What a read returns is a CLOSED SET of kinds** (#3888 review round 2), whatever the name:
+    plain data (and containers of plain data, rebuilt); a model, manager or queryset only as its
+    own floor proxy; a callable only as :class:`_FlooredCall`; any other instance only as
+    :class:`_FlooredObject`; a class, module or descriptor not at all. The wrapped instance is
+    held in a slot whose name the class refuses with every other underscore name (see
+    :func:`_slot_accessors`), so no name, however spelled, hands it back. ``test_model_handle_closed_set_3888`` enumerates ``dir(model)``.
     """
 
-    __slots__ = ("_obj", "_denied", "_allowed", "_optout")
+    __slots__ = ("_s",)
 
     def __init__(self, obj: "models.Model") -> None:
-        object.__setattr__(self, "_obj", obj)
-        object.__setattr__(self, "_denied", DjangoJSONEncoder._get_denied_fields(obj))
-        object.__setattr__(self, "_allowed", DjangoJSONEncoder._get_allowlist_fields(obj))
-        object.__setattr__(self, "_optout", DjangoJSONEncoder._get_sensitive_optout_fields(obj))
+        # [instance, denied, allowed, optout, floored-dict cell]. The three floor sets are read
+        # from the model class on the FIRST attribute read, not here: a handle that is only
+        # printed or serialised (`{{ u }}`) never needs them, and one is built per row.
+        _SMP_SET(self, [obj, None, None, None, []])
 
-    def __getattr__(self, name: str) -> Any:
-        # ``__getattr__`` fires only for names not in ``__slots__`` — i.e.
-        # every attribute the template can reference on the wrapped model.
-        # Django-parity: refuse ``_``-prefixed names outright. Templates never
-        # resolve them, and allowing them lets ``{{ obj._meta }}`` segfault the
-        # worker (Options extraction) + ``{{ obj._meta.db_table }}`` disclose
-        # the schema (#1986 review). Identity keys (pk/id) are not ``_``-names.
-        # ONE authority (#2614): ``_``-prefix, sensitive/expensive method
-        # names, and the serialization floor / allowlist / opt-out — the SAME
-        # ``_attr_is_serializable`` call every eager loop makes, so the two
-        # channels cannot drift (#1646). A refused name raises AttributeError.
-        denied = object.__getattribute__(self, "_denied")
-        allowed = object.__getattribute__(self, "_allowed")
-        optout = object.__getattribute__(self, "_optout")
+    def __getattribute__(self, name: str) -> Any:
+        # EVERY instance attribute read comes through here, so the refusal is structural: any
+        # underscore-prefixed name (the slot, the dunders a Python reader can walk: `__dict__`,
+        # `__reduce__`, `__init_subclass__`...) is refused. Two names are answered, and neither
+        # carries the instance: `__class__` is the proxy's OWN type (so `isinstance(p, SomeABC)`
+        # works) and `__djust_serialize__` is the hook the engine asks for.
+        if name[:1] == "_":
+            if name == "__class__":
+                return _Opaque
+            if name == "__djust_serialize__":
+                return _Hook(_smp_serialize, self)
+            raise AttributeError(name)
+        state = _SMP_GET(self)
+        obj = state[0]
+        denied = state[1]
+        if denied is None:
+            denied = state[1] = DjangoJSONEncoder._get_denied_fields(obj)
+            state[2] = DjangoJSONEncoder._get_allowlist_fields(obj)
+            state[3] = DjangoJSONEncoder._get_sensitive_optout_fields(obj)
+        allowed = state[2]
+        optout = state[3]
+        # ONE authority (#2614): the sensitive / expensive method names and the serialization floor
+        # / allowlist / opt-out, the SAME `_attr_is_serializable` call every eager loop makes, so
+        # the two channels cannot drift (#1646).
         if not DjangoJSONEncoder._attr_is_serializable(name, denied, allowed, optout):
             raise AttributeError(name)
-        obj = object.__getattribute__(self, "_obj")
-        # TYPE-based floor (#1987): refuse BinaryField / configured / encrypted
-        # field types even when the NAME passes the denylist — same authority
-        # the eager path calls.
-        if _field_type_excluded_for(type(obj), name):
+        # TYPE-based floor (#1987): refuse BinaryField / configured / encrypted field types even
+        # when the NAME passes the denylist — same authority the eager path calls.
+        if _field_type_excluded_for(_model_class_of(obj), name):
             raise AttributeError(name)
-        return _protect_sidecar_value(getattr(obj, name))
+        value = getattr(obj, name)
+        if type(value) in _PLAIN_TYPES:
+            return value
+        return _floored_result(value)
 
-    def __djust_serialize__(self) -> Any:
-        """Denylist-filtered dict for terminal Value conversion (called by the
-        Rust ``FromPyObject``). Routes through the eager serializer so a model
-        that becomes a template value (queryset item, terminal model) is
-        floor-filtered instead of ``__dict__``-dumped."""
-        return normalize_django_value(object.__getattribute__(self, "_obj"))
+    def __eq__(self, other: object) -> Any:
+        """Equal when the objects behind are equal (#3771).
+
+        A proxy is a view of ONE model, so two views of it, and a view and the instance, are the same
+        model. Without this ``{% perm_tag request.user obj.user %}`` compared two distinct proxies (or a
+        ``SimpleLazyObject`` and a proxy) and flipped from equal to unequal when the operand became a
+        proxy. Identity is all this reveals; no field is read, so the floor is unchanged.
+        """
+        if isinstance(other, _SidecarModelProxy):
+            other = _SMP_GET(other)[0]
+        return _SMP_GET(self)[0].__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash(_SMP_GET(self)[0])
 
     def __str__(self) -> str:
         # ``{{ member }}`` normally renders via the eager dict's ``__str__``
         # key; this covers the case where a proxied related model is the
         # terminal value of a walk.
-        return str(object.__getattribute__(self, "_obj"))
+        return str(_SMP_GET(self)[0])
 
     def __repr__(self) -> str:
         # ``{% debug %}`` (#2556) ``pformat``s the context, and Django's
         # ``Model.__repr__`` is ``<Class: str(self)>`` — the same text
         # ``__str__`` above already hands out, so delegating leaks nothing
         # the proxy did not already expose.
-        return repr(object.__getattribute__(self, "_obj"))
+        return repr(_SMP_GET(self)[0])
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise TypeError("a floor proxy cannot be pickled or copied")
+
+    def __reduce__(self) -> Any:
+        raise TypeError("a floor proxy cannot be pickled or copied")
+
+    def __getstate__(self) -> Any:
+        raise TypeError("a floor proxy cannot be pickled or copied")
+
+
+_SMP_GET, _SMP_SET = _slot_accessors(_SidecarModelProxy, "_s")
+
+
+class _Hook:
+    """What a floor proxy answers when the ENGINE asks for ``__djust_serialize__``: a callable that
+    runs the hook on its proxy and exposes nothing (not the function, not the proxy)."""
+
+    __slots__ = ("_s",)
+
+    def __init__(self, fn: Any, proxy: Any) -> None:
+        _HK_SET(self, (fn, proxy))
+
+    def __getattribute__(self, name: str) -> Any:
+        if name == "__class__":
+            return _OpaqueCall
+        raise AttributeError(name)
+
+    def __call__(self) -> Any:
+        fn, proxy = _HK_GET(self)
+        return fn(proxy)
+
+
+_HK_GET, _HK_SET = _slot_accessors(_Hook, "_s")
+
+
+class _FloorTz(_dt_tzinfo):
+    """A Python-defined ``tzinfo`` as a reader may hold it. ``datetime`` calls ``utcoffset`` /
+    ``dst`` / ``tzname`` on it and gets the original zone's answers; every public name a reader asks
+    for is the original's, floored (a method is a call wrapper); underscore names are refused and
+    ``__class__`` is :class:`_Opaque`, so no function (and no module namespace) is reachable."""
+
+    __slots__ = ("_s",)
+
+    def __init__(self, tz: Any) -> None:
+        _FT_SET(self, tz)
+
+    def __getattribute__(self, name: str) -> Any:
+        if name[:1] == "_":
+            if name == "__class__":
+                return _Opaque
+            raise AttributeError(name)
+        return _floored_result(getattr(_FT_GET(self), name))
+
+    def __str__(self) -> str:
+        return str(_FT_GET(self))
+
+    def __repr__(self) -> str:
+        return repr(_FT_GET(self))
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise TypeError("a floor tzinfo cannot be pickled or copied")
+
+
+_FT_GET, _FT_SET = _slot_accessors(_FloorTz, "_s")
+
+
+def _safe_text_html(text: Any) -> Any:  # noqa: dead-method-allowed (handed to _Hook by reference)
+    return text
+
+
+class _FloorSafeText(SafeData, str):
+    """Safe markup as a reader may hold it: still a ``SafeData`` ``str`` (the engine and
+    ``conditional_escape`` keep treating it as safe), but its class is :class:`_Opaque` and its
+    underscore names are refused, so no Python-level method of ``SafeString`` is reachable."""
+
+    __slots__ = ()
+
+    def __getattribute__(self, name: str) -> Any:
+        if name[:1] == "_":
+            if name == "__class__":
+                return _Opaque
+            if name == "__html__":
+                return _Hook(_safe_text_html, self)
+            raise AttributeError(name)
+        return str.__getattribute__(self, name)
+
+    def __str__(self) -> str:
+        return self
+
+
+def _smp_serialize(self: Any) -> Any:  # noqa: dead-method-allowed (handed to _Hook by reference)
+    """Denylist-filtered dict for terminal Value conversion (called by the Rust
+    ``FromPyObject``). Routes through the eager serializer so a model that becomes a template
+    value (queryset item, terminal model) is floor-filtered instead of ``__dict__``-dumped.
+
+    Built once per handle and kept (#3888 review round 2): a render is a snapshot, and a model
+    written to JSON for two tags (or twice for one) would otherwise be normalised twice."""
+    state = _SMP_GET(self)
+    cell = state[4]
+    if not cell:
+        cell.append(normalize_django_value(state[0]))
+    return cell[0]
+
+
+class _FlooredCall:
+    """The callable a floor proxy answers for ANY callable it would return (a model's bound method, a
+    manager's ``.all``...): it calls the real thing and sends the result back through
+    :func:`_floored_result`. Carries the markers the engine reads (``alters_data``,
+    ``do_not_call_in_templates``, ``djust_orm_call``) and nothing else: the callable it wraps, its
+    receiver and its closure are not reachable from it."""
+
+    __slots__ = ("_s", "alters_data", "do_not_call_in_templates", "djust_orm_call")
+
+    def __init__(self, fn: Any) -> None:
+        _FC_SET(self, fn)
+        self.alters_data = bool(getattr(fn, "alters_data", False))
+        self.do_not_call_in_templates = bool(getattr(fn, "do_not_call_in_templates", False))
+        self.djust_orm_call = isinstance(
+            getattr(fn, "__self__", None), (models.Manager, models.QuerySet)
+        )
+
+    def __getattribute__(self, name: str) -> Any:
+        if name == "__class__":
+            return _OpaqueCall
+        if name in ("alters_data", "do_not_call_in_templates", "djust_orm_call"):
+            return object.__getattribute__(self, name)
+        if name == "djust_requires_arguments":
+            return _Hook(_fc_requires_arguments, self)
+        raise AttributeError(name)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return _floored_result(_FC_GET(self)(*args, **kwargs))
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise TypeError("a floor call wrapper cannot be pickled or copied")
+
+
+_FC_GET, _FC_SET = _slot_accessors(_FlooredCall, "_s")
+
+
+def _fc_requires_arguments(call: Any) -> bool:  # noqa: dead-method-allowed (handed to _Hook by reference)
+    """Django's "were arguments required?" probe (``inspect.signature(fn).bind()``) for the callable
+    behind ``call``, answered as a bool. The Rust engine reads it through the
+    ``djust_requires_arguments`` marker, so no ``inspect.Signature`` (whose class has Python-level
+    methods) is ever handed out."""
+    try:
+        inspect.signature(_FC_GET(call)).bind()
+    except (TypeError, ValueError):
+        return True
+    return False
+
+
+def floored_call_signature(call: Any) -> Any:
+    """``inspect.signature`` of the callable behind a :class:`_FlooredCall`, for the Django-engine
+    bridge walker (trusted code, never a template reader); ``None`` for anything else."""
+    if type(call) is _FlooredCall:
+        return inspect.signature(_FC_GET(call))
+    return None
+
+
+class _FlooredObject:
+    """Any other instance a floor proxy returns (a file field, an enum member, a property's presenter):
+    reads, calls and items go back through :func:`_floored_result`, and the object is not reachable."""
+
+    __slots__ = ("_s",)
+
+    def __init__(self, obj: Any) -> None:
+        _FO_SET(self, obj)
+
+    def __getattribute__(self, name: str) -> Any:
+        if name[:1] == "_":
+            if name == "__class__":
+                return _Opaque
+            raise AttributeError(name)
+        return _floored_result(getattr(_FO_GET(self), name))
+
+    def __getitem__(self, key: Any) -> Any:
+        return _floored_result(_FO_GET(self)[key])
+
+    def __iter__(self) -> Any:
+        return (_floored_result(item) for item in _FO_GET(self))
+
+    def __len__(self) -> int:
+        return len(_FO_GET(self))
+
+    def __contains__(self, item: Any) -> bool:
+        return item in _FO_GET(self)
+
+    def __bool__(self) -> bool:
+        return bool(_FO_GET(self))
+
+    def __str__(self) -> str:
+        return str(_FO_GET(self))
+
+    def __repr__(self) -> str:
+        return repr(_FO_GET(self))
+
+    def __eq__(self, other: object) -> Any:
+        if isinstance(other, _FlooredObject):
+            other = _FO_GET(other)
+        return _FO_GET(self) == other
+
+    def __hash__(self) -> int:
+        return hash(_FO_GET(self))
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise TypeError("a floored object cannot be pickled or copied")
+
+
+_FO_GET, _FO_SET = _slot_accessors(_FlooredObject, "_s")
+
+
+def _model_proxy_class_name(proxy: Any) -> str:
+    """The wrapped model's CLASS name, for the engine's carrier of a model proxy (#3888 review).
+
+    Asked only by the Rust conversion, so a model whose ``__str__`` raises is described as
+    ``RvRaises object`` (what it was before the handle) and not as ``_SidecarModelProxy object``.
+    """
+    return type(_SMP_GET(proxy)[0]).__name__
 
 
 class _SidecarQuerySetProxy:
@@ -1740,51 +2197,42 @@ class _SidecarQuerySetProxy:
     ``get_context_data()``, where the eager serialization floor applies.
     """
 
-    __slots__ = ("_qs", "_is_projection")
+    __slots__ = ("_s",)
 
     def __init__(self, qs: Any) -> None:
-        object.__setattr__(self, "_qs", qs)
         # A ``.values()`` / ``.values_list()`` queryset sets ``_fields`` (to a
         # possibly-empty tuple); a normal queryset / manager leaves it ``None``.
         # This is the ONLY queryset op that sets ``_fields``, so it cleanly
         # detects the projection class we must refuse.
-        object.__setattr__(self, "_is_projection", getattr(qs, "_fields", None) is not None)
+        _SQP_SET(self, (qs, getattr(qs, "_fields", None) is not None))
 
-    def __getattr__(self, name: str) -> Any:
-        if name.startswith("_"):
+    def __getattribute__(self, name: str) -> Any:
+        if name[:1] == "_":
+            if name == "__class__":
+                return _Opaque
+            if name == "__djust_serialize__":
+                return _Hook(_sqp_serialize, self)
             raise AttributeError(name)
+        qs, is_projection = _SQP_GET(self)
         # Refuse ALL access on a values/values_list projection — .first/.get/
         # .aggregate/etc. each return an unfiltered raw row/scalar (vector 5).
-        if object.__getattribute__(self, "_is_projection"):
+        if is_projection:
             raise AttributeError(name)
-        qs = object.__getattribute__(self, "_qs")
-        attr = getattr(qs, name)
-        if callable(attr) and not isinstance(attr, type):
-
-            def _wrapped(*args: Any, **kwargs: Any) -> Any:
-                return _protect_sidecar_value(attr(*args, **kwargs))
-
-            # Preserve the template-callable guards + ORM ``__self__`` so the
-            # Rust walk auto-calls (or refuses) the wrapper exactly as it would
-            # the bound method (e.g. ``qs.delete`` keeps ``alters_data=True``).
-            for _marker in ("alters_data", "do_not_call_in_templates", "__self__"):
-                if hasattr(attr, _marker):
-                    try:
-                        setattr(_wrapped, _marker, getattr(attr, _marker))
-                    except (AttributeError, TypeError):  # pragma: no cover - defensive
-                        pass
-            return _wrapped
-        return _protect_sidecar_value(attr)
+        # a method comes back as `_FlooredCall` (its result goes back through `_floored_result`),
+        # a related model as its proxy, a class not at all: ONE function decides.
+        return _floored_result(getattr(qs, name))
 
     def __iter__(self) -> Any:
-        if object.__getattribute__(self, "_is_projection"):
+        qs, is_projection = _SQP_GET(self)
+        if is_projection:
             return iter(())  # refuse: projection rows have no per-field floor
-        return (_protect_sidecar_value(item) for item in object.__getattribute__(self, "_qs"))
+        return (_floored_result(item) for item in qs)
 
     def __len__(self) -> int:
-        if object.__getattribute__(self, "_is_projection"):
+        qs, is_projection = _SQP_GET(self)
+        if is_projection:
             return 0
-        return len(object.__getattribute__(self, "_qs"))
+        return len(qs)
 
     def __getitem__(self, key: Any) -> Any:
         """``qs[i]`` / ``qs[a:b]``, each result protected (#2717).
@@ -1814,28 +2262,1868 @@ class _SidecarQuerySetProxy:
         spelled as the zero-length sequence the rest of this proxy already
         reports (vector 5 — a projection row carries no per-field floor).
         """
-        if object.__getattribute__(self, "_is_projection"):
+        qs, is_projection = _SQP_GET(self)
+        if is_projection:
             if isinstance(key, slice):
                 return []
             raise IndexError("index out of range")
-        result = object.__getattribute__(self, "_qs")[key]
+        result = qs[key]
         if isinstance(key, slice):
-            return [_protect_sidecar_value(item) for item in result]
-        return _protect_sidecar_value(result)
-
-    def __djust_serialize__(self) -> Any:
-        """Denylist-filtered LIST for terminal Value conversion (called by the
-        Rust ``FromPyObject``). A ``{% for x in member.groups.all %}`` loop
-        resolves the queryset to this value; each item is floor-filtered
-        (``{{ x.name }}`` works, ``{{ x.password }}`` is empty) instead of
-        ``__dict__``-dumped. A ``.values()``/``.values_list()`` projection is
-        refused (empty) — its rows carry no per-field floor (vector 5)."""
-        if object.__getattribute__(self, "_is_projection"):
-            return []
-        return [normalize_django_value(item) for item in object.__getattribute__(self, "_qs")]
+            return [_floored_result(item) for item in result]
+        return _floored_result(result)
 
     def __str__(self) -> str:
-        return str(object.__getattribute__(self, "_qs"))
+        return str(_SQP_GET(self)[0])
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise TypeError("a floor proxy cannot be pickled or copied")
+
+
+_SQP_GET, _SQP_SET = _slot_accessors(_SidecarQuerySetProxy, "_s")
+
+
+def _sqp_serialize(self: Any) -> Any:  # noqa: dead-method-allowed (handed to _Hook by reference)
+    """The rows, each as its FLOOR PROXY, for terminal Value conversion (called by the Rust
+    ``FromPyObject``). A ``{% for x in member.groups.all %}`` loop resolves the queryset to this
+    value; the conversion carries each proxy as a live handle (#3888), so ``{{ x.name }}`` works,
+    ``{{ x.password }}`` is empty (the proxy refuses it per read) and a second relation hop
+    (``{{ x.user_set.count }}``) has the row to read it from. A ``.values()`` /
+    ``.values_list()`` projection is refused (empty) — its rows carry no per-field floor
+    (vector 5)."""
+    qs, is_projection = _SQP_GET(self)
+    if is_projection:
+        return []
+    return [_floored_result(item) for item in qs]
+
+
+#: Names a floor field's ``BoundField`` refuses when a template walks to them (#3790). ``value`` /
+#: ``initial`` / ``data`` read the model's value back; ``subwidgets`` (and indexing or iterating the
+#: field, which are its subwidgets) carry it in ``widget.value``; ``as_text`` / ``as_textarea`` /
+#: ``as_hidden`` swap in a widget that PRINTS it (``ReadOnlyPasswordHashWidget`` does not). The form's
+#: own rendering (``{{ form.password }}``, ``as_p``, ``as_widget``) is the widget the view author
+#: chose and is not refused.
+_FLOOR_BOUND_FIELD_ATTRS = frozenset(
+    {"value", "initial", "data", "subwidgets", "as_text", "as_textarea", "as_hidden"}
+)
+
+#: The form attributes that hold a model's values keyed by FIELD NAME: a floor field's key is dropped
+#: from the copy a template walks (the form itself is never mutated: ``initial`` is what a disabled
+#: field validates against).
+_FLOOR_FORM_DICT_ATTRS = frozenset({"initial", "data", "cleaned_data"})
+
+_FORM_CLASSES: Optional[tuple] = None
+
+
+def _form_classes() -> tuple:
+    """``(BoundField, BaseForm, BaseFormSet, BaseModelForm)``, imported on first use: ``django.forms``
+    is not needed by anything that renders no form, and this runs once per template path segment."""
+    global _FORM_CLASSES
+    if _FORM_CLASSES is None:
+        from django.forms import BaseForm
+        from django.forms.boundfield import BoundField
+        from django.forms.formsets import BaseFormSet
+        from django.forms.models import BaseModelForm
+
+        _FORM_CLASSES = (BoundField, BaseForm, BaseFormSet, BaseModelForm)
+    return _FORM_CLASSES
+
+
+_PASSWORD_WIDGET_CLASSES: Optional[tuple] = None
+
+
+def _widget_draws_password(widget: Any) -> bool:
+    """A password input, or a ``MultiWidget`` that has one among its parts (recursively)."""
+    global _PASSWORD_WIDGET_CLASSES
+    if _PASSWORD_WIDGET_CLASSES is None:
+        # Imported once: this runs for every field of a form, on every step of a template path that
+        # reaches the form (a function-level ``import`` per call was measurable on a 30-field form).
+        from django.forms import MultiWidget, PasswordInput
+
+        _PASSWORD_WIDGET_CLASSES = (PasswordInput, MultiWidget)
+    password_input, multi_widget = _PASSWORD_WIDGET_CLASSES
+    if isinstance(widget, password_input) or getattr(widget, "input_type", None) == "password":
+        return True
+    if isinstance(widget, multi_widget):
+        return any(_widget_draws_password(part) for part in getattr(widget, "widgets", ()))
+    return False
+
+
+def field_has_password_widget(field: Any) -> bool:
+    """Is *field*'s widget a password input? The WIDGET-TYPE half of the form floor (#3798).
+
+    ``isinstance(widget, PasswordInput)`` (so a subclass is one), ``input_type == "password"`` (a
+    widget that is not a ``PasswordInput`` but draws one), or a ``MultiWidget`` with such a part. What
+    such a field holds is what a person TYPED: it is not a column of any model, so the model floor
+    cannot name it, and it is a secret whatever the field is called.
+    ``djust.forms.is_sensitive_form_field`` asks this too, so the two cannot disagree about what a
+    password field is (#1646).
+    """
+    return _widget_draws_password(getattr(field, "widget", None))
+
+
+def _password_field_names(fields: Any) -> frozenset:
+    """The keys, in *fields* (a form's ``fields`` or a form class's ``base_fields``), under which a
+    password-widget field's value is held (:func:`field_has_password_widget`).
+
+    A field is held under its own name (``initial`` / ``cleaned_data`` / ``BoundField``). A
+    ``MultiWidget`` field is also submitted under one key per part (``pair_0``, ``pair_1``:
+    ``widget.widgets_names``), and that is what ``form.data`` holds, so those keys are named too.
+
+    This SCANS every field. A template path asks the question once per step, so a path that runs
+    through a form must ask :func:`_password_name_held` (one name, no scan) or hold a
+    :class:`_FormPasswordNames` (#3816).
+    """
+    if not fields:
+        return frozenset()
+    names = set()
+    for name, field in fields.items():
+        if not field_has_password_widget(field):
+            continue
+        names.add(name)
+        for suffix in getattr(getattr(field, "widget", None), "widgets_names", ()):
+            names.add(name + suffix)
+    return frozenset(names)
+
+
+#: Longest name :func:`_password_name_held` splits by lookup; past it the form is scanned instead.
+#: Django field names are Python identifiers, so none approaches it.
+_NAME_SPLIT_LIMIT = 256
+
+
+def _password_name_held(fields: Any, name: str) -> bool:
+    """Is *name* in ``_password_field_names(fields)``? The same answer, with no scan of *fields*.
+
+    *name* is held when it is a password-widget field's own name, or that field's name followed by
+    one of its ``widgets_names`` (the keys a ``MultiWidget`` is submitted under). So every way to
+    split *name* into ``<field name><suffix>`` is asked of the form once, each a dict lookup: the
+    cost is the length of *name*, not the width of the form. A loop over a 100-field form asked the
+    scan above once per field per path step, which was quadratic (+35-50% of a render, #3816).
+
+    Nothing is remembered: the form is read as it is on this call, so a widget swapped on a live form
+    (``form.fields["pin"].widget = PasswordInput()``, a field added, replaced or removed) is followed
+    on the very next step, and no answer can be shared between forms, requests or threads. A memo
+    keyed on ``fields`` would miss a swap, and a memo that validates itself has to read every
+    field's widget to do it, which is the scan again.
+    """
+    if len(name) > _NAME_SPLIT_LIMIT:
+        # A name this long is no field's: it can be held only by being the exact name of a field
+        # (or a field plus a suffix) that is as long, and a form has no such field. It is also the
+        # shape an ATTACKER chooses (a POST key reaches here through ``form.data``): the split below
+        # slices and hashes the name once per character, quadratic in its length (an 8 KB key pinned
+        # a worker for ~30 s). One scan of the form is exact and linear in the name.
+        return name in _password_field_names(fields)
+    for cut in range(len(name) + 1):
+        field = fields.get(name[:cut])
+        if field is None or not field_has_password_widget(field):
+            continue
+        if cut == len(name):
+            return True
+        if name[cut:] in getattr(getattr(field, "widget", None), "widgets_names", ()):
+            return True
+    return False
+
+
+class _FormPasswordNames:
+    """``_password_field_names(fields)`` as a read-through VIEW of a form's live ``fields`` (#3816).
+
+    The floor tuple of a form carries its password names as element 4, and everything that holds
+    the floor asks it ``name in names``. Built eagerly, that is a scan of the whole form on every
+    template path step; as a view it is :func:`_password_name_held`, one name at a time. It holds the
+    form's ``fields`` mapping, not an answer, so it is as current as the form is.
+    """
+
+    __slots__ = ("_fields",)
+    __hash__ = None  # type: ignore[assignment]  # equal by value (below), so not hashable
+
+    def __init__(self, fields: Any) -> None:
+        self._fields = fields
+
+    def __contains__(self, name: object) -> bool:
+        return isinstance(name, str) and _password_name_held(self._fields, name)
+
+    def _names(self) -> frozenset:
+        return _password_field_names(self._fields)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, _FormPasswordNames):
+            return other._fields is self._fields or self._names() == other._names()
+        if isinstance(other, (set, frozenset)):
+            return self._names() == other
+        return NotImplemented
+
+
+def _form_password_names(fields: Any) -> Any:
+    """The password names of a form's *fields*, as a view when *fields* can be looked up by name,
+    else as the scanned set."""
+    if fields and hasattr(fields, "get") and hasattr(fields, "values"):
+        return _FormPasswordNames(fields)
+    return _password_field_names(fields)
+
+
+def _floor_for_model(model_class: Any, password_names: Any = frozenset()) -> tuple:
+    """``(model class, denied, allowed, optout, password names)`` for a model CLASS: the SAME three
+    sets ``_SidecarModelProxy`` is built from, and the names of the form's password-widget fields
+    (#3798). ``model_class`` is ``None`` for a form with no model behind it (a plain ``Form``): its
+    floor is the password fields alone, and no model rule is applied to it (#3799). The model's readers
+    look only at ``type(obj)``, so an instance that was never initialised (no query, no ``__init__``)
+    stands in for the class."""
+    if model_class is None:
+        return (None, frozenset(), None, frozenset(), password_names)
+    stand_in = object.__new__(model_class)
+    return (
+        model_class,
+        DjangoJSONEncoder._get_denied_fields(stand_in),
+        DjangoJSONEncoder._get_allowlist_fields(stand_in),
+        DjangoJSONEncoder._get_sensitive_optout_fields(stand_in),
+        password_names,
+    )
+
+
+def _pinned_floor(form: Any) -> Optional[tuple]:
+    """The floor a formset pinned on a form it handed out (its management form), else ``None``."""
+    pinned = form.__dict__.get("_djust_floor") if hasattr(form, "__dict__") else None
+    return pinned  # type: ignore[no-any-return]
+
+
+def _model_form_floor(form: Any) -> Optional[tuple]:
+    """``(model class, denied, allowed, optout, password names)`` for a form, else ``None``.
+
+    Two floors meet here, and a form is on the floor if EITHER names a field of it:
+
+    * the MODEL floor, read off a ``ModelForm``'s ``instance``: a form over a ``User`` holds that
+      user's values under the user's field names, so the user's floor is the form's floor
+      (``password``, ``is_superuser``, ``is_staff``, ``DJUST_SENSITIVE_FIELDS``,
+      ``djust_exclude_fields``, and the ``djust_serializable_fields`` allowlist). A plain ``Form``
+      has no model behind it and so no model floor (#3799);
+    * the WIDGET-TYPE floor (#3798): a field whose widget is a password input holds what was typed,
+      whatever the form is and whatever the field is called, so it is a floor field of a plain
+      ``Form`` and of a ``ModelForm`` alike (``UserCreationForm.password1`` is no column of ``User``).
+    """
+    # A formset's management form is a plain ``Form`` with no instance; the formset pins its own floor
+    # on it when it hands it out (``_SidecarFormSetProxy``), so a field of it and the ``.form`` of that
+    # field lead back to a proxied form and not to the real one holding the formset's whole data.
+    pinned = _pinned_floor(form)
+    if pinned is not None:
+        return pinned
+    fields = getattr(form, "fields", None)
+    # ONLY a ``ModelForm`` has a model floor. A plain ``Form`` that happens to carry
+    # ``self.instance = <Model>`` is the view author's own form: its fields are not the model's
+    # columns, and "a plain Form has no model floor" stays true.
+    model_class = None
+    if isinstance(form, _form_classes()[3]):
+        instance = getattr(form, "instance", None)
+        if isinstance(instance, models.Model):
+            model_class = _model_class_of(instance)
+    if model_class is not None:
+        # On the floor whatever the password fields are, so nothing needs to know whether there are
+        # any: the names ride as a view of the live fields and no step scans the form (#3816).
+        return _floor_for_model(model_class, _form_password_names(fields))
+    passwords = _password_field_names(fields)
+    if not passwords:
+        return None
+    return _floor_for_model(None, passwords)
+
+
+def _bound_field_floor(bound_field: Any) -> Optional[tuple]:
+    """The floor that governs *bound_field*'s value, or ``None`` when it is not on one.
+
+    ``_model_form_floor(bound_field.form)``, except that a bound field of a PLAIN form (no model
+    floor, no pinned floor) is asked about by name (:func:`_password_name_held`) and never builds the
+    form's floor: that scanned every field of the form for every field a template walked, so a loop
+    over a wide form was quadratic (#3816). The answer a caller needs is the same: a plain form's
+    floor is its password names alone, so the field is on it exactly when its name is held. One
+    function for every reader of a bound field, so the walk and the component readers cannot disagree
+    (#1646).
+    """
+    form = bound_field.form
+    if form is None:
+        return None
+    fields = getattr(form, "fields", None)
+    if (
+        fields is not None
+        and hasattr(fields, "get")
+        and isinstance(bound_field.name, str)
+        and not isinstance(form, _form_classes()[3])
+        and _pinned_floor(form) is None
+        and not _password_name_held(fields, bound_field.name)
+    ):
+        return None
+    return _model_form_floor(form)
+
+
+def _formset_floor(formset: Any) -> Optional[tuple]:
+    """The floor of a formset: the model floor of ``BaseModelFormSet.model`` (else of the model of its
+    ``ModelForm`` class, a plain ``formset_factory(SomeModelForm)``) and the password-widget fields
+    of its forms (#3798). ``None`` when neither names anything.
+
+    The password fields are those of the form CLASS (``base_fields``) and of the forms the formset
+    has actually built: a form that adds a ``PasswordInput`` in its ``__init__`` is not in
+    ``base_fields``, but ``formset.cleaned_data`` / ``formset.data`` hold its value all the same.
+    """
+    form_class = getattr(formset, "form", None)
+    model = getattr(formset, "model", None)
+    if model is None:
+        model = getattr(getattr(form_class, "_meta", None), "model", None)
+    if not (isinstance(model, type) and issubclass(model, models.Model)):
+        model = None
+    passwords = set(_password_field_names(getattr(form_class, "base_fields", None)))
+    try:
+        for built in formset.forms:
+            passwords |= _password_field_names(getattr(built, "fields", None))
+    except Exception:  # noqa: BLE001 - a formset whose forms cannot be built exposes none either
+        logger.debug("[djust] a formset's forms could not be built for the floor")
+    if model is None and not passwords:
+        return None
+    return _floor_for_model(model, frozenset(passwords))
+
+
+def _floor_field_readable(floor: tuple, name: Any) -> bool:
+    """May a template read the value held under form-field key *name*? One authority:
+    ``_attr_is_serializable`` and the TYPE floor, as ``_SidecarModelProxy.__getattr__`` asks, and the
+    form's password-widget fields (#3798)."""
+    if not isinstance(name, str):
+        return True
+    model_class, denied, allowed, optout, passwords = floor
+    if name in passwords:
+        return False
+    if model_class is None:
+        return True  # a plain Form: only its password fields are on the floor (#3798, #3799)
+    if not DjangoJSONEncoder._attr_is_serializable(name, denied, allowed, optout):
+        return False
+    return not _field_type_excluded_for(model_class, name)
+
+
+def _floor_special_name_bound(floor: tuple) -> Optional[int]:
+    """The length of the longest NAME the floor treats specially, else ``None`` (= cannot tell).
+
+    :func:`_floor_field_readable` is a pure function of the name, and a name outside a finite set
+    gets the SAME answer as any other name outside it that begins the same way. The finite set is
+    what the floor can name: the form's password names, the model's denied / allowed / opt-out sets,
+    the identity keys, the sensitive model methods, and the model's own fields (``name`` and
+    ``attname``, which is what ``Options.get_field`` resolves). Past it the verdict is decided by the
+    name's LEADING characters only (``_`` prefix, the sensitive-method prefixes, whether an allowlist
+    exists), so the longest prefix a rule tests is part of the bound.
+
+    ``None`` when any of that cannot be read (a set holding a non-string, a ``_meta`` that raises):
+    the caller then asks the floor about every tail in full, the unbounded answer it always had.
+    """
+    model_class, denied, allowed, optout, passwords = floor
+    try:
+        if isinstance(passwords, _FormPasswordNames):
+            passwords = passwords._names()
+        bound = max((len(name) for name in passwords), default=0)
+        if model_class is None:
+            return bound
+        for names in (denied, allowed or (), optout, _IDENTITY_KEYS, _SENSITIVE_MODEL_METHODS):
+            bound = max(bound, max((len(name) for name in names), default=0))
+        bound = max(bound, 1, max(len(prefix) for prefix in _SENSITIVE_MODEL_METHOD_PREFIXES))
+        for field in model_class._meta.get_fields(include_hidden=True):
+            bound = max(bound, len(field.name), len(getattr(field, "attname", "")))
+    except Exception:  # noqa: BLE001 - unreadable means "unbounded", which is always correct
+        logger.debug("[djust] a form floor's special names could not be bounded; asking in full")
+        return None
+    return bound
+
+
+class _DataKeyReader:
+    """Is a ``form.data`` key readable? :func:`_floor_data_key_readable`, set up once per mapping.
+
+    ``form.data`` is keyed by ``form.add_prefix(name)`` (``u-password`` for ``prefix="u"``,
+    ``form-0-password`` in a formset), not by the bare field name every other mapping a form holds
+    uses. So a key is readable only when the whole key AND every ``-``-delimited tail of it is: the
+    tail after the prefix is the field name, whatever the prefix (or a formset's ``form-<n>``) is.
+
+    The keys are what a CLIENT posted, so a key's length is the client's to choose, and slicing every
+    tail was quadratic in it (a 32 KB key of dashes cost ~0.7 s and a 2.5 MB one extrapolated to
+    ~80 min, #3830). A tail longer than the longest name the floor treats specially
+    (:func:`_floor_special_name_bound`) cannot be one of those names, and the floor answers it as it
+    answers every other such name that begins the same way: so it is asked in the form of its first
+    ``bound + 1`` characters, which is the SAME answer (a differential test holds the two functions
+    to it over generated keys) at a cost that no longer grows with the tail. The work per key is
+    linear in its length; the constant is the form's own longest name, not the key's.
+
+    The form's password names are read ONCE, here, as a set, so no tail is asked of the form.
+    """
+
+    __slots__ = ("_floor", "_bound", "_memo")
+
+    #: How many distinct truncated tails are remembered for one mapping. A key chosen so that every
+    #: tail differs would otherwise grow the memo by one entry per dash.
+    _MEMO_LIMIT = 256
+
+    def __init__(self, floor: tuple) -> None:
+        if isinstance(floor[4], _FormPasswordNames):
+            floor = floor[:4] + (floor[4]._names(),)
+        self._floor = floor
+        self._bound = _floor_special_name_bound(floor)
+        self._memo: Dict[str, bool] = {}
+
+    def __call__(self, key: Any) -> bool:
+        if not isinstance(key, str):
+            return True
+        floor = self._floor
+        if not _floor_field_readable(floor, key):
+            return False
+        bound = self._bound
+        end = len(key)
+        cut = key.find("-")
+        while cut != -1:
+            start = cut + 1
+            if bound is not None and end - start > bound:
+                head = key[start : start + bound + 1]
+                readable = self._memo.get(head)
+                if readable is None:
+                    readable = _floor_field_readable(floor, head)
+                    if len(self._memo) >= self._MEMO_LIMIT:
+                        self._memo.clear()
+                    self._memo[head] = readable
+            else:
+                readable = _floor_field_readable(floor, key[start:])
+            if not readable:
+                return False
+            cut = key.find("-", start)
+        return True
+
+
+def _floor_data_key_readable(floor: tuple, key: Any) -> bool:
+    """May a template read the submitted-data key *key*? (:class:`_DataKeyReader`, for one key.)
+
+    A caller with many keys (:func:`_without_floor_keys`) sets the reader up once instead."""
+    return _DataKeyReader(floor)(key)
+
+
+def _without_floor_keys(value: Any, floor: tuple, readable: Any = None) -> Any:
+    """*value* (a form's ``initial`` / ``data`` / ``cleaned_data``) without the keys the floor
+    refuses. A COPY: the form keeps its own mapping. The caller's own object when nothing is
+    refused, so the common form (no floor field in it) pays one key scan and keeps identity.
+    A list of mappings (a formset's ``initial`` / ``cleaned_data``) is filtered mapping by mapping."""
+    if isinstance(floor[4], _FormPasswordNames):
+        # This asks the floor about EVERY key of the mapping (and, for ``data``, each ``-``-delimited
+        # tail of it): keys a client chose. Answer them from the names as a SET (linear in the key,
+        # as before #3816) instead of by lookup per split (quadratic in the key, cubic with
+        # dashes): one scan of the form per call, not per key.
+        floor = floor[:4] + (floor[4]._names(),)
+    keep: Callable[[Any], bool]
+    if readable is _floor_data_key_readable:
+        keep = _DataKeyReader(floor)  # set up once for every key of the mapping (#3830)
+    else:
+        keep = functools.partial(readable or _floor_field_readable, floor)
+    return _filter_floor_keys(value, keep)
+
+
+#: Where a form (or formset) keeps what it was last asked about its submitted data (#3834).
+_DATA_FLOOR_MEMO_ATTR = "_djust_data_floor_memo"
+
+
+class _DataFloorMemo:
+    """What the floor decided about one ``form.data`` mapping: the answer, and what it was an answer TO.
+
+    The verdict on a key is a pure function of the key and of the floor, so the verdict on a mapping
+    is a function of its KEYS and the floor, and of nothing else (not its values: the copy a template
+    reads is rebuilt on every read from the values the mapping holds NOW, and not which object holds
+    them: a different mapping with the same keys has the same verdict). So the memo keeps exactly that
+    input and compares it again before it trusts the answer: the keys in order, and a fingerprint of
+    the floor taken as COPIES, so a set mutated in place after the fact cannot make the old and the new
+    floor compare equal.
+
+    The memo keeps the key tuple of the mapping it was made for until the next read replaces it or the
+    form is dropped: replacing ``form.data`` and never reading it again leaves that tuple (one pointer
+    per key, bounded by the form-data limits over the socket) on the form, the same lifetime as the
+    form itself.
+    """
+
+    __slots__ = ("fingerprint", "keys", "refused")
+
+    def __init__(self, fingerprint: tuple, keys: tuple, refused: frozenset) -> None:
+        self.fingerprint = fingerprint
+        self.keys = keys
+        self.refused = refused
+
+
+def _floor_fingerprint(floor: tuple) -> tuple:
+    """Everything :func:`_floor_field_readable` reads, as values that cannot change under it.
+
+    That is the five parts of *floor* and the two things it reaches past them for, all listed here
+    because a verdict kept on an input this omits is a password key a template can read:
+
+    * the model class (itself: a class is the same class), the denied / allowed / opt-out sets
+      (copied, so a set edited in place afterwards is a different fingerprint), and the form's
+      password names, read NOW from the live ``fields`` the :class:`_FormPasswordNames` view looks
+      through, so a widget swapped on a live form is a different fingerprint;
+    * ``LIVEVIEW_CONFIG["sensitive_field_types"]`` (:func:`_sensitive_field_types`), which the TYPE
+      floor (:func:`_field_type_excluded_for`) matches the model's columns against;
+    * the model's columns, which that same floor resolves a key against (``_meta.get_field``) and
+      :func:`_floor_special_name_bound` measures. ``_meta.get_fields`` returns Django's cached tuple,
+      which Django replaces whenever a field is added to or removed from the model, so a column
+      added at runtime is a different fingerprint. A column whose CLASS is swapped in place
+      (``field.__class__ = ...``) is the one thing not seen; no Django API does that.
+
+    Everything else the verdict touches is a module constant (the identity keys, the sensitive model
+    methods and their prefixes)."""
+    model_class, denied, allowed, optout, passwords = floor
+    if isinstance(passwords, _FormPasswordNames):
+        passwords = passwords._names()
+    columns = (
+        None if model_class is None else tuple(model_class._meta.get_fields(include_hidden=True))
+    )
+    return (
+        model_class,
+        frozenset(denied),
+        None if allowed is None else frozenset(allowed),
+        frozenset(optout),
+        frozenset(passwords),
+        _sensitive_field_types(),
+        columns,
+    )
+
+
+def _floor_filtered_data(holder: Any, value: Any, floor: tuple) -> Any:
+    """``_without_floor_keys(value, floor, _floor_data_key_readable)``, asked of the floor ONCE.
+
+    A template that reads ``form.data`` ten times used to put every key of it to the floor ten times,
+    and the keys are what a client posted: 100,000 dashed keys were ~1 s per read (#3834). The verdict
+    is kept on *holder* (the form or formset ``value`` belongs to, which outlives the proxy a template
+    step wraps around it) and trusted only while the mapping has the same keys and the floor is the
+    same floor. Nothing about the values is kept, so a value changed in place is read as it is now.
+    Anything this cannot answer cheaply and exactly (a mapping that is not a dict, a floor that
+    cannot be fingerprinted, a holder that cannot carry the memo) is the uncached call.
+    """
+    if not isinstance(value, (dict, MultiValueDict)):
+        return _without_floor_keys(value, floor, _floor_data_key_readable)
+    try:
+        fingerprint = _floor_fingerprint(floor)
+        # A plain dict is read ONCE: the keys judged and the pairs returned come from the same
+        # snapshot, so a key added by another thread between the two cannot ride through unjudged.
+        pairs = None if isinstance(value, MultiValueDict) else list(value.items())
+        keys = tuple(value) if pairs is None else tuple([key for key, _ in pairs])
+        holder_dict = holder.__dict__
+    except Exception:  # noqa: BLE001 - unreadable means "ask in full", which is always correct
+        return _without_floor_keys(value, floor, _floor_data_key_readable)
+    memo = holder_dict.get(_DATA_FLOOR_MEMO_ATTR)
+    if isinstance(memo, _DataFloorMemo) and memo.fingerprint == fingerprint and memo.keys == keys:
+        refused = memo.refused
+    else:
+        keep = _DataKeyReader(floor)  # set up once for every key of the mapping (#3830)
+        refused = frozenset(key for key in keys if not keep(key))
+        holder_dict[_DATA_FLOOR_MEMO_ATTR] = _DataFloorMemo(fingerprint, keys, refused)
+    if not refused:
+        return value
+    if pairs is not None:
+        return {k: v for k, v in pairs if k not in refused}
+    copy: Any = value.copy()  # ``QueryDict.copy()`` is always mutable; restored below
+    for key in refused:
+        copy.pop(key, None)
+    mutable = getattr(value, "_mutable", None)
+    if mutable is not None:
+        copy._mutable = mutable
+    return copy
+
+
+def _filter_floor_keys(value: Any, keep: Any) -> Any:
+    """:func:`_without_floor_keys` with the question already bound: ``keep(key)``."""
+    if isinstance(value, (list, tuple)) and not isinstance(value, str):
+        filtered = [_filter_floor_keys(item, keep) for item in value]
+        if all(new is old for new, old in zip(filtered, value)):
+            return value
+        return type(value)(filtered) if type(value) in (list, tuple) else filtered
+    if isinstance(value, MultiValueDict):
+        refused = [k for k in value.keys() if not keep(k)]
+        if not refused:
+            return value
+        # ``QueryDict.copy()`` is always mutable; the original's mutability is restored below.
+        copy = value.copy()
+        for key in refused:
+            copy.pop(key, None)
+        mutable = getattr(value, "_mutable", None)
+        if mutable is not None:
+            copy._mutable = mutable
+        return copy
+    if isinstance(value, dict):
+        if all(keep(k) for k in value):
+            return value
+        return {k: v for k, v in value.items() if keep(k)}
+    return value
+
+
+#: Floor reads already reported (model, field, attribute): the breaking-change warning below fires
+#: once per process, not once per render.
+_REFUSED_READ_WARNED: set = set()
+
+
+def _warn_refused_floor_read(floor: tuple, field_name: str, attr: str) -> None:
+    key = (floor[0], field_name, attr)
+    if key in _REFUSED_READ_WARNED:
+        return
+    _REFUSED_READ_WARNED.add(key)
+    if field_name in floor[4]:
+        logger.warning(
+            "[djust] a template read form field %s via .%s, but its widget is a password input, so "
+            "what was typed into it is on the serialization floor (#3798): it renders as empty. "
+            "{{ form.%s }} still draws the control (Django's PasswordInput never writes the value "
+            "back); to use the value, read it in the view from cleaned_data and put what the "
+            "template needs in get_context_data().",
+            field_name,
+            attr,
+            field_name,
+        )
+        return
+    logger.warning(
+        "[djust] a template read form field %s.%s via .%s, which is on the serialization floor "
+        "(#3790): it renders as empty (as {{ obj.%s }} does on the model). Render the control with "
+        "{{ form.%s }}; to read the value, compute it in get_context_data() or opt the field in with "
+        "%s.djust_serialize_sensitive_fields.",
+        floor[0].__name__,
+        field_name,
+        attr,
+        field_name,
+        field_name,
+        floor[0].__name__,
+    )
+
+
+def protect_blanked_floor_columns(form: Any) -> None:
+    """Mark every field djust draws WITHOUT its stored value ``disabled=True`` on *form* (#3797).
+
+    A control drawn empty is posted back empty, and a ``ModelForm`` saves what it is posted: the column
+    would be overwritten on an untouched re-save. Django ignores what is posted for a ``disabled`` field
+    and keeps its initial value, which is the only thing that protects the column (HTML ``disabled`` /
+    ``readonly`` and leaving the control out of the page still save ``""``).
+
+    Applied to a ``ModelForm`` that edits an EXISTING row (a new record has no stored value to lose).
+    The fields are those :func:`_floor_blank_bound_field` blanks and a password input is not one of
+    them: Django already draws it empty and a person types a new value into it. The model's
+    ``djust_serialize_sensitive_fields`` opt-out takes a field off the floor, so it is not touched.
+    ``FormMixin.get_form()`` calls this. The form's own ``fields`` are per instance, so only this form
+    is changed.
+
+    The contract for a field this makes ``disabled`` (a field the form's author declared ``disabled``
+    is left as Django has it): Django cleans a disabled field to its INITIAL value, which here is the
+    stored column, so ``cleaned_data[name]`` would be the stored value and a ``save()`` that reads
+    it (``if cleaned_data["password"]: user.set_password(...)``) would hash the stored hash. So after
+    the form's fields are cleaned (:func:`_cleaned_data_stays_blank`) ``cleaned_data[name]`` is ``""``,
+    the same as the blank the person posted, and the column is not rewritten. ``clean_<name>()`` and
+    the body of a form's own ``_post_clean`` override still see the stored value (they run before the
+    blank is set: Django's own semantics for a disabled field). A ``save()`` or ``clean()`` that
+    writes a derived value from a blank (``make_password(pw) if pw else pw`` stores the hash of ``""``
+    on a blank submission) is that form's own bug, as it is for any blank submission. A many-to-many
+    or private field is left as it is (it is saved from ``cleaned_data`` after the instance is built).
+    """
+    floor = _model_form_floor(form)
+    if floor is None or floor[0] is None:
+        return
+    instance = getattr(form, "instance", None)
+    if not isinstance(instance, models.Model) or instance._state.adding:
+        return
+    made_read_only = set()
+    for name, field in form.fields.items():
+        if (
+            _floor_field_readable(floor, name)
+            or field_has_password_widget(field)
+            or not _floor_field_is_secret(floor, name, field)
+        ):
+            continue
+        if not field.disabled:
+            _warn_field_made_read_only(floor[0], name)
+            made_read_only.add(name)
+        field.disabled = True
+    _cleaned_data_stays_blank(form, made_read_only)
+
+
+#: (model label, field name) pairs :func:`_warn_field_made_read_only` has already reported. Bounded
+#: (a form's field names are code, but a dynamic form can mint them) and locked: forms are built on
+#: every event, on several threads.
+_READ_ONLY_WARNED: set = set()
+_READ_ONLY_WARNED_CAP = 1024
+_READ_ONLY_WARNED_LOCK = threading.Lock()
+
+
+def _warn_field_made_read_only(model_class: Any, field_name: str) -> None:
+    """Say once per (model, field) that :func:`protect_blanked_floor_columns` made a field read-only.
+
+    The field is on the floor and its name is secret-like, so it is drawn empty and, to keep an
+    untouched re-save from overwriting the column, ``disabled``: the person cannot edit it and what they
+    type is ignored. That is silent otherwise, and it reaches fields that are only secret-LOOKING
+    (``sort_key``, ``token_count`` named in ``djust_exclude_fields``, a "set a new password" box). The
+    message names the model and the field and nothing else: no value, object or exception.
+    """
+    label = getattr(getattr(model_class, "_meta", None), "label", None) or getattr(
+        model_class, "__name__", "?"
+    )
+    key = (label, field_name)
+    with _READ_ONLY_WARNED_LOCK:
+        if key in _READ_ONLY_WARNED or len(_READ_ONLY_WARNED) >= _READ_ONLY_WARNED_CAP:
+            return
+        _READ_ONLY_WARNED.add(key)
+    logger.warning(
+        "[djust] form field %s.%s is on the serialization floor and its name looks like a secret, so "
+        "FormMixin draws it empty and made it read-only (disabled=True): what is typed into it is "
+        "ignored, and the stored value is kept (#3797). If it is not a secret, name it in the model's "
+        "djust_serialize_sensitive_fields (or take it off DJUST_SENSITIVE_FIELDS / "
+        "djust_exclude_fields), give it a name without a secret word, or declare disabled=True on "
+        "the form field yourself to say it is meant.",
+        label,
+        field_name,
+    )
+
+
+def form_field_floor_state(bound_field: Any) -> Optional[str]:
+    """How a Python reader of a ``BoundField`` (a component tag) must treat its value (#3790).
+
+    ``None``: not a floor field, read it as before. ``"disabled"``: a floor field whose posted value
+    Django ignores (it validates against ``initial``), so a component may render it with the value
+    STRIPPED and a re-save cannot change it. ``"editable"``: a floor field the form posts back; the
+    value cannot be stripped without clearing it on the next save (measured in
+    ``test_form_initial_floor_3790.TestWhatPostingBackDoes``: a blank or an omitted control clears
+    a text field and unchecks a checkbox, which is how ``is_staff`` is demoted), so the reader keeps
+    rendering it and reports that it did (:func:`warn_editable_floor_field`).
+
+    ``"password"`` (#3798): the field's widget is a password input. Django's ``PasswordInput`` never
+    writes a value back into the control, so a reader that draws the control without the value is
+    exactly what Django draws, and a re-save posts what the person types, not what was typed before.
+    The value is stripped whether or not the field is editable (nothing is lost, nothing is reported).
+    """
+    floor = (
+        _bound_field_floor(bound_field) if getattr(bound_field, "form", None) is not None else None
+    )
+    if floor is None or _floor_field_readable(floor, bound_field.name):
+        return None
+    if bound_field.name in floor[4]:
+        return "password"
+    return "disabled" if getattr(bound_field.field, "disabled", False) else "editable"
+
+
+_EDITABLE_FLOOR_WARNED: set = set()
+
+
+def warn_editable_floor_field(bound_field: Any, floor: Optional[tuple] = None) -> None:
+    """Say, once per model field, that an EDITABLE floor field was rendered by djust, and how.
+
+    * A SECRET-LIKE field (:func:`_floor_field_is_secret`) is drawn WITHOUT its stored value (#3797).
+      An editable control drawn empty is posted back empty (a blank text control clears the column, an
+      unchecked checkbox demotes), so the message names the one thing that protects the column:
+      ``disabled=True`` on the form field, which ``FormMixin.get_form()`` sets for a form that edits an
+      existing row. A plain ``ModelForm`` in a classic view is not protected (``djust.S014``).
+    * Any other floor field (``email`` in ``DJUST_SENSITIVE_FIELDS``, ``is_staff``) keeps rendering its
+      real value, as it did: stripping it would clear it on the next save (#3790).
+    """
+    if floor is None:
+        floor = _model_form_floor(bound_field.form)
+    key = (floor[0] if floor else None, bound_field.name)
+    if key in _EDITABLE_FLOOR_WARNED:
+        return
+    _EDITABLE_FLOOR_WARNED.add(key)
+    model = floor[0].__name__ if floor and floor[0] is not None else "?"
+    if floor is not None and _floor_field_is_secret(floor, bound_field.name, bound_field.field):
+        logger.warning(
+            "[djust] form field %s.%s is a secret on the serialization floor and EDITABLE, so its "
+            "control is rendered WITHOUT its stored value (#3797): posting the form back as rendered "
+            "writes that emptiness over the column. Declare the form field disabled=True (Django then "
+            "ignores what is posted for it; FormMixin.get_form() does it for a form that edits an "
+            "existing row), leave it out of the form, or opt the model field out of the floor with "
+            "djust_serialize_sensitive_fields.",
+            model,
+            bound_field.name,
+        )
+        return
+    logger.warning(
+        "[djust] form field %s.%s is on the serialization floor and EDITABLE, so a component rendered "
+        "it with its value: stripping it would clear it on the next save (a blank text control clears "
+        "it, an unchecked checkbox demotes). Declare the form field disabled=True to render it "
+        "without the value, or leave it out of the form (#3790).",
+        model,
+        bound_field.name,
+    )
+
+
+#: Name tokens that make a floor field a SECRET (#3797). A name is split into lower-case words
+#: (``api_token``, ``apiToken``, ``AuthKey`` -> api/token, api/token, auth/key) and any word here
+#: counts; ``password`` / ``passwd`` / ``secret`` / ``token`` are also matched inside a longer word
+#: (``newpassword``). ``is_staff`` and ``is_superuser`` (privilege flags), selects and ordinary
+#: declared-sensitive text (``email``, ``first_name``) are NOT secrets: they are not secrets-in-HTML,
+#: and drawing them empty would corrupt data on the next save.
+_SECRET_NAME_WORDS = frozenset(
+    {
+        "password",
+        "passwd",
+        "passphrase",
+        "pwd",
+        "secret",
+        "token",
+        "key",
+        "apikey",
+        "hash",
+        "salt",
+        "credential",
+        "credentials",
+        "otp",
+        "signature",
+        "pin",
+    }
+)
+_SECRET_NAME_SUBSTRINGS = ("password", "passwd", "secret", "token", "apikey")
+_NAME_WORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])")
+
+
+def _name_is_secret_like(name: Any) -> bool:
+    if not isinstance(name, str):
+        return False
+    lowered = name.lower()
+    if any(part in lowered for part in _SECRET_NAME_SUBSTRINGS):
+        return True
+    return any(word.lower() in _SECRET_NAME_WORDS for word in _NAME_WORD_RE.findall(name))
+
+
+def _floor_field_is_secret(floor: tuple, name: Any, field: Any = None) -> bool:
+    """Is the floor field *name* a SECRET, whose value is blanked from the HTML (#3797)?
+
+    Four things make one, and nothing else does: its widget is a password input (``floor[4]``,
+    :func:`field_has_password_widget`: what a person typed); its name is secret-like
+    (:func:`_name_is_secret_like`: ``password``, ``api_token``, ``secret_key``, ``pwd_hash``, ...); or the
+    model's column is of a type ``LIVEVIEW_CONFIG['sensitive_field_types']`` excludes. Privilege flags
+    (``is_staff``, ``is_superuser``), selects (``role``, ``groups``) and ordinary declared-sensitive
+    text (``email``, ``first_name``) keep rendering their real state in the control.
+    """
+    if name in floor[4]:
+        return True
+    if field is not None and field_has_password_widget(field):
+        return True
+    if _name_is_secret_like(name):
+        return True
+    return (
+        floor[0] is not None and isinstance(name, str) and _field_type_excluded_for(floor[0], name)
+    )
+
+
+def floor_field_is_secret(bound_field: Any) -> bool:
+    """:func:`_floor_field_is_secret` for a ``BoundField`` (the component readers' question)."""
+    floor = (
+        _bound_field_floor(bound_field) if getattr(bound_field, "form", None) is not None else None
+    )
+    return (
+        floor is not None
+        and not _floor_field_readable(floor, bound_field.name)
+        and _floor_field_is_secret(floor, bound_field.name, bound_field.field)
+    )
+
+
+_KEEPS_VALUE_WIDGETS: Optional[tuple] = None
+
+
+def _widget_keeps_its_value(widget: Any) -> bool:
+    """May a floor field's widget keep drawing as it does? (#3797) Exactly two cases, both the widget's
+    OWN explicit contract and neither a way for a template to ask for a value:
+
+    * ``PasswordInput(render_value=True)``: the form author wrote that flag to echo the value into the
+      control (pinned in ``test_password_widget_floor_3798.TestTheControlStillDraws``). It is the one
+      widget-level opt-out there is, and it is the AUTHOR's, in the form class.
+    * Django's own ``ReadOnlyPasswordHashWidget``, matched by exact type: ``UserChangeForm.password``.
+      It draws a summary (algorithm, iterations, and the first six characters of the salt and the
+      hash, then ``*``), never the value. Blanked it would say "No password set." about a user who has
+      one. A subclass is NOT matched: its template is its own and can print ``widget.value``.
+    """
+    global _KEEPS_VALUE_WIDGETS
+    if _KEEPS_VALUE_WIDGETS is None:
+        from django.forms import PasswordInput
+
+        try:
+            from django.contrib.auth.forms import ReadOnlyPasswordHashWidget
+        except Exception:  # noqa: BLE001 - contrib.auth not installed: there is no such widget to keep
+            ReadOnlyPasswordHashWidget = type("_NoHashWidget", (), {})  # type: ignore[misc,assignment]
+        _KEEPS_VALUE_WIDGETS = (PasswordInput, ReadOnlyPasswordHashWidget)
+    password_input, hash_widget = _KEEPS_VALUE_WIDGETS
+    if isinstance(widget, password_input):
+        return bool(getattr(widget, "render_value", False))
+    return type(widget) is hash_widget
+
+
+def _value_withheld(floor: tuple, name: Any, field: Any) -> bool:
+    """:func:`form_field_value_withheld`, asked of a floor already built.
+
+    No widget is exempt. The live renderers print ``form_data`` through an adapter and never ask the
+    widget, so a widget's own contract about what it draws (``PasswordInput(render_value=True)``
+    echoes, Django's hash widget shows a masked summary) says nothing about what ``form_data``, the
+    state, the session and the WebSocket frames may carry.
+    """
+    return (
+        isinstance(name, str)
+        and field is not None
+        and not _floor_field_readable(floor, name)
+        and _floor_field_is_secret(floor, name, field)
+    )
+
+
+def form_field_value_withheld(form: Any, name: Any, field: Any = None) -> bool:
+    """Must the live form renderers NOT carry the stored value of field *name* of *form*?
+
+    ``FormMixin`` seeds ``form_data`` from each field's initial value, and ``as_live()`` /
+    ``as_live_field()`` / ``{% live_field %}`` / ``get_field_value()`` read it through an adapter that
+    does not ask the widget. A SECRET-LIKE floor field (:func:`_floor_field_is_secret`: a password
+    input, a secret-like name, a column of a type the type floor excludes) is seeded with ``""``;
+    every other field is seeded as it was.
+
+    The same verdict the template path gives (``_floor_blank_bound_field``), minus its two widget
+    carve-outs, which a template draws through the widget and the live renderers do not (see
+    :func:`_value_withheld`). ``FormMixin.get_form()`` makes a withheld field of an edit form
+    ``disabled`` (:func:`protect_blanked_floor_columns`), and a withheld password-widget field, which
+    stays editable, keeps its column when a submission leaves it blank
+    (:func:`keep_withheld_columns_when_blank`).
+
+    A CREATE form is withheld the same way: a secret-like field with an ``initial`` (a generated
+    ``api_key``) is seeded ``""`` and is not pre-filled in the live renderers, as it is not in a
+    template's ``{{ form.api_key }}`` (#3797). That is deliberate.
+    """
+    if field is None and isinstance(name, str):
+        field = getattr(form, "fields", {}).get(name)
+    floor = _model_form_floor(form)
+    return floor is not None and _value_withheld(floor, name, field)
+
+
+def model_field_value_withheld(model_class: Any, name: Any) -> bool:
+    """:func:`form_field_value_withheld` for a read of column *name* straight off a model instance
+    (``AdminFormMixin.get_field_value``'s fallback for a name that is not in ``form_data``)."""
+    if not (isinstance(model_class, type) and issubclass(model_class, models.Model)):
+        return False
+    floor = _floor_for_model(model_class)
+    return isinstance(name, str) and (
+        not _floor_field_readable(floor, name) and _floor_field_is_secret(floor, name)
+    )
+
+
+def form_withheld_field_names(form: Any) -> FrozenSet[str]:
+    """The names of the fields of *form* :func:`form_field_value_withheld` holds back, asked of the
+    floor ONCE (a seeding loop over a wide form must not rebuild it per field)."""
+    floor = _model_form_floor(form)
+    if floor is None:
+        return frozenset()
+    return frozenset(
+        name for name, field in form.fields.items() if _value_withheld(floor, name, field)
+    )
+
+
+def form_class_withheld_field_names(form_class: Any) -> FrozenSet[str]:
+    """:func:`form_withheld_field_names` for a form CLASS: no form is built and no row is read.
+
+    The names come from ``base_fields`` and the floor of ``Meta.model`` (a restore of saved state runs
+    before any form exists). A field a form's ``__init__`` adds is not in ``base_fields``.
+    """
+    base = getattr(form_class, "base_fields", None) or {}
+    if not base:
+        return frozenset()
+    model = getattr(getattr(form_class, "_meta", None), "model", None)
+    if not (isinstance(model, type) and issubclass(model, models.Model)):
+        model = None
+    floor = _floor_for_model(model, _form_password_names(base))
+    return frozenset(name for name, field in base.items() if _value_withheld(floor, name, field))
+
+
+def keep_withheld_columns_when_blank(form: Any) -> None:
+    """Make a withheld field of a BOUND ``ModelForm`` over an existing row ``disabled`` when the
+    submission leaves it absent or blank (#3797).
+
+    ``form_data`` is seeded ``""`` for a withheld field, so every submit posts ``""`` for it unless
+    the person typed a value. A ``ModelForm`` saves what it is posted: an untouched password-widget
+    field (which :func:`protect_blanked_floor_columns` leaves editable, a person types a new password
+    into it), a field whose page does not draw its control, and a form built by a ``get_form()`` that
+    never reached ``FormMixin.get_form()`` would all overwrite the column with ``""``. A ``disabled``
+    form field keeps the initial value (the stored one), and a ``required`` one validates against it,
+    so an untouched required secret does not make the form invalid for good. A non-blank submitted
+    value is left alone and writes. Blank is absent, ``None``, text that is empty once stripped, or any
+    other falsy value.
+    """
+    instance = getattr(form, "instance", None)
+    if (
+        not getattr(form, "is_bound", False)
+        or not isinstance(instance, models.Model)
+        or instance._state.adding
+    ):
+        return
+    data, files = getattr(form, "data", None), getattr(form, "files", None)
+    kept = set()
+    for name in form_withheld_field_names(form):
+        field = form.fields[name]
+        if field.disabled:
+            continue
+        value = field.widget.value_from_datadict(data, files, form.add_prefix(name))
+        if _is_blank_submission(value):
+            field.disabled = True
+            kept.add(name)
+    _cleaned_data_stays_blank(form, kept)
+
+
+def _is_blank_submission(value: Any) -> bool:
+    """Is a submitted value blank? Absent, ``None``, text empty once stripped, a list or tuple whose
+    every part is blank (a ``MultiWidget`` posts ``['', '']`` for an empty pair), and any other falsy
+    value (``{}``, ``0``, ``False``: only a client that crafts its frame sends them, and ``str()`` of
+    one would be written over the column)."""
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple)):
+        return all(_is_blank_submission(part) for part in value)
+    return not value
+
+
+def _blank_cleaned(form: Any) -> None:
+    """Once *form*'s fields are cleaned: ``cleaned_data[name] = ""`` for each pinned name."""
+    cleaned = getattr(form, "cleaned_data", None)
+    if cleaned is not None:
+        for name in set(form.__dict__.get("_djust_cleaned_blank", ())) & set(cleaned):
+            cleaned[name] = ""
+
+
+def _post_clean_without_blanked(form: Any, post_clean: Callable[[], None]) -> None:
+    """Run *post_clean* (``_post_clean``) with the pinned keys out of ``cleaned_data`` and put the
+    blank back afterwards, so ``construct_instance`` leaves the column alone."""
+    cleaned = getattr(form, "cleaned_data", None)
+    if cleaned is None:
+        post_clean()
+        return
+    present = set(form.__dict__.get("_djust_cleaned_blank", ())) & set(cleaned)
+    for name in present:
+        cleaned.pop(name, None)
+    try:
+        post_clean()
+    finally:
+        for name in present:
+            cleaned[name] = ""
+
+
+class _BlankPinned:
+    """Mixed in FRONT of a form's class (:func:`_pinned_form_class`) so that, once a form's fields are
+    cleaned, ``cleaned_data[name]`` is ``""`` for each name in the instance's ``_djust_cleaned_blank``.
+
+    A class, not wrappers on the instance: a ``copy.copy`` / ``copy.deepcopy`` of the form (Django's own
+    ``BaseForm.__deepcopy__`` is one) keeps the instance's ``__dict__``, and a closure over the original
+    form would clean the original, not the copy. The state is the set in the ``__dict__``; the behaviour
+    is the class, which a copy has too. A form whose class cannot be swapped (``__slots__`` layout)
+    gets instance-level wrappers instead (:func:`_pin_on_instance`).
+    """
+
+    _djust_pinned = True
+
+    def _clean_fields(self) -> None:
+        super()._clean_fields()  # type: ignore[misc]
+        _blank_cleaned(self)
+
+    def _post_clean(self) -> None:
+        _post_clean_without_blanked(self, super()._post_clean)  # type: ignore[misc]
+
+
+def _pin_on_instance(form: Any) -> None:
+    """The fallback for a form whose class cannot be swapped: the same two behaviours as closures on the
+    instance. A shallow ``copy.copy`` of such a form shares them (and so cleans the original): the price of
+    a class that cannot be derived from, paid only by that class."""
+    clean_fields, post_clean = form._clean_fields, form._post_clean
+
+    def _clean_fields() -> None:
+        clean_fields()
+        _blank_cleaned(form)
+
+    def _post_clean() -> None:
+        _post_clean_without_blanked(form, post_clean)
+
+    form._clean_fields = _clean_fields
+    form._post_clean = _post_clean
+    form.__dict__["_djust_pinned_on_instance"] = True
+
+
+#: The attribute a form class carries its derived class under, read from ``vars(cls)`` so a SUBCLASS of
+#: a form class never inherits its parent's. ON the class, not in a module-level container: the class
+#: and the derived class that names it are one reference cycle, which the garbage collector frees, so a
+#: class built per call (``modelform_factory``, ``ModelAdmin.get_form``) is collectable. A module-level
+#: cache keyed on the class would keep it alive through the derived class's bases.
+_PINNED_CLASS_ATTR = "_djust_pinned_class"
+#: Re-entrant: deriving the class runs ``__init_subclass__`` and the metaclass of the form class, which may
+#: pin ANOTHER class on the same thread.
+_PINNED_CLASS_LOCK = threading.RLock()
+
+
+def _pinned_form_class(form_class: Any) -> Any:
+    """*form_class* with :class:`_BlankPinned` in front, made once per class (see
+    ``_PINNED_CLASS_ATTR`` for where it is kept).
+
+    Consequences of a derived class, which a form's author can see: ``type(form) is MyForm`` is False for
+    a pinned form (``isinstance`` holds); the MRO lists ``_BlankPinned`` and then ``MyForm``;
+    ``MyForm.__init_subclass__`` and the form metaclass run again for the derived class; and its
+    ``base_fields`` are those of ``MyForm`` at the moment of the first derivation (a form instance keeps
+    its own ``fields``, which are what it is cleaned with). A class that registers its subclasses
+    somewhere global keeps the derived class there, one per form class.
+    """
+    pinned = vars(form_class).get(_PINNED_CLASS_ATTR)
+    if pinned is None:
+        with _PINNED_CLASS_LOCK:
+            pinned = vars(form_class).get(_PINNED_CLASS_ATTR)
+            if pinned is None:
+                pinned = type(form_class)(
+                    form_class.__name__,
+                    (_BlankPinned, form_class),
+                    {"__module__": form_class.__module__, "__qualname__": form_class.__qualname__},
+                )
+                try:
+                    setattr(form_class, _PINNED_CLASS_ATTR, pinned)
+                except (AttributeError, TypeError):  # a class that refuses attributes: not cached
+                    logger.debug("[djust] a form class refused the pinned-class cache attribute")
+    return pinned
+
+
+def _saved_from_cleaned_data_after_clean(form: Any, name: str) -> bool:
+    """Is *name* a field Django saves from ``cleaned_data`` AFTER ``save()`` built the instance?
+
+    ``BaseModelForm._save_m2m`` hands ``cleaned_data[name]`` to ``save_form_data`` for every many-to-many
+    and private (generic) field, so a blank put there EMPTIES the relation. Such a field is left as it
+    is: ``disabled``, cleaned to the stored value, and saved back unchanged (a relation holds no secret
+    string for a ``save()`` to hash). The other relations and the file fields are read by
+    ``construct_instance`` only, which does not see the key (:class:`_BlankPinned`).
+    """
+    model = getattr(getattr(form, "_meta", None), "model", None)
+    if model is None:
+        return False
+    try:
+        field = model._meta.get_field(name)
+    except Exception:  # noqa: BLE001 - a form field that is no model field: nothing is saved from it
+        return False
+    return bool(getattr(field, "many_to_many", False)) or field in model._meta.private_fields
+
+
+def _cleaned_data_stays_blank(form: Any, names: Any) -> None:
+    """After *form* is cleaned, ``cleaned_data[name]`` is ``""`` for each of *names* (fields djust made
+    ``disabled`` so Django keeps the stored column).
+
+    A disabled field cleans to its initial value, the stored column, and a ``save()`` or a
+    ``clean()`` that reads ``cleaned_data`` would act on that (``if cleaned_data["password"]:
+    set_password(...)`` would hash the stored hash). The form's class gets :class:`_BlankPinned` in
+    front (the form's own class is not touched): once its fields are cleaned the value is set to ``""``
+    (``clean()`` and everything after sees the blank that was posted), and ``_post_clean`` runs without
+    the key, so ``construct_instance`` leaves the column alone and the model is validated as for a
+    blank, not-required field. Many-to-many and private fields are left alone
+    (:func:`_saved_from_cleaned_data_after_clean`). Idempotent: a second call adds names to the first
+    call's set.
+
+    What still sees the STORED value, because it runs before the value is set (Django's own semantics
+    for a disabled field): ``clean_<name>()``, and the body of a form's own ``_post_clean`` override
+    before and after its ``super()`` call. A ``save()`` or ``clean()`` that WRITES a derived value
+    from a blank (``make_password(pw) if pw else pw`` stores the hash of ``""`` on a blank submission)
+    is that form's own bug, as it is for any blank submission.
+    """
+    names = {name for name in names if not _saved_from_cleaned_data_after_clean(form, name)}
+    if not names:
+        return
+    # A new set, never an in-place update: a shallow ``copy.copy`` of the form shares the old one.
+    form._djust_cleaned_blank = set(form.__dict__.get("_djust_cleaned_blank", ())) | names
+    if getattr(type(form), "_djust_pinned", False) or form.__dict__.get(
+        "_djust_pinned_on_instance"
+    ):
+        return
+    try:
+        form.__class__ = _pinned_form_class(type(form))
+    except (TypeError, AttributeError) as exc:
+        # ``__slots__`` and other layouts a class cannot be swapped across: the secret must still not be
+        # exposed, so the same behaviour is bound on the instance. Logged value-free.
+        from ._exposure_diagnostics import log_failure
+
+        log_failure(
+            logger,
+            exc,
+            "[djust] form class %s cannot be derived from; its blanked fields are pinned on the instance",
+            type(form).__name__,
+            level="warning",
+        )
+        _pin_on_instance(form)
+
+
+def scrub_restored_form_data(value: Any, withheld: Any) -> Any:
+    """*value* (a saved ``form_data``) with every key in *withheld* set to ``""``.
+
+    A restore writes the saved ``form_data`` over the freshly seeded one. The same object when there
+    is nothing to clean.
+    """
+    if not isinstance(value, dict) or not withheld:
+        return value
+    held = set(withheld) & set(value)
+    if not held:
+        return value
+    return {key: ("" if key in held else item) for key, item in value.items()}
+
+
+def stored_value_withheld(form: Any, name: Any, value: Any, row_expected: bool = False) -> bool:
+    """Is *value*, held under *name* in ``form_data``, the STORED value of a withheld field?
+
+    The read-time guard of ``get_field_value`` / ``as_live_field``: state that was restored or set
+    by code that does not go through the seeding still must not be printed. It compares with the
+    form's own initial value, so what a person TYPED into a password box is not mistaken for it.
+
+    *row_expected*: the view says a stored row exists (``model_pk`` / the admin's ``object_id``). If the
+    form was rebuilt over a blank instance anyway (the row could not be re-hydrated) its initial value
+    is ``""`` and there is nothing to compare with, so any value in a withheld field is held back: it
+    can only have come from the row. A genuine create view never says so, and its typed drafts stay.
+    """
+    if not value or form is None:
+        return False
+    field = getattr(form, "fields", {}).get(name) if isinstance(name, str) else None
+    if field is None or not form_field_value_withheld(form, name, field):
+        return False
+    instance = getattr(form, "instance", None)
+    if row_expected and isinstance(instance, models.Model) and instance._state.adding:
+        return True
+    stored = field.prepare_value(form[name].initial)
+    return stored not in ("", None) and bool(value == stored)
+
+
+def form_errors_without_secret_values(form: Any) -> Any:
+    """``form.errors`` with the value-bearing errors of a SECRET-LIKE floor field made generic.
+
+    A ``disabled`` field is validated against its STORED value, and Django's own messages interpolate
+    the value they reject (``invalid_choice``: "Select a valid choice. <value> is not one of ...").
+    A copy; the form's own errors are kept. The same object when nothing needs scrubbing.
+    """
+    errors = form.errors
+    floor = _model_form_floor(form)
+    return errors if floor is None else _scrub_floor_errors(errors, floor, form, withheld=True)
+
+
+def _no_value() -> None:
+    """``BoundField.value`` of a floor field as it is rendered: there is none."""
+    return None
+
+
+def _field_submission_keys(bound_field: Any) -> frozenset:
+    """Every key of ``form.data`` / ``form.files`` the control of *bound_field* is read from: its own
+    name, the name of its hidden-initial twin, and one per part of a ``MultiWidget``
+    (``widgets_names``: ``date_0``, ``date_1``) for each of the two."""
+    suffixes = getattr(bound_field.field.widget, "widgets_names", ())
+    names = (bound_field.html_name, bound_field.html_initial_name)
+    return frozenset(n + suffix for n in names for suffix in ("", *suffixes))
+
+
+def _stored_tokens(form: Any, name: Any, field: Any) -> tuple:
+    """The texts under which the STORED value of field *name* could appear in a message: its ``str``, its
+    ``repr`` and the ``repr`` / ``ascii`` / JSON forms of that text (quotes, backslashes and non-ASCII
+    escaped the way a formatter would). Empty when nothing is stored."""
+    try:
+        stored = field.prepare_value(form[name].initial)
+    except Exception:  # noqa: BLE001 - no initial can be read: only parameterised errors are scrubbed
+        return ()
+    if stored in ("", None):
+        return ()
+    text = str(stored)
+    forms_of_it = {
+        text,
+        repr(stored),
+        ascii(text),
+        json.dumps(text),
+        json.dumps(text, ensure_ascii=False),
+    }
+    # ``repr`` of ``repr`` of the text, up to three deep (a value inside a message that is itself printed
+    # with ``!r`` or in a list), each with and without its outer quotes
+    layer = text
+    for _ in range(3):
+        layer = repr(layer)
+        forms_of_it.add(layer)
+    # the text inside the quotes of each quoted form, as a message that quotes it itself writes it
+    forms_of_it |= {f[1:-1] for f in tuple(forms_of_it) if len(f) > 2 and f[0] == f[-1] in "'\""}
+    return tuple(token for token in forms_of_it if token)
+
+
+def _error_carries_value(error: Any, tokens: tuple, params_count: bool = True) -> bool:
+    """Does this error say something about the value? A parameterised one when *params_count* (Django
+    interpolates the value it rejects), and any whose message contains the stored value in any of its
+    forms (a ``clean_<name>`` that writes ``f"... {value!r} ..."``, or ``str()`` of an object that
+    holds it)."""
+    if params_count and getattr(error, "params", None):
+        return True
+    if not tokens:
+        return False
+    try:
+        text = " ".join(str(m) for m in error.messages)
+    except Exception:  # noqa: BLE001 - a message that cannot be formatted is not shown either
+        return True
+    return any(token in text for token in tokens)
+
+
+def scrub_error_messages(form: Any, name: Any, messages: List[Any]) -> List[Any]:
+    """*messages* (the ``.messages`` of a ``ValidationError`` raised for field *name*) made generic when
+    the field is withheld and a message contains its stored value. The same list otherwise; the
+    messages of any other field are never touched.
+
+    Best effort, by substring: the text, its ``repr`` / ``ascii`` / JSON forms and nested ``repr`` are
+    matched; an HTML-escaped, truncated, URL-quoted or upper-cased copy of the stored value is not. A
+    message of one field that echoes ANOTHER field's value is only checked for the non-field errors."""
+    floor = _model_form_floor(form)
+    field = form.fields.get(name) if isinstance(name, str) else None
+    if floor is None or not _value_withheld(floor, name, field):
+        return messages
+    tokens = _stored_tokens(form, name, field)
+    if tokens and any(token in str(m) for m in messages for token in tokens):
+        return ["Enter a valid value."]
+    return messages
+
+
+def _scrub_floor_errors(errors: Any, floor: tuple, form: Any, withheld: bool = False) -> Any:
+    """*errors* (a form's ``ErrorDict``) with every error that carries the value of a SECRET-LIKE floor
+    field replaced by a generic one (#3797). Django's own messages interpolate the value
+    (``invalid_choice``: "Select a valid choice. <value> is not one of the available choices."), a
+    ``disabled`` field is validated against its STORED value, and a developer's ``clean_<name>`` may
+    print it. A copy; the form's own errors are kept. The same object when nothing needs scrubbing.
+
+    *withheld*: the live renderers' rule (:func:`_value_withheld`, no widget exempt), and the non-field
+    errors are scrubbed of the stored value of every withheld field. Off, the template path's rule: a
+    widget that draws its own value keeps its errors.
+    """
+    if not isinstance(errors, dict) or not errors:
+        return errors
+    scrubbed: Any = None
+    all_tokens: Optional[tuple] = None
+    for name, error_list in list(errors.items()):
+        data = getattr(error_list, "data", None)
+        if not data:
+            continue
+        if withheld and name == "__all__":
+            if all_tokens is None:
+                all_tokens = tuple(
+                    token
+                    for other, other_field in form.fields.items()
+                    if _value_withheld(floor, other, other_field)
+                    for token in _stored_tokens(form, other, other_field)
+                )
+            tokens = all_tokens
+        else:
+            if _floor_field_readable(floor, name):
+                continue
+            field = form.fields.get(name) if isinstance(name, str) else None
+            if withheld:
+                if not _value_withheld(floor, name, field):
+                    continue
+            elif not _floor_field_is_secret(floor, name, field) or (
+                field is not None and _widget_keeps_its_value(field.widget)
+            ):
+                continue
+            tokens = _stored_tokens(form, name, field)
+        # The live renderers' rule: a parameterised message counts only for a field that HAS a stored value
+        # to carry (Django interpolates the value it rejects), never for a non-field error or a field with
+        # none, so a login form's "Please enter a correct username and password" and a password policy's
+        # "This password is too short ..." keep their text. The template path keeps its wider rule.
+        params_count = (not withheld) or (name != "__all__" and bool(tokens))
+        if not any(_error_carries_value(error, tokens, params_count) for error in data):
+            continue
+        from django.core.exceptions import ValidationError
+
+        if scrubbed is None:
+            scrubbed = copy.copy(errors)
+        replacement = copy.copy(error_list)
+        replacement.data = [
+            ValidationError("Enter a valid value.", code=getattr(error, "code", None))
+            if _error_carries_value(error, tokens, params_count)
+            else error
+            for error in data
+        ]
+        scrubbed[name] = replacement
+    return errors if scrubbed is None else scrubbed
+
+
+def _floor_blank_bound_field(bound_field: Any, floor: tuple) -> Any:
+    """What a template may DRAW for *bound_field* under the floor (#3797): the field itself, a COPY
+    that draws its control without the stored value, or ``None`` when it cannot be drawn safely.
+
+    Only a SECRET-LIKE floor field is blanked (:func:`_floor_field_is_secret`); every other field is
+    returned as it is, including the floor fields that are not secrets (``email``, ``is_staff``): their
+    real state stays in the control, because drawing them empty overwrites them on the next save.
+
+    A control is drawn from three reads on the ``BoundField``: ``value()`` (``as_widget``,
+    ``__str__``, ``as_hidden``, and the ``subwidgets`` it builds), ``initial`` (what ``value()`` is
+    made of), and ``data``, which on Django 5 ``as_widget(only_initial=True)`` takes straight out of
+    ``form.data`` (the posted hidden-initial value) without asking ``value()``. The copy answers ``None``
+    to the first two and is bound to a copy of the form whose ``data`` and ``files`` lack the control's
+    own keys (:func:`_field_submission_keys`) and whose errors for the field carry no value
+    (:func:`_scrub_floor_errors`). The real ``BoundField`` and form are not written to: a copy that is
+    the original, or that shares its ``__dict__`` with it, is refused before anything is set.
+
+    The widget then renders as it does for a field that has none: a text control with no ``value=``, a
+    ``<textarea>`` with no body, no ``<option selected>``, an unchecked checkbox, a ``MultiWidget`` with
+    empty parts. That is Django's own rendering of an empty field, so a custom widget needs no
+    cooperation.
+
+    ``None`` when the copy cannot be made or does not answer as promised (a ``BoundField`` subclass
+    with ``__slots__``, ``value`` or ``initial`` as a property, a ``__copy__`` that returns the
+    original): the caller renders nothing. A control that cannot be drawn without its value is not drawn.
+    """
+    try:
+        field = bound_field.field
+        if (
+            _floor_field_readable(floor, bound_field.name)
+            or not _floor_field_is_secret(floor, bound_field.name, field)
+            or _widget_keeps_its_value(field.widget)
+        ):
+            return bound_field
+        blank = copy.copy(bound_field)
+        if blank is bound_field or blank.__dict__ is bound_field.__dict__:
+            raise TypeError("the copy is the original")
+        state = blank.__dict__
+        # ``subwidgets`` is cached from ``value()``: drop it, it is rebuilt from the answer below.
+        state.pop("subwidgets", None)
+        state.pop("_djust_floor_proxy", None)
+        state["value"] = _no_value
+        state["initial"] = None
+        form = bound_field.form
+        keys = _field_submission_keys(bound_field)
+        data, files = getattr(form, "data", None), getattr(form, "files", None)
+        if getattr(form, "is_bound", False):
+            form.errors  # noqa: B018 - validated on the REAL form once; the copy shares the result
+        errors = getattr(form, "_errors", None)
+        scrubbed = _scrub_floor_errors(errors, floor, form)
+        if scrubbed is not errors or any(
+            c is not None and k in c for c in (data, files) for k in keys
+        ):
+            # The control's own posted keys and value-bearing errors leave a copy of the form.
+            stripped = copy.copy(form)
+            if stripped is form:
+                raise TypeError("the form copy is the original")
+            stripped.data = _filter_floor_keys(data, lambda k: k not in keys)
+            stripped.files = _filter_floor_keys(files, lambda k: k not in keys)
+            stripped._errors = _scrub_floor_errors(getattr(form, "_errors", None), floor, form)
+            state["form"] = stripped
+        if blank.value() is not None or blank.initial is not None:
+            raise TypeError("the copy still answers with the value")
+    except Exception:  # noqa: BLE001 - fail closed: nothing is drawn rather than the value
+        logger.warning(
+            "[djust] form field %s could not be drawn without its stored value, so it was not drawn "
+            "(#3797)",
+            getattr(bound_field, "name", "?"),
+        )
+        return None
+    if bound_field.name not in floor[4] and not getattr(field, "disabled", False):
+        warn_editable_floor_field(bound_field, floor)
+    return blank
+
+
+def _floor_render(bound_field: Any, floor: tuple) -> str:
+    """*bound_field*'s control as HTML without its stored value; ``""`` when it cannot be drawn."""
+    blank = _floor_blank_bound_field(bound_field, floor)
+    return "" if blank is None else str(blank)
+
+
+def _floor_render_form(form: Any, floor: tuple) -> Any:
+    """A copy of *form* whose floor fields draw without their stored value (#3797); a stand-in that
+    draws nothing when that cannot be done.
+
+    Django renders ``as_p`` / ``as_table`` / ``as_ul`` / ``as_div`` / ``render`` / ``str(form)`` from
+    ``self[name]``, and ``self[name]`` is ``self._bound_fields_cache[name]``. The copy shares every
+    piece of the form's state (``fields``, ``data``, ``initial``, the computed errors) and has its OWN
+    cache, filled with the form's real ``BoundField`` for every field that is not on the floor and a
+    blank one (:func:`_floor_blank_bound_field`) for every field that is. Django's own code then does
+    the rendering, on the copy; nothing of the real form is changed.
+
+    A form's errors are computed on the real form first (rendering does it unconditionally), so the
+    copy neither validates a second time nor holds a result the real form lacks. The work is one pass
+    over the fields: the same as the render.
+    """
+    try:
+        form.errors  # noqa: B018
+        shadow = copy.copy(form)
+        if shadow is form:
+            raise TypeError("the form copy is the original")
+        shadow._errors = _scrub_floor_errors(form._errors, floor, form)
+        cache = {}
+        for name in list(form.fields):
+            bound_field = form[name]
+            if _floor_field_readable(floor, name):
+                cache[name] = bound_field
+                continue
+            blank = _floor_blank_bound_field(bound_field, floor)
+            if blank is None:
+                raise TypeError("a floor field cannot be drawn without its value")
+            cache[name] = blank
+        shadow._bound_fields_cache = cache
+    except Exception:  # noqa: BLE001 - fail closed: the form is not drawn rather than drawn with a value
+        logger.warning("[djust] a form with floor fields could not be drawn without them (#3797)")
+        return _UNDRAWABLE
+    return shadow
+
+
+class _Undrawable:
+    """What a form that cannot be drawn without its floor values renders as: nothing."""
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return lambda *args, **kwargs: ""
+
+    def __str__(self) -> str:
+        return ""
+
+    __html__ = __str__
+
+
+_UNDRAWABLE = _Undrawable()
+
+
+def _floor_render_formset(formset: Any) -> Any:
+    """A copy of *formset* whose forms are :func:`_floor_render_form` copies (#3797): the formset's own
+    ``as_p`` / ``render`` / ``str()`` iterate ``self.forms`` and render each of them."""
+    try:
+        shadow = copy.copy(formset)
+        forms = []
+        for form in formset.forms:
+            floor = _model_form_floor(form)
+            forms.append(form if floor is None else _floor_render_form(form, floor))
+        shadow.__dict__["forms"] = forms
+    except Exception:  # noqa: BLE001 - fail closed
+        logger.warning(
+            "[djust] a formset with floor fields could not be drawn without them (#3797)"
+        )
+        return _UNDRAWABLE
+    return shadow
+
+
+#: The form methods that RENDER the form's controls (``RenderableMixin``). The proxy runs them on
+#: :func:`_floor_render_form`'s copy. ``__str__`` / ``__html__`` are ``render`` and are routed the same.
+_FLOOR_FORM_RENDER_ATTRS = frozenset({"render", "as_p", "as_table", "as_ul", "as_div"})
+
+#: The ``BoundField`` members read from the blank copy: the methods that render the CONTROL
+#: (``as_widget``, and ``as_field_group`` / ``render``, which draw the label and the control from
+#: ``self``) and ``errors`` (whose messages may carry the value, :func:`_scrub_floor_errors`).
+#: ``get_context`` is not here: it returns a dict the walk re-proxies, so the real one is safe. ``as_text`` /
+#: ``as_textarea`` / ``as_hidden`` stay refused (:data:`_FLOOR_BOUND_FIELD_ATTRS`).
+_FLOOR_BOUND_FIELD_RENDER_ATTRS = frozenset({"as_widget", "as_field_group", "render", "errors"})
+
+
+class _SidecarFormProxy:
+    """A model ``Form`` as a template AUTHOR's path sees it (#3790): its ``initial`` /
+    ``data`` / ``cleaned_data`` are copies without the model's floor fields, and every
+    ``BoundField`` it hands out for a floor field is a :class:`_SidecarBoundFieldProxy`.
+
+    ``ModelForm.initial`` is ``model_to_dict(instance)``: a plain ``dict`` of strings by the time a
+    template reads it, so the walk never meets a ``Model`` and ``_SidecarModelProxy`` has nothing to
+    refuse. ``{{ form.initial.password }}``, ``{{ form.password.value }}`` and
+    ``{{ form.cleaned_data.password }}`` (a disabled field validates to its ``initial``) printed the
+    hash while ``{{ form.instance.password }}`` was empty: the same secret by a different spelling.
+    The floor has to be applied where the dict leaves the form, and this is that place.
+
+    Everything else delegates to the real form, whose own methods run on the real form (validation,
+    rendering) and whose results are re-protected by the walk. A name that begins with ``_`` is
+    refused (Django parity, as on the model proxy). The proxy exists only inside a template walk
+    (``_protect_sidecar_walk``): a bridged tag's own Python is handed the real form
+    (``template_bridge_floor.release``).
+    """
+
+    __slots__ = ("_form", "_floor")
+
+    def __init__(self, form: Any, floor: tuple) -> None:
+        object.__setattr__(self, "_form", form)
+        object.__setattr__(self, "_floor", floor)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        form = object.__getattribute__(self, "_form")
+        if name in _FLOOR_FORM_RENDER_ATTRS:
+            # The form's own rendering runs on a copy whose floor fields draw without their value (#3797)
+            return getattr(_floor_render_form(form, object.__getattribute__(self, "_floor")), name)
+        value = getattr(form, name)
+        if name == "errors":
+            return _protect_sidecar_walk(
+                _scrub_floor_errors(value, object.__getattribute__(self, "_floor"), form)
+            )
+        if name in _FLOOR_FORM_DICT_ATTRS:
+            floor = object.__getattribute__(self, "_floor")
+            if name == "data":
+                return _floor_filtered_data(form, value, floor)  # asked once, not per read (#3834)
+            return _without_floor_keys(value, floor, None)
+        return _protect_sidecar_walk(value)
+
+    def __getitem__(self, key: Any) -> Any:
+        # ``form["name"]`` is a ``BoundField`` (or ``KeyError``, which sends Django's lookup on to the
+        # attribute step: ``form["initial"]`` is not a field).
+        return _protect_sidecar_walk(object.__getattribute__(self, "_form")[key])
+
+    def __iter__(self) -> Any:
+        return (_protect_sidecar_walk(bf) for bf in object.__getattribute__(self, "_form"))
+
+    def __dir__(self) -> List[str]:
+        return attribute_names(object.__getattribute__(self, "_form"))
+
+    def __str__(self) -> str:
+        return str(_floor_render_form(object.__getattribute__(self, "_form"), self._floor))
+
+    def __html__(self) -> str:
+        return _floor_render_form(  # type: ignore[no-any-return]
+            object.__getattribute__(self, "_form"), self._floor
+        ).__html__()
+
+    def __repr__(self) -> str:
+        return repr(object.__getattribute__(self, "_form"))
+
+    def __eq__(self, other: object) -> Any:
+        if isinstance(other, _SidecarFormProxy):
+            other = object.__getattribute__(other, "_form")
+        return object.__getattribute__(self, "_form").__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash(object.__getattribute__(self, "_form"))
+
+
+class _SidecarFormSetProxy:
+    """A formset over a model, as a template author's path sees it (#3790).
+
+    ``formset.data`` (keyed ``form-0-password``), ``formset.cleaned_data`` and ``formset.initial``
+    (lists of per-form mappings) hold the same values the forms do, and a template reaches them
+    without going through a form. They are filtered exactly as a form's are; the forms the formset
+    hands out (``formset.forms``, iteration, indexing) are re-protected on the step that reaches
+    them, so ``formset.forms.0.initial.password`` is already refused.
+    """
+
+    __slots__ = ("_fs", "_floor")
+
+    def __init__(self, formset: Any, floor: tuple) -> None:
+        object.__setattr__(self, "_fs", formset)
+        object.__setattr__(self, "_floor", floor)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        formset = object.__getattribute__(self, "_fs")
+        if name in _FLOOR_FORM_RENDER_ATTRS:
+            # each form's floor fields drawn without their value (#3797)
+            return getattr(_floor_render_formset(formset), name)
+        if name == "errors":
+            # one ErrorDict per form; a secret-like floor field's value-bearing messages are scrubbed
+            return _protect_sidecar_walk(
+                [
+                    _scrub_floor_errors(f.errors, fl, f)
+                    if (fl := _model_form_floor(f))
+                    else f.errors
+                    for f in formset.forms
+                ]
+            )
+        value = getattr(formset, name)
+        floor = object.__getattribute__(self, "_floor")
+        if name in _FLOOR_FORM_DICT_ATTRS:
+            if name == "data":
+                return _floor_filtered_data(formset, value, floor)  # asked once (#3834)
+            return _without_floor_keys(value, floor, None)
+        if name == "management_form":
+            # A plain ``Form`` (so the walk would leave it alone) that holds the formset's WHOLE
+            # submitted data: ``fs.management_form.data`` is ``form-0-password`` and all. It is
+            # proxied with the formset's floor, so its ``data`` is filtered like the formset's own.
+            # The pin is the ONE mechanism: ``_protect_sidecar_walk`` proxies a pinned form (and
+            # the fields of it, and the conversion floors it), so the generic return below is
+            # the proxy. Returning ``_SidecarFormProxy`` here as well was a second mechanism
+            # that no test could separate from the first.
+            try:
+                value._djust_floor = floor
+            except AttributeError:  # pragma: no cover - a form class with __slots__
+                pass
+        return _protect_sidecar_walk(value)
+
+    def __getitem__(self, key: Any) -> Any:
+        return _protect_sidecar_walk(object.__getattribute__(self, "_fs")[key])
+
+    def __iter__(self) -> Any:
+        return (_protect_sidecar_walk(f) for f in object.__getattribute__(self, "_fs"))
+
+    def __len__(self) -> int:
+        return len(object.__getattribute__(self, "_fs"))
+
+    def __bool__(self) -> bool:
+        return bool(object.__getattribute__(self, "_fs"))
+
+    def __dir__(self) -> List[str]:
+        return attribute_names(object.__getattribute__(self, "_fs"))
+
+    def __str__(self) -> str:
+        return str(_floor_render_formset(object.__getattribute__(self, "_fs")))
+
+    def __html__(self) -> str:
+        return _floor_render_formset(  # type: ignore[no-any-return]
+            object.__getattribute__(self, "_fs")
+        ).__html__()
+
+    def __repr__(self) -> str:
+        return repr(object.__getattribute__(self, "_fs"))
+
+    def __eq__(self, other: object) -> Any:
+        if isinstance(other, _SidecarFormSetProxy):
+            other = object.__getattribute__(other, "_fs")
+        return object.__getattribute__(self, "_fs").__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash(object.__getattribute__(self, "_fs"))
+
+
+class _SidecarBoundFieldProxy:
+    """The ``BoundField`` of a FLOOR field, as a template author's path sees it (#3790).
+
+    Only a floor field gets one (``password``, ``is_superuser``, ... of the form's model): every
+    other ``BoundField`` is left as it is. ``value`` / ``initial`` / ``data`` / ``subwidgets`` and the
+    renderers that swap in a widget which prints the value are refused (a missing name, which renders
+    empty, as a floor field on the model proxy does); ``__dir__`` omits them, so Django's "raised by a
+    @property" rule treats the refusal as a miss. The widget the form author chose still renders
+    (``str()``), because that is the form rendering itself and the view author decided it.
+    """
+
+    __slots__ = ("_bf", "_floor")
+
+    def __init__(self, bf: Any, floor: tuple) -> None:
+        object.__setattr__(self, "_bf", bf)
+        object.__setattr__(self, "_floor", floor)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        bf = object.__getattribute__(self, "_bf")
+        if name in _FLOOR_BOUND_FIELD_ATTRS:
+            # The refusal is a breaking change for a template that read the value back
+            # (`{% if form.is_staff.value %}`), so it names the field once.
+            if name in ("value", "initial", "data"):
+                _warn_refused_floor_read(object.__getattribute__(self, "_floor"), bf.name, name)
+            raise AttributeError(name)
+        if name in _FLOOR_BOUND_FIELD_RENDER_ATTRS:
+            # The control is drawn from a copy that has no value (#3797)
+            blank = _floor_blank_bound_field(bf, object.__getattribute__(self, "_floor"))
+            if blank is None:
+                raise AttributeError(name)
+            return _protect_sidecar_walk(getattr(blank, name))
+        return _protect_sidecar_walk(getattr(bf, name))
+
+    def __getitem__(self, idx: Any) -> Any:
+        # ``BoundField.__getitem__`` is a subwidget; its type check is kept.
+        if not isinstance(idx, (int, slice)):
+            raise TypeError(
+                "BoundField indices must be integers or slices, not %s." % type(idx).__name__
+            )
+        if isinstance(idx, slice):
+            return []  # every slice of no subwidgets
+        raise IndexError("BoundField index out of range")
+
+    def __iter__(self) -> Any:
+        return iter(())
+
+    def __len__(self) -> int:
+        return len(object.__getattribute__(self, "_bf"))
+
+    def __bool__(self) -> bool:
+        return bool(object.__getattribute__(self, "_bf"))
+
+    def __dir__(self) -> List[str]:
+        return [
+            n
+            for n in attribute_names(object.__getattribute__(self, "_bf"))
+            if n not in _FLOOR_BOUND_FIELD_ATTRS
+        ]
+
+    def __str__(self) -> str:
+        return _floor_render(
+            object.__getattribute__(self, "_bf"), object.__getattribute__(self, "_floor")
+        )
+
+    def __html__(self) -> str:
+        return self.__str__()
+
+    # No ``__repr__`` / ``__eq__`` / ``__hash__`` on purpose. The engine decides what ``==`` means
+    # for an object when it converts it: a class with the default ``__eq__`` AND ``__repr__`` (a
+    # ``BoundField`` is one) compares by identity, so ``{% if form.is_staff == form.is_staff %}`` is
+    # true; a class that overrides either is never equal to anything. The proxy keeps the real
+    # field's class of equality by keeping the defaults, and :func:`_cached_bound_field_proxy` makes
+    # one proxy per ``BoundField``, so the same field is the same object each time a walk reaches it.
+    #
+    # It does NOT make ``{% if form.is_staff in form %}`` true: ``in`` walks the form's own handle,
+    # whose items are the real fields, and an identity compare of a proxy with the real field is
+    # false. Converting the real field instead (a ``__djust_serialize__`` hook) was tried and
+    # refused: the handle the engine keeps is then the real field, and ``{% for w in form.password %}``
+    # iterates its subwidgets, which carry the value. Tracked in the issue named in the changelog.
+
+
+def _cached_bound_field_proxy(bound_field: Any, floor: tuple) -> "_SidecarBoundFieldProxy":
+    """ONE proxy per ``BoundField`` (and floor), so the same field reached twice is the same object.
+
+    Every walk step used to wrap a fresh proxy, and the engine compares an identity-class object by
+    its address: ``{% if form.is_staff == form.is_staff %}`` went false (true on main). A form builds
+    each ``BoundField`` once and keeps it, so the proxy rides on it. The floor is compared too: a proxy
+    made under an older ``DJUST_SENSITIVE_FIELDS`` is not reused after the setting changes.
+    """
+    cached = bound_field.__dict__.get("_djust_floor_proxy")
+    if cached is not None and object.__getattribute__(cached, "_floor") == floor:
+        return cached  # type: ignore[no-any-return]
+    proxy = _SidecarBoundFieldProxy(bound_field, floor)
+    try:
+        bound_field._djust_floor_proxy = proxy
+    except AttributeError:  # pragma: no cover - a BoundField subclass with __slots__
+        pass
+    return proxy
+
+
+def unwrap_form_proxy(value: Any) -> Any:
+    """The real ``Form`` / ``BoundField`` behind a form proxy; anything else is itself.
+
+    A bridged tag is the application's own code (``bound_field.value()`` in djust's component readers,
+    a third-party form tag): it must be handed the real object, or a form that renders a ``User``'s
+    ``is_staff`` checkbox would draw it unchecked and the next save would clear it. The floor is a
+    boundary against what a TEMPLATE can spell, and the template's walk is what is wrapped.
+    """
+    if isinstance(value, _SidecarFormProxy):
+        return object.__getattribute__(value, "_form")
+    if isinstance(value, _SidecarFormSetProxy):
+        return object.__getattribute__(value, "_fs")
+    if isinstance(value, _SidecarBoundFieldProxy):
+        return object.__getattribute__(value, "_bf")
+    return value
+
+
+def unwrap_form_proxy_for_tag(value: Any) -> Any:
+    """What a BRIDGED TAG or filter is handed for a form proxy (#3797): :func:`unwrap_form_proxy`,
+    except that the ``BoundField`` of a SECRET-LIKE floor field is handed as its blank copy
+    (:func:`_floor_blank_bound_field`), so a tag that draws it (``{% render_field form.password %}``,
+    ``{{ form.password|add_class:"x" }}``, an inclusion tag over ``{{ field }}``) cannot print the stored
+    value. ``""`` when the copy cannot be made. A form or formset is still the real one (a tag walks it
+    itself; not covered, see ``docs/SECURE_DEFAULTS.md``)."""
+    if isinstance(value, _SidecarBoundFieldProxy):
+        bf = object.__getattribute__(value, "_bf")
+        blank = _floor_blank_bound_field(bf, object.__getattribute__(value, "_floor"))
+        return "" if blank is None else blank
+    return unwrap_form_proxy(value)
+
+
+def _protect_sidecar_walk(value: Any) -> Any:
+    """The floor of a template AUTHOR's walk: :func:`_protect_sidecar_value` plus the model forms (#3790).
+
+    Applied after the root and after every segment of a path the engine resolves
+    (``Context::walk_live`` / the sidecar walk) and of a bridged tag's operand
+    (``template_bridge_floor``). ``_protect_sidecar_value`` stays the floor for an object handed to
+    Python code that is not a template path (a bridged tag's own operand, the handler dict), so the
+    form arms live here and not there. Idempotent.
+
+    * a ``ModelForm`` -> :class:`_SidecarFormProxy` (its ``initial`` / ``data`` / ``cleaned_data``
+      without the model's floor fields, ``data`` matched through its prefix);
+    * a formset over a model -> :class:`_SidecarFormSetProxy` (the same, for the lists it holds);
+    * the ``BoundField`` of a floor field of a ``ModelForm`` -> :class:`_SidecarBoundFieldProxy`.
+      Any other ``BoundField`` is itself: it holds no floor value, and ``.form`` leads back to a
+      form that this function proxies.
+    """
+    if isinstance(value, _FORM_PROXIES):
+        return value
+    protected = _protect_sidecar_value(value)
+    if protected is not value:
+        return protected
+    if value is None or type(value) in _WALK_SCALARS:
+        return value
+    bound_field, model_form, formset, _ = _form_classes()
+    if isinstance(value, model_form):
+        floor = _model_form_floor(value)
+        return value if floor is None else _SidecarFormProxy(value, floor)
+    if isinstance(value, bound_field):
+        floor = _bound_field_floor(value)
+        if floor is None or _floor_field_readable(floor, value.name):
+            return value
+        return _cached_bound_field_proxy(value, floor)
+    if isinstance(value, formset):
+        floor = _formset_floor(value)
+        return value if floor is None else _SidecarFormSetProxy(value, floor)
+    return value
+
+
+#: The three form proxies (defined above): a template path's view of a form, a formset, a floor field.
+_FORM_PROXIES = (_SidecarFormProxy, _SidecarFormSetProxy, _SidecarBoundFieldProxy)
+
+#: Types a walk cannot get a form out of; answered before the ``isinstance`` probes above.
+_WALK_SCALARS = frozenset({str, int, float, bool, list, dict, tuple, set, frozenset, bytes})
 
 
 def render_form_value(value: Any) -> Any:
@@ -1848,18 +4136,111 @@ def render_form_value(value: Any) -> Any:
 
     Returns the rendered value, or *None* if *value* is not a Form or
     BoundField (caller should continue with its own logic).
+
+    This is the **JSON-state** converter (the session save, a signed
+    snapshot, anything that must be ``json.dumps``-able). It is NOT how a form
+    reaches the template: a form held as LiveView state, or by a container
+    that is, rides the raw-Python sidecar as the object (:func:`holds_form`,
+    #3767), because a ``{name: widget HTML}`` dict cannot answer ``.errors``,
+    ``.label`` or ``{% for f in form %}``.
     """
     from django.forms import BaseForm
     from django.forms.boundfield import BoundField
     from django.utils.safestring import mark_safe
 
     if isinstance(value, BoundField):
+        # Held to the floor (#3797): this snapshot lands in LiveView state and the session, where the
+        # widget HTML of a floor field would be its stored value for good.
+        floor = _bound_field_floor(value) if value.form is not None else None
+        if floor is not None and not _floor_field_readable(floor, value.name):
+            return mark_safe(_floor_render(value, floor))
         return mark_safe(str(value))
 
     if isinstance(value, BaseForm):
-        return {name: mark_safe(str(value[name])) for name in value.fields}
+        floor = _model_form_floor(value)
+        if floor is None:
+            return {name: mark_safe(str(value[name])) for name in value.fields}
+        return {
+            name: mark_safe(
+                str(value[name])
+                if _floor_field_readable(floor, name)
+                else _floor_render(value[name], floor)
+            )
+            for name in value.fields
+        }
 
     return None
+
+
+#: How deep :func:`holds_form` looks inside dict / list / tuple. A form is held by a context
+#: name directly or one container (a wizard's ``steps``, a page's ``{"login": ..., "signup": ...}``);
+#: past this a value stays in state as :func:`render_form_value` rendered it, which is the
+#: behaviour the engine had before #3767 for it.
+_FORM_SCAN_DEPTH = 4
+
+
+def holds_form(value: Any, _depth: int = 0) -> bool:
+    """Is ``value`` a Django ``Form`` / ``BoundField`` / formset, or a dict / list / tuple holding one? (#3767)
+
+    A form is not state. ``LiveView`` state is JSON, and :func:`render_form_value` can only keep
+    the widget HTML of it (``{name: SafeString}``), which is why ``{{ form.name.errors }}``,
+    ``{% for f in form %}`` and ``{% field_error field=form.name %}`` were empty under the native
+    engine while ``DjustTemplateBackend`` (which hands the engine the form itself, #3755) and Django
+    rendered them. The engine already has a channel for the live object: the raw-Python sidecar
+    (``set_raw_py_values``), resolved lazily at the lookup, per segment, under the serialization
+    floor (#3790, #3798). A name for which this is True therefore goes there and **not** into the
+    Rust state, so the value stack has nothing to answer first (the shared assumption of the
+    options the issue lists: that the form must also be in state). This is the one decision, read
+    by every path that syncs a context to a ``RustLiveView``: ``_sync_state_to_rust``, the page
+    shell and a ``template_name`` component (see :func:`without_form_values`).
+
+    Containers are looked into because the sidecar is keyed by top-level name: a form one level
+    down is otherwise flattened inside the dict that holds it. A plain object that merely holds a
+    form is not looked into; it is already a sidecar value, and the engine's attribute walk reaches
+    the form through it.
+    """
+    from django.forms import BaseForm, BaseFormSet
+    from django.forms.boundfield import BoundField
+
+    if isinstance(value, (BaseForm, BaseFormSet, BoundField)):
+        return True
+    if _depth >= _FORM_SCAN_DEPTH or not isinstance(value, (dict, list, tuple)):
+        return False
+    items = value.values() if isinstance(value, dict) else value
+    return any(holds_form(item, _depth + 1) for item in items)
+
+
+def without_form_values(context: Dict[str, Any]) -> Dict[str, Any]:
+    """``context`` minus every name :func:`holds_form` claims (#3767).
+
+    For the entries that hand the engine a state dict and the raw objects separately
+    (``update_state`` / ``set_raw_py_values``) and build the raw side from the whole context
+    (``build_render_sidecar``): the state side must not carry what the sidecar answers, or the
+    flattened copy is found first.
+    """
+    return {k: v for k, v in context.items() if not holds_form(v)}
+
+
+def _is_form_object(value: Any) -> bool:
+    """Is ``value`` a Django ``Form`` or ``BoundField``? (#3755)
+
+    Asked by the Rust engine (``context::live_handle_is_form_object``) before it hands
+    a live, ITERABLE object to a bridged Python tag. The engine keeps an iterable
+    behind its ``TemplateObject`` wrapper because the leaf floor cannot see inside a
+    container; this family is the exception, and the decision lives here so the type
+    list is stated once. It adds a new spelling of an existing reach, not a new reach: such
+    an object reached the value stack from a form the raw-Python sidecar already hands the
+    same bridged tag live under its own name. The bridged tag's walk is held to the floor
+    (``template_bridge_floor``, #3771), so ``f.form.instance.password`` is refused there as it is
+    in ``{{ }}``; the native ``json_viewer`` resolves its operand through the engine's floored
+    walk (see ``TYPED_ARGS``).
+    """
+    from django.forms import BaseForm
+    from django.forms.boundfield import BoundField
+
+    # A form proxy (``_protect_sidecar_walk``, #3790) is the same object under a floor: it iterates
+    # to the same fields, so the engine reads it lazily through the handle as it does a form.
+    return isinstance(value, (BaseForm, BoundField, _SidecarFormProxy, _SidecarBoundFieldProxy))
 
 
 def _crosses_as_encoded(value: Any) -> bool:

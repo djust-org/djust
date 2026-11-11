@@ -785,6 +785,15 @@ LIFECYCLE_METHODS: List[Dict[str, Any]] = [
         "required": False,
     },
     {
+        "name": "handle_invalid_params",
+        "signature": "def handle_invalid_params(self, form, uri: str):",
+        "description": "Called instead of handle_params() when the view's params_form rejects "
+        "the URL. The default hands handle_params() the form's initial values; the messages "
+        "are in the template as params_errors. Override to raise Http404 or answer 400.",
+        "phase": "navigation",
+        "required": False,
+    },
+    {
         "name": "handle_tick",
         "signature": "def handle_tick(self):",
         "description": "Called periodically when tick_interval is set (in ms). "
@@ -846,6 +855,38 @@ CLASS_ATTRIBUTES: List[Dict[str, Any]] = [
         "name": "login_required",
         "type": "Optional[bool]",
         "description": "Require authenticated user. Set to True to protect, False to acknowledge public.",
+    },
+    {
+        "name": "params_form",
+        "type": "Optional[Type[forms.Form]]",
+        "description": "Django form that declares the URL's query parameters. djust binds and "
+        "cleans them before handle_params() on the HTTP GET, the socket/SSE mount, url_change "
+        "and the HTTP fallback POST; invalid input goes to handle_invalid_params()",
+        "example": "params_form = ListParams",
+    },
+    {
+        "name": "params_form_fallback",
+        "type": "str",
+        "default": "'initial'",
+        "description": "What the default handle_invalid_params() hands handle_params() when "
+        "params_form rejects the URL: 'initial' (the initial value of every field) or 'fields' "
+        "(keep the fields that validated, replace only the invalid ones with their initial value)",
+        "example": "params_form_fallback = 'fields'",
+    },
+    {
+        "name": "http_status_of_state",
+        "type": "Mapping[str, int]",
+        "default": "{}",
+        "description": "HTTP status a page answers for a state it renders itself; the default "
+        "get_http_status() reads the attribute state_attribute names. A view that declares none "
+        "reads LIVEVIEW_CONFIG['http_status_of_state']; its own attribute (even {}) wins, never merged",
+        "example": "http_status_of_state = {'not_found': 404, 'gone': 410}",
+    },
+    {
+        "name": "state_attribute",
+        "type": "str",
+        "default": "'state'",
+        "description": "Name of the attribute http_status_of_state is looked up by",
     },
     {
         "name": "permission_required",
@@ -1154,11 +1195,15 @@ BEST_PRACTICES = {
             "INSTALLED_APPS = ['djust', ...]\nASGI_APPLICATION = 'myproject.asgi.application'"
         ),
         "asgi": (
+            "from django.core.asgi import get_asgi_application\n"
+            "django_asgi_app = get_asgi_application()  # before importing djust\n"
+            "from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler\n"
             "from djust.routing import live_session\n"
             "from channels.routing import ProtocolTypeRouter, URLRouter\n"
             "from channels.auth import AuthMiddlewareStack\n"
             "application = ProtocolTypeRouter({\n"
-            "    'http': get_asgi_application(),\n"
+            "    # serves /static/ (client.js) under uvicorn/daphne in development\n"
+            "    'http': ASGIStaticFilesHandler(django_asgi_app),\n"
             "    'websocket': AuthMiddlewareStack(URLRouter([\n"
             "        live_session('app/', include('myapp.urls')),\n"
             "    ])),\n"

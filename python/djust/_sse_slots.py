@@ -18,9 +18,10 @@ so the client applies it to the right container.
 
 The page view is untouched: it is the session itself, its frames carry no
 ``target_id``, and a page with no sibling views creates no slot. SSE has no
-server push, presence, ``db_notify`` or tick for any view, so a slot has none
-either; what a slot gets is its own mount, events, async work, saved state and
-teardown.
+presence, ``db_notify``, ``push_to_view`` group or push scope for any view, so
+a slot has none either; what a slot gets is its own mount, events, async work,
+saved state, teardown, its ``tick_interval`` and the ``server_push`` its own
+code makes (#3809).
 """
 
 import asyncio
@@ -53,6 +54,8 @@ class SSESlotSession:
         self._event_request: Optional[Any] = None
         #: True once a ``view_refused`` frame has been sent for the view.
         self.refused = False
+        #: The slot's own runtime (set by ``SSESlot``).
+        self.runtime: Any = None
 
     # -- what differs for a slot -------------------------------------------
 
@@ -122,6 +125,9 @@ class SSESlot:
         self.runtime = ViewRuntime(
             SSESessionTransport(self.session), rate_limiter=session._rate_limiter
         )
+        # ``view._sse_session.runtime`` is THIS view's runtime, not the page
+        # view's that the forwarding ``__getattr__`` would find (#3809).
+        self.session.runtime = self.runtime
 
     @property
     def view(self) -> Optional[Any]:

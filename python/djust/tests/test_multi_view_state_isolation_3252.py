@@ -83,7 +83,7 @@ async def _connect(key):
     communicator.scope["user"] = AnonymousUser()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=3)  # connect ack
+    await communicator.receive_json_from()  # connect ack
     return communicator
 
 

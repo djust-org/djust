@@ -18,7 +18,7 @@ djust provides Phoenix-style flash messages for showing transient notifications 
 - **`{% dj_flash %}`** -- Template tag that renders the flash container
 - **Auto-dismiss** -- Messages disappear after a configurable timeout
 - **Per-level CSS classes** -- Style each level (`info`, `success`, `warning`, `error`) independently
-- **ARIA attributes** -- Accessible by default with `role="alert"` and `aria-live="polite"`
+- **ARIA attributes** -- Accessible by default: each message is its own live region, `role="status"` for `info` and `success` and `role="alert"` for `warning` and `error` (the container itself is not a live region)
 
 ## Quick Start
 
@@ -142,9 +142,14 @@ def dismiss_errors(self, **kwargs):
 Flash messages receive these CSS classes and attributes:
 
 ```html
-<!-- Individual flash message -->
-<div class="dj-flash dj-flash-success" role="alert" data-dj-flash-level="success">
+<!-- Individual flash message (info and success: role="status") -->
+<div class="dj-flash dj-flash-success" role="status" data-dj-flash-level="success">
     Item saved!
+</div>
+
+<!-- warning and error: role="alert" -->
+<div class="dj-flash dj-flash-error" role="alert" data-dj-flash-level="error">
+    Could not save.
 </div>
 
 <!-- During removal animation -->
@@ -152,6 +157,21 @@ Flash messages receive these CSS classes and attributes:
     Item saved!
 </div>
 ```
+
+### Screen readers
+
+Each message is its own live region, and the container is not one. `info`,
+`success` and any other level get `role="status"` (announced politely, after
+the current speech); `warning` and `error` get `role="alert"` (announced at
+once). The container renders no `role` and no `aria-live`, because a live
+region nested in another leaves the announcement to each screen reader (twice,
+or at the wrong urgency). If you wrote your own `#dj-flash-container`, do not
+give it a live role either.
+
+The roles follow the ARIA definitions of `status` and `alert`. Whether a given
+screen reader announces a message that is inserted already carrying its role
+(rather than a region that was present before its text changed) has not been
+verified here with VoiceOver, NVDA or JAWS.
 
 ### Minimal Starter CSS
 

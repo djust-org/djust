@@ -10,16 +10,17 @@ import math as _math
 from typing import Any
 
 from django import template
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
 from ._registry import (
     register,
     _resolve,
     _parse_kv_args,
-    conditional_escape,
     mark_safe,
     interpolate_color,
 )
+from djust.components.utils import attr_text
 
 # ---------------------------------------------------------------------------
 # Bar Chart
@@ -226,7 +227,8 @@ class LineChartNode(template.Node):
             if not isinstance(s, dict):
                 continue
             data = s.get("data", [])
-            color = conditional_escape(str(s.get("color", self.COLORS[si % len(self.COLORS)])))
+            # only in fill= / stroke= (#3904)
+            color = attr_text(s.get("color", self.COLORS[si % len(self.COLORS)]))
             name = conditional_escape(str(s.get("name", f"Series {si + 1}")))
 
             if not data:
@@ -287,7 +289,8 @@ class LineChartNode(template.Node):
             for si, s in enumerate(series):
                 if not isinstance(s, dict):
                     continue
-                color = conditional_escape(str(s.get("color", self.COLORS[si % len(self.COLORS)])))
+                # only in fill= / stroke= (#3904)
+                color = attr_text(s.get("color", self.COLORS[si % len(self.COLORS)]))
                 name = conditional_escape(str(s.get("name", f"Series {si + 1}")))
                 parts.append(
                     f'<rect x="{lx}" y="{ly - 6}" width="10" height="10" rx="2" fill="{color}"/>'
@@ -408,7 +411,8 @@ class PieChartNode(template.Node):
                 val = 0
             if val <= 0:
                 continue
-            color = conditional_escape(str(seg.get("color", self.COLORS[si % len(self.COLORS)])))
+            # only in fill= (#3904)
+            color = attr_text(seg.get("color", self.COLORS[si % len(self.COLORS)]))
             label = conditional_escape(str(seg.get("label", "")))
             pct = val / total
 
@@ -456,9 +460,8 @@ class PieChartNode(template.Node):
             for si, seg in enumerate(segments):
                 if not isinstance(seg, dict):
                     continue
-                color = conditional_escape(
-                    str(seg.get("color", self.COLORS[si % len(self.COLORS)]))
-                )
+                # only in fill= (#3904)
+                color = attr_text(seg.get("color", self.COLORS[si % len(self.COLORS)]))
                 label = conditional_escape(str(seg.get("label", "")))
                 parts.append(
                     f'<rect x="{lx}" y="{ly - 6}" width="10" height="10" rx="2" fill="{color}"/>'

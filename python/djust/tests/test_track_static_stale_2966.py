@@ -144,13 +144,13 @@ async def _mount_frame(extra):
     connected, _ = await communicator.connect()
     assert connected
     try:
-        await communicator.receive_json_from(timeout=2)
+        await communicator.receive_json_from()
         with override_settings(LIVEVIEW_ALLOWED_MODULES=[_MOD]):
             await communicator.send_json_to(
                 {"type": "mount", "view": f"{_MOD}.Page2966", "url": "/p2966/", **extra}
             )
             for _ in range(8):
-                msg = await communicator.receive_json_from(timeout=3)
+                msg = await communicator.receive_json_from()
                 if msg.get("type") == "mount":
                     return msg
         raise AssertionError("no mount frame")

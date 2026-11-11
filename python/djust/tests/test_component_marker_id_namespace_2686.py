@@ -214,12 +214,12 @@ def _ws_mount_html(cls_name: str) -> str:
         comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         connected, _ = await comm.connect()
         assert connected
-        await comm.receive_json_from(timeout=5)
+        await comm.receive_json_from()
         try:
             await comm.send_json_to({"type": "mount", "view": f"{MOD}.{cls_name}", "url": "/x/"})
             frames: List[Dict[str, Any]] = []
             for _ in range(6):
-                frame = await comm.receive_json_from(timeout=5)
+                frame = await comm.receive_json_from()
                 frames.append(frame)
                 if frame.get("type") == "mount":
                     return str(frame.get("html") or "")

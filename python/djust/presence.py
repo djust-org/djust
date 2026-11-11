@@ -404,7 +404,12 @@ class PresenceMixin:
 
             # The sync push API bridges group_send back to this serving loop.
             # Execute that bridge in a worker when track runs in an async event.
-            loop.create_task(sync_to_async(self._broadcast_presence_change)())
+            from .sync_turn import sync_step
+
+            # Reads ``get_presence_key()``: a ``"hook"`` step (#3637).
+            loop.create_task(
+                sync_to_async(sync_step(self, "hook", self._broadcast_presence_change))()
+            )
             return
 
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"

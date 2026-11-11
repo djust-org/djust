@@ -75,15 +75,15 @@ async def test_sql_capture_params_through_ws_event(monkeypatch, policy):
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".SqlView", "url": request.path}
             )
-            mounted = await socket.receive_json_from(timeout=3)
+            mounted = await socket.receive_json_from()
             assert mounted["type"] == "mount", mounted
             await socket.send_json_to({"type": "event", "event": "lookup", "params": {}, "ref": 5})
-            await socket.receive_json_from(timeout=3)
+            await socket.receive_json_from()
         finally:
             await socket.disconnect()
         body = await sync_to_async(_endpoint_body)()

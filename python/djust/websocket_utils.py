@@ -135,6 +135,18 @@ def _check_event_security(
     # keeps the gate closed for a caller that reaches the check directly.
     if is_push_only(owner_instance, event_name, handler):
         return "Server push handlers cannot be invoked as client events"
+    # ``LiveView.server_push(handler, payload)`` is the view's own way to run a
+    # push handler. It is public and undecorated, so under ``event_security``
+    # "warn" / "open" a browser event named ``server_push`` would run a
+    # push-only handler with a client payload. Refused in every mode, by NAME
+    # (a subclass that overrides ``server_push`` is still the push API) and by
+    # FUNCTION (whatever name the event carries, it is the same method) (#3809).
+    from .mixins.server_push import ServerPushMixin
+
+    if event_name == "server_push" or (
+        getattr(handler, "__func__", handler) is ServerPushMixin.server_push
+    ):
+        return "Server push methods cannot be invoked as client events"
     if isinstance(owner_instance, ComponentDeclaration) and not is_event_handler(handler):
         return "Interactive components accept only declared event actions"
 
@@ -406,7 +418,7 @@ async def _validate_event_security(
         # No custom get_object → no object-permission lifecycle → fall
         # through silently (preserves the existing no-op contract).
     else:
-        from .auth.core import _has_custom_get_object, check_object_permission
+        from .auth.core import _has_custom_get_object, check_object_permission_for_event
 
         try:
             # Wrap in sync_to_async to mirror the mount path
@@ -420,10 +432,16 @@ async def _validate_event_security(
             # A view that does not override get_object() has no object
             # lifecycle: the check returns at once, with no database access,
             # so it runs inline and saves a thread hop per event (#3095).
+            #
+            # ``check_object_permission_for_event`` is the full check unless the view
+            # lets this read-only handler reuse the object it authorized (#3967). It
+            # runs in the thread too: the view's hook may read the request's user.
             if _has_custom_get_object(owner_instance):
-                await sync_to_async(check_object_permission)(owner_instance, owner_request)
+                await sync_to_async(check_object_permission_for_event)(
+                    owner_instance, owner_request, handler
+                )
             else:
-                check_object_permission(owner_instance, owner_request)
+                check_object_permission_for_event(owner_instance, owner_request, handler)
         except PermissionDenied:
             await ws.send_error(
                 "Access denied for this object.",

@@ -9,7 +9,6 @@ value the page shows is the value the step submits.
 
 from __future__ import annotations
 
-import datetime
 import json
 import re
 import uuid
@@ -91,15 +90,20 @@ def test_the_shown_value_is_the_value_the_step_submits():
 
 
 def test_pinned_values_are_json_state_and_plain_initials_are_not_pinned():
+    before = timezone.now().replace(microsecond=0)
     view = _mounted()
     view.get_context_data()
+    after = timezone.now()
     pinned = view.wizard_step_data["ticket"]
     json.dumps(view.wizard_step_data)
     assert set(pinned) == {"token", "opened"}, "only callable initials are pinned"
     assert isinstance(pinned["opened"], str)
     # The stored text parses back to the moment it was drawn.
     parsed = TicketStep.base_fields["opened"].clean(pinned["opened"])
-    assert abs(parsed - timezone.now()) < datetime.timedelta(minutes=1)
+    # Between the two clock readings that bracket the draw (an ordering, #3711: "within
+    # a minute of now" would assert how fast the runner is). The stored text may drop
+    # the sub-second part, hence the floor on ``before``.
+    assert before <= parsed <= after
 
 
 def test_a_value_the_user_entered_is_never_replaced():

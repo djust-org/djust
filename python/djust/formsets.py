@@ -33,10 +33,14 @@ unconditionally, so the server-side form-valid step sees the deletion.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Type
+import weakref
+from typing import Any, Dict, FrozenSet, Iterable, Optional, Type
 
 from django.forms import BaseFormSet
+from django.forms.models import BaseModelFormSet
 
+from . import _form_data_bounds
+from ._exposure_diagnostics import log_failure_for
 from .decorators import event_handler
 
 
@@ -68,10 +72,162 @@ def _effective_cap(formset_cls: Type[BaseFormSet]) -> int:
     return int(getattr(formset_cls, "absolute_max", 2000))
 
 
+_MANAGEMENT_KEYS = ("TOTAL_FORMS", "INITIAL_FORMS", "MIN_NUM_FORMS", "MAX_NUM_FORMS")
+
+
+#: The suffixes a formset's forms always carry besides their own fields (Django's deletion, ordering and
+#: primary-key fields).
+_ROW_EXTRAS = ("DELETE", "ORDER", "id")
+#: Rows are indexed by a handful of digits at most; a longer index is never a row the formset has (and a
+#: longer string must not reach ``int()``, which refuses more than 4,300 digits).
+_MAX_INDEX_DIGITS = 9
+
+
+#: ``_row_suffixes`` per formset class. Keyed weakly, so a class a project builds per request (a
+#: ``formset_factory`` call in a handler) is not kept alive by the cache.
+_SUFFIX_CACHE: "weakref.WeakKeyDictionary[type, FrozenSet[str]]" = weakref.WeakKeyDictionary()
+
+
+def _declared_row_names(formset_cls: Type[BaseFormSet]) -> FrozenSet[str]:
+    """The class-declared part of a row's names: the fields the formset's form class declares, the
+    foreign key an inline formset adds, and Django's own ``DELETE`` / ``ORDER`` / ``id``. The fallback
+    when the formset cannot be built without arguments (:func:`_row_suffixes`)."""
+    names = set(_ROW_EXTRAS)
+    names.update(getattr(getattr(formset_cls, "form", None), "base_fields", None) or ())
+    fk_name = getattr(getattr(formset_cls, "fk", None), "name", None)
+    if isinstance(fk_name, str):
+        names.add(fk_name)
+    return frozenset(name for name in names if isinstance(name, str))
+
+
+def _unbound_formset(formset_cls: Type[BaseFormSet]) -> BaseFormSet:
+    """*formset_cls* built with no data and no arguments, for its ``empty_form``. A model formset's
+    default queryset is the model's whole table, evaluated on first use, so it is given an empty one: the
+    form's fields do not depend on the rows, and deriving them must not read any (#3881 review)."""
+    model = getattr(formset_cls, "model", None)
+    manager = getattr(model, "_default_manager", None)
+    if manager is not None and issubclass(formset_cls, BaseModelFormSet):
+        return formset_cls(queryset=manager.none())
+    return formset_cls()
+
+
+def _row_suffixes(formset_cls: Type[BaseFormSet]) -> FrozenSet[str]:
+    """The names a row's key may end in: the fields a row of this formset really has. Derived from the
+    CLASS, never from the client's data (#3858), and computed once per class (#3861).
+
+    A form may add fields in its ``__init__``, so ``form.base_fields`` is not all of them. The names
+    come from ``formset_cls().empty_form.fields``: the formset built with no data and no arguments, as
+    Django builds a row for the page, which includes what ``__init__`` adds, the inline formset's
+    foreign key, and ``DELETE`` / ``ORDER`` / ``id``. Nothing in that construction is the client's: the
+    form is unbound, so a field a form adds only when it holds data (``self.data``) is not one of them.
+    When the formset cannot be built without arguments (a form whose ``__init__`` requires a
+    ``form_kwargs`` entry), the class-declared names are used instead (:func:`_declared_row_names`):
+    narrower, so a field added by such a form counts toward ``max_form_fields``, which fails closed.
+
+    Computed once per class per process: a form whose fields depend on state that changes later keeps the
+    first answer."""
+    cached = _SUFFIX_CACHE.get(formset_cls)
+    if cached is not None:
+        return cached
+    try:
+        names = {*_ROW_EXTRAS, *_unbound_formset(formset_cls).empty_form.fields}
+    except Exception as exc:  # noqa: BLE001 - an app's form code runs here; any failure is the fallback
+        log_failure_for(
+            logger,
+            (formset_cls,),
+            exc,
+            "formset %s cannot be built without arguments; only the fields its form class declares "
+            "are exempt from max_form_fields",
+            getattr(formset_cls, "__name__", "?"),
+            level="warning",
+        )
+        names = set(_declared_row_names(formset_cls))
+    result = frozenset(name for name in names if isinstance(name, str))
+    _SUFFIX_CACHE[formset_cls] = result
+    return result
+
+
+def _row_index(text: str) -> Optional[int]:
+    """*text* as a row index, or ``None`` unless it is the canonical spelling of one: ASCII digits only
+    (``int()`` also reads Arabic-Indic and full-width digits, and ``str.isdigit()`` is true of ``"\u00b2"``,
+    which ``int()`` refuses), no leading zeros, at most :data:`_MAX_INDEX_DIGITS` of them. A key that
+    spells a row any other way is not the formset's row (``fs-00-x`` is not ``fs-0-x``)."""
+    if not (text.isascii() and text.isdigit()) or len(text) > _MAX_INDEX_DIGITS:
+        return None
+    if len(text) > 1 and text[0] == "0":
+        return None
+    return int(text)
+
+
+def _schema_keys(
+    formset_cls: Type[BaseFormSet], prefix: str, keys: Iterable[str], data: Dict[str, Any]
+) -> FrozenSet[str]:
+    """The *keys* that belong to the formset itself: its management form, and ``<prefix>-<n>-<field>``
+    for a row ``n`` below ``TOTAL_FORMS`` and a ``<field>`` the form really has (:func:`_row_suffixes`).
+    They are not the client's to add, so they do not count toward ``max_form_fields`` (#3858). Anything
+    else under the formset's prefix is: the suffix is as much the client's as the prefix is, so
+    ``fs-0-anything`` under a real row is counted, and so is ``fs-00-street`` or ``fs-5000-street``."""
+    head = prefix + "-"
+    rows = _row_index(str(data.get(f"{prefix}-TOTAL_FORMS", ""))) or 0
+    rows = min(
+        rows, max(_effective_cap(formset_cls), int(getattr(formset_cls, "absolute_max", 0) or 0))
+    )
+    suffixes = _row_suffixes(formset_cls)
+    own = set()
+    for key in keys:
+        if not isinstance(key, str) or not key.startswith(head):
+            continue
+        rest = key[len(head) :]
+        if rest in _MANAGEMENT_KEYS:
+            own.add(key)
+            continue
+        index, _, field = rest.partition("-")
+        row = _row_index(index)
+        if row is not None and row < rows and field in suffixes:
+            own.add(key)
+    return frozenset(own)
+
+
+def _seeded(
+    formset_cls: Type[BaseFormSet],
+    prefix: str,
+    data: Dict[str, Any],
+    formset_kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
+    """*data*, or the formset's own rows as bound data when there is nothing bound yet (#3966).
+
+    A formset built with ``instance`` (inline), ``queryset`` (model) or ``initial`` already shows rows
+    the caller has no bound data for: a view that starts with ``_formset_data = {}`` has bound nothing.
+    Rebuilding it from that empty dict with one more row would show only the new row, and for an inline
+    formset the existing rows would be missing from the submission. So when *data* has no management
+    form and the caller passed formset kwargs, the starting point is the formset those kwargs build
+    (unbound), written out the way a browser would post it: its management form and one key per field
+    of every row, existing rows first. With no formset kwargs the unbound formset holds nothing the
+    caller could lose, and *data* is used as it is. *data* itself is never changed.
+    """
+    if not formset_kwargs or f"{prefix}-TOTAL_FORMS" in data:
+        return data
+    from .wizard import _submittable
+
+    unbound = formset_cls(prefix=prefix, **formset_kwargs)
+    seeded: Dict[str, Any] = {
+        f"{prefix}-TOTAL_FORMS": str(unbound.total_form_count()),
+        f"{prefix}-INITIAL_FORMS": str(unbound.initial_form_count()),
+    }
+    for form in unbound.forms:
+        for name, field in form.fields.items():
+            value = form[name].value()
+            if value is not None:
+                seeded[form.add_prefix(name)] = _submittable(field, value)
+    seeded.update(data)
+    return seeded
+
+
 def add_row(
     formset_cls: Type[BaseFormSet],
     data: Optional[Dict[str, Any]] = None,
     prefix: Optional[str] = None,
+    **formset_kwargs: Any,
 ) -> BaseFormSet:
     """Return a new formset instance with one additional empty row.
 
@@ -83,24 +239,31 @@ def add_row(
             instantiates the formset with a custom prefix (e.g.
             ``FS(prefix="addresses")``) — without it, the management fields
             under ``addresses-*`` will never be updated.
+        **formset_kwargs: Every other argument the formset is built with, passed
+            through to ``formset_cls(data, prefix=prefix, **formset_kwargs)``:
+            ``instance`` (an inline formset's parent), ``queryset`` (a model
+            formset's rows), ``form_kwargs``, ``initial``, ``auto_id``. Without
+            them the rebuilt formset has lost its parent and its rows (#3966).
+            When *data* holds no management form yet, the formset these kwargs
+            build is the starting point, so its existing rows are kept.
 
     Caps at ``formset_cls.max_num`` when set, otherwise at ``absolute_max``.
     Data for existing rows is preserved; the new row's fields are empty.
     When already at the cap, the call is a logged no-op.
     """
-    data = dict(data) if data else {}
     prefix = _resolve_prefix(formset_cls, prefix)
+    data = dict(_seeded(formset_cls, prefix, dict(data) if data else {}, formset_kwargs))
     total_key = f"{prefix}-TOTAL_FORMS"
     current = int(data.get(total_key, 0))
     cap = _effective_cap(formset_cls)
     if current >= cap:
         logger.debug("add_row: %s at cap %d — no-op", prefix, cap)
-        return formset_cls(data or None, prefix=prefix)
+        return formset_cls(data or None, prefix=prefix, **formset_kwargs)
     data[total_key] = str(current + 1)
     data.setdefault(f"{prefix}-INITIAL_FORMS", "0")
     data.setdefault(f"{prefix}-MIN_NUM_FORMS", "0")
     data.setdefault(f"{prefix}-MAX_NUM_FORMS", str(cap))
-    return formset_cls(data, prefix=prefix)
+    return formset_cls(data, prefix=prefix, **formset_kwargs)
 
 
 def remove_row(
@@ -108,6 +271,7 @@ def remove_row(
     row_prefix: str,
     data: Optional[Dict[str, Any]] = None,
     prefix: Optional[str] = None,
+    **formset_kwargs: Any,
 ) -> BaseFormSet:
     """Mark the row with ``row_prefix`` for deletion.
 
@@ -118,6 +282,8 @@ def remove_row(
             ``prefix="addresses"``.
         data: Current bound data.
         prefix: Optional custom formset prefix for re-instantiation.
+        **formset_kwargs: Every other argument the formset is built with (``instance``,
+            ``queryset``, ``form_kwargs``, ``initial``, ``auto_id``), as for :func:`add_row` (#3966).
 
     Follows Django's standard formset delete protocol: sets ``DELETE="on"``
     on the row so ``formset.deleted_forms`` picks it up during validation.
@@ -125,11 +291,26 @@ def remove_row(
     remain counted until submit so the index gap doesn't confuse the
     management form. The server's ``formset.save()`` handles the actual
     removal.
+
+    *row_prefix* is usually the client's, so the key it names is bounded like any other key a client
+    names in a form's data: when storing it would take *data* past ``max_form_fields`` (counting only
+    keys that are not the formset's own), ``max_form_data_size`` or ``max_form_members``, nothing is
+    stored and the call is a logged no-op (#3858).
     """
-    data = dict(data) if data else {}
-    data[f"{row_prefix}-DELETE"] = "on"
     prefix = _resolve_prefix(formset_cls, prefix)
-    return formset_cls(data, prefix=prefix)
+    data = dict(_seeded(formset_cls, prefix, dict(data) if data else {}, formset_kwargs))
+    key = f"{row_prefix}-DELETE"
+    # ``row_prefix`` is the client's (``dj-value-prefix``), so the key it names is judged like any other
+    # key a client names in a form's data (#3858, #3834): past ``max_form_fields`` / ``max_form_data_size``
+    # / ``max_form_members`` the call is a logged no-op, like an add past the cap.
+    message = _form_data_bounds.refusal(
+        data, {key: "on"}, _schema_keys(formset_cls, prefix, (*data, key), data)
+    )
+    if message is not None:
+        logger.warning("remove_row refused form data: %s", message)
+        return formset_cls(data or None, prefix=prefix, **formset_kwargs)
+    data[key] = "on"
+    return formset_cls(data, prefix=prefix, **formset_kwargs)
 
 
 class FormSetHelpersMixin:
@@ -163,6 +344,42 @@ class FormSetHelpersMixin:
             )
         return cls
 
+    #: Arguments ``get_formset_kwargs()`` may not return: the helpers pass them themselves.
+    _RESERVED_FORMSET_KWARGS = frozenset({"data", "prefix"})
+
+    def get_formset_kwargs(self, name: str) -> Dict[str, Any]:
+        """The arguments formset *name* is built with, besides its data and prefix (#3966).
+
+        ``add_row`` and ``remove_row`` rebuild the formset from its bound data on
+        every call; without this hook everything it was first built with (an inline
+        formset's ``instance``, a model formset's ``queryset``, ``form_kwargs``,
+        ``initial``, ``auto_id``) is lost. Override it and build the formset in
+        ``mount()`` with the same method, so there is one place that says how::
+
+            def get_formset_kwargs(self, name):
+                return {"instance": self.order}
+
+            def mount(self, request, pk=None, **kwargs):
+                self.order = Order.objects.get(pk=pk)
+                self.items = ItemFormSet(prefix="items", **self.get_formset_kwargs("items"))
+                self._formset_data = {}
+
+        The default returns ``{}``. ``data`` and ``prefix`` are not accepted: the
+        mixin passes the formset's name as its prefix.
+        """
+        return {}
+
+    def _formset_kwargs(self, name: str) -> Dict[str, Any]:
+        """``get_formset_kwargs(name)``, refusing the arguments the helpers set themselves."""
+        kwargs = dict(self.get_formset_kwargs(name))
+        clash = sorted(self._RESERVED_FORMSET_KWARGS.intersection(kwargs))
+        if clash:
+            raise ValueError(
+                f"{type(self).__name__}.get_formset_kwargs({name!r}) returned {clash}; "
+                f"the formset's data and prefix are set by add_row/remove_row, not by this hook."
+            )
+        return kwargs
+
     def _require_formset_data(self) -> Dict[str, Any]:
         """Return ``self._formset_data``, raising a clear error if the user forgot to init it."""
         data = getattr(self, "_formset_data", None)
@@ -186,7 +403,7 @@ class FormSetHelpersMixin:
             return
         cls = self._resolve_formset_class(formset)
         data = self._require_formset_data()
-        updated = add_row(cls, data=data, prefix=formset)
+        updated = add_row(cls, data=data, prefix=formset, **self._formset_kwargs(formset))
         self._formset_data = updated.data
         setattr(self, formset, updated)
 
@@ -203,6 +420,8 @@ class FormSetHelpersMixin:
             return
         cls = self._resolve_formset_class(formset)
         data = self._require_formset_data()
-        updated = remove_row(cls, row_prefix=prefix, data=data, prefix=formset)
+        updated = remove_row(
+            cls, row_prefix=prefix, data=data, prefix=formset, **self._formset_kwargs(formset)
+        )
         self._formset_data = updated.data
         setattr(self, formset, updated)

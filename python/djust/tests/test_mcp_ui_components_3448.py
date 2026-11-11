@@ -75,15 +75,34 @@ def test_ui_component_kind_consistent_across_tools_and_suggest(mcp_server):
     assert all("kind" not in e for e in (listed, suggested, summary))
 
 
-def test_mcp_megabyte_query_is_bounded(mcp_server):
-    import time
-    from djust.ai_discovery.catalog import load_catalog
+def test_mcp_megabyte_query_is_bounded(mcp_server, monkeypatch):
+    from djust.ai_discovery import catalog
+    from djust.ai_discovery.catalog import MAX_QUERY_LENGTH, load_catalog
 
     load_catalog()
     query = ("table filters searchable dropdown " * 40000)[:1_048_576]
-    start = time.process_time()
+    # "Bounded" means the query is cut to 512 characters before any work, so the cost
+    # cannot grow with it. Asserted as what the work is GIVEN, not how long it takes
+    # (#3835): every string the tokenizer sees is at most MAX_QUERY_LENGTH characters,
+    # and 256 KB of query and 1 MB of query make the same calls on the same lengths.
+    seen = []
+    real = catalog._tokens
+
+    def spy(value):
+        seen.append(len(value))
+        return real(value)
+
+    monkeypatch.setattr(catalog, "_tokens", spy)
+    runs = {}
+    for scale in (1, 4):
+        seen.clear()
+        _call_tool(mcp_server, "list_ui_components", query=query[: 262_144 * scale])
+        runs[scale] = list(seen)
+    assert runs[1], "the tokenizer was never reached, so nothing was measured"
+    assert max(runs[4]) <= MAX_QUERY_LENGTH, max(runs[4])
+    assert runs[1] == runs[4]
+    monkeypatch.setattr(catalog, "_tokens", real)
     result = _call_tool(mcp_server, "list_ui_components", query=query)
-    assert time.process_time() - start < 1
     assert result["query"] == query[:512]
     assert (
         result["results"]

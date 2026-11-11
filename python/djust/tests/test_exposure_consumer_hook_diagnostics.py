@@ -53,12 +53,12 @@ async def test_hook_failure_logs_are_value_free_for_nonlegacy_views(
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".HookFailureView", "url": "/hooks/"}
             )
-            mounted = await socket.receive_json_from(timeout=3)
+            mounted = await socket.receive_json_from()
             assert mounted["type"] == "mount", mounted
 
             monkeypatch.setattr(HookFailureView, "exposure_policy", policy)
@@ -66,7 +66,7 @@ async def test_hook_failure_logs_are_value_free_for_nonlegacy_views(
             with caplog.at_level(logging.DEBUG):
                 # The heartbeat runs before the pong, so the pong orders the log.
                 await socket.send_json_to({"type": "ping"})
-                assert (await socket.receive_json_from(timeout=3))["type"] == "pong"
+                assert (await socket.receive_json_from())["type"] == "pong"
 
             if policy == "legacy" or debug:
                 # Control: the hook ran and legacy logging is unchanged; under
@@ -112,12 +112,12 @@ async def test_server_push_failure_logs_are_value_free_for_nonlegacy_views(
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".PushFailureView", "url": "/push/"}
             )
-            mounted = await socket.receive_json_from(timeout=3)
+            mounted = await socket.receive_json_from()
             assert mounted["type"] == "mount", mounted
 
             monkeypatch.setattr(PushFailureView, "exposure_policy", policy)
@@ -187,7 +187,7 @@ def _mount_policy(policy):
 async def _expect_denial(socket):
     """A refused server-originated turn gets the foreground denial."""
     for _ in range(20):
-        out = await socket.receive_output(timeout=3)
+        out = await socket.receive_output()
         if out["type"] == "websocket.close":
             assert out["code"] == 4403, out
             return
@@ -233,13 +233,13 @@ async def test_timer_and_notify_hook_failures_are_value_free_for_nonlegacy_views
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             with caplog.at_level(logging.DEBUG):
                 await socket.send_json_to(
                     {"type": "mount", "view": f"{__name__}.{view_cls.__name__}", "url": "/h/"}
                 )
-                mounted = await socket.receive_json_from(timeout=3)
+                mounted = await socket.receive_json_from()
                 assert mounted["type"] == "mount", mounted
                 monkeypatch.setattr(view_cls, "exposure_policy", policy)
                 caplog.clear()
@@ -293,11 +293,11 @@ async def test_disconnect_presence_cleanup_failure_is_value_free_for_nonlegacy_v
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         await socket.send_json_to(
             {"type": "mount", "view": __name__ + ".UntrackFailureView", "url": "/u/"}
         )
-        mounted = await socket.receive_json_from(timeout=3)
+        mounted = await socket.receive_json_from()
         assert mounted["type"] == "mount", mounted
         monkeypatch.setattr(UntrackFailureView, "exposure_policy", policy)
         caplog.clear()
@@ -348,7 +348,7 @@ async def test_mount_batch_escape_is_value_free_for_nonlegacy_views(
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
@@ -364,7 +364,7 @@ async def test_mount_batch_escape_is_value_free_for_nonlegacy_views(
                         ],
                     }
                 )
-                frame = await socket.receive_json_from(timeout=3)
+                frame = await socket.receive_json_from()
             assert frame["type"] == "mount_batch", frame
             [failed] = frame["failed"]
             if debug:
@@ -426,12 +426,12 @@ async def test_consumer_deferred_callback_failure_is_value_free_for_nonlegacy_vi
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".PushDeferView", "url": "/pd/"}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
             monkeypatch.setattr(PushDeferView, "exposure_policy", policy)
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
@@ -500,12 +500,12 @@ async def test_consumer_layout_render_failure_is_value_free_for_nonlegacy_views(
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".PushLayoutView", "url": "/pl/"}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
             monkeypatch.setattr(PushLayoutView, "exposure_policy", policy)
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
@@ -569,18 +569,18 @@ async def test_bug_capture_share_failure_is_value_free_for_nonlegacy_views(
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".BugShareView", "url": "/bs/"}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
             monkeypatch.setattr(BugShareView, "exposure_policy", policy)
             monkeypatch.setattr(BugShareView, "get_context_data", failing_context)
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await socket.send_json_to({"type": "bug_capture_share"})
-                frame = await socket.receive_json_from(timeout=3)
+                frame = await socket.receive_json_from()
             assert raised, "the re-render never ran; the test would be vacuous"
             assert frame["type"] == "error", frame
             text = json.dumps(frame) + caplog.text

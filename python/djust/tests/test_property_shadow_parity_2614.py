@@ -301,20 +301,20 @@ class TestRealRenderPaths:
             comm.scope["session"] = _ScopeSession(session_key)
             connected, _ = await comm.connect()
             assert connected
-            await comm.receive_json_from(timeout=2)  # connect frame
+            await comm.receive_json_from()  # connect frame
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}._ShadowView", "url": "/shadow/"}
             )
             frames = []
             for _ in range(6):
-                f = await comm.receive_json_from(timeout=3)
+                f = await comm.receive_json_from()
                 frames.append(f)
                 if f.get("type") == "mount":
                     break
             assert frames[-1].get("type") == "mount", frames
             await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
             for _ in range(6):
-                f = await comm.receive_json_from(timeout=3)
+                f = await comm.receive_json_from()
                 frames.append(f)
                 if f.get("type") in ("patch", "html_update"):
                     break
@@ -347,7 +347,7 @@ class TestStructuralChokepoint:
             assert "_field_is_serializable(" not in src, f"{site} still calls the field-only check"
 
     def test_sidecar_calls_the_chokepoint(self):
-        src = inspect.getsource(_SidecarModelProxy.__getattr__)
+        src = inspect.getsource(_SidecarModelProxy.__getattribute__)  # the one read hook (#3888)
         assert "_attr_is_serializable(" in src
         assert "_SENSITIVE_MODEL_METHODS" not in src
 
@@ -516,20 +516,20 @@ class TestJitRealRenderPaths:
             comm.scope["session"] = _ScopeSession(session_key)
             connected, _ = await comm.connect()
             assert connected
-            await comm.receive_json_from(timeout=2)  # connect frame
+            await comm.receive_json_from()  # connect frame
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}._JitView", "url": "/jit/"}
             )
             frames = []
             for _ in range(6):
-                f = await comm.receive_json_from(timeout=3)
+                f = await comm.receive_json_from()
                 frames.append(f)
                 if f.get("type") == "mount":
                     break
             assert frames[-1].get("type") == "mount", frames
             await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
             for _ in range(6):
-                f = await comm.receive_json_from(timeout=3)
+                f = await comm.receive_json_from()
                 frames.append(f)
                 if f.get("type") in ("patch", "html_update"):
                     break
@@ -645,7 +645,10 @@ class TestStructuralChokepointCodegen:
 
     def test_helper_calls_the_chokepoint(self):
         src = inspect.getsource(_codegen.emittable_names)
-        assert "_attr_is_serializable(" in src
+        # The gate asks ``_attr_is_readable``: the name rules of the chokepoint plus the
+        # column-TYPE floor. The chokepoint is still the only per-name authority.
+        assert "_attr_is_readable(" in src
+        assert "_attr_is_serializable(" in inspect.getsource(DjangoJSONEncoder._attr_is_readable)
         assert "_field_is_serializable(" not in src
         assert "_SENSITIVE_MODEL_METHODS" not in src
 
@@ -884,11 +887,11 @@ class TestRustQuerySetRealRenderPaths:
             comm.scope["session"] = _ScopeSession(session_key)
             connected, _ = await comm.connect()
             assert connected
-            await comm.receive_json_from(timeout=2)
+            await comm.receive_json_from()
             await comm.send_json_to({"type": "mount", "view": f"{__name__}._QsView", "url": "/qs/"})
             mount_frames = []
             for _ in range(6):
-                f = await comm.receive_json_from(timeout=3)
+                f = await comm.receive_json_from()
                 mount_frames.append(f)
                 if f.get("type") == "mount":
                     break
@@ -897,7 +900,7 @@ class TestRustQuerySetRealRenderPaths:
             await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
             event_frames = []
             for _ in range(6):
-                f = await comm.receive_json_from(timeout=3)
+                f = await comm.receive_json_from()
                 event_frames.append(f)
                 if f.get("type") in ("patch", "html_update"):
                     break

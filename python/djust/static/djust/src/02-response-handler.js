@@ -241,6 +241,21 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             }
         }
 
+        // dj-disable-with: put the pre-submit text back BEFORE the response's
+        // patches, so they apply to the server's baseline and have the last
+        // word on text and `disabled` (restoring after them overwrote a label
+        // the same response had just rendered, #3963).
+        if (!data.async_pending) {
+            document.querySelectorAll('[data-djust-original-text]').forEach(el => {
+                el.textContent = el.getAttribute('data-djust-original-text');
+                el.removeAttribute('data-djust-original-text');
+                // Only what the submit itself disabled: a button that was
+                // already disabled stays so.
+                if (!el.hasAttribute('data-djust-was-disabled')) el.disabled = false;
+                el.removeAttribute('data-djust-was-disabled');
+            });
+        }
+
         // Clear optimistic state BEFORE applying changes
         clearOptimisticState(eventName);
 
@@ -410,13 +425,6 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 } else {
                     el.classList.remove('djust-locked');
                 }
-            });
-
-            // dj-disable-with: restore original text on all disabled-with elements
-            document.querySelectorAll('[data-djust-original-text]').forEach(el => {
-                el.textContent = el.getAttribute('data-djust-original-text');
-                el.removeAttribute('data-djust-original-text');
-                el.disabled = false;
             });
         } else if (globalThis.djustDebug) {
             djLog('[LiveView] Keeping loading state — async work pending');

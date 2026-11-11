@@ -16,6 +16,7 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
 from .auth.any_of import AnyOf, user_has_permission_spec
+from .security.json_script import escape_json_for_script
 from .security.log_sanitizer import sanitize_for_log
 
 logger = logging.getLogger(__name__)
@@ -125,10 +126,15 @@ def DjustMiddlewareStack(inner: Any, *, validate_origin: bool = True) -> Any:
 
     Example::
 
+        from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler
         from djust.routing import DjustMiddlewareStack
 
+        django_asgi_app = get_asgi_application()  # before importing consumers
+
         application = ProtocolTypeRouter({
-            "http": get_asgi_application(),
+            # ASGIStaticFilesHandler serves /static/ (client.js included)
+            # under uvicorn or daphne in development, as runserver would.
+            "http": ASGIStaticFilesHandler(django_asgi_app),
             "websocket": DjustMiddlewareStack(
                 URLRouter(websocket_urlpatterns)
             ),
@@ -515,30 +521,30 @@ def get_route_map_script(request: Any = None) -> str:
     if not all_routes:
         return ""
 
-    route_json = json.dumps(all_routes)
     # CSP nonce support (#655)
     from .utils import get_csp_nonce
 
-    # Safety note: json.dumps escapes ", \, and control chars — it does NOT
-    # escape angle brackets, so a literal "</script>" / "<!--" would pass
-    # through verbatim. That is safe HERE only because the route data is
-    # developer-defined URL config (view module paths + URL patterns), which
-    # structurally cannot contain those script-breakout sequences. The
-    # route_json is therefore mark_safe()'d for interpolation inside the
-    # <script> body; the nonce is escaped by format_html. (Do NOT mark_safe
-    # user-derived data into a <script> body — that WOULD be an XSS surface.)
+    # ``json.dumps`` escapes ", \ and control characters but NOT ``<``, ``>`` or ``&``, so a
+    # literal "</script>" or "<!--" in a key or value would pass through verbatim and end the
+    # script element. The data is developer-defined URL config, which Django's ``path()``
+    # already keeps those sequences out of, but that was an assumption about where the data
+    # comes from, not something this function enforced (#3819). ``escape_json_for_script``
+    # turns ``<``, ``>``, ``&``, U+2028 and U+2029 into ``\uXXXX``, so the JSON is inert inside
+    # the script body whatever it holds; the result is identical for every route that has none
+    # of those characters. The nonce is escaped by format_html.
+    route_json = escape_json_for_script(json.dumps(all_routes))
     nonce = get_csp_nonce(request)
     if nonce:
         return str(
             format_html(
                 '<script nonce="{}">window.djust=window.djust||{{}};window.djust._routeMap={};</script>',
                 nonce,
-                mark_safe(route_json),  # developer-defined URL config; see safety note above
+                mark_safe(route_json),  # script-escaped JSON; see the note above
             )
         )
     return str(
         format_html(
             "<script>window.djust=window.djust||{{}};window.djust._routeMap={};</script>",
-            mark_safe(route_json),  # developer-defined URL config; see safety note above
+            mark_safe(route_json),  # script-escaped JSON; see the note above
         )
     )

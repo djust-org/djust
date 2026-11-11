@@ -12,13 +12,12 @@
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from djust import LiveView
 from djust.decorators import debounce
 from djust.mixins.template import _mask_raw_text
+from djust.tests._growth import assert_scales_linearly
 
 
 class _View(LiveView):
@@ -74,33 +73,45 @@ class TestHandlerMetadataInjection3018:
         assert out.index(MARK) < out.index("</BODY>")
 
 
+#: ``(prefix, unit, count)``: the page is ``prefix + unit * count * scale``. Count is a
+#: quarter of the 32 000 repeats the quadratic masker took seconds on; the growth
+#: check runs it at 1x and 4x.
 PATHOLOGICAL = [
-    "<html><head></head><body>" + "<script" * 32000,
-    "<html><body><script>" + "</script" * 32000,
-    "<html><body>" + "<style" * 32000,
-    "<html><body><style>" + "</style " * 32000,
+    ("<html><head></head><body>", "<script", 8000),
+    ("<html><body><script>", "</script", 8000),
+    ("<html><body>", "<style", 8000),
+    ("<html><body><style>", "</style ", 8000),
 ]
 
 
+def _page(prefix, unit, count, scale=1):
+    return prefix + unit * (count * scale)
+
+
 class TestMaskerIsLinear3019:
-    @pytest.mark.parametrize("html", PATHOLOGICAL)
-    def test_mask_raw_text(self, html):
-        start = time.perf_counter()
-        masked = _mask_raw_text(html)
-        assert time.perf_counter() - start < 0.5
-        assert len(masked) == len(html)
+    @pytest.mark.parametrize("prefix, unit, count", PATHOLOGICAL)
+    def test_mask_raw_text(self, prefix, unit, count):
+        # Growth, not an absolute bound (#3711): 4x the repeats, under 10x the cost.
+        assert_scales_linearly(
+            lambda scale: _mask_raw_text(_page(prefix, unit, count, scale)),
+            what="masking raw text",
+        )
+        html = _page(prefix, unit, count)
+        assert len(_mask_raw_text(html)) == len(html)
 
     @pytest.mark.parametrize(
-        "html",
+        "prefix, unit, count",
         [
-            "<div dj-root>x</div>" + "<script>" * 32000,
-            "<div dj-root>x</div>" + "<script" * 32000,
+            ("<div dj-root>x</div>", "<script>", 8000),
+            ("<div dj-root>x</div>", "<script", 8000),
         ],
     )
-    def test_split_for_streaming(self, html):
-        start = time.perf_counter()
-        _View()._split_for_streaming(html)
-        assert time.perf_counter() - start < 0.5
+    def test_split_for_streaming(self, prefix, unit, count):
+        view = _View()
+        assert_scales_linearly(
+            lambda scale: view._split_for_streaming(_page(prefix, unit, count, scale)),
+            what="splitting for streaming",
+        )
 
     def test_regions_are_masked_as_before(self):
         html = (

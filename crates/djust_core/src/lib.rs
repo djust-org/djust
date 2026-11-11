@@ -20,7 +20,9 @@ pub mod raw_text;
 pub mod render_env;
 pub mod serialization;
 
-pub use context::{Context, LazyBlock, LazyBlockGuard, SharedValues};
+pub use context::{
+    template_call_guard, Context, LazyBlock, LazyBlockGuard, SharedValues, TemplateCallGuard,
+};
 pub use errors::{DjangoRustError, Result};
 pub use object_key::ObjectKey;
 pub use render_env::RenderEnv;
@@ -415,6 +417,280 @@ pub enum Value {
     Encoded(Box<Encoded>),
 }
 
+/// The `str(o)` of an [`Encoded`] (#3769): either the text itself, or the object to ask for it.
+///
+/// A Django `Form` / `BoundField` / formset crosses with a `display` that is the render of the
+/// whole form (`as_div`, a widget per field), and the carrier is built for EVERY such object in
+/// the context on EVERY render — including the ones a template never prints. `hello` over a
+/// context holding a form called `str(form)` once, and `{{ form }}` twice (measured through
+/// `DjustTemplateBackend.from_string(..).render({"form": f})`; a form that is ALSO inside a list
+/// in the context is converted once more per occurrence); `{{ form.f0 }}` rendered every OTHER
+/// field too (4-5x the flattened cost, #3769). So the text of such a
+/// carrier is DEFERRED: the first reader asks the object, and the answer is kept.
+///
+/// **One reader per fact, and the reader forces.** `text`, `safe` and `raised` are the only ways
+/// to the three facts, and the type has no `Deref` / `Display`, so a new reader of
+/// [`Encoded::display`] has to say which fact it wants and cannot get a half-built answer. The
+/// fields that used to sit beside `display` (`display_safe`, `str_raised`, and `json`, which for
+/// every opaque carrier WAS `display`) are derived from the same one forcing for that reason: a
+/// copy of one `str()` would be the #1646 shape.
+///
+/// **Forcing never blocks the interpreter.** The cell is `std::sync::OnceLock` used only through
+/// `get` / `set`: the `str()` runs OUTSIDE it, so a thread holding the GIL is never parked on a
+/// lock whose holder needs the GIL to finish (`OnceLock::get_or_init` is exactly that deadlock).
+/// A lost race computes the text twice and keeps the first; the answers are equal by construction,
+/// because they are `str()` of one object read at one render.
+///
+/// `str()` RAISING does not fail the conversion (it used to: the object fell to
+/// [`handle_only_encoded`], and a different carrier shape). The text is then the stand-in
+/// (`repr`) and [`DisplayText::raised`] is `true`, which is the same condition the `{{ o }}` sink
+/// already branches on: it calls `str()` on [`Encoded::live`] and propagates what Python raises,
+/// where `{{ o.attr }}` never calls it.
+pub struct DisplayText(DisplayRepr);
+
+enum DisplayRepr {
+    /// The text was computed at the conversion, or came off the wire. `raised` is set only by
+    /// [`handle_only_encoded`], whose text is the stand-in for a `str()` that raised.
+    Eager {
+        text: String,
+        safe: bool,
+        raised: bool,
+    },
+    /// `str(handle)`, computed by the first reader.
+    Deferred(Box<DeferredDisplay>),
+}
+
+struct DeferredDisplay {
+    /// The object whose `str()` is the text.
+    handle: std::sync::Arc<Py<PyAny>>,
+    /// What the text is if `str()` raises: the object's `repr`, or `<Type object>`.
+    standin: String,
+    /// SHARED by every clone of this text. A `Value` is cloned wherever the engine copies it (a
+    /// filter chain's operand, a comparison, a cache key), and a cell per clone would ask the
+    /// object once per clone where the eager conversion asked once for all of them. The answer is
+    /// `str()` of one object at one render, so the clones agree by construction. (A second
+    /// `{{ form }}` does NOT share: the engine re-reads the object for each occurrence, as Django
+    /// does, and each reading is its own carrier.)
+    forced: std::sync::Arc<std::sync::OnceLock<ForcedDisplay>>,
+}
+
+#[derive(Clone)]
+struct ForcedDisplay {
+    text: String,
+    safe: bool,
+    raised: bool,
+}
+
+impl DisplayText {
+    /// A text that is already known. `safe` is "`str(o)` was a `SafeString`".
+    pub fn eager(text: String, safe: bool) -> Self {
+        DisplayText(DisplayRepr::Eager {
+            text,
+            safe,
+            raised: false,
+        })
+    }
+
+    /// The stand-in for a `str()` that raised AT the conversion ([`handle_only_encoded`]).
+    pub fn raised_standin(text: String) -> Self {
+        DisplayText(DisplayRepr::Eager {
+            text,
+            safe: false,
+            raised: true,
+        })
+    }
+
+    /// `str(handle)`, asked for by the first reader. `standin` is what a raising `str()` leaves.
+    pub fn deferred(handle: std::sync::Arc<Py<PyAny>>, standin: String) -> Self {
+        DisplayText(DisplayRepr::Deferred(Box::new(DeferredDisplay {
+            handle,
+            standin,
+            forced: std::sync::Arc::new(std::sync::OnceLock::new()),
+        })))
+    }
+
+    /// Has `str()` been asked yet? Always `true` for an eager text. Exists for the tests that pin
+    /// that a template which never reads the text never forces it.
+    pub fn is_forced(&self) -> bool {
+        match &self.0 {
+            DisplayRepr::Eager { .. } => true,
+            DisplayRepr::Deferred(d) => d.forced.get().is_some(),
+        }
+    }
+
+    /// Is this text computed on first read?
+    pub fn is_deferred(&self) -> bool {
+        matches!(self.0, DisplayRepr::Deferred(_))
+    }
+
+    fn forced(&self) -> ForcedRef<'_> {
+        match &self.0 {
+            DisplayRepr::Eager { text, safe, raised } => ForcedRef {
+                text,
+                safe: *safe,
+                raised: *raised,
+            },
+            DisplayRepr::Deferred(d) => {
+                let forced = match d.forced.get() {
+                    Some(forced) => forced,
+                    None => {
+                        let computed = d.compute();
+                        // A lost race returns `Err`; the winner's value is read back below.
+                        let _ = d.forced.set(computed);
+                        d.forced
+                            .get()
+                            .expect("set or lost the race: the cell is full")
+                    }
+                };
+                ForcedRef {
+                    text: &forced.text,
+                    safe: forced.safe,
+                    raised: forced.raised,
+                }
+            }
+        }
+    }
+
+    /// Let go of the object a deferred text would ask, WITHOUT asking it (#3769). The teardown
+    /// that drops [`Encoded::live`] (`clear_live_handles`, ADR-027 #2539) must drop this handle
+    /// too, or a connection would keep every form it ever resolved alive through its text. A
+    /// teardown never runs the object's code, so an unasked text keeps the stand-in (the same
+    /// degradation a cleared entry already has for a dotted lookup until the next full sync
+    /// re-converts it); a text that WAS asked keeps its answer. Eager text is untouched.
+    pub fn release_handle(&mut self) {
+        let DisplayRepr::Deferred(deferred) = &self.0 else {
+            return;
+        };
+        let (text, safe) = match deferred.forced.get() {
+            Some(done) => (done.text.clone(), done.safe),
+            None => (deferred.standin.clone(), false),
+        };
+        self.0 = DisplayRepr::Eager {
+            text,
+            safe,
+            raised: false,
+        };
+    }
+
+    /// `str(o)`, or the stand-in if it raised.
+    pub fn text(&self) -> &str {
+        self.forced().text
+    }
+
+    /// Is `str(o)` a `SafeString`? Runtime safety of the text, not of `o` itself.
+    pub fn safe(&self) -> bool {
+        self.forced().safe
+    }
+
+    /// Did `str(o)` raise? Then [`DisplayText::text`] is a stand-in and the `{{ o }}` sink must
+    /// call `str()` on the live object and propagate (ADR-027 Step 5, #2628).
+    pub fn raised(&self) -> bool {
+        self.forced().raised
+    }
+}
+
+struct ForcedRef<'a> {
+    text: &'a str,
+    safe: bool,
+    raised: bool,
+}
+
+impl DeferredDisplay {
+    fn compute(&self) -> ForcedDisplay {
+        Python::attach(|py| {
+            let object = self.handle.bind(py);
+            let asked = object.str().ok().and_then(|t| {
+                py_string_lossy(&t)
+                    .ok()
+                    .map(|s| (s, python_string_is_safe(t.as_any())))
+            });
+            match asked {
+                Some((text, safe)) => ForcedDisplay {
+                    text,
+                    safe,
+                    raised: false,
+                },
+                None => ForcedDisplay {
+                    text: self.standin.clone(),
+                    safe: false,
+                    raised: true,
+                },
+            }
+        })
+    }
+}
+
+impl Clone for DisplayText {
+    fn clone(&self) -> Self {
+        DisplayText(match &self.0 {
+            DisplayRepr::Eager { text, safe, raised } => DisplayRepr::Eager {
+                text: text.clone(),
+                safe: *safe,
+                raised: *raised,
+            },
+            DisplayRepr::Deferred(d) => DisplayRepr::Deferred(Box::new(DeferredDisplay {
+                handle: d.handle.clone(),
+                standin: d.standin.clone(),
+                forced: d.forced.clone(),
+            })),
+        })
+    }
+}
+
+impl fmt::Debug for DisplayText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            DisplayRepr::Eager { text, safe, raised } => f
+                .debug_struct("DisplayText::Eager")
+                .field("text", text)
+                .field("safe", safe)
+                .field("raised", raised)
+                .finish(),
+            // Never forces: a `Debug` that ran `str(form)` would change what a failing assertion
+            // costs, and could raise inside the formatter.
+            DisplayRepr::Deferred(d) => match d.forced.get() {
+                Some(done) => f
+                    .debug_struct("DisplayText::Deferred")
+                    .field("text", &done.text)
+                    .field("safe", &done.safe)
+                    .field("raised", &done.raised)
+                    .finish(),
+                None => f.write_str("DisplayText::Deferred(unforced)"),
+            },
+        }
+    }
+}
+
+/// A text that is known, for the places that build an [`Encoded`] from a string (a wire payload,
+/// a test): `str(o)` was not a `SafeString`, as `display_safe` always was for those.
+impl From<String> for DisplayText {
+    fn from(text: String) -> Self {
+        DisplayText::eager(text, false)
+    }
+}
+
+impl From<&str> for DisplayText {
+    fn from(text: &str) -> Self {
+        DisplayText::eager(text.to_owned(), false)
+    }
+}
+
+/// Two texts are equal if they are the same text, forced if they must be. Two deferred texts of
+/// the SAME object are equal without asking it: nothing can differ between two readings of one
+/// `str(o)` within a render, and a structural `==` that ran `str(form)` twice to say so would
+/// make the cheap case expensive.
+impl PartialEq for DisplayText {
+    fn eq(&self, other: &Self) -> bool {
+        if let (DisplayRepr::Deferred(a), DisplayRepr::Deferred(b)) = (&self.0, &other.0) {
+            if std::sync::Arc::ptr_eq(&a.handle, &b.handle) {
+                return true;
+            }
+        }
+        let (a, b) = (self.forced(), other.forced());
+        a.text == b.text && a.safe == b.safe
+    }
+}
+
 /// The payload of [`Value::Encoded`] (#2448). Boxed there to keep `Value`'s
 /// size unchanged — a `Value` is cloned per context entry per render.
 #[derive(Debug, Clone)]
@@ -424,12 +700,16 @@ pub struct Encoded {
     /// `datetime.timedelta`.
     pub type_name: String,
     /// `str(o)` — what `{{ p }}` renders, and what this value looked like
-    /// before the variant existed.
-    pub display: String,
-    /// Runtime safety of str(o), not of o itself. Never restored from wire data.
-    pub display_safe: bool,
+    /// before the variant existed. Computed on first read for a Django form
+    /// object (#3769); read it through [`Encoded::display`],
+    /// [`Encoded::display_safe`] and [`Encoded::str_raised`], which are the
+    /// three facts one `str(o)` yields.
+    pub display: DisplayText,
     /// `DjangoJSONEncoder.default(o)` — the string `json.dumps` writes.
-    pub json: String,
+    /// `None` when it IS [`Encoded::display`], which is every opaque carrier
+    /// (no encoder spelling exists for those) and is why a deferred `display`
+    /// needs no second deferral here. Read it through [`Encoded::json`].
+    pub json: Option<String>,
     /// `bool(o)` — Python's own truthiness for the object (#2458). See the
     /// [`Value::Encoded`] doc for why this is carried rather than derived.
     pub truthy: bool,
@@ -721,16 +1001,40 @@ pub struct Encoded {
     /// `{{ q.resolution }}` from the handle, and gating the handle off leaves
     /// the first standing.
     pub live: Option<std::sync::Arc<Py<PyAny>>>,
-    /// `str(o)` RAISED at conversion, so `display` is a stand-in and the
-    /// `{{ o }}` sink must call `str()` on [`Encoded::live`] itself — and
-    /// propagate what it raises, as Django does (ADR-027 Step 5, #2628;
-    /// decided for `{{ p }}` by #2429). Set only by [`handle_only_encoded`].
+}
+
+impl Encoded {
+    /// `str(o)` — what `{{ o }}` renders. Forces a deferred text (#3769); the stand-in if
+    /// `str()` raised (see [`Encoded::str_raised`]).
+    pub fn display(&self) -> &str {
+        self.display.text()
+    }
+
+    /// Runtime safety of `str(o)`, not of `o` itself. Never restored from wire data.
+    pub fn display_safe(&self) -> bool {
+        self.display.safe()
+    }
+
+    /// `str(o)` RAISED, so [`Encoded::display`] is a stand-in and the `{{ o }}` sink must call
+    /// `str()` on [`Encoded::live`] itself — and propagate what it raises, as Django does
+    /// (ADR-027 Step 5, #2628; decided for `{{ p }}` by #2429).
     ///
-    /// **TRANSIENT**, exactly like `live`: not serialized, not compared. A
-    /// carrier that came back from a state round trip has no handle to defer
-    /// to, and renders `display` — the stand-in — which is the same
-    /// degradation `live`'s own round-trip limit already has (#2767).
-    pub str_raised: bool,
+    /// **TRANSIENT**, exactly like `live`: not serialized, not compared. A carrier that came
+    /// back from a state round trip has no handle to defer to, and renders `display` — the
+    /// stand-in — which is the same degradation `live`'s own round-trip limit already has
+    /// (#2767).
+    pub fn str_raised(&self) -> bool {
+        self.display.raised()
+    }
+
+    /// `DjangoJSONEncoder.default(o)` — the string `json.dumps` writes. [`Encoded::display`]
+    /// for a carrier that has no encoder spelling of its own.
+    pub fn json(&self) -> &str {
+        match &self.json {
+            Some(json) => json,
+            None => self.display(),
+        }
+    }
 }
 
 /// Which of Python's equality contracts a [`Value::Encoded`] obeys (#2480).
@@ -768,6 +1072,13 @@ pub enum EqClass {
     /// `OrderedDict(a=1) == {"a": 1}` is. After a round trip that dropped the
     /// handle, two carriers compare by `repr`. Equality only.
     Mapping,
+    /// A raw Django model carried as a floored live handle (#3888). Two such carriers
+    /// compare through Python's own `==` on the live handles ([`Encoded::live_eq`]): Django's
+    /// `Model.__eq__` is "same concrete model and same primary key", which no carried spelling
+    /// (`repr` is `__str__`, shared by distinct rows) can answer. Equality only. Without a
+    /// handle (a round trip dropped it) two carriers are NEVER equal: the direction that shows
+    /// content, where equal-by-`repr` would conflate two rows that print the same.
+    Live,
 }
 
 /// The attribute names carried on a [`Value::Encoded`] for each of the four
@@ -965,6 +1276,21 @@ pub const CMP_DOMAIN_DATETIME_AWARE: u8 = 4;
 /// domain — see the `datetime.time` arm of [`comparison_key`].
 pub const CMP_DOMAIN_TIME_NAIVE: u8 = 5;
 
+/// Do two [`Encoded`]s carry the same encoder spelling? (#3769)
+///
+/// Compared WITHOUT reading [`Encoded::json`] when both mirror their text (`json: None`): that
+/// accessor forces a deferred `display`, and `display` is compared one line away by
+/// [`DisplayText`]'s own `==`, whose shortcut for two texts of the SAME object exists so that a
+/// structural `==` does not render a form to say so. A mirror and an explicit spelling are
+/// compared through the accessor, as before.
+fn json_spelling_equal(a: &Encoded, b: &Encoded) -> bool {
+    match (&a.json, &b.json) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x == y,
+        _ => a.json() == b.json(),
+    }
+}
+
 /// STRUCTURAL equality for two [`Encoded`]s — every carried spelling, plus the
 /// attribute map (#2481).
 ///
@@ -983,8 +1309,7 @@ impl PartialEq for Encoded {
     fn eq(&self, other: &Self) -> bool {
         self.type_name == other.type_name
             && self.display == other.display
-            && self.display_safe == other.display_safe
-            && self.json == other.json
+            && json_spelling_equal(self, other)
             && self.truthy == other.truthy
             && self.len == other.len
             && self.iterable == other.iterable
@@ -1174,6 +1499,16 @@ impl Serialize for Value {
         S: serde::Serializer,
     {
         use serde::ser::SerializeMap;
+        // A carried MODEL (#3888) is written as the floored dict it always was on the wire: the
+        // tag-argument text a native or bridged handler parses, and the state snapshot a backend
+        // round-trips. The handle is render-local; what survives a serialisation is the same
+        // denylist dict the conversion used to build for every model, read from the handle only
+        // when something asks for it (the render itself never does).
+        if let Value::Encoded(e) = self {
+            if let Some(dict) = e.floored_model_dict() {
+                return dict.serialize(serializer);
+            }
+        }
         match self {
             Value::Decimal(d) if !serializer.is_human_readable() => {
                 let mut m = serializer.serialize_map(Some(1))?;
@@ -1250,8 +1585,8 @@ impl Serialize for Value {
                     ENCODED_TAG,
                     &(
                         e.type_name.as_str(),
-                        e.display.as_str(),
-                        e.json.as_str(),
+                        e.display(),
+                        e.json(),
                         e.truthy,
                         // Slot 5 WIDENED from #2466's `sized_empty` boolean to
                         // `len(o)` itself (#2477/#2489) — `Option<u64>`, so
@@ -1335,7 +1670,7 @@ impl Serialize for Value {
             // bare string is what `from_json` can read back without a tag. The
             // client-facing JSON is `json_script`'s own `value_to_json`, which
             // has its own `Encoded` arm and writes the ENCODER spelling there.
-            Value::Encoded(e) => serializer.serialize_str(&e.display),
+            Value::Encoded(e) => serializer.serialize_str(e.display()),
             // Everything else is exactly the untagged derive it replaces.
             Value::Decimal(d) => serializer.serialize_str(d),
             Value::BigInt(d) => serializer.serialize_str(d),
@@ -1428,6 +1763,9 @@ pub const EQ_CLASS_NUMBER: u8 = 2;
 pub const EQ_CLASS_IDENTITY: u8 = 3;
 /// The wire tag for [`EqClass::Mapping`] (#2899).
 pub const EQ_CLASS_MAPPING: u8 = 4;
+/// The wire tag for [`EqClass::Live`] (#3888). A build that predates it reads this tag as
+/// ABSENT (`decode_eq_class`'s unknown-tag arm) and answers "never equal".
+pub const EQ_CLASS_LIVE: u8 = 5;
 
 /// The key the [`EqClass`] triple sits under inside slot 10's map (#2480).
 ///
@@ -1450,6 +1788,7 @@ fn encode_eq_class(class: Option<EqClass>) -> IndexMap<ObjectKey, Value> {
         Some(EqClass::Number { real, imag }) => (EQ_CLASS_NUMBER, real, imag),
         Some(EqClass::Identity) => (EQ_CLASS_IDENTITY, 0.0, 0.0),
         Some(EqClass::Mapping) => (EQ_CLASS_MAPPING, 0.0, 0.0),
+        Some(EqClass::Live) => (EQ_CLASS_LIVE, 0.0, 0.0),
     };
     map.insert(
         ObjectKey::Str(EQ_CLASS_KEY.to_string()),
@@ -1496,6 +1835,7 @@ fn decode_eq_class(map: &IndexMap<ObjectKey, Value>) -> Option<EqClass> {
         }),
         Ok(EQ_CLASS_IDENTITY) => Some(EqClass::Identity),
         Ok(EQ_CLASS_MAPPING) => Some(EqClass::Mapping),
+        Ok(EQ_CLASS_LIVE) => Some(EqClass::Live),
         _ => None,
     }
 }
@@ -1685,8 +2025,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: *truthy,
                                 len: match len {
                                     Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),
@@ -1722,8 +2062,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                         // TEN elements: the #2477/#2489 shape — slot 5
@@ -1749,8 +2087,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: *truthy,
                                 len: match len {
                                     Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),
@@ -1786,8 +2124,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                         // NINE elements: the #2481 shape, the attribute map
@@ -1805,8 +2141,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: *truthy,
                                 // Slot 5 is a BOOLEAN in this width, and every
                                 // value ever written in it was declined by
@@ -1844,8 +2180,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                         // Eight elements: the #2471/#2472 shape, `repr` and
@@ -1858,8 +2192,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: *truthy,
                                 // Slot 5 is a BOOLEAN in this width, and every
                                 // value ever written in it was declined by
@@ -1904,8 +2238,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                         // Six elements: the #2466 shape, `sized_empty` and
@@ -1915,8 +2247,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: *truthy,
                                 // Slot 5 is a BOOLEAN in this width, and every
                                 // value ever written in it was declined by
@@ -1962,8 +2294,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                         // Four elements: the #2458 shape, `truthy` carried and
@@ -1974,8 +2304,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: *truthy,
                                 // Every value written in the #2458 shape was a
                                 // datetime, and none of the four has a
@@ -2011,8 +2341,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                         // Three elements: the #2448 shape, still readable
@@ -2024,8 +2352,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: !display.is_empty(),
                                 len: None,
                                 iterable: false,
@@ -2058,8 +2386,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                     }
@@ -2317,8 +2643,8 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
 
     Some(Encoded {
         type_name,
-        display,
-        json,
+        display: display.into(),
+        json: Some(json),
         truthy,
         // A `datetime` / `date` / `time` / `timedelta` has no `__len__`, is
         // NOT iterable in Python, and `{% for %}` over one raises on both
@@ -2334,8 +2660,6 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // Preserve the immutable temporal object across Python filter calls.
         // The wire still carries the measured fields; live handles are transient.
         live: Some(std::sync::Arc::new(ob.clone().unbind())),
-        display_safe: false,
-        str_raised: false,
     })
 }
 
@@ -2542,8 +2866,8 @@ pub fn slim_timedelta_encoded(
     );
     Some(Encoded {
         type_name: "datetime.timedelta".to_string(),
-        display: timedelta_str(days, seconds, microseconds),
-        json: timedelta_iso_string(total_micros),
+        display: timedelta_str(days, seconds, microseconds).into(),
+        json: Some(timedelta_iso_string(total_micros)),
         truthy: total_micros != 0,
         len: None,
         iterable: false,
@@ -2557,8 +2881,6 @@ pub fn slim_timedelta_encoded(
         items: None,
         eq_class: None,
         live: Some(std::sync::Arc::new(ob.clone().unbind())),
-        display_safe: false,
-        str_raised: false,
     })
 }
 
@@ -2901,7 +3223,7 @@ impl Value {
     pub fn string_conversion_is_safe(&self) -> bool {
         match self {
             Value::SafeString(_) => true,
-            Value::Encoded(e) => e.display_safe,
+            Value::Encoded(e) => e.display_safe(),
             _ => false,
         }
     }
@@ -3169,10 +3491,37 @@ impl Value {
             // A non-`String` `"__str__"` (an upstream bug producing
             // `"__str__": null`) is NOT a marker: `Display` falls back to dict
             // repr for it, so this must too or the two disagree.
+            // A model whose `__str__` returns a `SafeString` (`format_html`, `mark_safe`)
+            // stamps a `Value::SafeString`; it is the same marker, so it is spelled by it too.
+            // The text is never marked safe by being printed from here: it is escaped like any
+            // other text unless the renderer is told otherwise.
             Value::Object(o) => match o.get("__str__") {
-                Some(Value::String(s)) => Some(s.as_str()),
+                Some(Value::String(s) | Value::SafeString(s)) => Some(s.as_str()),
                 _ => None,
             },
+            _ => None,
+        }
+    }
+
+    /// The text of a map that is a SERIALIZED MODEL: [`Value::object_str`]'s marker AND the rest
+    /// of the identity shape every model-serialization site stamps (`pk` and a text
+    /// `__model__`, see `serialization.model_identity`).
+    ///
+    /// `object_str` is what DISPLAY goes by (`{{ obj }}`, `|length`): it must accept the looser
+    /// shapes the path-mode serializers stamp (`__str__` beside only the keys the template
+    /// named). The sinks that treat a map as a model rather than as a dict (`pprint`,
+    /// `json_script`, `.items` / `.keys` / `.values`, iteration, `stringformat` mapping specs,
+    /// `in`, `pluralize`) go by this stricter shape, so a dict from user data that happens to
+    /// carry a text `__str__` key (a stored JSON column) keeps being a dict there. Any dict can
+    /// still carry all three keys: this narrows the accident, it does not make the marker
+    /// unforgeable.
+    pub fn model_str(&self) -> Option<&str> {
+        let text = self.object_str()?;
+        let Value::Object(o) = self else {
+            return None;
+        };
+        match (o.get("__model__"), o.get("pk")) {
+            (Some(Value::String(_) | Value::SafeString(_)), Some(_)) => Some(text),
             _ => None,
         }
     }
@@ -3351,7 +3700,7 @@ impl fmt::Display for Value {
             // unchanged cell beats a panic.
             Value::Encoded(e) => match self.container_spelling() {
                 Some(spelled) => write!(f, "{spelled}"),
-                None => write!(f, "{}", e.display),
+                None => write!(f, "{}", e.display()),
             },
             Value::List(items) => {
                 let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
@@ -3878,9 +4227,37 @@ fn is_django_queryset(ob: &Bound<'_, PyAny>) -> bool {
 ///   before/after, not a side effect of a length fix (CLAUDE.md #1079).
 fn list_repr_is_this_objects_own_spelling(ob: &Bound<'_, PyAny>) -> bool {
     if ob.is_instance_of::<PyList>() {
-        return true;
+        return !list_subclass_spells_itself(ob);
     }
     is_django_queryset(ob)
+}
+
+/// Does this `list` SUBCLASS spell itself — is `str(o)` something other than the
+/// list display? (#3755, the list half of #2899.)
+///
+/// A Django `ErrorList` IS a `list` (`UserList, list`) and renders as its
+/// `<ul class="errorlist">…</ul>` markup: `{{ form.name.errors }}` is that HTML on
+/// Django, and `['This field is required.']` on an engine that treats every `list`
+/// instance as a plain list. The rule is the dict one ([`dict_subclass_spells_itself`]),
+/// asked of the same two dunders and compared by identity against `list`'s own slots:
+/// a subclass that inherits both (`class L(list)`, `RequestScopedList`) resolves to
+/// the SAME wrapper object and is a list to the engine; one that overrides either
+/// crosses as the carrier, whose `{{ v }}` is `str(o)` (and, via `__html__`, safe when
+/// the object says so) and whose `{% for %}` / `|length` / item sinks read the items
+/// and the live object. An exact `list` costs one type check and no lookup.
+pub fn list_subclass_spells_itself(ob: &Bound<'_, PyAny>) -> bool {
+    if ob.is_exact_instance_of::<PyList>() {
+        return false;
+    }
+    let list_ty = ob.py().get_type::<PyList>();
+    let ty = ob.get_type();
+    let overrides = |name: &str| -> bool {
+        match (ty.getattr(name), list_ty.getattr(name)) {
+            (Ok(own), Ok(base)) => !own.is(&base),
+            _ => true,
+        }
+    };
+    overrides("__str__") || overrides("__repr__")
 }
 
 fn bounded_sequence_items<'py>(ob: &Bound<'py, PyAny>) -> Option<Vec<Bound<'py, PyAny>>> {
@@ -4147,8 +4524,16 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // to a value (queryset items in a `{% for %}`, a terminal model).
             // Only djust proxies carry this method, so `update_state` ingestion
             // (plain dicts/primitives) is unaffected.
+            let mut floored_model: Option<Bound<'_, PyAny>> = None;
             if let Ok(serializer) = ob.getattr("__djust_serialize__") {
-                if let Ok(result) = serializer.call0() {
+                if is_model_floor_proxy(&ob.to_owned()) {
+                    // #3888: a floored MODEL a template walk reached (a relation row:
+                    // `u.groups.all`, `.first`) is carried as a handle, exactly like a raw
+                    // model below, so a row has ONE representation however it arrived and a
+                    // second relation hop has a handle to read from. It is already the
+                    // floor proxy; the carrier arm below takes it from here.
+                    floored_model = Some(ob.to_owned());
+                } else if let Ok(result) = serializer.call0() {
                     // The hook returns a plain, denylist-filtered dict (model)
                     // or list-of-dicts (queryset) — recurse via Value so both
                     // shapes convert (Object / List). The result carries no
@@ -4182,17 +4567,38 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // `normalize_django_value` the eager path uses. `update_state`
             // ingestion passes pre-normalized dicts, so no raw model reaches
             // here on that path; the import is a cached sys.modules lookup.
-            if let Ok(models_mod) = ob.py().import("django.db.models") {
+            if let (None, Ok(models_mod)) = (&floored_model, ob.py().import("django.db.models")) {
                 if let Ok(model_cls) = models_mod.getattr("Model") {
                     if ob.is_instance(&model_cls).unwrap_or(false) {
-                        if let Ok(v) = ob
-                            .py()
-                            .import("djust.serialization")
-                            .and_then(|m| m.getattr("normalize_django_value"))
-                            .and_then(|f| f.call1((ob.to_owned(),)))
-                            .and_then(|r| r.extract::<Value>())
-                        {
-                            return Ok(v);
+                        // #3888: the model crosses as a FLOORED LIVE HANDLE, not as the
+                        // dict below. The dict holds fields and forward-FK objects and no
+                        // manager or `*_id` attname, so a template read of anything else
+                        // was answered from the render sidecar through the loop alias
+                        // `u == rows.<N>`, and an operand with a filter (`|slice`,
+                        // `|first`, `|dictsort`, a nested name) registers no alias, so the
+                        // read was empty. A handle travels with the row through any
+                        // filter (ADR-027), exactly as a plain object's does.
+                        //
+                        // The handle is the SAME floor proxy the sidecar walk uses
+                        // (`_SidecarModelProxy`), so the floor is enforced per attribute
+                        // READ and again after every segment of the walk
+                        // ([`Context::walk_live`]); this arm adds no reach, it moves the
+                        // existing reach from "by alias" to "by row". The proxy is carried by
+                        // the ONE carrier arm below (`opaque_value`, or the handle-only
+                        // terminal when one of its probes raised), so a model has no
+                        // policy of its own. It FALLS BACK to the denylist dict, never to
+                        // the raw model, when the floor is unavailable or raised.
+                        floored_model = floored_model_proxy(&ob.to_owned());
+                        if floored_model.is_none() {
+                            if let Ok(v) = ob
+                                .py()
+                                .import("djust.serialization")
+                                .and_then(|m| m.getattr("normalize_django_value"))
+                                .and_then(|f| f.call1((ob.to_owned(),)))
+                                .and_then(|r| r.extract::<Value>())
+                            {
+                                return Ok(v);
+                            }
                         }
                     }
                 }
@@ -4217,8 +4623,23 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // claimed anything the denylist governs, so a model cannot reach
             // this arm and cannot have its floor fields dumped by it. That
             // ordering is asserted structurally rather than left to reading.
+            // #3790: a Django form / BoundField keeps the walk-FLOORED object as its live
+            // handle, so every sink that reads the handle (iteration, `in`, a slice, an index,
+            // `==`, a loop variable's own walk) reads the floor and not the real field.
+            //
+            // Shadows `ob` (as a `Bound`) so the two call sites below keep their spelling: the
+            // structural pin on `opaque_value` having exactly one caller reads that text.
+            let ob = floored_form_handle(&ob.to_owned());
+            // A model is carried by its floor proxy (#3888), not by itself: shadowed here, as the
+            // form handle above is, so the one carrier arm below reads the floored object.
+            let is_floored_model = floored_model.is_some();
+            let ob = floored_model.unwrap_or(ob);
             if let Some(encoded) = opaque_value(&ob.to_owned()) {
-                return Ok(Value::Encoded(Box::new(encoded)));
+                return Ok(Value::Encoded(Box::new(as_carried_model(
+                    encoded,
+                    &ob,
+                    is_floored_model,
+                ))));
             }
             // The terminal arm, reached only when a probe in `opaque_value`
             // raised (`bool(o)`, `str(o)`, `repr(o)`, `type(o).__name__`, or
@@ -4239,6 +4660,110 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             ))))
         }
     }
+}
+
+/// The floor proxy a raw Django `Model` is carried by (#3888), or `None` for "use the denylist
+/// dict instead".
+///
+/// `None` when the floor could not be enforced (it raised: [`context::protect_sidecar_strict`]
+/// is fail-CLOSED) or when there is no djust Python side to enforce one (the same call hands the
+/// object back unchanged, and a raw model is never carried as its own handle).
+///
+/// The proxy is the handle on purpose, not the model. This is the one place a `Model` reaches
+/// the conversion RAW, so it is the one place the floor has to be applied; every sink that reads
+/// the handle afterwards (`walk_live`, `consume_live_items`, `live_get_item`, the filters'
+/// attribute reads) reads the proxy, which refuses a floor field, a sensitive method and any `_`
+/// name.
+fn floored_model_proxy<'py>(ob: &Bound<'py, PyAny>) -> Option<Bound<'py, PyAny>> {
+    let proxy = context::protect_sidecar_strict(ob.py(), ob.clone())?;
+    if proxy.is(ob) {
+        return None;
+    }
+    Some(proxy)
+}
+
+/// Is this object a floored MODEL proxy (`djust.serialization._SidecarModelProxy`)? (#3888)
+///
+/// One cached class and one `isinstance`, asked only of an object that already carries
+/// `__djust_serialize__` (a djust proxy), so an ordinary value never pays for it.
+fn is_model_floor_proxy(ob: &Bound<'_, PyAny>) -> bool {
+    static CLASS: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+    let py = ob.py();
+    let class = CLASS.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+        Ok(py
+            .import("djust.serialization")?
+            .getattr("_SidecarModelProxy")?
+            .unbind())
+    });
+    match class {
+        Ok(class) => ob.is_instance(class.bind(py)).unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// What a carried model answers that a carried object in general does not (#3888).
+///
+/// * **Equality** is the model's own `==` (same class, same pk). The proxy's `__eq__` is that, and
+///   [`equality_class`] cannot classify it (it only knows the default `__eq__`, a `Set`, a `Number`
+///   and a `dict`), so two rows of `{% if u == rows.0 %}` would never be equal. Set where the
+///   object is KNOWN to be a model proxy, not sniffed from its type.
+/// * **`repr`** is the model's `str()`, which is the spelling a model inside a container has
+///   always had here (`{{ rows }}` is `[u0, u1]`). The sinks that spell a whole container
+///   (`{{ v }}`, `|pprint`) read this slot for each item, and a container past
+///   [`OPAQUE_ITEM_CAP`] spells the same items through the same handles, so the two sides of the
+///   cap agree by construction. Python's `repr` (`<User: u0>`) is what Django prints for a LIST of
+///   models and is a different, separate divergence; it is deliberately not changed here.
+fn as_carried_model(mut encoded: Encoded, ob: &Bound<'_, PyAny>, is_model: bool) -> Encoded {
+    if is_model {
+        encoded.eq_class = Some(EqClass::Live);
+        encoded.repr = encoded.display().to_string();
+        // The MODEL's class, not the proxy's: a message built from it says `User`.
+        if let Some(name) = model_proxy_class_name(ob) {
+            encoded.type_name = name;
+        }
+    }
+    encoded
+}
+
+/// The wrapped model's class name, asked of the floor proxy (#3888). `None` when it cannot be
+/// read, which leaves the proxy's own name in place.
+fn model_proxy_class_name(proxy: &Bound<'_, PyAny>) -> Option<String> {
+    proxy
+        .py()
+        .import("djust.serialization")
+        .ok()?
+        .getattr("_model_proxy_class_name")
+        .ok()?
+        .call1((proxy,))
+        .ok()?
+        .extract::<String>()
+        .ok()
+}
+
+/// The object a Django `Form` / `BoundField` is carried by (#3790): the walk-floored proxy of it
+/// (`djust.serialization._protect_sidecar_walk`), or the object itself when there is nothing to
+/// floor (not a form object, or a form with no floor field to hide).
+///
+/// WHY HERE. A template reaches a real `BoundField` of a floor field by more routes than a path
+/// segment: a loop variable, `{% for f in form %}`, `visible_fields`, `get_context().fields`, a
+/// slice, a `{% with %}` alias. Every one of them goes through this conversion, and every sink that
+/// reads the carried object afterwards (`consume_live_items`, `live_contains`, `live_get_item`,
+/// `live_get_slice`, `live_eq`, the walk of a loop variable) reads `Encoded::live`. Substituting the
+/// floored object once, here, is the one place that holds them all; guarding each sink was the
+/// chain of point fixes that kept leaving the neighbour.
+///
+/// The floor failing to enforce (it raised) drops the value: an EMPTY STRING is returned in its place
+/// (it renders nothing, iterates to nothing, is falsy, and has no field to walk to). It is returned
+/// here, not as an early `return` from the conversion, because the structural reader of the fallback
+/// block counts that block's exits (`scripts/filter-parity-differential.py::_fallback_arms`); and not
+/// `None`, which this arm would carry as a one-element `Encoded` that `{% for %}` refuses.
+fn floored_form_handle<'py>(ob: &Bound<'py, PyAny>) -> Bound<'py, PyAny> {
+    // Forms and fields iterate; nothing else this concerns does. A type check, no Python call.
+    if !type_defines_iter(ob) || !context::live_handle_is_form_object(ob.py(), ob) {
+        return ob.clone();
+    }
+    context::protect_sidecar_walk_strict(ob.py(), ob.clone())
+        .unwrap_or_else(|| pyo3::types::PyString::new(ob.py(), "").into_any())
 }
 
 /// The most items the conversion will read out of ANY object, sized or not
@@ -4305,7 +4830,17 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
     let truthy = ob.is_truthy().ok()?;
     // `PyObject_GetIter`, which builds an iterator and consumes nothing — a
     // generator is not advanced by being asked.
-    let iterator = ob.try_iter().ok();
+    //
+    // A type that DEFINES `__iter__` and whose `iter(o)` RAISED is iterable and broken (a
+    // `BoundField` whose widget's `subwidgets` raises): the gate declines it like every other
+    // raising probe, so it crosses as the handle-only carrier, which is iterable by type, and
+    // `{% for %}` reports the object's own exception where Django does instead of
+    // `'BoundField' object is not iterable` (#3770 review).
+    let iterator = match ob.try_iter() {
+        Ok(it) => Some(it),
+        Err(_) if type_defines_iter(ob) => return None,
+        Err(_) => None,
+    };
     let iterable = iterator.is_some();
     // `PyObject_Size`: `Ok` for anything with a `__len__`, `Err` otherwise.
     let len = ob.len().ok();
@@ -4680,6 +5215,25 @@ impl Encoded {
         Python::attach(|py| a.bind(py).eq(b.bind(py)).ok())
     }
 
+    /// A list-subclass carrier's SEQUENCE, the list half of [`Encoded::live_mapping_value`]
+    /// (#3770 review). A `list` subclass that spells itself (Django's `ErrorList`) crosses as
+    /// a carrier whose text is `str(o)`; `|json_script` is `json.dumps`, which writes the
+    /// array. `None` for every non-list carrier and for one whose handle a round trip dropped.
+    pub fn live_sequence_value(&self) -> Option<Value> {
+        let handle = self.live.as_ref()?;
+        Python::attach(|py| {
+            let ob = handle.bind(py);
+            if !ob.is_instance_of::<PyList>() {
+                return None;
+            }
+            let mut items = Vec::with_capacity(ob.len().unwrap_or(0).min(64));
+            for item in ob.try_iter().ok()? {
+                items.push(item.ok()?.extract::<Value>().ok()?);
+            }
+            Some(Value::List(items))
+        })
+    }
+
     pub fn live_mapping_value(&self) -> Option<Value> {
         let handle = self.live.as_ref()?;
         Python::attach(|py| {
@@ -4705,6 +5259,57 @@ impl Encoded {
             Err(e) if e.is_instance_of::<pyo3::exceptions::PyIndexError>(py) => Ok(None),
             Err(e) => Err(e),
         }))
+    }
+
+    /// The denylist dict of a carried MODEL, read from its live handle (#3888); `None` for any
+    /// other value, and for a model whose handle a round trip dropped (it was already a dict then).
+    ///
+    /// Asked by [`Value`]'s `Serialize` only, so a render that never serialises a model never pays
+    /// for it. The handle is the floor proxy, whose `__djust_serialize__` is the same
+    /// `normalize_django_value` the conversion used before the handle.
+    pub fn floored_model_dict(&self) -> Option<Value> {
+        if self.eq_class != Some(EqClass::Live) {
+            return None;
+        }
+        let handle = self.live.as_ref()?;
+        Python::attach(|py| {
+            handle
+                .bind(py)
+                .getattr("__djust_serialize__")
+                .ok()?
+                .call0()
+                .ok()?
+                .extract::<Value>()
+                .ok()
+        })
+    }
+
+    /// One NAMED attribute of the live object, read as `dictsort`'s key is (#3888).
+    ///
+    /// Django's `_property_resolver` reads `value[part]` and falls back to `getattr(value, part)`
+    /// for each dotted part, and CALLS nothing, so neither does this. A raw model is a handle over
+    /// its floor proxy, so a floor field (`password`) or a `_` name raises `AttributeError` here
+    /// exactly as it does for a template path, and the caller discards the sort (Django's own
+    /// `except (TypeError, AttributeError): return ""`). `None` is "not readable": no handle, the
+    /// read raised, or the value does not convert.
+    pub fn live_attr(&self, name: &str) -> Option<Value> {
+        // No `_` refusal here, deliberately: the caller (`dictsort_by_key`) refuses a private
+        // name before any item is read, as Django does, and a model's own floor proxy refuses
+        // it again per attribute. A third copy would be one fix plus decoration.
+        if name.is_empty() {
+            return None;
+        }
+        let handle = self.live.as_ref()?;
+        Python::attach(|py| {
+            let mut current = handle.bind(py).clone();
+            for part in name.split('.') {
+                current = match current.get_item(part) {
+                    Ok(found) => found,
+                    Err(_) => current.getattr(part).ok()?,
+                };
+            }
+            current.extract::<Value>().ok()
+        })
     }
 
     /// Python's `o[start:stop:step]` over the live handle — Django's `slice`
@@ -4833,12 +5438,18 @@ pub fn crosses_as_encoded(ob: &Bound<'_, PyAny>) -> bool {
     // `Encoded` (#1986 and its vector 7). Cheap, and asked in the block's own
     // order.
     if ob.getattr("__djust_serialize__").is_ok() {
-        return false;
+        // A floored MODEL proxy is carried since #3888; a queryset proxy still recurses
+        // (its hook answers the proxies of its rows, which are each carried).
+        return is_model_floor_proxy(ob);
     }
     if let Ok(models_mod) = ob.py().import("django.db.models") {
         if let Ok(model_cls) = models_mod.getattr("Model") {
             if ob.is_instance(&model_cls).unwrap_or(false) {
-                return false;
+                // The conversion carries a model as a floored live handle (#3888), by
+                // `opaque_value` or, when one of its probes raises, by the handle-only
+                // terminal; it falls back to the denylist dict only when there is no
+                // floor. Ask the same function, so the two answer one question (#1646).
+                return floored_model_proxy(ob).is_some();
             }
         }
     }
@@ -4993,7 +5604,14 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     // An UNBOUNDED object (#2670, #2678) is left at `None` for the same
     // reason: the sinks read it through the handle, up to the cap.
     let one_shot = ob.try_iter().is_ok_and(|it| it.as_any().is(ob));
-    let items = if iterable && !one_shot && !unbounded {
+    // A Django `Form` / `BoundField` is carried like a one-shot iterator: handle live, `items`
+    // left `None`, the sink that needs them (`{% for %}`) reads them through the handle
+    // (#3770 review, performance). Enumerating them at conversion renders every subwidget of
+    // every field, and for a `ModelChoiceField` re-evaluates its queryset each time, which is
+    // work a template that never loops over the form pays for. A `Form` / `BoundField` re-iterates
+    // to the same items, so reading them at the sink is the same answer, later.
+    let lazy_form = iterable && context::live_handle_is_form_object(ob.py(), ob);
+    let items = if iterable && !one_shot && !unbounded && !lazy_form {
         let it = ob.try_iter().ok()?;
         let mut collected = Vec::with_capacity(len.unwrap_or(0).min(64));
         for item in it {
@@ -5016,11 +5634,23 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         .ok()?
         .extract::<String>()
         .ok()?;
-    let text = ob.str().ok()?;
-    let display_safe = python_string_is_safe(text.as_any());
-    // Lossy, like every other `str()` crossing (#2555): a `__str__` that
-    // yields a lone surrogate keeps its carrier rather than declining it.
-    let display = py_string_lossy(&text).ok()?;
+    // `str(o)`: NOW, or when a sink first asks (#3769). A Django form object's `str()` is the
+    // render of the whole form, and a formset's is the render of every form in it; the carrier
+    // is built for every one in the context on every render, so those are deferred. Every other
+    // object keeps the eager read, because there a raising `__str__` must still decline the
+    // carrier (the `?` below) and the objects whose `str()` is cheap have nothing to save. The
+    // formset question is asked only of an iterable that is not already a form, so an ordinary
+    // object pays no extra Python call. Read BEFORE `repr`, as it always was.
+    let defer_text = lazy_form || (iterable && context::live_handle_is_formset(ob.py(), ob));
+    let eager_text = if defer_text {
+        None
+    } else {
+        let text = ob.str().ok()?;
+        let display_safe = python_string_is_safe(text.as_any());
+        // Lossy, like every other `str()` crossing (#2555): a `__str__` that
+        // yields a lone surrogate keeps its carrier rather than declining it.
+        Some((py_string_lossy(&text).ok()?, display_safe))
+    };
     // MEASURED, not `display.clone()` (#2472). For `set()`, `frozenset()` and
     // `complex(0)` the two spellings coincide, which is exactly why copying
     // `display` here would look correct on every builtin this function was
@@ -5034,12 +5664,18 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     // allocation, so attaching one adds no Rust→Python crossing to the
     // per-render budget (#2532). Unconditional since Step 5 (#2628) deleted
     // the ADR-027 kill-switch flag that used to gate it.
-    let live = Some(std::sync::Arc::new(ob.clone().unbind()));
+    let live = std::sync::Arc::new(ob.clone().unbind());
+    let display = match eager_text {
+        Some((text, safe)) => DisplayText::eager(text, safe),
+        None => DisplayText::deferred(live.clone(), repr.clone()),
+    };
     Some(Encoded {
         type_name,
         // No encoder spelling exists for these; `str(o)` is what the
-        // `Value::String` path this replaces already wrote.
-        json: display.clone(),
+        // `Value::String` path this replaces already wrote — `None` says
+        // "the same as `display`", so a deferred `display` is not asked
+        // twice and not cloned.
+        json: None,
         display,
         truthy,
         len,
@@ -5059,9 +5695,7 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // names and `LenZero() == LenZero()` is False WITHIN one — so no
         // carried spelling decides it. Filed as #2480.
         cmp_key: None,
-        live,
-        display_safe,
-        str_raised: false,
+        live: Some(live),
         // EMPTY: the handle is the authority for every attribute lookup under
         // ADR-027, so building an eager `__dict__` map as well would be two
         // mechanisms answering one question (#1646) — and the wrong one would
@@ -5110,6 +5744,16 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
 /// is the one cell this carrier does not make Django-exact; it is no worse
 /// than the dict dump it replaces on that cell and strictly better on every
 /// lookup that walks the handle.
+/// Does the object's TYPE define a usable `__iter__`? (#3770 review)
+///
+/// Asked of the type, not of `iter(o)`: that call may be the very probe that raised. A class
+/// that sets `__iter__ = None` is Python's spelling of "not iterable", so `None` answers no.
+fn type_defines_iter(ob: &Bound<'_, PyAny>) -> bool {
+    ob.get_type()
+        .getattr(pyo3::intern!(ob.py(), "__iter__"))
+        .is_ok_and(|iter| !iter.is_none())
+}
+
 fn handle_only_encoded(ob: &Bound<'_, PyAny>) -> Encoded {
     let type_name = ob
         .get_type()
@@ -5117,6 +5761,12 @@ fn handle_only_encoded(ob: &Bound<'_, PyAny>) -> Encoded {
         .ok()
         .and_then(|n| n.extract::<String>().ok())
         .unwrap_or_else(|| "object".to_string());
+    // A model proxy is described by the MODEL's class (`<User object>`), never by the proxy's.
+    let type_name = if is_model_floor_proxy(ob) {
+        model_proxy_class_name(ob).unwrap_or(type_name)
+    } else {
+        type_name
+    };
     let text = ob.str().ok();
     let str_raised = text.is_none();
     let display_safe = text
@@ -5130,22 +5780,33 @@ fn handle_only_encoded(ob: &Bound<'_, PyAny>) -> Encoded {
     let display = text
         .and_then(|t| py_string_lossy(&t).ok())
         .unwrap_or_else(|| repr.clone());
-    Encoded {
+    let encoded = Encoded {
         type_name,
-        json: display.clone(),
-        display,
+        json: None,
+        display: if str_raised {
+            DisplayText::raised_standin(display)
+        } else {
+            DisplayText::eager(display, display_safe)
+        },
         truthy: ob.is_truthy().unwrap_or(true),
         len: None,
-        iterable: false,
+        // The TYPE says whether it iterates (#3770 review). `iter(o)` is not asked: it may be the
+        // very probe that raised (a form whose `str()` raised still iterates its `BoundField`s;
+        // a `BoundField` whose subwidgets raise still iterates, and the error is the one the
+        // loop should report). With `items` left `None` and the handle live, `{% for %}` consumes
+        // the live object at the sink, so the real exception surfaces THERE, as Django's does,
+        // instead of an `'X' object is not iterable` that hides it.
+        iterable: type_defines_iter(ob),
         repr,
         cmp_key: None,
         live: Some(std::sync::Arc::new(ob.clone().unbind())),
-        display_safe,
-        str_raised,
         attrs: IndexMap::new(),
         items: None,
         eq_class: None,
-    }
+    };
+    // A floored model whose `str` / `repr` / `bool` raised is carried here, so it answers what
+    // every carried model does (#3888): its own `==`, and `str()` as its container spelling.
+    as_carried_model(encoded, ob, is_model_floor_proxy(ob))
 }
 
 /// The Python types [`equality_class`] dispatches on, resolved once per
@@ -5293,7 +5954,7 @@ impl Encoded {
             }
             cls.call((), Some(&kwargs))?
         } else {
-            let value = cls.call_method1("fromisoformat", (&self.display,))?;
+            let value = cls.call_method1("fromisoformat", (self.display(),))?;
             let kwargs = pyo3::types::PyDict::new(py);
             if let Some(fold) = self.attrs.get("fold") {
                 kwargs.set_item("fold", fold.clone().into_pyobject(py)?)?;
@@ -5357,7 +6018,7 @@ impl<'py> IntoPyObject<'py> for Value {
             // contract, including the model-protection boundary (#2509).
             Value::Encoded(e) => match e.temporal_object(py)? {
                 Some(value) => Ok(value),
-                None => Ok(e.display.into_pyobject(py)?.to_owned().into_any()),
+                None => Ok(e.display().into_pyobject(py)?.to_owned().into_any()),
             },
             // Back to a real `decimal.Decimal`, not a str: a value that made
             // the round-trip as a Decimal must come back as one, or handlers
@@ -5397,12 +6058,11 @@ impl<'py> IntoPyObject<'py> for Value {
                 fields,
                 items,
             } => {
-                let cls = named_tuple_class(py, &name, &fields)?;
                 let args: Vec<_> = items
                     .into_iter()
                     .map(|v| v.into_pyobject(py))
                     .collect::<std::result::Result<Vec<_>, _>>()?;
-                cls.call(pyo3::types::PyTuple::new(py, args)?, None)
+                named_tuple_or_tuple(py, &name, &fields, args)
             }
             Value::Tuple(t) => {
                 // Round-trips back to a real Python tuple, so a tuple that
@@ -5449,19 +6109,28 @@ impl<'py> IntoPyObject<'py> for Value {
 /// cache changes is that two values of the SAME shape now share a class —
 /// `type(a) is type(b)` — which is what Python itself gives them; a class per
 /// value was the accident, not the contract.
+///
+/// A shape the factory REFUSES is remembered too (`Ok(None)`, #3849): without that, every
+/// conversion of a refused namedtuple re-ran `collections.namedtuple()` (an `exec` that raises),
+/// 115 ms against 92 ms per 20,000 rows in the review of #3856. Only the shape's own refusal
+/// (`ValueError`, or the `SyntaxError` `namedtuple()` raises for fields that are equal only after
+/// NFKC normalisation) is remembered; any other failure is not a fact about the shape and is tried
+/// again.
 fn named_tuple_class<'py>(
     py: Python<'py>,
     name: &str,
     fields: &[String],
-) -> PyResult<Bound<'py, PyAny>> {
+) -> PyResult<Option<Bound<'py, PyAny>>> {
     use std::collections::HashMap;
     use std::sync::Mutex;
-    type Cache = Mutex<HashMap<(String, Vec<String>), Py<PyAny>>>;
+    // `None` is a shape `collections.namedtuple` REFUSED (#3849): remembered, so a refused shape
+    // costs one lookup per conversion instead of a class-creation attempt (an `exec` that raises).
+    type Cache = Mutex<HashMap<(String, Vec<String>), Option<Py<PyAny>>>>;
     static CACHE: pyo3::sync::PyOnceLock<Cache> = pyo3::sync::PyOnceLock::new();
     let cache = CACHE.get_or_init(py, || Mutex::new(HashMap::new()));
     let key = (name.to_string(), fields.to_vec());
     if let Some(cls) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
-        return Ok(cls.bind(py).clone());
+        return Ok(cls.as_ref().map(|cls| cls.bind(py).clone()));
     }
     // Built OUTSIDE the lock: `namedtuple()` runs Python, which can re-enter
     // this function (a field default's `__repr__`, a GC callback) and would
@@ -5471,21 +6140,64 @@ fn named_tuple_class<'py>(
     // it first — a value that depends on request order is not a value.
     let kwargs = pyo3::types::PyDict::new(py);
     kwargs.set_item("module", "djust._rust")?;
-    let cls = py
+    let built = py
         .import("collections")?
         .getattr("namedtuple")?
-        .call((name, fields.to_vec()), Some(&kwargs))?;
+        .call((name, fields.to_vec()), Some(&kwargs));
+    let cls = match built {
+        Ok(cls) => Some(cls.unbind()),
+        // The shape's own refusal is a fact about the SHAPE, so it is remembered: `ValueError` (a
+        // duplicate, a leading underscore, a keyword, a name that is not an identifier, a field
+        // that is not a string: `namedtuple()` `str()`s its fields) and `SyntaxError` (fields
+        // equal only after NFKC normalisation, e.g. `("\u{fb01}", "fi")`, which fail when the
+        // generated `__new__` is compiled). No shape raises `TypeError` (probed over every
+        // refusal above), so it is not caught. Anything else (`MemoryError`, a
+        // `KeyboardInterrupt`, an exception from a patched `namedtuple`) is not, and propagates
+        // uncached: the next conversion tries again.
+        Err(err)
+            if err.is_instance_of::<pyo3::exceptions::PyValueError>(py)
+                || err.is_instance_of::<pyo3::exceptions::PySyntaxError>(py) =>
+        {
+            None
+        }
+        Err(err) => return Err(err),
+    };
     // The ENTRY is returned, not the class just built: two threads can build
     // the same shape at once (no GIL on 3.14t — measured 171/200 first
     // conversions), and only one build may become the canonical class. The
-    // loser's is dropped here.
+    // loser's is dropped here, with the lock held: harmless, a class sits in a
+    // reference cycle (`__mro__`, its methods' globals), so dropping our
+    // reference runs no finalizer and cannot re-enter this function.
     //
     // Process-lifetime, ~6 KB per shape, and only app code can grow it: the
     // key is the shape of a class the app created. No eviction, because an
     // evicted shape would come back as a second class.
     let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
-    let entry = guard.entry(key).or_insert_with(|| cls.unbind());
-    Ok(entry.bind(py).clone())
+    let entry = guard.entry(key).or_insert(cls);
+    Ok(entry.as_ref().map(|cls| cls.bind(py).clone()))
+}
+
+/// A [`Value::NamedTuple`] as the Python object it crosses back to: an instance of
+/// [`named_tuple_class`], or, when `collections.namedtuple` REFUSES the shape, the plain `tuple`
+/// of its items (#3849).
+///
+/// The shape is the Python class's own, so it can be one `namedtuple()` will not build:
+/// `namedtuple("R", ["a", "a", "b"], rename=True)` has the fields `('a', '_1', 'b')`, and a
+/// leading underscore is refused ("Field names cannot start with an underscore"); so is a class
+/// whose name is not an identifier. This conversion runs for the WHOLE context whenever a native
+/// tag is called (`build_py_context`), so raising here failed every tag in a template that merely
+/// held such a value, operand or not. Falling back loses the type, never the value.
+fn named_tuple_or_tuple<'py>(
+    py: Python<'py>,
+    name: &str,
+    fields: &[String],
+    args: Vec<Bound<'py, PyAny>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    match named_tuple_class(py, name, fields) {
+        Ok(Some(cls)) => cls.call(pyo3::types::PyTuple::new(py, args)?, None),
+        // Refused (cached, #3849) or failed some other way (not cached): the plain tuple.
+        Ok(None) | Err(_) => Ok(pyo3::types::PyTuple::new(py, args)?.into_any()),
+    }
 }
 
 /// Convert &Value to Python object (clones the value).
@@ -5716,7 +6428,7 @@ impl TemplateObject {
         match &self.value {
             Value::Encoded(e) => {
                 e.type_name.hash(&mut hasher);
-                e.display.hash(&mut hasher);
+                e.display().hash(&mut hasher);
                 e.repr.hash(&mut hasher);
             }
             other => other.to_string().hash(&mut hasher),
@@ -5837,7 +6549,9 @@ pub fn value_into_handler_pyobject(py: Python<'_>, value: Value) -> PyResult<Bou
                 return Ok(temporal);
             }
             if let Some(handle) = encoded.live.as_ref() {
-                if !encoded.iterable {
+                // Not iterable, or a Django form object (#3755): a `BoundField`
+                // iterates its subwidgets, and the wrapper below has no `errors`.
+                if !encoded.iterable || context::live_handle_is_form_object(py, handle.bind(py)) {
                     // `protect_sidecar_strict` answering `None` is the floor
                     // failing to enforce: fall to the wrapper, which can only
                     // ever expose `Encoded`'s measured facts.
@@ -5873,12 +6587,11 @@ pub fn value_into_handler_pyobject(py: Python<'_>, value: Value) -> PyResult<Bou
             fields,
             items,
         } => {
-            let cls = named_tuple_class(py, &name, &fields)?;
             let args: Vec<_> = items
                 .into_iter()
                 .map(|item| value_into_handler_pyobject(py, item))
                 .collect::<PyResult<Vec<_>>>()?;
-            cls.call(pyo3::types::PyTuple::new(py, args)?, None)
+            named_tuple_or_tuple(py, &name, &fields, args)
         }
         Value::Object(map) => {
             let py_dict = PyDict::new(py);
@@ -5998,6 +6711,72 @@ mod tests {
         ] {
             assert_eq!(v.object_str(), None, "{v:?}");
         }
+    }
+
+    /// A model whose `__str__` returns a `SafeString` (`format_html`, `mark_safe`) stamps a text
+    /// that crosses as `Value::SafeString`; it is the same marker, not an ordinary dict.
+    #[test]
+    fn test_object_str_accepts_a_safe_text() {
+        let mut model: IndexMap<ObjectKey, Value> = IndexMap::new();
+        model.insert(
+            "__str__".into(),
+            Value::SafeString("<b>bob</b>".to_string()),
+        );
+        assert_eq!(Value::Object(model).object_str(), Some("<b>bob</b>"));
+    }
+
+    /// `model_str()` is the marker the sinks that treat a map as a MODEL (not as a dict) read: the
+    /// full identity shape a serializer stamps. A dict that only carries a `__str__` text is
+    /// still spelled by it for display (`object_str`), but is not refused its keys, views or
+    /// iteration.
+    #[test]
+    fn test_model_str_needs_the_whole_identity_shape() {
+        let build = |keys: &[(&str, Value)]| {
+            let mut m: IndexMap<ObjectKey, Value> = IndexMap::new();
+            for (k, v) in keys {
+                m.insert((*k).into(), v.clone());
+            }
+            Value::Object(m)
+        };
+        let text = Value::String("bob".to_string());
+        let safe = Value::SafeString("<b>bob</b>".to_string());
+        let class = Value::String("Account".to_string());
+        let pk = Value::Integer(1);
+        let full = build(&[
+            ("pk", pk.clone()),
+            ("__str__", text.clone()),
+            ("__model__", class.clone()),
+        ]);
+        assert_eq!(full.model_str(), Some("bob"));
+        // a SafeString text and a null pk are still a model
+        let safe_full = build(&[
+            ("pk", Value::None),
+            ("__str__", safe.clone()),
+            ("__model__", class.clone()),
+        ]);
+        assert_eq!(safe_full.model_str(), Some("<b>bob</b>"));
+        // each part missing, or of the wrong type, is not
+        for partial in [
+            build(&[("__str__", text.clone())]),
+            build(&[("__str__", text.clone()), ("__model__", class.clone())]),
+            build(&[("__str__", text.clone()), ("pk", pk.clone())]),
+            build(&[("pk", pk.clone()), ("__model__", class.clone())]),
+            build(&[
+                ("__str__", text.clone()),
+                ("__model__", Value::Integer(5)),
+                ("pk", pk.clone()),
+            ]),
+            build(&[
+                ("__str__", Value::Integer(5)),
+                ("__model__", class.clone()),
+                ("pk", pk.clone()),
+            ]),
+        ] {
+            assert_eq!(partial.model_str(), None, "{partial:?}");
+        }
+        assert_eq!(Value::List(vec![]).model_str(), None);
+        // display still goes by the looser marker
+        assert_eq!(build(&[("__str__", text)]).object_str(), Some("bob"));
     }
 
     /// `object_str()` is the ONLY place the marker is spelled (#1646/#1859).

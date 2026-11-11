@@ -151,13 +151,140 @@ class TestAllViews(TestCase, LiveViewSmokeTest):
 
 1. Mounts each view
 2. Asserts it renders without raising an exception
-3. Checks DB query counts stay under `max_queries`
+3. Checks DB query counts stay under `max_queries`, or under the view's own
+   [`query_budget`](#per-view-query-budgets)
 4. If `fuzz=True`, sends malformed event payloads to handlers and asserts no 500 errors
 
 The fuzzer sends events only to `@event_handler` handlers, the ones dispatch
 resolves in every `event_security` mode. Under `"warn"` or `"open"` a client can
 still call an undecorated public method, so the smoke test emits one
 `UserWarning` per view naming those methods: decorate them, or test them directly.
+
+### Per-view query budgets
+
+One `max_queries` for the whole app lets a cheap view grow tenfold unnoticed
+while a heavy report needs a high limit. A view can declare its own budget,
+next to the code that spends it, with `query_budget`:
+
+```python
+from djust import LiveView
+
+
+class ProductListView(LiveView):
+    template_name = "shop/product_list.html"
+    query_budget = 3  # mount + first render, together
+
+
+class SalesReportView(LiveView):
+    template_name = "shop/sales_report.html"
+    query_budget = {"mount": 30, "render": 5}  # each phase on its own
+
+
+class SearchView(LiveView):
+    template_name = "shop/search.html"
+    query_budget = {"mount": 2, "event": 3, "events": {"export": 20}}
+```
+
+`test_smoke_queries` takes each view's budget from the first of these that is
+set:
+
+1. `view_config[View]["max_queries"]` on the test class (an int, for this test only);
+2. the view's `query_budget`;
+3. the test class's `max_queries`.
+
+An int counts mount and first render together. A dict counts `"mount"` and
+`"render"` separately, and a phase it leaves out falls back to `max_queries` on its own, so a dict
+that names one phase can spend up to `max_queries` on the other.
+`"mount"` includes `handle_params()` (a declared `params_form` too).
+Any key other than `"mount"`, `"render"`, `"event"` and `"events"` (a typo), and any value
+that is not an int from 0 to 1,000,000 (a `bool` included), fails the test with a `ValueError`
+naming the view, instead of being ignored. A view over budget is reported by name with
+its count and where its limit came from, for example
+`shop.views.ProductListView: 5 queries (max 3, from query_budget)`.
+
+**Event budgets.** `"event": n` caps the queries of every `@event_handler` of the view, and
+`"events": {"export": 20}` gives one handler its own number, which wins over `"event"`.
+`test_smoke_event_queries` calls each budgeted handler on a freshly mounted view, with the
+payloads the fuzz tests generate, and fails when any call ran more queries than the budget. It
+runs whether or not `fuzz` is on, because a budget the suite skipped would read as protection.
+
+A generated payload rarely reaches the query of a handler that needs a real object. So that a
+budget is never passed by a handler that failed before it did any work:
+
+- a handler **named in `"events"`** with no successful call is an error, and
+- a handler covered only by the broad `"event"` number with no successful call is a
+  `UserWarning` naming it.
+
+Give such a handler real parameters, one dict or a list of them, in `view_config`:
+
+```python
+class TestAllViews(TestCase, LiveViewSmokeTest):
+    view_config = {
+        SearchView: {"event_params": {"export": {"fmt": "csv"}}},
+    }
+```
+
+A handler name in `"events"` that the view does not have is a `ValueError`, and so is an
+`async def` or `@background` handler: a budget cannot be measured on either, and one that was
+accepted anyway would only look like protection. Under the broad `"event"` number those
+handlers are left out and a `UserWarning` names them. The same rule holds everywhere the
+declaration is read: `manage.py check` reports it as V024, the run-time meter logs it once and
+measures nothing, and `djust_audit` lists the view as `invalid: ...`. A
+`view_config` `max_queries` replaces the declared `mount` / `render` budget for that test
+class, and leaves the event budget in force.
+
+**At run time.** The same declaration is measured while the app runs. With `DEBUG` on (or
+under pytest), a view that declares a `query_budget` has the queries of each phase counted
+and a phase over its number is logged as a warning on the `djust._query_budget` logger:
+
+```text
+SearchView: event export ran 24 queries, over its query_budget of 20
+```
+
+A view that declares no `query_budget` is not measured: no wrapper is installed on the
+database connection, and each sync step pays one class-attribute read (about 90 ns). `LIVEVIEW_CONFIG["query_budget"]` chooses what happens:
+
+| value | effect |
+|---|---|
+| unset (default) | warn while `DEBUG` is on or under pytest; nothing otherwise |
+| `"warn"` | warn, whatever `DEBUG` says |
+| `"error"` | raise `QueryBudgetExceeded` from the step that went over, whatever `DEBUG` says. An over-budget mount fails the mount; an over-budget event is an error frame |
+| `"off"` | never measure |
+
+The phases are the ones the smoke test uses. `"mount"` is `mount()` plus `handle_params()`;
+a mount phase is reported once, when it first goes over, so its figure reads `at least N`.
+`"event"` is the handler's own queries, in the smoke test and at run time alike (the per-event
+object-permission re-check is not counted in either). An int budget is the mount phase plus the
+first render that follows it.
+
+`"render"` is one `get_context_data()` pass, and each pass is judged on its own. An HTTP GET
+makes one pass: the request evaluates the view's context once and the render that follows reads
+that context instead of evaluating it again, whether or not the view overrides
+`get_context_data()` or calls `super()`. (A GET used to call an overriding view's
+`get_context_data()` twice, so an `int` budget and the page's real cost differed by a factor of
+two: #3725.) A WebSocket or SSE mount makes one pass, and so does each event, which evaluates
+the context afresh because the handler changed state.
+
+Two paths still make more than one pass, and a budget has to allow for the passes they make:
+the HTTP POST fallback of a view on the default (legacy) exposure policy evaluates once to save
+the state and once to render (two passes, #3734), and the live mount of an explicit-exposure view
+whose page shell comes from `template_name` evaluates three times (#3733). Each pass is still judged against
+the `"render"` number on its own.
+
+Not measured, by design: `async def` handlers and hooks (they run on the event loop, outside
+the metered sync steps) and `@background` handlers (the work runs later, in `start_async`);
+`start_async` work and `handle_async_result`; ticks; the authorization hops (`check_permissions`,
+`get_object`, `has_object_permission`); the `on_mount` hooks and `connected()` /
+`disconnected()` (the `"lifecycle"` step); and a step that runs inside another step on the same
+thread, such as an embedded `{% live_render %}` child's `get_context_data()` (it is part of the
+parent's step, and the parent is the one judged: the child's own `"render"` budget is not
+judged there). Only the default database connection is counted, as in
+the smoke test.
+
+Two invalid-input rules are the same everywhere. An invalid `query_budget` is never measured
+(see above). An invalid `LIVEVIEW_CONFIG["query_budget"]` (`True`, `"WARN"`) is reported by
+`manage.py check` as C029; a request never fails over it, it reads the value as `"warn"` and logs
+that once.
 
 ## Performance Testing
 

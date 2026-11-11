@@ -39,3 +39,19 @@ Key rules:
 - `_refresh()`: build QuerySets, store in `self._private`
 - `get_context_data()`: assign `self.public = self._private`, call `super()`
 - Event handlers: update state, call `_refresh()` (framework re-renders automatically)
+
+URL params: declare them, do not parse them in `handle_params()`:
+
+```python
+class ListParams(forms.Form):
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+
+class ListView(LiveView):
+    params_form = ListParams  # handle_params gets cleaned_data; a bad value -> params_errors
+    params_form_fallback = "fields"  # optional: keep the fields that validated (default "initial": every field's initial value)
+
+    def handle_params(self, params, uri):
+        self.page = params["page"]
+```
+
+Not-found pages: set `http_status_of_state = {"not_found": 404}` once on a base view (or `LIVEVIEW_CONFIG["http_status_of_state"]` for the whole project; the view's own attribute wins, never merged) and set `self.state = "not_found"`; no per-view `get_http_status()` (V025 warns about one under a project-wide map).

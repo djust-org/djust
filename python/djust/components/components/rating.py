@@ -59,7 +59,7 @@ class Rating(Component):
                 parts.append(f'<span class="{star_cls}">&#9733;</span>')
             else:
                 parts.append(
-                    f'<button class="{star_cls}" {self.event_attrs(self.event, value=i)}>'
+                    f'<button type="button" class="{star_cls}" {self.event_attrs(self.event, value=i)}>'
                     f"&#9733;</button>"
                 )
         return f'<div class="{cls}">{"".join(parts)}</div>'

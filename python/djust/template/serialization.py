@@ -4,19 +4,84 @@ Serialization utilities for djust template rendering.
 Prepares Django/Python values for native rendering or JSON serialization.
 """
 
+import logging
+from collections import namedtuple
 from datetime import date, datetime, time, timedelta
+from functools import lru_cache
 from decimal import Decimal
 from django.utils.datastructures import MultiValueDict
 from django.utils.functional import Promise
 from typing import Any, Dict, List, Union, cast
 from uuid import UUID
 
+from django.db.models import Model
 from django.db.models.fields.files import FieldFile
 
 from djust.serialization import django_json_datetime
 
+logger = logging.getLogger(__name__)
+
 # JSON-compatible value the Rust engine accepts.
 JSONValue = Union[str, int, float, bool, None, List[Any], Dict[str, Any]]
+
+
+@lru_cache(maxsize=4096)
+def _namedtuple_shape_is_buildable_cached(name: str, fields: tuple) -> bool:
+    try:
+        namedtuple(name, fields)
+    except (ValueError, SyntaxError, TypeError):
+        # ``SyntaxError``: fields equal only after NFKC normalisation (``("\ufb01", "fi")``) fail
+        # when the generated ``__new__`` is compiled. It used to escape ``serialize_value`` and fail
+        # the render. ``TypeError``: no SHAPE raises it, but ``isinstance(x, str)`` admits a ``str``
+        # SUBCLASS and ``namedtuple()`` calls ``str()`` on every name, so a class whose ``__name__``
+        # or ``_fields`` is a ``str`` subclass with a raising ``__str__`` raises here. (Only the
+        # Rust side cannot see that: it extracts real ``String``s without calling ``__str__``.)
+        return False
+    return True
+
+
+def _namedtuple_shape_is_buildable(name: Any, fields: Any) -> bool:
+    """Would ``collections.namedtuple(name, fields)`` accept this shape? (#3849)
+
+    The engine holds a namedtuple as ``(name, fields, items)`` and rebuilds the Python class from
+    the first two with ``collections.namedtuple`` whenever it hands the context to a native tag.
+    That call REFUSES some shapes a real class can have: a duplicate field renamed by
+    ``namedtuple(..., rename=True)`` is ``('a', '_1', 'b')`` and a leading underscore is refused;
+    a class whose name is not an identifier; a Python keyword. A namedtuple like that must stay a
+    plain tuple, so it never reaches the engine as a ``Value::NamedTuple``. The real constructor
+    is the test, not a copy of its rules, and the answer is cached per shape (the call execs a
+    class body).
+    """
+    if not isinstance(name, str) or not isinstance(fields, (tuple, list)):
+        return False
+    if not all(isinstance(field, str) for field in fields):
+        return False
+    return _namedtuple_shape_is_buildable_cached(name, tuple(fields))
+
+
+def _spells_itself(value: Any) -> bool:
+    """Is ``value`` a ``dict`` / ``list`` subclass that renders itself as markup? (#3755)
+
+    The Python half of the engine's ``dict_subclass_spells_itself`` /
+    ``list_subclass_spells_itself``, narrowed to the subclasses that define ``__html__``
+    (Django's ``ErrorList`` / ``ErrorDict``, whose ``str()`` is the ``<ul class="errorlist">``
+    markup). The engine's rule is wider — any override of ``__str__`` / ``__repr__``, so an
+    ``OrderedDict`` nested in a value is already a carrier — and the wider rule is NOT applied
+    here: rebuilding a top-level ``OrderedDict`` / ``defaultdict`` / user mapping as a plain
+    dict is what this function has always done, and it also recurses into the values (a
+    ``FieldFile`` becomes its URL), which a raw pass-through would stop doing. Compared by
+    identity against the builtin's own slots, so a subclass that inherits both ``__str__`` and
+    ``__repr__`` is a plain container whatever it defines.
+    """
+    for base in (dict, list):
+        if isinstance(value, base):
+            cls = type(value)
+            return (
+                cls is not base
+                and hasattr(cls, "__html__")
+                and (cls.__str__ is not base.__str__ or cls.__repr__ is not base.__repr__)
+            )
+    return False
 
 
 def serialize_value(
@@ -49,6 +114,14 @@ def serialize_value(
         if isinstance(value, Promise):
             return str(value)
         if isinstance(value, (datetime, date, time, timedelta, Decimal, UUID)):
+            return value
+        # A model crosses whole (#3902): the engine carries it as a floored live handle (#3888), so
+        # it keeps its managers and its relations. It has to be decided HERE, before the duck-typed
+        # file check below: that check asks ``hasattr(value, "url") and hasattr(value, "name")``,
+        # which a ``Link(name, url)`` row satisfies (``{{ link }}`` rendered its URL instead of its
+        # ``str()``) and which RUNS a ``url`` property — one that raises anything but
+        # ``AttributeError`` failed the whole render. A model is never a file.
+        if isinstance(value, Model):
             return value
 
     if value is None:
@@ -93,6 +166,29 @@ def serialize_value(
                     return None
             return None
 
+    # Django Form / BoundField.
+    #
+    # With ``for_render=True`` the object itself crosses to the engine. The
+    # native render API takes Python objects (see the top of this function), and
+    # a ``Form`` is one whose behaviour IS its type: iterating it yields
+    # ``BoundField``s, ``form|length`` is 0 (no ``__len__``), ``{{ form }}`` is its
+    # ``as_div`` HTML, and ``f.errors`` / ``f.field.required`` read live
+    # attributes. ``render_form_value``'s ``{name: SafeString}`` snapshot keeps
+    # only the widget HTML, so ``{% for f in form %}`` iterated the KEYS,
+    # ``{{ f.errors }}`` and ``{% field_error field=f %}`` rendered empty (#3755).
+    # The engine already knows how to carry an object that way (a handle-bearing
+    # ``Value::Encoded``, ADR-027: the ``{% for %}`` / ``{% with %}`` binding takes
+    # the live object with it).
+    #
+    # The JSON-state paths (``normalize_django_value``, the LiveView bridge) still
+    # need a plain value and keep ``render_form_value``.
+    if for_render:
+        from django.forms import BaseForm
+        from django.forms.boundfield import BoundField
+
+        if isinstance(value, (BaseForm, BoundField)):
+            return value
+
     # Django Form / BoundField — render to SafeString HTML so that
     # {{ form.field_name }} produces widget HTML. Must come before dict check.
     from djust.serialization import render_form_value
@@ -114,6 +210,14 @@ def serialize_value(
     if isinstance(value, MultiValueDict):
         return cast(JSONValue, value)
 
+    # A ``dict`` / ``list`` SUBCLASS that renders itself as markup (Django's ``ErrorDict`` /
+    # ``ErrorList``: ``str(o)`` is the ``<ul class="errorlist">`` markup) crosses as itself
+    # with ``for_render=True``: rebuilding it as a plain container loses the spelling Django
+    # renders for ``{{ errors }}`` (#3755). See ``_spells_itself`` for why this is narrower
+    # than the engine's own rule.
+    if for_render and _spells_itself(value):
+        return value
+
     # Handle dict - recursively serialize
     if isinstance(value, dict):
         return {k: serialize_value(v, for_render=for_render) for k, v in value.items()}
@@ -121,7 +225,40 @@ def serialize_value(
     # Handle list/tuple - recursively serialize
     if isinstance(value, (list, tuple)):
         items = [serialize_value(item, for_render=for_render) for item in value]
-        return tuple(items) if for_render and isinstance(value, tuple) else items
+        if not (for_render and isinstance(value, tuple)):
+            return items
+        fields = getattr(value, "_fields", None)
+        if fields is not None and _namedtuple_shape_is_buildable(type(value).__name__, fields):
+            # A namedtuple keeps its type (#3849): the engine holds it as ``Value::NamedTuple``
+            # (name + fields + items) and prints ``P(x=1, y=2)`` as Django does, where a plain
+            # ``tuple(items)`` printed ``(1, 2)``. Rebuilt POSITIONALLY: ``type(value)(items)``
+            # would wrap the list in the first field.
+            #
+            # This runs the class's own ``__new__`` at render time, on values that are already
+            # serialized (a lazy string is a ``str`` by now), so ANY exception it raises means
+            # "this value cannot be rebuilt here": it degrades to the plain tuple it was before
+            # #3849, never to a failed render. (``_protect_sidecar_tree`` in
+            # ``python/djust/serialization.py`` rebuilds the same way and catches only
+            # ``TypeError``; not changed here.)
+            try:
+                return type(value)(*items)
+            except Exception as exc:  # noqa: BLE001 - see above: the user's __new__ is arbitrary
+                # Through ``log_failure`` (ADR-038): the user's ``__new__`` is arbitrary code, so
+                # its exception text may carry undeclared state and is logged only where
+                # diagnostics are allowed (``test_log_exposure_pin`` pins this). Imported here,
+                # not at module level: the template backend must not load the exposure modules
+                # at import time (``test_lazy_package_init_2559`` pins the allowlist).
+                from djust._exposure_diagnostics import log_failure
+
+                log_failure(
+                    logger,
+                    exc,
+                    "namedtuple %s could not be rebuilt for rendering, using a plain tuple",
+                    type(value).__name__,
+                    level="debug",
+                    traceback=True,
+                )
+        return tuple(items)
 
     # Pass through other types (str, int, float, bool, etc.)
     return cast(JSONValue, value)

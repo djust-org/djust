@@ -106,7 +106,7 @@ djust/
   line names — run `make sizes` to print the current values (#2138).
   - **Shipped**: `client.min.js.gz` is **~80 KB** gz — what a user downloads,
     and the only figure that constrains anything.
-  - **Build input**: unminified `client.js` is ~267 KB gz <!-- size-claim: unminified -->
+  - **Build input**: unminified `client.js` is ~270 KB gz <!-- size-claim: unminified -->
     across 59 modules in `static/djust/src/`. Not a deliverable; do not quote
     it as "the client size".
   - Until #2138 these read ~87 KB gz / 388 KB raw / 35 modules <!-- size-claim: historical -->
@@ -135,6 +135,7 @@ These are **hard requirements** — violations are auto-rejected in PR review:
 
 - **Conventional commits**: `fix:`, `feat:`, `docs:`, `refactor:`, `security:`, `test:`, `chore:`
 - **Run focused checks while editing**, then let the scoped pre-push hooks run. Do not redundantly run `make test` before every incremental push.
+- **No whole-suite runs on a laptop.** CI is the full-suite evidence. Locally run the file/class/`-k` you changed or `make test-selected`; `tests/local_load_guard.py` caps xdist at 2 workers and refuses a run over 5,000 tests unless `DJUST_FULL_LOCAL=1` (the `make test*` targets set it). Time per PR/issue: `make flow-metrics` (see `docs/testing-strategy.md`, "Local load guard and flow metrics").
 - **Pre-commit hooks** run automatically: ruff, ruff-format, bandit, detect-secrets
 - **Pre-push hooks** select affected Python tests and Rust crates; unknown/shared changes fall back to full coverage. See [test strategy](docs/testing-strategy.md).
 - **Review against** `docs/PULL_REQUEST_CHECKLIST.md` before marking PRs ready
@@ -1467,7 +1468,14 @@ over-deletion and every one a regression against `main`.
   **A gate-off harness must:** (a) `assert` the mutation text was found; (b)
   `assert` the mutated source differs from the original; (c) count *errors* as
   well as failures; and (d) refuse to report a number at all when the module
-  did not import. Reference implementation shape:
+  did not import. **Do not write this harness again: state the mutations as data
+  and run `scripts/gate_off.py` (#3714), which implements (a)-(d) here and the
+  bounded-run and restore rules in the paragraph further down; it cannot judge an
+  equivalent mutation or a shadowed mechanism; see its docstring. For a sweep over
+  many sites use `scripts/gate_off_batch.py` (`make gate-off-batch`, #3905): one full
+  run per batch, failures attributed to a mutation by name, never guessed; see
+  `docs/testing-strategy.md`.** Reference
+  implementation shape:
 
   ```python
   assert old in orig, f"MUTATION TEXT NOT FOUND for {label}"
@@ -1619,7 +1627,8 @@ itself** — and in two cases the premise was the *recommended fix*.
   mutation was equivalent, whether two mechanisms overlap, or whether coverage
   is genuinely missing — they look identical from the harness and have opposite
   remedies. When two mechanisms overlap, delete the redundant one rather than
-  testing around it.
+  testing around it. (`scripts/gate_off.py` reports a survivor as `SURVIVED` and
+  prints this question; it cannot answer it.)
 
 - **Grep for the SINK, not for the callers you expect.** Three PRs in this
   drain shipped with an incomplete set of call sites and were corrected only
@@ -1687,6 +1696,13 @@ number when the module did not import).
   input is not in the suite). Both outcomes stay distinguishable only if the
   harness survives to report them. Never `shutil.copy2` the original back
   after a mutation — it preserves mtime and cargo reuses the mutant.
+  `scripts/gate_off.py` does all of this (deadline, RSS ceiling, `HUNG` /
+  `RUNAWAY-MEMORY` reported as `CAUGHT` with the measurement, restore verified by
+  SHA-256, new inode and fresh mtime on every write, an `flock` on each target's
+  directory that refuses an overlapping run whatever its environment, and an
+  out-of-tree journal that restores a SIGKILLed run's mutant before the next run
+  snapshots it, provided both runs use the same journal directory, which defaults
+  to the user's `~/.cache/gate-off` regardless of `$HOME`; see its docstring).
 
 ## Process canonicalizations from the v1.2.0-6 retro arc (transport fidelity, wire versioning, check coverage)
 
@@ -1711,6 +1727,13 @@ Three rules from the v1.2.0-6 drain (PRs #2835-#2846, eight issues: #2821, #2823
   `static/djust/src/`; never hand-merge `client.js` / `client.min.js` / `client-sizes.json`
 - merge: squash (main carries no PR merge commits); drain PRs merge with `--admin`,
   since the author cannot approve their own PR and human review is at the milestone level
+  **A batch merges one PR at a time (#3735):** for the second and later PRs of a batch, wait for
+  main's `Tests` to finish green on the previous merge commit before squashing the next (or `git merge
+  origin/main` into the branch and wait for CI on that merged tree). Cross-file gates — a ratchet over
+  every test file, shard-duration coverage, a count or floor, a settings-leak scan — pass alone and fail
+  together; four back-to-back merges put main red twice in v1.3.0-16 (#3727, #3729). Run `make merge-gates`
+  on the scratch merge: it runs the whole-tree meta tests from one list (`MERGE_GATES` in the `Makefile`),
+  and `tests/test_merge_gates_3757.py` fails when a new tree-scanning test is neither on it nor excluded
 - release: squash-merge the release PR first, then tag `main` with `make release`; never tag
   `release/*` (the squash leaves the tag unreachable from main — #3149, v1.3.0rc3 / #3131)
 

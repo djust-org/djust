@@ -199,7 +199,7 @@ All three are Django **INFO** checks registered under the `djust` tag:
   It can also print during runserver/migrate system checks.
 - [I003](error-codes.md#i003-hand-rolled-ui-in-the-last-audit): a fresh UI
   summary contains X101–X104 findings, even if `djust.components` is installed
-  and enabled. X105 alone does not trigger it; missing, invalid, or stale
+  and enabled. X105 and X106 alone do not trigger it; missing, invalid, or stale
   caches are silent. See [cache lookup and limits](djust-audit.md#ui-summary-cache).
 
 I001 recognizes this exact environment-variable list:

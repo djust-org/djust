@@ -128,6 +128,7 @@ describe('the shipped hooks never replace an app hook (#2985 batch 2)', () => {
         describe(c.hook, () => {
             it('registers a hook, so mounting logs no "No hook registered"', () => {
                 const env = boot(c.markup, c.file);
+                expect(typeof env.window.DjustHooks?.[c.hook]?.mounted).toBe('function');
                 expect(env.warnings.filter((w) => w.includes('No hook registered'))).toEqual([]);
                 expect(c.probe(env.$(`[dj-hook="${c.hook}"]`))).toBe(true);
             });
@@ -143,6 +144,7 @@ describe('the shipped hooks never replace an app hook (#2985 batch 2)', () => {
                 const env = boot(c.markup, c.file, {
                     preRegister: (w) => { w.djust.hooks = { [c.hook]: { mounted } }; },
                 });
+                expect(env.window.DjustHooks?.[c.hook]).toBeUndefined();
                 expect(mounted).toHaveBeenCalledTimes(1);
                 expect(c.probe(env.$(`[dj-hook="${c.hook}"]`))).toBe(false);
             });

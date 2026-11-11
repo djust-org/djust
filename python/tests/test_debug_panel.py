@@ -13,6 +13,14 @@ from unittest.mock import patch
 
 import pytest
 
+# Import the static storage module BEFORE any test patches ``django.conf.settings``.
+# ``static()`` imports it lazily, and a module first imported while ``django.conf.settings``
+# is a MagicMock binds that mock as its module-level ``settings`` for the rest of the
+# process: the storage then reads STATIC_URL from a dead mock and ignores every later real
+# settings change (#3751). Importing it here keeps the patches below from ever being the
+# first importer, whichever worker or order runs this file.
+import django.contrib.staticfiles.storage  # noqa: F401  -- import for its side effect
+
 from djust import LiveView
 from djust.decorators import event_handler, debounce, cache
 
@@ -242,6 +250,72 @@ class TestGetDebugInfo:
         assert debug_info["template"] is None
 
 
+def _static_url(path):
+    """The URL the product emits for ``path``: ``static()``, with its fallback."""
+    from django.templatetags.static import static
+
+    try:
+        return static(path)
+    except (ValueError, AttributeError):
+        return "/static/" + path
+
+
+def _static_state():
+    """Where ``static()`` gets its URL from, read WITHOUT the ``django.conf.settings`` patch.
+
+    The tests below patch ``django.conf.settings`` with a mock, so the real settings are
+    reached through the static storage module, which holds the object it first imported.
+    A failure that says only "the tag is missing" cannot tell a product bug from a leak in
+    an earlier test of the same worker (#3751); this names the script prefix, the settings
+    in force, the two caches that freeze a prefixed URL and what ``static()`` answers.
+    """
+    try:
+        import django.contrib.staticfiles.storage as storage_module
+        from django.core.files.storage import storages
+        from django.urls import get_script_prefix
+
+        real = storage_module.settings
+        held = storages._storages.get("staticfiles")
+        state = {
+            "script prefix": get_script_prefix(),
+            "storage module settings": type(real).__name__,
+            "STATIC_URL": real.STATIC_URL,
+            "settings cache": real.__dict__.get("STATIC_URL"),
+            "STORAGES[staticfiles]": real.STORAGES.get("staticfiles", {}).get("BACKEND"),
+            "storage instance base url": getattr(held, "_base_url", None),
+            "static(panel)": _static_url("djust/debug-panel.js"),
+        }
+    except Exception as exc:  # noqa: BLE001 - the report must never hide the failure it describes
+        return "static state unreadable: %r" % (exc,)
+    return ", ".join("%s=%r" % item for item in state.items())
+
+
+def _missing_tag_message(expected, html):
+    import re
+
+    return "expected %r in the injected HTML; its <script src> tags were %r; %s" % (
+        expected,
+        re.findall(r"<script[^>]*\bsrc=[^>]*>", html),
+        _static_state(),
+    )
+
+
+def test_the_missing_tag_message_names_where_static_urls_come_from():
+    """The failure report is only worth having if it names the cause (#3751)."""
+    message = _missing_tag_message('<script src="/static/x.js"', "<html><script src='/app/x.js'>")
+
+    for needle in (
+        "script prefix",
+        "STATIC_URL",
+        "settings cache",
+        "STORAGES[staticfiles]",
+        "storage instance base url",
+        "static(panel)",
+        "/app/x.js",
+    ):
+        assert needle in message, message
+
+
 class TestDebugInfoInjection:
     """Test debug info injection in HTML"""
 
@@ -285,12 +359,18 @@ class TestDebugInfoInjection:
             in html
         )
 
-        # Check that debug-panel.js script tag is present (#194)
-        assert '<script src="/static/djust/debug-panel.js"' in html
+        # Check that debug-panel.js script tag is present (#194). The tag's URL is whatever
+        # ``static()`` resolves, which is what the product emits: the expected tag is derived
+        # the same way (a literal "/static/" held only while nothing else in the process had
+        # changed the static storage, #3751), and a failure names the tags it found.
+        panel_tag = '<script src="%s"' % _static_url("djust/debug-panel.js")
+        dev_tag = '<script src="%s"' % _static_url("djust/client-dev.js")
+        assert panel_tag in html, _missing_tag_message(panel_tag, html)
+        assert dev_tag in html, _missing_tag_message(dev_tag, html)
 
         # Verify debug-panel.js script tag comes before client-dev.js script tag
-        debug_panel_pos = html.index('<script src="/static/djust/debug-panel.js"')
-        client_dev_pos = html.index('<script src="/static/djust/client-dev.js"')
+        debug_panel_pos = html.index(panel_tag)
+        client_dev_pos = html.index(dev_tag)
         assert debug_panel_pos < client_dev_pos, "debug-panel.js must load before client-dev.js"
 
         # Extract and parse debug info
@@ -308,6 +388,43 @@ class TestDebugInfoInjection:
         assert "variables" in debug_info
         assert debug_info["view_class"] == "MyView"
         assert "increment" in debug_info["handlers"]
+
+    @patch("django.conf.settings")
+    def test_script_tags_follow_the_static_url_not_a_literal(self, mock_settings):
+        """The panel and dev-client tags carry ``static()``'s URL, whatever ``STATIC_URL`` is (#3751).
+
+        The victim above used to hold the literal ``/static/``; it passed only while nothing
+        in the process had pointed the static storage somewhere else. Under another
+        ``STATIC_URL`` the product emits that URL (correctly) and a literal fails with
+        the symptom reported in #3751: every other piece of the injection present, no
+        ``<script src="/static/djust/debug-panel.js"``. This test also fails, in a worker
+        that had not yet imported the static storage, if this file's own patches are the
+        first importer (the storage then keeps a MagicMock as its ``settings``).
+        """
+        import django.contrib.staticfiles.storage as storage_module
+        from django.test import override_settings
+
+        # The leak this file used to cause: the storage module bound to a mock.
+        assert type(storage_module.settings).__name__ == "LazySettings", (
+            "django.contrib.staticfiles.storage holds %r as its settings: it was first imported "
+            "while django.conf.settings was patched, so STATIC_URL no longer follows the real "
+            "settings (#3751)" % type(storage_module.settings).__name__
+        )
+        mock_settings.DEBUG = True
+        mock_settings.STATIC_URL = "/cdn/"
+
+        class MyView(LiveView):
+            template_string = "<html><head></head><body></body></html>"
+
+        with override_settings(STATIC_URL="/cdn/"):
+            html = MyView()._inject_client_script("<html><head></head><body></body></html>")
+        assert '<script src="/cdn/djust/debug-panel.js"' in html, _missing_tag_message(
+            "/cdn/djust/debug-panel.js", html
+        )
+        assert '<script src="/cdn/djust/client-dev.js"' in html
+        assert '<script src="/static/djust/debug-panel.js"' not in html
+        # The stylesheet link is a literal in the product; this test does not claim otherwise.
+        assert 'href="/static/djust/debug-panel.css"' in html
 
     @patch("django.conf.settings")
     def test_debug_info_not_injected_when_debug_false(self, mock_settings):

@@ -89,6 +89,11 @@ fi
 # slow tests (they are about the change); DJUST_PREPUSH_FULL=1 runs everything;
 # CI runs the slow tier. Combined with the nightly filter below into ONE -m:
 # pytest honours only the last -m it is given.
+# The full-suite fallback is the deliberate full gate, so it is allowed past the local
+# load guard (tests/local_load_guard.py); a targeted selection never needs the opt-in.
+if [ "${PATHS[*]}" = "tests/ python/tests/ python/djust/tests/" ]; then
+    export DJUST_FULL_LOCAL=1
+fi
 SKIP_SLOW=0
 if [ "${DJUST_PREPUSH_FULL:-}" != "1" ] && [ "${PATHS[*]}" = "tests/ python/tests/ python/djust/tests/" ]; then
     SKIP_SLOW=1
@@ -329,7 +334,15 @@ for _id in "${FAILED_IDS[@]}"; do
         0) NEW_IDS+=("$_id") ;;
         1) PRE_IDS+=("$_id") ;;
         4 | 5)
-            if [ "$_rc" -eq 4 ] && ! printf '%s' "$_out" | grep -qE '^ERROR: (file or directory )?not found:'; then
+            # A here-string, NOT `printf '%s' "$_out" | grep -q`. This file runs
+            # under `set -o pipefail`, and `grep -q` exits at the first match
+            # while the writer may still be mid-write: printf then dies of
+            # SIGPIPE ("printf: write error: Broken pipe"), pipefail reports
+            # the PIPELINE as failed, the `!` flips it to "no match", and a test
+            # that IS absent at the base is announced as unimportable. The
+            # race is rare for a 100-byte message and certain for one larger
+            # than the pipe buffer; CI hit it as a flake (#3810).
+            if [ "$_rc" -eq 4 ] && ! grep -qE '^ERROR: (file or directory )?not found:' <<<"$_out"; then
                 # Unimportable at the base, not absent. Not comparable.
                 UNRESOLVED=$((UNRESOLVED + 1))
             else

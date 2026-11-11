@@ -121,6 +121,75 @@ class StockTickerView(LiveView):
 
 The view re-renders and sends VDOM patches to all connected clients after each tick. No external task runner needed.
 
+A tick runs on a WebSocket and on an SSE session. It yields to a turn in progress (the tick is skipped, not queued), renders only when `handle_tick()` changed state or set `_force_full_html`, and honours `_skip_render`.
+
+## A push from the view's own code: `self.server_push()`
+
+`push_to_view()` reaches a view from outside, through the channel layer. A view that follows a long-running job with a background task wants something simpler: say "call this handler, then render and send", on the connection it is mounted on. That is `await self.server_push(handler, payload)`, and it works the same on a WebSocket and on an SSE session:
+
+```python
+import asyncio
+from djust import LiveView
+from djust.decorators import event_handler
+
+class JobView(LiveView):
+    def mount(self, request, **kwargs):
+        self.step = "queued"
+
+    @event_handler()
+    async def start(self, **kwargs):
+        # A task created from an async handler runs on the connection's loop.
+        self._follower = asyncio.get_running_loop().create_task(self._follow())
+
+    async def _follow(self):
+        async for step in job_steps():
+            await self.server_push("handle_step", {"step": step})
+
+    def handle_step(self, step="", **kwargs):
+        self.step = step
+```
+
+- **It is the same turn as `push_to_view()` on the socket**: the turn-middleware chain runs (so `LIVEVIEW_CONFIG["sync_turn_wrapper"]` and `reauth_on_event` apply), the handler runs under the connection's render lock, the page renders once and the frame is sent with `source="broadcast"`.
+- **Busy deferral.** A push that finds a turn in progress (an event, a background result, a tick, or the lock held) is queued and replayed in arrival order once the lock frees; identical queued pushes coalesce, the queue is bounded (64, the oldest dropped), and a backlog costs one render. A push issued from inside an event handler is queued behind that event, so it never waits on its own turn.
+- **A browser cannot call it.** `server_push` is refused as a client event in every `event_security` mode (`strict`, `warn`, `open`), by name (so a subclass that overrides it is covered too) and by function; only your server code reaches it.
+- **The handler is checked as `push_to_view()` checks it**: `handle_*`, `@event_handler` or `@push_handler`; any other name is refused with a `server_push: blocked handler` warning and never called. The handler name and the payload come from your server code; nothing a browser sends reaches `server_push()`.
+- **A failing handler or render is logged and swallowed**, as `push_to_view()` does on the socket: `server_push()` never raises it into your task, and a deferred batch is not lost with it.
+- **It returns `False` for a handler it refuses** (a `server_push: blocked handler` warning) or cannot find, so a caller can tell a refusal from a run.
+- **It returns `True` when the push ran or was queued, and `False` (with a debug log, never an exception) when there is nobody to push to**: on the first HTTP render and on the fresh instance an HTTP fallback POST builds, in `LiveViewTestClient`, after the view was closed or replaced by a `live_redirect`, and before `mount()` has finished. A task that outlives its view can therefore keep calling it safely; cancel the task in `disconnected()` to stop it sooner.
+- Call it from the view's event loop: an `async` handler, or a task created from one. A bad argument (`handler` not a non-empty `str`, `payload` not a `dict`) raises `TypeError`.
+
+### Is a live transport attached? `self.live_transport`
+
+`live_transport` is a reserved name: it is a read-only property, so `self.live_transport = ...` in a view raises `AttributeError` (a class attribute of that name shadows it). `self.live_transport` is `"websocket"`, `"sse"` or `None`. It is already set **inside `mount()`** on a WebSocket or SSE mount, and it is `None` on the first HTTP render, on an HTTP fallback POST's fresh instance and in `LiveViewTestClient`. A view uses it to decide whether to start background followers:
+
+```python
+def mount(self, request, **kwargs):
+    self.live = self.live_transport is not None  # False on the server-rendered first paint
+```
+
+## Over SSE: what reaches an SSE session
+
+When the client falls back to SSE (`use_websocket: False`, or a socket that exhausted its reconnects), a view still gets:
+
+- its events and its `start_async` results (always did);
+- `tick_interval` / `handle_tick()` (the same opt-in rule: set `tick_interval` **and** override `handle_tick`);
+- `self.server_push()` from its own code.
+
+It does **not** get, and these stay WebSocket-only because they need the channel layer:
+
+- `push_to_view()` / `apush_to_view()` groups, including `scope=` push scopes;
+- `db_notify` (`handle_info` from `listen()`);
+- presence broadcasts.
+
+SSE sessions live in the process that served the stream GET, so there is no way for a `push_to_view()` from another process (a Celery worker) to reach one today. Tracked in [#3809](https://github.com/djust-org/djust/issues/3809) follow-ups.
+
+Two things protect an SSE session that a WebSocket gets from `await send`:
+
+- **Back-pressure.** A frame the server produces is queued for the stream; nothing slows a producer when the client stops reading. While 128 frames are queued (`djust.sse._MAX_QUEUED_SERVER_FRAMES`), a **tick is skipped** (the next interval picks up the change) and a **`server_push()` is deferred**: queued, coalescing identical pushes, bounded at 64 with the oldest dropped, and replayed in order, as one render, once the client drains. Frames that answer a user event are never held back. The bound counts frames, not bytes: a few very large frames can still be queued.
+- **Re-authorization.** With `reauth_on_event` on, a tick or push of a view that sets `login_required` / `permission_required` re-reads the session and the user from the session store every `reauth_server_turn_interval` seconds, as a WebSocket does. A sign-out elsewhere, or a deactivated account, ends the stream with `permission_denied` instead of ticking on. Explicit-exposure roots reload the session on every server turn.
+
+The SSE push turn does not use the worker-pool offload that a WebSocket push turn may take (`worker_threads`); it runs the stock path.
+
 ## The Broadcast Pattern
 
 When multiple clients edit shared state (collaborative editing, shared dashboards), push each change to the view so every peer receives it. The session that made the change does not need special handling: when a handler pushes to its own view, the originating session automatically skips its own broadcast (#1677), because its direct event response already reflects the new state.
@@ -198,7 +267,7 @@ push_to_view("games.views.RoomView", handler="handle_refresh", scope="room-42")
   - A tenant view whose tenant did not resolve receives no scoped push, and a scoped push to a tenant-scoped view with no tenant reaches no session. Each logs one warning (per consumer, per view path) that names no value.
   - A push without `scope` goes to the view-wide group, which has no tenant in its name, but every push is also stamped with the tenant it is for (`tenant=`, defaulting to the bound tenant), and a tenant view applies only a push stamped for its own tenant or for none. A tenant's handler that pushes view-wide therefore reaches that tenant's sessions only; a task with no tenant, or `tenant=None`, is a broadcast to every tenant. A view that is not tenant-scoped applies every push, and a message without a stamp (from a process on an older djust) is applied as before. A database NOTIFY (`handle_info`) carries no stamp: qualify the channel name with the tenant if tenants must not see each other's notifications.
 - Scoped groups are ordinary channel-layer groups. They work across processes with the Redis channel layer, like view-wide push.
-- WebSocket sessions only. SSE and HTTP-only sessions receive no server push, scoped or not.
+- WebSocket sessions only. SSE and HTTP-only sessions receive no `push_to_view` push, scoped or not (see [Over SSE](#over-sse-what-reaches-an-sse-session)). A push from the view's own code, [`self.server_push()`](#a-push-from-the-views-own-code-selfserver_push), works on both.
 - **Presence follows.** In a view that also uses `PresenceMixin`, a join or leave then wakes only the sessions that share the presence key, not every room (v1.3+; see [Presence](../guides/presence.md#multi-room-views-who-a-join-wakes)).
 
 ## Event Sequencing
@@ -289,9 +358,17 @@ Async version of `push_to_view`. Same parameters.
 
 The scope or scopes this session receives scoped pushes for: a `str`, an `int`, a list, tuple or set of them (at most 64), or `None` (the default). Usually set in `mount()`; reassigning it in a handler, push hook, `handle_tick` or `handle_info` moves the session.
 
+### `await LiveView.server_push(handler, payload=None) -> bool`
+
+A push from the view's own code, on a WebSocket or an SSE session; a no-op returning `False` when no live transport is attached. See [A push from the view's own code](#a-push-from-the-views-own-code-selfserver_push).
+
+### `LiveView.live_transport`
+
+`"websocket"`, `"sse"` or `None`; set before `mount()` runs.
+
 ### `LiveView.tick_interval`
 
-Class attribute. Set to an integer (milliseconds) to enable periodic ticking.
+Class attribute. Set to an integer (milliseconds) to enable periodic ticking, on a WebSocket and on SSE.
 
 ### `LiveView.handle_tick()`
 

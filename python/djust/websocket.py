@@ -483,6 +483,18 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
             # For other objects, just use id — reassignment is detected,
             # in-place mutation is not (same as Phoenix LiveView).
             snapshot[k] = vid
+    # Streams (#3639). ``_streams`` is a framework attribute, so the walk above
+    # skips it, and a handler whose ONLY effect was ``stream_insert`` /
+    # ``stream_delete`` / ``stream_prune`` / ``stream_reset`` changed nothing it
+    # could see: the turn was answered ``noop`` and the row waited for the next
+    # unrelated render. ``StreamsMixin`` bumps ``_stream_epoch`` on every
+    # mutation that changed a stream; one int per view is the whole cost, and a
+    # turn that touched no stream compares equal. Reported under the storage
+    # name ``_streams`` (like ``_state_count`` above); the rendered key is
+    # ``streams``, which ``_sync_state_to_rust`` finds by comparing contexts.
+    stream_epoch = getattr(view_instance, "_stream_epoch", 0)
+    if stream_epoch:
+        snapshot["_streams"] = stream_epoch
     return snapshot
 
 
@@ -632,12 +644,14 @@ def render_embedded_child_html(child_view: Any) -> str:
         if not legacy_child and "view" in context:
             raise ExposureError("Explicit child context contains a reserved name")
         from django.template import engines
+        from ._include_guard import include_guard_scope
         from .templatetags.live_tags import active_parent_view
 
         template_str = child_view.get_template()
         engine = engines["django"] if "django" in engines else list(engines.all())[0]
         tmpl = engine.from_string(template_str)
-        with active_parent_view(child_view):
+        # Django's engine renders this; the template-call guard (#3880) is applied here.
+        with active_parent_view(child_view), include_guard_scope():
             html = tmpl.render(context)
         # Record the child's dj-model auto-allowlist from ITS own TEMPLATE
         # SOURCE — child update_model events gate against the child's
@@ -2405,9 +2419,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         Handler metadata is static and only sent on initial mount via
         get_debug_info() / window.DJUST_DEBUG_INFO.
         """
-        from django.conf import settings
+        from .config import debug_panel_enabled
 
-        if not getattr(settings, "DEBUG", False):
+        # DEBUG and ``debug_panel`` (on by default) — no panel, no payload.
+        if not debug_panel_enabled():
             return
 
         if not self.view_instance:
@@ -4130,7 +4145,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
                 # Get the new template content
                 try:
-                    new_template = await database_sync_to_async(self.view_instance.get_template)()
+                    from .sync_turn import sync_step
+
+                    new_template = await database_sync_to_async(
+                        sync_step(self.view_instance, "render", self.view_instance.get_template)
+                    )()
                 except TemplateDoesNotExist as e:
                     hotreload_logger.error("Template not found for hot reload: %s", e)
                     await self.send_json(
@@ -5084,11 +5103,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             views = [consumer.view_instance] if consumer is not None else []
         else:
             views = self._mounted_views()
+        from .sync_turn import sync_step
+
         for view in views:
             if not hasattr(view, "update_presence_heartbeat"):
                 continue
             try:
-                await sync_to_async(view.update_presence_heartbeat)()
+                await sync_to_async(sync_step(view, "hook", view.update_presence_heartbeat))()
             except Exception as e:
                 self._log_view_hook_failure(view, e, "Error updating presence heartbeat: %s", e)
 
@@ -6073,6 +6094,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 def turn() -> Tuple[List[BaseException], bool, bool, Any, Any]:
                     from django.db import close_old_connections
 
+                    from ._view_hooks import _hook_step
+                    from .sync_turn import run_sync_step
+
                     close_old_connections()
                     failures: List[BaseException] = []
                     applied = render = False
@@ -6083,7 +6107,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                             hook = self._prepare_server_push(view, event)
                             if hook is not None:
                                 handler_fn, payload = hook
-                                handler_fn(**payload)
+                                # The stock turn reaches the handler through ``call_hook``
+                                # (a ``hook`` step); this one-hop turn must enter the same
+                                # step, or the handler runs without the wrapper (#3646).
+                                run_sync_step(view, _hook_step(handler_fn), handler_fn, **payload)
                         except Exception as exc:  # noqa: BLE001 - logged on the loop
                             failures.append(exc)
                             continue
@@ -6186,9 +6213,19 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             from django.conf import settings
 
             if not getattr(settings, "DEBUG", False):
+                # ``_send_frame`` is the socket's own chokepoint and does not
+                # go through a slot's ``send_json``, so the frame of a view
+                # beside the page view is addressed here (#3692); a frame
+                # without it is applied to the page's container.
+                target = getattr(self, "target_id", None)
                 await self._send_frame(
                     text_data='{"type":"patch","patches":%s,"version":%d,'
-                    '"broadcast":true,"source":"broadcast"}' % (patches, version)
+                    '"broadcast":true,"source":"broadcast"%s}'
+                    % (
+                        patches,
+                        version,
+                        ',"target_id":' + json.dumps(target) if target else "",
+                    )
                 )
                 await self._flush_all_pending()
                 return

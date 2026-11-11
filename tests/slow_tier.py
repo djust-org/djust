@@ -19,6 +19,13 @@ Who uses it:
 - ``make test-fast``.
 
 Explicit ``@pytest.mark.slow`` keeps working — this only adds markers.
+
+``@pytest.mark.pr_tier`` is the opt-out: a test carrying it stays in the fast tier
+however long ``.test_durations`` says it took. It is for a ratchet that MUST run
+on every PR and whose cost is a fixture rather than the assertion — a module
+fixture is charged to the first test that asks for it, so one slow setup would
+otherwise push the only test that asserts the ratchet into the deselected tier
+the first time the durations are refreshed.
 ``DJUST_SLOW_TIER=0`` turns the derived markers off.
 """
 
@@ -58,5 +65,5 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         return
     marker = pytest.mark.slow(reason="> %.1fs in %s" % (SLOW_SECONDS, DURATIONS_FILE))
     for item in items:
-        if item.nodeid in slow:
+        if item.nodeid in slow and item.get_closest_marker("pr_tier") is None:
             item.add_marker(marker)

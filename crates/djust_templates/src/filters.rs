@@ -301,6 +301,10 @@ pub fn iter_values(value: &Value) -> Result<Option<Vec<Value>>> {
         Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
             Some(items.clone())
         }
+        // A serialized Django model is not iterable: `list(model)` raises, so it is "not
+        // iterable" here exactly as a live model handle is, and the keys of the map it was
+        // serialized to are not a sequence to walk.
+        Value::Object(_) if value.model_str().is_some() => None,
         // A dict iterates its KEYS, each as the value it actually is — an
         // `Integer` key must render `0`, not `"0"` (#2339).
         Value::Object(map) => Some(djust_core::object_key::dict_iteration_values(map)),
@@ -1125,7 +1129,7 @@ fn apply_resolved_filter(
         "striptags",
     ];
     let converted = if STRING_FILTERS.contains(&filter_name)
-        && matches!(value, Value::Encoded(e) if e.display_safe)
+        && matches!(value, Value::Encoded(e) if e.display_safe())
     {
         Some(Value::SafeString(value.to_string()))
     } else {
@@ -2479,13 +2483,26 @@ fn apply_builtin_filter(
             autoescape,
             input_safety,
         ),
-        "unordered_list" => filter_registry::apply_django_builtin_filter(
-            filter_name,
-            value,
-            django_filter_arg(arg, resolved_arg),
-            autoescape,
-            input_safety,
-        ),
+        // Routed to Django's own function (2.0), with one case answered here first: a
+        // serialized model is a map on the wire and NOT iterable (`iter_values` says so for
+        // `safeseq` / `escapeseq`). Handed to Django it would be walked as a dict and print the
+        // model's field names, where Django itself raises `TypeError` for a model. This is the
+        // rule main's native arm applied before the routing replaced that arm. Every other
+        // value goes to Django unchanged, so its own `TypeError` for an `int` or `None` is kept.
+        "unordered_list" => match value {
+            Value::Object(_) if value.model_str().is_some() => Err(value_op_error(
+                filter_name,
+                value,
+                &ValueOpError::NotIterable,
+            )),
+            _ => filter_registry::apply_django_builtin_filter(
+                filter_name,
+                value,
+                django_filter_arg(arg, resolved_arg),
+                autoescape,
+                input_safety,
+            ),
+        },
         "truncatechars_html" => filter_registry::apply_django_builtin_filter(
             filter_name,
             value,
@@ -4381,16 +4398,16 @@ fn format_time(datetime_str: &str, format_str: &str, original: &Value) -> Result
 }
 
 fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
-    let mut sorted_items = items.to_vec();
-
-    sorted_items.sort_by(|a, b| {
-        let a_val = get_dict_value(a, sort_key);
-        let b_val = get_dict_value(b, sort_key);
-
-        compare_sort_values(&a_val, &b_val)
-    });
-
-    sorted_items
+    // The key is read ONCE per item, not once per comparison (#3888): for a dict it is a map
+    // lookup either way, but a carried object's key is an attribute read on its live handle
+    // (a Python call), and `sort_by` compares each item O(log n) times.
+    let mut keyed: Vec<(Value, &Value)> = items
+        .iter()
+        .map(|item| (get_dict_value(item, sort_key), item))
+        .collect();
+    // `sort_by` is stable, as Python's `sorted` is.
+    keyed.sort_by(|a, b| compare_sort_values(&a.0, &b.0));
+    keyed.into_iter().map(|(_, item)| item.clone()).collect()
 }
 
 /// The one ordering used by every `dictsort` path (#1646).
@@ -4542,6 +4559,12 @@ fn dictsort_by_index(items: &[Value], n: usize, reverse: bool) -> Option<Vec<Val
 fn get_dict_value(value: &Value, key: &str) -> Value {
     match value {
         Value::Object(map) => map.get(key).cloned().unwrap_or(Value::Missing),
+        // A CARRIED object (a raw model is one since #3888): Django's `_property_resolver` reads
+        // `value[part]` then `getattr(value, part)`, which is the object's own attribute and not
+        // a key of a dict. Read through the live handle, which for a model is its floor proxy:
+        // a floor field or a `_` name is unreadable here, as in a template path, and the sort
+        // fails closed (`""`) instead of ordering rows by a value that must not be seen.
+        Value::Encoded(encoded) => encoded.live_attr(key).unwrap_or(Value::Missing),
         _ => Value::Missing,
     }
 }
@@ -4875,15 +4898,24 @@ fn value_to_json(value: &Value) -> String {
         // for exactly the reason the `Decimal` arm above documents.
         // #2899: a dict-subclass carrier spells its MAPPING here, as
         // `DjangoJSONEncoder` does; every other carrier keeps the string.
-        Value::Encoded(e) => match e.live_mapping_value() {
-            Some(mapping) => value_to_json(&mapping),
-            None => format!("\"{}\"", json_string_body(&e.json)),
+        // A list-subclass carrier (Django's `ErrorList`) is `str(o)` for TEXT and the SEQUENCE for
+        // JSON: `json.dumps(ErrorList(...))` is the array, not the errorlist markup (#3770 review).
+        Value::Encoded(e) => match e.live_mapping_value().or_else(|| e.live_sequence_value()) {
+            Some(container) => value_to_json(&container),
+            None => format!("\"{}\"", json_string_body(e.json())),
         },
         // JSON has no tuple; Python's `json.dumps` emits an array for one.
         Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
             let parts: Vec<String> = items.iter().map(value_to_json).collect();
             format!("[{}]", parts.join(", "))
         }
+        // A serialized Django model (a map carrying a `"__str__"` string, the
+        // marker `{{ obj }}` already spells it by) is written as that text, not
+        // as the map the serializer built. Routed through the `String` arm rather than
+        // escaping here, so the one escape helper still has the same sites.
+        Value::Object(_) if value.model_str().is_some() => value_to_json(&Value::String(
+            value.model_str().unwrap_or_default().to_string(),
+        )),
         Value::Object(map) => {
             let parts: Vec<String> = map
                 .iter()
@@ -5985,6 +6017,9 @@ fn pluralize(value: &Value, arg: &str) -> String {
         | Value::Tuple(l)
         | Value::NamedTuple { items: l, .. }
         | Value::DictView { items: l, .. } => return pick(l.len() == 1),
+        // A serialized model has no `len()`, so Django's `TypeError` arm falls through to its
+        // final `return ""`.
+        Value::Object(_) if value.model_str().is_some() => {}
         Value::Object(map) => return pick(map.len() == 1),
         // `None` and an absent variable have neither a `float()` nor a
         // `len()`. Django's final `return ""`.
@@ -6718,8 +6753,8 @@ mod tests {
             // direction, since #2448 added it.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "datetime.datetime".to_string(),
-                display: "2020-01-01 03:04:05".to_string(),
-                json: "2020-01-01T03:04:05".to_string(),
+                display: "2020-01-01 03:04:05".to_string().into(),
+                json: Some("2020-01-01T03:04:05".to_string()),
                 truthy: true,
                 len: None,
                 iterable: false,
@@ -6733,13 +6768,11 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
-                display: "set()".to_string(),
-                json: "set()".to_string(),
+                display: "set()".to_string().into(),
+                json: Some("set()".to_string()),
                 truthy: false,
                 len: Some(0),
                 iterable: true,
@@ -6749,8 +6782,6 @@ mod tests {
                 items: Some(vec![]),
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // The FOURTH shape, and the one #2477/#2489 added: a NON-EMPTY
             // carried collection. It is what makes the `python_len` ==
@@ -6758,8 +6789,8 @@ mod tests {
             // other than 0, which two empty samples cannot.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
-                display: "{'a', 'b'}".to_string(),
-                json: "{'a', 'b'}".to_string(),
+                display: "{'a', 'b'}".to_string().into(),
+                json: Some("{'a', 'b'}".to_string()),
                 truthy: true,
                 len: Some(2),
                 iterable: true,
@@ -6772,8 +6803,6 @@ mod tests {
                 ]),
                 eq_class: Some(djust_core::EqClass::Set),
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // The FIFTH: a falsy `__iter__` class with NO `__len__`. Django's
             // `|length` answers 0 (its `except TypeError`) while `{% for %}`
@@ -6781,8 +6810,8 @@ mod tests {
             // those apart, and a `sized_empty` BIT could not.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "FalsyIterable".to_string(),
-                display: "FalsyIterable()".to_string(),
-                json: "FalsyIterable()".to_string(),
+                display: "FalsyIterable()".to_string().into(),
+                json: Some("FalsyIterable()".to_string()),
                 truthy: false,
                 len: None,
                 iterable: true,
@@ -6792,8 +6821,6 @@ mod tests {
                 items: Some(vec![Value::String("x".to_string())]),
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // The THIRD shape, and the one that proves the two bits are two
             // questions: a class with a zero `__len__` and no `__iter__`.
@@ -6802,8 +6829,8 @@ mod tests {
             // are comprehensions.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "LenZero".to_string(),
-                display: "<LenZero object>".to_string(),
-                json: "<LenZero object>".to_string(),
+                display: "<LenZero object>".to_string().into(),
+                json: Some("<LenZero object>".to_string()),
                 truthy: false,
                 len: Some(0),
                 iterable: false,
@@ -6813,8 +6840,6 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
         ]
     }
@@ -6857,8 +6882,8 @@ mod tests {
         assert_eq!(checked, 0, "a live fixture now has the wire-only shape");
         let legacy = Value::Encoded(Box::new(djust_core::Encoded {
             type_name: "set".to_string(),
-            display: "set()".to_string(),
-            json: "set()".to_string(),
+            display: "set()".to_string().into(),
+            json: Some("set()".to_string()),
             truthy: false,
             len: Some(0),
             iterable: true,
@@ -6868,8 +6893,6 @@ mod tests {
             items: None,
             eq_class: None,
             live: None,
-            display_safe: false,
-            str_raised: false,
         }));
         assert!(iter_values_ok(&legacy).is_some_and(|items| items.is_empty()));
         assert_eq!(python_len(&legacy), Some(0));
@@ -7313,8 +7336,8 @@ mod tests {
             // hold.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "datetime.datetime".to_string(),
-                display: "2020-01-01 03:04:05".to_string(),
-                json: "2020-01-01T03:04:05".to_string(),
+                display: "2020-01-01 03:04:05".to_string().into(),
+                json: Some("2020-01-01T03:04:05".to_string()),
                 truthy: true,
                 len: None,
                 iterable: false,
@@ -7328,8 +7351,6 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // The SAME variant on the ITERATING side (#2466), which is why one
             // sample of it is no longer enough. Since `falsy_opaque` widened
@@ -7342,8 +7363,8 @@ mod tests {
             // reaches it.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "EmptyThing".to_string(),
-                display: "EmptyThing()".to_string(),
-                json: "EmptyThing()".to_string(),
+                display: "EmptyThing()".to_string().into(),
+                json: Some("EmptyThing()".to_string()),
                 truthy: false,
                 len: Some(0),
                 iterable: true,
@@ -7358,8 +7379,6 @@ mod tests {
                 items: Some(vec![]),
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
         ];
         // The hostile-display member, kept OUT of the array above so the
@@ -7368,8 +7387,8 @@ mod tests {
         // between it and the page.
         let hostile = Value::Encoded(Box::new(djust_core::Encoded {
             type_name: "Sneaky".to_string(),
-            display: "<script>alert(1)</script>".to_string(),
-            json: "<script>alert(1)</script>".to_string(),
+            display: "<script>alert(1)</script>".to_string().into(),
+            json: Some("<script>alert(1)</script>".to_string()),
             truthy: false,
             len: None,
             iterable: false,
@@ -7379,8 +7398,6 @@ mod tests {
             items: None,
             eq_class: None,
             live: None,
-            display_safe: false,
-            str_raised: false,
         }));
         assert!(
             iter_values_ok(&hostile).is_none(),
@@ -8502,6 +8519,251 @@ mod tests {
         assert!(s.starts_with("<script id=\"my-data\" type=\"application/json\">"));
         assert!(s.ends_with("</script>"));
         assert!(s.contains("\"hello\""));
+    }
+
+    /// A serialized Django model: a map carrying a `"__str__"` string (the one
+    /// marker `Value::object_str` reads) next to other entries. It holds more than its text on purpose, so a spelling that
+    /// fell through to the map would show them.
+    fn model_map(text: &str) -> Value {
+        let mut m = IndexMap::new();
+        for (k, v) in [
+            ("id", Value::Integer(1)),
+            ("pk", Value::Integer(1)),
+            ("__str__", Value::String(text.to_string())),
+            ("__model__", Value::String("Account".to_string())),
+            ("owner_code", Value::String("SENTINEL-A".to_string())),
+            ("get_note_text", Value::String("SENTINEL-B".to_string())),
+        ] {
+            m.insert(djust_core::ObjectKey::Str(k.to_string()), v);
+        }
+        Value::Object(m)
+    }
+
+    /// A serialized model is not iterable: `list(model)` raises in Python, so the filters that
+    /// iterate must not walk the keys of the map it was serialized to.
+    #[test]
+    fn a_serialized_model_is_not_iterable_to_the_sequence_filters() {
+        let model = model_map("Account:a1");
+        assert!(iter_values(&model).unwrap().is_none());
+        // an ordinary dict still iterates its keys
+        let mut d = IndexMap::new();
+        d.insert(
+            djust_core::ObjectKey::Str("a".to_string()),
+            Value::Integer(1),
+        );
+        assert_eq!(iter_values(&Value::Object(d)).unwrap().unwrap().len(), 1);
+
+        // `join` fails soft on a non-iterable (Django's `except TypeError: return value`),
+        // and spells the model by its text; the filters that raise still raise.
+        let joined = apply_filter("join", &model, Some(", ")).unwrap();
+        assert_eq!(joined.to_string(), "Account:a1");
+        for name in ["unordered_list", "safeseq", "escapeseq"] {
+            let out = apply_filter(name, &model, None);
+            let text = match &out {
+                Ok(v) => v.to_string(),
+                Err(e) => e.to_string(),
+            };
+            assert!(
+                !text.contains("owner_code") && !text.contains("get_note_text"),
+                "{name} printed key names: {text}"
+            );
+        }
+    }
+
+    /// A model whose text is a `SafeString`, and a dict that only carries a `__str__` text.
+    fn safe_model_map(text: &str) -> Value {
+        let mut m = IndexMap::new();
+        for (k, v) in [
+            ("pk", Value::Integer(1)),
+            ("__str__", Value::SafeString(text.to_string())),
+            ("__model__", Value::String("Account".to_string())),
+            ("owner_code", Value::String("SENTINEL-A".to_string())),
+        ] {
+            m.insert(djust_core::ObjectKey::Str(k.to_string()), v);
+        }
+        Value::Object(m)
+    }
+
+    fn text_key_dict() -> Value {
+        let mut m = IndexMap::new();
+        m.insert(
+            djust_core::ObjectKey::Str("__str__".to_string()),
+            Value::String("lbl".to_string()),
+        );
+        m.insert(
+            djust_core::ObjectKey::Str("k1".to_string()),
+            Value::String("v1".to_string()),
+        );
+        Value::Object(m)
+    }
+
+    #[test]
+    fn test_a_safe_text_model_is_spelled_as_its_text_by_json_script_and_the_sequence_filters() {
+        let model = safe_model_map("<b>a1</b>");
+        let out = json_script_of(&Value::List(vec![model.clone()]));
+        assert!(!out.contains("SENTINEL") && out.contains("a1"), "{out}");
+        assert!(iter_values(&model).unwrap().is_none());
+    }
+
+    /// A dict that merely carries a `__str__` text is user data: it keeps its keys, its
+    /// iteration and its mapping spelling in `json_script`.
+    #[test]
+    fn test_a_dict_with_only_a_text_key_is_not_a_model_to_the_sinks() {
+        let d = text_key_dict();
+        assert_eq!(iter_values(&d).unwrap().unwrap().len(), 2);
+        assert_eq!(
+            json_script_of(&d),
+            "<script id=\"x\" type=\"application/json\">{\"__str__\": \"lbl\", \"k1\": \"v1\"}</script>"
+        );
+    }
+
+    /// Django reads a model through none of these: `"%(name)s" % model` raises (the filter
+    /// answers empty) and a model has no `len()`, so `pluralize` takes the singular.
+    #[test]
+    fn test_a_serialized_model_is_not_a_mapping_to_stringformat_or_pluralize() {
+        let model = model_map("Account:a1");
+        let mut with_name = match &model {
+            Value::Object(m) => m.clone(),
+            _ => unreachable!(),
+        };
+        with_name.insert(
+            djust_core::ObjectKey::Str("name".to_string()),
+            Value::String("a1".to_string()),
+        );
+        let model = Value::Object(with_name);
+        let out = apply_filter("stringformat", &model, Some("(name)s")).unwrap();
+        assert_eq!(out.to_string(), "");
+        let out = apply_filter("pluralize", &model, None).unwrap();
+        assert_eq!(out.to_string(), "");
+        let out = apply_filter("pluralize", &model, Some("y,ies")).unwrap();
+        assert_eq!(out.to_string(), "");
+        // an ordinary one-entry dict still answers its length (Django: `len(d) == 1`)
+        let one = {
+            let mut m = IndexMap::new();
+            m.insert(
+                djust_core::ObjectKey::Str("a".to_string()),
+                Value::Integer(1),
+            );
+            Value::Object(m)
+        };
+        assert_eq!(
+            apply_filter("pluralize", &one, None).unwrap().to_string(),
+            ""
+        );
+        assert_eq!(
+            apply_filter("stringformat", &text_key_dict(), Some("(k1)s"))
+                .unwrap()
+                .to_string(),
+            "v1"
+        );
+    }
+
+    fn json_script_of(value: &Value) -> String {
+        apply_filter("json_script", value, Some("x"))
+            .unwrap()
+            .to_string()
+    }
+
+    /// `json_script` over a model map writes the model's text as a JSON string,
+    /// not the map that holds it, at the top level and inside every container.
+    #[test]
+    fn test_json_script_spells_a_model_map_as_its_text() {
+        assert_eq!(
+            json_script_of(&model_map("Account:a1")),
+            "<script id=\"x\" type=\"application/json\">\"Account:a1\"</script>"
+        );
+        let list = Value::List(vec![model_map("Account:a1"), model_map("Account:a2")]);
+        assert_eq!(
+            json_script_of(&list),
+            "<script id=\"x\" type=\"application/json\">[\"Account:a1\", \"Account:a2\"]</script>"
+        );
+        let tuple = Value::Tuple(vec![model_map("Account:a1")]);
+        assert_eq!(
+            json_script_of(&tuple),
+            "<script id=\"x\" type=\"application/json\">[\"Account:a1\"]</script>"
+        );
+        let mut d = IndexMap::new();
+        d.insert(
+            djust_core::ObjectKey::Str("items".to_string()),
+            Value::List(vec![model_map("Account:a1")]),
+        );
+        d.insert(
+            djust_core::ObjectKey::Str("owner".to_string()),
+            model_map("Account:a2"),
+        );
+        assert_eq!(
+            json_script_of(&Value::Object(d)),
+            "<script id=\"x\" type=\"application/json\">{\"items\": [\"Account:a1\"], \"owner\": \"Account:a2\"}</script>"
+        );
+        let deep = Value::List(vec![Value::List(vec![Value::Tuple(vec![model_map(
+            "Account:a1",
+        )])])]);
+        assert!(!json_script_of(&deep).contains("SENTINEL"));
+    }
+
+    /// An ordinary dict is still written as the object it is.
+    #[test]
+    fn test_json_script_still_writes_an_ordinary_dict_as_an_object() {
+        let mut d = IndexMap::new();
+        d.insert(
+            djust_core::ObjectKey::Str("a".to_string()),
+            Value::Integer(1),
+        );
+        d.insert(
+            djust_core::ObjectKey::Str("b".to_string()),
+            Value::String("x".to_string()),
+        );
+        assert_eq!(
+            json_script_of(&Value::Object(d)),
+            "<script id=\"x\" type=\"application/json\">{\"a\": 1, \"b\": \"x\"}</script>"
+        );
+    }
+
+    /// The model's text goes through the same escaping as every other string:
+    /// quotes and backslashes, controls, `<`, `>`, `&`, non-ASCII, and a text
+    /// that closes the script element.
+    #[test]
+    fn test_json_script_escapes_a_model_text_like_any_string() {
+        let cases = [
+            ("say \"hi\" \\ ok", "say \\\"hi\\\" \\\\ ok"),
+            ("a\nb\0c", "a\\nb\\u0000c"),
+            ("<b>&</b>", "\\u003Cb\\u003E\\u0026\\u003C/b\\u003E"),
+            ("caf\u{e9} \u{1F600}", "caf\\u00e9 \\ud83d\\ude00"),
+        ];
+        for (text, escaped) in cases {
+            let got = json_script_of(&model_map(text));
+            assert_eq!(
+                got,
+                format!("<script id=\"x\" type=\"application/json\">\"{escaped}\"</script>"),
+                "{text:?}"
+            );
+        }
+        let unusual = json_script_of(&model_map("</script><script>alert(1)</script>"));
+        let body = &unusual[..unusual.len() - "</script>".len()];
+        assert!(!body.contains("</script>"), "{unusual}");
+        assert!(!body.contains("<script>"), "{unusual}");
+        assert!(unusual.contains("\\u003C/script\\u003E"), "{unusual}");
+        assert!(!unusual.contains("SENTINEL"));
+    }
+
+    /// A very deep and a very large container of model maps neither overflow the
+    /// stack nor go quadratic, and never emit a field.
+    #[test]
+    fn test_json_script_over_deep_and_large_model_containers() {
+        let mut deep = model_map("Account:a1");
+        for _ in 0..200 {
+            deep = Value::List(vec![deep]);
+        }
+        let got = json_script_of(&deep);
+        assert!(got.contains("Account:a1") && !got.contains("SENTINEL"));
+
+        let rows: Vec<Value> = (0..20_000)
+            .map(|i| model_map(&format!("Account:{i}")))
+            .collect();
+        let started = std::time::Instant::now();
+        let got = json_script_of(&Value::List(rows));
+        assert!(!got.contains("SENTINEL"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
     }
 
     /// No argument, and every FALSY argument, omits the `id` attribute

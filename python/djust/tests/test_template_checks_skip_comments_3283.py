@@ -8,12 +8,12 @@ its line number.
 
 import pytest
 
-import time
-
 from djust.checks import check_accessibility, check_inline_script_csp, check_templates
 from djust.checks.assets import check_undeclared_origins
 from djust.checks.configuration import _check_manual_client_js, _check_tailwind_cdn_in_production
+from djust.checks import utils as checks_utils
 from djust.checks.utils import _blank_template_comments
+from djust.tests._growth import CountingPattern, Examined, counting_str
 
 
 def _write(settings, tmp_path, html, name="page.html"):
@@ -141,21 +141,52 @@ def test_blanking_keeps_every_line_break_the_scans_split_on():
     assert len(_blank_template_comments(source).splitlines()) == len(source.splitlines())
 
 
+# Each opener used to search for the end of its line with ``content.find("\n", position)``,
+# which runs to the end of a template that has no newline once per ``{% comment %}``
+# opener: ~4x per doubling of the openers (0.07 s at 20k, 1 s at 80k). The absolute
+# ``< 2`` bound this test used to assert could not see it; the growth check does
+# (#3723, found by the review of #3721), and since #3835 the check counts the characters
+# examined instead of timing the pass. The output is pinned separately, against the
+# pre-fix implementation, in test_blank_template_comments_differential_3723.py.
+def _examined_by_blanking(source, monkeypatch):
+    """Blank *source*; return the characters examined by every ``find`` and ``search`` it made."""
+    examined = Examined()
+    with monkeypatch.context() as patch:
+        for name in ("_COMMENT_OPENER", "_ENDCOMMENT"):
+            patch.setattr(
+                checks_utils, name, CountingPattern(getattr(checks_utils, name), examined)
+            )
+        _blank_template_comments(counting_str(examined)(source))
+    return examined.total
+
+
 @pytest.mark.parametrize(
-    "source",
+    "unit, count, tail",
     [
-        "{# x " * 50_000,
-        "{% comment %}" * 20_000,
-        "{# x {% comment %}" * 20_000,
-        "{% comment " * 30_000,
-        "{# x\n" * 50_000 + "#}",
+        ("{# x ", 12_500, ""),
+        ("{% comment %}", 10_000, ""),
+        ("{% comment %}x{% endcomment %}", 10_000, ""),
+        ("{# x {% comment %}", 10_000, ""),
+        ("{% comment ", 7_500, ""),
+        ("{# x\n", 12_500, "#}"),
     ],
-    ids=["hash", "comment-open", "mixed", "comment-no-close", "hash-lines"],
+    ids=["hash", "comment-open", "comment-closed", "mixed", "comment-no-close", "hash-lines"],
 )
-def test_blanking_is_linear_on_unterminated_openers(source):
-    start = time.perf_counter()
-    _blank_template_comments(source)
-    assert time.perf_counter() - start < 2
+def test_blanking_is_linear_in_the_number_of_openers(unit, count, tail, monkeypatch):
+    """Four times the openers examines about four times the characters (#3835).
+
+    Counted, not timed: every ``str.find`` and every opener / ``endcomment`` search the blanking pass
+    makes adds the characters between where it started and where it stopped. A pass that searches
+    to the end of the template once per opener (the #3723 shape) examines ~N x the template, 16x at
+    4x the openers; the linear pass examines 1.2-3.6x the template whatever its size, so 4x the
+    openers is 4.0x. Exact, and independent of the machine."""
+    examined = {}
+    for scale in (1, 4):
+        examined[scale] = _examined_by_blanking(unit * (count * scale) + tail, monkeypatch)
+    assert examined[1] > count, "the passes examined nothing, so nothing was measured"
+    assert examined[4] <= 4.5 * examined[1], examined
+    # And per character: a constant number of looks at each, however large the template.
+    assert examined[4] <= 5 * len(unit * (count * 4) + tail), examined
 
 
 # -- the sibling scanners that read template source (C010, C012, B010) ----------

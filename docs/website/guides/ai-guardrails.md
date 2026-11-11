@@ -197,13 +197,13 @@ Each check has an ID such as `djust.V004`: a family letter and a number. The the
 | --- | --- | --- |
 | `A` | Audit / static security checks | A100 to A107 |
 | `B` | Vendored assets and SBOMs | B001 to B014 |
-| `C` | Configuration | C020 to C026 |
+| `C` | Configuration | C020 to C029 |
 | `D` | Database notifications | none |
 | `Q` | Code quality | Q004 |
 | `S` | Security | S013 |
 | `T` | Templates | T019 to T022; T023 to T025 (main) |
 | `U` | Update notice | none |
-| `V` | Validation of LiveView classes and handlers | V016 to V021 |
+| `V` | Validation of LiveView classes and handlers | V016 to V025 |
 | `Y` | Accessibility | none |
 
 ### Checks that matter for generated code
@@ -294,7 +294,7 @@ System check identified 6 issues (0 silenced).
 | Dump permissions | `python manage.py djust_audit --dump-permissions` | A starter `permissions.yaml` written from the code. A view with no auth is written as public with a `TODO` note to confirm. |
 | Live | `python manage.py djust_audit --live https://staging.example.com` | A probe of a running deployment: response headers, cookie attributes, paths that should not be served, and whether the WebSocket accepts a cross-origin handshake, as `L0xx` findings. The WebSocket probe needs the `websockets` package and is skipped without it. |
 | AST | `python manage.py djust_audit --ast` | A scan of Python source and templates for a small set of patterns, as `X0xx` findings. |
-| Accessibility | `python manage.py djust_audit --a11y` | Template accessibility findings `Y001` to `Y004`. They are warnings, and the scan fails only under `--strict`. |
+| Accessibility | `python manage.py djust_audit --a11y` | Template accessibility findings `Y001` to `Y006`. They are warnings, and the scan fails only under `--strict`. |
 
 On the example view the default mode prints:
 

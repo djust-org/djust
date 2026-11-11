@@ -15,7 +15,13 @@ from djust import LiveView
 | `template_name`     | `str`  | —       | Path to a Django template file                                                |
 | `template`          | `str`  | —       | Inline HTML template string                                                   |
 | `temporary_assigns` | `dict` | `{}`    | State that resets to the default after each render (e.g., `{"messages": []}`) |
+| `static_render`     | `bool` | `False` | Keep no diff baseline: the rendered tree and context copy are dropped after every render, so the stored snapshot is the template and a counter, and any later render sends the whole page (see [Large LiveView state](../guides/BEST_PRACTICES.md#6-large-liveview-state)) |
+| `query_budget`      | `int` or `dict` | `None` | Query budget: an int caps mount + first render together; a dict caps each phase (`"mount"`, `"render"`, `"event"`, `"events": {handler: n}`). Read by `LiveViewSmokeTest` and measured at run time in `DEBUG` (see [Per-view query budgets](../testing/index.md#per-view-query-budgets)) |
 | `use_actors`        | `bool` | `False` | Enable actor-based state management                                           |
+| `params_form`       | `Form` class | `None` | Django form that declares the URL's query parameters; `handle_params()` receives its `cleaned_data` (see [`handle_params`](#handle_paramsparams-uri)) |
+| `params_form_fallback` | `str` | `"initial"` | What the default `handle_invalid_params()` hands `handle_params()` when `params_form` rejects the URL: `"initial"` (every field's initial value) or `"fields"` (keep the fields that validated; see [Navigation](../guides/navigation.md#declared-parameters-params_form)). Anything else raises `ImproperlyConfigured` and is a V023 error |
+| `http_status_of_state` | `Mapping[str, int]` | `{}` | HTTP status for a state the page renders itself, e.g. `{"not_found": 404}`; read by the default `get_http_status()`. A view that declares none reads `LIVEVIEW_CONFIG["http_status_of_state"]` |
+| `state_attribute`   | `str`  | `"state"` | Name of the attribute `http_status_of_state` is looked up by                 |
 | `on_mount`          | `list` | `[]`    | List of hook functions to run before `mount()` (see [on_mount Hooks](../guides/on-mount-hooks.md)) |
 
 Either `template_name` or `template` is required.
@@ -161,15 +167,72 @@ Called after `mount()` on the initial WebSocket connect, on every `live_patch()`
 
 **Parameters:**
 
-- `params` — `dict` of current URL query parameters
+- `params` — `dict` of current URL query parameters: raw strings, or the form's `cleaned_data` when the view sets `params_form`
 - `uri` — Current path plus query string
 
 ```python
 def handle_params(self, params, uri):
-    self.page = int(params.get("page", 1))
     self.sort = params.get("sort", "name")
     self._refresh()
 ```
+
+`int(params.get("page", 1))` raises on `?page=abc` and answers 500. Declare typed
+parameters instead: set `params_form` to a Django form and `params` is its
+`cleaned_data`, with `initial` filling the fields the URL left empty. The same form
+runs on the HTTP GET, the socket and SSE mount, `live_patch`, back/forward and the
+HTTP fallback POST. See [Navigation: declared parameters](../guides/navigation.md#declared-parameters-params_form).
+
+```python
+class ListParams(forms.Form):
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+
+
+class ListView(LiveView):
+    params_form = ListParams
+
+    def handle_params(self, params, uri):
+        self.page = params["page"]
+```
+
+---
+
+#### `handle_invalid_params(form, uri)`
+
+Called instead of `handle_params()` when `params_form` rejects the URL. `form` is the bound form; `form.errors` holds the messages, and the template reads them as `params_errors` (`{field: [messages]}`, errors that belong to no field under `"__all__"`). The default hands `handle_params()` the form's initial values, or, with `params_form_fallback = "fields"`, keeps the fields that validated and replaces only the ones in `form.errors` with their initial value (a form-level error from `clean()`, or a combination `clean()` rejects, still replaces all of them). See [Navigation: keeping what validated](../guides/navigation.md#declared-parameters-params_form). Override it to raise `Http404` or to answer 400 (set a flag and return 400 from `get_http_status()`). May be `async def`.
+
+---
+
+#### `get_http_status()`
+
+The HTTP status of the page's first render; `None` (the default) means 200. Only the HTTP response has a status: a socket frame has none. It is read after the render, so it can depend on what `mount()` found.
+
+A project that renders its own not-found state need not override it on every view. Set `http_status_of_state` once, on a base view, and the default reads the state the view already has:
+
+```python
+class AppView(LiveView):
+    abstract = True
+    http_status_of_state = {"not_found": 404, "forbidden": 403, "gone": 410}
+
+
+class ArticleView(AppView):
+    template_name = "demo/article.html"
+
+    def mount(self, request, slug="", **kwargs):
+        self.article = find_article(slug)
+        self.state = "ready" if self.article else "not_found"
+```
+
+`GET /articles/missing/` renders the view's own "not found" page and answers 404. `state_attribute` names the attribute that holds the state (`"state"` by default). Only a string state is looked up; anything else, or a name the map does not hold, answers 200. A view that overrides `get_http_status()` keeps its own answer.
+
+To set the map for the whole project instead, put it in `LIVEVIEW_CONFIG`:
+
+```python
+LIVEVIEW_CONFIG = {
+    "http_status_of_state": {"not_found": 404, "forbidden": 403, "gone": 410},
+}
+```
+
+The precedence is **the view's own `http_status_of_state` first, then the config**, and the two are never merged: a view that declares a map answers by that map alone (a state only the project's map names answers 200 there), and a view that declares `{}` opts out of the project's map. A view that declares nothing reads the config; with neither set the page answers 200. The value is validated when the config loads and on `config.set()` / `config.update()`: it must map state names (`str`) to statuses (`int`, 100 to 599), and anything else is logged and replaced by no map, so the page answers 200. While a project-wide map is configured, `manage.py check` warns about a class that overrides `get_http_status()` (V025), since the override replaces the map.
 
 ---
 

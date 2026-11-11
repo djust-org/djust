@@ -56,6 +56,14 @@ class TestEventGuard:
         assert is_safe_event_name("toggle_todo") is True
         assert is_safe_event_name("a") is True
 
+    def test_trailing_newline_blocked(self):
+        """``$`` matches before a trailing newline; the guard must not."""
+        from djust.security.event_guard import is_safe_event_name
+
+        assert is_safe_event_name("bump\n") is False
+        assert is_safe_event_name("bump\r\n") is False
+        assert is_safe_event_name("bump\n\n") is False
+
     def test_private_methods_blocked(self):
         from djust.security.event_guard import is_safe_event_name
 

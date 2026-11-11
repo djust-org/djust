@@ -48,6 +48,16 @@ from djust.rate_limit import (
 
 
 @pytest.fixture(autouse=True)
+def _own_the_bucket_clock(frozen_rate_limit_clock):
+    """No token refills inside a test, however long the runner stalls (#3707).
+
+    A bucket with ``rate > 0`` refills ``elapsed * rate`` tokens from REAL time
+    unless the test owns the clock; a stall of a second mints a token and an
+    "exhausted" assertion goes false. See ``frozen_rate_limit_clock``.
+    """
+
+
+@pytest.fixture(autouse=True)
 def _clear_shared_store():
     """Each test starts with an empty shared per-caller bucket store."""
     reset_handler_buckets()
@@ -244,12 +254,9 @@ async def test_f27_two_websocket_connections_combined_limit():
         comm = WebsocketCommunicator(app, "/ws/")
         connected, _ = await comm.connect()
         assert connected
-        try:
-            await comm.receive_json_from(timeout=2)  # connect ack
-        except Exception:
-            pass
+        await comm.receive_json_from()  # connect ack
         await comm.send_json_to({"type": "mount", "view": view_path})
-        mount_resp = await comm.receive_json_from(timeout=2)
+        mount_resp = await comm.receive_json_from()
         assert mount_resp.get("type") != "navigate", f"unexpected redirect: {mount_resp!r}"
         return comm
 

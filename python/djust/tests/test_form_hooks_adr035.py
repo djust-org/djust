@@ -194,11 +194,11 @@ async def test_public_hooks_and_prefix_through_websocket():
         connected, _ = await comm.connect()
         assert connected
         try:
-            await comm.receive_json_from(timeout=5)
+            await comm.receive_json_from()
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}.HookTransportView", "url": "/x/"}
             )
-            mounted = await comm.receive_json_from(timeout=5)
+            mounted = await comm.receive_json_from()
             assert mounted["type"] == "mount", mounted
             assert "Hook initial" in json.dumps(mounted)
             await comm.send_json_to(
@@ -211,7 +211,7 @@ async def test_public_hooks_and_prefix_through_websocket():
             )
             frames = []
             for _ in range(6):
-                frame = await comm.receive_json_from(timeout=5)
+                frame = await comm.receive_json_from()
                 frames.append(frame)
                 if frame.get("type") in {"patch", "html_update", "error", "noop"}:
                     break

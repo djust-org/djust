@@ -39,6 +39,8 @@ function harness() {
         cancelEventRequests: vi.fn(), takeServerUpdates: vi.fn(), clearOptimisticPending: vi.fn(),
         stripClientOwnedFrameFlags: () => {}, _recordParameterContractFrame: () => {},
         storeSignedSnapshot: () => {},
+        // From 00-namespace.js: publishes the deprecated window global.
+        defineDeprecatedGlobal: () => {},
     };
     // The transport and the frame handling it shares with SSE run in one
     // scope, as they do in the bundle.

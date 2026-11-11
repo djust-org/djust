@@ -60,7 +60,7 @@ flowchart TD
 
 The order below **is** the code's order, and the order is load-bearing: several
 arms are only correct because an earlier one already claimed the type.
-(`crates/djust_core/src/lib.rs:3916`–`4168`.)
+(`crates/djust_core/src/lib.rs:4373`–`4648`.)
 
 ```mermaid
 flowchart TD
@@ -175,7 +175,7 @@ djust's boundary is not "Python objects go to Rust". It is closer to the
 opposite: **almost nothing crosses as itself.** At the boundary, every context
 value is *measured* — its `str()`, its `repr()`, its truthiness, its length, its
 Django-JSON spelling, its comparison key — and it is those measurements that
-cross, as an inert `Value` (`crates/djust_core/src/lib.rs:221`). The render
+cross, as an inert `Value` (`crates/djust_core/src/lib.rs:227`). The render
 engine is a pure Rust program over inert data, and it can produce most of a page
 without ever touching the interpreter.
 
@@ -231,7 +231,7 @@ numbers are not.
 | 2 | Normalize DB values | `_normalize_db_values`, `python/djust/mixins/rust_bridge.py:83` |
 | 3 | Detect change | `deep_fingerprint`, `python/djust/change_detection.py:90` |
 | 4 | Hand across (PyO3) | `RustLiveView::set_changed_keys`, `crates/djust_live/src/lib.rs:336` |
-| 5 | Convert | `impl FromPyObject for Value`, `crates/djust_core/src/lib.rs:3916` |
+| 5 | Convert | `impl FromPyObject for Value`, `crates/djust_core/src/lib.rs:4373` |
 | 6 | Bind | `Context`, `crates/djust_core/src/context.rs:280` |
 | 7 | Resolve | `Context::resolve_without_builtins`, `context.rs:1755` |
 | 8 | Render | `render_nodes_partial` / `render_nodes_collecting`, `crates/djust_templates/src/renderer.rs:2193` / `:2173` |
@@ -239,37 +239,39 @@ numbers are not.
 
 ### 3.2 The types
 
-**`Value`** (`crates/djust_core/src/lib.rs:221`) — the inert carrier. **Fifteen**
+**`Value`** (`crates/djust_core/src/lib.rs:227`) — the inert carrier. **Fifteen**
 variants: `Missing`, `None`, `Bool`, `Integer`, `Float`, `String`, `SafeString`,
-`List`, `Tuple`, `NamedTuple`, `Object`, `DictView` (`:298`), `Decimal`,
+`List`, `Tuple`, `NamedTuple`, `Object`, `DictView` (`:304`), `Decimal`,
 `BigInt`, `Encoded`.
 
 `Missing` is *not* Python's `None`: an absent key arrives as `Option::None` from
 the resolver and `Missing` is what `string_if_invalid` substitutes. `DictView`
 is the carrier §1.3's third arm produces — `{{ m.items }}` / `.keys` /
-`.values` (#2334), with `DictViewKind` (`:203`) recording which of the three.
+`.values` (#2334), with `DictViewKind` (`:209`) recording which of the three.
 
-**`Encoded`** (`crates/djust_core/src/lib.rs:418`) — the carrier for a Python
+**`Encoded`** (`crates/djust_core/src/lib.rs:698`) — the carrier for a Python
 object that no other variant models. It holds the facts measured at conversion:
 
 | field | line | what it is |
 |---|---|---|
-| `type_name` | `:422` | CPython's `tp_name`, as a `TypeError` spells it |
-| `display` | `:425` | `str(o)` — what `{{ p }}` renders |
-| `display_safe` | `:427` | whether `str(o)` is `SafeData`; never restored from the wire |
-| `json` | `:429` | `DjangoJSONEncoder.default(o)` |
-| `truthy` | `:432` | `bool(o)` — Python's own answer, not a Rust guess |
-| `len` | `:462` | `len(o)`, or `None` where Python raises |
-| `iterable` | `:484` | `iter(o)` succeeded |
-| `repr` | `:500` | `repr(o)`, measured rather than copied from `display` (#2472) |
-| `cmp_key` | `:504` | Python's ordering key, for `{% if a < b %}` |
-| `attrs` | `:551` | the named attributes reached by a dotted lookup, see §3.3 |
-| `items` | `:589` | `list(o)`, enumerated at conversion — or `None`, see §3.5 |
-| `eq_class` | `:640` | which of Python's equality contracts this value obeys |
-| `live` | `:719` | **the live handle** — `Arc<Py<PyAny>>`, see §3.4 |
+| `type_name` | `:702` | CPython's `tp_name`, as a `TypeError` spells it |
+| `display` | `:708` | `str(o)` — what `{{ p }}` renders. A `DisplayText`: computed at conversion, except for a Django form / `BoundField` / formset, where it is asked for on first read and the answer is shared by every clone (#3769). Read it through `Encoded::display()`, `display_safe()` and `str_raised()` |
+| `display_safe()` | method | whether `str(o)` is `SafeData` (a fact of `display`, no field of its own since #3769); never restored from the wire |
+| `json` | `:713` | `DjangoJSONEncoder.default(o)`, as an `Option`: `None` means "the same as `display`" (every opaque carrier), read through `Encoded::json()` |
+| `truthy` | `:716` | `bool(o)` — Python's own answer, not a Rust guess |
+| `len` | `:746` | `len(o)`, or `None` where Python raises |
+| `iterable` | `:768` | `iter(o)` succeeded |
+| `repr` | `:784` | `repr(o)`, measured rather than copied from `display` (#2472) |
+| `cmp_key` | `:788` | Python's ordering key, for `{% if a < b %}` |
+| `attrs` | `:835` | the named attributes reached by a dotted lookup, see §3.3 |
+| `items` | `:873` | `list(o)`, enumerated at conversion — or `None`, see §3.5 |
+| `eq_class` | `:927` | which of Python's equality contracts this value obeys |
+| `live` | `:1004` | **the live handle** — `Arc<Py<PyAny>>`, see §3.4 |
+
+Line anchors in the `Value` / `Encoded` paragraphs and the table above were re-pinned by grep (not by offset) at main `5d3f4e6ff` plus #3829; the rest of this document's `lib.rs:NNN` anchors predate that and are approximate.
 
 The handle is transient: not serialized (the `ENCODED_TAG` wire payload stays
-eleven slots), not compared by `PartialEq for Encoded` (`:955`), dropped by a
+eleven slots), not compared by `PartialEq for Encoded` (`:1302`), dropped by a
 msgpack round trip, re-attached on every render.
 
 ### 3.3 `Encoded::attrs` and the two name tables

@@ -841,13 +841,15 @@ class TestARealQuerySetIsSpelledTheSameOnBothSidesOfTheCap:
         return qs
 
     #: How many rows each container sink spells the identity map of. ``{{ v }}``
-    #: renders a model row as its ``__str__``, so the map never shows; the two
-    #: dump filters do show it, once per REAL row (the padding is ``None``).
-    #: The bug spelled `{{ v }}` with the map too — that is what made it 66 MB.
+    #: renders a model row as its ``__str__``, so the map never shows. Until #3888 the two
+    #: dump filters did show it, once per REAL row (the padding is ``None``), because a model was
+    #: its denylist dict; a model is a floored handle now and every sink spells it by its
+    #: ``str()``, so all three are 0. The bug spelled ``{{ v }}`` with the map too, which is what
+    #: made it 66 MB, and 0 on all three sinks, on both sides of the cap, is what pins it.
     _IDENTITY_MAPS_PER_SINK = {
         "{{ v }}": 0,
-        "{{ v|pprint }}": 3,
-        '{{ v|json_script:"x" }}': 3,
+        "{{ v|pprint }}": 0,
+        '{{ v|json_script:"x" }}': 0,
     }
 
     @pytest.mark.parametrize("src", sorted(_IDENTITY_MAPS_PER_SINK))

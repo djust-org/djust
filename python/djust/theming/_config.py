@@ -14,12 +14,20 @@ so ``from djust.theming.manager import get_theme_config`` keeps working.
 from __future__ import annotations
 
 import re
+from typing import TypeVar
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
+_T = TypeVar("_T")
+
 # Cookie names may only contain ASCII letters, digits, underscores, hyphens.
 COOKIE_NAMESPACE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+# A class-name prefix is printed into ``<style>`` blocks that ``theme_head.html`` renders under
+# ``{% autoescape off %}`` (and into class attributes), so it must not be able to carry markup.
+# ``fullmatch``, not ``match`` + ``$``: ``$`` also matches before a trailing newline.
+CSS_PREFIX_RE = re.compile(r"[A-Za-z0-9_-]*")
 
 # Default configuration
 DEFAULT_CONFIG = {
@@ -61,18 +69,57 @@ def _validate_cookie_namespace(value: str | None) -> str | None:
     return value
 
 
+def _validate_css_prefix(value: _T) -> _T:
+    """Validate a CSS class-name prefix: ``LIVEVIEW_CONFIG['theme']['css_prefix']`` (#3779).
+
+    The prefix is interpolated into the generated ``<style>`` blocks (``.{prefix}btn { ... }``),
+    which ``theme_head.html`` prints with autoescape OFF. ``x</style><img src=x onerror=...>``
+    closed the block and ran. Validating once, at config load, covers every consumer
+    (``theme_head``, ``theme_css``, the context processor, the CSS view, the form/component tags)
+    instead of escaping at each of them, and a hard error at load also holds under servers that
+    never run ``manage.py check``.
+
+    ``""`` (the default, no prefix) and ``None`` (unset) are accepted. Anything else must be a
+    string of ASCII letters, digits, underscores and hyphens.
+
+    Raises:
+        ImproperlyConfigured: the value is not a string of those characters.
+    """
+    if value is None:
+        return value
+    if not isinstance(value, str) or CSS_PREFIX_RE.fullmatch(value) is None:
+        raise ImproperlyConfigured(
+            f"LIVEVIEW_CONFIG['theme']['css_prefix']={value!r} contains characters that are not "
+            f"allowed in a CSS class prefix. Use only ASCII letters, digits, underscores, and "
+            f"hyphens (for example 'dj-')."
+        )
+    return value
+
+
+def _merged_theme_config() -> dict:
+    """The defaults overlaid with ``LIVEVIEW_CONFIG['theme']``, NOT validated.
+
+    For a system check that has to report a bad value; everything else wants
+    :func:`get_theme_config`.
+    """
+    liveview_config = getattr(settings, "LIVEVIEW_CONFIG", {})
+    theme_config = liveview_config.get("theme", {})
+    return {**DEFAULT_CONFIG, **theme_config}
+
+
 def get_theme_config() -> dict:
     """Get theme configuration from Django settings.
 
     Raises:
         ImproperlyConfigured: if ``cookie_namespace`` contains characters
-            illegal in cookie names (#1169(b)).
+            illegal in cookie names (#1169(b)), or ``css_prefix`` is not
+            letters/digits/underscore/hyphen (#3779).
     """
-    liveview_config = getattr(settings, "LIVEVIEW_CONFIG", {})
-    theme_config = liveview_config.get("theme", {})
-    merged = {**DEFAULT_CONFIG, **theme_config}
+    merged = _merged_theme_config()
     # Validate cookie_namespace at config-load (#1169(b)).
     _validate_cookie_namespace(merged.get("cookie_namespace"))
+    # Validate css_prefix at config-load (#3779): it is printed into <style> blocks.
+    _validate_css_prefix(merged.get("css_prefix"))
     return merged
 
 

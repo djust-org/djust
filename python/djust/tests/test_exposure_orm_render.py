@@ -107,14 +107,14 @@ async def websocket_session(session_key, view_name):
     comm.scope["user"] = AnonymousUser()
     connected, _ = await comm.connect()
     assert connected
-    frames = [await comm.receive_json_from(timeout=5)]
+    frames = [await comm.receive_json_from()]
     try:
         await comm.send_json_to(
             {"type": "mount", "view": __name__ + "." + view_name, "url": "/orm-explicit/"}
         )
-        frames.append(await comm.receive_json_from(timeout=5))
+        frames.append(await comm.receive_json_from())
         await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
-        frames.append(await comm.receive_json_from(timeout=5))
+        frames.append(await comm.receive_json_from())
     finally:
         await comm.disconnect()
     return frames

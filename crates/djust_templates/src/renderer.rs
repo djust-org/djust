@@ -1472,7 +1472,11 @@ fn call_custom_tag(
         )?;
         return Ok((html, bindings.into_iter().map(sibling_binding).collect()));
     }
-    let context_map = bridged_context_map(context)?;
+    let mut context_map = bridged_context_map(context)?;
+    if !returns_bindings && crate::registry::tag_handler_wants_typed_args(name) {
+        let only = crate::registry::tag_handler_typed_standins_only(name);
+        add_typed_operands(&mut context_map, args, context, only);
+    }
     if returns_bindings {
         let (html, bindings) = crate::registry::call_handler_with_bindings(
             name,
@@ -1493,6 +1497,109 @@ fn call_custom_tag(
     )
     .map_err(|e| handler_call_error("Custom tag", name, e))?;
     Ok((html, Vec::new()))
+}
+
+/// The context key under which a handler that declares `TYPED_ARGS` receives its operands as
+/// typed Python values (#3756). Leading underscores: Django's own variable syntax refuses such a
+/// name, so no template can spell it, and `python/djust/components/rust_handlers.py`
+/// (`TYPED_ARGS_KEY`) is the one reader.
+///
+/// The key is RESERVED (#3773): it is the engine's, never the application's. A context key of this
+/// name (a top-level dict key in the view's context, or a raw-Python sidecar object) is removed
+/// before any handler is called, at [`bridged_context_map`] for the flat map and at
+/// `registry::build_py_context` / `build_py_context_memo` for the sidecar and the live frames, and
+/// only [`call_custom_tag`] puts the key back, from [`typed_operands`]. Without the removal, a
+/// template whose operands are all literals produces an empty `typed_operands`, nothing is
+/// inserted, and the application's value would stand in for the engine's.
+pub(crate) const TYPED_ARGS_KEY: &str = "__djust_typed_args__";
+
+/// Fold a `TYPED_ARGS` handler's operands into the context map it is called with, under
+/// [`TYPED_ARGS_KEY`] (#3756). The ONE site that does it for the inline tag
+/// ([`call_custom_tag`]) and the block tag ([`call_block_custom_tag`], #3768), so the two
+/// cannot resolve an operand differently (#1646).
+fn add_typed_operands(
+    context_map: &mut BridgedContextMap,
+    args: &[String],
+    context: &Context,
+    standins_only: bool,
+) {
+    let typed = typed_operands(args, context, standins_only);
+    if !typed.is_empty() {
+        // PROVENANCE (provenance_flatten_site_inventory): the operands of a tag
+        // are folded into the handler's context; the handler's output returns as a plain,
+        // never-authored `String`. See `typed_operands` for the full classification.
+        context_map
+            .map
+            .insert(TYPED_ARGS_KEY.to_string(), Value::Object(typed));
+    }
+}
+
+/// Each `key=<expression>` operand of an inline tag, resolved to a [`Value`] through
+/// [`get_value`] and keyed by `key` (#3756).
+///
+/// This is the resolution `{{ <expression> }}` performs, filters included, and it is the point of
+/// the channel: [`Context::resolve`] re-protects every segment of a dotted path
+/// (`protect_sidecar`), so `data=form.instance.password` is the same refusal here as in
+/// `{{ form.instance.password }}`. A handler that resolved the path itself over the raw objects (the
+/// `{% load %}` bridge) would have no floor. Quoted literals are skipped: the handler already
+/// reads them from its string arguments, and a literal has no type to recover. An operand that
+/// does not resolve (`Missing`, or an error) is skipped as well, so the handler falls back to its
+/// string argument exactly as before.
+///
+/// The values cross as typed Python objects through `value_into_handler_pyobject`: a `datetime`
+/// as the `datetime`, a `Decimal` as the `Decimal`, a carried object as its floor-protected live
+/// handle or its `TemplateObject`.
+fn typed_operands(
+    args: &[String],
+    context: &Context,
+    standins_only: bool,
+) -> indexmap::IndexMap<djust_core::ObjectKey, Value> {
+    let mut typed = indexmap::IndexMap::new();
+    for arg in args {
+        let Some((key, expr)) = arg.split_once('=') else {
+            continue;
+        };
+        let (key, expr) = (key.trim(), expr.trim());
+        if key.is_empty() || expr.is_empty() || strip_quotes(expr).is_some() {
+            continue;
+        }
+        // `get_value_safe`, not `get_value`: the second discards the runtime-safe flag, so
+        // `data=p` for a `p` bound by `{% with p=x|safe %}` (or a `mark_safe`d context value)
+        // reached the handler as a plain `str` and was escaped where Django hands the tag the
+        // `SafeString` and leaves it raw. Over-escaping, not a leak, and a byte difference from
+        // Django. The narrowing is `tag_arg`'s: only a STRING can be `SafeData`.
+        if let Ok((value, safe)) = get_value_safe(expr, context) {
+            let value = match value {
+                Value::String(text) if safe => Value::SafeString(text),
+                other => other,
+            };
+            // `standins_only` (#3768): a handler that reads only the types its string argument
+            // loses wants a tuple and an object (a `UUID`, a `Path`). A list, a dict, a number or a
+            // string is left out, so a large operand is not materialised a second time as Python
+            // objects for nothing: the handler has it, as JSON or text, in its string argument.
+            // A namedtuple is a tuple whose type the string argument loses as well (#3849): it
+            // arrives as the JSON list `[1, 2]` where Django's tag prints `P(x=1, y=2)`.
+            if standins_only
+                && !matches!(
+                    value,
+                    Value::Tuple(_) | Value::NamedTuple { .. } | Value::Encoded(_)
+                )
+            {
+                continue;
+            }
+            if !matches!(value, Value::Missing) {
+                // PROVENANCE: this folds a resolved operand into the object the handler is
+                // handed; it is not a rendered-output conversion. The handler's OUTPUT comes
+                // back as a plain `String` (`Ok((html).into())` in the `CustomTag` arm), never
+                // authored, so no authority is minted or dropped here, and the literal records
+                // this resolution leaves pending are discarded below exactly as
+                // `call_custom_tag` discards them after `resolve_custom_tag_args` (fail closed).
+                typed.insert(djust_core::ObjectKey::from(key), value);
+            }
+        }
+    }
+    context.take_provenance_flatten();
+    typed
 }
 
 /// Attribute a registry call's failure to its tag — unless it is the
@@ -1566,7 +1673,13 @@ fn call_block_custom_tag<L: TemplateLoader>(
     context.take_provenance_flatten();
     // #2710: through the ONE bridge, so a deferred `block.super` is
     // materialised for the flat map Python resolves against.
-    let context_map = bridged_context_map(context)?;
+    let mut context_map = bridged_context_map(context)?;
+    // A block handler that declared `TYPED_ARGS` is handed its operands as typed values, as an
+    // inline one is (#3768): the same helper, after the body is rendered and the args resolved.
+    if crate::registry::block_handler_wants_typed_args(name) {
+        let only = crate::registry::block_handler_typed_standins_only(name);
+        add_typed_operands(&mut context_map, args, context, only);
+    }
     // Forward raw-Python sidecar so block handlers can reach Python-only
     // context (request, view) the same way ``Node::CustomTag`` handlers do
     // (#1167).
@@ -1914,6 +2027,16 @@ fn sibling_binding(binding: crate::registry::HandlerBinding) -> SiblingBinding {
 /// `[List]`/`[Object]`-collapse parallel-path-drift class (CLAUDE.md
 /// #1646, issue #2042).
 fn value_to_arg_string(v: &Value) -> String {
+    // A carried MODEL (#3888) is its floored dict here, as every model was before it was a handle:
+    // a handler parses this text, and `{% data_table rows=rows %}` reads dict rows. A model inside
+    // a list reaches the same dict through `Value`'s `Serialize`; a bare one (a loop variable,
+    // `{% with u=rows|first %}`) comes through this early return. Ahead of the `match` so no new
+    // flatten site is added beside it (the provenance inventory pins those).
+    if let Value::Encoded(e) = v {
+        if let Some(Ok(text)) = e.floored_model_dict().map(|d| serde_json::to_string(&d)) {
+            return text;
+        }
+    }
     match v {
         // Tuple included: a structured arg must be JSON-encoded, not collapsed
         // to its Display form — the #2042 `[List]`-collapse class (#2203).
@@ -2462,7 +2585,7 @@ fn localize_if_number(value: &Value) -> Result<String> {
             // `{{ p }}` over a raising `__str__` propagates on both
             // engines). Before the temporal branch: a `datetime` whose
             // tzinfo raises inside `__str__` is this carrier too.
-            if encoded.str_raised {
+            if encoded.str_raised() {
                 if let Some(handle) = encoded.live.as_ref() {
                     return Python::attach(|py| -> Result<String> {
                         let text = handle
@@ -2485,7 +2608,7 @@ fn localize_if_number(value: &Value) -> Result<String> {
                 // them.
                 return Ok(match value.container_spelling() {
                     Some(spelled) => spelled.to_string(),
-                    None => encoded.display.clone(),
+                    None => encoded.display().to_string(),
                 });
             }
             // `localize_temporal` resolved once per process, not per value.
@@ -2495,7 +2618,7 @@ fn localize_if_number(value: &Value) -> Result<String> {
                 pyo3::sync::PyOnceLock::new();
             return Python::attach(|py| -> PyResult<String> {
                 let Some(value) = encoded.temporal_object(py)? else {
-                    return Ok(encoded.display.clone());
+                    return Ok(encoded.display().to_string());
                 };
                 // `None` is cached ONLY for ImportError (a bare-Rust harness
                 // with no djust package); any other failure propagates and
@@ -2514,7 +2637,7 @@ fn localize_if_number(value: &Value) -> Result<String> {
                         }
                     })?;
                 let Some(localize) = localize else {
-                    return Ok(encoded.display.clone());
+                    return Ok(encoded.display().to_string());
                 };
                 let use_l10n = USE_L10N_STACK.with(|stack| stack.borrow().last().copied());
                 localize.bind(py).call1((value, use_l10n))?.extract()
@@ -2889,6 +3012,8 @@ impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
 /// alone: the lazy object replaces only the scope's own, EMPTY `block`.
 fn bridged_context_map(context: &Context) -> Result<BridgedContextMap> {
     let mut map = context.to_hashmap();
+    // #3773: the typed-operand channel is the engine's. See `TYPED_ARGS_KEY`.
+    map.remove(TYPED_ARGS_KEY);
     let mut guard = None;
     if let Some((lazy_block, lazy_guard)) = context.lazy_block_value()? {
         let scope_block =
@@ -3625,6 +3750,12 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     true,
                     Vec::new(),
                 ),
+                // A serialized Django model is not iterable (`list(model)` raises): it falls
+                // through to the refusal arm below, as a live model handle does, rather than
+                // iterating the keys of the map it was serialized to.
+                model @ Value::Object(_) if model.model_str().is_some() => {
+                    (model, false, Vec::new())
+                }
                 Value::Object(map) => (
                     // Each key as the VALUE it is, not its text: an int key
                     // binds `Value::Integer` so `{{ k }}` renders `0` and
@@ -5474,7 +5605,9 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                         .or_else(|| e.consume_live_match(|item| values_equal(&needle, item)))
                     {
                         Some(Ok(found)) => Ok(found),
-                        Some(Err(_)) | None => Ok(false),
+                        // The handle's own `in` raised (a model handle has no `__contains__`):
+                        // false for `not in` as well, as in Django's smart-if.
+                        Some(Err(_)) | None => return Ok(false),
                     }
                 }
                 Value::Encoded(ref e) if e.items.is_some() => Ok(e
@@ -5488,6 +5621,10 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                         return Ok(false);
                     }
                 }
+                // A serialized model is not a container: `x in model` raises in Python, and
+                // smart-if reads the raise as false for `in` AND for `not in`, so this returns
+                // rather than flowing into the negation below.
+                ref model @ Value::Object(_) if model.model_str().is_some() => return Ok(false),
                 Value::Object(map) => {
                     // Django: "x in dict" checks dict keys — BY VALUE, as
                     // Python does, not by `Display` (#2339).
@@ -6459,6 +6596,10 @@ fn encoded_equal(a: &Encoded, b: &Encoded) -> bool {
         (Some(EqClass::Mapping), Some(EqClass::Mapping)) => {
             a.live_eq(b).unwrap_or_else(|| a.repr == b.repr)
         }
+        // #3888: two raw models, carried as floored handles: the model's own `==` (class and
+        // primary key). No handle (a round trip) is "not equal", never "equal by repr": two
+        // distinct rows can print the same `__str__`.
+        (Some(EqClass::Live), Some(EqClass::Live)) => a.live_eq(b).unwrap_or(false),
         // Everything else — two Sets, two datetimes, and every CROSS-class
         // pair (which answers `None` there, i.e. false, exactly as Python
         // says `set() != complex(0)`).
@@ -7213,6 +7354,30 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::parse;
     use indexmap::IndexMap;
+
+    #[test]
+    fn two_carried_models_without_a_handle_are_never_equal_3888() {
+        // The class survives a snapshot (wire tag 5) and the live object does not. Equal-by-repr
+        // would conflate two rows that print the same `__str__`, so a carrier with no handle to
+        // ask is "not equal", never "equal".
+        let carried = || {
+            Value::Encoded(Box::new(djust_core::Encoded {
+                type_name: "User".to_string(),
+                display: "u0".to_string().into(),
+                json: None,
+                truthy: true,
+                len: None,
+                iterable: false,
+                repr: "u0".to_string(),
+                cmp_key: None,
+                attrs: Default::default(),
+                items: None,
+                eq_class: Some(EqClass::Live),
+                live: None,
+            }))
+        };
+        assert!(!values_equal(&carried(), &carried()));
+    }
 
     #[test]
     fn captured_literal_replay_requires_allowlisted_text_and_literal_arguments() {
@@ -8052,6 +8217,38 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
+    /// `x in model` and `x not in model` both raise in Python, and smart-if reads a raise as false
+    /// for BOTH, so neither takes the true branch (the `not in` negation must not flip it).
+    #[test]
+    fn test_membership_in_a_serialized_model_is_false_for_in_and_not_in() {
+        let model: IndexMap<_, _> = [
+            ("pk", "1"),
+            ("__str__", "Account:a1"),
+            ("__model__", "Account"),
+            ("name", "a1"),
+        ]
+        .into_iter()
+        .map(|(k, v)| {
+            (
+                djust_core::ObjectKey::Str(k.chars().collect()),
+                Value::String(v.chars().collect()),
+            )
+        })
+        .collect();
+        let mut context = Context::new();
+        context.set("m".chars().collect(), Value::Object(model));
+        for (src, want) in [
+            ("{% if 'name' in m %}YES{% else %}NO{% endif %}", "NO"),
+            ("{% if 'zzz' in m %}YES{% else %}NO{% endif %}", "NO"),
+            ("{% if 'name' not in m %}YES{% else %}NO{% endif %}", "NO"),
+            ("{% if 'zzz' not in m %}YES{% else %}NO{% endif %}", "NO"),
+        ] {
+            let tokens = tokenize(src).unwrap();
+            let nodes = parse(&tokens).unwrap();
+            assert_eq!(render_nodes(&nodes, &context).unwrap(), want, "{src}");
+        }
+    }
+
     // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
     #[cfg(feature = "liveview")]
     #[test]
@@ -8548,7 +8745,7 @@ mod tests {
     #[test]
     fn test_if_in_attribute_with_gt_in_value() {
         // Fix for review issue #2: bare > inside an attribute value must not
-        // trick is_inside_html_tag() into thinking we are outside the tag.
+        // trick is_inside_html_tag_at() into thinking we are outside the tag.
         // e.g. title="a > b {% if show %}text{% endif %}" with show=False
         // must produce title="a > b " not title="a > b <!--dj-if-->".
         let template = r#"<div title="a > b {% if show %}text{% endif %}"></div>"#;
@@ -8739,6 +8936,34 @@ mod tests {
             Value::List(Vec::new()),
             Value::Tuple(vec![Value::Integer(1)]),
             Value::Object(IndexMap::new()),
+            // A serialized model: `list(model)` raises, so BOTH probes say "not iterable".
+            Value::Object(
+                [
+                    ("__str__", "Account:a1"),
+                    ("__model__", "Account"),
+                    ("pk", "1"),
+                ]
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        djust_core::ObjectKey::Str(k.chars().collect()),
+                        Value::String(v.chars().collect()),
+                    )
+                })
+                .collect(),
+            ),
+            // A dict that merely carries a text `__str__` is user data and iterates its keys.
+            Value::Object(
+                [("__str__", "lbl"), ("k1", "v1")]
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            djust_core::ObjectKey::Str(k.chars().collect()),
+                            Value::String(v.chars().collect()),
+                        )
+                    })
+                    .collect(),
+            ),
             Value::DictView {
                 kind: djust_core::DictViewKind::Keys,
                 items: vec![Value::Integer(1)],
@@ -8747,8 +8972,8 @@ mod tests {
             // say "not iterable".
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "datetime.datetime".to_string(),
-                display: "2020-01-01 03:04:05".to_string(),
-                json: "2020-01-01T03:04:05".to_string(),
+                display: "2020-01-01 03:04:05".to_string().into(),
+                json: Some("2020-01-01T03:04:05".to_string()),
                 truthy: true,
                 len: None,
                 iterable: false,
@@ -8762,15 +8987,13 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // A `set()`: `len` 0 and iterable, so both probes say
             // "iterates to nothing".
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
-                display: "set()".to_string(),
-                json: "set()".to_string(),
+                display: "set()".to_string().into(),
+                json: Some("set()".to_string()),
                 truthy: false,
                 len: Some(0),
                 iterable: true,
@@ -8780,8 +9003,6 @@ mod tests {
                 items: Some(vec![]),
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // A `{'a'}`: truthy, `len` 1, and its item carried (#2477/#2489).
             // Without it every `Encoded` sample here is EMPTY, and the sweep
@@ -8789,8 +9010,8 @@ mod tests {
             // always renders nothing".
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
-                display: "{'a'}".to_string(),
-                json: "{'a'}".to_string(),
+                display: "{'a'}".to_string().into(),
+                json: Some("{'a'}".to_string()),
                 truthy: true,
                 len: Some(1),
                 iterable: true,
@@ -8800,8 +9021,6 @@ mod tests {
                 items: Some(vec![Value::String("a".to_string())]),
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // A falsy `__iter__` class with NO `__len__`: Django's `ForNode`
             // has no length to read, so it `list()`s the object and renders
@@ -8809,8 +9028,8 @@ mod tests {
             // iterate — which is why that arm reads `items`, not `len`.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "FalsyIterable".to_string(),
-                display: "FalsyIterable()".to_string(),
-                json: "FalsyIterable()".to_string(),
+                display: "FalsyIterable()".to_string().into(),
+                json: Some("FalsyIterable()".to_string()),
                 truthy: false,
                 len: None,
                 iterable: true,
@@ -8820,16 +9039,14 @@ mod tests {
                 items: Some(vec![Value::String("x".to_string())]),
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // A zero-`__len__` class with no `__iter__`: `{% for %}` renders
             // the empty branch, `iter_values` refuses. The one sample that
             // makes the two questions distinguishable.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "LenZero".to_string(),
-                display: "<LenZero object>".to_string(),
-                json: "<LenZero object>".to_string(),
+                display: "<LenZero object>".to_string().into(),
+                json: Some("<LenZero object>".to_string()),
                 truthy: false,
                 len: Some(0),
                 iterable: false,
@@ -8839,8 +9056,6 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
         ];
         // `Value::None` and `Value::Missing` are Django's `values is None`
@@ -8879,12 +9094,12 @@ mod tests {
                 refusing += 1;
             }
         }
-        // The canary: the sweep is not vacuous in either direction. Six of the
+        // The canary: the sweep is not vacuous in either direction. Seven of the
         // samples refuse and eleven do not, so a change that made EVERYTHING
         // refuse — or nothing — cannot pass by making the equality trivially
         // true.
-        assert_eq!(refusing, 6, "expected exactly six refusing samples");
-        assert_eq!(samples.len(), 19);
+        assert_eq!(refusing, 7, "expected exactly seven refusing samples");
+        assert_eq!(samples.len(), 21);
         // Non-vacuity for the extra term: the zero-`len`-and-not-iterable
         // sample must be one the two probes DISAGREE about, or the relation
         // above is indistinguishable from a plain equality.

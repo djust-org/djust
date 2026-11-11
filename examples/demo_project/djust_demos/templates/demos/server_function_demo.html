@@ -28,8 +28,10 @@
 
             <hr class="my-6">
 
-            {# Server function demo: client-side JS calls djust.call()
-               to hit @server_function methods without triggering a re-render. #}
+            {% comment %}
+            Server function demo: client-side JS calls djust.call()
+            to hit @server_function methods without triggering a re-render.
+            {% endcomment %}
             <h2 class="text-xl font-bold mb-3">Product Search (via djust.call)</h2>
             <input
                 id="sf-query"
@@ -55,8 +57,10 @@
     </section>
 </div>
 
-{# CSRF token is rendered server-side; djust.call reads it from the cookie
-   (or the hidden input if present). #}
+{% comment %}
+CSRF token is rendered server-side; djust.call reads it from the cookie
+(or the hidden input if present).
+{% endcomment %}
 {% csrf_token %}
 
 <script>

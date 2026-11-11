@@ -7,7 +7,7 @@ import re
 
 from djust import Component
 from typing import Any, ClassVar, Optional, Tuple
-from djust.components.utils import safe_css_length
+from djust.components.utils import safe_css_length, url_is_protocol_relative
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,9 @@ def _plain_url(value: Any) -> str:
     text = value.strip()
     if not text or any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in text):
         return ""
+    # A root-relative path is tested the way a browser reads it (url_is_protocol_relative).
     if text.startswith(("https://", "http://")) or (
-        text.startswith("/") and not text.startswith("//")
+        text.startswith("/") and not url_is_protocol_relative(text)
     ):
         return text
     return ""

@@ -92,8 +92,8 @@ fn tag() -> String {
 fn sample() -> Encoded {
     Encoded {
         type_name: "datetime.timedelta".to_string(),
-        display: "0:01:30".to_string(),
-        json: "P0DT00H01M30S".to_string(),
+        display: "0:01:30".to_string().into(),
+        json: Some("P0DT00H01M30S".to_string()),
         truthy: true,
         // `None` — no `__len__`, which is what a `timedelta` answers. Slot 5
         // is an OPTION since #2477, not a boolean, so the "three consecutive
@@ -128,8 +128,6 @@ fn sample() -> Encoded {
         eq_class: Some(djust_core::EqClass::Identity),
         // TRANSIENT, never on the wire (#2539).
         live: None,
-        display_safe: false,
-        str_raised: false,
     }
 }
 
@@ -168,8 +166,8 @@ fn decode_parts(parts: Vec<Value>) -> Value {
 fn parts_of(e: &Encoded) -> Vec<Value> {
     let mut v = vec![
         Value::String(e.type_name.clone()),
-        Value::String(e.display.clone()),
-        Value::String(e.json.clone()),
+        Value::String(e.display().to_string()),
+        Value::String(e.json().to_string()),
         Value::Bool(e.truthy),
         match e.len {
             Some(n) => Value::Integer(n as i64),
@@ -217,6 +215,7 @@ fn parts_of(e: &Encoded) -> Vec<Value> {
         }
         Some(djust_core::EqClass::Identity) => eq_limbs(djust_core::EQ_CLASS_IDENTITY, 0.0, 0.0),
         Some(djust_core::EqClass::Mapping) => eq_limbs(djust_core::EQ_CLASS_MAPPING, 0.0, 0.0),
+        Some(djust_core::EqClass::Live) => eq_limbs(djust_core::EQ_CLASS_LIVE, 0.0, 0.0),
         None => Value::Object(indexmap::IndexMap::new()),
     });
     v
@@ -686,6 +685,27 @@ fn every_domain_constant_round_trips() {
 }
 
 #[test]
+fn the_live_equality_class_round_trips_and_has_its_own_tag_3888() {
+    // A raw model is carried as a floored live handle whose equality is the model's own
+    // (#3888). The class must survive a snapshot (the handle itself never does), and its tag
+    // must be distinct from every other class's, or a snapshot would read it back as another.
+    let e = Encoded {
+        eq_class: Some(djust_core::EqClass::Live),
+        ..sample()
+    };
+    assert_eq!(round_trip(&e), e);
+    let tags = [
+        djust_core::EQ_CLASS_SET,
+        djust_core::EQ_CLASS_NUMBER,
+        djust_core::EQ_CLASS_IDENTITY,
+        djust_core::EQ_CLASS_MAPPING,
+        djust_core::EQ_CLASS_LIVE,
+    ];
+    let unique: std::collections::BTreeSet<u8> = tags.iter().copied().collect();
+    assert_eq!(unique.len(), tags.len(), "two classes share a wire tag");
+}
+
+#[test]
 fn a_one_slot_shift_is_detectable() {
     // Non-vacuity for every assertion above. Drop slot 4 (`len`) to shift
     // every later slot down one and prove the payload is refused rather than
@@ -951,7 +971,8 @@ fn the_older_widths_still_read_with_the_documented_fallbacks() {
             assert_eq!(back.len, None, "the 6-element bool slot 4 is `false`");
             assert_eq!(back.iterable, e.iterable);
             assert_eq!(
-                back.repr, e.display,
+                back.repr,
+                e.display(),
                 "a 6-element read must not invent a repr"
             );
             assert_eq!(back.cmp_key, None, "a 6-element read must not invent a key");
@@ -965,7 +986,7 @@ fn the_older_widths_still_read_with_the_documented_fallbacks() {
         Value::Encoded(back) => {
             assert_eq!(back.truthy, e.truthy);
             assert!(back.len.is_none() && !back.iterable);
-            assert_eq!(back.repr, e.display);
+            assert_eq!(back.repr, e.display());
             assert_eq!(back.cmp_key, None);
             assert!(back.attrs.is_empty());
         }
@@ -975,8 +996,8 @@ fn the_older_widths_still_read_with_the_documented_fallbacks() {
     // THREE — the #2448 shape: truthiness derived from the display.
     match decode_parts(legacy(3, false)) {
         Value::Encoded(back) => {
-            assert_eq!(back.truthy, !e.display.is_empty());
-            assert_eq!(back.repr, e.display);
+            assert_eq!(back.truthy, !e.display().is_empty());
+            assert_eq!(back.repr, e.display());
             assert_eq!(back.cmp_key, None);
             assert!(back.attrs.is_empty());
         }

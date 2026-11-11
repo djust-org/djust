@@ -69,6 +69,20 @@ parses and the client uses to `replaceWith` the slot.
 
 Several lazy children render in parallel (`asyncio.as_completed()`).
 
+The slot can carry a placeholder: `lazy={"placeholder": ...}`. It follows Django's own escaping
+rule. A marked-safe value (`mark_safe(...)`, `format_html(...)`, anything with `__html__`) is
+markup and is spliced in as written; a plain `str` is text and is escaped, so a placeholder built
+from data cannot inject markup.
+
+```python
+from django.utils.html import format_html
+
+lazy_cfg = {"placeholder": format_html('<div class="skeleton">Loading {}...</div>', name)}
+```
+
+(A plain `str` placeholder used to be spliced as HTML. A project that passed
+`"<div>Loading...</div>"` should wrap it in `mark_safe(...)`.)
+
 ---
 
 This is the djust analog of React's

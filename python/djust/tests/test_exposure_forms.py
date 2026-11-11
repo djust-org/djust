@@ -215,10 +215,10 @@ async def websocket_frames(session_key, view_name):
     comm.scope["user"] = AnonymousUser()
     connected, _ = await comm.connect()
     assert connected
-    frames = [await comm.receive_json_from(timeout=5)]
+    frames = [await comm.receive_json_from()]
     try:
         await comm.send_json_to({"type": "mount", "view": __name__ + "." + view_name, "url": PATH})
-        frames.append(await comm.receive_json_from(timeout=5))
+        frames.append(await comm.receive_json_from())
         for name, params in (
             ("validate_field", {"field": "name", "value": "Al"}),
             ("validate_field", {"field": "password", "value": PASSWORD}),
@@ -227,7 +227,7 @@ async def websocket_frames(session_key, view_name):
             ("submit_form", {"name": "Al", "email": "bad", "password": "BAD" + PASSWORD}),
         ):
             await comm.send_json_to({"type": "event", "event": name, "params": params})
-            frames.append(await comm.receive_json_from(timeout=5))
+            frames.append(await comm.receive_json_from())
     finally:
         await comm.disconnect()
     return frames

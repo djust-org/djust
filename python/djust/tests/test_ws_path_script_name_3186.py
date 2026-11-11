@@ -19,9 +19,10 @@ from pathlib import Path
 import pytest
 from django.core.handlers.wsgi import WSGIHandler
 from django.test import RequestFactory, override_settings
-from django.urls import clear_url_caches, path, set_script_prefix
+from django.urls import clear_url_caches, path
 
 from djust import LiveView
+from djust.test_isolation import reset_static_state
 from djust.utils import clear_template_dirs_cache
 
 _TEMPLATE = """{% load live_tags %}<!doctype html>
@@ -66,7 +67,11 @@ def page_template():
         yield
     clear_template_dirs_cache()
     clear_url_caches()
-    set_script_prefix("/")
+    # A request under SCRIPT_NAME="/app" freezes "/app/static/" into the script prefix,
+    # ``settings.STATIC_URL``, the staticfiles storage instance and its lazy proxy; clearing
+    # only some of them refilled the rest (#3751). The autouse reset does this before the
+    # next test too; doing it here keeps the leak out of this module's own later tests.
+    reset_static_state()
     shutil.rmtree(tmp, ignore_errors=True)
 
 

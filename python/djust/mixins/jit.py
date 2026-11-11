@@ -11,7 +11,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from .._render_caches import render_caches_enabled
 from .._rust import extract_template_variables
-from ..optimization.codegen import compile_serializer, generate_serializer_code
+from ..optimization.codegen import (
+    all_methods_need_rows,
+    all_row_cap,
+    compile_serializer,
+    generate_serializer_code,
+)
 from ..optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
 from ..serialization import model_identity, normalize_django_value
 from ..session_utils import _jit_serializer_cache, _get_model_hash
@@ -71,6 +76,45 @@ def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
 
     _variable_extraction_cache[content_hash] = result
     return result
+
+
+def _paths_for_variable(variable_paths_map: Optional[dict], variable_name: str) -> List[str]:
+    """The template paths read off the value named *variable_name* (#3788).
+
+    A context name the template reads directly (``users``) is a key of the
+    extraction map. A value reached THROUGH a container is not: with
+    ``{"d": {"users": qs}}`` and ``{% for x in d.users %}{{ x.groups.all }}``,
+    the map holds ``d: ["users", "users.groups.all", "users.username"]`` and no
+    key ``d.users``, so a lookup by the dotted name found no path and the
+    value was serialized as a flat field dict, with every relation the
+    template walks missing. The dotted name is its root's paths with the
+    leading segments removed.
+
+    One resolver for the QuerySet, the model and the model-list producers
+    (#1646): they each did their own ``map.get(name)``.
+    """
+    if not variable_paths_map:
+        return []
+    direct = variable_paths_map.get(variable_name)
+    if direct:
+        return list(direct)
+    root, dot, rest = variable_name.partition(".")
+    if not dot:
+        return []
+    prefix = rest + "."
+    return [
+        path[len(prefix) :] for path in variable_paths_map.get(root, ()) if path.startswith(prefix)
+    ]
+
+
+def _serializer_function_name(variable_name: str, template_hash: str) -> str:
+    """``serialize_<name>_<hash>`` as a Python identifier (#3788).
+
+    A nested value's name is dotted (``d.users``), and the generated source
+    ``def serialize_d.users_...`` does not compile.
+    """
+    safe = re.sub(r"\W", "_", variable_name)
+    return f"serialize_{safe}_{template_hash}"
 
 
 def _template_hash(template_content: str) -> str:
@@ -138,6 +182,22 @@ def _template_source_key(view: Any) -> Optional[Tuple[str, str, Tuple[str, ...]]
     if not isinstance(ident, str):
         return None
     return (kind, ident, tuple(get_template_dirs()))
+
+
+def keep_rows_for_all_methods(view: Any, name: str, rows: List[Any]) -> None:
+    """Remember the evaluated rows of a top-level context value whose template
+    reads a relation both as rows and through a QuerySet method (#3801).
+
+    One serialized value cannot be both the list ``{% for g in u.groups.all %}``
+    iterates and the object ``{{ u.groups.all.count }}`` reads, so the rows ship
+    as a list and the method is answered from these raw rows: the render sidecar
+    (``_sync_state_to_rust``) holds them under the context name, and the engine's
+    guarded getattr walk -- the one ``DjustTemplateBackend`` renders through, with
+    its ``alters_data`` / ``do_not_call_in_templates`` refusals and the
+    serialization floor -- reads ``users.N.groups.all.count`` from them. Written
+    to ``__dict__`` so it is not state; ``get_context_data`` resets it per render.
+    """
+    view.__dict__.setdefault("_all_method_rows", {})[name] = rows
 
 
 def _jit_template_content(view: Any) -> Optional[str]:
@@ -757,7 +817,7 @@ class JITMixin:
                 if recursive_relation:
                     raise ValueError("Cannot extract recursive partial model fields")
                 return [normalize_django_value(obj) for obj in queryset]
-            paths_for_var = variable_paths_map.get(variable_name, [])
+            paths_for_var = _paths_for_variable(variable_paths_map, variable_name)
 
             if not paths_for_var and recursive_relation:
                 raise ValueError("Cannot extract recursive partial model fields")
@@ -815,7 +875,9 @@ class JITMixin:
                     id(item): item._meta.get_field(recursive_relation).is_cached(item)
                     for item in items
                 }
-            result = serialize_queryset(items, paths_for_var)
+            result = serialize_queryset(items, paths_for_var, all_row_cap())
+            if "." not in variable_name and all_methods_need_rows(model_class, paths_for_var):
+                keep_rows_for_all_methods(self, variable_name, items)
 
             # Check if Rust serializer captured all expected paths
             # (Rust can't access @property attributes, only model fields)
@@ -839,7 +901,7 @@ class JITMixin:
                 # costs anything for a template that names a denied field, which
                 # is a bug in the template.
 
-                func_name = f"serialize_{variable_name}_{template_hash}"
+                func_name = _serializer_function_name(variable_name, template_hash)
                 code = generate_serializer_code(model_class.__name__, paths_for_var, func_name)
                 serializer = compile_serializer(code, func_name)
                 result = [serializer(obj) for obj in items]
@@ -897,7 +959,7 @@ class JITMixin:
         """
         recursive_relation = _recursive_queryset_relation(template_content, variable_name)
         variable_paths_map = _cached_extract_template_variables(template_content)
-        paths_for_var = (variable_paths_map or {}).get(variable_name, [])
+        paths_for_var = _paths_for_variable(variable_paths_map, variable_name)
         if not paths_for_var:
             if recursive_relation:
                 raise ValueError("Cannot extract recursive partial model fields")
@@ -935,7 +997,7 @@ class JITMixin:
                 if relation:
                     raise ValueError("Cannot extract recursive partial model fields")
                 return cast(Dict[str, Any], normalize_django_value(obj))
-            paths_for_var = variable_paths_map.get(variable_name, [])
+            paths_for_var = _paths_for_variable(variable_paths_map, variable_name)
 
             if not paths_for_var and relation:
                 raise ValueError("Cannot extract recursive partial model fields")
@@ -965,7 +1027,7 @@ class JITMixin:
             if cache_key in _jit_serializer_cache:
                 serializer, _ = _jit_serializer_cache[cache_key]
             else:
-                func_name = f"serialize_{variable_name}_{template_hash}"
+                func_name = _serializer_function_name(variable_name, template_hash)
                 code = generate_serializer_code(model_class.__name__, paths_for_var, func_name)
                 serializer = compile_serializer(code, func_name)
                 _jit_serializer_cache[cache_key] = (serializer, None)

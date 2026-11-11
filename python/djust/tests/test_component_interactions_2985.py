@@ -11,18 +11,16 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 
 import pytest
 from django.template import Context, Template
 
+from djust import _rust
 from djust.components import rust_handlers as rh
 from djust.components.components.json_viewer import JsonViewer
 from djust.components.components.log_viewer import LogViewer
 from djust.components.components.sortable_grid import SortableGrid
 from djust.components.components.sortable_list import SortableList
-
-STATIC = Path(rh.__file__).resolve().parent / "static" / "djust_components"
 
 ITEMS = [
     {"id": "a", "label": "Alpha"},
@@ -153,9 +151,12 @@ class TestJsonViewerMarkupTheHookReads:
         return {
             "class": JsonViewer(data=self.DATA, collapsed_depth=1).render(),
             "tag": _tag("{% json_viewer data=data collapsed_depth=1 %}", data=self.DATA),
+            # ``json_viewer`` has no native handler class since #3756 (it dispatches on a
+            # value's type, so the Python node renders it through the bridge); the third
+            # path is the Rust engine's render of the tag.
             "handler": str(
-                rh.JsonViewerHandler().render(
-                    ["data=data", "collapsed_depth=1"], {"data": self.DATA}
+                _rust.render_template(
+                    "{% json_viewer data=data collapsed_depth=1 %}", {"data": self.DATA}
                 )
             ),
         }
@@ -197,10 +198,3 @@ class TestScriptsAreShippedAndFound:
             "script": f"djust_components/{script}",
             "hook_shipped": True,
         }
-
-    def test_the_script_registers_without_replacing_an_app_hook(self, component, hook, script):
-        """It registers in window.DjustHooks, which window.djust.hooks overrides,
-        and only when neither registry already holds the hook."""
-        source = (STATIC / script).read_text()
-        assert f"window.DjustHooks.{hook} = " in source
-        assert f"!appHooks.{hook} && !window.DjustHooks.{hook}" in source

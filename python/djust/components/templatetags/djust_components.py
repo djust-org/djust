@@ -17,14 +17,23 @@ import json as _json
 import re as _re
 import uuid
 from urllib.parse import urlencode
+from collections.abc import Mapping
 from typing import Any
 
 from django import template
-from django.utils.html import conditional_escape
+from django.utils.html import conditional_escape, format_html, format_html_join
 from django.utils.safestring import SafeString
 
-from ._registry import safe_url
-from djust.components.utils import rich_html, unique_ids as _unique_ids, url_attr
+from djust._template_guards import call_method_for_template
+from djust.components.utils import safe_url  # from where it is DEFINED, not ``._registry`` (#3820)
+from djust.components.utils import (
+    rich_html,
+    unique_ids as _unique_ids,
+    url_attr,
+    data_url_attr,
+    attr_text,
+    srcset_attr,
+)
 from djust.components.utils import (
     safe_css_color,
     safe_css_length,
@@ -32,6 +41,7 @@ from djust.components.utils import (
     safe_css_ratio,
 )
 from djust.components.components.dashboard_grid import clamp_cells, clamp_columns
+from djust.components.utils import _exact_str
 from django.utils.safestring import mark_safe
 
 
@@ -56,6 +66,7 @@ del _submodule, importlib
 # Re-export helpers moved to sub-modules for backward compatibility
 # (importing from _forms also triggers its @register decorators at load time)
 from djust.components.templatetags._forms import (  # noqa: E402
+    _bound_field_value,
     _get_field_type,  # noqa: F401
     _infer_columns,  # noqa: F401
     _queryset_to_rows,  # noqa: F401
@@ -79,6 +90,20 @@ def _resolve(value: Any, context: Any) -> Any:
         except template.VariableDoesNotExist:
             return ""
     return value
+
+
+def _item_attr(item: Any, name: str, default: Any = "") -> Any:
+    """``getattr(item, name, default)`` that reads DATA: a callable attribute is not a value.
+
+    A list item that is not a dict is read by attribute (``notif.title``). A ``str`` item has
+    a ``title`` too, the METHOD ``str.title``, so ``{% notification_popover
+    notifications=names %}`` rendered ``<built-in method title of str object at 0x...>`` into
+    the page (#3667). A method is not what a caller meant by "the title of this item", so it
+    reads as absent. (Django's own ``{{ item.title }}`` would CALL it; that is how a bare name
+    would come out titlecased as the notification title, which is no more meant.)
+    """
+    value = getattr(item, name, default)
+    return default if callable(value) else value
 
 
 def _parse_kv_args(bits: Any, parser: Any) -> Any:
@@ -107,16 +132,22 @@ def _parse_kv_args(bits: Any, parser: Any) -> Any:
 
 
 # Placed by {% modal_description %}; render_modal swaps it for the id.
-_MODAL_DESCRIPTION_MARKER = " data-dj-modal-description"
+#
+# render_modal finds the block in the already-rendered body, so what it looks for must be
+# something no ESCAPED variable can spell. A marker of plain characters (the old
+# ' data-dj-modal-description') survives escaping, so text inside an attribute value earlier in
+# the body could take the replacement - which carries a raw '"' - and break out of the value.
+# '<' is always escaped in variable output, so a marker that starts with one can only have been
+# written by this module (or by a template author who marks their own text safe).
+_MODAL_DESCRIPTION_MARKER = "<!--dj-modal-description-->"
+_MODAL_DESCRIPTION_OPEN = '<div class="dj-modal__description">'
 
 
 def render_modal_description(content: Any) -> SafeString:
     """Markup for ``{% modal_description %}``: the body of a modal's
     description, which the enclosing ``{% modal %}`` names in
     ``aria-describedby``."""
-    return mark_safe(
-        f'<div class="dj-modal__description"{_MODAL_DESCRIPTION_MARKER}>{content}</div>'
-    )
+    return mark_safe(f"{_MODAL_DESCRIPTION_MARKER}{_MODAL_DESCRIPTION_OPEN}{content}</div>")
 
 
 def render_modal(kw: Any, content: Any) -> SafeString:
@@ -167,10 +198,16 @@ def render_modal(kw: Any, content: Any) -> SafeString:
         level = 3
     description = kw.get("description", "")
     desc_id = f"{modal_id}-desc"
-    has_slot = not description and _MODAL_DESCRIPTION_MARKER in str(content)
+    marked = f"{_MODAL_DESCRIPTION_MARKER}{_MODAL_DESCRIPTION_OPEN}"
+    has_slot = not description and marked in str(content)
     if has_slot:
         # The {% modal_description %} block marked itself; give it the id.
-        content = str(content).replace(_MODAL_DESCRIPTION_MARKER, f' id="{desc_id}"', 1)
+        content = str(content).replace(
+            marked, f'<div class="dj-modal__description" id="{desc_id}">', 1
+        )
+    # No marker may reach the page: a second block, a block beside a description=, or a block
+    # outside any modal leaves it behind otherwise.
+    content = str(content).replace(_MODAL_DESCRIPTION_MARKER, "")
     described_ids = ([desc_id] if description or has_slot else []) + str(
         kw.get("describedby", "") or ""
     ).split()
@@ -722,6 +759,58 @@ def _checked_column_widths(columns: Any) -> Any:
     return checked
 
 
+@register.filter
+def table_width(value: Any) -> Any:
+    """``col.width`` as a CSS length for ``style="width:..."``, or ``""``.
+
+    Checked HERE, in the template, so it holds whatever the columns are (a list of dicts, of
+    objects, any other iterable) and whatever the width is marked as: the value is judged as the
+    plain text it prints (``safe_css_length``) and escaped, so a marked-safe width cannot leave
+    the attribute (#3894). ``_checked_column_widths`` only reaches dicts in a list or tuple."""
+    if not value:
+        return ""
+    return mark_safe(conditional_escape(safe_css_length(str(value), "")))
+
+
+@register.filter
+def table_cell(row: Any, key: Any) -> Any:
+    """``row[key]`` of a dict row, as ``table.html`` writes a cell and a row's ``data-value`` (#3870).
+
+    The template read a cell as ``{{ row|dictsort:col.key|first }}``: ``dictsort`` over a dict
+    iterates its KEYS and resolves ``col.key`` against each one, so every cell was ``""``. Django
+    has no lookup by a name held in a variable, and ``row.items`` is the row's ``items`` key when it
+    has one, so this is the lookup.
+
+    A row that is not a mapping, and a key it lacks, are ``""`` (what the native table writes).
+    Anything but a string is written the way the native table writes it, ``str()``: a number is not
+    localised (``1,000`` is not a row id), ``None`` is ``None``. A string, a ``mark_safe`` one
+    included, is returned as it is and escaped (or not) by the template.
+    """
+    if not isinstance(row, Mapping):
+        return ""
+    try:
+        value = row.get(key, "")
+    except TypeError:  # an unhashable key
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
+@register.filter
+def table_href(row: Any, key: Any) -> Any:
+    """``row[key]`` as a URL for ``href`` / ``data-href``: escaped, and a dangerous scheme is ``#``.
+
+    Reading the value out of the row (#3870) is what made these two sinks live: they were ``""``
+    for every dict row. A row is data, often someone else's, so ``javascript:`` is neutralised
+    here as for every other URL of a component (``url_attr``). The result is escaped, so it is
+    marked safe for the template.
+
+    A marked-safe value (``mark_safe``, a lazy one, ``Markup``) is checked and escaped like any
+    other (``honor_safe=False``, as the class-based components do): marking a cell safe keeps its
+    markup in a TEXT cell, and says nothing about using it as a URL (#3894).
+    """
+    return mark_safe(url_attr(table_cell(row, key), honor_safe=False))
+
+
 @register.inclusion_tag("djust_components/table.html")
 def data_table(
     rows: Any,
@@ -1049,6 +1138,20 @@ def data_table(
 # ---------------------------------------------------------------------------
 
 
+def pagination_pages(page: Any, total_pages: Any) -> "list[Any]":
+    """The page numbers a pager shows, with ``"..."`` for each gap.
+
+    Shared with the native handler (#3669), so the two engines wire the same buttons.
+    """
+    pages: list = []
+    for p in range(1, total_pages + 1):
+        if p == 1 or p == total_pages or abs(p - page) <= 2:
+            pages.append(p)
+        elif pages and pages[-1] != "...":
+            pages.append("...")
+    return pages
+
+
 @register.inclusion_tag("djust_components/pagination.html")
 def pagination(
     page: Any = 1,
@@ -1057,16 +1160,10 @@ def pagination(
     next_event: Any = "page_next",
 ) -> "dict[str, Any]":
     """Render pagination controls."""
-    pages: list = []
-    for p in range(1, total_pages + 1):
-        if p == 1 or p == total_pages or abs(p - page) <= 2:
-            pages.append(p)
-        elif pages and pages[-1] != "...":
-            pages.append("...")
     return {
         "page": page,
         "total_pages": total_pages,
-        "pages": pages,
+        "pages": pagination_pages(page, total_pages),
         "prev_event": prev_event,
         "next_event": next_event,
     }
@@ -1091,7 +1188,11 @@ def avatar(
         status: online, offline, busy, away, or empty
     """
     return {
-        "src": src,
+        # The same sanitiser the native handler uses, so both engines agree: a
+        # script-capable scheme becomes "#", an inline data:image/ URI is kept
+        # (#3665). The helper returns HTML-escaped text marked safe, so the template does not
+        # escape it a second time; a marked-safe ``src`` is checked like any other (#3898).
+        "src": data_url_attr(src, image=True),
         "alt": alt,
         "initials": initials or (alt[:2].upper() if alt else ""),
         "size": size,
@@ -1188,6 +1289,61 @@ _DJ_BUTTON_VARIANT_CLASS_MAP = {
 }
 
 
+def resolve_dj_button_args(
+    label: Any,
+    variant: Any,
+    event: Any,
+    confirm: Any,
+    icon: Any,
+    disabled: Any,
+    loading: Any,
+    size: Any,
+    preset: Any,
+) -> "tuple[Any, Any, Any, Any, Any, bool, bool, Any]":
+    """Apply a ``dj_button`` preset and read the boolean flags, exactly as the tag does.
+
+    Shared with the native handler (#3669): which event, confirmation and flags a button
+    ends up with must not be decided twice. A preset fills only the arguments the caller left
+    at their defaults, so an explicit argument always wins.
+    """
+    if preset:
+        from djust.components.presets import get_preset
+
+        preset_params = get_preset("dj_button", preset)
+        if preset_params:
+            _defaults = {
+                "variant": "primary",
+                "event": "",
+                "confirm": "",
+                "icon": "",
+                "disabled": False,
+                "loading": False,
+                "size": "md",
+            }
+            if label == "" and "label" in preset_params:
+                label = preset_params["label"]
+            if variant == _defaults["variant"] and "variant" in preset_params:
+                variant = preset_params["variant"]
+            if event == _defaults["event"] and "event" in preset_params:
+                event = preset_params["event"]
+            if confirm == _defaults["confirm"] and "confirm" in preset_params:
+                confirm = preset_params["confirm"]
+            if icon == _defaults["icon"] and "icon" in preset_params:
+                icon = preset_params["icon"]
+            if disabled == _defaults["disabled"] and "disabled" in preset_params:
+                disabled = preset_params["disabled"]
+            if loading == _defaults["loading"] and "loading" in preset_params:
+                loading = preset_params["loading"]
+            if size == _defaults["size"] and "size" in preset_params:
+                size = preset_params["size"]
+
+    if isinstance(disabled, str):
+        disabled = disabled.lower() not in ("false", "0", "")
+    if isinstance(loading, str):
+        loading = loading.lower() not in ("false", "0", "")
+    return label, variant, event, confirm, icon, bool(disabled), bool(loading), size
+
+
 @register.simple_tag
 def dj_button(
     label: Any = "",
@@ -1220,43 +1376,9 @@ def dj_button(
         size: sm, md, lg (md emits no extra class)
         preset: optional preset name (see ``djust_components.presets``)
     """
-    # Apply preset defaults — explicit kwargs take precedence.
-    if preset:
-        from djust.components.presets import get_preset
-
-        preset_params = get_preset("dj_button", preset)
-        if preset_params:
-            # Only apply preset values for args the caller left at defaults.
-            _defaults = {
-                "variant": "primary",
-                "event": "",
-                "confirm": "",
-                "icon": "",
-                "disabled": False,
-                "loading": False,
-                "size": "md",
-            }
-            if label == "" and "label" in preset_params:
-                label = preset_params["label"]
-            if variant == _defaults["variant"] and "variant" in preset_params:
-                variant = preset_params["variant"]
-            if event == _defaults["event"] and "event" in preset_params:
-                event = preset_params["event"]
-            if confirm == _defaults["confirm"] and "confirm" in preset_params:
-                confirm = preset_params["confirm"]
-            if icon == _defaults["icon"] and "icon" in preset_params:
-                icon = preset_params["icon"]
-            if disabled == _defaults["disabled"] and "disabled" in preset_params:
-                disabled = preset_params["disabled"]
-            if loading == _defaults["loading"] and "loading" in preset_params:
-                loading = preset_params["loading"]
-            if size == _defaults["size"] and "size" in preset_params:
-                size = preset_params["size"]
-
-    if isinstance(disabled, str):
-        disabled = disabled.lower() not in ("false", "0", "")
-    if isinstance(loading, str):
-        loading = loading.lower() not in ("false", "0", "")
+    label, variant, event, confirm, icon, disabled, loading, size = resolve_dj_button_args(
+        label, variant, event, confirm, icon, disabled, loading, size, preset
+    )
 
     # Map well-known variants to their canonical CSS class names; for
     # everything else, pass through with conditional_escape (#1619).
@@ -1403,8 +1525,7 @@ def dj_select(
         ov, ol = _opt_pair(opt)
         selected_attr = " selected" if str(ov) == str(value) else ""
         options_html_parts.append(
-            f'<option value="{conditional_escape(ov)}"{selected_attr}>'
-            f"{conditional_escape(ol)}</option>"
+            f'<option value="{attr_text(ov)}"{selected_attr}>{conditional_escape(ol)}</option>'
         )
 
     required_span = '<span class="form-required"> *</span>' if required else ""
@@ -1480,15 +1601,22 @@ def dj_radio(
     current_value: Any = "",
     event: Any = "",
     disabled: Any = False,
+    id: Any = "",
 ) -> SafeString:
-    """Render a single radio button."""
+    """Render a single radio button.
+
+    ``id`` sets the input's id; by default it is ``<name>_<value>`` with every
+    character other than a letter, digit, ``_`` or ``-`` replaced by ``-`` (a
+    value with a space made an invalid id). For a group with a legend, render
+    the radios inside your own ``<fieldset><legend>``.
+    """
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")
 
     e_name = conditional_escape(name)
     e_label = conditional_escape(label)
     e_value = conditional_escape(value)
-    radio_id = conditional_escape(f"{name}_{value}")
+    radio_id = conditional_escape(id or _re.sub(r"[^A-Za-z0-9_-]", "-", f"{name}_{value}"))
     dj_event = conditional_escape(event or name)
 
     checked_attr = " checked" if str(value) == str(current_value) else ""
@@ -1563,6 +1691,153 @@ def dj_textarea(
         f"{error_html}"
         f"{helper_html}"
         f"</div>"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 19b. Radio group (#3961)
+# ---------------------------------------------------------------------------
+
+
+def _radio_group_options(options: Any, field: Any) -> list[tuple[Any, Any, bool]]:
+    """``(value, label, disabled)`` per option of a radio group.
+
+    ``options`` is a list of dicts (``value``, ``label``, optional ``disabled``), of
+    ``(value, label)`` pairs or of plain values. With ``field=`` and no ``options``, a Django
+    choice field's own choices (optgroups flattened).
+    """
+    if options is None and field is not None:
+        choices = getattr(getattr(field, "field", None), "choices", None) or []
+        options = []
+        for choice_value, choice_label in choices:
+            if isinstance(choice_label, (list, tuple)):  # an optgroup
+                options.extend({"value": v, "label": lb} for v, lb in choice_label)
+            else:
+                options.append({"value": choice_value, "label": choice_label})
+    out: list[tuple[Any, Any, bool]] = []
+    for opt in options or []:
+        if isinstance(opt, dict):
+            out.append(
+                (opt.get("value", ""), opt.get("label", ""), _truthy_flag(opt.get("disabled")))
+            )
+        elif isinstance(opt, (list, tuple)) and len(opt) == 2:
+            out.append((opt[0], opt[1], False))
+        else:
+            out.append((opt, opt, False))
+    return out
+
+
+@register.simple_tag
+def dj_radio_group(
+    name: Any = "",
+    label: Any = "",
+    options: Any = None,
+    value: Any = "",
+    event: Any = "",
+    error: Any = "",
+    helper: Any = "",
+    required: Any = False,
+    disabled: Any = False,
+    describedby: Any = "",
+    invalid: Any = False,
+    field: Any = None,
+    id: Any = "",
+) -> SafeString:
+    """Render a group of radio buttons that assistive technology reads as one control.
+
+    A lone ``{% dj_radio %}`` is announced with no group name, no required state and no
+    description. This renders the group: a ``<fieldset role="radiogroup">`` named by its
+    ``<legend>``, one ``<input type="radio">`` with its own ``<label for>`` per option (ids
+    ``<group id>_<index>``, never the option value), and the help text and error as the group's
+    ``aria-describedby`` (an error also sets ``aria-invalid``).
+
+    Args:
+        name: the radios' shared ``name``
+        label: the group's name, rendered as the ``<legend>``
+        options: list of dicts ``{"value", "label", "disabled"}``, of ``(value, label)`` pairs, or
+            of plain values
+        value: the checked option's value
+        event: ``dj-change`` event for every radio (default: ``name``)
+        error / helper: text that describes the group
+        required: ``aria-required`` on the group and ``required`` on each radio
+        disabled: disables every radio
+        describedby: extra element ids for the group's ``aria-describedby``
+        invalid: sets ``aria-invalid`` (an ``error`` does too)
+        field: a Django BoundField; fills name, label, value, options (its choices), error, help
+            text and required, and its ``auto_id`` becomes the group's id
+        id: the group's id (default: ``name``); the legend, help and error ids derive from it
+    """
+    if field is not None:
+        filled = _from_bound_field(
+            field,
+            {
+                "name": name,
+                "label": label,
+                "value": value,
+                "error": error,
+                "helper": helper,
+                "required": required,
+            },
+        )
+        name, label, value = filled["name"], filled["label"], filled["value"]
+        error, helper, required = filled["error"], filled["helper"], filled["required"]
+        auto_id = getattr(field, "auto_id", None)
+        if not id and auto_id:
+            id = auto_id
+    required = _truthy_flag(required)
+    disabled = _truthy_flag(disabled)
+
+    # One id scheme, every character a valid id: a value or a name with a space or a bracket
+    # made an invalid id (and a ``<label for>`` that pointed nowhere).
+    group_id = attr_text(_re.sub(r"[^A-Za-z0-9_-]", "-", str(id or name or "radio-group")))
+    legend_id = f"{group_id}-legend"
+    e_name = attr_text(name)
+    e_event = attr_text(event or name)
+    e_error = conditional_escape(error)
+    e_helper = conditional_escape(helper)
+
+    group_attrs = f' id="{group_id}" class="dj-radio-group" role="radiogroup"'
+    if label:
+        group_attrs += f' aria-labelledby="{legend_id}"'
+    if required:
+        group_attrs += ' aria-required="true"'
+    group_attrs += field_aria_attrs(str(group_id), error, helper, describedby, invalid)
+
+    required_span = '<span class="form-required" aria-hidden="true"> *</span>' if required else ""
+    legend_html = (
+        f'<legend id="{legend_id}" class="dj-radio-group__legend form-label">'
+        f"{conditional_escape(label)}{required_span}</legend>"
+        if label
+        else ""
+    )
+
+    required_attr = " required" if required else ""
+    options_html = ""
+    for index, (raw_value, option_label, option_disabled) in enumerate(
+        _radio_group_options(options, field)
+    ):
+        option_id = f"{group_id}_{index}"
+        # The RAW text decides "checked" (#3927); escaping is for output only.
+        checked_attr = " checked" if _exact_str(raw_value) == _exact_str(value) else ""
+        disabled_attr = " disabled" if disabled or option_disabled else ""
+        options_html += (
+            f'<div class="form-radio-wrapper dj-radio-option">'
+            f'<input class="form-radio" type="radio" name="{e_name}" id="{option_id}" '
+            f'value="{attr_text(raw_value)}" dj-change="{e_event}"'
+            f"{checked_attr}{disabled_attr}{required_attr}>"
+            f'<label class="form-radio-label" for="{option_id}">'
+            f"{conditional_escape(option_label)}</label>"
+            f"</div>"
+        )
+
+    helper_html = (
+        f'<span class="form-helper" id="{group_id}-helper">{e_helper}</span>' if helper else ""
+    )
+    error_html = (
+        f'<span class="form-error-message" id="{group_id}-error">{e_error}</span>' if error else ""
+    )
+    return mark_safe(
+        f"<fieldset{group_attrs}>{legend_html}{options_html}{helper_html}{error_html}</fieldset>"
     )
 
 
@@ -1950,9 +2225,55 @@ def do_timeline_item(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 
+#: What a screen reader adds to a completed step that is not the current one. The state used to be a
+#: CSS class only, so it reached nobody who could not see the colour (WCAG 1.3.1, 1.4.1).
+_STEP_COMPLETED = mark_safe('<span class="sr-only"> (completed)</span>')
+_STEP_CURRENT = mark_safe(' aria-current="step"')
+
+
+def render_stepper(
+    entries: Any, active: int, event: Any, *, number_class: str, label_class: str
+) -> SafeString:
+    """The markup of ``{% stepper %}``, shared by the Django tag and the Rust handler (#3970).
+
+    An ordered list, one ``<li>`` per step. A step is a real ``<button type="button">``, so it
+    takes focus, Enter and Space activate it, and it never submits a form it sits in; the
+    current step carries ``aria-current="step"`` and a completed one says so in text.
+
+    ``entries`` is ``(label, li_class, completed)`` per step. The caller decides which classes a
+    step wears (the two engines differ on when a step counts as complete, which is the
+    template-library parity issue, #3663); the structure is decided here, once. ``event`` is
+    escaped for an attribute, whatever it is marked as (#3898).
+    """
+    items = format_html_join(
+        "",
+        '<li class="{}"><button type="button" class="stepper-step-button"{} '
+        'dj-click="{}" data-value="{}"><span class="{}">{}</span> <span class="{}">{}</span>{}'
+        "</button></li>",
+        (
+            (
+                li_class,
+                _STEP_CURRENT if i == active else "",
+                attr_text(event),
+                i,
+                number_class,
+                i + 1,
+                label_class,
+                label,
+                _STEP_COMPLETED if completed and i != active else "",
+            )
+            for i, (label, li_class, completed) in enumerate(entries)
+        ),
+    )
+    return format_html('<ol class="stepper">{}</ol>', items)
+
+
 @register.simple_tag
 def stepper(steps: Any = None, active: Any = 0, event: Any = "set_step") -> SafeString:
     """Render a step indicator.
+
+    The steps are an ordered list of buttons; the current one is
+    ``aria-current="step"`` and a completed one is announced as such.
 
     Args:
         steps: list of dicts {"label":..., "complete": False} or list of strings
@@ -1960,19 +2281,18 @@ def stepper(steps: Any = None, active: Any = 0, event: Any = "set_step") -> Safe
         event: dj-click event name for step navigation
     """
     if not steps:
-        return mark_safe('<div class="stepper"></div>')
+        return render_stepper([], 0, event, number_class="", label_class="")
 
     try:
         active = int(active)
     except (ValueError, TypeError):
         active = 0
 
-    e_event = conditional_escape(event)
-    parts = []
+    entries = []
     for i, step in enumerate(steps):
         if isinstance(step, dict):
             lbl = step.get("label", "")
-            complete = step.get("complete", False)
+            complete = bool(step.get("complete", False))
         else:
             lbl = str(step)
             complete = False
@@ -1982,15 +2302,11 @@ def stepper(steps: Any = None, active: Any = 0, event: Any = "set_step") -> Safe
             cls += " stepper-step-active"
         if complete:
             cls += " stepper-step-complete"
+        entries.append((lbl, cls, complete))
 
-        parts.append(
-            f'<button class="{cls}" dj-click="{e_event}" data-value="{i}">'
-            f'<span class="stepper-number">{i + 1}</span>'
-            f'<span class="stepper-label">{conditional_escape(lbl)}</span>'
-            f"</button>"
-        )
-
-    return mark_safe(f'<div class="stepper">{"".join(parts)}</div>')
+    return render_stepper(
+        entries, active, event, number_class="stepper-number", label_class="stepper-label"
+    )
 
 
 # ===========================================================================
@@ -2104,7 +2420,7 @@ def _from_bound_field(field: Any, values: dict) -> dict:
     if not out.get("label"):
         out["label"] = field.label or ""
     if not out.get("value"):
-        current = field.value()
+        current = _bound_field_value(field)
         out["value"] = "" if current is None else str(current)
     if not out.get("error") and field.errors:
         out["error"] = str(list(field.errors)[0])
@@ -2227,7 +2543,8 @@ def combobox(
         else:
             opt_label_map[str(opt)] = str(opt)
 
-    selected_set = set(str(s) for s in selected) if multiple else set()
+    # Selected state is decided on the RAW text of both sides (#3927); escaping is for output only.
+    selected_set = set(_exact_str(s) for s in selected) if multiple else set()
 
     # Ids: from ``id`` / the bound field's auto_id, else the legacy
     # name-derived ones.
@@ -2244,7 +2561,7 @@ def combobox(
         tags_html = ""
         hidden_inputs_html = ""
         for sv in selected:
-            e_sv = conditional_escape(str(sv))
+            e_sv = attr_text(sv)  # only in data-value= / value= (#3904)
             sl = opt_label_map.get(str(sv), str(sv))
             e_sl = conditional_escape(sl)
             tags_html += (
@@ -2262,44 +2579,41 @@ def combobox(
         options_html = ""
         for n, opt in enumerate(options):
             if isinstance(opt, dict):
-                ov = conditional_escape(str(opt.get("value", "")))
+                raw_ov = opt.get("value", "")
                 ol = conditional_escape(str(opt.get("label", "")))
             else:
-                ov = ol = conditional_escape(str(opt))
-            sel_cls = " combobox-option-selected" if str(ov) in selected_set else ""
+                raw_ov = opt
+                ol = conditional_escape(str(opt))
+            av = attr_text(raw_ov)
+            sel_cls = " combobox-option-selected" if _exact_str(raw_ov) in selected_set else ""
             aria_sel = "true" if sel_cls else "false"
             options_html += (
                 f'<div class="combobox-option{sel_cls}" id="{id_prefix}-option-{n}" role="option" '
                 f'aria-selected="{aria_sel}" '
-                f'dj-click="{e_event}" data-value="{ov}"{field_attr}>{ol}</div>'
+                f'dj-click="{e_event}" data-value="{av}"{field_attr}>{ol}</div>'
             )
     else:
         # Single-select mode (existing behavior)
         tags_container = ""
         hidden_inputs_html = ""
 
-        # Find current label
-        current_label = e_value
-        for opt in options:
-            if isinstance(opt, dict) and str(opt.get("value", "")) == str(value):
-                current_label = conditional_escape(str(opt.get("label", value)))
-                break
-
         options_html = ""
         # Each option has a stable id for the input's aria-activedescendant
         # (the client moves it with the arrow keys).
         for n, opt in enumerate(options):
             if isinstance(opt, dict):
-                ov = conditional_escape(str(opt.get("value", "")))
+                raw_ov = opt.get("value", "")
                 ol = conditional_escape(str(opt.get("label", "")))
             else:
-                ov = ol = conditional_escape(str(opt))
-            is_sel = str(ov) == str(value)
+                raw_ov = opt
+                ol = conditional_escape(str(opt))
+            av = attr_text(raw_ov)
+            is_sel = _exact_str(raw_ov) == _exact_str(value)
             sel = " combobox-option-selected" if is_sel else ""
             options_html += (
                 f'<div class="combobox-option{sel}" id="{id_prefix}-option-{n}" role="option" '
                 f'aria-selected="{"true" if is_sel else "false"}" '
-                f'dj-click="{e_event}" data-value="{ov}"{field_attr}>{ol}</div>'
+                f'dj-click="{e_event}" data-value="{av}"{field_attr}>{ol}</div>'
             )
 
     label_html = f'<label class="form-label" for="{input_id}">{e_label}</label>' if label else ""
@@ -2327,8 +2641,8 @@ def combobox(
     if not multiple:
         current_label = e_value
         for opt in options:
-            if isinstance(opt, dict) and str(opt.get("value", "")) == str(value):
-                current_label = conditional_escape(str(opt.get("label", value)))
+            if isinstance(opt, dict) and _exact_str(opt.get("value", "")) == _exact_str(value):
+                current_label = attr_text(opt.get("label", value))  # only in value= (#3904)
                 break
         input_value = current_label
     else:
@@ -2426,8 +2740,14 @@ def rating(
     readonly: Any = False,
     event: Any = "set_rating",
     size: Any = "md",
+    name: Any = "",
 ) -> SafeString:
-    """Render a star rating component."""
+    """Render a star rating component.
+
+    The stars are ``<button type="button">``, so a rating inside a form does
+    not submit it. ``name`` posts the current value with the form, from a
+    hidden input named ``name``.
+    """
     try:
         value = float(value)
         max_stars = int(max_stars)
@@ -2453,11 +2773,18 @@ def rating(
             parts.append(f'<span class="{star_cls}">★</span>')
         else:
             parts.append(
-                f'<button class="{star_cls}" dj-click="{e_event}" '
+                f'<button type="button" class="{star_cls}" dj-click="{e_event}" '
                 f'data-value="{i}" title="{i} star{"s" if i > 1 else ""}">★</button>'
             )
 
-    return mark_safe(f'<div class="rating{size_cls}">{"".join(parts)}</div>')
+    hidden = ""
+    if name:
+        shown = int(value) if value == int(value) else value
+        hidden = (
+            f'<input type="hidden" name="{attr_text(name)}" '
+            f'value="{conditional_escape(str(shown))}">'
+        )
+    return mark_safe(f'<div class="rating{size_cls}">{hidden}{"".join(parts)}</div>')
 
 
 # ---------------------------------------------------------------------------
@@ -2654,7 +2981,7 @@ def notification_center(
     for n in notifications:
         if not isinstance(n, dict):
             continue
-        nid = conditional_escape(str(n.get("id", "")))
+        nid = attr_text(n.get("id", ""))  # only in data-value= (#3904)
         msg = conditional_escape(str(n.get("message", n.get("msg", ""))))
         time_ = conditional_escape(str(n.get("time", "")))
         unread = n.get("unread", False)
@@ -2789,11 +3116,11 @@ def carousel(
     dots = ""
     for i, img in enumerate(images):
         if isinstance(img, dict):
-            src = url_attr(img.get("src", img.get("url", "")), image=True)
-            alt = conditional_escape(str(img.get("alt", f"Slide {i + 1}")))
+            src = data_url_attr(img.get("src", img.get("url", "")), image=True)
+            alt = attr_text(img.get("alt", f"Slide {i + 1}"))  # only in alt=
             caption = img.get("caption", "")
         else:
-            src = url_attr(img, image=True)
+            src = data_url_attr(img, image=True)
             alt = f"Slide {i + 1}"
             caption = ""
 
@@ -2860,7 +3187,7 @@ def tree_view(
     def render_node(node: Any, depth: Any = 0) -> Any:
         if not isinstance(node, dict):
             return ""
-        nid = conditional_escape(str(node.get("id", "")))
+        nid = attr_text(node.get("id", ""))  # only in data-value= (#3904)
         label = conditional_escape(str(node.get("label", "")))
         children = node.get("children", [])
         expanded = node.get("expanded", False)
@@ -3361,7 +3688,7 @@ def table_of_contents(
     def render_item(item: Any) -> Any:
         if not isinstance(item, dict):
             return ""
-        iid = conditional_escape(str(item.get("id", "")))
+        iid = attr_text(item.get("id", ""))  # only in href="#..." / data-value= (#3904)
         lbl = conditional_escape(str(item.get("label", "")))
         level = int(item.get("level", 1))
         indent = (level - 1) * 1.0
@@ -3488,7 +3815,7 @@ def kanban_board(
     for col in columns:
         if not isinstance(col, dict):
             continue
-        col_id = conditional_escape(str(col.get("id", "")))
+        col_id = attr_text(col.get("id", ""))  # only in dj-key= / data-* (#3904)
         col_title = conditional_escape(str(col.get("title", "")))
         col_color = conditional_escape(safe_css_color(col.get("color", "#6366F1"), "#6366F1"))
         cards = col.get("cards", [])
@@ -3497,12 +3824,12 @@ def kanban_board(
         for card in cards:
             if not isinstance(card, dict):
                 continue
-            card_id = conditional_escape(str(card.get("id", "")))
+            card_id = attr_text(card.get("id", ""))  # only in dj-key= / data-* (#3904)
             card_title = conditional_escape(str(card.get("title", "")))
             card_label = card.get("label", "")
             card_sub = card.get("sub", "")
             label_html = (
-                f'<span class="kanban-card-label kanban-label-{conditional_escape(card_label)}">'
+                f'<span class="kanban-card-label kanban-label-{attr_text(card_label)}">'
                 f"{conditional_escape(card_label)}</span>"
                 if card_label
                 else ""
@@ -3699,8 +4026,8 @@ def multi_select(
                 f'<span class="multi-select-tag">'
                 f"{conditional_escape(ol)}"
                 f'<button type="button" class="multi-select-tag-remove" '
-                f'dj-click="{dj_event}" data-value="{conditional_escape(ov)}" '
-                f'dj-value-option="{conditional_escape(ov)}" dj-value-value:bool="false"'
+                f'dj-click="{dj_event}" data-value="{attr_text(ov)}" '
+                f'dj-value-option="{attr_text(ov)}" dj-value-value:bool="false"'
                 f"{disabled_attr}>&times;</button>"
                 f"</span>"
             )
@@ -3714,11 +4041,11 @@ def multi_select(
         checked_attr = " checked" if ov in selected else ""
         cb_parts.append(
             f'<label class="multi-select-option">'
-            f'<input type="checkbox" name="{e_name}" value="{conditional_escape(ov)}"'
+            f'<input type="checkbox" name="{e_name}" value="{attr_text(ov)}"'
             f'{checked_attr}{disabled_attr} dj-change="{dj_event}" '
             # A checkbox's change sends only `value` (checked or not); without
             # the option the handler could not tell WHICH box changed.
-            f'dj-value-option="{conditional_escape(ov)}">'
+            f'dj-value-option="{attr_text(ov)}">'
             f" {conditional_escape(ol)}"
             f"</label>"
         )
@@ -3900,20 +4227,21 @@ def tag_input(
     tag_parts = []
     for tag in tags:
         e_tag = conditional_escape(str(tag))
+        a_tag = attr_text(tag)  # data-value= / value=; e_tag stays the text (#3904)
         tag_parts.append(
             f'<span class="tag-input-tag">'
             f"{e_tag}"
             f'<button type="button" class="tag-input-remove" '
-            f'dj-click="{dj_event}" data-value="remove:{e_tag}"'
+            f'dj-click="{dj_event}" data-value="remove:{a_tag}"'
             f"{disabled_attr}>&times;</button>"
-            f'<input type="hidden" name="{e_name}" value="{e_tag}">'
+            f'<input type="hidden" name="{e_name}" value="{a_tag}">'
             f"</span>"
         )
 
     # Build suggestion datalist
     suggestion_parts = []
     for s in suggestions:
-        suggestion_parts.append(f'<option value="{conditional_escape(str(s))}">')
+        suggestion_parts.append(f'<option value="{attr_text(s)}">')
 
     label_html = f'<label class="form-label">{e_label}</label>' if label else ""
 
@@ -4088,17 +4416,24 @@ def toggle_group(
     mode: Any = "single",
     disabled: Any = False,
     size: Any = "md",
+    form_field: Any = False,
 ) -> SafeString:
     """Render a segmented toggle button group (radio-style or multi-select).
 
+    The buttons are ``<button type="button">``, so a group inside a form does
+    not submit it.
+
     Args:
-        name: group name for identification
+        name: group name for identification (and the form field name with
+            ``form_field``)
         options: list of dicts with keys: value, label, icon (optional)
         value: currently selected value (or list of values in multi mode)
         event: dj-click event name
         mode: "single" (radio) or "multi" (checkbox-style)
         disabled: disables all buttons
         size: sm, md, lg
+        form_field: post the selected value(s) with the form under ``name``,
+            from hidden inputs (one per value in multi mode)
     """
     if options is None:
         options = []
@@ -4108,6 +4443,7 @@ def toggle_group(
     e_name = conditional_escape(name)
     e_event = conditional_escape(event)
     e_mode = conditional_escape(mode)
+    hidden = _toggle_group_hidden(name, value, mode) if _truthy_flag(form_field) else ""
 
     size_cls = ""
     if size and size != "md":
@@ -4118,7 +4454,7 @@ def toggle_group(
     for opt in options:
         if not isinstance(opt, dict):
             continue
-        opt_value = conditional_escape(str(opt.get("value", "")))
+        opt_value = attr_text(opt.get("value", ""))  # only in data-value= (#3904)
         opt_label = conditional_escape(str(opt.get("label", "")))
         opt_icon = opt.get("icon", "")
 
@@ -4139,7 +4475,7 @@ def toggle_group(
             )
 
         buttons.append(
-            f'<button class="toggle-group-btn{active_cls}" '
+            f'<button type="button" class="toggle-group-btn{active_cls}" '
             f'aria-pressed="{aria_pressed}" '
             f'data-name="{e_name}"{click_attr}{disabled_attr}>'
             f"{icon_html}"
@@ -4150,9 +4486,21 @@ def toggle_group(
     return mark_safe(
         f'<div class="toggle-group{size_cls}{disabled_cls}" '
         f'role="group" data-mode="{e_mode}">'
-        f"{''.join(buttons)}"
+        f"{hidden}{''.join(buttons)}"
         f"</div>"
     )
+
+
+def _toggle_group_hidden(name: Any, value: Any, mode: Any) -> str:
+    """The hidden input(s) that post a toggle group's value with its form."""
+    if not name:
+        return ""
+    if mode == "multi" and isinstance(value, (list, tuple)):
+        values = list(value)
+    else:
+        values = [value]
+    e_name = attr_text(name)
+    return "".join(f'<input type="hidden" name="{e_name}" value="{attr_text(v)}">' for v in values)
 
 
 # ---------------------------------------------------------------------------
@@ -4211,8 +4559,8 @@ def fab(
             if not isinstance(act, dict):
                 continue
             act_icon = conditional_escape(str(act.get("icon", "")))
-            act_event = conditional_escape(str(act.get("event", "")))
-            act_label = conditional_escape(str(act.get("label", "")))
+            act_event = attr_text(act.get("event", ""))  # only in dj-click= (#3904)
+            act_label = attr_text(act.get("label", ""))  # only in aria-label= (#3904)
             act_click = f' dj-click="{act_event}"' if act_event and not disabled else ""
             act_aria = f' aria-label="{act_label}"' if act_label else ""
             action_items.append(
@@ -4299,7 +4647,7 @@ def split_button(
         if not isinstance(opt, dict):
             continue
         opt_label = conditional_escape(str(opt.get("label", "")))
-        opt_event = conditional_escape(str(opt.get("event", "")))
+        opt_event = attr_text(opt.get("event", ""))  # only in dj-click= (#3904)
         opt_click = f' dj-click="{opt_event}"' if opt_event and not disabled else ""
         opt_disabled = " disabled" if disabled else ""
         option_items.append(
@@ -4781,6 +5129,7 @@ class StatusIndicatorNode(template.Node):
         pulse = kw.get("pulse", False)
         size = kw.get("size", "md")
         custom_class = kw.get("custom_class", "")
+        live = _truthy_flag(kw.get("live", False))
 
         e_label = conditional_escape(str(label))
         e_size = conditional_escape(str(size))
@@ -4804,7 +5153,11 @@ class StatusIndicatorNode(template.Node):
         dot_html = '<span class="dj-status-indicator__dot"></span>'
         label_html = f'<span class="dj-status-indicator__label">{e_label}</span>' if label else ""
 
-        return mark_safe(f'<span class="{cls}" role="status">{dot_html}{label_html}</span>')
+        # A label that is part of the page is not a status message (WCAG 4.1.3): a live role on
+        # every instance announces each one when its text changes, and a table with one per row
+        # has dozens. ``live=True`` is for the one indicator that updates in place.
+        role = ' role="status"' if live else ""
+        return mark_safe(f'<span class="{cls}"{role}>{dot_html}{label_html}</span>')
 
 
 @register.tag("status_indicator")
@@ -5053,7 +5406,7 @@ def rich_select(
         opt_html = _rich_select_option_html(opt, is_display=False)
         opt_parts.append(
             f'<div class="rich-select-option{active_cls}{variant_cls}" '
-            f'data-value="{conditional_escape(ov)}" '
+            f'data-value="{attr_text(ov)}" '
             f'dj-click="{dj_event}"{field_attr} '
             f'role="option" aria-selected="{"true" if ov == value else "false"}">'
             f"{opt_html}"
@@ -5117,7 +5470,7 @@ def _rich_select_option_html(opt: Any, is_display: Any = False) -> Any:
 
     if image:
         parts.append(
-            f'<img class="rich-select-option-image" src="{url_attr(image, image=True)}" alt="">'
+            f'<img class="rich-select-option-image" src="{data_url_attr(image, image=True)}" alt="">'
         )
     elif icon:
         parts.append(
@@ -5221,7 +5574,7 @@ def data_grid(
     for idx, col in enumerate(columns):
         if not isinstance(col, dict):
             continue
-        col_key = conditional_escape(str(col.get("key", "")))
+        col_key = attr_text(col.get("key", ""))  # only in data-col-key= (#3904)
         col_label = conditional_escape(str(col.get("label", col.get("key", ""))))
         width = col.get("width", "")
         width = safe_css_length(width, "") if width else ""
@@ -5251,13 +5604,13 @@ def data_grid(
     for row in rows:
         if not isinstance(row, dict):
             continue
-        rk = conditional_escape(str(row.get(row_key, "")))
+        rk = attr_text(row.get(row_key, ""))  # only in data-value= / data-row-key= (#3904)
         cells = []
         for idx, col in enumerate(columns):
             if not isinstance(col, dict):
                 continue
             col_key_raw = str(col.get("key", ""))
-            col_key = conditional_escape(col_key_raw)
+            col_key = attr_text(col_key_raw)  # only in data-col-key= (#3904)
             cell_val = conditional_escape(str(row.get(col_key_raw, "")))
             editable = col.get("editable", True)
             if isinstance(editable, str):
@@ -5271,7 +5624,7 @@ def data_grid(
                 frozen_cls = " data-grid-frozen-right"
 
             edit_attr = ' data-editable="true"' if editable else ""
-            type_attr = f' data-type="{conditional_escape(str(col_type))}"'
+            type_attr = f' data-type="{attr_text(col_type)}"'
 
             cells.append(
                 f'<td class="data-grid-cell{frozen_cls}" '
@@ -5621,7 +5974,7 @@ def responsive_image(
     if isinstance(lazy, str):
         lazy = lazy.lower() not in ("false", "0", "")
 
-    e_src = url_attr(src, image=True)
+    e_src = data_url_attr(src, image=True)
     e_alt = conditional_escape(alt)
     e_cls = conditional_escape(custom_class)
 
@@ -5640,8 +5993,9 @@ def responsive_image(
     img_attrs = [f'src="{e_src}"', f'alt="{e_alt}"']
     if lazy:
         img_attrs.append('loading="lazy"')
-    if srcset:
-        img_attrs.append(f'srcset="{conditional_escape(srcset)}"')
+    e_srcset = srcset_attr(srcset, honor_safe=False)
+    if e_srcset:
+        img_attrs.append(f'srcset="{e_srcset}"')
     if sizes:
         img_attrs.append(f'sizes="{conditional_escape(sizes)}"')
 
@@ -5649,7 +6003,7 @@ def responsive_image(
 
     placeholder_html = ""
     if placeholder:
-        e_ph = url_attr(placeholder, image=True)
+        e_ph = data_url_attr(placeholder, image=True)
         placeholder_html = (
             f'<img src="{e_ph}" alt="" class="dj-responsive-image__placeholder" aria-hidden="true">'
         )
@@ -6536,6 +6890,117 @@ class FilterSearchNode(template.Node):
         return ""  # rendered by FilterBarNode
 
 
+def render_filter_bar(
+    kw: Any, controls: Any, *, default_id: Any = None, extra_html: Any = ""
+) -> SafeString:
+    """Markup for ``{% filter_bar %}``, shared by the Django tag and the native handler (#3669).
+
+    ``kw`` is the bar's own resolved arguments; ``controls`` is a list of ``(kind, kwargs)``
+    with ``kind`` one of ``select`` / ``date_range`` / ``search`` and ``kwargs`` the child
+    tag's resolved arguments. The bar owns ``event`` and ``clear_event``: a child's own
+    ``event=`` is never read. ``default_id`` is the id used when the bar has none (the Django
+    tag draws a random one; the native handler passes a constant so a socket render does not
+    change it). ``extra_html`` is appended inside the controls row (the native handler keeps
+    whatever else the template put in the bar; the Django tag has none).
+    """
+    bar_id = kw.get(
+        "id", default_id if default_id is not None else f"filter-bar-{uuid.uuid4().hex[:8]}"
+    )
+    event = kw.get("event", "filter_change")
+    custom_class = kw.get("class", "")
+    clear_event = kw.get("clear_event", "filter_clear")
+
+    cls = "dj-filter-bar"
+    if custom_class:
+        cls += f" {conditional_escape(custom_class)}"
+
+    e_event = conditional_escape(event)
+    e_clear = conditional_escape(clear_event)
+
+    parts = []
+    has_values = False
+    for kind, nkw in controls:
+        if kind == "select":
+            name = conditional_escape(nkw.get("name", ""))
+            label = conditional_escape(nkw.get("label", name))
+            options = nkw.get("options", [])
+            value = nkw.get("value", "")
+            if value:
+                has_values = True
+            opt_html = f'<option value="">{label}</option>'
+            if isinstance(options, list):
+                for opt in options:
+                    if isinstance(opt, dict):
+                        ov = conditional_escape(str(opt.get("value", "")))
+                        ol = conditional_escape(str(opt.get("label", ov)))
+                        av = attr_text(opt.get("value", ""))  # the value= attribute (#3904)
+                    else:
+                        ov = conditional_escape(str(opt))
+                        ol = ov
+                        av = attr_text(opt)
+                    selected = (
+                        " selected"
+                        if str(opt.get("value", opt) if isinstance(opt, dict) else opt)
+                        == str(value)
+                        else ""
+                    )
+                    opt_html += f'<option value="{av}"{selected}>{ol}</option>'
+            parts.append(
+                f'<div class="dj-filter-bar__control dj-filter-bar__select-wrap">'
+                f'<select class="dj-filter-bar__select" name="{name}" '
+                f'dj-change="{e_event}">{opt_html}</select></div>'
+            )
+        elif kind == "date_range":
+            name = conditional_escape(nkw.get("name", ""))
+            label = conditional_escape(nkw.get("label", name))
+            value_start = conditional_escape(str(nkw.get("start", "")))
+            value_end = conditional_escape(str(nkw.get("end", "")))
+            if value_start or value_end:
+                has_values = True
+            parts.append(
+                f'<div class="dj-filter-bar__control dj-filter-bar__date-range">'
+                f'<label class="dj-filter-bar__label">{label}</label>'
+                f'<input class="dj-filter-bar__date" type="date" name="{name}_start" '
+                f'value="{value_start}" dj-change="{e_event}">'
+                f'<span class="dj-filter-bar__date-sep">&ndash;</span>'
+                f'<input class="dj-filter-bar__date" type="date" name="{name}_end" '
+                f'value="{value_end}" dj-change="{e_event}"></div>'
+            )
+        elif kind == "search":
+            name = conditional_escape(nkw.get("name", ""))
+            placeholder = conditional_escape(nkw.get("placeholder", "Search\u2026"))
+            value = conditional_escape(str(nkw.get("value", "")))
+            debounce = nkw.get("debounce", 300)
+            if value:
+                has_values = True
+            parts.append(
+                f'<div class="dj-filter-bar__control dj-filter-bar__search-wrap">'
+                f'<input class="dj-filter-bar__search" type="search" name="{name}" '
+                f'placeholder="{placeholder}" value="{value}" '
+                f'dj-input="{e_event}" dj-debounce="{int(debounce)}"></div>'
+            )
+
+    clear_html = ""
+    if has_values:
+        clear_html = (
+            f'<div class="dj-filter-bar__actions">'
+            f'<button class="dj-filter-bar__clear" dj-click="{e_clear}">Clear filters</button></div>'
+        )
+
+    return mark_safe(
+        f'<div class="{cls}" id="{conditional_escape(bar_id)}" role="search">'
+        f'<div class="dj-filter-bar__controls">{"".join(parts)}{extra_html}</div>'
+        f"{clear_html}</div>"
+    )
+
+
+_FILTER_KINDS = {
+    FilterSelectNode: "select",
+    FilterDateRangeNode: "date_range",
+    FilterSearchNode: "search",
+}
+
+
 class FilterBarNode(template.Node):
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
@@ -6543,98 +7008,12 @@ class FilterBarNode(template.Node):
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        bar_id = kw.get("id", f"filter-bar-{uuid.uuid4().hex[:8]}")
-        event = kw.get("event", "filter_change")
-        custom_class = kw.get("class", "")
-        clear_event = kw.get("clear_event", "filter_clear")
-
-        cls = "dj-filter-bar"
-        if custom_class:
-            cls += f" {conditional_escape(custom_class)}"
-
-        e_event = conditional_escape(event)
-        e_clear = conditional_escape(clear_event)
-
-        filter_nodes = [
-            n
+        controls = [
+            (_FILTER_KINDS[type(n)], {k: _resolve(v, context) for k, v in n.kwargs.items()})
             for n in self.nodelist
-            if isinstance(n, (FilterSelectNode, FilterDateRangeNode, FilterSearchNode))
+            if type(n) in _FILTER_KINDS
         ]
-
-        parts = []
-        has_values = False
-        for node in filter_nodes:
-            nkw = {k: _resolve(v, context) for k, v in node.kwargs.items()}
-            if isinstance(node, FilterSelectNode):
-                name = conditional_escape(nkw.get("name", ""))
-                label = conditional_escape(nkw.get("label", name))
-                options = nkw.get("options", [])
-                value = nkw.get("value", "")
-                if value:
-                    has_values = True
-                opt_html = f'<option value="">{label}</option>'
-                if isinstance(options, list):
-                    for opt in options:
-                        if isinstance(opt, dict):
-                            ov = conditional_escape(str(opt.get("value", "")))
-                            ol = conditional_escape(str(opt.get("label", ov)))
-                        else:
-                            ov = conditional_escape(str(opt))
-                            ol = ov
-                        selected = (
-                            " selected"
-                            if str(opt.get("value", opt) if isinstance(opt, dict) else opt)
-                            == str(value)
-                            else ""
-                        )
-                        opt_html += f'<option value="{ov}"{selected}>{ol}</option>'
-                parts.append(
-                    f'<div class="dj-filter-bar__control dj-filter-bar__select-wrap">'
-                    f'<select class="dj-filter-bar__select" name="{name}" '
-                    f'dj-change="{e_event}">{opt_html}</select></div>'
-                )
-            elif isinstance(node, FilterDateRangeNode):
-                name = conditional_escape(nkw.get("name", ""))
-                label = conditional_escape(nkw.get("label", name))
-                value_start = conditional_escape(str(nkw.get("start", "")))
-                value_end = conditional_escape(str(nkw.get("end", "")))
-                if value_start or value_end:
-                    has_values = True
-                parts.append(
-                    f'<div class="dj-filter-bar__control dj-filter-bar__date-range">'
-                    f'<label class="dj-filter-bar__label">{label}</label>'
-                    f'<input class="dj-filter-bar__date" type="date" name="{name}_start" '
-                    f'value="{value_start}" dj-change="{e_event}">'
-                    f'<span class="dj-filter-bar__date-sep">&ndash;</span>'
-                    f'<input class="dj-filter-bar__date" type="date" name="{name}_end" '
-                    f'value="{value_end}" dj-change="{e_event}"></div>'
-                )
-            elif isinstance(node, FilterSearchNode):
-                name = conditional_escape(nkw.get("name", ""))
-                placeholder = conditional_escape(nkw.get("placeholder", "Search\u2026"))
-                value = conditional_escape(str(nkw.get("value", "")))
-                debounce = nkw.get("debounce", 300)
-                if value:
-                    has_values = True
-                parts.append(
-                    f'<div class="dj-filter-bar__control dj-filter-bar__search-wrap">'
-                    f'<input class="dj-filter-bar__search" type="search" name="{name}" '
-                    f'placeholder="{placeholder}" value="{value}" '
-                    f'dj-input="{e_event}" dj-debounce="{int(debounce)}"></div>'
-                )
-
-        clear_html = ""
-        if has_values:
-            clear_html = (
-                f'<div class="dj-filter-bar__actions">'
-                f'<button class="dj-filter-bar__clear" dj-click="{e_clear}">Clear filters</button></div>'
-            )
-
-        return mark_safe(
-            f'<div class="{cls}" id="{conditional_escape(bar_id)}" role="search">'
-            f'<div class="dj-filter-bar__controls">{"".join(parts)}</div>'
-            f"{clear_html}</div>"
-        )
+        return render_filter_bar(kw, controls)
 
 
 @register.tag("filter_bar")
@@ -6695,15 +7074,15 @@ class AvatarGroupNode(template.Node):
                 name = user.get("name", "")
                 src = user.get("avatar", "") or user.get("src", "")
             elif hasattr(user, "get_full_name"):
-                name = user.get_full_name() or str(user)
+                name = call_method_for_template(user, "get_full_name") or str(user)
                 src = getattr(user, "avatar", "")
                 if hasattr(src, "url"):
                     src = src.url
             else:
                 name = str(user)
                 src = ""
-            e_name = conditional_escape(str(name))
-            e_src = url_attr(src, image=True)
+            e_name = attr_text(name)  # only in title= / alt=
+            e_src = data_url_attr(src, image=True)
             initials = conditional_escape("".join(w[0].upper() for w in str(name).split()[:2] if w))
             z = len(visible) - i
             if e_src:
@@ -6838,11 +7217,11 @@ class NotificationPopoverNode(template.Node):
                 n_time = notif.get("time", "")
                 n_read = notif.get("read", False)
             else:
-                n_id = getattr(notif, "id", "")
-                n_title = getattr(notif, "title", "")
-                n_body = getattr(notif, "body", getattr(notif, "message", ""))
-                n_time = getattr(notif, "time", "")
-                n_read = getattr(notif, "read", False)
+                n_id = _item_attr(notif, "id")
+                n_title = _item_attr(notif, "title")
+                n_body = _item_attr(notif, "body", _item_attr(notif, "message"))
+                n_time = _item_attr(notif, "time")
+                n_read = _item_attr(notif, "read", False)
             e_n_id = conditional_escape(str(n_id))
             e_n_title = conditional_escape(str(n_title))
             e_n_body = conditional_escape(str(n_body))
@@ -6913,10 +7292,10 @@ class ConversationThreadNode(template.Node):
                 text = msg.get("text", "")
                 time = msg.get("time", "")
             else:
-                sender = getattr(msg, "sender", "user")
-                name = getattr(msg, "name", "")
-                text = getattr(msg, "text", "")
-                time = getattr(msg, "time", "")
+                sender = _item_attr(msg, "sender", "user")
+                name = _item_attr(msg, "name")
+                text = _item_attr(msg, "text")
+                time = _item_attr(msg, "time")
 
             e_name = conditional_escape(str(name))
             e_text = conditional_escape(str(text))
@@ -7423,7 +7802,7 @@ class ModelSelectorNode(template.Node):
             inner = self._option_inner(opt)
             opt_parts.append(
                 f'<div class="dj-model-sel__opt{active_cls}" '
-                f'data-value="{conditional_escape(ov)}" '
+                f'data-value="{attr_text(ov)}" '
                 f'dj-click="{e_event}" '
                 f'role="option" aria-selected="{"true" if ov == value else "false"}">'
                 f"{inner}</div>"
@@ -7586,7 +7965,7 @@ class ChatBubbleNode(template.Node):
         e_name = conditional_escape(str(name))
         e_text = conditional_escape(str(text))
         e_time = conditional_escape(str(time_str))
-        e_avatar = url_attr(avatar_src, image=True)
+        e_avatar = data_url_attr(avatar_src, image=True)
         e_class = conditional_escape(str(custom_class))
 
         side = "dj-bubble--user" if sender == "user" else "dj-bubble--other"
@@ -7601,7 +7980,7 @@ class ChatBubbleNode(template.Node):
         if e_avatar:
             avatar_html = (
                 f'<span class="dj-bubble__avatar">'
-                f'<img src="{e_avatar}" alt="{e_name}" class="dj-bubble__avatar-img">'
+                f'<img src="{e_avatar}" alt="{attr_text(name)}" class="dj-bubble__avatar-img">'
                 f"</span>"
             )
         else:
@@ -7693,8 +8072,8 @@ class PresenceAvatarsNode(template.Node):
                 src = ""
                 status = "online"
 
-            e_name = conditional_escape(str(name))
-            e_src = url_attr(src, image=True)
+            e_name = attr_text(name)  # only in title= / alt=
+            e_src = data_url_attr(src, image=True)
             safe_status = status if status in self.VALID_STATUSES else "online"
             initials = conditional_escape(
                 "".join(w[0].upper() for w in str(name).split()[:2] if w) or "?"
@@ -7777,9 +8156,10 @@ class MentionsInputNode(template.Node):
         for user in users:
             if not isinstance(user, dict):
                 continue
-            uid = conditional_escape(str(user.get("id", "")))
+            uid = attr_text(user.get("id", ""))  # only in data-user-id=
             uname = conditional_escape(str(user.get("name", "")))
-            avatar_src = url_attr(user.get("avatar", ""), image=True)
+            uname_attr = attr_text(user.get("name", ""))  # alt= / data-user-name=
+            avatar_src = data_url_attr(user.get("avatar", ""), image=True)
 
             initials = (
                 conditional_escape(
@@ -7790,14 +8170,14 @@ class MentionsInputNode(template.Node):
 
             if avatar_src:
                 avatar_html = (
-                    f'<img src="{avatar_src}" alt="{uname}" class="dj-mentions__avatar-img">'
+                    f'<img src="{avatar_src}" alt="{uname_attr}" class="dj-mentions__avatar-img">'
                 )
             else:
                 avatar_html = f'<span class="dj-mentions__avatar-initials">{initials}</span>'
 
             items_html.append(
                 f'<li class="dj-mentions__item" data-user-id="{uid}" '
-                f'data-user-name="{uname}" role="option">'
+                f'data-user-name="{uname_attr}" role="option">'
                 f'<span class="dj-mentions__avatar">{avatar_html}</span>'
                 f'<span class="dj-mentions__name">{uname}</span>'
                 f"</li>"
@@ -8352,7 +8732,7 @@ class WizardNode(template.Node):
         for i, step in enumerate(steps):
             if not isinstance(step, dict):
                 continue
-            step_id = conditional_escape(str(step.get("id", "")))
+            step_id = attr_text(step.get("id", ""))  # only in data-value= (#3904)
             step_label = conditional_escape(str(step.get("label", "")))
             step_cls = "dj-wizard__step"
             if i < active_idx:
@@ -8763,9 +9143,8 @@ class FormArrayNode(template.Node):
                     f"{inner_html}{remove_html}</div>"
                 )
             else:
-                val = conditional_escape(
-                    str(row.get("value", "") if isinstance(row, dict) else row)
-                )
+                # only in value= (#3904)
+                val = attr_text(row.get("value", "") if isinstance(row, dict) else row)
                 rows_html.append(
                     f'<div class="dj-form-array__row" data-index="{i}">'
                     f'<input type="text" name="{e_name}[{i}]" value="{val}" '
@@ -8835,7 +9214,7 @@ class ScrollSpyNode(template.Node):
             else:
                 s_id = str(section)
                 s_label = s_id
-            e_id = conditional_escape(str(s_id))
+            e_id = attr_text(s_id)  # only in href="#..." / data-section= (#3904)
             e_label = conditional_escape(str(s_label))
             active_cls = " dj-scroll-spy__item--active" if str(s_id) == str(active) else ""
             nav_items.append(
@@ -8994,7 +9373,7 @@ def render_menu_item(item: Any, event_attrs: Any = None) -> str:
 
     if item.get("href") and not disabled:
         return (
-            f'<a class="{item_cls}" role="{role}" href="{url_attr(item["href"])}"'
+            f'<a class="{item_cls}" role="{role}" href="{data_url_attr(item["href"])}"'
             f"{checked_attr}>{inner}</a>"
         )
 
@@ -9156,7 +9535,7 @@ class MeterNode(template.Node):
             else:
                 pct = 0
             color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
-            seg_label = conditional_escape(str(seg.get("label", "")))
+            seg_label = attr_text(seg.get("label", ""))  # only in aria-label= (#3904)
             style = f"width:{pct:.1f}%"
             if color:
                 style += f";background:{color}"
@@ -9241,10 +9620,11 @@ class ExportDialogNode(template.Node):
         format_options = []
         for fmt in formats:
             e_fmt = conditional_escape(str(fmt))
+            a_fmt = attr_text(fmt)  # the value= attribute; e_fmt stays the text (#3904)
             checked = " checked" if str(fmt) == str(selected_format) else ""
             format_options.append(
                 f'<label class="dj-export-dialog__format">'
-                f'<input type="radio" name="export_format" value="{e_fmt}"{checked}>'
+                f'<input type="radio" name="export_format" value="{a_fmt}"{checked}>'
                 f'<span class="dj-export-dialog__format-label">{e_fmt.upper()}</span></label>'
             )
         format_section = (
@@ -9257,7 +9637,7 @@ class ExportDialogNode(template.Node):
         for col in columns:
             if not isinstance(col, dict):
                 continue
-            e_id = conditional_escape(str(col.get("id", "")))
+            e_id = attr_text(col.get("id", ""))  # only in value= (#3904)
             e_label = conditional_escape(str(col.get("label", "")))
             checked = " checked" if col.get("checked", True) else ""
             col_options.append(
@@ -9358,7 +9738,7 @@ class ImportWizardNode(template.Node):
             for field in model_fields:
                 if not isinstance(field, dict):
                     continue
-                e_id = conditional_escape(str(field.get("id", "")))
+                e_id = attr_text(field.get("id", ""))  # only in name= (#3904)
                 e_label = conditional_escape(str(field.get("label", "")))
                 field_rows.append(
                     f'<div class="dj-import-wizard__field-row">'
@@ -9439,11 +9819,10 @@ class AuditLogNode(template.Node):
             cells = []
             for col in columns:
                 val = conditional_escape(str(entry.get(col, "")))
-                cell_cls = f"dj-audit-log__td dj-audit-log__td--{conditional_escape(col)}"
+                # a column name and an action value land in a ``class=`` attribute (#3904)
+                cell_cls = f"dj-audit-log__td dj-audit-log__td--{attr_text(col)}"
                 if col == "action":
-                    cell_cls += (
-                        f" dj-audit-log__action--{conditional_escape(str(entry.get('action', '')))}"
-                    )
+                    cell_cls += f" dj-audit-log__action--{attr_text(entry.get('action', ''))}"
                 cells.append(f'<td class="{cell_cls}">{val}</td>')
             rows.append(f'<tr class="dj-audit-log__row">{"".join(cells)}</tr>')
 
@@ -9558,7 +9937,7 @@ class SortableListNode(template.Node):
         for item in items:
             if not isinstance(item, dict):
                 continue
-            item_id = conditional_escape(str(item.get("id", "")))
+            item_id = attr_text(item.get("id", ""))  # only in data-id= / data-key= (#3904)
             key_attr = f' data-key="{item_id}"' if keyed else ""
             label = conditional_escape(str(item.get("label", "")))
             handle_html = (
@@ -9632,16 +10011,16 @@ class SortableGridNode(template.Node):
         for item in items:
             if not isinstance(item, dict):
                 continue
-            item_id = conditional_escape(str(item.get("id", "")))
+            item_id = attr_text(item.get("id", ""))  # only in data-id= / data-key=
             key_attr = f' data-key="{item_id}"' if keyed else ""
             label = conditional_escape(str(item.get("label", "")))
             thumbnail = item.get("thumbnail", "")
             thumb_html = ""
             if thumbnail:
-                e_thumb = url_attr(thumbnail, image=True)
+                e_thumb = data_url_attr(thumbnail, image=True)
                 thumb_html = (
                     f'<img class="dj-sortable-grid__thumb" '
-                    f'src="{e_thumb}" alt="{label}" loading="lazy">'
+                    f'src="{e_thumb}" alt="{attr_text(item.get("label", ""))}" loading="lazy">'
                 )
             drag_attr = ' draggable="true"' if not disabled else ""
             items_html.append(
@@ -9686,7 +10065,7 @@ class ImageCropperNode(template.Node):
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
-        e_src = url_attr(src, image=True)
+        e_src = data_url_attr(src, image=True)
         e_event = conditional_escape(str(crop_event))
         e_class = conditional_escape(str(custom_class))
 
@@ -9942,8 +10321,8 @@ class LightboxNode(template.Node):
         if images and 0 <= idx < total:
             img = images[idx]
             if isinstance(img, dict):
-                e_src = url_attr(img.get("src", ""), image=True)
-                e_alt = conditional_escape(str(img.get("alt", "")))
+                e_src = data_url_attr(img.get("src", ""), image=True)
+                e_alt = attr_text(img.get("alt", ""))  # only in alt=
                 caption = img.get("caption", "")
                 img_html = f'<img class="dj-lightbox__image" src="{e_src}" alt="{e_alt}">'
                 if caption:
@@ -10044,7 +10423,7 @@ class DashboardGridNode(template.Node):
         for panel in panels:
             if not isinstance(panel, dict):
                 continue
-            pid = conditional_escape(str(panel.get("id", "")))
+            pid = attr_text(panel.get("id", ""))  # only in data-panel-id= (#3904)
             title = conditional_escape(str(panel.get("title", "")))
             content = conditional_escape(panel.get("content", ""))
 

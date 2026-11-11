@@ -69,6 +69,14 @@ Rules:
   authorizes each one. Override at least one (check `djust.S013`).
 - Missing, filtered-out and forbidden records get the same denial, and no form
   or hook runs. Every event looks the record up and checks it again.
+- Opt-ins (added after 1.3.2; neither changes a write): `object_recheck = "writes"`
+  lets only read-only events (`validate_field`, plus names in
+  `object_read_only_events`) reuse the authorized record; every other event,
+  including `submit_form` and every handler of yours, is checked in full.
+  `get_object_lookup()` (keys `pk_url_kwarg` / `slug_url_kwarg`) selects the
+  record from view state such as a `?open=<id>` param kept in `handle_params`;
+  with `object_optional = True` "nothing selected" is `object = None` and no
+  form, while a selected record that does not resolve is still a denial.
 - `self.object` renders as `object` (plus `context_object_name` if set) and is
   never persisted. Only `self.object = form.save()` (the same record) may be
   assigned; anything else raises `ValueError`.
@@ -120,6 +128,69 @@ class EditView(FormMixin, LiveView):
 </div>
 ```
 
+## Rendering fields with the adapters
+
+Prefer the adapters to hand-written field markup. In a `FormMixin` view,
+`{% live_field view "email" %}` (`view.as_live_field("email")`; `{% live_form view %}`
+for every field) renders label, control, help text and errors with the
+configured `css_framework`, bound to `validate_field`:
+
+```html
+{% load live_tags %}
+<form dj-submit="submit_form">
+    {% csrf_token %}
+    {% live_field view "name" %}
+    {% live_field view "size" group_variant="segmented" %}
+    <button type="submit">Save</button>
+</form>
+```
+
+What every adapter renders (unreleased):
+- The control's id is `id_<name>` (`auto_id=` overrides it). Help text is
+  `<id>-help` and errors `<id>-error`; the control's `aria-describedby` lists the
+  ones rendered, a field with errors is `aria-invalid="true"`, a required one
+  `required`. The required `*` is `aria-hidden`.
+- `Select`: a native `<select dj-change>`. An optional field gets one empty
+  option, never a second one when its choices already have a `""` choice;
+  grouped choices render as `<optgroup>`.
+- `RadioSelect`: `<fieldset role="radiogroup" aria-labelledby="<id>-legend">`
+  with a `<legend>`, `aria-required`, and the group's `aria-describedby` /
+  `aria-invalid`; each choice is `<input type="radio" id="<id>_<n>" dj-change="validate_field">`
+  plus its `<label for>`. A change sends `field` (the name) and `value`, which
+  is what `validate_field` takes; `dj-submit` FormData and the HTTP fallback send
+  the checked value under the name. Hook classes: `dj-radio-group`,
+  `dj-radio-option`, and `dj-radio-group--<variant>` from `group_variant=`.
+- `CheckboxSelectMultiple`: a `<fieldset class="dj-checkbox-group">` of
+  checkboxes, not bound to `validate_field` unless `dom_event=` is passed (a
+  checkbox change sends its checked state, not the list of values).
+- A `BooleanField` has one label, after the checkbox.
+
+Theme classes by slot, without copying adapter code:
+
+```python
+LIVEVIEW_CONFIG = {
+    "form_classes": {
+        "input": "input", "label": "field-label", "help": "field-help",
+        "error": "field-error", "radio_group": "segmented",
+        "radio_option": "segmented-option",
+    },
+}
+```
+
+Or subclass: `class BrandAdapter(Bootstrap5Adapter): css_classes = {"input": "brand-input"}`,
+then `register_adapter("brand", BrandAdapter())` and `css_framework="brand"`.
+`css_classes` wins over `form_classes`, which wins over the framework's map;
+unset slots keep the framework's classes; `""` means no class. Slots:
+`djust.frameworks.FORM_CLASS_SLOTS` and the CSS frameworks guide.
+
+Long option lists: the adapter's native `<select>` is the accessible default.
+The `djust_audit` rule X102 asks for a searchable combobox only for a
+hand-written `<select dj-change>` with more than 10 or loop-generated options;
+for such a form field render
+`{% combobox field=view.form_instance.country options=country_options event="validate_field" %}`
+(`djust_components`; `country_options` is a list of `{"value", "label"}` dicts)
+instead of `live_field`. `field=` fills name, label, value, help, error and id.
+
 ## Manual Form (without FormMixin)
 
 ```python
@@ -135,7 +206,9 @@ def save(self, **form_data):
 ```
 
 Rules:
-- Strict policy (opt-in, ADR-036): a strict `dj-submit` handler receives only the form fields it declares, or all of them through `**form_data`, and never `_target`
+- Strict policy (opt-in, ADR-036): a strict `dj-submit` handler receives only the form fields it declares (the pressed submit button's `name=value` is one of them), or all of them through `**form_data`, and never `_target`
+- Several values: a checkbox group (2+ same-named checkboxes in one form), a `<select multiple>` and any repeated name reach `dj-submit` as a list (`tags=["x", "y"]`; `[]` when a group is unticked), and `dj-change` on a group/`<select multiple>` sends `value` as that list. A lone checkbox stays scalar, so a per-row `dj-change` toggle whose boxes share a name now gets the list (read it as a list, or give the boxes distinct names). Declare `list[str]` under the strict policy
+- Pressed button: under the strict policy a `dj-submit` handler declaring `intent` receives the pressed `<button name="intent" value="...">`; legacy handlers keep `_target` and get no new field
 - Set `_model_instance` BEFORE calling `super().mount()` for edit forms
 - FormMixin provides `submit_form` handler automatically
 - `form_valid`/`form_invalid` are called after validation

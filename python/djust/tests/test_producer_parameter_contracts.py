@@ -37,7 +37,7 @@ async def _connect_and_mount(view_suffix, url):
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     communicator.scope["session"] = _ScopeSession(await sync_to_async(_create_session)())
     assert (await communicator.connect())[0]
-    await communicator.receive_json_from(timeout=2)
+    await communicator.receive_json_from()
     await communicator.send_json_to(
         {"type": "mount", "view": f"{__name__}.{view_suffix}", "url": url}
     )
@@ -175,7 +175,7 @@ async def test_push_state_frame_carries_the_contract_snapshot(view):
             await communicator.send_json_to(
                 {"type": "event", "event": "work", "params": {}, "ref": 1}
             )
-            pushed = await communicator.receive_json_from(timeout=3)
+            pushed = await communicator.receive_json_from()
             assert pushed["type"] in ("patch", "html_update"), pushed
             assert "Step: 1" in str(pushed) or pushed.get("patches"), pushed
             if view == "_StrictPushView":
@@ -256,7 +256,7 @@ async def test_component_creation_replacement_and_removal_follow_the_render():
                 await communicator.send_json_to(
                     {"type": "event", "event": event, "params": payload, "ref": 1}
                 )
-                return await communicator.receive_json_from(timeout=3)
+                return await communicator.receive_json_from()
 
             created = await send("create")
             assert _owner(created, "menu")["handlers"]["pick"]["policy"] == "strict"

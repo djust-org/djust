@@ -96,9 +96,9 @@ async def _mounted(app):
     socket = WebsocketCommunicator(app, "/ws/")
     socket.scope.update(session=session, user=AnonymousUser(), tenant=None)
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     await socket.send_json_to({"type": "mount", "view": __name__ + ".TickingView", "url": "/t/"})
-    assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+    assert (await socket.receive_json_from())["type"] == "mount"
     return socket
 
 
@@ -129,7 +129,7 @@ async def test_close_while_event_in_flight_still_reaches_disconnect():
         await asyncio.sleep(0.2)
         # uvicorn then delivers the disconnect on the receive side.
         await socket.send_input({"type": "websocket.disconnect", "code": 1006})
-        await socket.wait(timeout=3)
+        await socket.wait()
 
         assert consumer.disconnect_calls == 1, "disconnect() never ran: zombie session"
         assert consumer.view_instance is None
@@ -166,7 +166,7 @@ async def test_exception_escaping_dispatch_still_runs_disconnect(monkeypatch):
         socket = WebsocketCommunicator(RecordingConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=await sync_to_async(_session)(), user=AnonymousUser())
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         consumer = CONSUMERS[-1]
         await socket.send_json_to({"type": "ping"})
         with pytest.raises(RuntimeError, match="blew up"):
@@ -249,7 +249,7 @@ async def test_channels_handler_failing_before_disconnect_still_cleans_up():
         socket = WebsocketCommunicator(GroupConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=await sync_to_async(_session)(), user=AnonymousUser())
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         consumer = CONSUMERS[-1]
         real_discard = consumer.channel_layer.group_discard
 

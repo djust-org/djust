@@ -902,4 +902,43 @@ mod tests {
             assert_eq!(render_markdown(src, tl), render_unbounded(src, tl));
         }
     }
+
+    // ---------------------------------------------------------------
+    // Wikilinks (RUSTSEC-2026-0414, RUSTSEC-2026-0433)
+    // ---------------------------------------------------------------
+
+    /// Every option combination `RenderOpts` can produce.
+    fn every_opts() -> Vec<RenderOpts> {
+        let mut all = Vec::new();
+        for bits in 0..16u8 {
+            all.push(RenderOpts {
+                provisional: bits & 1 != 0,
+                tables: bits & 2 != 0,
+                strikethrough: bits & 4 != 0,
+                task_lists: bits & 8 != 0,
+            });
+        }
+        all
+    }
+
+    /// Both advisories need `Options::ENABLE_WIKILINKS`, which `to_pulldown`
+    /// never sets, so wikilink syntax is literal text under every option djust
+    /// can build. If someone adds that option, `[[a]]` becomes a link and this
+    /// goes red, which is the only thing standing between those inputs
+    /// (`[[a|]]` repeated, nested `![[`) and the parser.
+    #[test]
+    fn wikilink_syntax_is_never_a_link() {
+        for opts in every_opts() {
+            let o = opts.to_pulldown();
+            assert!(
+                !o.contains(Options::ENABLE_WIKILINKS),
+                "ENABLE_WIKILINKS is set for {opts:?}"
+            );
+            let out = render_markdown("see [[a|b]] and ![[img]]\n", opts);
+            assert!(!out.contains("<a "), "{opts:?}: {out}");
+            assert!(!out.contains("<img"), "{opts:?}: {out}");
+            assert!(out.contains("[[a|b]]"), "{opts:?}: {out}");
+            assert!(out.contains("![[img]]"), "{opts:?}: {out}");
+        }
+    }
 }

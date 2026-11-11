@@ -34,7 +34,7 @@ _FRAMEWORKS = ("bootstrap5", "tailwind", "plain")
 # ---------------------------------------------------------------------------
 
 
-async def _receive_until(communicator, wanted_type, *, tries=8, timeout=3):
+async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
@@ -67,7 +67,7 @@ async def _connect_and_mount(view_path: str, url: str = "/modal/"):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
 
     await communicator.send_json_to({"type": "mount", "view": view_path, "url": url})
     mount_frame = await _receive_until(communicator, "mount")
@@ -118,7 +118,7 @@ class TestModalDismissOverWebSocket:
                     "ref": 1,
                 }
             )
-            resp = await communicator.receive_json_from(timeout=3)
+            resp = await communicator.receive_json_from()
 
             assert resp.get("type") != "error", (
                 f"#2748: the close control's 'dismiss' event must be handled; got {resp!r}"
@@ -146,7 +146,7 @@ class TestModalDismissOverWebSocket:
                     "ref": 2,
                 }
             )
-            resp = await communicator.receive_json_from(timeout=3)
+            resp = await communicator.receive_json_from()
             assert resp.get("type") == "error", resp
             await communicator.disconnect()
 

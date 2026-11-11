@@ -357,7 +357,16 @@ pub enum Node {
     },
 }
 
-/// Returns true if `text` ends inside an unclosed HTML opening tag.
+/// Where a left-to-right scan of HTML text stands: inside an opening tag, and if
+/// so inside which kind of quoted attribute value.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+struct HtmlTagState {
+    in_tag: bool,
+    in_quote: Option<char>,
+}
+
+/// The state after scanning `text` from `state`; `.in_tag` is whether it ends inside
+/// an unclosed HTML opening tag.
 ///
 /// Used to detect whether a `{% if %}` tag appears inside an attribute value,
 /// e.g. `<div class="btn {% if active %}`. In that context the VDOM placeholder
@@ -370,9 +379,11 @@ pub enum Node {
 ///
 /// Known limitation: does not track JavaScript/CSS template literals or
 /// CDATA sections — these are not expected in Django template attribute values.
-fn is_inside_html_tag(text: &str) -> bool {
-    let mut in_tag = false;
-    let mut in_quote: Option<char> = None;
+fn advance_html_tag_state(state: HtmlTagState, text: &str) -> HtmlTagState {
+    let HtmlTagState {
+        mut in_tag,
+        mut in_quote,
+    } = state;
 
     for ch in text.chars() {
         match (in_tag, in_quote, ch) {
@@ -391,34 +402,113 @@ fn is_inside_html_tag(text: &str) -> bool {
         }
     }
 
-    in_tag
+    HtmlTagState { in_tag, in_quote }
 }
 
-/// Scan backwards through all preceding tokens to determine if we are inside
-/// an HTML opening tag. Variable/expression tokens (`{{ }}`) produce escaped
-/// text that cannot contain raw `<` or `>`, so they are skipped — only Text
-/// tokens contribute to the tag-open/close state.
+/// For each position `p` in `0..=tokens.len()`, whether the text before
+/// `tokens[p]` ends inside an HTML opening tag, computed in one forward pass.
+///
+/// Only Text tokens contribute (variable and tag tokens emit no raw `<` or `>`).
+/// The scan restarts, from outside any tag, at every Text token that contains a
+/// `>`: that is the state a backwards walk from `p` reaches, because it stops at
+/// the nearest such token and scans the text from there. So `table[p]` is exactly
+/// what that walk answers, for every `p`, in time linear in the tokens (#3724).
+fn html_tag_context_table(tokens: &[Token]) -> Vec<bool> {
+    let mut table = Vec::with_capacity(tokens.len() + 1);
+    let mut state = HtmlTagState::default();
+    for token in tokens {
+        table.push(state.in_tag);
+        if let Token::Text(text) = token {
+            if text.contains('>') {
+                state = HtmlTagState::default();
+            }
+            state = advance_html_tag_state(state, text);
+        }
+    }
+    table.push(state.in_tag);
+    table
+}
+
+/// The per-parse answer table for [`is_inside_html_tag_at`]: built lazily, from the
+/// token slice a `parse_internal` call is parsing, and found again by that slice's
+/// address and length.
+struct TagContextCache {
+    tokens_ptr: usize,
+    tokens_len: usize,
+    table: Option<Vec<bool>>,
+}
+
+// `with`, not `try_with`: the slot holds a `Vec`, so it has a destructor and `with`
+// would panic if called after that destructor ran, i.e. from the destructor of another
+// thread-local during thread teardown. Parsing is only entered from a request or an
+// explicit call into the crate, never from a destructor, and no such path was found
+// (the sibling `WALK_RAW_BODIES` flag below is read the same way), so there is nothing
+// to test and the plain `with` keeps a logic error loud instead of silently falling
+// back to the slow scan.
+thread_local! {
+    static TAG_CONTEXT:std::cell::RefCell<Option<TagContextCache>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Installs a [`TagContextCache`] for the tokens a parse is working through and
+/// puts back whatever was installed before it (a parse can nest) when dropped.
+struct TagContextScope {
+    previous: Option<TagContextCache>,
+}
+
+impl TagContextScope {
+    fn enter(tokens: &[Token]) -> Self {
+        let cache = TagContextCache {
+            tokens_ptr: tokens.as_ptr() as usize,
+            tokens_len: tokens.len(),
+            table: None,
+        };
+        Self {
+            previous: TAG_CONTEXT.with(|slot| slot.borrow_mut().replace(cache)),
+        }
+    }
+}
+
+impl Drop for TagContextScope {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        TAG_CONTEXT.with(|slot| *slot.borrow_mut() = previous);
+    }
+}
+
+/// Determine whether position `pos` is inside an HTML opening tag, looking
+/// through ALL preceding tokens. Variable/expression tokens (`{{ }}`) produce
+/// escaped text that cannot contain raw `<` or `>`, so they are skipped — only
+/// Text tokens contribute to the tag-open/close state.
 ///
 /// This fixes the case where `<option value="{{ var }}" {% if cond %}selected{% endif %}>`
 /// has a Variable token between the `<option` and the `{% if %}`, causing the
 /// single-token check to miss the unclosed tag context.
+///
+/// The answer for every position of the token slice being parsed comes from one
+/// forward pass ([`html_tag_context_table`]), built the first time it is asked
+/// for. The backwards walk this replaced had no stopping point in a template
+/// whose text between tags holds no `>` (whitespace, plain prose): it re-read the
+/// whole template for every `{{ }}` and `{% if %}`, and rebuilt its text by
+/// prepending each piece, so extraction cost ~n^2.9 in the number of blocks
+/// (#3724). A slice that is not the one a parse is working through (nothing in
+/// the crate asks about one) is answered by a forward scan of its prefix.
 fn is_inside_html_tag_at(tokens: &[Token], pos: usize) -> bool {
-    let mut combined = String::new();
-    // Walk backwards, collecting Text tokens. Stop early if we find a `>`
-    // outside quotes (definitely closed) or have enough context.
-    for j in (0..pos).rev() {
-        if let Token::Text(t) = &tokens[j] {
-            combined.insert_str(0, t);
-            // Optimization: if the combined text contains a `>` we have enough
-            // context — the final state from is_inside_html_tag will be correct.
-            if t.contains('>') {
-                break;
+    TAG_CONTEXT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let Some(cache) = slot.as_mut() {
+            if cache.tokens_ptr == tokens.as_ptr() as usize && cache.tokens_len == tokens.len() {
+                let table = cache
+                    .table
+                    .get_or_insert_with(|| html_tag_context_table(tokens));
+                if let Some(answer) = table.get(pos) {
+                    return *answer;
+                }
             }
         }
-        // Variable tokens produce HTML-escaped content (no raw < or >), skip them.
-        // Tag tokens ({% %}) are structural and don't emit < or >, skip them too.
-    }
-    is_inside_html_tag(&combined)
+        let end = pos.min(tokens.len());
+        html_tag_context_table(&tokens[..end])[end]
+    })
 }
 
 /// Parse a token stream into an AST.
@@ -584,6 +674,7 @@ fn parse_internal(
     source: &str,
     identity_hash: u64,
 ) -> Result<Vec<Node>> {
+    let _tag_context = TagContextScope::enter(tokens);
     let mut nodes = Vec::new();
     let mut block_names = HashSet::new();
     let mut i = 0;
@@ -2359,10 +2450,14 @@ fn parse_token_inner(
                         Err(crate::registry::library_syntax_error(&message))
                     } else if crate::registry::handler_exists(tag_name) {
                         crate::registry::validate_tag_arguments(tag_name, args, false)?;
+                        // A handler may name its positional operands from the
+                        // ORIGINAL tokens (#3664); after resolution a
+                        // positional value and a keyword are the same text.
+                        let args = crate::registry::rewrite_tag_arguments(tag_name, args)?;
                         // Inline handler exists - create CustomTag node
                         Ok(Some(Node::CustomTag {
                             name: tag_name.clone(),
-                            args: args.clone(),
+                            args,
                         }))
                     } else if crate::registry::assign_handler_exists(tag_name) {
                         // Context-mutating assign tag (register_assign_tag_handler).
@@ -2991,6 +3086,9 @@ pub fn extract_template_variables(
             }
         }
         paths.retain(|path| !path.is_empty());
+        // After the index segments are gone, so that `rows.0.items` and
+        // `rows.items` are the same iterable when a key is matched to it.
+        resolve_item_key_paths(paths);
         paths.sort();
         paths.dedup();
     }
@@ -3312,10 +3410,14 @@ fn extract_from_nodes(
                 // must be tracked as a dependency too, otherwise a nested
                 // {% if %}{{ x|default:dynamic }}{% endif %} silently drops
                 // when only `dynamic` changes (issue #787).
-                for (_name, arg) in filters {
+                for (name, arg) in filters {
                     if let Some(arg) = arg {
                         extract_from_filter_arg(arg, variables);
                     }
+                    // `{{ users|dictsort:'name' }}` reads `name` off each user
+                    // (#3892); a tag operand reaches the same helper through
+                    // `extract_from_operand`.
+                    record_item_key_filter(var_expr, name, arg.as_deref(), variables);
                 }
             }
             Node::If {
@@ -3504,17 +3606,25 @@ fn extract_from_nodes(
                     }
                 }
             }
-            Node::CustomTag { args, name: _ }
+            Node::CustomTag { args, name }
             | Node::BlockCustomTag {
                 args,
-                name: _,
+                name,
                 children: _,
             }
             | Node::RawBlockCustomTag {
                 args,
-                name: _,
+                name,
                 body: _,
             } => {
+                // `{% regroup users by name as g %}` reads `name` off each
+                // user, as `dictsort:'name'` does (#3892). `regroup` is an
+                // inline tag handler (the `as` form is still `CustomTag`),
+                // and `handler_exists` is asked before `assign_handler_exists`
+                // at parse, so it arrives here and never as `AssignTag`.
+                if name == "regroup" {
+                    record_regroup_item_key(args, variables);
+                }
                 // Extract variables from custom/block tag arguments
                 for arg in args {
                     if (arg.starts_with('"') && arg.ends_with('"'))
@@ -3810,7 +3920,159 @@ fn extract_from_operand(
         if let Some((_, arg)) = spec.split_once(':') {
             extract_from_filter_arg(arg, variables);
         }
+        // A quoted argument is a LITERAL, so the line above rightly files
+        // nothing for it. For `dictsort:'username'` that literal is itself a
+        // read: of `username`, off each item of `head` (#3892).
+        let (name, arg, _) = crate::filter_lexer::scan_filter_spec(spec.trim());
+        record_item_key_filter(head, name, arg, variables);
     }
+}
+
+/// Marks a path as an ITEM-KEY read: the field a filter or tag names in its
+/// ARGUMENT, off each item of an iterable, rather than a read the template
+/// body makes (#3892). A path is `<iterable path>.<MARK><key>`, or `<MARK><key>`
+/// when the iterable is the root. It rides the ordinary path channel so every
+/// transfer in [`extract_from_nodes`] (a loop variable onto its iterable, a
+/// `{% with %}` alias onto its source) prefixes it like any other path, and
+/// [`resolve_item_key_paths`] settles it at the one chokepoint every
+/// producer flows through. `U+0001` cannot appear in a template identifier.
+const ITEM_KEY_MARK: char = '\u{1}';
+
+/// The built-in filters whose ARGUMENT names an attribute read off each ITEM
+/// of the value they filter (a Django `Variable` path, resolved per item).
+///
+/// A decision per built-in filter, derived rather than recalled: the probe in
+/// `python/tests/test_item_key_filters_3892.py` hands every Django built-in an
+/// iterable of tripwire items and records which of them read the named
+/// attribute, and exactly these two do. The others read nothing by name:
+/// `unordered_list`, `join`, `first`, `last`, `random`, `slice`, `length`,
+/// `make_list`, `safeseq` and `escapeseq` stringify or index whole items.
+/// A new entry here is a filter that reads a field of each item; the test
+/// fails when Django grows one.
+const ITEM_KEY_FILTERS: &[&str] = &["dictsort", "dictsortreversed"];
+
+/// A key a filter or tag may name, as a path the JIT may serialize.
+///
+/// Django resolves it with `Variable`, so a dotted path (`profile.name`) and an
+/// index segment are legal and an underscore-led segment is refused
+/// ("Variables and attributes may not begin with underscores"). The refusal
+/// matters here: the key comes from a string literal, which the parser never
+/// sees as a variable, so without this check `dictsort:'_secret'` would name a
+/// private attribute for the serializer to read. A key that is not a plain path
+/// contributes nothing, as does one that starts with an index (`itemgetter`).
+fn is_item_key_path(key: &str) -> bool {
+    !key.is_empty()
+        && !is_index_segment(key.split('.').next().unwrap_or(""))
+        && key.split('.').all(|segment| {
+            !segment.is_empty()
+                && !segment.starts_with('_')
+                && segment.chars().all(|c| c.is_alphanumeric() || c == '_')
+        })
+}
+
+/// File `key` as a field read off each item of the iterable `head`.
+///
+/// `head` is the iterable's own variable path (`users`, `page.users`), without
+/// its filter chain. The read is filed under `head`'s root with the path to
+/// the iterable in front, exactly where `{% for u in head %}{{ u.<key> }}`
+/// puts it after the loop transfer, because a list's item paths are filed on
+/// the list (see the `Node::For` arm of [`extract_from_nodes`]).
+fn record_item_key_read(
+    head: &str,
+    key: &str,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    let head = head.trim();
+    // A variable starts like a name; a quoted string and a number do not, and
+    // have no list to put a key on.
+    let named = head
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_');
+    if !named || !is_item_key_path(key) {
+        return;
+    }
+    let (root, list_path) = match head.split_once('.') {
+        Some((root, path)) => (root, format!("{path}.")),
+        None => (head, String::new()),
+    };
+    variables
+        .entry(root.to_string())
+        .or_default()
+        .push(format!("{list_path}{ITEM_KEY_MARK}{key}"));
+}
+
+/// The item-key read of one filter applied to `head`, if it is one: a filter in
+/// [`ITEM_KEY_FILTERS`] whose argument is a QUOTED literal. A bare argument
+/// (`dictsort:key`) is a context variable whose value is the field name, which
+/// no static pass can know; it is filed as the variable read it also is, and
+/// the field it will name at render time is not attributed (#3892).
+fn record_item_key_filter(
+    head: &str,
+    name: &str,
+    arg: Option<&str>,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    if !ITEM_KEY_FILTERS.contains(&name) {
+        return;
+    }
+    let Some(arg) = arg.map(str::trim) else {
+        return;
+    };
+    let key = strip_filter_arg_quotes(arg);
+    if key.len() != arg.len() {
+        record_item_key_read(head, key, variables);
+    }
+}
+
+/// `{% regroup <source> by <attr> as <var> %}` reads `<attr>` off each item of
+/// `<source>`, the same read `dictsort:'<attr>'` makes (#3892). The source may
+/// carry a filter chain, and so may the attribute (`by country|lower`); only
+/// the heads name anything.
+fn record_regroup_item_key(
+    args: &[String],
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    // The second argument is `by`: the handler's `validate_at_parse` refuses
+    // `{% regroup x y z %}` ("second argument to 'regroup' tag must be 'by'")
+    // before extraction runs, so a tag that reaches here has it.
+    let [source, _by, attr, ..] = args else {
+        return;
+    };
+    let head = |operand: &str| {
+        crate::filter_lexer::split_pipes(operand)
+            .first()
+            .map(|part| part.trim().to_string())
+            .unwrap_or_default()
+    };
+    record_item_key_read(&head(source), &head(attr), variables);
+}
+
+/// Settle the item-key reads in one root's paths (see [`ITEM_KEY_MARK`]).
+///
+/// A key is kept only when the same iterable's items are read by field
+/// elsewhere (`<iterable path>.<other field>`, or any other path when the
+/// iterable is the root). A path list that names fields makes the JIT build
+/// rows from exactly those fields, so the key has to be among them; an empty
+/// list means "no field is singled out" and the row is serialized whole, which
+/// already carries the key AND the `__str__` a bare `{{ u }}` prints. Adding
+/// the key to an empty list would turn that whole row into a one-field row and
+/// break `{% for u in users|dictsort:'name' %}{{ u }}`, which works today.
+fn resolve_item_key_paths(paths: &mut Vec<String>) {
+    if !paths.iter().any(|path| path.contains(ITEM_KEY_MARK)) {
+        return;
+    }
+    let (marked, mut plain): (Vec<String>, Vec<String>) = std::mem::take(paths)
+        .into_iter()
+        .partition(|path| path.contains(ITEM_KEY_MARK));
+    let kept: Vec<String> = marked
+        .iter()
+        .filter_map(|path| path.split_once(ITEM_KEY_MARK))
+        .filter(|(list_path, _)| plain.iter().any(|other| other.starts_with(list_path)))
+        .map(|(list_path, key)| format!("{list_path}{key}"))
+        .collect();
+    plain.extend(kept);
+    *paths = plain;
 }
 
 /// Extract variable paths from an expression (like in if tags)
@@ -6805,5 +7067,249 @@ mod dep_tests {
         ] {
             assert!(parse_source(source).is_ok(), "{source:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tag_context_tests {
+    //! #3724: `is_inside_html_tag_at` answers from one forward pass. The oracle is the
+    //! backwards walk it replaced, kept verbatim.
+    use super::*;
+
+    fn oracle_inside_html_tag_at(tokens: &[Token], pos: usize) -> bool {
+        let mut combined = String::new();
+        for j in (0..pos).rev() {
+            if let Token::Text(t) = &tokens[j] {
+                combined.insert_str(0, t);
+                if t.contains('>') {
+                    break;
+                }
+            }
+        }
+        // The original single-pass scan, verbatim.
+        let mut in_tag = false;
+        let mut in_quote: Option<char> = None;
+        for ch in combined.chars() {
+            match (in_tag, in_quote, ch) {
+                (false, None, '<') => in_tag = true,
+                (true, None, '>') => in_tag = false,
+                (true, None, '"') => in_quote = Some('"'),
+                (true, None, '\'') => in_quote = Some('\''),
+                (true, Some(q), c) if c == q => in_quote = None,
+                _ => {}
+            }
+        }
+        in_tag
+    }
+
+    fn text(s: &str) -> Token {
+        Token::Text(s.to_string())
+    }
+
+    /// Every position of `tokens`, through the cache a parse installs and through the
+    /// uncached fallback, against the oracle.
+    fn assert_matches_oracle(tokens: &[Token]) {
+        let _scope = TagContextScope::enter(tokens);
+        for pos in 0..tokens.len() {
+            let expected = oracle_inside_html_tag_at(tokens, pos);
+            assert_eq!(
+                is_inside_html_tag_at(tokens, pos),
+                expected,
+                "cached answer at {pos} of {tokens:?}"
+            );
+            let end = pos;
+            assert_eq!(
+                html_tag_context_table(&tokens[..end])[end],
+                expected,
+                "fallback answer at {pos} of {tokens:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn matches_the_backward_walk_on_named_shapes() {
+        let shapes: Vec<Vec<Token>> = vec![
+            vec![],
+            vec![text("plain"), Token::Variable("x".into())],
+            // an unclosed tag, a variable, then a tag token inside it
+            vec![
+                text("<option value=\""),
+                Token::Variable("v".into()),
+                text("\" "),
+                Token::Tag("if".into(), vec!["c".into()]),
+                text("selected"),
+                Token::Tag("endif".into(), vec![]),
+                text(">"),
+                Token::Variable("after".into()),
+            ],
+            // a `>` inside a quoted value: the walk stops at that token and starts
+            // its scan there, mid-quote, which the table must reproduce
+            vec![
+                text("<a title=\"x"),
+                Token::Variable("v".into()),
+                text("y>z\" "),
+                Token::Variable("w".into()),
+                text(">"),
+                Token::Variable("u".into()),
+            ],
+            vec![
+                text("<a "),
+                text("href='"),
+                Token::Variable("v".into()),
+                text("'"),
+            ],
+            vec![
+                text("<"),
+                Token::Variable("v".into()),
+                text("a>"),
+                Token::Variable("w".into()),
+            ],
+            // whitespace only between tokens: no `>` to stop at (the #3724 shape)
+            vec![
+                text("\n  "),
+                Token::Tag("for".into(), vec!["o".into(), "in".into(), "l".into()]),
+                text("\n  "),
+                Token::Variable("o.a".into()),
+                text("\n  "),
+                Token::Tag("endfor".into(), vec![]),
+                text("\n"),
+            ],
+            vec![
+                Token::Comment(" x ".into()),
+                text("<b"),
+                Token::Comment("y".into()),
+                text(">"),
+            ],
+        ];
+        for tokens in &shapes {
+            assert_matches_oracle(tokens);
+        }
+    }
+
+    #[test]
+    fn matches_the_backward_walk_on_random_token_streams() {
+        // Single characters and short runs, plus the composites real markup produces:
+        // a closing `>` followed by a tag that is still open. A text token holding BOTH
+        // is what the restart-at-`>` logic exists for, and a generator of one-fragment
+        // tokens never makes it.
+        const FRAGMENTS: [&str; 22] = [
+            "<",
+            ">",
+            "\"",
+            "'",
+            "<a ",
+            "x",
+            " ",
+            "\n",
+            "title=\"",
+            "\">",
+            "a>b",
+            "<<",
+            ">>",
+            "",
+            "</p><div class=\"",
+            "</p><div ",
+            "<p>a</p><div ",
+            "a</p><b title='",
+            "x>y<a href=\"",
+            "> <div ",
+            "\">text<span ",
+            "<b title=\"a > b\" ",
+        ];
+        // A fixed-seed LCG: no dependency, and a failure reproduces.
+        let mut seed: u64 = 0x3724;
+        let mut next = move |bound: usize| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) as usize) % bound
+        };
+        let mut text_tokens_with_gt_and_open_tag = 0;
+        for _ in 0..5000 {
+            let len = next(18);
+            let tokens: Vec<Token> = (0..len)
+                .map(|_| match next(4) {
+                    0 => Token::Variable("v".into()),
+                    1 => Token::Tag("if".into(), vec!["c".into()]),
+                    _ => {
+                        // one to three fragments in a single text token
+                        let pieces = 1 + next(3);
+                        let joined: String = (0..pieces)
+                            .map(|_| FRAGMENTS[next(FRAGMENTS.len())])
+                            .collect();
+                        text(&joined)
+                    }
+                })
+                .collect();
+            for token in &tokens {
+                if let Token::Text(t) = token {
+                    if t.contains('>') && advance_html_tag_state(HtmlTagState::default(), t).in_tag
+                    {
+                        text_tokens_with_gt_and_open_tag += 1;
+                    }
+                }
+            }
+            assert_matches_oracle(&tokens);
+        }
+        // Non-vacuity: the corpus must reach the shape the restart logic is for.
+        assert!(
+            text_tokens_with_gt_and_open_tag > 1000,
+            "only {text_tokens_with_gt_and_open_tag} text tokens held a `>` and ended inside a tag"
+        );
+    }
+
+    /// `<p>a</p><div {% if y %}hidden{% endif %}>t</div>`: one text token holds a `>` AND
+    /// a trailing unclosed tag, so the `{% if %}` is inside the `<div`. Compared with the
+    /// oracle at every position, and checked at the node the parser builds.
+    #[test]
+    fn a_tag_opened_after_a_closing_tag_in_the_same_text_token_is_in_tag_context() {
+        let source = "<p>a</p><div {% if y %}hidden{% endif %}>t</div>";
+        let tokens = crate::lexer::tokenize(source).unwrap();
+        assert_matches_oracle(&tokens);
+        let if_at = tokens
+            .iter()
+            .position(|t| matches!(t, Token::Tag(name, _) if name == "if"))
+            .unwrap();
+        {
+            let _scope = TagContextScope::enter(&tokens);
+            assert!(is_inside_html_tag_at(&tokens, if_at));
+        }
+        assert!(oracle_inside_html_tag_at(&tokens, if_at));
+        let nodes = parse(&tokens).unwrap();
+        let in_tag_context = nodes
+            .iter()
+            .find_map(|n| match n.unlocated() {
+                Node::If { in_tag_context, .. } => Some(*in_tag_context),
+                _ => None,
+            })
+            .expect("the template has an If node");
+        assert!(in_tag_context, "the if is inside `<div ...>`");
+    }
+
+    #[test]
+    fn a_parse_installs_and_removes_its_cache() {
+        let tokens = crate::lexer::tokenize("<a {% if x %}b{% endif %}>{{ y }}").unwrap();
+        parse(&tokens).unwrap();
+        TAG_CONTEXT.with(|slot| assert!(slot.borrow().is_none(), "the scope must not leak"));
+    }
+
+    #[test]
+    fn a_nested_scope_restores_the_outer_one() {
+        let outer = vec![text("<a "), Token::Variable("v".into())];
+        let inner = vec![text("</a>"), Token::Variable("w".into())];
+        let _outer = TagContextScope::enter(&outer);
+        assert!(is_inside_html_tag_at(&outer, 1));
+        {
+            let _inner = TagContextScope::enter(&inner);
+            assert!(!is_inside_html_tag_at(&inner, 1));
+            // a slice that is not the installed one is still answered correctly
+            assert!(is_inside_html_tag_at(&outer, 1));
+        }
+        assert!(is_inside_html_tag_at(&outer, 1));
+        TAG_CONTEXT.with(|slot| {
+            let slot = slot.borrow();
+            let cache = slot.as_ref().expect("the outer cache is back");
+            assert_eq!(cache.tokens_ptr, outer.as_ptr() as usize);
+        });
     }
 }

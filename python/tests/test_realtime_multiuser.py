@@ -18,6 +18,7 @@ import pytest
 
 from djust.backends.memory import InMemoryPresenceBackend
 from djust.backends.registry import reset_presence_backend, set_presence_backend
+from djust.tests._growth import assert_scales_linearly_async
 from djust.presence import (
     PRESENCE_TIMEOUT,
     PresenceManager,
@@ -595,69 +596,143 @@ class TestPerformanceBaseline:
     These are not strict SLA tests — they establish a regression baseline.
     """
 
-    @pytest.mark.parametrize("n_subscribers", [1, 10, 50, 100])
-    def test_presence_list_scales_linearly(self, n_subscribers):
-        """Listing N presences completes within an acceptable wall-clock budget."""
-        key = f"perf:list:{n_subscribers}"
-        for i in range(n_subscribers):
-            PresenceManager.join_presence(key, str(i), {"name": f"user{i}"})
+    # Every test below judges GROWTH, never a number of seconds (#3711). The wall-clock
+    # budgets these used to assert (20 ms + 0.5 ms per user, 30 ms, 5 s) were bumped
+    # twice for runner variance (#1016) and still asserted how fast the machine is.
 
-        budget_ms = 20 + n_subscribers * 0.5  # generous: 20ms base + 0.5ms per user
-        start = time.perf_counter()
-        presences = PresenceManager.list_presences(key)
-        elapsed_ms = (time.perf_counter() - start) * 1000
+    def test_presence_list_scales_linearly(self, fresh_presence_backend, monkeypatch):
+        """Listing four times the presences does about four times the work.
 
-        assert len(presences) == n_subscribers
-        assert elapsed_ms < budget_ms, (
-            f"list_presences({n_subscribers}) took {elapsed_ms:.1f}ms, expected < {budget_ms:.1f}ms"
-        )
+        Counted, not timed (#3835): every heartbeat the cleanup looks up, every record handed to the
+        per-user aggregation and every per-user merge. 25 presences and 100 presences are listed
+        the same number of times; a listing that rescanned the group for each presence (quadratic)
+        would do ~16x the work at 4x the presences, a linear one ~4x.
+        """
+        from djust.backends import memory
 
-    @pytest.mark.parametrize("n_subscribers", [1, 10, 50, 100])
+        counts = {"heartbeats": 0, "records": 0, "merges": 0}
+
+        class CountingHeartbeats(dict):
+            def get(self, key, default=None):
+                counts["heartbeats"] += 1
+                return super().get(key, default)
+
+        real_aggregate = memory.aggregate_by_user
+        real_merge = memory.merge_connection_records
+
+        def aggregate(records):
+            records = list(records)
+            counts["records"] += len(records)
+            return real_aggregate(records)
+
+        def merge(group):
+            counts["merges"] += 1
+            return real_merge(group)
+
+        fresh_presence_backend._heartbeats = CountingHeartbeats(fresh_presence_backend._heartbeats)
+        monkeypatch.setattr(memory, "aggregate_by_user", aggregate)
+        monkeypatch.setattr(memory, "merge_connection_records", merge)
+        monkeypatch.setattr("djust.backends.base.merge_connection_records", merge)
+
+        work = {}
+        for scale, n_subscribers in ((1, 25), (4, 100)):
+            key = f"perf:list:{n_subscribers}"
+            for i in range(n_subscribers):
+                PresenceManager.join_presence(key, str(i), {"name": f"user{i}"})
+            fresh_presence_backend._heartbeats = CountingHeartbeats(
+                fresh_presence_backend._heartbeats
+            )
+            for name in counts:
+                counts[name] = 0
+            for _ in range(20):
+                assert len(PresenceManager.list_presences(key)) == n_subscribers
+            work[scale] = dict(counts)
+
+        # The counters measure something: a listing looks at every presence at least once.
+        assert work[1]["heartbeats"] >= 25 * 20 and work[1]["records"] >= 25 * 20, work[1]
+        for name in counts:
+            # 4x the presences: about 4x the work, never the ~16x of a rescan per presence.
+            assert work[4][name] <= 5 * work[1][name], (name, work)
+
     @patch("djust.presence.get_channel_layer")
     @patch("djust.presence.async_to_sync")
-    def test_broadcast_latency_scales(self, mock_sync, mock_layer, n_subscribers):
+    def test_broadcast_latency_scales(self, mock_sync, mock_layer, fresh_presence_backend):
         """
-        Simulate a broadcast with N subscribers already in presence state
-        and measure the overhead of computing the group name + initiating send.
+        A broadcast to N subscribers costs one channel-layer send, however many
+        subscribers there are (#3831).
+
+        This used to time ``broadcast_to_presence`` at 25 and 100 subscribers and
+        assert the ratio of the two (#1016, then #3711). That ratio compares two
+        wall-clock runs of a few milliseconds, and it failed on CI at ``1.7x``
+        (``0.00600s -> 0.01015s``) in a PR that did not touch this code.
+
+        The property is a number of operations, not a duration: the group name is
+        computed and ONE ``group_send`` is made (the channel layer fans it out), and
+        the subscribers' presence records are never read. An O(n) walk of the
+        subscribers shows up as more sends per broadcast or as backend calls, so
+        four times the subscribers is four times the count -- exactly, and
+        independent of how loaded the runner is.
         """
         mock_layer.return_value = Mock()
         group_send = Mock()
         mock_sync.return_value = group_send
 
-        key = f"perf:broadcast:{n_subscribers}"
-        for i in range(n_subscribers):
-            PresenceManager.join_presence(key, str(i), {"name": f"user{i}"})
+        # Every public method of the backend counts its calls: a broadcast that
+        # walks the subscribers has to read them from here.
+        backend_calls = []
+        for name in dir(fresh_presence_backend):
+            # Public names only, and the name is checked BEFORE the lookup:
+            # ``dir()`` on 3.13+ lists ``__provides__`` (a zope.interface hook)
+            # and ``getattr`` on it raises AttributeError, which failed this test on
+            # 3.13, 3.14 and 3.15 while 3.12 passed.
+            if name.startswith("_"):
+                continue
+            method = getattr(fresh_presence_backend, name, None)
+            if not callable(method):
+                continue
 
-        Cls = _make_view_class(key)
-        view = Cls(user=FakeUser("sender", 9999))
+            def counted(*args, _name=name, _method=method, **kwargs):
+                backend_calls.append(_name)
+                return _method(*args, **kwargs)
 
-        # #1016 — original budget was 10ms (broadcast dispatch overhead
-        # only). py3.14 GitHub Actions runners have different scheduler
-        # characteristics and contention patterns; observed a 12× over-
-        # budget hit in PR #990 CI on the n_subscribers=10 slot
-        # (118ms) which then passed cleanly on rerun. The budget is
-        # bumped to 30ms to absorb runner-contention variance while
-        # still catching genuine regressions (the linear-scaling check
-        # in `test_presence_list_scales_linearly` already catches
-        # algorithmic O(n) regressions; this test only covers
-        # constant-time dispatch overhead).
-        budget_ms = (
-            30.0  # broadcast dispatch overhead only — 30ms tolerates py3.14 CI runner variance
-        )
-        start = time.perf_counter()
-        view.broadcast_to_presence("ping", {"ts": time.time()})
-        elapsed_ms = (time.perf_counter() - start) * 1000
+            setattr(fresh_presence_backend, name, counted)
 
-        group_send.assert_called_once()
-        assert elapsed_ms < budget_ms, (
-            f"broadcast_to_presence({n_subscribers} subscribers) "
-            f"took {elapsed_ms:.2f}ms, expected < {budget_ms}ms"
+        sizes = (25, 100)
+        views = {}
+        for n_subscribers in sizes:
+            key = f"perf:broadcast:{n_subscribers}"
+            for i in range(n_subscribers):
+                PresenceManager.join_presence(key, str(i), {"name": f"user{i}"})
+            assert len(PresenceManager.list_presences(key)) == n_subscribers
+            views[n_subscribers] = _make_view_class(key)(user=FakeUser("sender", 9999))
+
+        broadcasts = 5
+        sends = {}
+        for n_subscribers in sizes:
+            group_send.reset_mock()
+            del backend_calls[:]
+            for _ in range(broadcasts):
+                views[n_subscribers].broadcast_to_presence("ping", {"ts": 1})
+            sends[n_subscribers] = group_send.call_count
+            assert backend_calls == [], (
+                f"a broadcast to {n_subscribers} subscribers read the presence backend "
+                f"({backend_calls}): its cost now depends on how many there are"
+            )
+            groups = {call.args[0] for call in group_send.call_args_list}
+            group = PresenceManager.presence_group_name(f"perf:broadcast:{n_subscribers}")
+            assert groups == {group}
+
+        # One send per broadcast at both sizes: four times the subscribers must not
+        # mean four times the sends.
+        assert sends == {25: broadcasts, 100: broadcasts}, (
+            f"broadcast_to_presence made {sends} channel-layer sends for {broadcasts} "
+            "broadcasts at 25 and 100 subscribers; expected one per broadcast at both sizes"
         )
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("n_sessions", [5, 20])
-    async def test_concurrent_actor_throughput(self, n_sessions):
-        """N concurrent session actors can each complete 10 events within budget."""
+    async def test_concurrent_actor_throughput(self):
+        """Four times the concurrent session actors, each completing 10 events, costs
+        under ten times as much."""
         from djust._rust import create_session_actor
 
         class FastView:
@@ -670,21 +745,21 @@ class TestPerformanceBaseline:
             def get_context_data(self):
                 return {"count": self.count}
 
-        async def run_session(i):
-            h = await create_session_actor(f"throughput-{n_sessions}-{i}")
-            v = FastView()
-            await h.mount("v", {}, v)
-            for _ in range(10):
-                await h.event("inc", {})
-            assert v.count == 10
-            await h.shutdown()
+        runs = iter(range(1_000_000))
 
-        budget_s = 5.0
-        start = time.perf_counter()
-        await asyncio.gather(*[run_session(i) for i in range(n_sessions)])
-        elapsed = time.perf_counter() - start
+        async def run_sessions(scale):
+            run = next(runs)
 
-        assert elapsed < budget_s, (
-            f"{n_sessions} concurrent sessions × 10 events took {elapsed:.2f}s, "
-            f"expected < {budget_s}s"
-        )
+            async def run_session(i):
+                h = await create_session_actor(f"throughput-{run}-{i}")
+                v = FastView()
+                await h.mount("v", {}, v)
+                for _ in range(10):
+                    await h.event("inc", {})
+                assert v.count == 10
+                await h.shutdown()
+
+            await asyncio.gather(*[run_session(i) for i in range(5 * scale)])
+
+        # Wall clock: the actors run on the Rust runtime's threads, not this one.
+        await assert_scales_linearly_async(run_sessions, what="concurrent session actors")

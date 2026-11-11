@@ -509,6 +509,25 @@ class TestHTTPPostDebugPayload:
         data = json.loads(response.content.decode("utf-8"))
         assert "_debug" not in data
 
+    def test_no_debug_when_panel_off(self, settings):
+        """DEBUG=True with DJUST_CONFIG["debug_panel"] = False: no _debug payload."""
+        settings.DEBUG = True
+        settings.LIVEVIEW_CONFIG = {"debug_panel": False}
+        view, factory, get_request = self._setup_view()
+
+        post_request = factory.post(
+            "/test/",
+            data='{"event":"increment","params":{}}',
+            content_type="application/json",
+        )
+        post_request.session = get_request.session
+
+        response = view.post(post_request)
+        assert response.status_code == 200
+
+        data = json.loads(response.content.decode("utf-8"))
+        assert "_debug" not in data
+
 
 @pytest.mark.django_db
 class TestHTTPFallbackSecurityUndecorated:

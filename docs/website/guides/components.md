@@ -103,6 +103,37 @@ class Badge(Component):
 
 Most components only need a `template`. Use `_render_custom()` instead of a `template` when you need framework-specific HTML (Bootstrap vs Tailwind). `_render_custom()` is reached only when the class has no `template`: a template that fails in the Rust engine is re-rendered by Django's engine, not by `_render_custom()`, so in the `Badge` above it never runs. Add `_rust_impl_class` for hot-path components rendered hundreds of times per page.
 
+**Attributes in a `template`.** A `{{ value }}` in the value of an attribute of a start tag (`class="btn-{{ variant }}"`, `<img src="{{ src }}">`) is escaped whatever the value is marked as and however it yields its text (a marked-safe string, a lazy one, an object whose text form is marked safe, a callable). In a URL attribute (`href`, `src`, `action` ...) the value is also judged with the scheme allowlist the Rust instance and `_render_custom()` use; a scheme outside it becomes `#`. That matters most for a lazy string (`gettext_lazy`, `format_lazy`): the Rust constructor takes plain text only, so such a value is drawn by the `template`.
+
+A URL is judged as the whole value, in every way it can come out. A literal inside `{% if %}` / `{% for %}` may be skipped, so it never fixes the value (each branch is judged as a path of its own; a good value after a block-added literal is judged as if the block were skipped). A slot that can still choose the scheme (first in the value, or only scheme characters before it) is judged together with the literal text and the other slots (`href="{{ u }}"`, `href="{{ scheme }}:{{ rest }}"`). A slot after a top-level literal that already fixes the value (`href="/search?q={{ q }}"`, `href="http://{{ host }}/"`, `href="{% url 'x' %}?q={{ q }}"`) is escaped and not judged, so `foo:bar` and `host:port` are kept; a literal is read the way a browser reads it (character references decoded, tab and newline dropped). What is escaped but **not** judged, with one warning per component class (class and attribute names only): a URL value whose slot is a dotted path, a filtered expression, a `{% for %}` / `{% with %}` variable, that sits beside a tag that prints text this module does not follow, that has more than 64 paths, or whose attribute name is built by tags (give the template a plain top-level name instead); a `srcset` with literal text or several slots; an unquoted value (quote it). In an attribute a number prints in its canonical form (`33.5`, not a localized `33,5`) and a date in its ISO form (`2026-01-02`); a callable that needs arguments prints nothing. `{% verbatim %}` and `{% comment %}` blocks, text between tags and a `{{ }}` in an attribute name are left as written.
+
+**Text inside `<textarea>` and `<title>`, and in HTML comments (#3914).** The content of `<textarea>` and `<title>` is RCDATA: text in which character references are decoded, ended by the first matching end tag, so markup in a value written there can end the element (and `-->` ends a comment the same way). A `{{ value }}` in such text is therefore escaped **even when it is marked safe** (a marked-safe string, a lazy one, an object whose text form is marked safe, a callable returning one; also `{{ v|safe }}` and under `{% autoescape off %}`). `TextArea(value=...)` is the case that was reported. An ordinary value prints exactly as before: a plain name keeps the engine's own formatting (a date is localized, a number formatted); a dotted path or a filtered expression ends in `|force_escape`, so a date or number there prints in its canonical form (`2026-01-02`), as in an attribute. A callable in such a slot is called where the engine reaches the slot, so one in a branch that does not render is not called. The same text in an HTML comment changes as well: a marked-safe value in `<!-- {{ v }} -->` is now escaped.
+
+**`<script>`, `<style>`, `<xmp>`, `<iframe>`, `<noembed>`, `<noframes>`, `<plaintext>` and `<noscript>` keep your markup.** Entities are not decoded in them, so HTML escaping is the wrong encoding there (`<script>var cfg = {{ cfg|safe }};</script>` must stay JSON), and the markup in them is yours. Nothing about them changes: a value (marked safe or not) prints as it did. To put data in a page, use `{{ data|json_script:"id" }}` (a script element, escaped for HTML) or a `data-*` attribute, and read it from your script. The scanner still knows the first seven as raw text (their content is not markup, so an `<a href="{{ u }}">` written inside `<xmp>` is not read as an attribute). `<noscript>` is markup where scripting is off and is scanned as it always was: its attribute slots follow the attribute rule.
+
+What is **not** covered, named by one warning per component class (class, tag, attribute and element names and a count; never an attribute value or anything from the context; a name is template text, so keep names static in a template you build per instance): a tag that prints text inside `<textarea>` / `<title>` / a comment (`{% firstof %}`, `{% cycle %}` ...; escape what it prints); an `{% include %}` / `{% extends %}` of a template whose slots would need the rule (a literal name the loaders find, with no attribute slot and no escaped-text slot, is not reported); and shapes the scanner cannot follow like a browser does: an element name built by a tag (`<{{ tag }}>`), an end tag inside another block than its start tag (`{% if closed %}</textarea>{% endif %}`; a slot after an end tag whose name is followed by a token, `</textarea{{ x }}>`, is escaped as if still inside). A `<textarea>` opened inside `{% verbatim %}` is followed.
+
+**`{% blocktranslate %}` blocks.** The variables of a translation block are keyed by the translation catalog (`%(name)s`), so the body is never rewritten (a rename would change the msgid). In an attribute value and in `<textarea>` / `<title>` / a comment the block is escaped as a whole: a variable it reads from the context is escaped around it, a `with` argument gets `|force_escape`, a `count` argument is a number, and the literal text prints as written. A block with `asvar` prints nothing; the variable it sets is a marked-safe string, escaped again where an attribute prints it, like any pre-escaped string. The legacy `with expr as name` form cannot be rewritten and is named by the warning. A block in a URL attribute is escaped, not scheme-checked.
+
+**Every other text slot keeps a marked-safe value's markup** (`<span>{{ v }}</span>`), as a Django template does. This is a difference from the Rust instance and `_render_custom()` of the same class, which escape a text slot whatever it is marked as, so the same marked-safe text can print as markup or as text depending on which path the constructor's accept/refuse decision picks. It is tracked in [#3932](https://github.com/djust-org/djust/issues/3932).
+
+**Inline templates of `LiveComponent` and class-level (`BoundComponent`) components follow the same rule (#3913).** Their `template` string is drawn by the same helper (`_render_inline_template`), so the attribute slots are escaped whatever the value is marked as, a URL attribute (`href`, `src`, `action`, `dj-navigate`, `dj-patch` ...) is judged with the scheme allowlist, and the text of `<textarea>` / `<title>` and of HTML comments is escaped, exactly as above, with one warning per component class. **What this changes in an existing inline template** (a before/after list, measured over a corpus of values and templates):
+
+| in your template | before | now |
+| --- | --- | --- |
+| `<a href="{{ url }}">` with a state value `javascript:alert(1)` (or any scheme outside the allowlist) | printed as written | `href="#"` |
+| `<p title="{{ v }}">` or `title="{{ v\|safe }}"` with a marked-safe value | the markup left the attribute | escaped, stays in the attribute (`mark_safe("a &amp; b")` prints `a &amp;amp; b`: pass plain text) |
+| `<textarea>{{ v }}</textarea>` / `<title>` / `<!-- {{ v }} -->` with a marked-safe value | the markup printed | escaped |
+| a number or date in an attribute, or in a dotted / filtered slot of `<textarea>` | localized (`Jan. 2, 2026`, `33,5`) | canonical (`2026-01-02`, `33.5`) |
+| `<script>`, `<style>`, `<xmp>`, `<noscript>` ... with `{{ v\|safe }}` | as written | **unchanged** |
+| an ordinary URL (relative, `http(s):`, `mailto:`, `tel:`, a fragment, a query) | printed | **unchanged**, byte for byte |
+
+Which schemes pass: relative URLs, `http`, `https`, `ftp`, `ftps`, `mailto` and `tel`; `data:image/...` only on an image source; `href="javascript:void(0)"` and `javascript:;` (an `href` only). Any other scheme (`sms:`, `whatsapp:`, `zoommtg:`, `webcal:`, `geo:`, `slack:` ...) becomes `#`, **silently** (nothing is logged). A link with a fixed scheme written in the template itself (`<a href="sms:+15551234">`) is not a slot and is not changed; a link whose scheme comes from data must use a scheme on the list. The scheme check applies where the slot is a plain top-level name; a dotted path (`{{ item.url }}`), a filtered expression, a `{% for %}` / `{% with %}` variable and a `{% blocktranslate %}` are only **escaped** (the warning names them), and the slots of an `{% include %}`d partial are neither escaped nor checked.
+
+Two behaviours to know. A callable in a URL slot is called when the context is prepared, even if its branch does not render (it must be judged first); a callable in `<textarea>` / `<title>` text is called only where the engine reaches it. And a `BoundComponent` hashes its state to cache its render, which asks each value for its text form.
+
+A `template_name` file is not read by the rule: it is loaded by the project's template loaders, with `{% include %}` and `{% extends %}`, and escapes (or not) as your template says ([#3933](https://github.com/djust-org/djust/issues/3933)).
+
 ### Updating a Component
 
 Write the attribute. A plain component's constructor kwargs are its state,
@@ -874,7 +905,7 @@ label stays on `--foreground`, so no label's contrast depends on a status hue.
 | --- | --- |
 | `{% badge %}` | `dj-badge`, `dj-badge--<status>` (`default`, `online`, `offline`, `warning`, `error`, `info`), `dj-badge__dot`, `dj-badge__dot--pulse`, `dj-badge__label` |
 | `{% avatar %}` | `dj-avatar`, `dj-avatar--<size>`, `dj-avatar__img`, `dj-avatar__initials`, `dj-avatar__status`, `dj-avatar__status--<status>` |
-| `{% progress %}` | `dj-progress`, `dj-progress--<size>`, `dj-progress__header`, `dj-progress__label`, `dj-progress__value`, `dj-progress__track`, `dj-progress__fill`, `dj-progress__fill--<color>` |
+| `{% progress %}` | `dj-progress`, `dj-progress--<size>`, `dj-progress__header`, `dj-progress__label`, `dj-progress__value`, `dj-progress__track`, `dj-progress__fill`, `dj-progress__fill--<color>`, `dj-progress-w-<0..100>` |
 | `{% toast_container %}` | `dj-toast-container`, `dj-toast`, `dj-toast--<type>`, `dj-toast__icon`, `dj-toast__message`, `dj-toast__dismiss` |
 
 To restyle one, write a rule for the same class after the stylesheet. The
@@ -887,6 +918,34 @@ reads the `--dj-toast-*` properties its docstring lists (`--dj-toast-bg`,
 `{% toast_container %}` toasts read only the six base properties
 (`--dj-toast-bg`, `-fg`, `-border`, `-radius`, `-padding`, `-shadow`), not
 the per-type ones.
+
+### Roles, keyboard and strict CSP of four components
+
+All of these render the same markup under the Django engine (the first HTTP render) and the Rust
+engine (every socket render).
+
+- **`{% progress %}`** draws its fill with a width class, `dj-progress-w-0` to `dj-progress-w-100`
+  (one per whole percent, in `components.css`), and never with `style="width:N%"`: a
+  `style-src` without `'unsafe-inline'` refuses an inline `style` attribute, and the bar drew empty.
+  The track is `role="progressbar"` with `aria-valuenow`, `aria-valuemin`, `aria-valuemax` and an
+  `aria-label` (the `label=`; an unlabelled bar has no name, so give one). `value` is clamped to 0-100; the `Progress` class
+  draws to the whole percent and keeps the exact value in `aria-valuenow`. The Bootstrap/Tailwind
+  `djust.components.ui.Progress` still writes inline styles.
+- **`{% stepper %}`** is an `<ol class="stepper">` of `<li class="stepper-step">`, each holding a
+  `<button type="button">` (focusable, Enter and Space activate it, never submits a form). The
+  current step is `aria-current="step"`; a completed step that is not the current one adds a
+  visually hidden "(completed)".
+- **`{% status_indicator %}`** is a plain `<span>`: a label that is part of the page is not a
+  status message. Pass `live=True` (also on the `StatusIndicator` class) for the one indicator that
+  changes in place; it then renders `role="status"`.
+- **`{% dj_radio_group name="plan" label="Plan" options=plans value=plan event="set_plan" %}`**
+  renders a `<fieldset role="radiogroup">` named by its `<legend>`, one input with its own
+  `<label for>` per option (ids `<group>_<index>`, never the value), `aria-required` for
+  `required=True`, and `helper=` / `error=` as the group's `aria-describedby` (an error also sets
+  `aria-invalid`). `options` is a list of `{"value", "label", "disabled"}` dicts, `(value, label)`
+  pairs or plain values; `field=form.plan` fills everything, choices included, from a `BoundField`.
+  A single `{% dj_radio %}` is still one loose radio: put it inside your own
+  `<fieldset><legend>`.
 
 ### `{% data_table %}` row-level navigation (#1111)
 
@@ -955,6 +1014,18 @@ def get_context_data(self, **kwargs):
 
 `row_click_event` takes precedence when both are set.
 
+A column can be a link too: `{"key": "claim_number", "label": "Claim #", "link": "claim_url",
+"link_class": "text-blue"}` draws the cell as `<a href>` of the row's `claim_url` value
+(`link_class` is optional). `row_url` and `link` are drawn the same way by the first render
+(Django's template engine) and by every render after the socket opens (the native handler), with
+two exceptions: the URL goes through the same scheme allowlist on the server, so `javascript:`,
+`data:` and other non-navigation schemes become `#` before they reach the page, and a `None` /
+`""` / `0` / `False` `row_url` or `link` draws nothing (it is not the key `"None"`). The
+exceptions: a `row_url` given as a template VARIABLE that holds the text `"0"`, `"None"` or
+`"False"` makes a clickable row in the Python tag but not natively, because the native handler
+re-types the text it is handed (#3882, #3883); and a row whose URL value is `None` or missing
+still draws `<a href="None">` / `<a href="">` on both engines (#3895).
+
 **Accessibility**: row-clickable `<tr>`s are focusable (`tabindex="0"`),
 announce as buttons (`role="button"`), and activate on Enter or Space.
 Screen reader users get the same affordance as mouse / touch users.
@@ -1009,12 +1080,39 @@ touching the theme:
 | Class (`from djust.components import …`) | Classes it renders | Custom properties it reads |
 | --- | --- | --- |
 | `Alert` | `dj-alert`, `dj-alert-<variant>`, `dj-alert-dismissible`, `dj-alert-icon`, `dj-alert-message`, `dj-alert-dismiss` | `--dj-alert-{bg,fg,border,radius,padding}`, `--dj-alert-<variant>-{bg,fg,border}` |
-| `Progress` | `dj-progress`, `dj-progress-<variant>`, `dj-progress-<size>`, `dj-progress-label`, `dj-progress-track`, `dj-progress-bar`, `dj-progress-value` | `--dj-progress-{bg,bar-bg,radius,height}`, `--dj-progress-<variant>-bg` |
+| `Progress` | `dj-progress`, `dj-progress-<variant>`, `dj-progress-<size>`, `dj-progress-label`, `dj-progress-track`, `dj-progress-bar`, `dj-progress-w-<0..100>`, `dj-progress-value` | `--dj-progress-{bg,bar-bg,radius,height}`, `--dj-progress-<variant>-bg` |
 | `Avatar` | `dj-avatar`, `dj-avatar-<size>`, `dj-avatar-img`, `dj-avatar-initials`, `dj-avatar-status`, `dj-avatar-status-<status>` | `--dj-avatar-size`, set on the avatar element itself (its size class sets the property there, so a value on a parent has no effect) |
 
 The `{% theme_alert %}` / `{% theme_progress %}` / `{% theme_avatar %}` tags
 from `djust.theming` render the same components with the theming package's
 own class names.
+
+### URLs in component attributes
+
+What a built-in component prints into a URL attribute (`<a href>`, `<form action>`, `<img src>`, `srcset`, a poster) is decided by one rule, an allowlist, in both libraries: `djust_components` (the template tags in both rendering engines, the Python tag under Django's engine and the native handler under `DjustTemplateBackend`, and the class-based components) and `djust_theming` (the `theme_*` tags and pages).
+
+| the value | what is printed |
+| --- | --- |
+| relative (`/x`, `../x`, `#frag`, `?q=1`), `http`, `https`, `ftp`, `ftps`, `mailto`, `tel`, `//host/x` | the value, HTML-escaped |
+| any other scheme: `javascript:`, `vbscript:`, `data:text/html`, `blob:`, `file:`, custom schemes, including the case-folded, whitespace/control-character-obfuscated forms (`JaVa<TAB>Script:`) | `#` |
+| `data:image/...` | kept, but only on an image source (`<img src>`, a `srcset` candidate) |
+| a `mark_safe` value (also a lazy one, or any `str` with `__html__`) | **no exemption, anywhere** (#3898): the marker means "no HTML escaping needed" in a text slot, not "navigable", so a marked-safe URL is checked and escaped like any other string, in the template tags (data and the tag's own keyword), the class-based components, the native handlers and `djust_theming` (an already-escaped `&amp;` becomes `&amp;amp;`; pass the plain URL). The same holds for an ITEM value (an entry of a list of items, an item dict) that lands in an attribute, in every class-based component and in the list parameters of the template tags the sweep derives (#3904: 43 tag parameters and the choice values of `dj_form`, each pinned by a test cell, over the `djust_components` and `djust_theming` tag libraries; a library the sweep does not cover is not claimed; the static hunt over the tag modules is the structural check and the run-time derivation the second net); a scalar argument in a non-URL attribute is the developer's own. Text slots keep their markup. The one exception, on purpose: the literal no-op hrefs `javascript:void(0)` and `javascript:;` (exact text after `strip` and case-folding, nothing appended, in an `href` only, never an image source) are accepted marked or not, so a dropdown toggle needs no `mark_safe`. |
+
+An entity or percent escape inside the scheme (`jav&#x61;script:`, `javascript%3A`) is printed as literal text, which a browser reads as a relative URL, not as a script URL. A `srcset` is a comma-separated list, so each candidate URL is checked as an image source; candidates are split exactly as the HTML specification's "parse a srcset attribute" splits them (parentheses in a descriptor do not nest, and only ASCII whitespace separates).
+
+The implementation is `djust.components.utils.data_url_attr` (one URL: `url_attr` that never honours the marker), `safe_url` (navigation sinks, no `data:` images) and `srcset_attr(..., honor_safe=False)`. A new component that prints a caller-supplied URL must use one of them; a test fails on any call that leaves `honor_safe` at its default. An item value that lands in an attribute is written with `attr_text` (the exact text, escaped once), never with `conditional_escape`, which writes a marked-safe value as it is. A template that prints an item in an attribute uses `|force_escape` for the same reason. The three templates that do (`djust_components/toast.html`, `djust_theming/components/select.html` and `radio.html`) carry that protection themselves: a per-theme override (`djust_theming/themes/<theme>/components/<name>.html`) or a project copy of one of them that was made from the old template does not, and must add `|force_escape` to the attribute values it prints from an item. None of the overrides shipped in the package (`button`, `card`, `tabs`) is one of the three. The class-based claim is tested, not assumed: the sweep fails any (class, parameter) pair that no rendered cell got through, and states the few it cannot reach (parameters that only take numbers, a queryset or a fixed list of words) and the item keys it had to leave out or turn into numbers.
+
+**`djust_theming` (`theme_*` tags and pages) uses the same allowlist.** It used to keep a denylist of its own (`javascript:`, `vbscript:`, `data:`, `livescript:`, `mhtml:`), which let every scheme it did not name through: `blob:`, `file:`, `view-source:`, `jar:`, `intent:`, `feed:`, `ws:`, `git:`, `ms-word:` and custom application schemes. It now asks `djust.components.utils.url_allowed`, the decision `safe_url` makes, so a scheme added to (or refused by) the components list changes theming with it. `url_allowed` only judges the scheme; the escaping is the caller's, and theming escapes through its templates (see `mark_safe` below). What a rejected scheme does depends on the sink:
+
+| theming sink | a scheme the allowlist rejects |
+| --- | --- |
+| data-derived: nav, sidebar and breadcrumb items, `url_pattern`, an avatar `src`, a page's `action` and links | `#`; the rest of the component renders as before. An avatar `src` may also be an inline `data:image/...` URI |
+| developer-supplied literals: `{% theme_button href=... %}`, and `href` / `src` / `action` / `formaction` passed through `**attrs` | a script scheme (`javascript:`, `vbscript:`, `data:`, `livescript:`, `mhtml:`, in any spelling a browser reads as that scheme) raises `ValueError`, as it always has; any other rejected scheme renders `#` and logs a warning that names the parameter (these sinks rendered such a URL before, and `href=record.url` is data, so it must not become a 500) |
+| a `mark_safe` value, in any theming sink | no exemption: it is made plain text before the template prints it, so it is judged and escaped like any other string, as `safe_url` does (an already-escaped `&amp;` prints as `&amp;amp;`) |
+
+**Consequence for theme authors:** a link whose scheme is not on the list above no longer renders as written in a `theme_*` tag or page. That includes `sms:`, `geo:`, `webcal:` and app deep links such as `myapp://record/42`; they were passed through before and are now `#`. The allowlist is deliberately not widened for theming. To link to one, write the `<a>` in your own template: the rule decides what the framework's own tags print, not what your templates print.
+
+`make template-library-url-sweep` (see [the template backend reference](../../TEMPLATE_BACKEND.md)) drives script and other non-navigation schemes (`javascript:`, `livescript:`, `blob:`, `file:`, custom schemes, ...) through every parameter of every tag, in both libraries, and every driveable class component, and `python/tests/test_url_scheme_sweep_3665.py` fails a PR that adds a sink without the check, because it derives the tags, parameters and classes from the code. It does not drive the descriptor components (their markup is the caller's template) or the gallery pages. `python/tests/test_theming_url_allowlist_3677.py` pins the set of theming sinks, so a new one is a visible decision.
 
 ## djust-theming
 
@@ -1109,6 +1207,19 @@ page that uses only the `{% theme_X %}` tags pays for none of them. The settings
 variables (`theme_preset`, `theme_mode`, `theme_resolved_mode`, `theme_pack`,
 `theme_presets`, `components_gallery_url`) are plain values computed up front.
 A template that reads an HTML variable gets the same text it always did.
+
+`theme_presets` is about 12 KB of dicts, and djust copies every JSON-serialisable
+context-processor value into a LiveView's stored state, so it used to be stored
+in the snapshot of every view in an app that installs the processor (a
+one-counter view stored 12,182 bytes, 11,684 of them this list). It is now a
+`RequestScopedList`: a real `list`, so `isinstance(..., list)`, `json.dumps`,
+`{{ theme_presets|json_script:"presets" }}`, `len`, indexing, `in` and
+`{% for %}` all work in both template engines, but a LiveView sends it to the
+renderer without storing it (the same view stores 510 bytes). The one check
+that tells it from a plain list is `type(theme_presets) is list`. A processor of
+your own can opt a large, request-derived list out of the stored state the same
+way: return `RequestScopedList(items)` from `djust.request_scoped` (public API). A plain list
+from your processor is stored as before.
 
 The HTML variables are not `str` instances: they are lazy trusted-HTML objects
 (`isinstance(theme_head, str)` is `False`). `{{ ... }}`, `|safe`, `|length`,
@@ -1482,7 +1593,9 @@ What changed for code that reached the old attributes through the context:
   supplied when the template is rendered, from the view's request; a view with no
   request renders them empty (every framework path sets one, a view driven by
   hand in a test may not).
-- `theme_presets_count` is still available to templates, as before.
+- `theme_presets_count` is still available to templates, as before. In the
+  template and in `view.theme_presets`, `theme_presets` is a real `list`
+  (`json_script` and `json.dumps` work, #3631).
 - After `set_theme_mode`, `set_theme_preset`, `toggle_theme_mode` or
   `cycle_theme_preset` the next render re-sends all four, so a `dj-root` template
   that reads `{{ theme_head|length }}` or the switcher shows the new theme.

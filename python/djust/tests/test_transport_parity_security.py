@@ -628,6 +628,17 @@ class TestObjectPermissionParity:
 # for the same caller identity. We drive that exact shared seam per transport.
 # --------------------------------------------------------------------------- #
 
+
+@pytest.fixture(autouse=True)
+def _own_the_bucket_clock(frozen_rate_limit_clock):
+    """No token refills inside a test, however long the runner stalls (#3707).
+
+    A bucket with ``rate > 0`` refills ``elapsed * rate`` tokens from REAL time
+    unless the test owns the clock; a stall of a second mints a token and an
+    "exhausted" assertion goes false. See ``frozen_rate_limit_clock``.
+    """
+
+
 # rate=1, burst=1 → the first call passes, the second trips. Deterministic and
 # independent of wall-clock (the bucket starts full; no refill within the test).
 _RATE_LIMIT_SETTINGS = {"rate": 1, "burst": 1}

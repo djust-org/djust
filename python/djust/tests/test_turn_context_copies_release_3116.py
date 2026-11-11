@@ -92,16 +92,16 @@ async def _run_turn_then_disconnect(event: str):
             session=await sync_to_async(_session)(), user=AnonymousUser(), tenant=None
         )
         assert (await sock.connect())[0]
-        await sock.receive_json_from(timeout=3)
+        await sock.receive_json_from()
         await sock.send_json_to({"type": "mount", "view": f"{__name__}.PinView", "url": "/p/"})
-        assert (await sock.receive_json_from(timeout=3))["type"] == "mount"
+        assert (await sock.receive_json_from())["type"] == "mount"
         mine = [c for c in _consumers() if id(c) not in before]
         assert len(mine) == 1
         probe = weakref.ref(mine[0])
         del mine
         await sock.send_json_to({"type": "event", "event": event, "params": {}, "ref": 1})
         for _ in range(5):
-            frame = await sock.receive_json_from(timeout=5)
+            frame = await sock.receive_json_from()
             if frame.get("ref") == 1:
                 break
         await sock.disconnect()

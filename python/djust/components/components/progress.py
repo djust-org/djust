@@ -16,7 +16,9 @@ class Progress(Component):
     links (#2993), on the active theme's tokens: a ``--muted`` track and a
     ``--primary`` bar (or the variant's colour). The classes it renders are
     ``dj-progress``, ``dj-progress-<variant>``, ``dj-progress-<size>``,
-    ``dj-progress-label``, ``dj-progress-track``, ``dj-progress-bar`` and
+    ``dj-progress-label``, ``dj-progress-track``, ``dj-progress-bar``,
+    ``dj-progress-w-<0..100>`` (the bar's width, rounded to a whole percent: no
+    inline ``style``, which a strict ``style-src`` refuses) and
     ``dj-progress-value``.
 
     Usage in a LiveView::
@@ -123,10 +125,14 @@ class Progress(Component):
             parts.append(f'<div class="dj-progress-label">{html.escape(self.label)}</div>')
 
         bar_parts = []
+        # The width is a class (``dj-progress-w-0`` .. ``-100``), not ``style="width:N%"``,
+        # which a ``style-src`` without ``'unsafe-inline'`` refuses (#3969). The bar is drawn to
+        # the whole percent; ``aria-valuenow`` keeps the exact value.
+        name_attr = f' aria-label="{html.escape(self.label)}"' if self.label else ""
         bar_parts.append(
-            f'<div class="dj-progress-bar" role="progressbar" '
-            f'aria-valuenow="{self.value}" aria-valuemin="0" aria-valuemax="{self.max}" '
-            f'style="width:{pct:.1f}%"></div>'
+            f'<div class="dj-progress-bar dj-progress-w-{round(pct)}" role="progressbar" '
+            f'aria-valuenow="{self.value}" aria-valuemin="0" aria-valuemax="{self.max}"'
+            f"{name_attr}></div>"
         )
         bar_content = "".join(bar_parts)
         parts.append(f'<div class="dj-progress-track">{bar_content}</div>')
