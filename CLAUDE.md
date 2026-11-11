@@ -1721,12 +1721,19 @@ Three rules from the v1.2.0-6 drain (PRs #2835-#2846, eight issues: #2821, #2823
 
 ## Pipeline
 
-- default_branch: main
+- default_branch: main. Since 2026-11-11 (#4013) `main` IS the 2.0 line (`2.0.0.dev0`); there is
+  no separate 2.0 trunk. The released 1.3 line lives on the `1.3` branch, which takes security and
+  serious fixes only.
 - test_command: `npx vitest run` (JS) · `pytest` (Python; see `pyproject.toml` testpaths)
 - regenerate: `bash scripts/build-client.sh` — run this after any merge that touched
   `static/djust/src/`; never hand-merge `client.js` / `client.min.js` / `client-sizes.json`
 - merge: squash (main carries no PR merge commits); drain PRs merge with `--admin`,
   since the author cannot approve their own PR and human review is at the milestone level
+  **A branch-to-branch merge is the one exception, and it must NOT be queued (#4010, #4013).**
+  `main`'s merge queue only squashes, and "merge when ready" on `main` goes through that queue. A
+  squash of one long-lived branch into another drops the source as a parent, so the next sync
+  re-hits every conflict and the source branch can never be retired. Land such a merge with
+  `gh pr merge <n> --merge --admin --match-head-commit <full sha>` once its own checks are green.
   **A batch merges one PR at a time (#3735):** for the second and later PRs of a batch, wait for
   main's `Tests` to finish green on the previous merge commit before squashing the next (or `git merge
   origin/main` into the branch and wait for CI on that merged tree). Cross-file gates — a ratchet over
