@@ -1806,7 +1806,13 @@ class LiveView(
         from the session (``enable_state_snapshot``), and on a WebSocket/SSE
         mount of an explicit view whose declared ``state(persist=...)`` fields
         were restored (after ``mount()``, with the restored values in place).
-        It does not run after a plain ``mount()``. May be ``async def``.
+        An explicit child embedded with ``{% live_render %}`` gets it the same
+        way. It does not run after a plain ``mount()``. May be ``async def``.
+
+        Keep it idempotent: what it changes is not saved until the next event,
+        so it runs again on every reconnect until one lands. It also cannot
+        tell a reconnect from a second tab opening the same page in the same
+        session, which restores the same state.
 
         Background work does not survive a reconnect or a restart: a job
         started with ``start_async`` / ``@background`` belongs to the connection

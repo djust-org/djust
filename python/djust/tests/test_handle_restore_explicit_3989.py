@@ -136,3 +136,93 @@ async def test_without_the_hook_the_restored_flag_is_what_was_saved():
     ``handle_restore`` gets its declared state back as saved."""
     second, _ = await _start_then_reconnect(NoHookView)
     assert second.view_instance.running is True
+
+
+class RaisingHookView(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root><span>{{ running }}</span></div>"
+    running = state(False, persist="server")
+
+    def mount(self, request, **kwargs):
+        self.running = False
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(running=self.running, **kwargs)
+
+    def handle_restore(self, request):
+        raise RuntimeError("HOOK_SENTINEL")
+
+    @event_handler()
+    def start(self):
+        self.running = True
+
+
+async def test_a_hook_that_raises_fails_the_mount():
+    request = await sync_to_async(make_request)()
+    first, _ = await mount(request, RaisingHookView)
+    await first.dispatch_event({"type": "event", "event": "start", "params": {}})
+
+    again = await sync_to_async(make_request)(request.session.session_key)
+    transport = MockTransport()
+    transport.build_request = lambda: again
+    runtime = ViewRuntime(transport)
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=["djust"]):
+        await runtime.dispatch_mount(
+            {"type": "mount", "view": __name__ + ".RaisingHookView", "url": again.path}
+        )
+
+    assert runtime.view_instance is None
+    assert not any(frame.get("type") == "mount" for frame in transport.sent), transport.sent
+    assert transport.errors or any(f.get("type") == "error" for f in transport.sent)
+    # The exception's text reaches neither the client nor (outside diagnostic mode) the log.
+    assert "HOOK_SENTINEL" not in repr(transport.sent) + repr(transport.errors)
+
+
+# ---- the HTTP page-POST fallback restores an explicit view's state too ----------
+
+
+def _http_post(view_class, initial, event):
+    import json
+
+    from django.test import RequestFactory
+
+    request = RequestFactory().post(
+        initial.path,
+        data=json.dumps({}),
+        content_type="application/json",
+        HTTP_X_DJUST_EVENT=event,
+    )
+    request.user, request.session, request.tenant = initial.user, initial.session, None
+    view = view_class()
+    response = view.post(request)
+    assert response.status_code == 200, response.content
+    return view
+
+
+class HttpJobView(JobView):
+    running = state(False, persist="server")
+    count = state(0, persist="server")
+
+    @event_handler()
+    def noop(self):
+        pass
+
+
+def _http_flow():
+    HttpJobView.seen = []
+    initial = make_request()
+    assert HttpJobView().get(initial).status_code == 200
+    _http_post(HttpJobView, initial, "start")  # running=True, count=1 saved
+    seen_before = list(HttpJobView.seen)
+    view = _http_post(HttpJobView, initial, "noop")
+    return seen_before, view
+
+
+async def test_the_http_fallback_calls_the_hook_for_an_explicit_view():
+    seen_before, view = await sync_to_async(_http_flow)()
+    # The page GET saved the declared defaults, so the first POST restored those ...
+    assert seen_before == [(False, 0)]
+    # ... and the second restored what the first one saved, then the hook cleared the flag.
+    assert HttpJobView.seen == [(False, 0), (True, 1)]
+    assert view.running is False
+    assert view.count == 1

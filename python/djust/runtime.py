@@ -4165,10 +4165,27 @@ class ViewRuntime(RuntimeTurnPort):
                         # the HTTP fallback call lets the view act on what was
                         # restored: read rows again from a restored id, or clear a
                         # persisted "running" flag whose background work did not
-                        # survive the reconnect (#1646: three restore paths, one hook).
+                        # survive the reconnect. The HTTP fallback (mixins/request.py) and an
+                        # embedded child (templatetags/live_tags.py) call it too (#1646).
                         handle_restore = getattr(view_instance, "handle_restore", None)
                         if callable(handle_restore):
-                            await call_hook(handle_restore, request)
+                            try:
+                                await call_hook(handle_restore, request)
+                            except Exception as exc:
+                                # Named for what failed: the handler below would
+                                # report this as an error in mount().
+                                response = handle_exception(
+                                    exc,
+                                    error_type="mount",
+                                    view_class=view_path,
+                                    logger=logger,
+                                    log_message=(
+                                        f"Error in {sanitize_for_log(view_path)}.handle_restore()"
+                                    ),
+                                    expose_details=_diagnostics_policy_allows(view_instance),
+                                )
+                                await self._fail_mount(view_instance, exc, response)
+                                return
                         mounted_from_restore = True
                         view_instance._force_full_html = True
             except Exception as exc:

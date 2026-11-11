@@ -2791,6 +2791,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             raise ExposureError("Child reuse identity changed during mount")
         child._explicit_child_reuse_identity = explicit_identity
 
+    # Whether this child's declared state was put back on top of its mount() (#3989).
+    explicit_child_restored = False
     if explicit_adapter is not None:
         from ..security import safe_setattr
 
@@ -2813,6 +2815,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         if explicit_values is not None:
             for name, value in explicit_values.items():
                 safe_setattr(child, name, value, allow_private=False, raise_on_blocked=True)
+            explicit_child_restored = True
 
     # 4c. Object-permission check (ADR-017) for the embedded child. The child's
     #     view-level auth ran above (check_view_auth); the object-level step
@@ -2828,6 +2831,17 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             "{%% live_render %%} target %r denied access: object-level permission "
             "check failed for the requested object." % view_path
         )
+
+    # #3989: the child's declared state came back after its mount() ran. The hook a
+    # root view gets lets the child act on it (clear a persisted "running" flag whose
+    # background work is gone). After the object check, so it never reads for a
+    # denied object.
+    if explicit_child_restored:
+        handle_restore = getattr(child, "handle_restore", None)
+        if callable(handle_restore):
+            from .._view_hooks import call_hook_sync
+
+            call_hook_sync(handle_restore, request)
 
     if explicit_child:
         assert explicit_slot is not None

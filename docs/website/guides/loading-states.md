@@ -380,7 +380,12 @@ class ReportView(LiveView):
         self.generating = False
 ```
 
-A flag that is not persisted needs none of this: a reconnect runs `mount()` and starts from its values.
+Two things to keep in mind:
+
+- **Keep `handle_restore()` idempotent.** What it changes is saved by the next event, not by the reconnect, so it runs again on each reconnect until then.
+- **A second tab looks like a reconnect.** Declared state is shared by every tab of one session on the same page, so a second tab restores `generating=True` while the first tab's job is still running. If that matters, keep the flag out of persisted state.
+
+On an explicit view, a flag that is not persisted needs none of this: a reconnect runs `mount()` and starts from its values.
 
 ## Combining Both Systems
 
