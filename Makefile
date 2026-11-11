@@ -816,7 +816,7 @@ endif
 	@cargo update --workspace --offline 2>/dev/null || cargo update --workspace
 	@# The distribution SBOM's root version comes from pyproject.toml (ADR-040).
 	@echo "$(GREEN)Regenerating python/djust/djust.cdx.json...$(NC)"
-	@PYTHONPATH=python $(PYTHON) -m djust.assets.sbom --distribution
+	@PYTHONPATH=python/djust $(PYTHON) -m assets.sbom --distribution
 	@echo "$(YELLOW)Don't forget to update CHANGELOG.md!$(NC)"
 	@echo "$(YELLOW)Commit uv.lock + Cargo.lock + python/djust/djust.cdx.json alongside the manifest bump.$(NC)"
 
@@ -943,7 +943,9 @@ VENDOR_OUTPUTS := python/djust/components/djust_assets.json python/djust/admin_e
 
 vendor: ## Build vendored third-party browser assets, their manifests and python/djust/djust.cdx.json (ADR-040)
 	cd js/vendor && npm ci && npm run build
-	PYTHONPATH=python $(PYTHON) -m djust.assets.sbom --distribution
+	# Run as the top-level package `assets`, not `djust.assets`: importing `djust` needs the
+	# compiled extension (mandatory in 2.0), and this target runs in CI with no build.
+	PYTHONPATH=python/djust $(PYTHON) -m assets.sbom --distribution
 
 vendor-check: vendor ## Fail when committed vendored assets, manifests or djust.cdx.json differ from a rebuild
 	@git diff --exit-code -- $(VENDOR_OUTPUTS) || { echo "Vendored outputs are stale: run 'make vendor' and commit."; exit 1; }
