@@ -81,43 +81,6 @@ DOC_FILES: list[pathlib.Path] = sorted(
 # when the entry should be looked at again. ``Block.key`` computes it; the
 # comment above each entry gives the line it had when it was recorded.
 KNOWN_FAILURES: dict[str, str] = {
-    # --- phantom attribute: the class reads something it never sets/defines ---
-    # was docs/website/guides/declarative-ux-attrs.md line 710
-    "docs/website/guides/declarative-ux-attrs.md@f5710695": (
-        "ChatView.send calls self._post(value); the block defines no _post (elided helper)"
-    ),
-    # was docs/website/guides/error-codes.md line 533
-    "docs/website/guides/error-codes.md@6bf612fb": (
-        "V004 'Fix' block: MyView.toggle_sidebar reads self.sidebar_open, which no mount() sets"
-    ),
-    # was docs/website/guides/hooks.md line 468
-    "docs/website/guides/hooks.md@31c5e48b": (
-        "DashboardView.mount calls self.fetch_sales(); the block defines no fetch_sales (elided helper)"
-    ),
-    # was docs/website/guides/http-api.md line 416
-    "docs/website/guides/http-api.md@f2ab03ab": (
-        "MyView.mount calls self.subscribe_presence() and self._seed(); neither exists on LiveView "
-        "nor in the block (subscribe_presence reads like an API but djust has no such method)"
-    ),
-    # was docs/website/guides/tutorial-multi-step-wizard.md line 117
-    "docs/website/guides/tutorial-multi-step-wizard.md@572ee429": (
-        "SignupWizardView.back_step reads self.step; the block says '# ... state as above ...' "
-        "and the earlier block's state() declarations are not carried"
-    ),
-    # --- template contract ---
-    # was docs/website/guides/time-travel-debugging.md line 25
-    "docs/website/guides/time-travel-debugging.md@bd19ed38": (
-        "CounterView.template = '<div>{{ count }}</div>' has no dj-root / dj-view root; "
-        "template-requirements.md says the client attaches to one"
-    ),
-    # --- public-API collision ---
-    # was docs/website/guides/tutorial-streaming-ai.md line 78
-    "docs/website/guides/tutorial-streaming-ai.md@9c911c22": (
-        "`from djust import rate_limit` resolves to the djust.rate_limit MODULE once that submodule "
-        "is imported (runtime.py:81 imports it; djust/__init__.py re-binds only live_view), so "
-        "`@rate_limit(rate=0.1, burst=3)` raises TypeError: 'module' object is not callable. "
-        "Import it from djust.decorators"
-    ),
     # --- deliberate ---
     # was docs/website/guides/error-overlay.md line 44
     "docs/website/guides/error-overlay.md@7a3e8f4c": (

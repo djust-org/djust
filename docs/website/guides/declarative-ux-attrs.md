@@ -709,9 +709,13 @@ where pressing Enter never blurs the textarea:
 
 ```python
 class ChatView(LiveView):
+    def mount(self, request, **kwargs):
+        self.messages = []
+        self.composer = ""
+
     @event_handler
     def send(self, value: str = "", **kwargs):
-        self._post(value)
+        self.messages = [*self.messages, value]
         self.composer = ""   # cleared server-side…
 ```
 
