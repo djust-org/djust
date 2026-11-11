@@ -1362,7 +1362,7 @@ def test_multiple_decorators():
 # tests/test_live_view.py
 def test_metadata_injection():
     class TestView(LiveView):
-        template_string = "<div>{{ count }}</div>"
+        template = "<div>{{ count }}</div>"
 
         @debounce(wait=0.5)
         def increment(self, **kwargs):

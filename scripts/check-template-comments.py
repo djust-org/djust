@@ -30,9 +30,13 @@ files, so the scan also reads the string constants of every ``.py`` file under a
 --with-examples`` wrote a two-line ``{# #}`` whose quoted ``{% end_theme_card %}``
 then raised ``TemplateSyntaxError``.
 
+The demo apps under ``examples/`` are scanned as well: the check covered only
+``python/djust`` until five multi-line comments turned up rendering as text on
+the server-function and sticky-LiveView demo pages.
+
 Usage:
     python3 scripts/check-template-comments.py
-    python3 scripts/check-template-comments.py --path python/djust
+    python3 scripts/check-template-comments.py --path python/djust --path examples
 
 Exit code:
     0 — no multi-line ``{# #}`` found
@@ -59,14 +63,25 @@ _MULTILINE_COMMENT_RE = re.compile(r"\{#(.*?)#\}", re.DOTALL)
 #: management commands and scaffolders that write templates into a project.
 _EMBEDDED_TEMPLATE_DIRS = ("management", "scaffolding")
 
+#: Scanned when no ``--path`` is given: the framework and its demo apps.
+DEFAULT_PATHS = ("python/djust", "examples")
+
+#: Build output and environments that can sit untracked inside a scanned tree
+#: (``examples/*/staticfiles`` after a ``collectstatic``).
+_SKIP_DIRS = frozenset({"node_modules", "staticfiles", ".venv", "venv", "__pycache__"})
+
 
 def _findings_in_text(source: str, first_line: int = 1) -> list[tuple[int, str]]:
     findings = []
+    # Newlines are counted between one finding and the next, not from the start of
+    # the source for each (O(source x findings), #3705).
+    line, counted_to = first_line, 0
     for match in _MULTILINE_COMMENT_RE.finditer(source):
         body = match.group(1)
         if "\n" not in body:
             continue  # single-line: Django handles it correctly
-        line = first_line + source[: match.start()].count("\n")
+        line += source.count("\n", counted_to, match.start())
+        counted_to = match.start()
         first = body.strip().splitlines()[0][:60] if body.strip() else ""
         findings.append((line, first))
     return findings
@@ -98,9 +113,16 @@ def find_multiline_comments_in_python(path: Path) -> list[tuple[int, str]]:
     return sorted(findings)
 
 
+def _iter_files(root: Path, pattern: str):
+    """``root.rglob(pattern)``, sorted, minus anything under a ``_SKIP_DIRS`` directory."""
+    for path in sorted(root.rglob(pattern)):
+        if not _SKIP_DIRS.intersection(path.relative_to(root).parts[:-1]):
+            yield path
+
+
 def iter_embedded_template_modules(root: Path):
     """``.py`` files under a ``management/`` or ``scaffolding/`` directory of ``root``."""
-    for module in sorted(root.rglob("*.py")):
+    for module in _iter_files(root, "*.py"):
         parts = module.relative_to(root).parts[:-1]
         if any(part in _EMBEDDED_TEMPLATE_DIRS for part in parts):
             yield module
@@ -110,27 +132,32 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--path",
-        default="python/djust",
-        help="Directory to scan, relative to the repo root (default: python/djust).",
+        action="append",
+        help=(
+            "Directory to scan, relative to the repo root; repeatable "
+            f"(default: {' and '.join(DEFAULT_PATHS)})."
+        ),
     )
     args = parser.parse_args(argv)
 
-    root = ROOT / args.path
-    if not root.is_dir():
-        print(f"error: {root} is not a directory", file=sys.stderr)
-        return 2
+    roots = [ROOT / path for path in (args.path or DEFAULT_PATHS)]
+    for root in roots:
+        if not root.is_dir():
+            print(f"error: {root} is not a directory", file=sys.stderr)
+            return 2
 
     total = 0
-    for template in sorted(root.rglob("*.html")):
-        for line, preview in find_multiline_comments(template):
-            rel = template.relative_to(ROOT)
-            print(f"{rel}:{line}: multi-line {{# #}} renders as page text -> {preview}…")
-            total += 1
-    for module in iter_embedded_template_modules(root):
-        for line, preview in find_multiline_comments_in_python(module):
-            rel = module.relative_to(ROOT)
-            print(f"{rel}:{line}: multi-line {{# #}} in a generated template -> {preview}…")
-            total += 1
+    for root in roots:
+        for template in _iter_files(root, "*.html"):
+            for line, preview in find_multiline_comments(template):
+                rel = template.relative_to(ROOT)
+                print(f"{rel}:{line}: multi-line {{# #}} renders as page text -> {preview}…")
+                total += 1
+        for module in iter_embedded_template_modules(root):
+            for line, preview in find_multiline_comments_in_python(module):
+                rel = module.relative_to(ROOT)
+                print(f"{rel}:{line}: multi-line {{# #}} in a generated template -> {preview}…")
+                total += 1
 
     if total:
         print(

@@ -1,6 +1,6 @@
 # ADR-029: The Render Environment as Per-View Config (ADR-027 Addendum)
 
-**Status**: Proposed
+**Status**: Accepted — shipped 2026-09-10 in v1.2.0 (PR #2772; Step 5 as PR #2628)
 **Date**: 2026-09-09
 **Citations**: `file:line` pinned to `main` at `1631e0ec`; every one asserted against its expected token at write time
 **Deciders**: Project maintainers

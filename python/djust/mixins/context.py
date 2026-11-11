@@ -2,6 +2,7 @@
 ContextMixin - Context data management for LiveView.
 """
 
+import itertools
 import json
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
@@ -87,6 +88,89 @@ def _clear_processor_caches(**kwargs: Any) -> None:
 
 
 setting_changed.connect(_clear_processor_caches)
+
+
+#: Types that can never hold a Model or QuerySet. A scan of a long list of
+#: plain rows exits on this one ``type()`` lookup per value instead of three
+#: ``isinstance`` calls (#3788).
+_NEVER_DB_TYPES = frozenset({str, int, float, bool, bytes, type(None)})
+
+#: How many containers deep ``_holds_db_value`` looks. ``{"d": {"rows":
+#: [{"users": qs}]}}`` is three; past this the value is left as the view built
+#: it, as ``_normalize_db_values`` does at its own bound.
+_NESTED_DB_DEPTH = 4
+
+
+#: Set once the bound has been reported (#3801); the warning is per process.
+_DEPTH_BOUND_REPORTED: dict[str, bool] = {"reported": False}
+
+#: How many values past the bound are looked at to learn whether a Model or
+#: QuerySet is there. The report is a hint, so it stays cheap on a long list.
+_DEPTH_BOUND_PROBE = 64
+
+
+def _warn_once_if_deeper_db_value(items: Any) -> None:
+    """Say, once, that a Model / QuerySet sits past ``_NESTED_DB_DEPTH`` (#3801).
+
+    Past the bound a container is left as the view built it -- a flat field dict
+    whose relations render empty -- and nothing said so. Only the values directly
+    inside the first container past the bound are looked at (at most
+    ``_DEPTH_BOUND_PROBE``): finding a deeper one would mean the scan the bound
+    exists to avoid, so a value deeper still is not reported.
+    """
+    if _DEPTH_BOUND_REPORTED["reported"]:
+        return
+    for item in itertools.islice(items, _DEPTH_BOUND_PROBE):
+        if isinstance(item, (models.Model, models.QuerySet)):
+            _DEPTH_BOUND_REPORTED["reported"] = True
+            logger.warning(
+                "A %s is nested more than %s containers deep in the context, past what the "
+                "template serializer looks at: it is sent as a flat field dict and its "
+                "relations render empty. Hoist it to a shallower name.",
+                type(item).__name__,
+                _NESTED_DB_DEPTH,
+            )
+            return
+
+
+def _holds_db_value(value: Any, depth: int = 0) -> bool:
+    """Whether a dict / list holds a Model or QuerySet at any bounded depth (#3788).
+
+    ``{"d": {"users": qs}}`` and ``[{"label": "a", "users": qs}]`` are the
+    shapes a view builds to group rows. The JIT only looked at top-level
+    context values, so a QuerySet reached through a container was serialized
+    as a flat field dict and every relation the template walked
+    (``{% for g in x.groups.all %}``) came out empty. Plain data answers on a
+    single ``type()`` lookup per value.
+    """
+    t = type(value)
+    if t in _NEVER_DB_TYPES:
+        return False
+    items: Any
+    if t is dict:
+        items = value.values()
+    elif t is list:
+        items = value
+    elif isinstance(value, (models.Model, models.QuerySet)):
+        return True
+    elif isinstance(value, dict):
+        if isinstance(value, MultiValueDict) or _crosses_as_encoded(value):
+            return False
+        items = value.values()
+    elif isinstance(value, list):
+        items = value
+    else:
+        return False
+    if depth >= _NESTED_DB_DEPTH:
+        _warn_once_if_deeper_db_value(items)
+        return False
+    depth += 1
+    for item in items:
+        # Inlined leaf test: a call per value is what a long list of plain rows
+        # would otherwise pay (measured 20 ms for 10,000 rows of 8 values).
+        if type(item) not in _NEVER_DB_TYPES and _holds_db_value(item, depth):
+            return True
+    return False
 
 
 def _jit_serialization_enabled() -> bool:
@@ -198,6 +282,21 @@ def _is_json_serializable(value: Any) -> bool:
         return False
 
 
+def _keeps_out_of_state(value: Any) -> bool:
+    """Whether a REQUEST-SCOPED context value must stay out of the Rust state.
+
+    Two kinds: a value that is not JSON data (``WSGIRequest``, ``PermWrapper``,
+    ``FallbackStorage``, a lazy ``user``, a lazy HTML chunk), which the normalizer
+    would stringify, and plain data a processor marked ``RequestScopedList``
+    because storing it is the cost (#3631). Both ride the raw-value sidecar.
+    Every site that decides this asks here, so the dj-root render, the page-shell
+    render and the sidecar builder cannot disagree (#1646).
+    """
+    from ..request_scoped import is_request_scoped_data
+
+    return is_request_scoped_data(value) or not _is_json_serializable(value)
+
+
 def _request_scoped_keys(view: Any) -> set:
     """Context keys that are request-scoped, not LiveView state (#1786, #3061).
 
@@ -264,13 +363,15 @@ def _drop_request_scoped_values(view: Any, context: Dict[str, Any]) -> Dict[str,
     (``render_full_template``) agree (#3061, the #1646 parallel-path class).
     The values still reach the template through the raw-value sidecar.
     Serializable processor output (``csrf_token``, ``DEFAULT_MESSAGE_LEVELS``,
-    a theming ``SafeString``) is kept.
+    a theming ``SafeString``) is kept, except plain data a processor marked
+    ``RequestScopedList`` (``theme_presets``, #3631): it is left out here and
+    reaches the template through the sidecar, as in ``_sync_state_to_rust``.
     """
     scoped = _request_scoped_keys(view)
     return {
         key: value
         for key, value in context.items()
-        if key not in scoped or _is_json_serializable(value)
+        if key not in scoped or not _keeps_out_of_state(value)
     }
 
 
@@ -318,6 +419,50 @@ class ContextMixin:
         def _jit_serialize_model_list(
             self, items: Any, template_content: str, variable_name: str
         ) -> List[Any]: ...
+
+    def _context_for_render(
+        self, preloaded_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """The context a render pass starts from, without evaluating it twice (#3725).
+
+        The one place the render path decides where its context comes from,
+        in this order:
+
+        1. ``preloaded_context``: the caller already has it (the async path
+           awaited it).
+        2. ``self._cached_context``: the HTTP GET evaluated ``get_context_data()``
+           once (``RequestMixin._get_turn_body``) and cached it for exactly this
+           render, to keep QuerySets and the view's own work from running again.
+           The stock ``get_context_data()`` honours that cache itself, but the
+           short-circuit sits inside the stock method, so a view that defines
+           its own ``get_context_data()`` ran its whole body a second time.
+           Reading the cache here, before the method is reached, serves both.
+           A legacy view gets a shallow copy of the cached dict; an explicit
+           view gets a fresh render context rebuilt from it (provider
+           ownership intact).
+        3. A real evaluation, in the sync-turn ``render`` step. This is every
+           render after the GET: an event handler changed state, so the context
+           must be computed again. The GET clears the cache when it finishes
+           for that reason.
+        """
+        if preloaded_context is not None:
+            return preloaded_context
+        cached = getattr(self, "_cached_context", None)
+        if cached is not None:
+            from .._exposure import uses_legacy_exposure
+
+            if uses_legacy_exposure(self):
+                # A copy: the render adds keys to the dict it is handed and
+                # replaces models in it with their serialized form. The cache
+                # stays what the view returned, because the page shell reads
+                # RAW values from it for its sidecar (``_set_shell_sidecar``,
+                # #2589). Every evaluation returned a fresh dict before this
+                # read the cache; a copy keeps that for a view with its own method.
+                return dict(cached)
+            return self._get_explicit_context_data()
+        from ..sync_turn import run_sync_step
+
+        return run_sync_step(self, "render", self.get_context_data)
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """
@@ -490,6 +635,9 @@ class ContextMixin:
         # JIT auto-serialization for QuerySets and Models
         jit_serialized_keys = set()
         template_content = None
+        # The raw rows a template's QuerySet-method read is answered from
+        # (#3801); rebuilt every render, never state.
+        self.__dict__["_all_method_rows"] = {}
 
         # Short-circuit: skip JIT pipeline if no DB objects in context (#278).
         # NOTE: This scan only checks top-level context values. DB objects nested
@@ -520,7 +668,12 @@ class ContextMixin:
                     # Template hash once for codegen cache keys
                     from ..mixins.jit import _template_hash
                     from ..session_utils import _jit_serializer_cache, _get_model_hash
-                    from ..optimization.codegen import generate_serializer_code, compile_serializer
+                    from ..optimization.codegen import (
+                        all_methods_need_rows,
+                        compile_serializer,
+                        generate_serializer_code,
+                    )
+                    from ..mixins.jit import keep_rows_for_all_methods
 
                     template_hash = _template_hash(template_content)
 
@@ -600,6 +753,8 @@ class ContextMixin:
                                     serializer = compile_serializer(code, func_name)
                                     _jit_serializer_cache[cache_key] = (serializer, None)
                                 context[key] = [serializer(item) for item in value]
+                                if all_methods_need_rows(model_class, paths):
+                                    keep_rows_for_all_methods(self, key, value)
                             else:
                                 # No field path for this list: the QuerySet
                                 # contract, not the single-model identity map
@@ -624,6 +779,10 @@ class ContextMixin:
 
         # Single pass: deep-serialize dicts and fallback-serialize remaining Models
         tc = template_content
+        # The JIT's template source for values reached THROUGH a container is
+        # looked up on first need (#3788), not by a pre-scan of every context
+        # value: a context with no nested DB value pays nothing.
+        self._nested_template_source: List[Optional[str]] = [] if tc is None else [tc]
         for key, value in list(context.items()):
             if key in jit_serialized_keys:
                 continue
@@ -650,6 +809,10 @@ class ContextMixin:
                 context[key] = normalize_django_value(value)
             elif is_model_list(value):
                 context[key] = [normalize_django_value(item) for item in value]
+            elif isinstance(value, list) and _holds_db_value(value):
+                # A list of dicts that hold QuerySets / Models (#3788):
+                # ``[{"label": "a", "users": qs}]``.
+                context[key] = self._deep_serialize_sequence(value, tc, key)
 
         self._jit_serialized_keys = jit_serialized_keys
 
@@ -844,6 +1007,62 @@ class ContextMixin:
         self._jit_serialized_keys = set()
         return context
 
+    def _nested_template_content(self) -> Optional[str]:
+        """The JIT's template source for a value reached through a container.
+
+        ``get_context_data`` only reads the template when a TOP-LEVEL value is
+        a Model / QuerySet / model list; a QuerySet inside a dict has none of
+        that, and ``_deep_serialize_dict`` then flattened it to a field dict
+        (#3788). Read once per render, on the first nested DB value.
+        """
+        memo: Optional[List[Optional[str]]] = getattr(self, "_nested_template_source", None)
+        if memo:
+            return memo[0]
+        content: Optional[str] = None
+        if _jit_serialization_enabled():
+            try:
+                from ..mixins.jit import _jit_template_content
+
+                content = _jit_template_content(self)
+            except Exception as exc:  # noqa: BLE001 - fall back to the flat serializer
+                from .._exposure_diagnostics import log_failure_for
+
+                log_failure_for(
+                    logger,
+                    (self,),
+                    exc,
+                    "JIT template source unavailable for a nested value",
+                    level="debug",
+                )
+        if memo is not None:
+            memo.append(content)
+        return content
+
+    def _deep_serialize_sequence(
+        self,
+        items: List[Any],
+        template_content: Optional[str] = None,
+        var_name: str = "",
+    ) -> List[Any]:
+        """A list whose dicts hold Models / QuerySets, serialized item by item (#3788).
+
+        Each dict is named by the LIST's name: the extractor folds the loop
+        variable onto its iterable, so ``{% for r in rows %}{% for x in r.users
+        %}`` is ``rows: ["users", "users.groups.all", ...]`` -- paths relative
+        to one element.
+        """
+        result: List[Any] = []
+        for item in items:
+            if isinstance(item, dict) and not _crosses_as_encoded(item):
+                result.append(self._deep_serialize_dict(item, template_content, var_name))
+            elif isinstance(item, list) and _holds_db_value(item):
+                result.append(self._deep_serialize_sequence(item, template_content, var_name))
+            elif isinstance(item, models.Model):
+                result.append(normalize_django_value(item))
+            else:
+                result.append(item)
+        return result
+
     def _deep_serialize_dict(
         self,
         d: Dict[str, Any],
@@ -853,13 +1072,20 @@ class ContextMixin:
         """Recursively walk a dict, serializing any Model/QuerySet values found.
 
         When template_content is provided, uses JIT serialization; otherwise
-        falls back to DjangoJSONEncoder.
+        falls back to DjangoJSONEncoder. A Model / QuerySet / model list with
+        no template source yet asks for it here (#3788): the top-level scan in
+        ``get_context_data`` does not see a value inside a dict, and the flat
+        fallback has no relation for ``x.groups.all`` to walk.
         """
         from django.db.models import QuerySet
 
         result: Dict[str, Any] = {}
         for k, v in d.items():
             child_name = f"{var_name}.{k}" if var_name else k
+            if template_content is None and (
+                isinstance(v, (models.Model, QuerySet)) or is_model_list(v)
+            ):
+                template_content = self._nested_template_content()
             if isinstance(v, models.Model):
                 if template_content:
                     result[k] = self._jit_serialize_model(v, template_content, child_name)
@@ -881,6 +1107,8 @@ class ContextMixin:
                 result[k] = v
             elif isinstance(v, dict):
                 result[k] = self._deep_serialize_dict(v, template_content, child_name)
+            elif isinstance(v, list) and _holds_db_value(v):
+                result[k] = self._deep_serialize_sequence(v, template_content, child_name)
             else:
                 result[k] = v
         return result

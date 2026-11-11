@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import re
 
+import pytest
 from django.middleware.csrf import CsrfViewMiddleware, _check_token_format, _unmask_cipher_token
 from django.conf import settings
 from django.test import RequestFactory, override_settings
 
 from djust.mixins.post_processing import PostProcessingMixin
+from djust.tests._growth import assert_scales_linearly
 
 
 class _FakeView(PostProcessingMixin):
@@ -163,15 +165,15 @@ def test_custom_element_named_body_something_is_not_body():
     assert html.index('name="djust-csrf-token"') > html.index("</body-shell>")
 
 
-def test_unterminated_regions_scan_in_linear_time():
-    import time
-
+@pytest.mark.parametrize("opener", ["<!--", "<script>", "<title>", "</body ", "</head ", "<title "])
+def test_unterminated_regions_scan_in_linear_time(opener):
     # A bare "<script" with no ">" is left out: that shape is quadratic in the
     # shared #2663 raw-text masker already (tracked separately), not here.
-    for opener in ("<!--", "<script>", "<title>", "</body ", "</head ", "<title "):
-        # No ">" after the run: every unterminated tag used to scan to the end.
-        page = "<html><head></head><body>" + opener * 32000
-        start = time.perf_counter()
-        _inject(page, RequestFactory().get("/"))
-        # Quadratic scanning took seconds on these inputs; linear is milliseconds.
-        assert time.perf_counter() - start < 1.0, opener
+    request = RequestFactory().get("/")
+    # No ">" after the run: every unterminated tag used to scan to the end. Judged by
+    # growth, not by seconds (#3711): 4x the openers (8 000 -> 32 000) must cost under
+    # 10x as much. Quadratic scanning took seconds on these inputs.
+    assert_scales_linearly(
+        lambda scale: _inject("<html><head></head><body>" + opener * (8000 * scale), request),
+        what=f"injecting the CSRF meta past {opener!r}",
+    )

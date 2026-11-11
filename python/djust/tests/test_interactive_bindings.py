@@ -253,12 +253,12 @@ async def test_real_websocket_two_menus_and_unknown_target():
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".MenuPage", "url": request.path}
             )
-            frame = await socket.receive_json_from(timeout=3)
+            frame = await socket.receive_json_from()
             assert frame["type"] == "mount", frame
             import re
 
@@ -267,7 +267,7 @@ async def test_real_websocket_two_menus_and_unknown_target():
             await socket.send_json_to(
                 {"type": "event", "event": "open_project", "params": {}, "ref": 1}
             )
-            opened = await socket.receive_json_from(timeout=3)
+            opened = await socket.receive_json_from()
             assert opened["type"] == "patch", opened
             assert "aria-expanded" in json.dumps(opened)
             for expected in ["html_update", "noop"]:
@@ -279,7 +279,7 @@ async def test_real_websocket_two_menus_and_unknown_target():
                         "ref": 1,
                     }
                 )
-                closed = await socket.receive_json_from(timeout=3)
+                closed = await socket.receive_json_from()
                 assert closed["type"] == expected, closed
             for target, value, expected in [
                 (identities[0], "edit", "project:edit"),
@@ -293,7 +293,7 @@ async def test_real_websocket_two_menus_and_unknown_target():
                         "ref": 1,
                     }
                 )
-                frame = await socket.receive_json_from(timeout=3)
+                frame = await socket.receive_json_from()
                 assert frame["type"] == "html_update", frame
                 assert expected in frame["html"], frame
             await socket.send_json_to(
@@ -304,7 +304,7 @@ async def test_real_websocket_two_menus_and_unknown_target():
                     "ref": 2,
                 }
             )
-            frame = await socket.receive_json_from(timeout=3)
+            frame = await socket.receive_json_from()
             assert frame["type"] == "error", frame
         finally:
             await socket.disconnect()
@@ -317,12 +317,12 @@ async def test_real_websocket_two_menus_and_unknown_target():
             tenant=None,
         )
         assert (await resumed.connect())[0]
-        await resumed.receive_json_from(timeout=3)
+        await resumed.receive_json_from()
         try:
             await resumed.send_json_to(
                 {"type": "mount", "view": __name__ + ".MenuPage", "url": request.path}
             )
-            frame = await resumed.receive_json_from(timeout=3)
+            frame = await resumed.receive_json_from()
             assert frame["type"] == "mount", frame
             assert "account:settings" in frame["html"], frame
             assert re.findall('data-component-id="([^"]+)"', frame["html"]) == identities

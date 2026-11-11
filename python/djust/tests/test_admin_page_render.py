@@ -370,10 +370,8 @@ async def test_admin_view_on_an_unrouted_url_is_refused_cleanly(django_user_mode
         )
         frames = []
         for _ in range(10):
-            try:
-                frame = await ws.comm.receive_json_from(timeout=3)
-            except Exception:
-                break
+            # The error/navigate frame is asserted below, so it WILL arrive: default wait.
+            frame = await ws.comm.receive_json_from()
             frames.append(frame)
             if frame.get("type") in ("mount", "error", "navigate"):
                 break

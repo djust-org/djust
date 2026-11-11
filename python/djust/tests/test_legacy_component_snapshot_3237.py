@@ -138,7 +138,7 @@ async def _connect():
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect ack
+    await communicator.receive_json_from()  # connect ack
     return communicator, session_key
 
 

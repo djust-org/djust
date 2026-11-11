@@ -10,7 +10,10 @@ from typing import Any
 
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.http import HttpRequest
+from django.utils.html import escape, format_html
+from django.utils.safestring import SafeString, mark_safe
 
+from ..request_scoped import RequestScopedList
 from ._lazy_html import LazyThemeHTML
 from .manager import (
     ThemeMode,
@@ -142,7 +145,9 @@ def theme_context(request: HttpRequest) -> dict:
     renders on its first read and not at all on a page that never reads it. The
     settings values (``theme_preset``, ``theme_mode``, ``theme_resolved_mode``,
     ``theme_pack``, ``theme_presets``, ``components_gallery_url``) are plain
-    values computed here. Templates can use ``{{ theme_head }}`` /
+    values computed here; ``theme_presets`` is a ``list`` subclass
+    (:class:`~djust.request_scoped.RequestScopedList`, #3631) that a LiveView
+    does not store in its state. Templates can use ``{{ theme_head }}`` /
     ``{{ theme_panel }}`` etc. instead of ``{% theme_head %}`` /
     ``{% theme_panel %}`` (#1435). The tag forms still work — they're how
     customization-with-args is supported — but consumers using the default
@@ -287,10 +292,25 @@ def theme_context(request: HttpRequest) -> dict:
         "theme_mode": state.mode,
         "theme_resolved_mode": state.resolved_mode,
         "theme_pack": state.pack,
-        "theme_presets": presets,
+        # A real ``list`` (``json_script``, ``json.dumps`` and ``isinstance``
+        # work), but one the bridge keeps out of the stored view state (#3631):
+        # 11.7 KB that every view in an app with this processor installed
+        # otherwise copied into its snapshot. A fresh object per call, so a
+        # template or caller that mutates it cannot reach the next request's.
+        "theme_presets": RequestScopedList(presets),
         # "" when the optional component gallery app is absent or unrouted.
         "components_gallery_url": _components_gallery_url(),
     }
+
+
+def _option_text(value: object) -> SafeString:
+    """``escape(value)`` that leaves ``'`` alone, for an ``<option value="...">label</option>``.
+
+    Both places are written between double quotes or as text, where ``'`` is inert, and a
+    built-in preset is named ``Synthwave '84``: ``escape`` alone would print ``&#x27;``, which
+    shows the same but changes the bytes of the page (and of the lazy/eager parity pin).
+    """
+    return mark_safe(escape(value).replace("&#x27;", "'"))
 
 
 def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
@@ -316,8 +336,13 @@ def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
     preset_options = ""
     for preset in presets:
         selected = "selected" if preset["is_active"] else ""
-        preset_options += (
-            f'<option value="{preset["name"]}" {selected}>{preset["display_name"]}</option>'
+        # A preset's name and display name are registry data, escaped here (#3766); the chunk
+        # is marked safe by ``LazyThemeHTML``, so nothing downstream would do it.
+        preset_options += format_html(
+            '<option value="{}" {}>{}</option>',
+            _option_text(preset["name"]),
+            selected,
+            _option_text(preset["display_name"]),
         )
 
     return f"""<div class="theme-switcher">

@@ -486,6 +486,17 @@ class TestTheDivergenceTheUnMaskingRevealed:
                 du = "<<EXC>>"
             if dj != du:
                 diverging[name] = (dj, du)
+        # `d-model` is the serialized-model map (#2322). The engine reads its `"__str__"` marker as a
+        # model and writes the model's text, as `{{ p }}` always did and as `json_script` now does for a
+        # model held in a container; Django, handed the plain `dict` this tool can only offer, writes
+        # the mapping. A page that holds a real model hands Django the model, which it refuses. Pinned
+        # separately because it is a body divergence, not the refusal half the rest of this set is.
+        model_cell = diverging.pop("d-model", None)
+        assert model_cell is not None, "d-model no longer diverges: the model-text rule moved"
+        assert model_cell[0].startswith('<script type="application/json">{"id": 7'), model_cell
+        assert model_cell[1] == (
+            '<script type="application/json">"\\u003Cimg src=x onerror=alert(1)\\u003E"</script>'
+        ), model_cell
         assert set(diverging) == {
             "d-typed-key",
             "set-empty",

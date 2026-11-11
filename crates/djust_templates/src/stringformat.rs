@@ -204,6 +204,10 @@ fn scan(spec: &str, value: &Value) -> Result<Vec<Piece>, Reject> {
             let Value::Object(map) = value else {
                 return Err(Reject); // `TypeError: format requires a mapping`
             };
+            // A serialized model is not a mapping: `"%(name)s" % model` is that same `TypeError`.
+            if value.model_str().is_some() {
+                return Err(Reject);
+            }
             // A MISSING key is a `KeyError`, which Django does not catch —
             // see the bounded residue in the module docs. `""` here is the
             // less-permissive answer.

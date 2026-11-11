@@ -159,8 +159,13 @@ LIVEVIEW_CONFIG = {
         "reconnect_cooldown": 5,        # Seconds before a rate-limited IP can reconnect
     },
     "max_message_size": 65536,  # 64KB
+    "max_form_fields": 1000,           # fields one form's submitted data may hold (Django's default)
+    "max_form_data_size": 2_621_440,   # characters of keys + values (Django's 2.5 MB)
+    "max_form_members": 100_000,       # keys, values and nested containers (bounds the time of an event)
 }
 ```
+
+`max_message_size` bounds one frame; a form's data is the sum of many, so `max_form_fields`, `max_form_data_size` and `max_form_members` bound what `FormMixin`, `WizardMixin`, the admin form view and a `params_form` keep (an event past them is refused whole, `0` = no limit; #3834). The fields a form declares do not count toward `max_form_fields`; nested values are counted to any depth. `max_form_members` counts every key, every value and every list, tuple, set or mapping inside them as one, however long a string is: characters do not bound time, because every event hands the whole of the stored data to the template engine at about 0.7 microseconds a member, so 2.6 million empty strings (under the size limit) made each later event take over a second (#3844). What the cap buys is a bound, not a removal: at 100,000 members an event costs about 70 ms of that pass for flat strings or numbers, and roughly 0.2 to 0.4 s for container-heavy data (a list or mapping weighs one member, the same as a leaf, but costs more to hand over; measured on a loaded machine), and the state sync still walks everything that is stored. A wizard keeps one mapping per step: `max_form_fields` is a step's (a step is a form), but the characters and the members are the wizard's TOTAL, every step together (#3858); before that a four-step wizard of optional fields could keep four times the limit. `FormSetHelpersMixin.remove_row` (and `remove_row()`) judge the `-DELETE` key of a client-named row prefix like any other client-named key; only the formset's management keys and, for a row below `TOTAL_FORMS`, the real fields of its form (plus `DELETE`, `ORDER` and `id`, spelled in canonical ASCII digits) are the formset's own; any other key under its prefix, such as `fs-0-anything` or `fs-00-street`, counts toward `max_form_fields`. A field the form adds in its `__init__` counts as one of its fields: the names are read once per formset class from `formset_cls().empty_form.fields` (the unbound form, never the client's data); a form that cannot be built without arguments keeps only its declared fields exempt (#3861). The names are computed once per formset class per process, so a form whose fields depend on state that changes later keeps the first answer. Each field counts as two members (its key and its value), so the default of 100,000 members is 50,000 fields: raise `max_form_fields` above about 50,000 and `max_form_members` must be raised with it. Behaviour change: more than 1,000 undeclared fields, or 2.5 MB, over the socket is refused as it is over HTTP, and so is data of more than 100,000 members; raise the limits for a form that needs more. A value written with `config.set()` / `config.update()` is validated like one in `LIVEVIEW_CONFIG`: one that is not a non-negative integer is the default, never unlimited.
 
 For expensive handlers, use the `@rate_limit` decorator:
 
@@ -396,6 +401,11 @@ When reviewing PRs, check for these security issues:
 - [ ] New endpoints have CSRF protection (no unjustified `@csrf_exempt`)
 - [ ] No `|safe` filter used on user-controlled template variables
 - [ ] Components pass through SafeString detection (pre-rendered HTML not double-escaped)
+- [ ] A caller-supplied URL printed into `href`, `action`, `src` or `srcset` goes through `url_attr` / `safe_url` / `srcset_attr` in the Python tag AND the native handler AND any class-based twin; `make template-library-url-sweep` drives script-capable URLs through every parameter of every tag and component, in both engines
+
+### Models and Forms
+- [ ] A model's `__str__` is built from public fields only (it is shipped as public text, whatever `djust_exclude_fields` / `djust_serializable_fields` say, #3806)
+- [ ] A form field that holds a typed secret uses a password widget (`PasswordInput`): a template cannot read a password-widget field's value back (#3798)
 
 ### JavaScript
 - [ ] innerHTML assignments reviewed for XSS
@@ -534,6 +544,46 @@ from django.utils.html import escape
 # Safe for embedding in JS string contexts
 js_selector = escape(user_selector)
 ```
+
+### 8. A Row's `__str__` Is Public Text (#3806)
+
+**What it is:** `djust_exclude_fields`, `djust_serializable_fields` and the
+serialization floor (`password`, `is_superuser`, `is_staff`,
+`DJUST_SENSITIVE_FIELDS`) decide which *fields* of a model a template can read.
+They do **not** constrain `str(row)`: `"__str__"` is an identity key every
+serialized model carries, so `{{ row }}` prints whatever the model's `__str__`
+returns, exactly as Django's own template engine does.
+
+**Where it ships** (measured, with Django's engine as the control, in
+`python/tests/test_row_str_is_public_text_3806.py`): a top-level loop over a
+QuerySet (`{% for r in rows %}{{ r }}`), a model in the context (`{{ row }}`), a
+foreign key read whole (`{{ row.shelf }}`), a row reached through a relation
+(`{{ shelf.rows.all.first }}`), and on the `DjustTemplateBackend` a QuerySet's
+`{{ rows.first }}` / `{{ rows.last }}`.
+
+**Impact:** a model whose `__str__` is built from a field you excluded or did not
+allowlist shows that field in the rendered page while `{{ row.that_field }}` is
+empty. The stock `User.__str__` is the username, so no stock Django model leaks.
+
+**Prevention:** treat `__str__` as public text and build it from public fields
+only:
+```python
+class Account(models.Model):
+    name = models.CharField(max_length=80)
+    api_token = models.CharField(max_length=64)
+    djust_exclude_fields = ("api_token",)
+
+    # BAD - the token is excluded as a field, and printed here anyway
+    def __str__(self):
+        return f"{self.name} ({self.api_token[:6]}...)"
+
+    # GOOD - public fields only
+    def __str__(self):
+        return self.name
+```
+The framework does not rewrite `__str__`: that would make `{{ row }}` differ from
+Django's, and a model's display text is its author's decision. See
+[SECURE_DEFAULTS.md](SECURE_DEFAULTS.md) (section 1) for the precise behaviour.
 
 ---
 
@@ -779,6 +829,7 @@ Verify production-safe defaults:
 - [ ] `DEBUG` is not hardcoded to `True` anywhere
 - [ ] Rate limit defaults are reasonable (100 req/s sustained, 20 burst)
 - [ ] `max_message_size` is set (default: 64KB)
+- [ ] `max_form_fields` / `max_form_data_size` / `max_form_members` are not `0` (defaults: 1000 fields, 2.5 MB, 100,000 members)
 - [ ] `max_connections_per_ip` is set (default: 10)
 - [ ] CSRF protection is enabled on all non-WebSocket endpoints
 - [ ] Template auto-escaping is enabled by default in the Rust engine

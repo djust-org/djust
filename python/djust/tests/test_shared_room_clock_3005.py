@@ -1228,3 +1228,72 @@ async def test_room_clock_step_runs_when_timer_starts_after_its_deadline():
             assert ticks[0].scheduled_at == pytest.approx(0.1)
         finally:
             await cleanup(c, time)
+
+
+# ---- #3451: a manual-time sleep must keep the deadline it was asked for ----
+
+
+class _TimeMovesBeforeTheSleeperRuns(ManualClock):
+    """Move manual time between a sleep request and its sleeper's first step.
+
+    ``RoomClock._wait`` turns its absolute deadline into ``seconds`` and hands the
+    coroutine to ``create_task``, whose first step runs later. The callback queued
+    here is ahead of that step in the loop's FIFO ready queue, so it runs in the gap
+    a test task that is already ready (a polling ``wait_until`` waking, a thread
+    completion landing in the same iteration) can fall into on a loaded runner.
+    """
+
+    def __init__(self, bump: float) -> None:
+        super().__init__()
+        self.bump = bump
+        self.armed = True
+
+    def sleep(self, seconds):
+        coro = super().sleep(seconds)
+        if self.armed and seconds > 0:
+            self.armed = False
+            asyncio.get_running_loop().call_soon(self._move)
+        return coro
+
+    def _move(self) -> None:
+        self.value += self.bump
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("moved,woken", [(0.1, True), (0.05, False)])
+async def test_manual_sleep_deadline_is_fixed_when_sleep_is_called(moved, woken):
+    time = ManualClock()
+    sleeper = asyncio.create_task(time.sleep(0.1))  # called at 0; first step is later
+    time.value += moved  # time moves before the sleeper's first step
+    await time.settle()
+    assert sleeper.done() is woken, "a late first step must not push the deadline out"
+    if not woken:
+        await time.advance(0.05)  # reaches 0.1, the deadline it was asked for
+        assert sleeper.done()
+    await sleeper
+
+
+@pytest.mark.asyncio
+async def test_manual_sleep_already_due_at_its_first_step_needs_no_settle():
+    time = ManualClock()
+    sleeper = asyncio.create_task(time.sleep(0.1))
+    time.value += 0.1
+    # One loop turn runs the sleeper's first step; no ``settle`` follows it, so a
+    # sleeper that registered itself would wait for a wake-up nobody sends.
+    await asyncio.sleep(0)
+    assert sleeper.done()
+    assert not time.sleepers
+
+
+@pytest.mark.asyncio
+async def test_clock_ticks_when_time_moves_between_its_wait_and_the_sleeper_start():
+    register_serving_loop()
+    time, ticks = _TimeMovesBeforeTheSleeperRuns(0.1), []
+    c = clock(time, ticks.append)
+    try:
+        await c.aensure(view(), "room")
+        await time.settle()
+        assert time.now() == pytest.approx(0.1)
+        assert [t.seq for t in ticks] == [1], "the first beat was due and never fired"
+    finally:
+        await cleanup(c, time)

@@ -833,7 +833,10 @@ class TestCounter:
 
 ### 6. Testing Async Code
 
-Use pytest-asyncio for async tests:
+Use pytest-asyncio for async tests. Channels' `channels.testing` package
+imports `daphne.testing`, and djust does not install daphne, so add the extra
+to your test dependencies (`pip install 'djust[daphne]'`) before importing
+`WebsocketCommunicator`:
 
 ```python
 import pytest

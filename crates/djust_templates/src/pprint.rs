@@ -70,6 +70,17 @@ pub fn pformat(value: &Value) -> String {
 /// This is also the whole of the old filter, which is why the old filter agreed
 /// with Django character-for-character below the width and diverged above it.
 fn flat_repr(value: &Value) -> String {
+    // A serialized Django model is a map carrying a `"__str__"` string, and
+    // that marker is the one `{{ obj }}` already spells it by
+    // (`Value::model_str`). Printing the map here would write out the whole
+    // serializer map, which Python's
+    // `pformat` of the model never does: it prints the model's own text, and so
+    // does this, unquoted, as a model nested in a list is spelled by `{{ rows }}`.
+    // Placed before the match so the rule holds at every depth, since every
+    // container arm below recurses through this function.
+    if let Some(text) = value.model_str() {
+        return text.to_string();
+    }
     match value {
         // `pprint` renders BOTH absent and `None` as `None`, unlike `Display`,
         // which renders `Missing` as the empty string (Django's
@@ -158,7 +169,9 @@ fn format_value(value: &Value, out: &mut String, indent: isize, allowance: isize
     // CPython lets this go negative and compares an `int` against it; `isize`
     // does the same, where `usize` would wrap.
     let max_width = WIDTH - indent - allowance;
-    if char_len(&rep) > max_width {
+    // A model is one atom, like an `int`: its text overruns the line rather
+    // than being laid out as a wrapped dict of the fields it was serialized from.
+    if char_len(&rep) > max_width && value.model_str().is_none() {
         match value {
             Value::List(items) => {
                 out.push('[');
@@ -440,6 +453,162 @@ mod tests {
         for line in ["a b  c", "  lead", "trail  ", "", "a\u{a0}b"] {
             assert_eq!(split_nonspace_space(line).concat(), line);
         }
+    }
+
+    /// A serialized Django model: a map carrying a `"__str__"` string, which is
+    /// the one marker `Value::object_str` reads. It holds more than its text on
+    /// purpose, so a spelling that fell through to the map would show them.
+    fn model(text: &str) -> Value {
+        let mut m = indexmap::IndexMap::new();
+        for (k, v) in [
+            ("id", Value::Integer(1)),
+            ("pk", Value::Integer(1)),
+            ("__str__", s(text)),
+            ("__model__", s("Account")),
+            ("owner_code", s("SENTINEL-A")),
+            ("get_note_text", s("SENTINEL-B")),
+        ] {
+            m.insert(ObjectKey::Str(k.to_string()), v);
+        }
+        Value::Object(m)
+    }
+
+    fn plain_dict() -> Value {
+        let mut m = indexmap::IndexMap::new();
+        m.insert(ObjectKey::Str("a".to_string()), Value::Integer(1));
+        m.insert(ObjectKey::Str("b".to_string()), s("x"));
+        Value::Object(m)
+    }
+
+    /// A model map is spelled as its text, like `{{ obj }}` spells it, and not
+    /// as the map that holds the text.
+    #[test]
+    fn a_model_map_is_spelled_as_its_text() {
+        let got = pformat(&model("Account:a1"));
+        assert_eq!(got, "Account:a1");
+        assert!(!got.contains("SENTINEL"), "{got}");
+    }
+
+    /// A model whose text is a SafeString (`format_html`) is spelled the same way.
+    #[test]
+    fn a_model_map_with_a_safe_text_is_spelled_as_its_text() {
+        let mut m = indexmap::IndexMap::new();
+        for (k, v) in [
+            ("pk", Value::Integer(1)),
+            ("__str__", Value::SafeString("<b>a1</b>".to_string())),
+            ("__model__", s("Account")),
+            ("owner_code", s("SENTINEL-A")),
+        ] {
+            m.insert(ObjectKey::Str(k.to_string()), v);
+        }
+        assert_eq!(pformat(&Value::List(vec![Value::Object(m)])), "[<b>a1</b>]");
+    }
+
+    /// A dict that merely carries a text `__str__` key (user data, a JSON column) is not a
+    /// model: it is still the sorted map.
+    #[test]
+    fn a_dict_with_only_a_text_key_is_still_a_map() {
+        let mut m = indexmap::IndexMap::new();
+        m.insert(ObjectKey::Str("__str__".to_string()), s("lbl"));
+        m.insert(ObjectKey::Str("k1".to_string()), s("v1"));
+        assert_eq!(pformat(&Value::Object(m)), "{'__str__': 'lbl', 'k1': 'v1'}");
+    }
+
+    /// An ordinary dict is untouched: still the sorted map repr.
+    #[test]
+    fn an_ordinary_dict_is_still_a_map() {
+        assert_eq!(pformat(&plain_dict()), "{'a': 1, 'b': 'x'}");
+    }
+
+    /// The same holds at every depth and inside every container type.
+    #[test]
+    fn a_model_map_nested_in_any_container_is_spelled_as_its_text() {
+        let a = || model("Account:a1");
+        let b = || model("Account:a2");
+        assert_eq!(
+            pformat(&Value::List(vec![a(), b()])),
+            "[Account:a1, Account:a2]"
+        );
+        assert_eq!(
+            pformat(&Value::Tuple(vec![a(), b()])),
+            "(Account:a1, Account:a2)"
+        );
+        assert_eq!(pformat(&Value::Tuple(vec![a()])), "(Account:a1,)");
+        let mut d = indexmap::IndexMap::new();
+        d.insert(ObjectKey::Str("items".to_string()), Value::List(vec![a()]));
+        d.insert(ObjectKey::Str("owner".to_string()), b());
+        assert_eq!(
+            pformat(&Value::Object(d)),
+            "{'items': [Account:a1], 'owner': Account:a2}"
+        );
+        let nested = Value::List(vec![Value::List(vec![Value::Tuple(vec![a()])])]);
+        assert_eq!(pformat(&nested), "[[(Account:a1,)]]");
+        let named = Value::NamedTuple {
+            name: "Pair".to_string(),
+            fields: vec!["left".to_string(), "right".to_string()],
+            items: vec![a(), b()],
+        };
+        let got = pformat(&named);
+        assert!(!got.contains("SENTINEL"), "{got}");
+        assert!(
+            got.contains("Account:a1") && got.contains("Account:a2"),
+            "{got}"
+        );
+    }
+
+    /// A model map is ONE atom: when its text is wider than the line it
+    /// overruns, as an `int` does, and is never broken into a wrapped dict.
+    /// The surrounding list still wraps one element per line.
+    #[test]
+    fn a_wide_model_map_is_an_atom_and_never_wraps_as_a_dict() {
+        let wide = "W".repeat(120);
+        let got = pformat(&model(&wide));
+        assert_eq!(got, wide);
+        assert!(!got.contains('\n') && !got.contains("SENTINEL"), "{got}");
+
+        let rows: Vec<Value> = (0..4)
+            .map(|i| model(&format!("Account number {i:02}-{}", "x".repeat(30))))
+            .collect();
+        let got = pformat(&Value::List(rows));
+        assert_eq!(got.matches('\n').count(), 3, "{got}");
+        assert!(got.starts_with("[Account number 00-"), "{got}");
+        assert!(got.ends_with("xxxxxx]"), "{got}");
+        assert!(!got.contains("SENTINEL") && !got.contains('{'), "{got}");
+    }
+
+    /// The text is printed as it is: NULs, newlines and brackets in a model's
+    /// `__str__` do not change the spelling and cannot reach the map.
+    #[test]
+    fn an_unusual_model_text_is_printed_verbatim() {
+        for text in ["", "a\0b", "line1\nline2", "}{][,'\"", "\u{2028}\u{1F600}"] {
+            assert_eq!(pformat(&model(text)), text, "{text:?}");
+        }
+    }
+
+    /// A very deep chain of lists around a model map, and a very large list of
+    /// them, neither recurse without bound nor go quadratic.
+    #[test]
+    fn deep_and_large_model_containers_are_bounded() {
+        let mut deep = model("Account:a1");
+        for _ in 0..200 {
+            deep = Value::List(vec![deep]);
+        }
+        let got = pformat(&deep);
+        assert_eq!(got.len(), 200 + "Account:a1".len() + 200);
+        assert!(!got.contains("SENTINEL"), "{got}");
+
+        let rows: Vec<Value> = (0..20_000)
+            .map(|i| model(&format!("Account:{i}")))
+            .collect();
+        let started = std::time::Instant::now();
+        let got = pformat(&Value::List(rows));
+        assert!(!got.contains("SENTINEL"));
+        assert_eq!(got.matches('\n').count(), 19_999);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "pformat of 20000 model maps took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

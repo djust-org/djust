@@ -8,7 +8,7 @@ import logging
 import socket
 import threading
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Set, Union, cast
 
 if TYPE_CHECKING:
     from .auth.any_of import PermissionRequired
@@ -38,6 +38,7 @@ from .session_utils import (  # noqa: F401
 
 from .mixins import (
     AsyncWorkMixin,
+    ServerPushMixin,
     StreamsMixin,
     StreamingMixin,
     TemplateMixin,
@@ -59,6 +60,7 @@ from .mixins import (
     StickyChildRegistry,
     ActivityMixin,
 )
+from .mixins.request import UNDECLARED_STATUS_MAP
 
 from ._rust import (
     RustLiveView,
@@ -145,6 +147,16 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "on_mount_count",
         "static_assigns",
         "static_assigns_count",
+        "static_render",
+        "query_budget",
+        # View options of the page-status / declared-URL-params work (#3688,
+        # #3689). Class attributes like ``query_budget``; an instance that
+        # assigns one (``self.state_attribute = ...``) must not publish it as
+        # reactive state (#3706).
+        "http_status_of_state",
+        "state_attribute",
+        "params_form",
+        "params_form_fallback",
         "template",
         "template_name",
         "base_template",
@@ -193,6 +205,9 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_djust_computed_cache",
         "_djust_computed_deps",
         "_djust_computed_lock",
+        # The context names that are a form or hold one (#3767): the sidecar answers
+        # for them, and a name not sent this sync keeps this answer.
+        "_form_held_keys",
         "_dirty_baseline",
         "_rust_render_timing",
         # Adaptive loop-cache bypass bookkeeping (#3071), written after a render.
@@ -200,6 +215,11 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_loop_cache_bypassed",
         "_djust_mount_kwargs",
         "_jit_serialized_keys",
+        # The JIT's template source for a value reached through a container,
+        # read once per render by ``get_context_data`` (#3788).
+        "_nested_template_source",
+        # The raw rows a QuerySet-method read is answered from (#3801).
+        "_all_method_rows",
         "_context_processor_keys",
         # What the last legacy render built from attributes / as render-only
         # (``mixins/context.py`` ``legacy_unsaved_keys``).
@@ -535,6 +555,7 @@ class LiveView(
     LayoutMixin,
     WaiterMixin,
     AsyncWorkMixin,
+    ServerPushMixin,
     NotificationMixin,
     StickyChildRegistry,
     ActivityMixin,
@@ -573,7 +594,8 @@ class LiveView(
                 self.messages = [msg]  # Only new messages sent to client
 
         IMPORTANT: When using temporary_assigns, use dj-update="append" in your
-        template to tell the client to append new items instead of replacing:
+        template (the container and each item need an ``id``) so the new items
+        are added after the ones already on the page instead of replacing them:
 
             <ul dj-update="append" id="messages">
                 {% for msg in messages %}
@@ -650,6 +672,14 @@ class LiveView(
 
         Multiple concurrent tasks are supported with named tasks. Phoenix LiveView users
         will find this API familiar.
+
+    .. deprecated:: 1.3
+        Defining ``_drain_announcements`` or ``_drain_focus`` on a subclass is
+        deprecated and the WebSocket/SSE flush that drains them is removed no
+        earlier than djust 2.0.0. Render a ``role="status"`` live region and
+        call ``JS.focus()`` through ``push_commands()`` instead. A hook added
+        after the class exists (``setattr``, a decorator, an instance
+        attribute) is not detected and does not warn.
     """
 
     template_name: Optional[str] = None
@@ -683,6 +713,62 @@ class LiveView(
     # Use for large, unchanging context (pre-rendered HTML, static config).
     # Pair with dj-update="ignore" on the template element for full optimization.
     static_assigns: List[str] = []
+
+    # Memory optimization for a page that renders once and is not expected to
+    # change (#3626): keep no diff baseline. After every render the rendered
+    # tree and the context copy the renderer holds are dropped, in this process
+    # and in the state backend (whose entry keeps only the template and the
+    # version counter), so any later render (an event, a push, a reconnect)
+    # sends the whole page instead of patches. See the Best Practices guide,
+    # "Large LiveView state".
+    static_render: bool = False
+
+    # The HTTP status a page answers for a state it renders itself (#3688).
+    # ``{"not_found": 404, "gone": 410}``: the default ``get_http_status()``
+    # reads the attribute ``state_attribute`` names (``self.state`` by default)
+    # and answers the status mapped to its value. Set it once, on a base view;
+    # the default is empty, so a view that declares nothing keeps answering 200.
+    # Only the HTTP response has a status. A view that overrides
+    # ``get_http_status()`` keeps its own answer.
+    #
+    # A project-wide default is ``LIVEVIEW_CONFIG["http_status_of_state"]`` (#3706).
+    # The view's own attribute wins, then the config, never merged: the config is
+    # read only while this attribute is still the framework's own
+    # ``UNDECLARED_STATUS_MAP`` (an empty read-only map, equal to ``{}``), so a
+    # view that declares ``{}`` opts out of the project's map.
+    http_status_of_state: Mapping[str, int] = UNDECLARED_STATUS_MAP
+    state_attribute: str = "state"
+
+    # URL parameters a view declares as a Django form (#3689). When set, the
+    # framework binds the URL's query parameters to it and calls
+    # ``handle_params(cleaned_data, uri)``; invalid input calls
+    # ``handle_invalid_params(form, uri)`` instead, and the messages are in the
+    # template as ``params_errors``. The same decision runs for the HTTP GET, the
+    # socket and SSE mount, ``url_change`` and the HTTP fallback POST. ``None``
+    # (the default) keeps ``handle_params`` receiving the raw dict.
+    params_form: Optional[type] = None
+
+    # What the default ``handle_invalid_params`` hands ``handle_params`` when the
+    # form rejects the URL (#3874). ``"initial"`` (the default): the initial value
+    # of every field. ``"fields"``: the fields that validated, with only the ones
+    # in ``form.errors`` replaced by their initial value. Anything else raises
+    # ``ImproperlyConfigured`` (and is a V023 error), on every request of a view
+    # that declares ``params_form``, whatever ``handle_invalid_params`` does. A view
+    # that overrides it without calling ``super()`` never uses the mode. The result
+    # is always a combination the form's ``clean()`` accepts, or the plain initials.
+    # A mixin that sets it must come BEFORE ``LiveView`` in the bases.
+    params_form_fallback: str = "initial"
+
+    # Per-view query budget (#3686, #3701). ``None`` (the default) leaves the
+    # view on the smoke test's class-wide ``max_queries`` and measures nothing
+    # at run time. An int caps mount + first render combined; a dict caps the
+    # phases on their own: ``{"mount": 2, "render": 1, "event": 3,
+    # "events": {"export": 20}}``. ``LiveViewSmokeTest`` enforces it, and with
+    # ``DEBUG`` on a view that declares one is measured per phase while it runs
+    # (``djust._query_budget``). A budget nothing can enforce (any other key, a
+    # bool, a negative number) is an error, not ignored.
+    # ``view_config[View]["max_queries"]`` overrides mount/render per test class.
+    query_budget: Optional[Union[int, Dict[str, Any]]] = None
 
     # Authentication & authorization
     login_required: Optional[bool] = None  # True = must be authenticated
@@ -918,6 +1004,13 @@ class LiveView(
         self._temporary_assigns_initialized: bool = False  # Track if temp assigns are set up
         self._streams: Dict[str, Stream] = {}  # Stream collections
         self._stream_operations: list = []  # Pending stream operations for this render
+        # Bumped by StreamsMixin._record_stream_op each time a mutation changed a
+        # stream. ``_streams`` is a framework attribute, so the pre/post-handler
+        # snapshot (``websocket._snapshot_assigns``) cannot see into it; this
+        # counter is how a handler whose only effect is a stream mutation is told
+        # apart from one that changed nothing (#3639). Framework state: set
+        # before the ``_framework_attrs`` snapshot below.
+        self._stream_epoch: int = 0
         # Initialize navigation support (live_patch, live_redirect)
         self._init_navigation()
 
@@ -1326,11 +1419,29 @@ class LiveView(
         )
 
     def _restore_private_state(self, private_state: Dict[str, Any]) -> None:
-        """Restore legacy private attributes; explicit views require a bound adapter."""
+        """Restore legacy private attributes; explicit views require a bound adapter.
+
+        A ``"lifecycle"`` step of the ``sync_turn_wrapper`` (#3646): a private model
+        reference is re-fetched here (``decode_private_model_refs``, ``Model.objects.get``)
+        and a private attribute can be a property whose setter is application code. Every
+        caller (the WebSocket state restore, the HTTP POST restore, a lazy container and
+        a sticky child's restore) reaches this method, so the step is entered here.
+
+        A guarded step, like ``_restore_snapshot``: a wrapper whose ``__exit__`` swallows
+        an exception would otherwise turn a failing restore into a silent PARTIAL one
+        (the attributes before the failing key applied, the rest skipped). The failure
+        propagates as ``PermissionDenied`` instead.
+        """
         from ._exposure import require_legacy_state_api
-        from .security import DANGEROUS_ATTRIBUTES
+        from .sync_turn import run_guarded_step
 
         require_legacy_state_api(self)
+        run_guarded_step(self, "lifecycle", lambda: self._apply_private_state(private_state))
+
+    def _apply_private_state(self, private_state: Dict[str, Any]) -> None:
+        """The body of :meth:`_restore_private_state`, run inside its step."""
+        from .security import DANGEROUS_ATTRIBUTES
+
         framework: frozenset[str] = getattr(self, "_framework_attrs", frozenset())
         meta_attrs = {"_framework_attrs", "_user_private_keys"}
         for key, value in private_state.items():
@@ -1838,6 +1949,13 @@ class LiveView(
 
         Called automatically after each render to free memory for large collections.
         """
+        # Returning here, before ``_reset_streams()``, is load-bearing: a view
+        # that uses streams WITHOUT temporary_assigns keeps its stream items so
+        # the next render lists them. The differ turns that list into DOM changes
+        # against the stored tree, so clearing it after every render would
+        # remove every row from the page on the next unrelated event (measured in
+        # ``test_stream_state_weight_3632.py``; the cost is the stream rows held
+        # in the stored state, #3632).
         if not self.temporary_assigns:
             return
 

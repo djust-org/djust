@@ -482,7 +482,7 @@ arms:**
    replacement is `handle_only_encoded` (`crates/djust_core/src/lib.rs`): the object keeps its
    live handle with best-effort measurements, so every handle-walked lookup is Django's answer.
    A raising `__str__` is DEFERRED rather than swallowed — the transient `Encoded::str_raised`
-   bit makes the `{{ o }}` sink (`renderer::localize_if_number`) call `str()` on the handle and
+   bit (a method over `DisplayText::raised` since #3769) makes the `{{ o }}` sink (`renderer::localize_if_number`) call `str()` on the handle and
    propagate, which is what #2429 decided and what Django does; `{{ o.attr }}` never calls it.
    That also closed a recorded djust-REFUSES-where-Django-RENDERS cell: `{{ p.year }}` on a
    `datetime` whose tzinfo raises inside `__str__` (`test_nullary_autocall_2485.py`). Only
@@ -508,6 +508,181 @@ separate change with its own before/after (CLAUDE.md #1079), not a side effect o
 - **Positive.** One statement of Django's lookup rules, reached from every operand site, on all three djust paths; the plain and LiveView paths stop disagreeing on `{{ o }}` / `|length` / truthiness (rows I, T); six open issues close by pointer; ~7 scoreboard cells and one crash; a tag-handler context that can only hold floored values; the `__dict__` recursion class cannot recur.
 - **Behaviour changes to declare (CHANGELOG "Behavior change" sub-bullets at the flip).** `{{ o }}` on the plain path renders `str(o)`, not the attribute dict; a class in a context is instantiated (Django parity, including model classes); a generator is consumed by `{% for %}`; a callable at any segment is called (rows J/J2 — was a repr / `None`).
 - **Negative / risks.** Presenter objects on downstream sites that relied on the dict repr; `Encoded` reader-sweep completeness (the count-canary is the defence); the unmeasured cost on the `@property` fixture and `presenter_control`'s one-off list extraction (`page.rows` still converts a list of raw models per render; memoising it is a follow-up); #2532 must land first — it is the row above this one.
+
+## Addendum (#3888): a raw model that reaches the engine is a floored handle
+
+This ADR kept "models stay eager floored dicts" for the LiveView path, for four reasons: the client
+needs a JSON shape, a rolling deploy needs msgpack compatibility, the floor needs a materialised
+form, and `_normalize_db_values` turns a model into a dict so a container `!=` sees a field mutation
+behind a stable `id()`. **All four are properties of the state path, and the LiveView path still
+normalises a model in Python before it reaches Rust** (`mixins/context.py`, `rust_bridge.py`), so
+they are unchanged.
+
+What changed is the model that reaches `impl FromPyObject for Value` RAW: a `list` / `tuple` / nested
+`QuerySet` of models in a `DjustTemplateBackend` context, `render_template`, a tag's return value.
+That model used to be the denylist dict, and the dict has no manager and no `*_id` attname, so a read
+of either went to the render sidecar through the loop alias `u == rows.<N>`. A filtered operand
+(`|slice`, `|first`, `|dictsort`, a `{% with %}` of one, a nested name) registers no alias (it would
+key the safe-string marks by a shifted index, an XSS boundary, #2325/#2334), so the read was empty.
+
+It is now carried as a `Value::Encoded` whose live handle is `_SidecarModelProxy`
+(`floored_model_proxy`, `crates/djust_core/src/lib.rs`): the object ADR-027 already gives every other
+Python object, over the floor proxy this ADR already uses for a walked model. So the row carries its
+own handle through any filter, and the floor is enforced per attribute READ (and again after every
+segment of `Context::walk_live`), not once at conversion. It adds no reach: it moves the existing
+reach from "by alias" to "by row".
+
+Invariants it keeps (each has a test in `python/tests/test_model_live_handle_3888.py`):
+
+- the handle is never the raw model; if the floor cannot be built the conversion falls back to the
+  denylist dict, never to the model (fail closed);
+- a floor field, a sensitive method, a `_` name and a per-model exclusion are unreadable on the handle,
+  through any filter and through any relation (the relation yields floored rows again);
+- `alters_data` / `do_not_call_in_templates` are decided by the engine's call guard on the object the
+  proxy returns, so `{{ u.delete }}` and `{{ u.save }}` are never called;
+- the live handle refuses underscore-prefixed names for ANY reader, not only a template path: the
+  proxy defines `__getattribute__`, so a custom filter or tag handler that receives it (and walks a
+  dotted attribute path) is refused the wrapped instance and the slots, as is the queryset proxy and
+  the call wrapper it hands out;
+- `{{ u }}` is `str(u)`, and two handles of one row are `==`;
+- a handle is never serialised as itself: written to JSON (the text a native or bridged tag
+  receives as an argument) or to a msgpack state snapshot, a carried model is its floored dict, read
+  from the handle only when something serialises it. So a model inside a set / frozenset / dict view
+  held in state keeps its fields across a state-backend round trip, and
+  `{% data_table rows=rows %}` over a list of models still receives dict rows.
+
+The rows a relation read returns (`u.groups.all`, `.first`) are carried the same way: the
+`__djust_serialize__` arm of the conversion recognises the floor MODEL proxy
+(`is_model_floor_proxy`) and carries it as the handle instead of calling the hook, and a queryset
+proxy's hook answers its rows' proxies rather than their dicts. So a row has ONE representation
+however it arrived (raw, or walked), a second relation hop (`g.user_set.count` inside `u.groups.all`)
+has a row to read from, and a container of such rows spells the same on both sides of
+`OPAQUE_ITEM_CAP`. A carried model's `repr` slot is its `str()` (the spelling a model inside a
+container has always had here, `[u0, u1]`), not Python's `<User: u0>`, so no existing spelling moves.
+
+**What is still the dict form.** A top-level SINGLE model on a LiveView is serialised in Python before
+it reaches Rust (#3936: the view holds it as STATE, and this ADR keeps models eager on the state path),
+so `{{ u|pprint }}` of a top-level model dumps its fields while `{{ rows|first|pprint }}` prints its
+name, and a filtered rebinding of a top-level model reads its reverse relations empty. A top-level
+single model on `DjustTemplateBackend` is NOT in this set since #3902: a plain render is not state, so
+`DjustTemplate.render` leaves it whole (`serialize_value(for_render=True)` passes a `Model` through
+before its duck-typed file check) and it is a handle exactly like a row; a model reached through a
+context processor (`request.user` as `user`, a lazy object) is the same. **What changed for a template
+that depended on the old dict (top-level model, `DjustTemplateBackend` only; each line was run against
+the old and the new code).**
+
+- **A bare `FileField` prints its stored NAME, as on Django, not its URL.** `{{ doc.attach }}` was
+  `/a/b.txt` and is `a/b.txt`; `{{ doc.attach.url }}` is `/a/b.txt` on both. A template that wrote
+  `<img src="{{ profile.avatar }}">` against the old dict must write `{{ profile.avatar.url }}`.
+- **The model is no longer a mapping or an iterable of field names.** `{% for f in user %}` and
+  `{{ user|unordered_list }}` iterated the field names and now fail the render (a `RuntimeError`; Django
+  raises `TypeError`); `{{ user|join:"," }}` was `id,pk,__str__,...` and is `str(user)`;
+  `{{ user|pluralize }}` was `s` and is empty; `{% for k, v in user.items %}` renders empty and
+  `{% if 'username' in user %}` is false.
+- **A custom FILTER that receives the model gets the floor proxy** (attribute reads work,
+  `row["field"]` does not; `isinstance(u, Mapping)` is false) where it got the dict. A `simple_tag`
+  already received the proxy before this change, so nothing moves for tags. A filter or tag that
+  `copy.copy`s, `copy.deepcopy`s or pickles the model now gets `copy.Error` / `pickle.PicklingError`
+  (the proxy refuses both by design).
+- `{{ u|pprint }}` and `{{ u|json_script:"x" }}` spell the model as its `str()` (Django raises for the
+  `json_script` case), so code that reads such data in JavaScript must build the data explicitly. A
+  model INSIDE a list / tuple / nested container already received the floor proxy since #3888; a
+  top-level model on a LiveView or a top-level queryset loop still receives the dict.
+
+**What a read through a handle can return (closed set, #3888).** The handle does not list the names it
+refuses; it decides by the KIND of what a read returns, in one place (`_floored_result`,
+`python/djust/serialization.py`). Plain data comes back as is, matched by EXACT type (`str`, `int`,
+`float`, `bool`, `None`, `Decimal`, `bytes`, `date`, `timedelta`), and so does a list /
+tuple / dict / set of it, rebuilt member by member (a dict's keys too). A UUID is its text. A `datetime` or
+`time` passes as it is when its `tzinfo` is `None` or a C type (`datetime.timezone`, `zoneinfo.ZoneInfo`);
+a Python-defined `tzinfo` (the shape a `pytz` or `dateutil` zone has) is replaced by a floor `tzinfo` that
+gives the same `utcoffset` / `dst` / `tzname` / `str` and reports a class with no Python-level methods, so
+the value renders the same under `date`, `time`, `timesince`, `localtime` and the rest. Safe markup
+stays safe markup (`SafeData` is what the engine asks), as a `str` whose class and methods a reader
+cannot reach; a `TextChoices` / `IntegerChoices` member is its value. A model, a manager and a queryset
+come back as floor proxies. Any callable (a bound method, a manager's `.all`) comes back as a call
+wrapper whose result goes through the same function. A class, a module or a descriptor is refused. Any
+other instance (a file field, a subclass of plain data, an enum member) comes back as a read-only view
+that answers reads, calls and items through the same function. Every underscore-prefixed name is
+refused by every one of these, except the serialisation hook the engine asks for and `__class__`,
+which reports a class with no Python-level methods (so a reader that walks attributes from a wrapper
+finds no function, and no module namespace behind one) while `isinstance` / `issubclass` against
+`collections.abc` classes still work because they also consult the wrapper's real type. A call wrapper
+hands out no `inspect.Signature`; the engine asks it "were arguments required?" through a marker
+(`djust_requires_arguments`), the same way it reads `djust_orm_call`. A model's own exception classes
+(`{{ u.DoesNotExist }}`) are classes, so they are refused too.
+`python/tests/test_model_handle_closed_set_3888.py` enumerates `dir()` of `User`, `Group`,
+`Permission`, `ContentType` and a custom model with a relation, a property, a file field and a
+method, and asserts that no result, at the first or the second level, is a model instance, a model
+class, a manager, a queryset, a bound method, a module or a type, and that no class reached has a
+Python function among its members; the second level is every underscore name that would reach one
+(`__self__`, `__func__`, `__wrapped__`, `__globals__`, `__code__`, `__closure__`, `__dict__`,
+`__module__`). `python/tests/test_model_handle_namespaces_3888.py` pins the kinds one at a time. The
+tests guarantee the KIND of what is returned for the members of those models; they do not guarantee
+the content of a field.
+
+## Addendum (#3949, #3936): a render-time handle overlay for a model held as state (Accepted, to be built for 1.4.0)
+
+**Status: Accepted (maintainer decision, 2026-11-10). Nothing in this addendum is implemented yet; it is built for 1.4.0, not in a 1.3.x patch.** Maintainer decision recorded on #3949: the behaviour is pinned and documented now (`python/tests/test_custom_callable_model_argument_3949.py`, the guide section "What a custom filter or tag receives for a model"), and the real fix is taken together with #3936, under this addendum.
+
+### The problem, measured on 1.3.1
+
+The #3888 addendum made a model that reaches the engine RAW a floored handle. A model held as LiveView STATE never reaches the engine raw: `mixins/context.py` replaces it with a dict before Rust sees it (ADR-027 keeps models eager on the state path). So on a LiveView:
+
+- a custom filter or tag receives a plain `dict` where `DjustTemplateBackend` and `render_template` hand it the floor proxy (`_SidecarModelProxy`), and the dict's keys depend on what the template names elsewhere (JIT): the same filter on the same model measured 4, 1 or 19 keys;
+- a Django-library tag that prints its operand (`{% blocktranslate with u=x %}`) writes the whole mapping on a LiveView and the model's text on the other two entries;
+- a filtered rebinding of a top-level model reads its reverse relation empty (#3936).
+
+Both are one fact: the state path has no handle to hand out. Neither issue can be fixed alone (a Python shim around a registered callable has no instance to wrap, and a pruned row carries no `__model__` or `pk`).
+
+### Decision proposed
+
+Keep the dict as state. Carry, next to it, a **render-time overlay**: for each state key whose value is a model, a model list or a QuerySet, a floored handle built by the same function the raw path uses (`_protect_sidecar_tree`, `floored_model_proxy`). The Rust render entry sets those handles into the render `Context` AFTER the state is loaded, so every template read of the key (operand, filter, tag argument, `{% with %}`, loop) sees the handle. State, change detection, msgpack, the client payload and the JIT serializer keep seeing the dict.
+
+Mechanism (smallest complete design, sizes from reading the code, not a prototype):
+
+- **Python** (about 80 to 120 lines): `mixins/context.py` records the raw object per key at the places that replace a value (single model, `list[Model]`, QuerySet, the `normalize_django_value` fallback, a dict holding models) into a per-render slot, never into state. `mixins/rust_bridge.py` builds `{key: _protect_sidecar_tree(raw, ...)}` and calls a new `RustLiveView.set_render_handles(...)` on **every** sync, including empty (the discipline `set_raw_py_values` already documents, #2300).
+- **Rust** (about 100 to 150 lines, a rebuild, an ABI change): a field and setter beside `raw_py_values` in `crates/djust_live/src/lib.rs`; at each render entry, after the context is built from state, `context.set(key, handle)`; mirrored at the component and actor renders. A stale-extension guard (`hasattr`, as for `set_raw_py_values`) and `_rust.pyi`.
+- **Kill-switch:** `LIVEVIEW_CONFIG["state_models_as_handles"]`, default off for the first release candidate, as ADR-027's own steps shipped.
+- **Release:** a minor (1.4.0). It changes what custom callables and template reads of the key observe.
+
+### Invariants (each needs a test that fails without it)
+
+- The overlay is never the raw model. If the floor cannot be built the conversion falls back to the dict, not to the instance (fail closed).
+- Floor fields, `DJUST_SENSITIVE_FIELDS`, per-model `djust_exclude_fields` and `_`-prefixed names stay unreadable, through any filter and any relation. A custom callable still cannot reach the instance: this is deliberately NOT "hand over the live model". The backend entry already does not, and a filter reading `value.password` getting the hash would be a new exposure.
+- Native and bridged tag **arguments** stay the floored JSON text (`value_to_arg_string`): `data_table` and other component tags read dict rows.
+- A handle is never serialised as itself (JSON, msgpack, state): a carried model is its floored dict.
+- The overlay is set and cleared on every sync, so a key that leaves state does not leave a stale handle behind.
+- Change detection is unchanged: a field mutated behind a stable `id()` still re-renders; a partial render with `set_changed_keys` still works; a msgpack round trip drops the handle and the next sync restores it.
+- Flag on and flag off render byte-identical HTML for every template that does not depend on what changes below (an equivalence differential over the LiveView test corpus, with a non-vacuity case).
+
+### Behaviour changes to declare
+
+- Dict-style access on a state model inside a custom filter or tag (`value["name"]`, `.get`, `dict(value)`, `isinstance(value, dict)`, `.items`) stops working; attribute access starts working (`value.pk`, `value.get_full_name()`, a relation walk).
+- `{{ x|pprint }}` and `json_script` of a top-level model spell the model's text, as they already do for a model inside a container.
+- A Django-library tag that prints its operand writes the model's text on a LiveView, as on the other entries.
+- Framework callables that require a `Mapping` row (`table_cell`, `table_href` in `djust_components`) are reached through `inclusion_tag` data; the implementation must be shown, with a test, to keep handing them dict rows.
+
+### Alternatives rejected
+
+| option | why not |
+|---|---|
+| Sidecar twin for tags only (Python only) | does not reach filters, which is half the issue |
+| Resolve the filter operand by path against a twin (Rust) | bare names and dotted paths only; `rows\|first\|f`, `{% with %}` aliases and filtered rebindings have no path, and the alias guards are an XSS boundary (#2504) |
+| A hidden token key inside the dict that a shim resolves | every dict consumer (`.items`, `\|length`, `pprint`, JSON, state) must learn to skip it: the "one short" class the repo's canon warns about |
+| A Python shim that rebuilds a proxy from the dict | impossible: a JIT-pruned row has no `__model__` or `pk` and the shim has no instance |
+| Hand the raw instance (no floor) | a new exposure; not proposed |
+| A system check for filters that print their argument | undecidable statically |
+
+### Decisions (2026-11-10)
+
+1. **Accept the overlay.** It is built for 1.4.0. "Pin and document" remains the answer on the 1.3.x line.
+2. **Flag default:** `LIVEVIEW_CONFIG["state_models_as_handles"]` is off in the release candidates and on by 1.4.0, with a behaviour-change note in the changelog.
+3. **The actor entry** (`use_actors = True`) gets the overlay in the same release, so the two paths do not drift.
+
+### Acceptance (the work for 1.4.0)
+
+The #3949 matrix (every entry by every shape by every callable kind) pins the flag-on behaviour with a Django oracle on real instances; the floor gate-offs (raw instance instead of the proxy, the protect call dropped, the fail-closed fallback broken, the overlay not cleared) each turn a leak row red; the `LiveView` branch at `python/tests/test_adr027_characterization_net_2539.py` ("delete when #3936 closes") is removed; `changelog.d/3949.changed.md` carries a "Behavior change" bullet listing the items above.
 
 ## Non-goals
 

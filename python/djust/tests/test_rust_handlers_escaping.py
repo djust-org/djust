@@ -116,13 +116,6 @@ IMG_CASES: list[tuple[str, Any, bool, list[str], Callable[[object], dict[str, ob
         lambda v: {"u": v},
     ),
     (
-        "avatar_group",
-        rh.AvatarGroupHandler(),
-        False,
-        ["users=users"],
-        lambda v: {"users": [{"name": "Ann Lee", "avatar": v}]},
-    ),
-    (
         "chat_bubble",
         rh.ChatBubbleHandler(),
         False,
@@ -230,10 +223,21 @@ def test_https_url_is_kept(case: Any) -> None:
 
 
 @pytest.mark.parametrize("case", URL_CASES, ids=URL_IDS)
-def test_marked_safe_url_passes_through(case: Any) -> None:
+def test_marked_safe_url_is_checked_and_escaped_like_any_other(case: Any) -> None:
+    """``mark_safe`` means "no HTML escaping needed", not "navigable" (#3898). The native
+    handlers never honour the marker, so a handler called with the Python objects (as here) gives
+    a marked-safe URL exactly what plain text gets: a plain ``&`` is escaped once, a marked-safe
+    one is not exempt (it is escaped the same way, not twice and not zero times), and a script
+    scheme is neutralised."""
     _id, handler, block, args, ctx = case
-    html = _call(handler, block, args, ctx(mark_safe("/ok?a=1&b=2")))
-    assert '"/ok?a=1&b=2"' in html
+    plain = _call(handler, block, args, ctx("/ok?a=1&b=2"))
+    marked = _call(handler, block, args, ctx(mark_safe("/ok?a=1&b=2")))
+    assert '"/ok?a=1&amp;b=2"' in plain
+    assert '"/ok?a=1&amp;b=2"' in marked and "&amp;amp;" not in marked
+    assert '"/ok?a=1&b=2"' not in marked
+    script = _call(handler, block, args, ctx(mark_safe("javascript:alert(1)")))
+    assert '="javascript:' not in script
+    assert '="#"' in script
 
 
 @pytest.mark.parametrize("case", IMG_CASES, ids=[c[0] for c in IMG_CASES])

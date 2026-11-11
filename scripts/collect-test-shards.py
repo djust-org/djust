@@ -48,8 +48,15 @@ class ShardSnapshot:
             config.option.splits, config.option.group = original
         self.result = {"collected": [item.nodeid for item in items], "groups": groups}
         if corpus_plugin is not None:
+            # `shared_units` is every shared fixture's readers, keyed by unit id (each unit
+            # must sit wholly in one shard). `shared_corpus` is the corpus_payload readers
+            # alone, kept for the check that the corpus fixture was recognized at all.
+            units = corpus_plugin.shared_groups(items)
+            self.result["shared_units"] = {
+                unit: [item.nodeid for item in readers] for unit, readers in units.items()
+            }
             self.result["shared_corpus"] = [
-                item.nodeid for item in corpus_plugin.shared_readers(items)
+                item.nodeid for item in units.get("@@djust-shared-corpus-sweep", [])
             ]
 
 

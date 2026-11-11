@@ -704,6 +704,73 @@ def _check_view_state_in_session(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_http_fallback_background_timeout(errors: list[CheckMessage]) -> None:
+    """C028 — ``LIVEVIEW_CONFIG['http_fallback_background_timeout']`` is ``None`` or a number in (0, TIMEOUT_MAX].
+
+    Anything else (``"30"``, ``0``, ``True``, ``nan``) is read as no deadline,
+    so a typo would silently leave the page-POST fallback waiting on a task that
+    never returns (#3634).
+    """
+    from ..config import config, valid_http_fallback_background_timeout
+
+    if _is_check_suppressed("djust.C028"):
+        return
+    value = config.get("http_fallback_background_timeout")
+    if value is None or valid_http_fallback_background_timeout(value):
+        return
+    try:
+        shown = repr(value)[:80]
+    except ValueError:  # an int of more than 4300 digits has no repr
+        shown = "an integer with too many digits to show"
+    errors.append(
+        DjustError(
+            "LIVEVIEW_CONFIG['http_fallback_background_timeout'] is %s; it must be None or a "
+            "number of seconds greater than 0 and at most threading.TIMEOUT_MAX "
+            "(about 9.2e9)." % shown,
+            hint=(
+                "With any other value djust applies no deadline: a start_async task that does "
+                "not return holds the HTTP fallback POST open for as long as it runs. A value "
+                "above threading.TIMEOUT_MAX (the longest a thread can wait) is rejected, not "
+                "clamped."
+            ),
+            id="djust.C028",
+            fix_hint=(
+                "Set `LIVEVIEW_CONFIG['http_fallback_background_timeout']` to a number of "
+                "seconds such as `30`, or remove it."
+            ),
+        )
+    )
+
+
+def _check_query_budget_mode(errors: list[CheckMessage]) -> None:
+    """C029 — ``LIVEVIEW_CONFIG['query_budget']`` is ``None``, ``"off"``, ``"warn"`` or ``"error"``.
+
+    Anything else (``True``, ``"WARN"``, ``1``) is read as ``"warn"`` by the
+    request path, which says so once in the log; a project that wrote
+    ``"query_budget": True`` meaning "on, as errors" would never learn it (#3701).
+    """
+    from .._query_budget import MODES, _shown, valid_mode
+    from ..config import config
+
+    if _is_check_suppressed("djust.C029"):
+        return
+    value = config.get("query_budget")
+    if valid_mode(value):
+        return
+    errors.append(
+        DjustError(
+            "LIVEVIEW_CONFIG['query_budget'] is %s; it must be None or one of %s."
+            % (_shown(value), ", ".join(repr(m) for m in MODES)),
+            hint=(
+                "djust reads any other value as 'warn'. 'warn' logs a phase over its "
+                "view's query_budget, 'error' raises QueryBudgetExceeded, 'off' never measures."
+            ),
+            id="djust.C029",
+            fix_hint='Set `LIVEVIEW_CONFIG[\'query_budget\']` to `"warn"`, `"error"` or `"off"`, or remove it.',
+        )
+    )
+
+
 def _check_liveview_middleware(errors: list[CheckMessage]) -> None:
     """C026 — every ``LIVEVIEW_MIDDLEWARE`` entry is an importable ``async def`` (ADR-044).
 
@@ -1295,6 +1362,12 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C027 -- LIVEVIEW_CONFIG['view_state_in_session'] is not a bool
     _check_view_state_in_session(errors)
+
+    # C028 -- LIVEVIEW_CONFIG['http_fallback_background_timeout'] is not None or a number > 0
+    _check_http_fallback_background_timeout(errors)
+
+    # C029 -- LIVEVIEW_CONFIG['query_budget'] is not None / "off" / "warn" / "error"
+    _check_query_budget_mode(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)

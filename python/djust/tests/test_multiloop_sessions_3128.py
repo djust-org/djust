@@ -123,10 +123,10 @@ async def _connect(query: str):
     communicator.scope["session"] = _ScopeSession()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=5)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to({"type": "mount", "view": VIEW, "url": f"/r/?{query}"})
     for _ in range(8):
-        frame = await communicator.receive_json_from(timeout=5)
+        frame = await communicator.receive_json_from()
         if frame.get("type") == "mount":
             return communicator
     raise AssertionError(f"no mount frame: {frame!r}")
@@ -147,7 +147,7 @@ async def _drain(communicator, seconds: float):
     while time.monotonic() < deadline:
         if await communicator.receive_nothing(timeout=0.05, interval=0.01):
             continue
-        frames.append(await communicator.receive_json_from(timeout=2))
+        frames.append(await communicator.receive_json_from())
     return frames
 
 

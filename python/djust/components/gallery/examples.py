@@ -276,6 +276,39 @@ EXAMPLES: Dict[str, Any] = {
             },
         ],
     },
+    "dj_radio_group": {
+        "purpose": "Group of radio buttons that assistive technology reads as one named control",
+        "keywords": ("radiogroup", "fieldset", "legend", "choice"),
+        "related": ("dj_radio", "dj_select", "toggle_group"),
+        "label": "Radio Group",
+        "category": "form",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% dj_radio_group name="plan" label="Plan" options=plans value="pro" %}',
+                "context": {
+                    "plans": [
+                        {"value": "free", "label": "Free"},
+                        {"value": "pro", "label": "Pro"},
+                        {"value": "team", "label": "Team"},
+                    ]
+                },
+            },
+            {
+                "name": "Required with error",
+                "template": (
+                    '{% dj_radio_group name="plan" label="Plan" options=plans required=True '
+                    'helper="Billed monthly" error="Pick a plan" %}'
+                ),
+                "context": {
+                    "plans": [
+                        {"value": "free", "label": "Free"},
+                        {"value": "pro", "label": "Pro"},
+                    ]
+                },
+            },
+        ],
+    },
     "switch": {
         "purpose": "Accessible on/off toggle with a checked state",
         "keywords": (),

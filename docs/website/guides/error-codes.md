@@ -116,7 +116,7 @@ CHANNEL_LAYERS = {
 
 **What you see**: With the wrong order, `manage.py runserver` starts the WSGI server instead of the ASGI server, so WebSockets do not work in development.
 
-**Fix**: For the Info case, install an ASGI server; `pip install 'uvicorn[standard]'` is recommended. For the ordering case:
+**Fix**: For the Info case, install an ASGI server; `pip install 'uvicorn[standard]'` is recommended. djust does not install daphne itself; to use it, install `pip install 'djust[daphne]'`. For the ordering case:
 
 ```python
 # settings.py
@@ -353,6 +353,26 @@ In development, pages render without Tailwind utilities until you compile the CS
 **What causes it**: `LIVEVIEW_CONFIG['view_state_in_session']` is set to something other than `True` or `False`, such as the string `"false"`. Only `False` turns the session copy of view state off, so with any other value djust keeps saving each view's state in the session.
 
 **Fix**: Set it to `False` (stateless) or `True`, or remove it. See [Keeping view state out of the session](http-only-mode.md#keeping-view-state-out-of-the-session). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C027"]}`.
+
+---
+
+### C029: Invalid query_budget mode
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['query_budget']` is set to something other than `None`, `"off"`, `"warn"` or `"error"` (`True`, `"WARN"`, `1`). The request path reads any such value as `"warn"` and logs it once.
+
+**Fix**: Set it to `"warn"`, `"error"` or `"off"`, or remove it. See [Per-view query budgets](../testing/index.md#per-view-query-budgets).
+
+---
+
+### C028: Invalid http_fallback_background_timeout
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is set to something other than `None` or a number of seconds greater than 0 and at most `threading.TIMEOUT_MAX` (about 9.2e9, the longest a thread can wait), such as `"30"`, `0`, `True` or `1e10`. A value above the maximum is rejected, not clamped. Any other value is read as no deadline, so the page-POST fallback keeps waiting for a `start_async` task that never returns.
+
+**Fix**: Set it to a number of seconds such as `30`, or remove it. See [Deadline](http-only-mode.md#what-the-page-post-fallback-keeps-between-events). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C028"]}`.
 
 ---
 
@@ -775,6 +795,34 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 ---
 
+### V023: `params_form` the request path cannot use
+
+**Severity**: Error
+
+**What causes it**: A view sets `params_form` to something djust cannot build as `form_class(data=...)`, which is how it binds the URL's query parameters. Either the value is not a Django form class (a dotted-path string, a form instance, an unrelated class), which raises `ImproperlyConfigured` on the first request, or the form's `__init__` requires an argument besides `data` (a user, a queryset, a tenant) or cannot take `data=`, which raises `TypeError` there. Message: "<view>.params_form must be a Django form class, not 'str'." or "<view>.params_form cannot be built as form_class(data=...): its __init__ requires 'user'."
+
+A view that declares a `params_form` is also held to its `params_form_fallback`: anything but `"initial"` or `"fields"` raises `ImproperlyConfigured` on every request. Message: "<view>.params_form_fallback must be one of 'initial', 'fields', not 'field'."
+
+**Fix**: Set `params_form` to a form class. Give every other `__init__` argument a default, or read it from the view in `handle_params()` instead. Set `params_form_fallback` to `"initial"` (the default) or `"fields"`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V023"]}`.
+
+### V024: Invalid `query_budget`
+
+**Severity**: Error
+
+**What causes it**: A view's `query_budget` is a declaration nothing can enforce: an unknown dict key, a `bool`, a non-int, negative or over-1,000,000 number, a malformed `events`, a handler named in `events` that the view does not have, or an `async def` / `@background` handler (a budget cannot be measured on either). `LiveViewSmokeTest` raises `ValueError` on it, the run-time meter logs it once and measures nothing, and `djust_audit` lists it as invalid.
+
+**Fix**: Use an int, or a dict with `mount`, `render`, `event` and `events`; name only synchronous `@event_handler` methods in `events`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V024"]}`.
+
+### V025: `get_http_status()` overridden under a project-wide status map
+
+**Severity**: Warning
+
+**What causes it**: `LIVEVIEW_CONFIG["http_status_of_state"]` holds a map (`{"not_found": 404}`), and a class defines `get_http_status()`. The default `get_http_status()` is what reads the map, so the override replaces it for every view that inherits the override. Message: "<class> overrides get_http_status() while LIVEVIEW_CONFIG['http_status_of_state'] is configured; ..."
+
+**Fix**: Delete the override and set `self.state` to a state the map names. For a real special case, call `super().get_http_status()` first so the map still applies. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V025"]}`.
+
+---
+
 ## Security Errors (S0xx)
 
 ### S001: mark_safe() with f-string
@@ -979,6 +1027,16 @@ not trigger it.
 **What causes it**: A `ModelFormMixin` view overrides neither `get_queryset()` nor `has_object_permission()`. Every user who passes the view-level checks can then edit any row of the model by changing the id in the URL. The default stays permissive, as Django's `UpdateView` is, and this check says so. Message: "<view> lets any user who can open the view edit any <model> by its id." Nothing is constructed, mounted or queried.
 
 **Fix**: Override `get_queryset()` to limit the rows the user may edit, or `has_object_permission(self, request, obj)` to authorize each object (see [Authorization](authorization.md)). Suppress one view with `# noqa: S013` on its class line, or all of them with `DJUST_CONFIG = {"suppress_checks": ["S013"]}`.
+
+---
+
+### S014: Editable secret field on the serialization floor
+
+**Severity**: Warning
+
+**What causes it**: A `ModelForm` has an editable field that is a secret on the serialization floor (a `password` column, a field named like `api_token` / `secret_key`, a configured sensitive field type). djust draws it without its stored value, a browser posts an empty control as `""`, and submitting the form unchanged saves the column as empty. Message: "<form> has editable secret field(s) on the serialization floor (<names>): djust draws them without their stored value, so submitting the form unchanged saves them as empty."
+
+**Fix**: Declare the form field `disabled=True` (Django then ignores the posted value and keeps the stored one; a `FormMixin` view that edits an existing row sets it for you), leave the field out of `Meta.fields`, or opt the model field out of the floor with `djust_serialize_sensitive_fields`. HTML `disabled` / `readonly` does not protect the column. Suppress one form with `# noqa: S014` on its class line, or all with `DJUST_CONFIG = {"suppress_checks": ["S014"]}`.
 
 ---
 
@@ -1934,7 +1992,7 @@ not silence I002.
 **Why:** Tables, selects, overlays, and status feedback may have reusable
 component replacements. It fires even with `djust.components` installed and
 enabled; installation advice is conditional on availability/enabling.
-X105 alone does not trigger it. Missing, invalid, and stale caches are silent.
+X105 and X106 alone do not trigger it. Missing, invalid, and stale caches are silent.
 Cache lookup tries resolved `settings.BASE_DIR`, then cwd, and stops at the
 first non-missing state; see [reader limits and staleness](djust-audit.md#ui-summary-cache).
 The check reads the cache and stats covered files; it does not rescan sources.
@@ -1989,6 +2047,26 @@ These scan LiveView templates. All are Warnings, so a false positive never fails
 **What causes it**: '<file>:<line> -- positive tabindex="N" overrides natural focus order (WCAG 2.4.3).'
 
 **Fix**: Use `tabindex="0"` to add an element to the natural order, or `tabindex="-1"` to make it focusable only programmatically.
+
+---
+
+### Y005: Chart or svg with no accessible name
+
+**Severity**: Warning
+
+**What causes it**: '<file>:<line> -- role="img" has no accessible name (WCAG 1.1.1).' or '... -- <svg> has no accessible name (WCAG 1.1.1).' An element with `role="img"`, or an inline `<svg>`, has no non-blank `aria-label`, `aria-labelledby` or `title`, and an `<svg>` has no `<title>` child. `aria-hidden="true"` graphics (on the element or on an ancestor that wraps it), an `<svg>` inside a `<button>` or `<a href>`, and a nested `<svg>` are not flagged.
+
+**Fix**: Add `aria-label="..."` (or `aria-labelledby`, or a `<title>` in an `<svg>`), or mark a purely decorative graphic `aria-hidden="true"`. An empty `aria-label=""` is not a name.
+
+---
+
+### Y006: Legend item told apart by colour alone
+
+**Severity**: Warning
+
+**What causes it**: '<file>:<line> -- legend item has no text, so its series is told apart by colour alone (WCAG 1.4.1).' An `<li>` inside an element whose `class` has a `legend` token (`legend`, `chart-legend`, `legend__list`) has no text, no `{{ }}`/`{% %}`, no `<img>` with a non-empty `alt`, and no `aria-label`, `aria-labelledby` or `title`.
+
+**Fix**: Put the series name in the `<li>` as text (it may be visually hidden), or add an `aria-label` to the item.
 
 ---
 
@@ -2059,6 +2137,8 @@ The processor is optional. `{% theme_head %}`, `{% theme_switcher %}` and `{% th
 **What causes it**: 'css_prefix "<prefix>" contains invalid characters. Only letters, digits, and hyphens are allowed, and it must start with a letter.'
 
 **Fix**: Use a prefix like `"djt-"` or `"myapp-"`.
+
+Independently of this check, `get_theme_config()` raises `ImproperlyConfigured` for a `css_prefix` that holds anything but ASCII letters, digits, underscores and hyphens, because the prefix is printed into the theme's `<style>` blocks (#3779).
 
 ---
 
@@ -2741,7 +2821,7 @@ WARN [djust.X007] /path/templates/emails/body.html:3:0 Template uses {% autoesca
 
 ## AST UI Rules (X1xx)
 
-`manage.py djust_audit --ast` includes X101–X105 by default. All five are
+`manage.py djust_audit --ast` includes X101–X106 by default. All six are
 warnings and fail CI under `--strict`. They scan the live template closure
 and its linked application stylesheets; see the [audit guide](djust-audit.md#ui-rules-x1xx)
 for discovery limits and the [summary cache](djust-audit.md#ui-summary-cache).
@@ -2750,13 +2830,13 @@ Use `--ast-no-ui` to opt out, or fix or suppress individual findings.
 The examples below assume a LiveView template. Load `djust_components` for
 component tags. Template suppressions belong on the same line as the opening
 HTML tag reported by the finding, for example `{# djust: noqa X101 #}`.
-CSS suppressions use `/* djust: noqa X105 */` on the declaration's starting
-line. Bare `{# djust: noqa #}` or `/* djust: noqa */` suppresses all applicable
+CSS suppressions use `/* djust: noqa X105 */` (or `X106`) on the declaration's starting
+line; in a template `style` attribute, put `{# djust: noqa X105 #}` on the declaration's line. Bare `{# djust: noqa #}` or `/* djust: noqa */` suppresses all applicable
 rules on that line; a comma-separated code list suppresses selected rules.
 
 **Differences from ADR-043 wording**: Bare `.panel` is not flagged because it
 is too common as a card class. X104 matches `<p>`, `<div>`, and `<span>`.
-X105 reports one finding per stylesheet and does not detect named colors.
+X105 reports one finding per stylesheet and, unlike the ADR, also detects named colors and reads `style` attributes (see below); X106 is an addition.
 
 ### X101: Hand-built `<table>` renders a loop — use the data_table component
 
@@ -2833,6 +2913,14 @@ trigger the rule.
 
 Alternatively use
 `{% rich_select name="field" options=options event="on_change" searchable=True %}`.
+
+For a Django form field, pass the bound field and validate through
+`FormMixin`:
+`{% combobox field=view.form_instance.country options=country_options event="validate_field" %}`.
+The form adapters (`{% live_field %}`, `as_live_field`) render a native
+`<select>`, which is the accessible default for a short list; X102 reads
+template source and does not see their output, so use the combobox for a
+long list yourself.
 
 **Suppression**: Add `{# djust: noqa X102 #}` on the `<select>` opening line.
 
@@ -2939,18 +3027,24 @@ opening line.
 **Severity**: Warning
 
 **What causes it**: A stylesheet linked from the live template closure
-through a literal `static` reference contains hex colors or color functions
-(`rgb`, `rgba`, `hsl`, `hsla`, `hwb`, `lab`, `lch`, `oklab`, `oklch`, or
-`color`) in declarations. Recognized theme-token definitions, CSS comments,
-`var(...)` including fallbacks, and `url(...)` are ignored. Selectors and
-named colors are not checked. Only linked, eligible application CSS is scanned;
-see [scan scope](djust-audit.md#ui-rules-x1xx).
+through a literal `static` reference, or a `style="…"` attribute in a template
+of that closure, contains hex colors, color functions (`rgb`, `rgba`, `hsl`,
+`hsla`, `hwb`, `lab`, `lch`, `oklab`, `oklch`, or `color`) or CSS named colors
+(`white`, `red`, `black`, and the rest) in declarations. A named color counts
+in a property that can hold one (`color`, `background`, `border*`, `outline*`,
+`box-shadow`, `fill`, `stroke`, and similar) and as the whole value of a custom
+property. `transparent`, `currentColor` and the CSS-wide keywords are allowed.
+Recognized theme-token definitions, CSS comments, `var(...)` including
+fallbacks, and `url(...)` are ignored, and selectors are not checked. A
+`{{ … }}` value in a `style` attribute is unknown, not a literal. Only linked,
+eligible application CSS is scanned; see [scan scope](djust-audit.md#ui-rules-x1xx).
 
-**What you see**: One `WARN [djust.X105]` per stylesheet, at its first
-unsuppressed offending declaration. Details give the number of literals,
-the first declaration and up to 10 line numbers, followed by the token/preset
-suggestion. The count is of offending declarations, even if one declaration
-contains multiple colors.
+**What you see**: One `WARN [djust.X105]` per stylesheet and one per template
+that has `style` attributes, at its first unsuppressed offending declaration.
+Details give the number of literals (with "in style attributes" for a
+template), the first declaration and up to 10 line numbers, followed by the
+token/preset suggestion. The count is of offending declarations, even if one
+declaration contains multiple colors.
 
 **Example trigger** (in a linked stylesheet):
 
@@ -2975,6 +3069,45 @@ a suppressed line can cover multiple declarations:
 ```css
 .brand-mark { color: #123456; } /* djust: noqa X105 */
 ```
+
+In a template, put `{# djust: noqa X105 #}` on the line of the declaration.
+
+---
+
+### X106: Literal font-family outside djust theme font tokens — use var(--font-sans) or var(--font-mono)
+
+**Severity**: Warning
+
+**What causes it**: A stylesheet linked from the live template closure, or a
+`style="…"` attribute in a template of that closure, sets `font-family` to
+anything other than a `var(--font-*)` theme token, or sets a `font` shorthand
+that names a family. A stack written out in CSS is repeated across the app, and
+a theme change does not reach it. `inherit`, `initial`, `unset` and `revert`
+are allowed, and so is everything inside `@font-face` and
+`@font-palette-values`, where `font-family` names the face being defined. A
+generic family after a theme token (`var(--font-sans), sans-serif`) is its
+fallback and is allowed; a named family after it is not. In a `font` shorthand any `var()` is accepted,
+since it may be the size or line height.
+
+**What you see**: One `WARN [djust.X106]` per stylesheet and one per template
+with `style` attributes, at its first unsuppressed offending declaration, with
+the count, the first declaration and up to 10 line numbers.
+
+**Example trigger**:
+
+```css
+.note { font-family: "Comic Sans MS", cursive; }
+```
+
+**Fix**: Use the theme's font token:
+
+```css
+.note { font-family: var(--font-sans); }
+```
+
+**Suppression**: `/* djust: noqa X106 */` on the declaration's starting line in
+CSS, or `{# djust: noqa X106 #}` on its line in a template. `noqa X105` does not
+suppress X106, and a bare `noqa` suppresses both.
 
 ---
 

@@ -216,7 +216,7 @@ impl ObjectKey {
             // `{% if dt in d %}` missed then and misses now; carrying the
             // display keeps a match against a genuine `str()` key working, and
             // changing either side is #2429's typed-key question, not this one.
-            crate::Value::Encoded(e) => ObjectKey::Str(e.display.clone()),
+            crate::Value::Encoded(e) => ObjectKey::Str(e.display().to_string()),
             crate::Value::Tuple(items) | crate::Value::NamedTuple { items, .. } => {
                 ObjectKey::Tuple(
                     items

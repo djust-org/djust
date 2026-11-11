@@ -77,12 +77,12 @@ async def test_notify_released_activity_event_requires_fresh_authorization(monke
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".ActivityNotifyView", "url": "/a/"}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
 
             # Sent while the activity is hidden: queued, not dispatched.
             await socket.send_json_to(
@@ -196,12 +196,12 @@ async def test_notify_released_event_failures_log_value_free_for_explicit_views(
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".ActivityFailureView", "url": "/af/"}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
             await socket.send_json_to(
                 {"type": "event", "event": event, "params": {"_activity": "panel"}}
             )

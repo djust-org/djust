@@ -453,7 +453,7 @@ class TestSerializationFloorAtThisSink:
     dict — so handing live handles to handlers does not open it.
     """
 
-    def test_a_model_reaches_a_handler_without_its_floor_fields(self):
+    def test_a_model_reaches_a_handler_without_its_floor_fields(self):  # noqa: D401
         from django.contrib.auth.models import User
 
         import djust.template_tags.regroup as regroup_module
@@ -476,10 +476,15 @@ class TestSerializationFloorAtThisSink:
             regroup_module.RegroupTagHandler.render = original
 
         row = seen["rows"][0]
-        assert isinstance(row, dict), "a Model must still reach a handler as a filtered dict"
-        assert "password" not in row
-        assert "is_staff" not in row
-        assert row["username"] == "alice"
+        # Since #3888 a Model reaches a handler as its FLOOR PROXY (the object the engine carries
+        # it by), not as the filtered dict it used to be: attribute reads work (Django's own shape
+        # for a tag), `row["field"]` no longer does, and the floor is enforced per read.
+        assert type(row).__name__ == "_SidecarModelProxy", type(row)
+        assert not isinstance(row, dict)
+        assert row.username == "alice"
+        for refused in ("password", "is_staff", "is_superuser", "get_session_auth_hash", "_meta"):
+            with pytest.raises(AttributeError):
+                getattr(row, refused)
 
 
 # --------------------------------------------------------------------------

@@ -209,12 +209,12 @@ async def _connect(view_name):
     communicator.scope["session"] = _ScopeSession()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
     await communicator.send_json_to(
         {"type": "mount", "view": f"{MOD}.{view_name}", "url": "/probe/"}
     )
     for _ in range(8):
-        frame = await communicator.receive_json_from(timeout=5)
+        frame = await communicator.receive_json_from()
         if frame.get("type") == "mount":
             return communicator
     raise AssertionError("no mount frame")
@@ -774,6 +774,8 @@ EXPECTED_HOOK_REFERENCES = {
     ): "call_async_result_sync",
     # The test client drains the same hook (render_async).
     ("testing.py", "LiveViewTestClient.render_async", "handle_async_result"): "_run_step",
+    # The step map also names ``handle_tick`` a "tick" step (#3637).
+    ("_view_hooks.py", "<module>", "handle_tick"): None,
     # Lookups that call nothing: the tick task is only started for a view that
     # overrides handle_tick; static checks and the schema listing read the names.
     ("runtime.py", "maybe_start_tick_task", "handle_tick"): None,

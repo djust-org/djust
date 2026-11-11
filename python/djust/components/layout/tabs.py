@@ -7,6 +7,7 @@ Provides tabbed navigation with multiple panels.
 from typing import Dict, Any
 from dataclasses import dataclass
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from django.utils.safestring import SafeString
 from ..base import LiveComponent
 from ...decorators import event_handler
@@ -112,7 +113,7 @@ class TabsComponent(LiveComponent):
         attrs = f'dj-click="{conditional_escape(self.action)}"'
         if self.action == "activate_tab":
             attrs += f' data-component-id="{conditional_escape(self.component_id)}"'
-        return f'{attrs} data-tab="{conditional_escape(tab_id)}"'
+        return f'{attrs} data-tab="{attr_text(tab_id)}"'
 
     @event_handler()
     def activate_tab(self, tab: str = "", **kwargs: Any) -> None:
@@ -178,7 +179,7 @@ class TabsComponent(LiveComponent):
             content = tab.get("content", "")
             active_class = " show active" if tab_id == self.active else ""
 
-            html += f'<div class="tab-pane fade{active_class}" id="tab-{conditional_escape(tab_id)}">{conditional_escape(content)}</div>'
+            html += f'<div class="tab-pane fade{active_class}" id="tab-{attr_text(tab_id)}">{conditional_escape(content)}</div>'
 
         html += "</div></div>"
         return html
@@ -243,7 +244,7 @@ class TabsComponent(LiveComponent):
             content = tab.get("content", "")
             display = "" if tab_id == self.active else " hidden"
 
-            html += f'<div id="tab-{conditional_escape(tab_id)}" class="tab-pane{display}">{conditional_escape(content)}</div>'
+            html += f'<div id="tab-{attr_text(tab_id)}" class="tab-pane{display}">{conditional_escape(content)}</div>'
 
         html += "</div></div>"
         return html
@@ -278,7 +279,7 @@ class TabsComponent(LiveComponent):
             content = tab.get("content", "")
             display = "" if tab_id == self.active else ' style="display:none"'
 
-            html += f'<div class="tab-pane" id="tab-{conditional_escape(tab_id)}"{display}>{conditional_escape(content)}</div>'
+            html += f'<div class="tab-pane" id="tab-{attr_text(tab_id)}"{display}>{conditional_escape(content)}</div>'
 
         html += "</div></div>"
         return html

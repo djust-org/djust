@@ -254,6 +254,10 @@ CORPUS = corpus()
 # for half its rows.
 
 
+#: the filters that iterate their operand: a serialized model is not iterable to them
+MODEL_NOT_ITERABLE = ("escapeseq", "safeseq", "unordered_list")
+
+
 class TestTheReferenceTableIsRunNotTranscribed:
     """The differential itself: every one of the seven, over every corpus value.
 
@@ -340,6 +344,11 @@ class TestTheReferenceTableIsRunNotTranscribed:
                 du = outcome(source, value, "djust")
                 if du.startswith("<<") and not dj.startswith("<<"):
                     offenders.append((name, key, dj, du))
+        # The serialized-model map again (see the class-mismatch test below): the corpus hands both
+        # engines a `dict`, Django iterates its keys, and djust reads the `__str__` marker and
+        # answers what a real MODEL does, which is to refuse to be iterated. Exactly the three
+        # iterating filters, exactly this row.
+        offenders = [o for o in offenders if not (o[1] == "d-model" and o[0] in MODEL_NOT_ITERABLE)]
         assert not offenders, f"{len(offenders)} cells refuse where Django renders:\n" + "\n".join(
             f"  {n} <{k}>: django={a!r} djust={b}" for n, k, a, b in offenders[:15]
         )
@@ -674,14 +683,16 @@ class TestOneChokepointAnswersWhichExceptionPythonRaises:
     def test_the_constructor_is_reached_from_every_arm_that_can_refuse(self) -> None:
         """The COUNT, so an arm that grows a bespoke `Err` is visible.
 
-        Five filters and six call sites: `first`, `last` and the two native
+        Six filters and seven call sites: `first`, `last` and the two native
         iterators have one each, and `random` has two — one for the subscript
-        and one for the missing `len()`. (The third iterator, `unordered_list`,
-        and `phone2numeric` are Django's own functions since 2.0.)
+        and one for the missing `len()`. `unordered_list` is Django's own
+        function since 2.0, with one native refusal ahead of the routing: a
+        serialized model is not iterable, and Django must not be handed the
+        map it was serialized to. (`phone2numeric` is Django's own function.)
         """
         source = production(FILTERS_RS)
         arm = source.split("fn apply_builtin_filter", 1)[1].split("\n}\n", 1)[0]
-        assert arm.count("value_op_error(") == 6, arm.count("value_op_error(")
+        assert arm.count("value_op_error(") == 7, arm.count("value_op_error(")
 
     def test_the_pin_goes_red_when_an_arm_stops_using_the_constructor(self) -> None:
         """Canary, direction one: a bespoke ``Err`` in every arm."""

@@ -91,8 +91,16 @@ def _git(cwd: Path, *args: str) -> None:
     )
 
 
-def _make_repo(tmp_path: Path, base_files: dict[str, str], branch_files: dict[str, str]) -> Path:
-    """A repo whose merge-base has `base_files` and whose HEAD adds `branch_files`."""
+def _make_repo(
+    tmp_path: Path,
+    base_files: dict[str, str],
+    branch_files: dict[str, str],
+    root_files: dict[str, str] | None = None,
+) -> Path:
+    """A repo whose merge-base has `base_files` and whose HEAD adds `branch_files`.
+
+    `root_files` are committed at the repo root in the base commit (a conftest.py, say).
+    """
     repo = tmp_path / "repo"
     (repo / "tests").mkdir(parents=True)
     (repo / "scripts").mkdir()
@@ -125,6 +133,8 @@ def _make_repo(tmp_path: Path, base_files: dict[str, str], branch_files: dict[st
     _git(repo, "init", "-q", "-b", "main")
     for name, body in base_files.items():
         (repo / "tests" / name).write_text(textwrap.dedent(body))
+    for name, body in (root_files or {}).items():
+        (repo / name).write_text(textwrap.dedent(body))
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "base")
     _git(repo, "branch", "-f", "work")
@@ -573,3 +583,41 @@ def test_a_backstop_that_cannot_run_does_not_demote_a_new_test(tmp_path):
         f"a broken backstop must leave the classification as it was, not "
         f"demote a real branch-local failure to unattributed\n{out}"
     )
+
+
+def test_a_chatty_merge_base_run_does_not_demote_a_new_test(tmp_path):
+    # #3810. The script runs under `set -o pipefail`, and it used to classify
+    # the merge-base run's rc-4 message with `printf '%s' "$_out" | grep -q ...`.
+    # `grep -q` quits at the first match; if printf is still writing it dies of
+    # SIGPIPE, pipefail fails the pipeline, `!` reads that as "message did not
+    # match", and a test that is simply ABSENT at the base is announced as
+    # unimportable ("could not be checked ... NOT attributed") instead of new.
+    # For a 100-byte message that is a rare race (it flaked once in ~15,700 CI
+    # tests, and 4 in 240 under load locally); for a message larger than the
+    # pipe buffer it is certain, so this makes the output large rather than
+    # hoping for the race.
+    #
+    # The base commit carries a conftest.py that, only when pytest is given a
+    # node id, appends ~400 KB to stderr AFTER pytest has written its
+    # `ERROR: file or directory not found:` line: the first line matches at
+    # once while the writer still has far more than a pipe buffer left to send.
+    chatty = """
+        import atexit
+        import sys
+
+        if any("::" in a for a in sys.argv):
+            atexit.register(lambda: sys.stderr.write("noise " * 70000 + "\\n"))
+    """
+    repo = _make_repo(
+        tmp_path,
+        {"test_ok.py": "def test_ok(): assert True\n"},
+        {"test_new.py": "def test_new(): assert False\n"},
+        root_files={"conftest.py": chatty},
+    )
+    out = _run(repo)
+    assert "are new on this branch" in out, (
+        "an id that is absent at the merge-base must be reported as new even when "
+        "the run that proves it is chatty; the classification must not depend on "
+        f"whether a writer outlives its reader\n{out[-3000:]}"
+    )
+    assert "Broken pipe" not in out, out[-3000:]

@@ -1,7 +1,6 @@
 """Round-two regressions: cyclic planning, source liveness and portable addresses."""
 
 import re
-import time
 
 import pytest
 from django.contrib.sessions.backends.db import SessionStore
@@ -68,20 +67,23 @@ def test_recursive_tree_planning_and_render_are_bounded(tmp_path, fan):
     page = '<div dj-root>{% include "tree.html" with n=tree %}</div>'
     rust = RustLiveView(page, [str(tmp_path)])
     rust.update_state({"tree": {"v": 1, "l": {"v": 2}, "r": None, "m": None}})
-    start = time.perf_counter()
-    assert not template_needs_provenance(page, [str(tmp_path)])
-    assert time.perf_counter() - start < 1.0
-    start = time.perf_counter()
-    for _ in range(15):
-        plain = rust.render()
-    plain_time = time.perf_counter() - start
-    start = time.perf_counter()
-    for _ in range(15):
+    assert not template_needs_provenance(page, [str(tmp_path)])  # it returns at all
+
+    # What is exact is asserted here: the tracked render IS the plain render, with nothing
+    # tracked. How long planning and tracking take is a latency claim about the Rust engine, which
+    # has no operation to count, so it lives in the serial benchmark tier as a median against a
+    # target (tests/benchmarks/test_lazy_provenance_cost_3835.py, #3835) instead of as a ratio of
+    # two durations here.
+    plain = rust.render()
+    for _ in range(3):
         html, spans, origins = rust.render_lazy_html()
         assert html == plain
         assert not spans and not origins
-    tracked_time = time.perf_counter() - start
-    assert tracked_time < max(0.5, plain_time * 20)
+    for run in range(2):  # a fresh, unplanned copy of the tree plans to the same answer
+        copy = tmp_path / f"plan{run}"
+        copy.mkdir()
+        (copy / "tree.html").write_text(source)
+        assert not template_needs_provenance(page, [str(copy)])
 
 
 def test_mutual_cycle_and_dependency_edits_invalidate_plan(tmp_path):

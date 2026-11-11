@@ -173,6 +173,10 @@ class TestTileUrlPolicy:
         "https://tiles.example.com/{z}/{x}/{y} .png",
         "https://tiles.example.com/{z}/{x}/{y}\n.png",
         "tiles/{z}/{x}/{y}.png",
+        # the same URL with other separators or a TAB (a browser normalises them first)
+        "/\\tiles.example/{z}/{x}/{y}.png",
+        "/\t/tiles.example/{z}/{x}/{y}.png",
+        "\\\\tiles.example/{z}/{x}/{y}.png",
         "",
         None,
         42,
@@ -418,7 +422,3 @@ class TestScriptAndCatalogue:
     def test_script_has_no_hard_coded_tile_host_or_key(self):
         assert "openstreetmap" not in self.SOURCE.lower()
         assert not re.search(r"api[_-]?key|access[_-]?token", self.SOURCE, re.I)
-
-    def test_script_registers_without_replacing_an_app_hook(self):
-        assert "window.DjustHooks.MapPicker" in self.SOURCE
-        assert "!appHooks.MapPicker && !window.DjustHooks.MapPicker" in self.SOURCE

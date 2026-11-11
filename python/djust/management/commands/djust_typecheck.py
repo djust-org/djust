@@ -46,6 +46,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from django.core.management.base import CommandParser, BaseCommand
 
+from djust.checks.utils import LineCounter
 from djust.management._introspect import (
     app_label_for_class as _app_label,
 )
@@ -307,18 +308,20 @@ def _extract_referenced_names(src: str) -> List[tuple]:
     refs: List[tuple] = []
 
     # `{{ ... }}` — grab the first identifier of each expression.
+    _line_counter = LineCounter(src)
     for match in _VAR_RE.finditer(src):
         name = match.group(1)
         if name in {"True", "False", "None"}:
             continue
-        line = src.count("\n", 0, match.start()) + 1
+        line = _line_counter.line_at(match.start())
         refs.append((name, line))
 
     # `{% if name %}`, `{% elif name %}`, `{% for x in name %}` etc.
+    _line_counter = LineCounter(src)
     for match in _TAG_RE.finditer(src):
         tag = match.group(1)
         args = match.group(2)
-        line = src.count("\n", 0, match.start()) + 1
+        line = _line_counter.line_at(match.start())
         if tag in {"if", "elif", "while"}:
             # Root-only extraction (#2824): `todo.done` must yield `todo`,
             # not also `done` as a separate top-level reference. Uses a

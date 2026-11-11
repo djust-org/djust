@@ -10,7 +10,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-from djust.components.utils import url_attr
+from djust.components.utils import data_url_attr
 
 
 class Breadcrumb(Component):
@@ -148,7 +148,7 @@ class Breadcrumb(Component):
             else:
                 # Link to page
                 breadcrumb_items.append(
-                    f'  <li class="breadcrumb-item"><a href="{url_attr(url)}">{label}</a></li>'
+                    f'  <li class="breadcrumb-item"><a href="{data_url_attr(url)}">{label}</a></li>'
                 )
 
         breadcrumb_html = "\n".join(breadcrumb_items)
@@ -193,7 +193,7 @@ class Breadcrumb(Component):
             else:
                 # Link to page
                 breadcrumb_items.append(
-                    f'    <li class="inline-flex items-center"><a href="{url_attr(url)}" class="inline-flex items-center text-sm font-medium text-gray-700 hover:text-blue-600">{label}</a></li>'
+                    f'    <li class="inline-flex items-center"><a href="{data_url_attr(url)}" class="inline-flex items-center text-sm font-medium text-gray-700 hover:text-blue-600">{label}</a></li>'
                 )
 
         breadcrumb_html = "\n".join(breadcrumb_items)
@@ -235,7 +235,7 @@ class Breadcrumb(Component):
             else:
                 # Link to page
                 breadcrumb_items.append(
-                    f'  <li class="breadcrumb-item"><a href="{url_attr(url)}">{label}</a></li>'
+                    f'  <li class="breadcrumb-item"><a href="{data_url_attr(url)}">{label}</a></li>'
                 )
 
         breadcrumb_html = "\n".join(breadcrumb_items)

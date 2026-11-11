@@ -7,6 +7,7 @@ Provides pagination controls for navigating through data sets.
 from typing import Dict, Any, List
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
+from ..._html import attr_name
 from ..base import LiveComponent
 from ...decorators import event_handler
 
@@ -73,7 +74,7 @@ class PaginationComponent(LiveComponent):
         the parent view (#2776 — same shape as ``TableComponent.sort_by``)."""
         attrs = f' dj-click="{conditional_escape(event)}" data-component-id="{conditional_escape(self.component_id)}"'
         for key, value in data.items():
-            attrs += f' data-{key}="{conditional_escape(value)}"'
+            attrs += f' {attr_name("data-" + str(key))}="{conditional_escape(value)}"'
         return attrs
 
     @event_handler()

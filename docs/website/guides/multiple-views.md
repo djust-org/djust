@@ -106,7 +106,8 @@ The contract above holds on every connection the page can have; what differs is 
 | Events, routed by view | yes | yes | the page view's and `{% live_render %}` children's; a lazy view's are refused |
 | Hooks (`pushEvent`) | to the view they sit in | to the view they sit in | no |
 | Uploads | yes | no | no |
-| Server push, presence, `db_notify`, tick | per view | none, for any view (SSE has no server push) | none |
+| `push_to_view` groups and scopes, presence, `db_notify` | per view | none, for any view | none |
+| Tick, and `self.server_push()` from the view's own code | per view | per view | none |
 | `start_async` and background work | per view | per view | no |
 | Saved state, snapshots, authorization | per view | per view | the page view's |
 | Unmount one view | `unmount` frame | `unmount` frame | n/a |

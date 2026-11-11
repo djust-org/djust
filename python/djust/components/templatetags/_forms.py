@@ -10,14 +10,15 @@ All tags register on the shared ``register`` from ``_registry``.
 from typing import Any
 
 from django import template
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
+from djust.components.utils import safe_url  # from where it is DEFINED, not ``._registry`` (#3820)
+from djust.components.utils import attr_text
 from ._registry import (
     register,
     _resolve,
     _parse_kv_args,
-    conditional_escape,
-    safe_url,
     mark_safe,
     CURRENCY_SYMBOLS,
 )
@@ -413,13 +414,15 @@ def autocomplete(
     suggestion_items = []
     for sug in suggestions:
         if isinstance(sug, dict):
-            sv = conditional_escape(str(sug.get("value", "")))
-            sl = conditional_escape(str(sug.get("label", sv)))
+            raw_value = sug.get("value", "")
+            sv = attr_text(raw_value)  # only in data-value= (#3904)
+            sl = conditional_escape(str(sug.get("label", raw_value)))
         elif isinstance(sug, (list, tuple)) and len(sug) >= 2:
-            sv = conditional_escape(str(sug[0]))
+            sv = attr_text(sug[0])  # only in data-value= (#3904)
             sl = conditional_escape(str(sug[1]))
         else:
-            sv = sl = conditional_escape(str(sug))
+            sv = attr_text(sug)  # only in data-value= (#3904)
+            sl = conditional_escape(str(sug))
         suggestion_items.append(
             f'<li class="dj-autocomplete__item" role="option" data-value="{sv}">{sl}</li>'
         )
@@ -703,11 +706,13 @@ def dependent_select(
         if isinstance(opt, dict):
             ov = conditional_escape(str(opt.get("value", "")))
             ol = conditional_escape(str(opt.get("label", ov)))
+            av = attr_text(opt.get("value", ""))  # the value= attribute (#3904)
         else:
             ov = conditional_escape(str(opt))
             ol = ov
+            av = attr_text(opt)
         selected = " selected" if ov == e_value else ""
-        opt_parts.append(f'<option value="{ov}"{selected}>{ol}</option>')
+        opt_parts.append(f'<option value="{av}"{selected}>{ol}</option>')
 
     spinner_html = (
         '<span class="dj-dependent-select__spinner" aria-hidden="true"></span>' if loading else ""
@@ -935,6 +940,36 @@ _FIELD_TYPE_MAP = {
 }
 
 
+def _bound_field_value(bound_field: Any) -> Any:
+    """``bound_field.value()``, held to the serialization floor (#3790, #3797).
+
+    The one reader every component that fills a control from a ``BoundField`` calls
+    (``_render_field``, the hidden-field loop of ``dj_form``, ``_from_bound_field``), so they cannot
+    disagree with each other or with a template's own ``{{ form.field }}``. A floor field of a
+    ``ModelForm`` reads as ``None`` when it is ``disabled`` (Django ignores what is posted for it) or
+    its widget is a password input (#3798). An EDITABLE floor field keeps its value, because the browser
+    posts the control back and a blank one clears the column (an unchecked checkbox demotes the user),
+    and the reader says so once; except a SECRET-LIKE one (``password``, ``api_token``, ...), which is
+    drawn empty as a template's ``{{ form.field }}`` draws it
+    (:func:`djust.serialization._floor_blank_bound_field`) and is protected by
+    ``disabled=True`` (``FormMixin.get_form()``).
+    """
+    from djust.serialization import (
+        floor_field_is_secret,
+        form_field_floor_state,
+        warn_editable_floor_field,
+    )
+
+    state = form_field_floor_state(bound_field)
+    if state in ("disabled", "password"):
+        return None
+    if state == "editable":
+        warn_editable_floor_field(bound_field)
+        if floor_field_is_secret(bound_field):
+            return None
+    return bound_field.value()
+
+
 def _get_field_type(bound_field: Any) -> Any:
     """Determine the djust component type for a Django BoundField."""
     field = bound_field.field
@@ -977,6 +1012,24 @@ def _get_choices(bound_field: Any) -> Any:
     return []
 
 
+def _selected_values(raw: Any, field_type: str) -> frozenset:
+    """The choice values a field's current value selects, as strings.
+
+    A multi-valued field's value is a LIST (what ``dj-submit`` / ``dj-change`` send for a checkbox
+    group or a ``<select multiple>``, #3959, and what ``MultipleChoiceField`` cleans to), so each
+    member selects its own choice. A scalar is one choice, and a ``checkbox_group`` given a
+    comma-separated string keeps selecting each part (the form that reached this renderer before
+    #3959). Rendering the list through ``str()`` selected nothing, so the multi-value fix did not
+    survive a re-render: the user's ticked boxes un-ticked.
+    """
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        return frozenset(str(item) for item in raw)
+    text = str(raw)
+    if field_type == "checkbox_group":
+        return frozenset(text.split(",")) if text else frozenset()
+    return frozenset({text}) if text else frozenset()
+
+
 def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
     """Render a single Django BoundField as the appropriate djust component HTML."""
     field_type = _get_field_type(bound_field)
@@ -998,10 +1051,12 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
 
     # Get current value
     value = ""
+    selected_values: frozenset = frozenset()
     if hasattr(bound_field, "value"):
-        v = bound_field.value()
+        v = _bound_field_value(bound_field)
         if v is not None:
             value = str(v)
+            selected_values = _selected_values(v, field_type)
 
     e_name = conditional_escape(name)
     e_label = conditional_escape(label)
@@ -1066,10 +1121,17 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
         select_error_cls = " form-select-error" if error_msg else ""
         options_html = ""
         for ov, ol in choices:
-            selected_attr = " selected" if str(ov) == str(value) else ""
+            selected_attr = (
+                " selected"
+                if (
+                    str(ov) in selected_values
+                    if field_type == "select_multiple"
+                    else str(ov) == value
+                )
+                else ""
+            )
             options_html += (
-                f'<option value="{conditional_escape(ov)}"{selected_attr}>'
-                f"{conditional_escape(ol)}</option>"
+                f'<option value="{attr_text(ov)}"{selected_attr}>{conditional_escape(ol)}</option>'
             )
         return (
             f'<div class="form-group">'
@@ -1091,7 +1153,7 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
             radios += (
                 f'<div class="form-radio-wrapper">'
                 f'<input class="form-radio" type="radio" '
-                f'name="{e_name}" id="{radio_id}" value="{conditional_escape(ov)}" '
+                f'name="{e_name}" id="{radio_id}" value="{attr_text(ov)}" '
                 f'dj-change="{dj_event}"{checked_attr}{disabled_attr}>'
                 f'<label class="form-radio-label" for="{radio_id}">{conditional_escape(ol)}</label>'
                 f"</div>"
@@ -1106,8 +1168,6 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
 
     if field_type == "checkbox_group":
         choices = _get_choices(bound_field)
-        # value might be a list for multiple checkboxes
-        selected_values = value.split(",") if value else []
         checks = ""
         for ov, ol in choices:
             checked_attr = " checked" if ov in selected_values else ""
@@ -1115,7 +1175,7 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
             checks += (
                 f'<div class="form-checkbox-wrapper">'
                 f'<input class="form-checkbox" type="checkbox" '
-                f'name="{e_name}" id="{cb_id}" value="{conditional_escape(ov)}" '
+                f'name="{e_name}" id="{cb_id}" value="{attr_text(ov)}" '
                 f'dj-change="{dj_event}"{checked_attr}{disabled_attr}>'
                 f'<label class="form-checkbox-label" for="{cb_id}">{conditional_escape(ol)}</label>'
                 f"</div>"
@@ -1245,7 +1305,7 @@ def dj_form(
         h_name = bf.html_name if hasattr(bf, "html_name") else bf.name
         h_value = ""
         if hasattr(bf, "value"):
-            v = bf.value()
+            v = _bound_field_value(bf)
             if v is not None:
                 h_value = str(v)
         hidden_html += (
@@ -1565,7 +1625,7 @@ def model_table(
             '<th class="data-table__th data-table__th--select"><input type="checkbox"></th>'
         )
     for col in columns:
-        col_key = conditional_escape(col["key"])
+        col_key = attr_text(col["key"])  # only in dj-value-column= (#3904)
         col_label = conditional_escape(col["label"])
         sort_cls = ""
         sort_attr = ""
@@ -1592,13 +1652,13 @@ def model_table(
             filter_cells += '<td class="data-table__filter-cell"></td>'
         for col in columns:
             if col.get("filterable"):
-                col_key = conditional_escape(col["key"])
-                fval = conditional_escape(str(filters.get(col["key"], "")))
+                col_key = attr_text(col["key"])  # only in dj-value-column= (#3904)
+                fval = attr_text(filters.get(col["key"], ""))  # only in value= / the compare
                 ft = col.get("filter_type", "text")
                 if ft == "select" and col.get("filter_options"):
                     opts = '<option value="">All</option>'
                     for fo in col["filter_options"]:
-                        fov = conditional_escape(str(fo.get("value", "")))
+                        fov = attr_text(fo.get("value", ""))  # value= and the compare (#3904)
                         fol = conditional_escape(str(fo.get("label", "")))
                         sel = " selected" if fov == fval else ""
                         opts += f'<option value="{fov}"{sel}>{fol}</option>'
@@ -1639,8 +1699,11 @@ def model_table(
             f"</td></tr>"
         )
     else:
-        for row in safe_rows:
+        for row, raw_row in zip(safe_rows, rows):
             row_id = row.get(row_key, "")
+            # the id as the row HELD it: ``safe_rows`` kept a marked-safe value raw, and the id is
+            # written into an attribute below (a TEXT cell keeps its markup, an attribute never)
+            row_id_attr = attr_text(raw_row.get(row_key, ""))
             row_selected = str(row_id) in [str(s) for s in selected_rows]
             selected_cls = " data-table__tr--selected" if row_selected else ""
             cells = ""
@@ -1649,7 +1712,7 @@ def model_table(
                 cells += (
                     f'<td class="data-table__td data-table__td--select">'
                     f'<input type="checkbox" dj-change="{e_select_event}" '
-                    f'dj-value-row="{conditional_escape(str(row_id))}"{chk}></td>'
+                    f'dj-value-row="{row_id_attr}"{chk}></td>'
                 )
             for col in columns:
                 cell_val = row.get(col["key"], "")

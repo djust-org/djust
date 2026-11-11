@@ -93,12 +93,12 @@ async def test_layout_render_failure_log_is_value_free_for_explicit_views(
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".LayoutFailureView", "url": "/l/"}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await socket.send_json_to({"type": "event", "event": "swap", "params": {}})
@@ -163,12 +163,12 @@ async def test_deferred_callback_failure_log_is_value_free_for_explicit_views(
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".DeferFailureView", "url": "/d/"}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await socket.send_json_to({"type": "event", "event": "later", "params": {}})
@@ -222,7 +222,7 @@ async def test_presence_key_failure_at_mount_is_value_free_for_explicit_views(
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
@@ -285,7 +285,7 @@ async def test_full_html_signal_receiver_failure_is_value_free_for_explicit_view
             socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
             socket.scope.update(session=request.session, user=request.user, tenant=None)
             assert (await socket.connect())[0]
-            await socket.receive_json_from(timeout=3)
+            await socket.receive_json_from()
             try:
                 await socket.send_json_to(
                     {"type": "mount", "view": __name__ + ".FullHtmlView", "url": "/f/"}
@@ -374,7 +374,7 @@ async def test_post_event_state_save_failure_is_value_free_for_explicit_views(
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".PersistFailureView", "url": "/s/"}
@@ -447,7 +447,7 @@ async def test_time_travel_push_failure_logs_detail_under_debug_for_every_policy
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".TimeTravelPushView", "url": "/tt/"}
@@ -555,7 +555,7 @@ async def test_assign_async_loader_failure_is_value_free_for_explicit_views(
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".AssignAsyncView", "url": "/aa/"}

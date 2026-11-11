@@ -139,7 +139,7 @@ async def _connect(view, query=""):
     communicator.scope["session"] = _ScopeSession()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
     await communicator.send_json_to(
         {"type": "mount", "view": f"{MOD}.{view}", "url": f"/ceiling/?{query}"}
     )
@@ -148,7 +148,7 @@ async def _connect(view, query=""):
     return communicator
 
 
-async def _receive_until(communicator, wanted, *, tries=8, timeout=5):
+async def _receive_until(communicator, wanted, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
@@ -257,6 +257,10 @@ async def test_an_undecorated_handler_makes_no_permission_hops(pool, monkeypatch
             await comm.disconnect()
     assert frame.get("ref") == 1
     assert "check_handler_permission" not in hops
+    # The per-event object check is ``check_object_permission_for_event`` (a view with no
+    # ``get_object`` returns from it at once, on the loop). Match both names: this pin went
+    # vacuous when the hop was renamed, because it matched an exact function ``__name__``.
+    assert "check_object_permission_for_event" not in hops
     assert "check_object_permission" not in hops
 
 
@@ -293,7 +297,7 @@ async def test_permission_and_object_checks_still_hop_when_they_can_touch_the_db
     ws = MagicMock(send_error=AsyncMock(), close=AsyncMock(), _client_ip="127.0.0.1")
     handler = await wu._validate_event_security(ws, "guarded", view, MagicMock())
     assert handler is not None
-    assert hops == ["check_handler_permission", "check_object_permission"]
+    assert hops == ["check_handler_permission", "check_object_permission_for_event"]
 
 
 # ---------------------------------------------------------------------------

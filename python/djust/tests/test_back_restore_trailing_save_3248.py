@@ -98,7 +98,9 @@ class Store:
     write); ``fail`` raises for every save while it is truthy.
     """
 
-    def __init__(self, monkeypatch, *, block_first=False, fail=False, engine=None):
+    def __init__(self, monkeypatch, *, block_first=False, fail=False, engine=None, valve=15):
+        #: ``valve``: seconds a blocked first save waits for ``release`` before it gives
+        #: up on its own, so a test that never releases it cannot hang the run.
         self.release = threading.Event()
         if not block_first:
             self.release.set()
@@ -122,7 +124,7 @@ class Store:
                 store.attempts += 1
                 first = store.attempts == 1
             if first:
-                store.release.wait(timeout=15)
+                store.release.wait(timeout=valve)
             with store._lock:
                 failing = store.fail or store.fail_next > 0
                 store.fail_next = max(0, store.fail_next - 1)
@@ -184,22 +186,22 @@ class Socket:
     async def open(self, view="Counter", url=PATH):
         ok, _ = await self.ws.connect()
         assert ok
-        assert (await self.ws.receive_json_from(timeout=3))["type"] == "connect"
+        assert (await self.ws.receive_json_from())["type"] == "connect"
         return await self.mount(view, url)
 
     async def mount(self, view="Counter", url=PATH, kind="mount"):
         await self.ws.send_json_to({"type": kind, "view": f"{MOD}.{view}", "url": url})
         for _ in range(10):
-            frame = await self.ws.receive_json_from(timeout=5)
+            frame = await self.ws.receive_json_from()
             if frame.get("type") == "mount":
                 return frame
         raise AssertionError("no mount frame")
 
     async def event(self, name="increment", ref=1):
         await self.ws.send_json_to({"type": "event", "event": name, "params": {}, "ref": ref})
-        frames = [await self.ws.receive_json_from(timeout=5)]
+        frames = [await self.ws.receive_json_from()]
         while not await self.ws.receive_nothing(timeout=0.05):
-            frames.append(await self.ws.receive_json_from(timeout=5))
+            frames.append(await self.ws.receive_json_from())
         return frames
 
     async def close(self):
@@ -330,7 +332,7 @@ async def test_restored_state_does_not_bypass_handler_permissions(monkeypatch):
     try:
         assert "Counter: 2" in frame["html"]  # restored
         await again.ws.send_json_to({"type": "event", "event": "wipe", "params": {}, "ref": 9})
-        reply = await again.ws.receive_json_from(timeout=5)
+        reply = await again.ws.receive_json_from()
         assert reply["type"] == "error", reply
         assert VIEWS[-1].count == 2  # the handler did not run
     finally:
@@ -462,7 +464,7 @@ async def _hang(monkeypatch, session, key, wait):
     """Hung storage: the first save never answers, so every later event's save
     never starts and its state is recorded as unsaved. ``wait`` is how long
     teardown comes after the last event: the default thresholds apply."""
-    store = Store(monkeypatch, block_first=True)
+    store = Store(monkeypatch, block_first=True, valve=HELD_FOREVER_S)
     for _ in range(3):
         await _sse_event(session, key)
     await asyncio.sleep(wait)
@@ -470,20 +472,38 @@ async def _hang(monkeypatch, session, key, wait):
     return store
 
 
-# Real default constants. Teardown right after the events is the case a
-# stuck-threshold check made once up front missed: the hang had not yet lasted
-# long enough to look hung, and teardown waited the full 3 s.
+# Teardown right after the events is the case a stuck-threshold check made once up
+# front missed: the hang had not yet lasted long enough to look hung, and teardown
+# waited the full flush bound (3 s).
+#
+# Not "it took under 1.5 s" (#3711): that bound sat 0.4 s above the stuck threshold
+# the teardown legitimately waits for (1 s), so any runner pause failed it. The
+# claim is that teardown does not wait out the bounds a hung save is otherwise held
+# to: the flush bound (3 s) and the trailing save's own deadline (10 s). So both are
+# made effectively infinite and teardown must still return: it can only do that by
+# recognising the hang. The stuck threshold stays real. ``HUNG_ONLY_S`` is the
+# deadline only a regression reaches (the old code would sit in the 600 s bounds).
+HELD_FOREVER_S = 600.0
+HUNG_ONLY_S = 60.0
+
+
+def _hold_the_flush_bounds_forever(monkeypatch):
+    from djust import _exposure_sessions
+
+    monkeypatch.setattr(runtime_module, "_TRAILING_FLUSH_TIMEOUT_S", HELD_FOREVER_S)
+    monkeypatch.setattr(_exposure_sessions, "MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S", HELD_FOREVER_S)
+
+
 @pytest.mark.parametrize("wait", [0.0, 0.5])
 async def test_hung_storage_does_not_hold_an_sse_close(monkeypatch, wait):
     from djust.sse import _shutdown_closed_session
 
+    _hold_the_flush_bounds_forever(monkeypatch)
     key = await sync_to_async(_fresh_key)()
     session = await _sse_start(key)
     store = await _hang(monkeypatch, session, key, wait)
     try:
-        started = time.monotonic()
-        await _shutdown_closed_session(session)
-        assert time.monotonic() - started < 1.5
+        await asyncio.wait_for(_shutdown_closed_session(session), timeout=HUNG_ONLY_S)
     finally:
         # The abandoned save must land before the database is flushed.
         store.release.set()
@@ -492,13 +512,15 @@ async def test_hung_storage_does_not_hold_an_sse_close(monkeypatch, wait):
 
 @pytest.mark.parametrize("wait", [0.0, 0.5])
 async def test_hung_storage_does_not_hold_an_sse_navigation(monkeypatch, wait):
+    _hold_the_flush_bounds_forever(monkeypatch)
     key = await sync_to_async(_fresh_key)()
     session = await _sse_start(key)
     store = await _hang(monkeypatch, session, key, wait)
     try:
-        started = time.monotonic()
-        await _sse_event(session, key, {"type": "live_redirect_mount", "url": "/other/"})
-        assert time.monotonic() - started < 1.5
+        await asyncio.wait_for(
+            _sse_event(session, key, {"type": "live_redirect_mount", "url": "/other/"}),
+            timeout=HUNG_ONLY_S,
+        )
     finally:
         # The abandoned save must land before the database is flushed.
         store.release.set()

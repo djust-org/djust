@@ -62,7 +62,7 @@ async def _socket():
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=await sync_to_async(_session)(), user=AnonymousUser(), tenant=None)
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     return socket
 
 
@@ -73,7 +73,7 @@ async def _mount_and_count_ticks(view_name):
         await socket.send_json_to(
             {"type": "mount", "view": f"{__name__}.{view_name}", "url": "/t/"}
         )
-        first = await socket.receive_json_from(timeout=3)
+        first = await socket.receive_json_from()
         before = len(TICKS)
         await asyncio.sleep(0.2)  # ten beats of a live tick
         return first, len(TICKS) - before

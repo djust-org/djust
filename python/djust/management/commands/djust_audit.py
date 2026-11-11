@@ -300,7 +300,38 @@ def _audit_class(
     if template_vars is not None:
         result["template_vars"] = template_vars
 
+    # The declared query budget (#3701), read by the same ``declared_budget`` as
+    # the smoke test, the run-time meter and the system check, so the listing says
+    # what they enforce: the normalized budget (JSON-safe), or None plus the reason
+    # it is invalid (a bad declaration never crashes the audit, and is never shown
+    # as a budget).
+    if cls_type == "LiveView":
+        from djust._query_budget import declared_budget, is_declared
+
+        result["query_budget"] = None
+        if is_declared(cls):
+            try:
+                result["query_budget"] = declared_budget(cls).declared()
+            except ValueError as exc:
+                result["query_budget_error"] = str(exc)[:300]
+
     return result
+
+
+def _describe_query_budget(audit: dict[str, Any]) -> str:
+    """The ``Query budget:`` line for the report."""
+    if audit.get("query_budget_error"):
+        return "invalid: %s" % audit["query_budget_error"]
+    budget = audit.get("query_budget")
+    if budget is None:
+        return "(none)"
+    if not isinstance(budget, dict):
+        return "%s (mount + first render)" % (budget,)
+    parts = ["%s %s" % (key, budget[key]) for key in ("mount", "render", "event") if key in budget]
+    events = budget.get("events")
+    if events:
+        parts.append("events " + ", ".join("%s %s" % (name, n) for name, n in events.items()))
+    return ", ".join(parts) if parts else "(empty)"
 
 
 def _extract_vars(cls: type) -> Optional[Any]:
@@ -436,7 +467,7 @@ class Command(BaseCommand):
                 "user Python and template files looking for IDOR, missing "
                 "auth on state-mutating handlers, SQL string formatting, "
                 "open redirects, and mark_safe/|safe abuse. Emits stable "
-                "X001-X008 security codes and X101-X105 UI-component warnings (ADR-043)."
+                "X001-X008 security codes and X101-X106 UI-component warnings (ADR-043)."
             ),
         )
         parser.add_argument(
@@ -485,8 +516,9 @@ class Command(BaseCommand):
             help=(
                 "Run the accessibility (Y0xx) audit (#1523). Regex-scans "
                 "template files for missing accessible names, image alt "
-                "text, form-control labels, and positive tabindex. Emits "
-                "stable Y001-Y004 finding codes. All findings are warnings: "
+                "text, form-control labels, positive tabindex, charts and "
+                "svgs with no name, and colour-only legends. Emits "
+                "stable Y001-Y006 finding codes. All findings are warnings: "
                 "normal mode always exits 0; --strict exits 1 if any "
                 "finding exists."
             ),
@@ -678,7 +710,7 @@ class Command(BaseCommand):
         directly, branches on ``--json``, and applies the strict exit-code
         rule.
 
-        Exit-code nuance — Y001-Y004 are *all* :class:`DjustWarning`; there
+        Exit-code nuance — Y001-Y006 are *all* :class:`DjustWarning`; there
         is no error tier. So normal mode NEVER exits non-zero; ``--strict``
         exits 1 if any finding exists. This is consistent with ``--ast``,
         which also only fails on warnings under ``strict`` — accessibility
@@ -747,7 +779,7 @@ class Command(BaseCommand):
         self.stdout.write("")
 
         if findings:
-            # Group findings by stable code (Y001-Y004) for readability.
+            # Group findings by stable code (Y001-Y006) for readability.
             by_code: Dict[str, list] = {}
             for f in findings:
                 by_code.setdefault(getattr(f, "id", "") or "", []).append(f)
@@ -1027,6 +1059,9 @@ class Command(BaseCommand):
                     self.stdout.write("    Mixins:     %s" % ", ".join(audit["mixins"]))
                 else:
                     self.stdout.write("    Mixins:     (none)")
+
+                if "query_budget" in audit:
+                    self.stdout.write("    Query budget: %s" % _describe_query_budget(audit))
 
                 # Config flags
                 config = audit["config"]

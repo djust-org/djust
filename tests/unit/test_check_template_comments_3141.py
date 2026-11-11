@@ -66,3 +66,33 @@ def test_the_tree_has_no_multiline_comments():
     """The pre-commit hook only runs on commit; this keeps CI honest too."""
     script = _load()
     assert script.main([]) == 0
+
+
+MULTILINE_TEMPLATE = "<p>\n{# first line\n   second line #}\n</p>\n"
+
+
+def test_default_scan_covers_the_example_apps(tmp_path, monkeypatch):
+    """The demo apps rendered five multi-line comments while only python/djust was scanned."""
+    script = _load()
+    monkeypatch.setattr(script, "ROOT", tmp_path)
+    (tmp_path / "python" / "djust").mkdir(parents=True)
+    template = tmp_path / "examples" / "demo" / "templates" / "page.html"
+    template.parent.mkdir(parents=True)
+    template.write_text(MULTILINE_TEMPLATE)
+
+    assert script.main([]) == 1
+    assert script.main(["--path", "python/djust"]) == 0
+    assert script.main(["--path", "python/djust", "--path", "examples"]) == 1
+
+
+def test_build_output_and_environments_are_skipped(tmp_path):
+    script = _load()
+    for skipped in ("staticfiles", "node_modules", ".venv"):
+        path = tmp_path / "app" / skipped / "page.html"
+        path.parent.mkdir(parents=True)
+        path.write_text(MULTILINE_TEMPLATE)
+    kept = tmp_path / "app" / "templates" / "page.html"
+    kept.parent.mkdir(parents=True)
+    kept.write_text(MULTILINE_TEMPLATE)
+
+    assert list(script._iter_files(tmp_path, "*.html")) == [kept]

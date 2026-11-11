@@ -53,6 +53,16 @@ from djust.uploads import UploadMixin  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _own_the_bucket_clock(frozen_rate_limit_clock):
+    """No token refills inside a test, however long the runner stalls (#3707).
+
+    A bucket with ``rate > 0`` refills ``elapsed * rate`` tokens from REAL time
+    unless the test owns the clock; a stall of a second mints a token and an
+    "exhausted" assertion goes false. See ``frozen_rate_limit_clock``.
+    """
+
+
 class _StateTargetView:
     """A real (non-Mock) view stand-in for server_push state application.
 
@@ -249,16 +259,10 @@ async def _connect_and_mount():
     connected, _ = await communicator.connect()
     assert connected
     # Drain the initial connect/ack frame.
-    try:
-        await communicator.receive_json_from(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": _UPLOAD_VIEW_PATH})
     # Drain the mount response.
-    try:
-        await communicator.receive_output(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_output()
     return communicator
 
 
@@ -313,7 +317,7 @@ class TestUploadFrameRateLimit:
             # upload_burst=5: send 3 cancel frames (well within budget).
             for _ in range(3):
                 await communicator.send_to(bytes_data=_cancel_frame())
-                out = await communicator.receive_output(timeout=2)
+                out = await communicator.receive_output()
                 # Each legit frame yields a normal progress/cancelled response,
                 # never a close and never a rate_limit_exceeded.
                 assert out["type"] != "websocket.close", "legit upload frame caused disconnect"

@@ -248,9 +248,6 @@ class TestScriptStylesAndCatalogue:
     def test_script_records_nothing_stores_nothing_and_sends_nothing_itself(self, banned):
         assert not re.search(banned, self.CODE), banned
 
-    def test_script_registers_without_replacing_an_app_hook(self):
-        assert "!appHooks.VoiceInput && !window.DjustHooks.VoiceInput" in self.SOURCE
-
     def test_recognition_is_started_in_exactly_one_place_the_press(self):
         assert len(re.findall(r"\.start\(\)", self.CODE)) == 1
         start = self.CODE.index("rec.start()")

@@ -11,7 +11,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-from djust.components.utils import url_attr
+from djust.components.utils import data_url_attr, attr_text
 
 
 class Dropdown(Component):
@@ -161,9 +161,9 @@ class Dropdown(Component):
         }
         direction_class = direction_map.get(self.direction, "dropdown")
 
-        parts = [f'<div class="btn-group {direction_class}" id="{conditional_escape(self.id)}">']
+        parts = [f'<div class="btn-group {direction_class}" id="{attr_text(self.id)}">']
 
-        button_class = f"btn btn-{conditional_escape(self.variant)}{size_class}"
+        button_class = f"btn btn-{attr_text(self.variant)}{size_class}"
 
         if self.split:
             # Split button dropdown
@@ -198,7 +198,7 @@ class Dropdown(Component):
                 disabled_attr = ' aria-disabled="true"' if disabled else ""
 
                 parts.append(
-                    f'        <li><a class="dropdown-item{disabled_class}" href="{url_attr(url)}"{disabled_attr}>{label}</a></li>'
+                    f'        <li><a class="dropdown-item{disabled_class}" href="{data_url_attr(url)}"{disabled_attr}>{label}</a></li>'
                 )
 
         parts.append("    </ul>")
@@ -228,7 +228,7 @@ class Dropdown(Component):
         size_class = size_map.get(self.size, size_map["md"])
 
         parts = [
-            f'<div class="relative inline-block text-left" id="{conditional_escape(self.id)}" x-data="{{open: false}}">'
+            f'<div class="relative inline-block text-left" id="{attr_text(self.id)}" x-data="{{open: false}}">'
         ]
 
         # Button
@@ -285,7 +285,7 @@ class Dropdown(Component):
                 click_attr = ' @click="open = false"' if not disabled else ""
 
                 parts.append(
-                    f'            <a href="{url_attr(url)}" class="block px-4 py-2 text-sm text-gray-700{disabled_class}"{click_attr}>{label}</a>'
+                    f'            <a href="{data_url_attr(url)}" class="block px-4 py-2 text-sm text-gray-700{disabled_class}"{click_attr}>{label}</a>'
                 )
 
         parts.append("        </div>")
@@ -296,20 +296,20 @@ class Dropdown(Component):
 
     def _render_plain(self) -> str:
         """Render plain HTML dropdown"""
-        size_class = f" button-{conditional_escape(self.size)}" if self.size != "md" else ""
+        size_class = f" button-{attr_text(self.size)}" if self.size != "md" else ""
 
-        parts = [f'<div class="dropdown" id="{conditional_escape(self.id)}">']
+        parts = [f'<div class="dropdown" id="{attr_text(self.id)}">']
 
         if self.split:
             parts.append(
-                f'    <button type="button" class="button button-{conditional_escape(self.variant)}{size_class}">{conditional_escape(self.label)}</button>'
+                f'    <button type="button" class="button button-{attr_text(self.variant)}{size_class}">{conditional_escape(self.label)}</button>'
             )
             parts.append(
-                f'    <button type="button" class="dropdown-toggle button button-{conditional_escape(self.variant)}{size_class}">▼</button>'
+                f'    <button type="button" class="dropdown-toggle button button-{attr_text(self.variant)}{size_class}">▼</button>'
             )
         else:
             parts.append(
-                f'    <button type="button" class="dropdown-toggle button button-{conditional_escape(self.variant)}{size_class}">{conditional_escape(self.label)} ▼</button>'
+                f'    <button type="button" class="dropdown-toggle button button-{attr_text(self.variant)}{size_class}">{conditional_escape(self.label)} ▼</button>'
             )
 
         parts.append('    <div class="dropdown-menu">')
@@ -325,7 +325,7 @@ class Dropdown(Component):
                 disabled_class = " disabled" if disabled else ""
 
                 parts.append(
-                    f'        <a href="{url_attr(url)}" class="dropdown-item{disabled_class}">{label}</a>'
+                    f'        <a href="{data_url_attr(url)}" class="dropdown-item{disabled_class}">{label}</a>'
                 )
 
         parts.append("    </div>")

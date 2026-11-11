@@ -578,6 +578,85 @@ added. Before 1.2.1 the key was read by nothing and had no effect (#2984). The
 `jit_cache_backend`, `jit_cache_dir` and `jit_redis_url` keys were never read
 and were removed in 1.3.
 
+### Related managers, `.all` and its methods, and the row cap
+
+A QuerySet is serialized by the fields the template reads, wherever it sits in
+the context: as a top-level value, as a value inside a dict, or inside a dict in
+a list (`{"d": {"users": qs}}`, `[{"label": "a", "users": qs}]`). Looked at the
+other way round, `{% for g in x.groups.all %}{{ g.name }}{% endfor %}` over a
+QuerySet nested in a container renders the same rows it does over a top-level
+one (#3788).
+
+A container is searched four containers deep (`{"a": {"b": {"c": {"d": qs}}}}`
+is found, a fifth level is not). **Below that the value is left as the view
+built it and no error is raised**: the QuerySet is sent as a flat field dict, and
+every relation the template walks (`x.groups.all`) renders empty. Keep the
+QuerySet within four containers of the context, or assign it to a top-level name.
+
+`.all` on a related manager is read in one of two ways, and the template decides:
+
+- **As rows**: `{% for g in u.groups.all %}`, `{{ u.groups.all|length }}`,
+  `{% if u.groups.all %}`. Every row up to `queryset_all_row_cap` is sent.
+- **Through QuerySet methods only**: `{{ u.groups.all.count }}`,
+  `{% if u.groups.all.exists %}`, `{{ u.groups.all.first.name }}`,
+  `.all.last`. The method runs on the QuerySet (a `COUNT`, an `EXISTS`, a
+  `LIMIT 1`) and its answer is sent; the relation is not read into rows.
+
+The method reading (a `{"count": n, ...}` dict in place of the rows) is used
+only when the template does **not** also read the relation as rows, and the row
+model has no attribute of that name. When it does (#3801) -- a loop beside
+`.count`, `|length` beside `.count`, `{% if u.groups.all %}{{ u.groups.all.count }}`,
+`{% with gs=u.groups.all %}{{ gs.count }}`, `|slice` beside `.count`, a row model
+with a `count` / `exists` / `first` / `last` *field* -- the relation ships as rows
+and the method is answered another way: the evaluated rows of that name (a
+top-level QuerySet or `list[Model]`) are kept in the render sidecar, and the
+engine's guarded getattr walk, the one `DjustTemplateBackend` renders through,
+calls the method on the real QuerySet. A method marked `alters_data` or
+`do_not_call_in_templates` is still never called, and the serialization floor
+still governs every row. A model method that mutates but carries neither flag is
+now callable from a template on a LiveView, exactly as Django and
+`DjustTemplateBackend` already call it: mark such a method `alters_data = True`.
+Only a name read both ways pays for this (a proxy per kept row, roughly 2.4 KB
+and +50% render time per row in a 20,000-row measurement); a plain loop and a
+method-only read do not. Measured again for #3867 (release extension, 20,000 users in one or two groups each, the
+same template with and without the kept rows, three renders per process, two processes per
+variant): the render took 1.19 to 1.34 s without the kept rows and 1.96 to 2.00 s with them
+(+48 to +69%), and peak RSS rose from 296 MB to 358 to 360 MB (about 3.2 KB a row; that
+includes whatever the view holds for the render). A cProfile run of the same case shows about
+300,000 Python calls in the sidecar floor's functions (`_protect_sidecar_tree`: a
+`_SidecarModelProxy` per kept row, built up front) beside the engine's own render; the profiler
+does not separate the two, so no share is claimed. Making the proxies lazy would change how
+the floor is constructed, not trim a copy, so it is not done; annotate (`Count("groups")`)
+when a very long list is read both ways. A QuerySet nested in a dict is not covered: read the
+count at a top-level name, or annotate it (`Count("groups")`).
+
+A mixed read through a `|slice` of the top-level name itself
+(`{% for u in users|slice:':2' %}{{ u.groups.all.count }}{% for g in u.groups.all %}...`) still
+prints no count where Django prints one (#3867): the kept rows are reached by the loop
+variable's alias for `users.<N>`, a filtered operand registers none (`slice` shifts the
+index), and the serialized rows carry no handle of their own. Slice the relation instead
+(`u.groups.all|slice:':1'`, covered), slice in the view, or annotate the count.
+
+A row's integer `count` / `exists` field survives on a `list[Model]` too (the
+Python serializer only calls a leaf that is callable).
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {
+    'queryset_all_row_cap': 100_000,   # the default; 0 removes the cap
+}
+```
+
+At most this many rows are read per `.all` (a SQL `LIMIT` on an unevaluated
+relation). A longer relation is cut to the cap and a warning is logged. The cut
+is visible: `{{ u.groups.all|length }}` reports the capped number, so a template
+that needs a total should read `.count`, which is never capped. `0`, and any value
+of 2**62 or more, removes the cap; `None` is the same as unset (the default, not
+"no cap"); anything that is not a non-negative integer is logged and replaced by
+the default. **The cap bounds the work the serializer does, not memory**: the
+optimizer still prefetches the whole relation before the serializer runs
+(#3862), so a huge relation is loaded whatever the cap is.
+
 ### Debugging Serialization Issues
 
 If data isn't appearing in your template, check:

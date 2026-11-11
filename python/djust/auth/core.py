@@ -39,12 +39,13 @@ import inspect
 import logging
 import weakref
 from collections.abc import Iterator
-from typing import Any, Callable, NamedTuple, Optional, Union, cast
+from typing import Any, Callable, NamedTuple, Optional, Tuple, Union, cast
 
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
 from django.http import Http404
 
+from ..sync_turn import guarded_step, run_guarded_step
 from .any_of import PermissionRequired, describe_permission_spec, user_has_permission_spec
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,28 @@ def check_view_auth(
         PermissionDenied: If user is authenticated but lacks required
             permissions or ``check_permissions()`` refuses them. Matches
             Django's PermissionRequiredMixin behavior.
+
+    Runs as one ``"auth"`` step of ``LIVEVIEW_CONFIG["sync_turn_wrapper"]`` on
+    every transport, so ``check_permissions()`` and Django's ``test_func`` see
+    the same per-turn scope as the handler (#3637). Entered through
+    :func:`~djust.sync_turn.run_guarded_step`: a wrapper that swallows a failed
+    check can never turn it into a pass.
     """
+    return run_guarded_step(
+        view_instance,
+        "auth",
+        _check_view_auth,
+        view_instance,
+        request,
+        http_dispatched=http_dispatched,
+        event=event,
+    )
+
+
+def _check_view_auth(
+    view_instance: Any, request: Any, *, http_dispatched: bool, event: bool
+) -> Optional[str]:
+    """The body of :func:`check_view_auth` (the ``"auth"`` step runs around it)."""
     login_url = _view_login_url(view_instance)
 
     # 1 + 2. Login and permission_required.
@@ -256,7 +278,10 @@ def check_event_auth(view_instance: Any, request: Any) -> Optional[str]:
         getattr(view_instance, "login_url", None)
         or getattr(settings, "LOGIN_URL", "/accounts/login/"),
     )
-    return _http_only_access(view_instance, request, login_url, _PHASE_EVENT)
+    # The decorators it replays are application code: an ``"auth"`` step (#3637).
+    return run_guarded_step(
+        view_instance, "auth", _http_only_access, view_instance, request, login_url, _PHASE_EVENT
+    )
 
 
 def has_event_access_control(view_cls: type, urlconf: Optional[str] = None) -> bool:
@@ -1849,6 +1874,65 @@ def check_object_permission(view_instance: Any, request: Any) -> None:
     if not _has_custom_get_object(view_instance):
         return
 
+    # ``get_object()`` and ``has_object_permission()`` are application code that
+    # reads rows, so they run as one ``"auth"`` step of the sync-turn wrapper
+    # (#3637): under row-level security an unscoped ``get_object()`` finds
+    # nothing and the check would fail closed for a caller who is allowed.
+    # The cache is written after the step, not inside it, so a wrapper whose
+    # exit raises (a failed commit) cannot leave an object cached for a check
+    # that was refused.
+    outcome = run_guarded_step(
+        view_instance, "auth", _resolve_object_permission, view_instance, request
+    )
+    if outcome is not None:
+        view_instance._object = outcome[0]
+        # A view that keeps something beside the object (ADR-035's form state, the
+        # record an event may reuse) learns here that ``_object`` was just resolved
+        # and authorized for ``request``. Only a successful check gets this far.
+        note = getattr(view_instance, "_djust_note_authorized_object", None)
+        if callable(note):
+            note(request)
+
+
+def check_object_permission_for_event(view_instance: Any, request: Any, handler: Any) -> None:
+    """:func:`check_object_permission` for the event ``handler`` is about to run.
+
+    The per-event check of ADR-017. It is the full check, unless the view says that
+    ``handler`` may reuse the object it already authorized
+    (``view._djust_reuses_authorized_object(handler, request)``; ``ModelFormMixin``
+    with ``object_recheck = "writes"``, for its read-only events only, #3967). A view
+    without that method, and every handler it does not name, gets the full check.
+    The hook is the view's own code: it is asked, and a hook that raises means "no":
+    the full check runs, so an error here can only cost a lookup, never skip one.
+
+    Every transport's event path calls this and no other; do not call
+    :func:`check_object_permission` directly for an event (#1646).
+    """
+    reuse = getattr(view_instance, "_djust_reuses_authorized_object", None)
+    if callable(reuse):
+        try:
+            if reuse(handler, request):
+                return
+        except Exception as exc:  # noqa: BLE001 — the hook is app code; a failure means "check in full"
+            from .._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger,
+                (view_instance,),
+                exc,
+                "_djust_reuses_authorized_object raised on %s; checking the object in full",
+                view_instance.__class__.__name__,
+                level="warning",
+            )
+    check_object_permission(view_instance, request)
+
+
+def _resolve_object_permission(view_instance: Any, request: Any) -> Optional[Tuple[Any]]:
+    """The check of :func:`check_object_permission`, up to caching its result.
+
+    Returns ``(value,)`` for the value to cache as ``view._object``, or ``None``
+    to leave the cache alone. Raises ``PermissionDenied`` on denial.
+    """
     # ADR-035: a managed-object view (``djust.forms.ModelFormMixin``) resolves
     # and authorizes its object inside ``mount()``, before its form exists, and
     # leaves a one-shot verdict for the check that immediately follows mount on
@@ -1864,8 +1948,8 @@ def check_object_permission(view_instance: Any, request: Any) -> None:
                 raise PermissionDenied(
                     f"Access denied for object on {view_instance.__class__.__name__}"
                 )
-            view_instance._object = verdict_object
-            return
+            return (verdict_object,)
+        # A verdict for another request is ignored, as before.
 
     # ADR-035 D3: an edit adapter requires its object. "Not found", "filtered
     # out by the queryset" and "no object" are all a denial there, raised with
@@ -1889,8 +1973,7 @@ def check_object_permission(view_instance: Any, request: Any) -> None:
         # leak existence via DEBUG-mode tracebacks. The two catches are
         # listed explicitly because Http404 inherits from Exception, not
         # ObjectDoesNotExist.
-        view_instance._object = None
-        return
+        return (None,)
 
     if obj is None and required:
         view_instance._object = None
@@ -1900,8 +1983,7 @@ def check_object_permission(view_instance: Any, request: Any) -> None:
         # Explicit "no object" — clear cache (was implicit before; making
         # it explicit so v0.9.5-1b's per-event re-check sees a consistent
         # post-state regardless of prior cache content).
-        view_instance._object = None
-        return
+        return (None,)
 
     # Run the permission check BEFORE populating the cache. Populating
     # the cache before the check (the v0.9.5-1a shape) was benign at
@@ -1932,8 +2014,8 @@ def check_object_permission(view_instance: Any, request: Any) -> None:
         # re-run this check anyway in v0.9.5-1b).
         raise PermissionDenied(f"Access denied for object on {view_instance.__class__.__name__}")
 
-    # Permission granted — populate the cache only now.
-    view_instance._object = obj
+    # Permission granted — the caller populates the cache, only now.
+    return (obj,)
 
 
 def enforce_object_permission(view_instance: Any, request: Any) -> None:
@@ -2137,7 +2219,9 @@ async def acheck_view_auth(
         )
 
     login_url = _view_login_url(view_instance)
-    redirect = await sync_to_async(_check_login_and_permission)(view_instance, request, login_url)
+    redirect = await sync_to_async(
+        guarded_step(view_instance, "auth", _check_login_and_permission)
+    )(view_instance, request, login_url)
     if redirect is not None:
         return redirect
     try:
@@ -2149,7 +2233,7 @@ async def acheck_view_auth(
     redirect = _custom_check_verdict(view_instance, request, login_url, result)
     if redirect is not None:
         return redirect
-    return await sync_to_async(_check_after_custom)(
+    return await sync_to_async(guarded_step(view_instance, "auth", _check_after_custom))(
         view_instance, request, login_url, http_dispatched=http_dispatched, event=event
     )
 
@@ -2217,7 +2301,14 @@ def check_handler_permission(handler: Any, request: Any) -> bool:
     perm = meta.get("permission_required")
     if perm is None:
         return True
-    return user_has_permission_spec(getattr(request, "user", None), perm)
+    # ``has_perm`` runs the project's auth backends: an ``"auth"`` step (#3637).
+    return run_guarded_step(
+        getattr(handler, "__self__", None),
+        "auth",
+        user_has_permission_spec,
+        getattr(request, "user", None),
+        perm,
+    )
 
 
 def _is_authenticated(request: Any) -> bool:

@@ -309,6 +309,10 @@ struct BlockHandlerEntry {
     wants_autoescape: bool,
     /// See [`read_lazy_body`] (#2658).
     lazy_body: bool,
+    /// See [`read_wants_typed_args`] (#3768).
+    wants_typed_args: bool,
+    /// See [`read_typed_standins_only`] (#3768).
+    typed_standins_only: bool,
 }
 
 /// Global registry for block tag handlers (tags with children).
@@ -422,6 +426,44 @@ fn read_wants_autoescape(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
     handler.getattr("WANTS_AUTOESCAPE")?.is_truthy()
 }
 
+/// The handler's opt-in "hand me my operands as TYPED values" declaration (#3756).
+///
+/// The inline-handler contract resolves every operand to TEXT (scalars) or JSON (lists, dicts)
+/// before `render(args, context)` runs, so a handler that branches on a value's TYPE
+/// (`json_viewer`: `isinstance`) sees `str(datetime)` where Django's tag sees the `datetime`.
+/// A handler that sets `TYPED_ARGS = True` is additionally handed, in the `context` dict under
+/// [`crate::renderer`]'s reserved key, each `key=<expression>` operand as the typed Python value
+/// the engine resolved through the SAME floored walk `{{ }}` uses (`value_into_handler_pyobject`).
+/// It is the engine, not the handler, that resolves the expression, which is the point: a handler
+/// resolving it itself, as the `{% load %}` bridge does, walks raw objects with no floor.
+///
+/// Opt-IN, like [`read_wants_autoescape`], and read once at registration so a handler without it
+/// pays nothing per call. Both registries read it here (#3768): the inline one, and the block one
+/// (a plain block handler; a `LAZY_BODY` one is called through `before_body` / `after_body` and is
+/// not handed the operands).
+fn read_wants_typed_args(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if !handler.hasattr("TYPED_ARGS")? {
+        return Ok(false);
+    }
+    handler.getattr("TYPED_ARGS")?.is_truthy()
+}
+
+/// A `TYPED_ARGS` handler's narrower ask: only the operands the engine stands in for (#3768).
+///
+/// `TYPED_ARGS = True` alone hands over EVERY `key=<expression>` operand as a typed Python value,
+/// which materialises a large list or dict a second time (the handler already got it as JSON).
+/// A handler that also sets `TYPED_ARGS_STANDINS_ONLY = True` is handed only the operands whose
+/// string form loses their type, the ones `djust.components.rust_handlers._parse_args` takes back:
+/// a tuple, a namedtuple (#3849) and an object (`UUID`, `Path`, ...). Every other operand is left
+/// out, so the handler reads it from its string argument exactly as it did before the channel
+/// existed. Has no effect without `TYPED_ARGS`.
+fn read_typed_standins_only(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if !handler.hasattr("TYPED_ARGS_STANDINS_ONLY")? {
+        return Ok(false);
+    }
+    handler.getattr("TYPED_ARGS_STANDINS_ONLY")?.is_truthy()
+}
+
 /// The handler's opt-in "let ME decide whether the body renders at all"
 /// declaration (#2658).
 ///
@@ -485,6 +527,9 @@ fn read_lazy_body(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
 /// has resolved them, and only the un-resolved path can tell them apart.
 struct TagHandlerEntry {
     validator: Option<Py<PyAny>>,
+    /// The optional `rewrite_args_at_parse` hook (#3664): see
+    /// [`rewrite_tag_arguments`].
+    arg_rewriter: Option<Py<PyAny>>,
     handler: Py<PyAny>,
     resolve_positions: Option<HashSet<usize>>,
     /// See [`read_returns_bindings`] (#2547).
@@ -493,6 +538,10 @@ struct TagHandlerEntry {
     accepts_as_var: bool,
     /// See [`read_wants_autoescape`] (#2556).
     wants_autoescape: bool,
+    /// See [`read_wants_typed_args`] (#3756).
+    wants_typed_args: bool,
+    /// See [`read_typed_standins_only`] (#3768).
+    typed_standins_only: bool,
     /// `Some(message)` when the parser must REFUSE this tag with Django's
     /// `TemplateSyntaxError` the moment a template uses it (#2547): a raw
     /// `@register.tag` that consumes a body cannot be bridged, and the
@@ -551,6 +600,45 @@ pub fn validate_tag_arguments(name: &str, args: &[String], block: bool) -> djust
             .map_err(DjangoRustError::PythonException)?;
     }
     Ok(())
+}
+
+/// Let an inline handler REWRITE the original argument tokens once, at
+/// template compilation (#3664).
+///
+/// A handler that defines `rewrite_args_at_parse(args) -> list[str]` gets the
+/// tokens exactly as the template wrote them and returns the list the node
+/// keeps. It exists for the one thing a handler cannot do after the engine has
+/// resolved the operands: tell a POSITIONAL operand from a KEYWORD one. A
+/// resolved `{% dj_tag name %}` with `name = "variant=primary"` arrives as the
+/// text `variant=primary`, indistinguishable from `{% dj_tag variant=primary
+/// %}`, so a handler that reads `key=value` strings both dropped every
+/// positional argument and let a positional VALUE inject a keyword. Decided
+/// here, from the tokens, the handler can name each positional operand
+/// (`label="Python"`) before anything is resolved, and the engine then treats
+/// it exactly like the keyword it stands for.
+///
+/// Runs outside the registry lock (a handler may itself touch the registry),
+/// like [`validate_tag_arguments`]. A handler without the hook gets its tokens
+/// back unchanged. Raising from the hook refuses the template at compile time,
+/// with the handler's own exception.
+pub fn rewrite_tag_arguments(name: &str, args: &[String]) -> djust_core::Result<Vec<String>> {
+    // Attach BEFORE taking the read lock (see "Lock order" above).
+    let rewriter = Python::attach(|py| -> djust_core::Result<Option<Py<PyAny>>> {
+        let registry = TAG_HANDLERS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+        Ok(registry
+            .get(name)
+            .and_then(|entry| entry.arg_rewriter.as_ref())
+            .map(|method| method.clone_ref(py)))
+    })?;
+    match rewriter {
+        None => Ok(args.to_vec()),
+        Some(rewriter) => Python::attach(|py| -> PyResult<Vec<String>> {
+            rewriter.call1(py, (args.to_vec(),))?.extract(py)
+        })
+        .map_err(DjangoRustError::PythonException),
+    }
 }
 
 /// Run the optional second stage only after the block body parsed successfully.
@@ -651,6 +739,8 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
     let returns_bindings = read_returns_bindings(handler_ref)?;
     let accepts_as_var = read_accepts_as_var(handler_ref)?;
     let wants_autoescape = read_wants_autoescape(handler_ref)?;
+    let wants_typed_args = read_wants_typed_args(handler_ref)?;
+    let typed_standins_only = read_typed_standins_only(handler_ref)?;
     if accepts_as_var && !returns_bindings {
         return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
             "Handler '{name}' declares ACCEPTS_AS_VAR but not RETURNS_BINDINGS — \
@@ -660,6 +750,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
     let parse_refusal = read_parse_refusal(handler_ref)?;
 
     let validator = read_parse_validator(handler_ref)?;
+    let arg_rewriter = read_named_parse_validator(handler_ref, "rewrite_args_at_parse")?;
 
     let mut registry = TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
@@ -670,10 +761,13 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
         TagHandlerEntry {
             handler,
             validator,
+            arg_rewriter,
             resolve_positions,
             returns_bindings,
             accepts_as_var,
             wants_autoescape,
+            wants_typed_args,
+            typed_standins_only,
             parse_refusal,
         },
     );
@@ -799,6 +893,8 @@ pub fn register_block_tag_handler(
     let returns_bindings = read_returns_bindings(handler_ref)?;
     let wants_autoescape = read_wants_autoescape(handler_ref)?;
     let lazy_body = read_lazy_body(handler_ref)?;
+    let wants_typed_args = read_wants_typed_args(handler_ref)?;
+    let typed_standins_only = read_typed_standins_only(handler_ref)?;
 
     // The two-phase contract is TOTAL or it is not a contract (#2658): a
     // handler that declares it must carry both halves, and the combinations
@@ -846,6 +942,8 @@ pub fn register_block_tag_handler(
             returns_bindings,
             wants_autoescape,
             lazy_body,
+            wants_typed_args,
+            typed_standins_only,
         },
     );
     drop(registry);
@@ -1286,6 +1384,46 @@ pub fn tag_handler_returns_bindings(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Internal Rust API — did the inline handler for `name` declare `TYPED_ARGS` (#3756)?
+/// `false` for an unregistered name.
+pub fn tag_handler_wants_typed_args(name: &str) -> bool {
+    TAG_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.wants_typed_args))
+        .unwrap_or(false)
+}
+
+/// Internal Rust API — did the inline handler for `name` declare `TYPED_ARGS_STANDINS_ONLY`
+/// (#3768)? `false` for an unregistered name.
+pub fn tag_handler_typed_standins_only(name: &str) -> bool {
+    TAG_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.typed_standins_only))
+        .unwrap_or(false)
+}
+
+/// Internal Rust API — did the block handler for `name` declare `TYPED_ARGS_STANDINS_ONLY`
+/// (#3768)? `false` for an unregistered name.
+pub fn block_handler_typed_standins_only(name: &str) -> bool {
+    BLOCK_TAG_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.typed_standins_only))
+        .unwrap_or(false)
+}
+
+/// Internal Rust API — did the block handler for `name` declare `TYPED_ARGS` (#3768)?
+/// `false` for an unregistered name.
+pub fn block_handler_wants_typed_args(name: &str) -> bool {
+    BLOCK_TAG_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.wants_typed_args))
+        .unwrap_or(false)
+}
+
 /// Internal Rust API — did the inline handler for `name` declare
 /// `ACCEPTS_AS_VAR` (#2563)? `false` for an unregistered name.
 pub fn tag_handler_accepts_as_var(name: &str) -> bool {
@@ -1536,6 +1674,10 @@ pub(crate) fn build_py_context<'py>(
     }
     if let Some(raw) = raw_py_objects {
         for (key, obj) in raw {
+            // #3773: the typed-operand channel is the engine's, never the application's.
+            if key == crate::renderer::TYPED_ARGS_KEY {
+                continue;
+            }
             py_context
                 .set_item(key, obj.bind(py))
                 .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
@@ -1565,8 +1707,22 @@ pub(crate) fn build_py_context_memo<'py>(
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
 ) -> Result<Bound<'py, pyo3::types::PyDict>, String> {
     let py_context = context.bridged_py_dict(py)?;
+    // #3773: a live-frame key of the engine's reserved name never reaches a handler. The dict is
+    // this call's own (`bridged_py_dict` builds a fresh one); the per-frame memo is untouched.
+    if py_context
+        .contains(crate::renderer::TYPED_ARGS_KEY)
+        .unwrap_or(false)
+    {
+        py_context
+            .del_item(crate::renderer::TYPED_ARGS_KEY)
+            .map_err(|e| format!("Failed to drop the reserved typed-args key: {e}"))?;
+    }
     if let Some(raw) = raw_py_objects {
         for (key, obj) in raw {
+            // #3773: as in `build_py_context`, the sidecar cannot carry the engine's key.
+            if key == crate::renderer::TYPED_ARGS_KEY {
+                continue;
+            }
             py_context
                 .set_item(key, obj.bind(py))
                 .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
@@ -2597,6 +2753,31 @@ pub fn is_core_root_layout(name: &str) -> Result<bool, DjangoRustError> {
 }
 
 fn core_root_layout_object(py: Python<'_>, handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+    // `register_with_rust_engine` registers each native handler inside the framework's two
+    // argument wrappers (the Django-checked tag handler around the typed block operands,
+    // #3676 / #3871). Each layer is peeled only when its type IS that framework class, so a
+    // subclass, a look-alike wrapper or a wrapper around anything else gains nothing, and the
+    // innermost object still has to be one of the four exact layout classes below.
+    let mut handler = handler.clone();
+    for (module, class) in [
+        ("djust._positional_args", "DjangoCheckedTagHandler"),
+        ("djust.components.rust_handlers", "_TypedBlockOperands"),
+    ] {
+        let wrapper = py.import(module)?.getattr(class)?;
+        if handler.get_type().as_any().is(&wrapper) {
+            // The wrapper's own instance attribute, read from its `__dict__`: no `__getattr__`
+            // forwarding and no descriptor can answer for it.
+            let inner = handler
+                .getattr("__dict__")?
+                .cast_into::<pyo3::types::PyDict>()?
+                .get_item("_handler")?;
+            let Some(inner) = inner else {
+                return Ok(false);
+            };
+            handler = inner;
+        }
+    }
+    let handler = &handler;
     let ty = handler.get_type();
     let name = ty.name()?;
     let name = name.to_str()?;

@@ -10,10 +10,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
+# The generator is imported as the top-level package ``assets``, not ``djust.assets``:
+# importing ``djust`` needs the compiled extension (mandatory in 2.0), and this runs in a CI
+# job with no build. ``make vendor`` runs the generator the same way.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python" / "djust"))
 
-from djust.assets.manifest import Asset, AssetFile, Package, sri  # noqa: E402
-from djust.assets.sbom import dumps, to_cyclonedx  # noqa: E402
+from assets.manifest import Asset, AssetFile, Package, sri  # noqa: E402
+from assets.sbom import dumps, to_cyclonedx  # noqa: E402
 
 asset = Asset(
     name="canary",

@@ -105,11 +105,11 @@ async def _connect(request, view_class):
     socket.scope["session"] = SessionStore(request.session.session_key)
     socket.scope["user"] = AnonymousUser()
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     await socket.send_json_to(
         {"type": "mount", "view": __name__ + "." + view_class.__name__, "url": request.path}
     )
-    frame = await socket.receive_json_from(timeout=3)
+    frame = await socket.receive_json_from()
     assert frame["type"] == "mount", frame
     return socket, frame
 

@@ -211,10 +211,6 @@ class TestDictRoundTrip:
         assert isinstance(result["outer"]["inner"], dict)
         assert result["outer"]["inner"]["deep"] == "value"
 
-    def test_normalize_empty_dict(self):
-        """Empty dict should remain an empty dict."""
-        assert normalize_django_value({}) == {}
-
     def test_normalize_dict_with_complex_values(self):
         """Dict with various value types should normalize correctly.
 

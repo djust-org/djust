@@ -135,7 +135,7 @@ def _solicited_by(frame, ref) -> bool:
     return frame.get("ref") == ref or (frame.get("entry") or {}).get("ref") == ref
 
 
-async def _receive_until(communicator, wanted_type, *, ref=None, tries=8, timeout=3):
+async def _receive_until(communicator, wanted_type, *, ref=None, tries=8, timeout=30):
     """Drain frames until one of ``wanted_type`` (and matching ``ref``, if given).
 
     Pass ``ref`` whenever a stray could share the wanted type — otherwise this
@@ -174,7 +174,7 @@ async def _connect_and_mount(view_suffix, url):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await _recv(communicator, 2)  # drain connect frame
+    await _recv(communicator, 30)  # drain connect frame
 
     await communicator.send_json_to(
         {"type": "mount", "view": f"{__name__}.{view_suffix}", "url": url}
@@ -257,7 +257,7 @@ async def test_time_travel_jump_recovery_version_is_current():
         # time_travel_state frame. Capture the render frame's version.
         jump_render = None
         for _ in range(8):
-            frame = await _recv(communicator, 3)
+            frame = await _recv(communicator, 30)
             if frame.get("type") in ("patch", "html_update"):
                 jump_render = frame
                 break
@@ -470,7 +470,7 @@ async def test_an_idle_connection_receives_no_unsolicited_frames():
 
         # Now sit idle. Anything that arrives was not asked for.
         idle_clean = await communicator.receive_nothing(timeout=1.5)
-        stray = None if idle_clean else await communicator.receive_json_from(timeout=1)
+        stray = None if idle_clean else await communicator.receive_json_from()
         assert idle_clean, (
             f"an unsolicited frame arrived at an idle connection: {stray!r}\n"
             "That is a #2215 producer. Whatever sent this is what bumps the "

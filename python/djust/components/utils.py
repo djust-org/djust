@@ -9,8 +9,10 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
-from django.utils.html import conditional_escape
+from django.utils.html import conditional_escape, escape
 from django.utils.safestring import SafeData
+
+from djust.security.urls import url_as_parsed, url_is_protocol_relative
 
 __all__ = [
     "CURRENCY_SYMBOLS",
@@ -23,7 +25,10 @@ __all__ = [
     "safe_css_ratio",
     "safe_url",
     "unique_ids",
+    "url_allowed",
+    "url_as_parsed",
     "url_attr",
+    "url_is_protocol_relative",
 ]
 
 
@@ -222,6 +227,19 @@ _COLOR_FUNC_RE = re.compile(
 _CSS_VAR_RE = re.compile(_CSS_VAR)
 
 
+def _exact_str(value: Any) -> str:
+    """``value`` as the EXACT ``str`` type, with the content ``str(value)`` has.
+
+    The URL and CSS checks below read the text with ``strip()``, ``lower()``, slices and the like.
+    On a ``str`` subclass those methods are the subclass's, and one may hand back a marked-safe
+    (or otherwise special) object, so a check that ran on its result could be skipped by the
+    value's own type. ``"".join`` builds a new base ``str`` from the content alone, and every
+    later operation is then the base type's.
+    """
+    text = str(value)
+    return text if type(text) is str else "".join((text,))
+
+
 def safe_css_color(value: Any, default: str = "") -> str:
     """Return ``value`` if it is a plain CSS colour, else ``default``.
 
@@ -234,7 +252,7 @@ def safe_css_color(value: Any, default: str = "") -> str:
     """
     if value is None:
         return default
-    text = str(value)
+    text = _exact_str(value)
     candidate = text.strip()
     if not candidate or len(candidate) > _CSS_MAX_VALUE_LEN:
         return default
@@ -286,7 +304,7 @@ def safe_css_length(value: Any, default: str = "") -> str:
     """
     if value is None:
         return default
-    text = str(value)
+    text = _exact_str(value)
     candidate = text.strip()
     if not candidate or len(candidate) > _CSS_MAX_VALUE_LEN:
         return default
@@ -320,7 +338,7 @@ def safe_css_ratio(value: Any, default: str = "") -> str:
     ``auto``, ``auto 4/3``), else ``default``."""
     if value is None:
         return default
-    text = str(value)
+    text = _exact_str(value)
     candidate = text.strip()
     if candidate and len(candidate) <= _CSS_MAX_VALUE_LEN and _CSS_RATIO_RE.fullmatch(candidate):
         return text
@@ -338,7 +356,7 @@ def safe_css_number(value: Any, default: str = "", *, integer: bool = False) -> 
     takes) are accepted."""
     if value is None or isinstance(value, bool):
         return default
-    text = str(value)
+    text = _exact_str(value)
     candidate = text.strip()
     if len(candidate) > _CSS_MAX_VALUE_LEN:
         return default
@@ -382,26 +400,65 @@ def safe_url(value: Any) -> str:
         control-char/whitespace-obfuscated variants, and any value that fails to
         parse → replaced with ``"#"`` (fail-closed).
     """
-    s = str(value).strip()
+    s = _exact_str(value).strip()
     if not s:
         return ""
-    try:
-        scheme = urlsplit(s).scheme.lower()
-    except ValueError:
-        return "#"
-    probe = _CTRL_WS_RE.sub("", s).lower()
-    if scheme and scheme not in _SAFE_URL_SCHEMES:
-        return "#"
-    # Belt-and-suspenders: catch parser-evasion where the obfuscated value has
-    # an empty/odd urlsplit scheme but a browser would still see a bad scheme.
-    if probe.startswith(("javascript:", "vbscript:", "data:")):
+    if not url_allowed(s):
         return "#"
     escaped: str = conditional_escape(s)
     return escaped
 
 
+def url_allowed(value: Any, *, image: bool = False) -> bool:
+    """Whether ``value`` may be printed into an ``href``/``action``/``src``.
+
+    This is the allowlist decision :func:`safe_url` makes, without the escaping or
+    the ``"#"`` substitution, so a caller that must keep the original value (a
+    template that escapes it once itself) applies the SAME rule instead of writing a
+    second one. ``djust_theming`` is that caller (#3677).
+
+    ``True`` for an empty value, a relative / anchor / query / scheme-less URL and an
+    absolute URL whose scheme is in :data:`_SAFE_URL_SCHEMES`. ``False`` for any other
+    scheme (``javascript:``, ``livescript:``, ``blob:``, ``file:``, custom schemes, ...)
+    including case-folded and control-character-obfuscated forms, and for a value that
+    fails to parse. With ``image=True`` an inline ``data:image/...`` URI is also
+    allowed, for ``<img src>``. A marked-safe (``SafeData``) value is judged like any
+    other string.
+
+    This is a SCHEME allowlist, not an origin check: a URL to another host is allowed, as it is
+    in an ``<a href>``. A slot that must stay on this site (a root-relative asset path, a
+    same-origin redirect) says so with :func:`url_is_protocol_relative`.
+
+    This only JUDGES the scheme. A caller that prints the value must also escape it:
+    ``safe_url`` does, and ``djust_theming`` hands its templates plain text (a
+    ``SafeData`` URL is converted first), because a template prints a ``SafeData``
+    raw and ``mark_safe("&#x6A;avascript:x")`` passes this check (it has no scheme
+    until a browser decodes the reference).
+    """
+    s = _exact_str(value).strip()
+    if not s:
+        return True
+    if image and _is_data_image(s):
+        return True
+    try:
+        scheme = urlsplit(s).scheme.lower()
+    except ValueError:
+        return False
+    if scheme and scheme not in _SAFE_URL_SCHEMES:
+        return False
+    # Belt-and-suspenders: catch parser-evasion where the obfuscated value has
+    # an empty/odd urlsplit scheme but a browser would still see a bad scheme.
+    probe = _CTRL_WS_RE.sub("", s).lower()
+    return not probe.startswith(("javascript:", "vbscript:", "data:"))
+
+
 # Image sources may legitimately be inline ``data:image/...`` URIs.
 _DATA_IMAGE_RE = re.compile(r"^data:image/[a-z0-9.+-]+[;,]")
+
+
+def _is_data_image(value: Any) -> bool:
+    """Whether ``value`` is an inline ``data:image/...`` URI (control chars ignored)."""
+    return bool(_DATA_IMAGE_RE.match(_CTRL_WS_RE.sub("", _exact_str(value)).lower()))
 
 
 def unique_ids(items: Any) -> bool:
@@ -418,26 +475,163 @@ def unique_ids(items: Any) -> bool:
     return bool(ids) and all(ids) and len(set(ids)) == len(ids)
 
 
-def url_attr(value: Any, *, image: bool = False) -> str:
+#: The two no-op hrefs a dropdown toggle or a JavaScript-driven link uses. Exact text (after
+#: ``strip`` and case-folding, nothing appended), in an ``href`` only: neither runs script. Every
+#: other ``javascript:`` URL is neutralised, marked safe or not (#3898).
+_NOOP_HREFS = frozenset({"javascript:void(0)", "javascript:;"})
+
+
+def url_attr(value: Any, *, image: bool = False, honor_safe: bool = True) -> str:
     """Return ``value`` ready to place inside a quoted ``href``/``src``/``action``.
 
-    Values the developer marked safe (``mark_safe`` / ``SafeString``) are
-    returned unchanged. Anything else goes through :func:`safe_url`: it is
-    HTML-escaped, and a URL whose scheme is not a navigation scheme
-    (``javascript:``, ``vbscript:``, ``data:``, ...) becomes ``"#"``. With
-    ``image=True`` an inline ``data:image/...`` URI is also accepted (escaped),
-    for ``<img src>``.
+    The value is HTML-escaped (:func:`safe_url`), and a URL whose scheme is not a navigation
+    scheme (``javascript:``, ``vbscript:``, ``data:``, ...) becomes ``"#"``. With ``image=True`` an
+    inline ``data:image/...`` URI is also accepted (escaped), for ``<img src>``.
+
+    A value marked safe (``mark_safe`` / ``SafeString`` / a lazy one / anything with ``__html__``)
+    is NOT exempt (#3898): the marker means "no HTML escaping needed" in a text slot, not
+    "navigable". The one exception is the literal no-op ``href`` ``javascript:void(0)`` /
+    ``javascript:;`` (:data:`_NOOP_HREFS`), accepted marked or not, never for an image.
+
+    ``honor_safe`` is kept for a caller that must return a marked-safe value untouched; no
+    call site in the package passes ``True`` or leaves the default (pinned by
+    ``python/djust/tests/test_marked_safe_attribute_sweep_3898.py``): pass ``honor_safe=False``
+    or use :func:`data_url_attr`.
     """
     if value is None:
         return ""
-    if isinstance(value, SafeData):
-        return str(value)
-    if image:
-        probe = _CTRL_WS_RE.sub("", str(value)).lower()
-        if _DATA_IMAGE_RE.match(probe):
-            escaped: str = conditional_escape(str(value).strip())
-            return escaped
+    text = _exact_str(value)  # the base type: every check below is the base type's own
+    if not image and text.strip().lower() in _NOOP_HREFS:
+        return text.strip().lower()
+    if honor_safe and isinstance(value, SafeData):
+        return text
+    if image and _is_data_image(text):
+        escaped: str = conditional_escape(text.strip())
+        return escaped
     return safe_url(value)
+
+
+def data_url_attr(value: Any, *, image: bool = False) -> str:
+    """:func:`url_attr` for every URL a component prints: read out of an item dict, a list of
+    images, a row, a constructor argument or a template tag's own keyword (#3898, #3894).
+
+    A marked-safe value (``mark_safe``, a lazy one, ``Markup``) is checked and escaped like any
+    other, except the literal no-op hrefs of :data:`_NOOP_HREFS`. ``mark_safe`` keeps markup in a
+    TEXT slot; it does not mean "use this as a URL".
+    ``python/djust/tests/test_marked_safe_attribute_sweep_3898.py`` pins that no call site uses
+    :func:`url_attr`'s ``honor_safe`` default.
+    """
+    return url_attr(value, image=image, honor_safe=False)
+
+
+def attr_text(value: Any) -> str:
+    """``value`` escaped for a quoted attribute, whatever it is marked as (#3898).
+
+    ``conditional_escape`` leaves a marked-safe value (and anything with ``__html__``) as it is,
+    which is right in a text slot and lets the value out of an attribute. This always escapes
+    (``django.utils.html.escape``), so it is for ``class=``, ``id=``, ``data-*`` and the like.
+    """
+    return str(escape(_exact_str(value)))
+
+
+#: The HTML spec's "ASCII whitespace": TAB, LF, FF, CR and SPACE. Not VT, and not
+#: Unicode whitespace (``str.isspace()`` would be both): a browser does not split
+#: a ``srcset`` on U+00A0, so neither may this.
+_ASCII_WS = "\t\n\f\r "
+
+
+def _srcset_candidates(text: str) -> list[tuple[str, list[str]]]:
+    """``[(url, descriptors)]`` of an ``srcset`` value: the HTML spec's "parse a
+    srcset attribute", step for step
+    (https://html.spec.whatwg.org/multipage/images.html#parse-a-srcset-attribute).
+
+    A candidate's URL is the run of non-whitespace characters after any commas and
+    whitespace; if it ends in commas they are removed and it has no descriptors.
+    Otherwise descriptors are tokenised by the spec's three states, and
+    PARENTHESES DO NOT NEST: the first ``)`` after a ``(`` ends the "in parens"
+    state (``((),`` is one descriptor ``(()`` followed by a comma). A browser may
+    later drop a candidate whose descriptors are invalid; that is not modelled:
+    every candidate's URL is returned, because a URL that survives to the browser
+    through a candidate this parser skipped is exactly the bypass to avoid.
+    """
+    out: list[tuple[str, list[str]]] = []
+    pos, n = 0, len(text)
+    while True:
+        while pos < n and (text[pos] in _ASCII_WS or text[pos] == ","):
+            pos += 1
+        if pos >= n:
+            return out
+        start = pos
+        while pos < n and text[pos] not in _ASCII_WS:
+            pos += 1
+        url = text[start:pos]
+        descriptors: list[str] = []
+        if url.endswith(","):
+            url = url.rstrip(",")
+        else:
+            while pos < n and text[pos] in _ASCII_WS:
+                pos += 1
+            current, state = "", "descriptor"
+            while True:
+                c = text[pos] if pos < n else None
+                if state == "descriptor":
+                    if c is None:
+                        if current:
+                            descriptors.append(current)
+                        break
+                    if c in _ASCII_WS:
+                        if current:
+                            descriptors.append(current)
+                        current, state = "", "after"
+                    elif c == ",":
+                        pos += 1
+                        if current:
+                            descriptors.append(current)
+                        break
+                    elif c == "(":
+                        current, state = current + c, "parens"
+                    else:
+                        current += c
+                elif state == "parens":
+                    if c is None:
+                        descriptors.append(current)
+                        break
+                    current += c
+                    if c == ")":
+                        state = "descriptor"
+                else:  # after a descriptor
+                    if c is None:
+                        break
+                    if c not in _ASCII_WS:
+                        state = "descriptor"
+                        pos -= 1
+                pos += 1
+        out.append((url, descriptors))
+
+
+def srcset_attr(value: Any, *, honor_safe: bool = True) -> str:
+    """Return ``value`` ready to place inside a quoted ``srcset``.
+
+    Each candidate's URL (split as :func:`_srcset_candidates` does) goes through
+    :func:`url_attr` as an image source (a script scheme becomes ``"#"``,
+    ``data:image/...`` stays) and its descriptors (``2x``, ``480w``) are
+    HTML-escaped. Values the developer marked safe are returned unchanged, as
+    :func:`url_attr` does, unless ``honor_safe=False``. A value with no candidate
+    gives ``""`` (so a caller can omit the attribute).
+    """
+    if value is None:
+        return ""
+    if honor_safe and isinstance(value, SafeData):
+        return str(value)
+    parts = []
+    for url, descriptors in _srcset_candidates(_exact_str(value)):
+        candidate = url_attr(url, image=True, honor_safe=False)
+        if not candidate:
+            continue
+        if descriptors:
+            candidate += " " + " ".join(str(conditional_escape(d)) for d in descriptors)
+        parts.append(candidate)
+    return ", ".join(parts)
 
 
 def rich_html(value: Any) -> str:

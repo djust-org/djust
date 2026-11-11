@@ -200,7 +200,7 @@ async def _ws_mounted_tour(event, view=TOUR):
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect ack
+    await communicator.receive_json_from()  # connect ack
     await communicator.send_json_to({"type": "mount", "view": view, "url": "/tour/"})
     await _ws_mounted(communicator)
     assert len(VIEWS) == 1

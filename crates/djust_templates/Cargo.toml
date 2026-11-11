@@ -30,7 +30,12 @@ thiserror.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 tracing = { workspace = true }
-pulldown-cmark = { version = "0.13.5", default-features = false, features = ["html"] }
+# 0.13.6 is the floor, not just what Cargo.lock happens to hold: RUSTSEC-2026-0414
+# (fixed in 0.13.5) and RUSTSEC-2026-0433 (fixed in 0.13.6) are both in the
+# 0.13.0-0.13.5 range, so a lock regeneration must not be able to resolve below it.
+# djust never sets `Options::ENABLE_WIKILINKS` (the option both advisories need);
+# see `markdown.rs::to_pulldown` and `wikilink_syntax_is_never_a_link`.
+pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }
 # `markup5ever::data::NAMED_ENTITIES` is byte-identical to CPython's
 # `html.entities.html5` (2231 entries, equality asserted in the parity suite),
 # which is what `html.unescape` resolves against — and `html.unescape` is what

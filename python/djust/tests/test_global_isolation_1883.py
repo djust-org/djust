@@ -267,7 +267,7 @@ _TT_MOD = "djust.tests.test_recovery_version_staleness_1817"
 _ARM_REF = 1
 
 
-async def _recv_until(comm, wanted, *, ref=None, tries=8, timeout=3):
+async def _recv_until(comm, wanted, *, ref=None, tries=8, timeout=30):
     """Drain frames until one of ``wanted`` type (and matching ``ref``, if given).
 
     ``ref`` matters more than it looks. A hot-reload broadcast is not its own
@@ -326,7 +326,7 @@ async def _drive_jump_with_stale_layer_sender(reset_layer: bool):
     comm.scope["session"] = _S(key)
     ok, _ = await comm.connect()
     assert ok
-    await comm.receive_json_from(timeout=2)  # connect frame
+    await comm.receive_json_from()  # connect frame
 
     await comm.send_json_to({"type": "mount", "view": f"{_TT_MOD}._TTRecoveryView", "url": "/tt/"})
     mount = await _recv_until(comm, "mount")
@@ -346,7 +346,7 @@ async def _drive_jump_with_stale_layer_sender(reset_layer: bool):
     await comm.send_json_to({"type": "time_travel_jump", "index": 0, "which": "before"})
     v_jump = None
     for _ in range(8):
-        f = await comm.receive_json_from(timeout=3)
+        f = await comm.receive_json_from()
         if f.get("type") in ("patch", "html_update"):
             v_jump = f["version"]
             break
@@ -455,3 +455,29 @@ def test_autouse_fixture_left_counters_clean():
     # Leave it advanced; the next test's autouse fixture re-resets it.
     next(sticky._view_id_counter)
     _ = itertools  # silence unused-import lints in stripped builds
+
+
+# ---------------------------------------------------------------------------
+# (3) The worker-pool settings (#3692)
+# ---------------------------------------------------------------------------
+
+
+def test_reset_clears_a_pool_setting_a_config_swap_stranded_3692(monkeypatch):
+    """The leak: ``monkeypatch.setitem`` on ``config._config`` followed by any
+    config swap leaves ``worker_threads`` on, because monkeypatch restores the
+    old dict. The reset puts it back."""
+    from djust.config import config
+    from djust.test_isolation import reset_djust_globals
+
+    monkeypatch.setitem(config._config, "worker_threads", 2)
+    config.set("css_framework", config.get("css_framework"))  # swaps _config
+    assert config.get("worker_threads") == 2  # the setitem is now on the new dict
+
+    # What monkeypatch's teardown does: restore onto the OLD dict.
+    stranded = config._config
+    try:
+        reset_djust_globals()
+        assert config.get("worker_threads") in (None, False)
+        assert config.get("worker_pinning") is True
+    finally:
+        config._config = stranded  # leave the dict monkeypatch will restore

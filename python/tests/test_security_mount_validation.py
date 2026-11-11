@@ -38,7 +38,7 @@ class TestMountSecurityValidation:
         assert connected
 
         # Receive connect message first
-        connect_msg = await communicator.receive_json_from(timeout=2)
+        connect_msg = await communicator.receive_json_from()
         assert connect_msg.get("type") == "connect"
 
         # Mount a valid LiveView
@@ -46,7 +46,7 @@ class TestMountSecurityValidation:
             {"type": "mount", "view": "python.tests.test_security_mount_validation.ValidView"}
         )
 
-        response = await communicator.receive_json_from(timeout=2)
+        response = await communicator.receive_json_from()
         assert response.get("type") == "mount"
         assert "html" in response
 
@@ -60,12 +60,12 @@ class TestMountSecurityValidation:
         assert connected
 
         # Receive connect message
-        await communicator.receive_json_from(timeout=2)
+        await communicator.receive_json_from()
 
         # Try to mount a non-LiveView class (built-in dict)
         await communicator.send_json_to({"type": "mount", "view": "builtins.dict"})
 
-        response = await communicator.receive_json_from(timeout=2)
+        response = await communicator.receive_json_from()
         assert response.get("type") == "error"
         # F22 consolidation: `builtins` is not an installed-app prefix, so the
         # mount is rejected at the allowlist gate (BEFORE the subclass check) —
@@ -84,12 +84,12 @@ class TestMountSecurityValidation:
         assert connected
 
         # Receive connect message
-        await communicator.receive_json_from(timeout=2)
+        await communicator.receive_json_from()
 
         # Try to mount os.system (security vulnerability if allowed)
         await communicator.send_json_to({"type": "mount", "view": "os.system"})
 
-        response = await communicator.receive_json_from(timeout=2)
+        response = await communicator.receive_json_from()
         assert response.get("type") == "error"
         # Should be rejected before type checking (import will fail for function)
         assert "error" in response
@@ -104,12 +104,12 @@ class TestMountSecurityValidation:
         assert connected
 
         # Receive connect message
-        await communicator.receive_json_from(timeout=2)
+        await communicator.receive_json_from()
 
         # Try to mount an arbitrary standard library class
         await communicator.send_json_to({"type": "mount", "view": "pathlib.Path"})
 
-        response = await communicator.receive_json_from(timeout=2)
+        response = await communicator.receive_json_from()
         assert response.get("type") == "error"
         # F22 consolidation: `pathlib` is not an installed-app prefix, so the
         # mount is rejected at the allowlist gate (BEFORE the subclass check).
@@ -126,13 +126,13 @@ class TestMountSecurityValidation:
         assert connected
 
         # Receive connect message
-        await communicator.receive_json_from(timeout=2)
+        await communicator.receive_json_from()
 
         # Try to mount a valid LiveView from a non-whitelisted module
         # (This would pass type check but fail whitelist check)
         await communicator.send_json_to({"type": "mount", "view": "other_app.views.OtherView"})
 
-        response = await communicator.receive_json_from(timeout=2)
+        response = await communicator.receive_json_from()
         assert response.get("type") == "error"
         # Should fail at whitelist check before even importing
         assert "error" in response

@@ -148,7 +148,7 @@ async def _mount_and_bump(view_class) -> list[dict]:
         with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
             connected, _ = await communicator.connect()
             assert connected
-            await communicator.receive_json_from(timeout=2)
+            await communicator.receive_json_from()
             await communicator.send_json_to(
                 {"type": "mount", "view": f"{MODULE}.{view_class.__name__}", "url": "/"}
             )
@@ -349,6 +349,8 @@ class TestTheWarningItself:
         )
         assert "streams and get_render_only_context() do not shrink this snapshot" in text
         assert "session save" in text
+        # Rows added to a dj-update container (#3639) stay in the tree too.
+        assert 'dj-update="append" container keeps every row it was given in the tree' in text
 
     def test_the_guide_the_warning_points_at_has_that_section(self):
         guide = Path(__file__).resolve().parents[3] / "docs/website/guides/BEST_PRACTICES.md"

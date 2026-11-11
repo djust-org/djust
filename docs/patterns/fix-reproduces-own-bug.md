@@ -12,6 +12,7 @@
 |---|---|---|---|
 | #2838 | each review round's fix to the shared per-element rate-limit cache broke an adjacent keyboard/click path | enumerate every caller's invariant first | no (origin) |
 | #2147, #2146, #2846 | see the v1.2.0-6 retro | | no (origin) |
+| #3703 | the fix for review finding 2 (`initial` for an absent `BooleanField`) judged "supplied" by the field's own key, which broke multi-key widgets (review finding 3) | enumerate widget families first; test per family | no (demoted at v1.3.0-11/12; first instance since) |
 
 ## The rule as it stood in CLAUDE.md
 

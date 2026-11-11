@@ -16,14 +16,16 @@ from .._exposure_providers import (
     ExplicitRenderContext,
     require_no_provider_keys,
 )
+from .._accumulating_containers import view_accumulating_container_ids
 from ..change_detection import deep_fingerprint, fingerprints_by_content, warn_fingerprint_truncated
 from ..security import sanitize_for_log
-from ..serialization import normalize_django_value
+from ..serialization import holds_form, normalize_django_value
 from ..state_pass import convert_for_render, fingerprint_and_convert
 from ..template_filters import _ensure_custom_filters_bridged
 from ..utils import get_template_dirs
 from ..render_env import apply_render_env
-from .context import _is_json_serializable
+from ..request_scoped import is_request_scoped_data
+from .context import _keeps_out_of_state
 from .context import _request_scoped_keys as request_scoped_keys
 
 logger = logging.getLogger(__name__)
@@ -234,6 +236,84 @@ def _collect_sub_ids(
             _collect_sub_ids(v, collected, visited, depth + 1)
 
 
+def _unassigned_temporary_keys(view: Any) -> Set[str]:
+    """The ``temporary_assigns`` keys that hold their reset default (#3639).
+
+    After a render each such key is reset to a fresh copy of its default, so on
+    the next sync it always looks changed (a new object whose fingerprint differs
+    from the rows it held). That is why they were left out of the changed keys:
+    treating the reset as a change would re-render the container with no rows.
+    But a handler that ASSIGNS rows (``self.rows = [new_row]``) is a change, and
+    leaving the key out as well meant the node reading it was not re-rendered
+    and the new row never reached the page. So only a key still equal to its
+    default is left out; a key holding anything else was assigned this turn.
+    """
+    out: Set[str] = set()
+    for key, default in (getattr(view, "temporary_assigns", None) or {}).items():
+        value = getattr(view, key, default)
+        if isinstance(default, (list, dict, set, tuple)):
+            same = type(value) is type(default) and len(value) == len(default) and value == default
+        else:
+            same = value is default or (type(value) is type(default) and value == default)
+        if same:
+            out.add(key)
+    return out
+
+
+def _temporary_key_aliases(view: Any, context: Any) -> Tuple[str, ...]:
+    """Context keys that hold a ``temporary_assigns`` attribute's very object (#3647).
+
+    ``get_context_data`` may hand the rows to the template under another name
+    (``context["feed"] = self.rows``). A ``dj-update`` container reading ``feed``
+    is fed by the temporary key just as one reading ``rows`` is, but nothing in the
+    template says so. The two are the same object, so identity finds them; a value
+    derived from the attribute (``list(self.rows)``, a slice, a filter) is a
+    different object and is NOT found, which is a documented limit rather than a
+    guess. Only mutable containers are compared: ``None``, ``0`` and ``""`` are
+    shared by unrelated names.
+    """
+    declared = getattr(view, "temporary_assigns", None)
+    if not declared or not isinstance(context, dict):
+        return ()
+    held = {}
+    for key in declared:
+        value = getattr(view, key, None)
+        if isinstance(value, (list, dict, set)):
+            held[id(value)] = key
+    if not held:
+        return ()
+    return tuple(
+        sorted(
+            name for name, value in context.items() if name not in declared and id(value) in held
+        )
+    )
+
+
+def _warn_rows_without_id(view: Any) -> None:
+    """Say, once per view class and in DEBUG only, that rows without an ``id`` were dropped.
+
+    An accumulating container adds a row only by its ``id`` (as the client does),
+    so a row without one never reaches the page; without a word that reads as
+    a lost update. The count comes from the render before this sync.
+    """
+    take = getattr(view._rust_view, "take_accumulate_dropped", None)
+    dropped = take() if take is not None else 0
+    cls = type(view)
+    if not dropped or "_djust_warned_rows_without_id" in cls.__dict__:
+        return
+    from django.conf import settings
+
+    if getattr(settings, "DEBUG", False):
+        cls._djust_warned_rows_without_id = True  # type: ignore[attr-defined]
+        logger.warning(
+            "%s: %d row(s) in a dj-update container fed by temporary_assigns have no id "
+            "attribute and were not added to the page. An appended or prepended row is "
+            'added only by its id; give each row one (for example id="row-{{ r.pk }}").',
+            cls.__name__,
+            dropped,
+        )
+
+
 class RustBridgeMixin:
     """Rust integration: _initialize_rust_view, _sync_state_to_rust."""
 
@@ -254,6 +334,10 @@ class RustBridgeMixin:
         _authenticated_template_source: Optional[str]
 
         def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
+
+        def _context_for_render(
+            self, preloaded_context: Optional[Dict[str, Any]] = None
+        ) -> Dict[str, Any]: ...
 
         def _apply_context_processors(
             self, context: Dict[str, Any], request: Any
@@ -832,18 +916,17 @@ class RustBridgeMixin:
           3. Computed value changes — id() reference comparison against previous render
         """
         if self._rust_view:
-            from django import forms
-
             # Per-render, before anything is formatted (#2209, #2221).
             self._apply_render_env()
 
-            from ..sync_turn import run_sync_step
+            # One place decides: preloaded, the GET's cached context, or a
+            # fresh evaluation (#3725). Calling ``self.get_context_data`` here
+            # ran an overriding view's body a second time on every GET.
+            full_context = self._context_for_render(preloaded_context)
 
-            full_context = (
-                preloaded_context
-                if preloaded_context is not None
-                else run_sync_step(self, "render", self.get_context_data)
-            )
+            # Context keys that are a temporary attribute under another name (#3647);
+            # before the normalize pass below, which copies what it converts.
+            _context_aliases = _temporary_key_aliases(self, full_context)
 
             # Defensive normalize pass for DB values added after super() (#1205, #1207).
             # When a user overrides ``get_context_data`` and sets a raw DB
@@ -926,7 +1009,9 @@ class RustBridgeMixin:
             # The non-serializable ones still reach the Rust renderer through
             # the raw-value sidecar (``set_raw_py_values`` below); serializable
             # processor outputs (e.g. theming's ``{{ theme_head }}`` SafeString)
-            # stay in ``update_state`` and are unaffected.
+            # stay in ``update_state`` and are unaffected, except plain data a
+            # processor marked ``RequestScopedList`` (``theme_presets``, #3631),
+            # which rides the sidecar like the non-serializable ones.
             _request_scoped_keys = request_scoped_keys(self)
 
             # Ensure csrf_token is available for {% csrf_token %} tag (#696).
@@ -1138,6 +1223,12 @@ class RustBridgeMixin:
             _JSON_PRIMITIVES = (int, float, bool, type(None))
             safe_keys: List[str] = []
             sidecar_only_keys: Set[str] = set()
+            # Names whose value is a form, or holds one (#3767): sidecar only, never
+            # state. Re-decided for every name sent this sync; a name that was not
+            # sent is unchanged, so it keeps the answer it had (``_form_held_keys``,
+            # stored below), which is what lets the sidecar below keep a list of
+            # forms that did not change this event.
+            form_held_keys: Set[str] = set()
             rendered_context: Dict[str, Any] = {}
             # Rust values already produced by ``state_pass``; every other key
             # goes through ``normalize_django_value`` below as before.
@@ -1156,7 +1247,7 @@ class RustBridgeMixin:
                 # rendering. Serializable processor outputs (e.g. theming's
                 # ``{{ theme_head }}`` SafeString) are NOT skipped — they fall
                 # through to the normal handling below.
-                if key in _request_scoped_keys and not _is_json_serializable(value):
+                if key in _request_scoped_keys and _keeps_out_of_state(value):
                     # A lazily rendered trusted-HTML value (theming's
                     # ``theme_head`` & co., #3028) is SafeData that is not a
                     # ``str``. It must NOT keep a stale state entry under the
@@ -1164,18 +1255,14 @@ class RustBridgeMixin:
                     # build whose processor stored the rendered string; the
                     # state entry would win over the sidecar and was never
                     # re-marked safe), so it is left out of the retained keys
-                    # below. That does not render it.
-                    if isinstance(value, SafeData):
+                    # below. That does not render it. The same holds for a
+                    # processor's ``RequestScopedList`` (theming's
+                    # ``theme_presets``, #3631): a snapshot stored by a build that
+                    # copied the list into the state must not keep that copy.
+                    if isinstance(value, SafeData) or is_request_scoped_data(value):
                         sidecar_only_keys.add(key)
                     continue
-                if isinstance(value, forms.BaseForm):
-                    from djust.serialization import render_form_value
-
-                    rendered_context[key] = render_form_value(value)
-                    for field_name in value.fields:
-                        safe_keys.append(f"{key}.{field_name}")
-                    needs_normalize = True
-                elif isinstance(value, _JSON_PRIMITIVES):
+                if isinstance(value, _JSON_PRIMITIVES):
                     # Fast path: primitives are JSON-native and can't be SafeString
                     rendered_context[key] = value
                 elif isinstance(value, str):
@@ -1194,12 +1281,28 @@ class RustBridgeMixin:
                     if converted is None:
                         converted = convert_for_render(value, key)
                     if converted is None:
+                        # A form, or a container holding one (#3767), is not state:
+                        # it reaches the template from the raw-Python sidecar. The
+                        # walk above gives up on exactly the values that can hold
+                        # one, so a plain-data container never pays this scan.
+                        if holds_form(value):
+                            form_held_keys.add(key)
+                            continue
                         safe_keys.extend(_collect_safe_keys(value, key))
                     else:
                         safe_keys.extend(converted[0])
                         converted_values[key] = converted[1]
                     rendered_context[key] = value
                     needs_normalize = True
+
+            # The names that are a form (or hold one) now: the ones decided above and
+            # the ones this sync did not send, which are unchanged (#3767).
+            form_held_now = form_held_keys | {
+                k
+                for k in getattr(self, "_form_held_keys", ())
+                if k in full_context and k not in context
+            }
+            self._form_held_keys = frozenset(form_held_now)
 
             # Skip normalize_django_value when context only has JSON-native types
             if needs_normalize:
@@ -1247,8 +1350,21 @@ class RustBridgeMixin:
                     # `{% querystring my_qd a=2 %}` needs, so it rides the
                     # sidecar the way `build_render_sidecar` already carries
                     # it on the non-LiveView paths (#2556, #1646).
-                    if isinstance(_raw_val, _JSON_FRIENDLY) and not isinstance(
-                        _raw_val, MultiValueDict
+                    #
+                    # A ``RequestScopedList`` is a ``list`` but is NOT in the
+                    # state (#3631), so the sidecar is the only way it reaches
+                    # the renderer: it must not be skipped as "JSON friendly".
+                    #
+                    # A dict / list / tuple that holds a form (#3767) is the same
+                    # case in the other direction: it is not in the state, so the
+                    # sidecar is the only way it reaches the renderer.
+                    if (
+                        isinstance(_raw_val, _JSON_FRIENDLY)
+                        and not isinstance(_raw_val, MultiValueDict)
+                        and not (
+                            _raw_key in _request_scoped_keys and is_request_scoped_data(_raw_val)
+                        )
+                        and _raw_key not in form_held_now
                     ):
                         continue
                     # A `Component`/`LiveComponent` used to be excluded here
@@ -1279,8 +1395,6 @@ class RustBridgeMixin:
                     # OUTPUT, not `full_context`), and only when a template
                     # still uses the `.render` spelling the docs no longer
                     # recommend.
-                    if isinstance(_raw_val, forms.BaseForm):
-                        continue
                     sidecar[_raw_key] = _raw_val
                 # Authenticated partial-root mode renders the page shell with
                 # the same Rust view. Its bridged Django tags need the actual
@@ -1300,6 +1414,15 @@ class RustBridgeMixin:
                 # getattr walk. Explicit sidecar entries above take precedence.
                 for _raw_key, _raw_val in _raw_models_for_sidecar.items():
                     sidecar.setdefault(_raw_key, _raw_val)
+                # #3801: a relation the template reads as rows AND through a
+                # QuerySet method (``{% for g in u.groups.all %}`` beside
+                # ``{{ u.groups.all.count }}``) ships as rows, which cannot
+                # answer the method; the engine's guarded getattr walk answers it
+                # from these evaluated rows. Only such a name is kept (a proxy
+                # per row is built for it); a plain loop pays nothing.
+                for _raw_key, _raw_val in (getattr(self, "_all_method_rows", None) or {}).items():
+                    if _raw_key in full_context:
+                        sidecar.setdefault(_raw_key, _raw_val)
                 # #1986 (ADR-024 review): the Rust getattr walk bypasses the
                 # serialization floor (SECURE_DEFAULTS Pattern 1) unless raw
                 # models are wrapped — else `{{ user.password }}` /
@@ -1333,7 +1456,7 @@ class RustBridgeMixin:
             # previous set_changed_keys call with meaningful keys.
             # Also exclude temporary_assigns keys — they're reset to new
             # objects after each render, always getting new id().
-            _temp_assigns = set(getattr(self, "temporary_assigns", {}).keys())
+            _temp_assigns = _unassigned_temporary_keys(self)
             # #1786: request-scoped keys are excluded from the change-detection
             # fingerprint above, so on every render they look "new" and would
             # otherwise be reported as changed keys — triggering spurious
@@ -1390,7 +1513,9 @@ class RustBridgeMixin:
             # being in this render's context.
             removed_keys: List[str] = []
             if hasattr(self._rust_view, "retain_state_keys"):
-                keep_keys = [k for k in full_context if k not in sidecar_only_keys]
+                keep_keys = [
+                    k for k in full_context if k not in sidecar_only_keys and k not in form_held_now
+                ]
                 if getattr(self, "_static_assigns_sent", False):
                     keep_keys.extend(getattr(self, "static_assigns", None) or [])
                 removed_keys = self._rust_view.retain_state_keys(keep_keys)
@@ -1418,6 +1543,18 @@ class RustBridgeMixin:
 
             if user_changed is not None:
                 self._rust_view.set_changed_keys(user_changed)
+
+            # The ``dj-update="append"|"prepend"`` containers whose rows come from
+            # a ``temporary_assigns`` key must ACCUMULATE in the differ, as the
+            # client does for a full html frame; otherwise the rows a render lists
+            # (only the ones just assigned) replace the stored ones (#3639). Set
+            # on every sync: a restored Rust view starts with none, and
+            # ``hasattr`` covers an extension built before the method existed.
+            if hasattr(self._rust_view, "set_accumulate_containers"):
+                _warn_rows_without_id(self)
+                self._rust_view.set_accumulate_containers(
+                    list(view_accumulating_container_ids(self, _context_aliases))
+                )
 
             # Mark static assigns as sent — subsequent syncs will skip them
             if getattr(self, "static_assigns", None) and not getattr(

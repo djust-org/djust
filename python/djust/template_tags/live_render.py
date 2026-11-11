@@ -58,7 +58,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Tuple
 
-from . import TagHandler, register
+from . import TYPED_ARGS_KEY, TagHandler, register
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +125,19 @@ class LiveRenderTagHandler(TagHandler):
     HTML on both rendering paths. Production users on
     ``RustLiveView`` who want streaming via ``lazy=True`` can now use
     it without falling back to the slower Python template engine.
+
+    ``TYPED_ARGS`` (#3838): ``lazy=cfg`` with ``cfg = {"placeholder": ..., "trigger": ...}`` is a
+    DICT under Django's tag, and the engine hands a handler the string argument ``lazy=<json>``,
+    which ``live_render`` refuses. A handler that declares ``TYPED_ARGS`` is handed the operand's
+    resolved value next to its string (``context["__djust_typed_args__"]``, the channel
+    ``json_viewer`` uses, #3756), so ``lazy`` arrives as the dict, with a ``mark_safe``
+    placeholder still marked safe (the escaping contract of #3819) and a plain ``str`` still text.
+    Only ``lazy`` is read from there: it is the one operand whose value is a structure the tag
+    inspects. The other keyword operands are the child's ``mount()`` kwargs and cross as they
+    always did.
     """
+
+    TYPED_ARGS = True
 
     def _split_args(self, args: List[str], context: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
         """Split the raw Rust-parser arg list into ``(view_path, kwargs)``.
@@ -145,6 +157,10 @@ class LiveRenderTagHandler(TagHandler):
         # in case the arg shape changes.
         if isinstance(view_path, str):
             view_path = view_path.strip("'\"")
+
+        typed = context.get(TYPED_ARGS_KEY)
+        if not isinstance(typed, dict):
+            typed = {}
 
         kwargs: Dict[str, Any] = {}
         for arg in args[1:]:
@@ -167,7 +183,12 @@ class LiveRenderTagHandler(TagHandler):
             # function pattern-matches on (bool, "visible", dict, etc).
             # Coerce string-literal forms back to the Python types we
             # need.
-            if key in ("lazy", "sticky"):
+            if key == "lazy" and key in typed:
+                # The operand the engine resolved, as the value it is (#3838): a dict stays a
+                # dict, a SafeString inside it stays marked, and a string variable holding the
+                # text ``'visible'`` is refused as Django refuses it rather than unquoted.
+                value = typed[key]
+            elif key in ("lazy", "sticky"):
                 value = _parse_lazy_value(value)
             kwargs[key] = value
 

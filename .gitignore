@@ -100,3 +100,6 @@ context/
 .coverage-scripts/
 # Also ignore local dependency symlinks in worktrees.
 node_modules
+
+# gate_off_batch.py reports (scripts/gate_off_batch.py, #3905)
+*.gateoff-report.json

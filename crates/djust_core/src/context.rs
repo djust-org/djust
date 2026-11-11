@@ -131,6 +131,104 @@ pub(crate) fn protect_sidecar_strict<'py>(
     protect.call1((obj,)).ok()
 }
 
+/// [`protect_sidecar_strict`] for a TEMPLATE AUTHOR's walk (#3790): the floor
+/// `Context::walk_live` applies after every segment.
+///
+/// Two floors, one leaf. `_protect_sidecar_value` proxies a `Model` / `Manager` /
+/// `QuerySet`; `_protect_sidecar_walk` is that PLUS the objects that hold a model's
+/// values behind a plain `dict` / attribute (a model `Form` and its `BoundField`s), where the
+/// leaf floor cannot see a floor field because the value is already a string
+/// (`{{ form.initial.password }}`, `{{ form.password.value }}`).
+///
+/// They are different calls on purpose. [`protect_sidecar_strict`] is also what
+/// [`crate::value_into_handler_pyobject`] hands a live object to a bridged
+/// Python TAG with, and that code is the application's own: djust's `bound_field.value()`
+/// component readers and every third-party form tag must get the real `BoundField`, or
+/// a form rendering a `User`'s `is_staff` checkbox would draw it unchecked and a save
+/// would silently demote the user. The wrapper the walk needs is for a path a
+/// TEMPLATE spells, not for a Python function that receives the object.
+///
+/// Falls back to the leaf floor when `_protect_sidecar_walk` is absent from an
+/// importable `djust.serialization` (a stub, or a version skew): never weaker than
+/// before; the only thing missing is the form arm.
+pub(crate) fn protect_sidecar_walk_strict<'py>(
+    py: Python<'py>,
+    obj: pyo3::Bound<'py, pyo3::PyAny>,
+) -> Option<pyo3::Bound<'py, pyo3::PyAny>> {
+    let Ok(module) = py.import("djust.serialization") else {
+        return Some(obj);
+    };
+    let Ok(protect) = module
+        .getattr("_protect_sidecar_walk")
+        .or_else(|_| module.getattr("_protect_sidecar_value"))
+    else {
+        return Some(obj);
+    };
+    protect.call1((obj,)).ok()
+}
+
+/// Is this live handle a Django `Form` / `BoundField` (#3755)?
+///
+/// [`crate::value_into_handler_pyobject`] hands a live handle to a bridged Python
+/// tag only when the object is NOT iterable, because the floor
+/// ([`protect_sidecar_strict`]) is a leaf floor and cannot see inside a container.
+/// A `BoundField` is iterable (its subwidgets), so a `{% for f in form %}` /
+/// `{% with f=form.name %}` binding reached `{% field_error field=f %}` as a
+/// [`crate::TemplateObject`] with no `errors` to read, while the same field spelled
+/// `form.name` reached it live.
+///
+/// The exception is this exact family, decided by `djust.serialization` (one
+/// authority, not a copy of its type list here). It adds a new SPELLING of an existing
+/// reach, not a new reach: a `Form` / `BoundField` in the value stack came from a `Form`
+/// that the raw-Python sidecar already hands the same bridged tag LIVE under its own
+/// name, and everything reachable from a field is reachable from that form. That reach has
+/// NO floor: Django's `Variable` walks raw objects, so a bridged tag given
+/// `form.instance.password` or `f.form.instance.password` prints the hash (tracked in the
+/// follow-up issue; an earlier version of this comment said "adds no exposure", which was
+/// wrong for `json_viewer`, now back on the floored native path). Fail-CLOSED: anything but
+/// a clean `True` (djust's Python not importable, the helper missing or raising) answers
+/// `false`, and the caller keeps the wrapper.
+pub(crate) fn live_handle_is_form_object(
+    py: Python<'_>,
+    obj: &pyo3::Bound<'_, pyo3::PyAny>,
+) -> bool {
+    py.import("djust.serialization")
+        .and_then(|m| m.getattr("_is_form_object"))
+        .and_then(|check| check.call1((obj,)))
+        .and_then(|answer| answer.is_truthy())
+        .unwrap_or(false)
+}
+
+/// Is this live handle a Django formset, or the walk proxy of one (#3769)?
+///
+/// The conversion asks it ONLY to decide whether `str(o)` is read now or on first use: a formset's
+/// text is the render of its management form and of every form in it. It is a separate question
+/// from [`live_handle_is_form_object`], which also decides how a bridged tag receives the object
+/// (#3755) and has never included a formset.
+///
+/// **Asked of every iterable that is not a form** (a `set`, a `range`, a `deque`...), so it makes
+/// no Python-level call: the two classes are resolved ONCE per process into a tuple and the
+/// answer is one C-level `isinstance`. (The first version imported `django.forms.formsets` and
+/// called a Python helper per value: +4-6% CPU on a conversion of a `set`.) Only a SUCCESSFUL
+/// lookup is cached; a failed one (djust's Python not importable yet, Django absent) is retried,
+/// and answers `false` meanwhile: fail-closed, the text is read now, as it always was.
+pub(crate) fn live_handle_is_formset(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>) -> bool {
+    static CLASSES: pyo3::sync::PyOnceLock<Py<pyo3::PyAny>> = pyo3::sync::PyOnceLock::new();
+    let classes = CLASSES.get_or_try_init(py, || -> PyResult<Py<pyo3::PyAny>> {
+        let formset = py.import("django.forms.formsets")?.getattr("BaseFormSet")?;
+        let proxy = py
+            .import("djust.serialization")?
+            .getattr("_SidecarFormSetProxy")?;
+        Ok(pyo3::types::PyTuple::new(py, [formset, proxy])?
+            .into_any()
+            .unbind())
+    });
+    match classes {
+        Ok(classes) => obj.is_instance(classes.bind(py)).unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
 /// Reuse only exact builtin values with no user-defined timezone behavior.
 /// Subclasses can override display, truthiness and methods; aware values can
 /// carry mutable tzinfo implementations, so both take normal live conversion.
@@ -1655,16 +1753,14 @@ impl Context {
         let handle = Python::attach(|py| object.clone_ref(py).into_any());
         let value = Value::Encoded(Box::new(crate::Encoded {
             type_name: "LazyBlock".to_string(),
-            display: String::new(),
-            display_safe: false,
-            json: String::new(),
+            display: String::new().into(),
+            json: Some(String::new()),
             truthy: true,
             len: None,
             iterable: false,
             repr: LAZY_BLOCK_REPR.to_string(),
             cmp_key: None,
             live: Some(std::sync::Arc::new(handle)),
-            str_raised: false,
             attrs: Default::default(),
             items: None,
             eq_class: None,
@@ -2147,9 +2243,19 @@ impl Context {
         if !matches!(last, "items" | "keys" | "values") {
             return None;
         }
-        let Value::Object(map) = self.get(prefix)? else {
+        let value = self.get(prefix)?;
+        let Value::Object(map) = value else {
             return None;
         };
+        // A serialized Django model is not a mapping to a template. `{{ model.items }}` is
+        // empty in Django (a model has no such attribute), so this answers nothing and the
+        // read is missing, as it is for a live model handle. The entries of this map are the
+        // serializer's, not the model's, and a view of them would print them whole. The marker
+        // is `Value::model_str`, the one `pprint`, `json_script`, iteration and the other
+        // model-not-mapping sinks read, so they all agree on what `p` IS.
+        if value.model_str().is_some() {
+            return None;
+        }
         let kind = match last {
             "keys" => crate::DictViewKind::Keys,
             "values" => crate::DictViewKind::Values,
@@ -2777,19 +2883,31 @@ impl Context {
     /// Floor enforcement is INDEPENDENT of the `auto_call` kill-switch
     /// (`{{ p.user.password }}` leaks via pure getattr, no call), so this runs
     /// regardless of `self.auto_call`. It is idempotent (wrapping a proxy
-    /// returns it unchanged) and fail-safe: any error returns the value
-    /// unwrapped rather than crashing the render.
+    /// returns it unchanged). A floor that RAISES drops the value (the cell
+    /// renders empty) rather than handing the raw object on (#3790); only an
+    /// interpreter with no `djust.serialization` at all passes it through.
     fn protect_sidecar<'py>(
         &self,
         py: Python<'py>,
         obj: pyo3::Bound<'py, pyo3::PyAny>,
     ) -> pyo3::Bound<'py, pyo3::PyAny> {
-        match py
-            .import("djust.serialization")
-            .and_then(|m| m.getattr("_protect_sidecar_value"))
-            .and_then(|f| f.call1((obj.clone(),)))
-        {
-            Ok(wrapped) => wrapped,
+        // The WALK's floor (#3790): `_protect_sidecar_walk` is the leaf floor plus the
+        // model-form arms, and falls back to the leaf when the name is absent.
+        match py.import("djust.serialization").and_then(|m| {
+            m.getattr("_protect_sidecar_walk")
+                .or_else(|_| m.getattr("_protect_sidecar_value"))
+        }) {
+            Ok(protect) => match protect.call1((obj,)) {
+                Ok(wrapped) => wrapped,
+                // The floor RAN and raised (#3790): the form arms read a form's instance and its
+                // field set, which can raise for an exotic object. Handing the raw object on is
+                // handing the next segment the very thing the floor exists to hold back, so the
+                // value is dropped instead (`None`: the next segment finds nothing, and the cell
+                // renders empty). The ABSENT-floor arm below still passes the object through.
+                Err(_) => py.None().into_bound(py),
+            },
+            // No `djust.serialization` on this interpreter (an embedder): no floor to fail
+            // closed about.
             Err(_) => obj,
         }
     }
@@ -2820,7 +2938,7 @@ impl Context {
         py: Python<'py>,
         obj: pyo3::Bound<'py, pyo3::PyAny>,
     ) -> Option<pyo3::Bound<'py, pyo3::PyAny>> {
-        protect_sidecar_strict(py, obj)
+        protect_sidecar_walk_strict(py, obj)
     }
 
     /// Django-parity callable handling for one resolved attribute
@@ -2839,14 +2957,14 @@ impl Context {
             return Ok(CallOutcome::AsIs(obj));
         }
         // `do_not_call_in_templates` → use as-is (Model classes,
-        // enums.Choices set this).
-        if attr_is_truthy(&obj, "do_not_call_in_templates") {
-            return Ok(CallOutcome::AsIs(obj));
-        }
-        // `alters_data` → refuse: never call, expression renders empty
-        // (Django stamps Model.save/delete, QuerySet.delete/update, …).
-        if attr_is_truthy(&obj, "alters_data") {
-            return Ok(CallOutcome::Empty);
+        // enums.Choices set this); `alters_data` → refuse: never call,
+        // expression renders empty (Django stamps Model.save/delete,
+        // QuerySet.delete/update, …). One statement of the rule, shared with
+        // the queryset serializer (#3772).
+        match template_call_guard(&obj) {
+            TemplateCallGuard::UseAsIs => return Ok(CallOutcome::AsIs(obj)),
+            TemplateCallGuard::AltersData => return Ok(CallOutcome::Empty),
+            TemplateCallGuard::Callable => {}
         }
         warn_once_on_orm_autocall(py, &obj, path);
         match obj.call0() {
@@ -3466,6 +3584,57 @@ fn name_in_dir(obj: &pyo3::Bound<'_, pyo3::PyAny>, name: &str) -> PyResult<bool>
     Ok(false)
 }
 
+/// What a template may do with a callable it has just resolved — Django's
+/// `Variable._resolve_lookup` callable block, stated ONCE (#3772).
+///
+/// Two sites in the Rust tree decide this and they are not the same walk: the
+/// sidecar / live-handle walk ([`Context::maybe_call`]) and the queryset
+/// serializer behind `DjustTemplateBackend.render` and the LiveView queryset
+/// JIT (`serialize_object_with_paths` in `djust_live`). The second one
+/// `call0()`-ed every callable leaf with NO guard, so `{{ users.delete }}`
+/// deleted every row while `_rust.render_template` — which has no JIT step and
+/// only the first walk — was inert (#3772). Both now ask this function, so the
+/// rule cannot drift between them (#1646).
+///
+/// The order is Django's: `do_not_call_in_templates` is tested FIRST, so a
+/// callable carrying both markers is used as-is rather than refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateCallGuard {
+    /// No marker: Django calls it with no arguments.
+    Callable,
+    /// `do_not_call_in_templates` — use the object itself (a Model class, an
+    /// `enums.Choices`), never call it.
+    UseAsIs,
+    /// `alters_data` — never call it; the expression is `string_if_invalid`.
+    AltersData,
+}
+
+impl TemplateCallGuard {
+    /// May a template call it? Only when no marker forbids it.
+    pub fn may_call(self) -> bool {
+        self == TemplateCallGuard::Callable
+    }
+}
+
+/// Classify a resolved callable for a template, reading
+/// `do_not_call_in_templates` then `alters_data` exactly as Django does
+/// (`getattr(obj, name, False)`; a missing attribute or a raising descriptor is
+/// falsy).
+///
+/// Reads the markers off the object it is GIVEN. For a bound method that is
+/// the function's attribute (`QuerySet.delete.alters_data`), which Django
+/// stamps on `Model.save/delete`, `QuerySet.delete/update/create/…` and the
+/// related-manager mutators.
+pub fn template_call_guard(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> TemplateCallGuard {
+    if attr_is_truthy(obj, "do_not_call_in_templates") {
+        TemplateCallGuard::UseAsIs
+    } else if attr_is_truthy(obj, "alters_data") {
+        TemplateCallGuard::AltersData
+    } else {
+        TemplateCallGuard::Callable
+    }
+}
+
 /// Truthiness of an optional attribute (`getattr(obj, name, False)` +
 /// `bool(...)`). Missing attribute or a raising descriptor counts as
 /// falsy — matching Django's `getattr(current, "...", False)` reads.
@@ -3483,6 +3652,16 @@ fn attr_is_truthy(obj: &pyo3::Bound<'_, pyo3::PyAny>, name: &str) -> bool {
 /// builtin) is treated the same. A successful zero-arg bind means the
 /// `TypeError` came from INSIDE the method and must propagate.
 fn callable_requires_arguments(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>) -> bool {
+    // A floor call wrapper (`djust.serialization._FlooredCall`) hands out no `inspect.Signature`
+    // (its class would put Python-level methods in a reader's reach); it answers the question itself
+    // through this marker.
+    if let Some(answer) = obj
+        .getattr("djust_requires_arguments")
+        .ok()
+        .and_then(|marker| marker.call0().ok())
+    {
+        return answer.is_truthy().unwrap_or(true);
+    }
     let probe = || -> PyResult<bool> {
         let inspect = py.import("inspect")?;
         let signature = inspect.call_method1("signature", (obj,))?;
@@ -3509,18 +3688,23 @@ fn warn_once_on_orm_autocall(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>,
             return; // already warned for this path
         }
     }
-    // Only bound methods whose __self__ is a Manager/QuerySet.
-    let Ok(receiver) = obj.getattr("__self__") else {
-        return;
+    // Only bound methods whose __self__ is a Manager/QuerySet. A floored call wrapper
+    // (`djust.serialization._FlooredCall`) does not expose its receiver (a reader that walks
+    // attributes could take it), so it says the same thing with a flag.
+    let is_orm = match obj.getattr("__self__") {
+        Ok(receiver) => py
+            .import("django.db.models")
+            .and_then(|m| {
+                let manager = m.getattr("Manager")?;
+                let queryset = m.getattr("QuerySet")?;
+                Ok(receiver.is_instance(&manager)? || receiver.is_instance(&queryset)?)
+            })
+            .unwrap_or(false),
+        Err(_) => obj
+            .getattr("djust_orm_call")
+            .and_then(|flag| flag.is_truthy())
+            .unwrap_or(false),
     };
-    let is_orm = py
-        .import("django.db.models")
-        .and_then(|m| {
-            let manager = m.getattr("Manager")?;
-            let queryset = m.getattr("QuerySet")?;
-            Ok(receiver.is_instance(&manager)? || receiver.is_instance(&queryset)?)
-        })
-        .unwrap_or(false);
     if !is_orm {
         return;
     }

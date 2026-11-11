@@ -7,7 +7,11 @@ not be written.
 
 **Status**: `skill` · **gate**: partial — `scripts/check-doc-snippets.py` (doc figures),
 the #2652 symbol check (documented methods), `scripts/check-changelog-test-counts.py` (JS test
-counts) · **candidate for mechanical gate**: yes
+counts), and for PR bodies `scripts/check_pr_body.py` (unresolved placeholders and `#N` /
+`issuecomment-<id>` references that do not resolve; a **non-gating** CI job, #3713) ·
+**candidate for mechanical gate**: no. HARDEN at v1.3.0-17 proposed one (#3739); the maintainer declined it because the
+reviewer caught all three misses. The reviewer brief (Step 3b in `.pipeline-templates/feature-state.json` and
+`bugfix-state.json`) now names measured, 'every/never/only' and 'the cause' claims. Revisit if one gets past review.
 **Origin**: the v1.2.0-6 retro (#2838) — the first instance of this class in this repo to
 cause a *code* defect rather than a documentation one.
 
@@ -29,14 +33,38 @@ cause a *code* defect rather than a documentation one.
 | #3472 | first PR body said the new gates were "not PR gating"; the JavaScript job's lint step does run on PRs | review caught it before merge; body and fragment corrected | yes, fired |
 | #3473 | the issue asserted "no test assertion is involved" and a lost runner, from a `gh run view --log` copy truncated at ~8,000 of 24,882 lines; the real cause was a Python 3.14 test failure exposing GHSA-4h5m-xcmg-vvmw | raw job log via the API; CLAUDE.md rule (v1.3.0-11/12 arc) | yes, missed |
 | #3474 | the implementer's CodeQL report called #3004 a false positive by citing a different file, and #3042 a false positive when CodeQL was right | reviewer re-verified every dismissal against the source before filing it | yes, fired |
+| #3692 | the issue's title and body said CI shards "ended silently"; the full logs showed real failures (read through a truncated view) | issue corrected, premise named in the retro | yes, missed |
+| #3704 | the renderer "reads HTML comments and script bodies as text" was written into code, three tests, docs and a changelog; the lexer is HTML-blind (`crates/djust_templates/src/lexer.rs:404-407`). Round 2: docs said "False positives: None known" | fresh-context review; a differential test against `djust._rust.render_template` | yes, fired |
+| #3708 | first PR body carried a placeholder count and pointed at comments that did not exist yet | reviewer caught it before merge | yes, fired |
+| #3721 | stated that four files' kept drains were absence windows; the reviewer's recount showed they were not | three statements corrected before merge | yes, missed |
+| #3722 | the reviewer's "an HTTP GET runs `get_context_data()` twice" was measured by the author before it was filed (#3725) | measured first | yes, fired |
+| #3731 | the PR body said the issue's 16 s at 1,600 blocks could not be reproduced; it reproduces (16.6 s on main) | the reviewer measured it; the body was corrected | yes, missed |
+| #3732 | the docstring and a changelog fragment said the baseline held one entry (three) and that every drain is counted per file (a few shapes were) | the ratchet was extended so the second claim became true; reasons became data pinned to BASELINE | yes, missed |
+| #3738 | the changelog fragment said 'This was the cause' for a failure never observed naturally | reworded to the best-supported explanation | yes, missed |
+| #3747 | the changelog and `docs/website/guides/components.md` said the theming and components URL rules 'cannot disagree', and `changelog.d/3665.security.md` kept saying theming passes every scheme the allowlist rejects after the allowlist change; a `mark_safe` URL still printed raw | all three corrected before merge; the `mark_safe` case was fixed, not documented around | yes, missed |
+| #3753 | 'unknown keywords stay lenient' (false for six of nine tags), 'eight of nine within 12% of the old handlers' (re-measured +14 to 16% on `field_error`), and a test described as checking the docs name 'exactly' the refusing tags (it checks one direction) | corrected in the docs, changelog fragment and PR body before merge | yes, missed |
 
 ## Detection
 
 - **The three checkable shapes**: a path, a symbol, a count. All three are mechanically
   verifiable today for `docs/` and `README.md`; `changelog.d/*.md` and PR bodies are the
   uncovered surface, which is where seven of the ten above live (#2849 proposes closing it).
+  `scripts/check_pr_body.py` now covers the placeholder-and-dangling-reference half of the PR
+  body (`.github/workflows/pr-body-lint.yml`, non-gating: `continue-on-error: true` and not in
+  the `test-summary` AND-condition until it has run green on the runner once). It does not
+  cover a claim about code, which is what #3704 and #3692 were.
 - **Cite the line.** `path:line` makes the claim falsifiable by a reader in one grep; a bare
   claim makes it falsifiable only by re-deriving the whole analysis.
+- **Read the whole job log, not the CLI's view of it.** `gh run view --log-failed` and
+  `gh run view <run> --job <id> --log` print a truncated view of a long job: for the failed
+  shard of main run 41245126443 (job 124667567653, `python-tests (py3.13, shard 1/4)`) the first
+  printed 18,082 lines and the second 17,984, while the job-logs API returned 27,220, and only
+  the API output contains pytest's summary line (`1 failed, 12942 passed, 187 skipped`). A failed
+  shard read through the truncated view looks like a silent end; #3692's premise and #3473's
+  came from exactly that. Use
+  `gh api --allow-escape-sequences repos/<repo>/actions/jobs/<id>/logs` (job ids from
+  `gh run view <run> --json jobs`) before writing that a run "ended silently" or "no assertion
+  failed".
 - **For a count, count.** `check-changelog-test-counts` exists precisely because hand-counted
   test claims drift; note its own regex has a prose false-positive (#2839) — share one parser
   rather than adding a third.

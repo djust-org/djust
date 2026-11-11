@@ -11,9 +11,8 @@ import os
 
 import pytest
 
-import time
-
 from djust.checks import _document_root_scan_text, _find_document_roots
+from djust.tests._growth import assert_scales_linearly
 
 
 def _hits(markup):
@@ -266,22 +265,25 @@ def test_markup_after_a_terminated_comment_and_script_is_still_read(tmp_path, se
 
 
 @pytest.mark.parametrize(
-    "markup",
+    "unit",
     [
-        "<script>\n" * 20000,
-        "<script \n" * 20000,
-        "<!-- \n" * 20000,
-        "<html x='\n" * 20000,
-        '<html x="\n' * 20000,
-        "<html {% if \n" * 20000,
-        "<html {{ \n" * 20000,
-        "</script \n" * 20000,
+        "<script>\n",
+        "<script \n",
+        "<!-- \n",
+        "<html x='\n",
+        '<html x="\n',
+        "<html {% if \n",
+        "<html {{ \n",
+        "</script \n",
     ],
 )
-def test_unterminated_input_is_scanned_in_one_pass(markup):
-    started = time.perf_counter()
-    _find_document_roots(_document_root_scan_text(markup))
-    assert time.perf_counter() - started < 3.0
+def test_unterminated_input_is_scanned_in_one_pass(unit):
+    # Growth, not an absolute bound (#3711): 4x the openers (5 000 -> 20 000, where
+    # the nested-quantifier regexp took 14-43 s) must cost under 10x as much.
+    assert_scales_linearly(
+        lambda scale: _find_document_roots(_document_root_scan_text(unit * (5000 * scale))),
+        what="scanning unterminated input",
+    )
 
 
 def test_message_says_it_is_unsupported_and_ignored_and_what_to_do(tmp_path, settings):

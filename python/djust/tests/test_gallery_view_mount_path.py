@@ -169,15 +169,12 @@ async def _mount(view_path: str, page_url: str):
     connected, _ = await communicator.connect()
     assert connected, "the WebSocket did not accept the connection"
 
-    try:
-        await communicator.receive_json_from(timeout=3)  # connect ack
-    except Exception:  # noqa: BLE001 — absent on some transports
-        pass
+    await communicator.receive_json_from()  # connect ack
 
     await communicator.send_json_to(
         {"type": "mount", "view": view_path, "url": page_url, "params": {}}
     )
-    return communicator, await communicator.receive_json_from(timeout=5)
+    return communicator, await communicator.receive_json_from()
 
 
 @_BASE

@@ -90,7 +90,7 @@ fn assert_slim_matches(py: Python<'_>, td: &Bound<'_, PyAny>, label: &str) {
     let slim = slim_timedelta_encoded(td, &timedelta_cls(py))
         .unwrap_or_else(|| panic!("{label}: slim path declined an exact timedelta"));
     assert_eq!(slim.type_name, "datetime.timedelta", "{label}: type_name");
-    assert_eq!(slim.display, str_of(td), "{label}: str()");
+    assert_eq!(slim.display(), str_of(td), "{label}: str()");
     assert_eq!(slim.repr, repr_of(td), "{label}: repr()");
     assert_eq!(slim.truthy, td.is_truthy().unwrap(), "{label}: bool()");
     assert_eq!(slim.len, None, "{label}: len");
@@ -101,7 +101,7 @@ fn assert_slim_matches(py: Python<'_>, td: &Bound<'_, PyAny>, label: &str) {
         slim.live.is_some(),
         "{label}: the live handle is attached (#2741)"
     );
-    assert!(!slim.display_safe, "{label}: display_safe");
+    assert!(!slim.display_safe(), "{label}: display_safe");
 
     let days: i64 = td.getattr("days").unwrap().extract().unwrap();
     let seconds: i64 = td.getattr("seconds").unwrap().extract().unwrap();
@@ -214,7 +214,7 @@ fn the_slim_json_is_djangos_duration_iso_string() {
         for &((d, s, u), want) in cases {
             let td = make_timedelta(py, d, s, u);
             let slim = slim_timedelta_encoded(&td, &timedelta_cls(py)).unwrap();
-            assert_eq!(slim.json, want, "json for ({d}, {s}, {u})");
+            assert_eq!(slim.json(), want, "json for ({d}, {s}, {u})");
         }
     });
 }
@@ -297,8 +297,8 @@ fn aware_datetime(py: Python<'_>) -> Encoded {
         // The `T` separator rather than `str(dt)`'s space: the embedded
         // interpreter `cargo test` links may predate 3.11, whose
         // `fromisoformat` is the first to accept the space form.
-        display: "2026-07-04T05:06:07+02:00".to_string(),
-        json: "2026-07-04T05:06:07+02:00".to_string(),
+        display: "2026-07-04T05:06:07+02:00".to_string().into(),
+        json: Some("2026-07-04T05:06:07+02:00".to_string()),
         truthy: true,
         len: None,
         iterable: false,
@@ -314,8 +314,6 @@ fn aware_datetime(py: Python<'_>) -> Encoded {
         items: None,
         eq_class: None,
         live: None,
-        display_safe: false,
-        str_raised: false,
     }
 }
 
@@ -365,7 +363,7 @@ fn the_msgpack_state_payload_carries_tzinfo_as_a_string_and_the_deltas_as_encode
         };
         assert!(matches!(back.attrs.get("tzinfo"), Some(Value::String(s)) if s == "Europe/Berlin"));
         assert!(
-            matches!(back.attrs.get("utcoffset"), Some(Value::Encoded(e)) if e.display == "2:00:00")
+            matches!(back.attrs.get("utcoffset"), Some(Value::Encoded(e)) if e.display() == "2:00:00")
         );
     });
 }
@@ -397,8 +395,8 @@ fn temporal_object_restores_the_zone_from_either_tzinfo_shape() {
             "tzinfo".into(),
             Value::Encoded(Box::new(Encoded {
                 type_name: "ZoneInfo".to_string(),
-                display: "Europe/Berlin".to_string(),
-                json: "Europe/Berlin".to_string(),
+                display: "Europe/Berlin".to_string().into(),
+                json: Some("Europe/Berlin".to_string()),
                 truthy: true,
                 len: None,
                 iterable: false,
@@ -408,8 +406,6 @@ fn temporal_object_restores_the_zone_from_either_tzinfo_shape() {
                 items: None,
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
         );
         for (label, e) in [("new", new_shape), ("old", old_shape)] {

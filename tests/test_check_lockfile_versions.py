@@ -297,4 +297,4 @@ class TestSbomVersion:
         recipe runs the distribution SBOM writer (#3184)."""
         makefile = (_SELF.parents[1] / "Makefile").read_text()
         recipe = makefile.split("\nversion:", 1)[1].split("\n.PHONY:", 1)[0]
-        assert "-m djust.assets.sbom --distribution" in recipe
+        assert "-m assets.sbom --distribution" in recipe

@@ -29,6 +29,25 @@ DEBUG = True  # Debug panel will appear
 DEBUG = False  # Debug panel hidden (zero performance impact)
 ```
 
+### Turning the panel off in development
+
+To keep DEBUG (and the rest of djust's dev tooling: `client-dev.js` hot reload,
+toasts and the error overlay) without the panel, set `debug_panel` to `False`:
+
+```python
+# settings.py
+DEBUG = True
+DJUST_CONFIG = {"debug_panel": False}  # or LIVEVIEW_CONFIG
+```
+
+The default is `True`, so the panel keeps loading whenever `DEBUG` is on. With
+`False`, djust serves no `debug-panel.js` or `debug-panel.css`, no
+`window.DJUST_DEBUG_INFO`, no toolbar button or icon, and no per-event `_debug`
+payload on WebSocket or HTTP responses (which also saves the 2-5 ms per event it
+costs to build), and `generate_sw` leaves `debug-panel.js` out of the precache
+list. Only `False` turns it off. This helps a project whose development
+Content-Security-Policy blocks the panel's icon and inline styles.
+
 ### Security Note
 
 The debug panel only appears when `DEBUG = True`. Never deploy to production with DEBUG mode enabled, as this:

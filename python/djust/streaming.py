@@ -399,15 +399,22 @@ class StreamingMixin:
         from asgiref.sync import sync_to_async
         from django.template.loader import render_to_string
 
-        context = await sync_to_async(self.get_context_data)()
+        from ._include_guard import include_guard_scope
+        from .sync_turn import sync_step
+
+        context = await sync_to_async(sync_step(self, "render", self.get_context_data))()
 
         if self.template_name:
-            html = await sync_to_async(render_to_string)(self.template_name, context)
+            # The scope is a ContextVar and asgiref runs the thread with a copy of this task's
+            # context, so entering it here guards the render on the worker thread (#3880).
+            with include_guard_scope():
+                html = await sync_to_async(render_to_string)(self.template_name, context)
         elif self.template:
             from django.template import Template, Context
 
             tmpl = Template(self.template)
-            html = await sync_to_async(tmpl.render)(Context(context))
+            with include_guard_scope():
+                html = await sync_to_async(tmpl.render)(Context(context))
         else:
             return ""
 

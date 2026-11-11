@@ -163,7 +163,7 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P1**~~ | ~~#3462 — `djust ai inventory`: compare the Windows owner SID/DACL of a discovered `manage.py`~~ ✅ (#3474) | v1.3.0 |
 | ~~**P2**~~ | ~~#3470 — carry the unfinished #3129 review items forward into the 1.3.0 final audit checklist~~ ✅ (#3474) | v1.3.0 |
 
-### v1.3.0-10 — HTTP fallback parity, sync-turn-wrapper coverage, theme state weight (drain bucket → ships in 1.3)
+### v1.3.0-13 — HTTP fallback parity, sync-turn-wrapper coverage, theme state weight (drain bucket → ships in 1.3)
 
 *Kind:* transport parity and state weight, all reported by a downstream app on 1.3.0rc13. Four PRs, one per row group: the stateless HTTP fallback (#3624, #3503), the sync-turn wrapper (#3625), `ThemeMixin` state (#3626), and the silent release-audit failure (#3482). #3607 (tokio advisory) was already fixed on `main` (#3619) and is closed.
 
@@ -173,7 +173,106 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P2**~~ | ~~#3503 — Check whether the HTTP POST fallback drops `push_event` / deferred work / layout side effects the WebSocket and SSE paths flush (repro first)~~ ✅ (closed without code: not reproducible; pinned by #3630, accessibility/focus gap #3629) | v1.3.0 |
 | ~~**P2**~~ | ~~#3625 — `sync_turn_wrapper` is entered around `handle_tick()` and `handle_async_result()`, and around the test client's `send_event()`, `send_push()` and `render_async()`~~ ✅ (#3636; unwrapped hops #3637) | v1.3.0 |
 | **P2** | #3626 — `ThemeMixin` stops putting ~60KB of rendered HTML in every view's state (part 1); the `Large LiveView state` warning reports what it measures and gives advice that matches (part 2) Part 1 and the warning text shipped in #3633; the stored-tree and `theme_presets` remainder is #3632 / #3631 (issue stays open). | v1.3.0 |
-| **P3** | #3482 — A release run blocked by the pre-release audit opens or updates an issue naming the tag, the failing job and the run URL PR #3638 (needs the `release-workflow-reviewed` label). | v1.3.0 |
+| ~~**P3**~~ | ~~#3482 — A release run blocked by the pre-release audit opens or updates an issue naming the tag, the failing job and the run URL~~ ✅ (#3638) | v1.3.0 |
+
+### v1.3.0-14 — follow-ups of the v1.3.0-13 drain (drain bucket → ships in 1.3)
+
+*Kind:* follow-ups filed by the v1.3.0-13 PR reviews: transport parity, the remaining sync hops of `sync_turn_wrapper`, `dj-update` accumulation, and the pins that guard them. #3500 (the 2.0 tracking issue) and the design half of #3632 are not drain items.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| ~~**P1**~~ | ~~Main red after #3630 + #3636 merged (the HTTP fallback's `handle_async_result` was not in the pin; it ran as a `hook` step, not `async`)~~ ✅ (#3642) | v1.3.0 |
+| ~~**P2**~~ | ~~#3629 — The duck-typed `_drain_announcements` / `_drain_focus` hooks are deprecated (the client never implemented the frames; 2.0 already deleted the flush)~~ ✅ (#3644) | v1.3.0 |
+| ~~**P2**~~ | ~~#3631 — `theme_context` returns `theme_presets` as a request-scoped list that stays out of the stored snapshot (about 12 KB per view)~~ ✅ (#3640) | v1.3.0 |
+| **P2** | #3632 — Stream and temporary-assign rows in the stored snapshot: the refresh warning is fixed (#3640); keeping rows out of the stored tree is a design decision (clearing stream items breaks the page; accumulated rows now stay in the baseline, documented in `large-lists.md`) | v1.3.0 |
+| ~~**P2**~~ | ~~#3634 — A deadline (`http_fallback_background_timeout`) and a cap on abandoned workers for `start_async` work in the HTTP fallback~~ ✅ (#3641) | v1.3.0 |
+| ~~**P2**~~ | ~~#3635 — A page the GET left loading is loaded by the first fallback POST on the default session policy~~ ✅ (#3641) | v1.3.0 |
+| ~~**P1**~~ | ~~#3637 — `sync_turn_wrapper` also covers the object-permission and view-level auth checks, `on_mount`, `connected()`/`disconnected()`, cursor/presence hooks, replay and snapshot restore (new `auth` and `lifecycle` steps, fail-closed)~~ ✅ (#3643) | v1.3.0 |
+| ~~**P1**~~ | ~~#3639 — Stream-only handlers and `temporary_assigns` rows reach the page over patches (Rust differ accumulates `dj-update` append/prepend containers)~~ ✅ (#3645) | v1.3.0 |
+| ~~**P3**~~ | ~~#3647 — `dj-update` accumulation: included templates, aliases, duplicate ids, nesting, scanner bounds~~ ✅ (#3648) | v1.3.0 |
+| **P3** | #3646 — Harden the `sync_turn_wrapper` pin: allowlist keyed by file and function, every override point has a checked disposition, teardown and template-time hook wording corrected | v1.3.0 |
+
+### v1.3.0-15 — security review leftovers, component-tag parity, and the first DX asks from a downstream app on 1.3.0rc14 (drain bucket → ships in 1.3)
+
+*Kind:* three row groups, each a grouped PR. **A, security:** the URL-sink leftovers of the #3665 review. **B, audit and test DX:** new rules and a per-view budget from the rc14 downstream report. **C, view API:** `get_http_status()` and `handle_params()`. The component-tag parity rows (#3663, #3666, #3667, #3669, #3676, #3677) need a canonical implementation chosen before code and are not started by this bucket's grouped PRs. #3500 (the 2.0 tracking issue), #3632 (design half) and the 2.0 design issues #3656–#3659 are not drain items.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| ~~**P1**~~ | ~~`TtydTerminalView` takes its WebSocket target from `?url=` without validation~~ ✅ (#3698) | v1.3.0 |
+| ~~**P2**~~ | ~~`djust_audit --a11y`: a rule for a chart or `<svg>` with no accessible name, and a legend told apart by colour only~~ ✅ (#3702) | v1.3.0 |
+| ~~**P2**~~ | ~~Per-view query budget: `LiveViewSmokeTest` lets a view declare its own, instead of one `max_queries` for every view~~ ✅ (#3702) | v1.3.0 |
+| ~~**P2**~~ | ~~X105 also flags named colours, literal `font-family` stacks and `style=` attributes in LiveView templates~~ ✅ (#3702) | v1.3.0 |
+| ~~**P2**~~ | ~~`get_http_status()` is per view: a page that renders its not-found state answers 200 unless each view overrides it~~ ✅ (#3703) | v1.3.0 |
+| ~~**P2**~~ | ~~`handle_params()` gets raw strings: a declared params form, so the docstring example does not 500 on `?page=abc`~~ ✅ (#3703) | v1.3.0 |
+| ~~**P2**~~ | ~~Close the low-severity review leftovers from #3535, #3652 and #3678 (tidy-up checklist)~~ ✅ (#3704) | v1.3.0 |
+| ~~**P2**~~ | ~~#3692 — `main`'s `python-tests` flakes: `target_id` on push frames (#3694), pool-config leak (#3695), and the four timing races (test-side only)~~ ✅ (#3708) | v1.3.0 |
+| **P2** | #3663 — `djust_components` / `theme_tags`: the same tag renders different markup under the Django engine and the native Rust handler (117 of 208 tags). Needs a canonical implementation first | v1.3.0 |
+| ~~**P2**~~ | ~~#3666 — Form and `BoundField` arguments do not reach the native Rust component handlers. Needs a canonical implementation first~~ ✅ (#3753) | v1.3.0 |
+| ~~**P2**~~ | ~~#3667 — Native Rust component handlers swallow invalid input the Python tags reject. Needs a canonical implementation first~~ ✅ (#3753) | v1.3.0 |
+| **P2** | #3669 — Event-wiring (`dj-*`) attributes differ between the Django and Rust renderings of 12 component tags. Needs a canonical implementation first | v1.3.0 |
+| ~~**P1**~~ | ~~#3676 — Native raw `@register.tag` component handlers read a bare variable's value as `key=value` pairs (parameter injection; 117 of 136 tags). Needs a canonical implementation first~~ ✅ (#3746) | v1.3.0 |
+| ~~**P2**~~ | ~~#3677 — The `djust_theming` URL sanitiser is a denylist; `djust_components` uses an allowlist. Needs a canonical implementation first~~ ✅ (#3747) | v1.3.0 |
+
+### v1.3.0-16 — follow-ups of the v1.3.0-15 drain: the TTY parameter bug, test-timing debt, gate-off tooling, view-API leftovers (drain bucket → ships in 1.3)
+
+*Kind:* four grouped PRs, each a theme. **A, hardening:** one bug and one low-severity idiom. **B, test timing:** the #3710 class and its ratchets. **C, process tooling:** a shared gate-off helper and a PR-body lint. **D, view API and budgets:** the follow-ups #3703 and #3702 left out on purpose. **Left out, and why:** #3700 needs a browser and axe-core as a dependency (a decision first); the component-tag parity rows stay in v1.3.0-15 (a canonical implementation first); #3632 is a design decision; #3500 and #3656–#3659 are 2.0 work. Inside D, the config-level `http_status_of_state` default needs a precedence rule decided before it is built, so it is not in the PR.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| ~~**P2**~~ | ~~#3699 — `TtydTerminalView`: `?rows=` / `?cols=` fall back to the class default on a non-integer and are clamped to a sane range~~ ✅ (#3719) | v1.3.0 |
+| ~~**P3**~~ | ~~#3705 — Guard `gethostbyname_ex`, `gethostbyaddr` and `getnameinfo` in the doc-snippet `no_network`; the other `templates.py` scans use an incremental line counter, pinned by a growth test~~ ✅ (#3719) | v1.3.0 |
+| ~~**P2**~~ | ~~#3711 — Sweep the 16 remaining absolute wall-clock bounds on compute or waits, and add a ratchet that counts them~~ ✅ (#3721) | v1.3.0 |
+| **P2** | #3709 — Ratchet on explicit sub-10 s communicator `timeout=` calls (the count may only fall), and convert the worst files to `receive_until` / `receive_settled` — **partly done** (#3721: the worst files converted, ratchet in; the remainder stays open) | v1.3.0 |
+| ~~**P3**~~ | ~~#3715 — Each xdist worker prints its worst gen-2 GC pause and longest event-loop stall at session end~~ ✅ (#3721) | v1.3.0 |
+| ~~**P3**~~ | ~~#3714 — `scripts/gate_off.py`: mutations as data in, CAUGHT / SURVIVED / INVALID out, restore by hash, bounded run; CLAUDE.md points at it~~ ✅ (#3720) | v1.3.0 |
+| ~~**P3**~~ | ~~#3713 — PR-body lint for unresolved placeholders and `#N` / `issuecomment-` references that do not resolve; record the truncated `gh run view` log on the pattern page~~ ✅ (#3720) | v1.3.0 |
+| **P3** | #3706 — System checks for a `params_form` that is not a form class or whose `__init__` needs arguments; `LiveViewTestClient` drives `handle_params`; the new class attributes are reserved names under `exposure_policy = "explicit"` — **partly done** (#3722: the checks and the test client; the remainder stays open) | v1.3.0 |
+| ~~**P3**~~ | ~~#3701 — Run-time query-budget measurement per phase (warning, or error under `LIVEVIEW_CONFIG["query_budget"] = "error"`), event budgets checked by the fuzz tests, budgets listed in `djust_audit`~~ ✅ (#3722) | v1.3.0 |
+
+### v1.3.0-17 — follow-ups of the v1.3.0-16 drain: two quadratic template functions, the double `get_context_data()` on GET, the kept test drains, the presence flake (drain bucket → ships in 1.3)
+
+*Kind:* four row groups, each a grouped PR or an investigation. **A, template perf:** the two functions the #3711 growth checks found quadratic. **B, render path:** the second `get_context_data()` pass on an HTTP GET. **C, test timing:** the try/pass drains #3721 kept, and tightening the ratchet over them. **D, investigation:** the presence-test flake, now seen three times, which may close without code.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| ~~**P2**~~ | ~~#3723 — `_blank_template_comments` finds each opener's end with one forward scan instead of a search to the end of the template per opener; the growth test that is now an `xfail` becomes a plain test~~ ✅ (#3731) | v1.3.0 |
+| ~~**P2**~~ | ~~#3724 — `extract_template_variables` stops growing about n^2.9 with the number of blocks (not yet diagnosed); its growth test becomes a plain test~~ ✅ (#3731) | v1.3.0 |
+| ~~**P2**~~ | ~~#3725 — An overriding `get_context_data()` runs once per HTTP GET: the render path takes the context the request path already computed; a counting test pins GET == 1 and WS mount == 1~~ ✅ (#3730) | v1.3.0 |
+| ~~**P3**~~ | ~~#3726 — Convert the kept try/pass drains in four live-auth and form-route test files to `receive_until` / `receive_settled` (keep `receive_nothing` where something must not arrive) and tighten the #3709 ratchet over them~~ ✅ (#3732) | v1.3.0 |
+| ~~**P2**~~ | ~~#3451 — The presence test flake (`test_presence_timeout_retries_after_retirement_without_another_join`): diagnose between a runner stall over 30 s and a lost wake-up in the test, from the three failing logs; may close without code~~ ✅ (#3738) | v1.3.0 |
+
+### v1.3.0-18 — native component-handler parity: parameter injection, URL schemes, object arguments, lenient input (drain bucket → ships in 1.3)
+
+*Kind:* one security-first bucket from the component-tag parity audit (#3655 / #3660). **A, theming URLs:** the denylist sanitiser. **B, raw-tag parse:** bare operands read as `key=value`. **C, handler fidelity:** Form/BoundField arguments and invalid input. **Deferred by decision (2026-11-02):** #3663 (117 of 208 tags render different markup per engine) and #3669 (`dj-*` attributes differ on 12 tags) stay open; each touches 100+ tags or needs a call on which engine's markup wins.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| ~~**P1**~~ | ~~#3676 — Native raw `@register.tag` handlers refuse a bare operand at parse time with Django's message (`Unexpected argument 'val'. Use key=value format.`), so a variable's value is never read as `key=value` pairs (117 of 136 tags)~~ ✅ (#3746) | v1.3.0 |
+| ~~**P2**~~ | ~~#3677 — `djust_theming` sanitises URLs with the `djust_components` allowlist (`safe_url` / `url_attr`), not a denylist; the #3675 sweep runs over the theming tags as a regression net~~ ✅ (#3747) | v1.3.0 |
+| ~~**P2**~~ | ~~#3666 — `Form` / `BoundField` arguments reach the native Rust component handlers (`{% field_error field=form.name %}` renders the same under both engines)~~ ✅ (#3753) | v1.3.0 |
+| ~~**P2**~~ | ~~#3667 — Native Rust handlers raise the errors the Python tags raise for invalid input, and the leaked method repr in `notification_popover` is fixed~~ ✅ (#3753) | v1.3.0 |
+
+### v1.3.0-19 — accessibility semantics and live form paths, from a downstream app on 1.3.0 (drain bucket → ships in 1.3)
+
+*Kind:* fourteen issues filed 2026-11-10/11 from one downstream app's accessibility and forms work, all re-checked against `main` at 1.3.2. Three groups, each one PR: **A, component and flash ARIA/CSP** (the template-engine markup and the Y005 check), **B, server-side form paths** (`WizardMixin`, formsets, `ModelFormMixin`), **C, client-side form events** (`dj-submit`, multi-value fields, `dj-disable-with`). **#3972 is not drained here:** its opt-in form mode (`form_field=True`) is delivered by the open PR #3962, which also carries the `type="button"` fix; it closes with that PR. PRs #3960 and #3962 are the downstream author's own and stay theirs.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| ~~**P2**~~ | ~~**A.** #3971 — `{% status_indicator %}` renders `role="status"`, making every indicator a live region~~ ✅ (#3980) | v1.3.0 |
+| **P2** | **A.** #3968 — Flash messages are announced through nested live regions (`role="alert"` inside `role="status"`) — fix merged in #3980; left open until a screen reader (VoiceOver/NVDA) confirms the announcements | v1.3.0 |
+| ~~**P2**~~ | ~~**A.** #3970 — `{% stepper %}` steps are click-only divs: not keyboard operable, no `aria-current`, not a list~~ ✅ (#3980) | v1.3.0 |
+| ~~**P2**~~ | ~~**A.** #3969 — `{% progress %}` fill is an inline style (blocked by a strict CSP) and the bar has no `progressbar` role~~ ✅ (#3980) | v1.3.0 |
+| ~~**P2**~~ | ~~**A.** #3961 — Radio components have no group semantics (`dj_radio`, `live_input type="radio"`)~~ ✅ (#3980) | v1.3.0 |
+| ~~**P3**~~ | ~~**A.** #3973 — `djust.Y005` flags an `<svg>` inside an `aria-hidden="true"` ancestor~~ ✅ (#3980) | v1.3.0 |
+| ~~**P1**~~ | ~~**B.** #3964 — `WizardMixin.next_step` ignores the submitted step form, and `validate_field` does not validate~~ ✅ (#3981) | v1.3.0 |
+| ~~**P1**~~ | ~~**B.** #3966 — `FormSetHelpersMixin.add_row` / `remove_row` drop `instance`, `queryset` and the other formset kwargs~~ ✅ (#3981) | v1.3.0 |
+| ~~**P2**~~ | ~~**B.** #3965 — `WizardMixin.mount` always restarts at step 0, with no hook to resume stored progress~~ ✅ (#3981) | v1.3.0 |
+| ~~**P2**~~ | ~~**B.** #3967 — `ModelFormMixin`: let read-only events reuse the authorized object, and take the lookup from params (design call: ADR-017 guarantee for writes stays)~~ ✅ (#3981) | v1.3.0 |
+| ~~**P1**~~ | ~~**C.** #3959 — Multi-value form fields lose values: `dj-submit` keeps only the last `FormData` entry, `dj-change` on a checkbox sends its checked state~~ ✅ (#3976) | v1.3.0 |
+| ~~**P2**~~ | ~~**C.** #3958 — `dj-submit`: the pressed submit button is lost under strict event parameters (ADR-036)~~ ✅ (#3976) | v1.3.0 |
+| ~~**P2**~~ | ~~**C.** #3963 — `dj-disable-with` restores a button's old text over the text the server just rendered~~ ✅ (#3976) | v1.3.0 |
+| **P3** | Follow-ups filed from the group reviews: #3975 (`dj-lock` restore order), #3978 (draft manager / `dj-model` / adapters flatten multi-value fields), #3977 (`LiveViewTestClient.mount()` cannot mount a routed `ModelFormMixin` view), #3979 (inline-width progress fills in `ui/` variants and docs), #3982 (`on_wizard_complete` undeclared names), #3983 (record fingerprint cost) | v1.4.0 |
+| ~~**P2**~~ | ~~#3972 — `{% toggle_group %}` form mode~~ covered by open PR #3962 (`form_field=True`); closes with it | v1.3.0 |
 
 ## Next: v1.2.1 — non-breaking fixes (drain)
 

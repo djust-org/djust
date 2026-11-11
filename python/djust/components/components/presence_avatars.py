@@ -1,10 +1,11 @@
 """Presence Avatars component for stacked online user avatars with overflow count."""
 
 import html
-from djust.components.utils import url_attr
+from djust.components.utils import data_url_attr
 from typing import Any, List, Optional, Union
 
 from djust import Component
+from djust._template_guards import call_method_for_template
 
 
 class PresenceAvatars(Component):
@@ -72,7 +73,7 @@ class PresenceAvatars(Component):
                 src = user.get("avatar", "") or user.get("src", "")
                 status = user.get("status", "online")
             elif hasattr(user, "get_full_name"):
-                name = user.get_full_name() or str(user)
+                name = call_method_for_template(user, "get_full_name") or str(user)
                 src = getattr(user, "avatar", "")
                 if hasattr(src, "url"):
                     src = src.url
@@ -83,7 +84,7 @@ class PresenceAvatars(Component):
                 status = "online"
 
             e_name = html.escape(str(name))
-            e_src = url_attr(src, image=True) if src else ""
+            e_src = data_url_attr(src, image=True) if src else ""
             safe_status = status if status in self.VALID_STATUSES else "online"
             initials = html.escape("".join(w[0].upper() for w in str(name).split()[:2] if w)) or "?"
             z = len(visible) - i

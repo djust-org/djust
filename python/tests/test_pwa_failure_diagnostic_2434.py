@@ -17,21 +17,30 @@ Why the #2379 audit could not see it
 ``render([], {})``, and under this repo's own settings all four PWA tags
 render SUCCESSFULLY there — ``Template.render`` returns a ``SafeString``, so
 the enumeration only ever reached the success exit. The failure exit needs an
-argument that makes the generated Django source unparseable, which is why the
-same enumeration now carries a quote-bearing kwarg vector
-(``_ARG_VECTORS``); before this fix that vector turns the enumeration red with
-these four handlers as offenders, which is the mechanical net rather than this
-file's targeted rows.
+argument the bridge cannot turn into a tag call, which is why the same
+enumeration now carries an unsupported-keyword vector (``_ARG_VECTORS``);
+before this fix that vector turns the enumeration red with these four handlers
+as offenders, which is the mechanical net rather than this file's targeted
+rows.
 
 Reached from a real template, not by monkeypatching
 ---------------------------------------------------
-``_build_django_tag`` assembles ``key="value"`` by concatenation, so a kwarg
-value carrying a double quote produces ``name="he said "hi""`` — a
-``TemplateSyntaxError``. That is a genuine end-to-end trigger under the repo's
-own settings: no ``settings.configure(INSTALLED_APPS=[])``, no patched
-``Template``, no forced exception. (The library-not-loadable case the issue
-describes — ``djust`` absent from ``INSTALLED_APPS`` — is the same exit,
+The trigger is a keyword the tag does not take (``no_such_pwa_argument=...``).
+``_tag_source_and_context`` accepts only the keywords in ``_TAG_PARAMS`` and
+raises on any other, which is the one deterministic way left to reach the
+failure exit from a template: no ``settings.configure(INSTALLED_APPS=[])``, no
+patched ``Template``, no forced exception. (The library-not-loadable case the
+issue describes — ``djust`` absent from ``INSTALLED_APPS`` — is the same exit,
 reached by a route a configured test process cannot take.)
+
+The original trigger was a double quote in a kwarg VALUE: the bridge used to
+write each value into the Django source as ``key="value"``, so a quote made the
+source unparseable. That was not a diagnostic path, it was #3824 — the same
+quote, plus ``%}``, let a context value write its own markup into the page — so
+it cannot be the trigger any more: a quote-bearing value now renders, escaped
+(``test_pwa_tag_template_injection_3824.py``). The intent of this file is
+unchanged: whatever drives the handler to its failure exit, the diagnostic that
+comes out must be a comment and not escaped text.
 
 What was decided, and why marked rather than emptied
 -----------------------------------------------------
@@ -95,9 +104,9 @@ PWA_TAGS = (
     "djust_offline_indicator",
 )
 
-#: A kwarg value whose double quote breaks ``_build_django_tag``'s naive
-#: ``key="value"`` assembly, so the generated Django source raises.
-BREAKS_THE_GENERATED_SOURCE = 'he said "hi"'
+#: A keyword argument no PWA tag takes, so ``_tag_source_and_context`` raises
+#: and the handler reaches its failure exit.
+FAILURE_KWARG = "no_such_pwa_argument"
 
 
 def _diagnostic(tag_name: str) -> str:
@@ -114,7 +123,7 @@ class TestTheFailureDiagnosticReachesThePageAsAComment:
 
     @pytest.mark.parametrize("tag", PWA_TAGS)
     def test_the_rendered_page_carries_a_comment_and_not_escaped_text(self, tag: str) -> None:
-        out = _rust.render_template("{%% %s name=n %%}" % tag, {"n": BREAKS_THE_GENERATED_SOURCE})
+        out = _rust.render_template("{%% %s %s=n %%}" % (tag, FAILURE_KWARG), {"n": "x"})
         assert out == _diagnostic(tag), (
             "the failure exit was not reached — this row proves nothing about "
             f"the marker unless the diagnostic is what rendered: {out!r}"
@@ -125,7 +134,7 @@ class TestTheFailureDiagnosticReachesThePageAsAComment:
 
     @pytest.mark.parametrize("tag", PWA_TAGS)
     def test_the_handler_marks_the_diagnostic_it_returns(self, tag: str) -> None:
-        out = get_registered_handlers()[tag].render([f"name={BREAKS_THE_GENERATED_SOURCE}"], {})
+        out = get_registered_handlers()[tag].render([f"{FAILURE_KWARG}=x"], {})
         assert out == _diagnostic(tag), f"the failure exit was not reached: {out!r}"
         assert hasattr(out, "__html__"), (
             "an unmarked `str` carrying markup is escaped by the bridge (#2379)"

@@ -143,7 +143,7 @@ LiveView (parent)
 **Example**:
 ```python
 class TodoListComponent(LiveComponent):
-    template_string = """
+    template = """
         <div class="todo-list">
             {% for item in items %}
             <div dj-click="toggle_todo" data-id="{{ item.id }}">

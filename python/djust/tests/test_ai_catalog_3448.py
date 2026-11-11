@@ -201,18 +201,37 @@ def test_class_snippets_use_public_constructor_signatures():
         inspect.signature(classes[name]).bind(*args, **kwargs)
 
 
-def test_suggest_megabyte_intent_is_bounded():
+def test_suggest_megabyte_intent_is_bounded(monkeypatch):
     import json
-    import time
-    from djust.ai_discovery.catalog import load_catalog, search
+    from djust.ai_discovery import catalog
+    from djust.ai_discovery.catalog import MAX_QUERY_LENGTH, load_catalog, search
     from djust.ai_discovery.runner import render_suggest
 
     load_catalog()
     intent = ("table filters searchable dropdown " * 40000)[:1_048_576]
-    start = time.process_time()
+    # "Bounded" means the intent is cut to 512 characters before any work, so the cost
+    # cannot grow with it. Asserted as what the work is GIVEN, not how long it takes
+    # (#3835): every string the tokenizer sees is at most MAX_QUERY_LENGTH characters,
+    # and 256 KB of intent and 1 MB of intent make the same calls on the same lengths.
+    seen = {}
+    real = catalog._tokens
+
+    def spy(value):
+        seen.setdefault("lengths", []).append(len(value))
+        return real(value)
+
+    monkeypatch.setattr(catalog, "_tokens", spy)
+    runs = {}
+    for scale in (1, 4):
+        seen.clear()
+        search(intent[: 262_144 * scale])
+        render_suggest(intent[: 262_144 * scale], 5, as_json=True)
+        runs[scale] = list(seen["lengths"])
+    assert max(runs[4]) <= MAX_QUERY_LENGTH, max(runs[4])
+    assert runs[1] == runs[4]  # the same tokenizer calls, on the same lengths, at 4x the intent
+    monkeypatch.setattr(catalog, "_tokens", real)
     actual = search(intent)
     payload = json.loads(render_suggest(intent, 5, as_json=True))
-    assert time.process_time() - start < 1
     assert actual == search(intent[:512])
     assert payload["intent"] == intent[:512]
 

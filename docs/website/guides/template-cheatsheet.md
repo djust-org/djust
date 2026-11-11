@@ -240,7 +240,7 @@ host view's. A poll stops when its element leaves the page.
 
 | Attribute | Description |
 |---|---|
-| `dj-disable-with="text"` | Disable button + replace text during submission |
+| `dj-disable-with="text"` | Disable button + replace text during submission; the response then has the last word, so a label or `disabled` state it renders stays |
 | `dj-lock` | Block event until server responds (prevents double-fire) |
 
 ```html
@@ -467,7 +467,7 @@ Handler receives `_target="email"` or `_target="username"`.
 
 ### Generated values under the strict policy
 
-Under the opt-in strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive every value as before.
+Under the opt-in strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields (and the pressed submit button's `name=value`) for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive the same values as before, with one change: a repeated field name on `dj-submit`, and a `dj-change` / `dj-input` / `dj-blur` / `dj-focus` on a group of same-named checkboxes or a `<select multiple>`, now arrive as a **list** (see [Fields with several values](forms.md#fields-with-several-values)).
 
 ---
 
@@ -623,9 +623,19 @@ and for values bound by `{% for %}` and `{% with %}`.
    discloses *more*. Check what the `__str__` of anything you place bare
    in a template, or pass to `json_script`, actually says.
 
-Django **models** are unaffected by all of this: they stay on djust's
-eager, floored path, and the serialization floor keeps
-`{{ user.password }}` empty.
+Django **models** are held to the serialization floor on every path
+(`{{ user.password }}` is empty everywhere), but how one reaches the
+engine depends on the entry. A model in a list, tuple or nested
+container, and a top-level model rendered through
+`DjustTemplateBackend` or `render_template`, is a floored live handle:
+managers, relations and `*_id` attributes read as they do on Django,
+including behind a filter (`{% with q=user|default:user %}{{ q.groups.count }}{% endwith %}`).
+A top-level model held by a `LiveView` is still the floored dict,
+because a view holds it as state (it is sent to the client and
+change-tracked), so that filtered rebinding reads a relation empty
+there (#3936). A handle is not a mapping: iterate a model's fields
+explicitly, and read a `FileField` with `.url` (a bare
+`{{ doc.attach }}` prints the stored name, as on Django).
 
 **There is no kill-switch.** The release candidates carried
 `LIVEVIEW_CONFIG["template_resolve_lazy"] = False` as a rollback to the
@@ -704,6 +714,15 @@ register_tag_handler("hello", HelloTag())
 ```django
 {% hello "Alice" %}
 ```
+
+An inline handler may also define two optional methods that the parser calls once, at
+compilation, with the tag's arguments as the template wrote them (before anything is
+resolved): `validate_at_parse(args)` raises to refuse the template, and
+`rewrite_args_at_parse(args) -> list[str]` returns the argument list the tag keeps. Use
+the second when a handler must tell a positional argument from a keyword one: after
+resolution they are both just text, so `{% hello name %}` with `name = "k=v"` would look
+like the keyword `k`. djust's own components use it to name positional arguments after the
+Python tag's parameters (`djust/_positional_args.py`).
 
 Overhead is ~100–500 ns per call (PyO3 boundary). Built-in tags
 (`if`, `for`, `block`, …) stay in pure Rust with zero overhead. See

@@ -135,7 +135,9 @@ class TestLazyNotEvaluatedWhenUnused:
         assert type(ctx["theme_preset"]) is str
         assert type(ctx["theme_mode"]) is str
         assert type(ctx["theme_resolved_mode"]) is str
-        assert type(ctx["theme_presets"]) is list
+        # A real list (``json_script`` / ``json.dumps`` work); it is a marked
+        # subclass so the bridge keeps it out of the stored state (#3631).
+        assert isinstance(ctx["theme_presets"], list)
         assert _total_renders(spies) == 0
 
     def test_each_chunk_renders_only_the_one_that_is_read(self, spies):

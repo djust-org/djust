@@ -39,7 +39,7 @@ describe('flash message rendering', () => {
         expect(flash).not.toBeNull();
         expect(flash.textContent).toBe('Saved!');
         expect(flash.classList.contains('dj-flash-success')).toBe(true);
-        expect(flash.getAttribute('role')).toBe('alert');
+        expect(flash.getAttribute('role')).toBe('status');
         expect(flash.getAttribute('data-dj-flash-level')).toBe('success');
     });
 
@@ -77,6 +77,93 @@ describe('flash message rendering', () => {
 
         const flash = document.querySelector('.dj-flash');
         expect(flash).toBeNull();
+    });
+});
+
+// The container exactly as {% dj_flash %} renders it (python/tests/test_flash_tag_handler.py pins
+// that it carries no role and no aria-live).
+const SSR_CONTAINER =
+    '<div id="dj-flash-container" class="dj-flash-container" dj-update="ignore" data-dj-auto-dismiss="0"></div>';
+
+const LIVE_ROLES = ['alert', 'status', 'log'];
+function isLiveRegion(el) {
+    return LIVE_ROLES.includes(el.getAttribute('role')) || el.hasAttribute('aria-live');
+}
+// The live regions on the path from `el` up to the document: the element itself and each ancestor.
+function liveRegionsOnPath(el) {
+    const found = [];
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+        if (isLiveRegion(node)) found.push(node);
+    }
+    return found;
+}
+
+describe('flash live regions (#3968)', () => {
+    it.each([
+        ['info', 'status'],
+        ['success', 'status'],
+        ['warning', 'alert'],
+        ['error', 'alert'],
+        ['debug', 'status'],
+        ['', 'status'],
+    ])('a %s message is role=%s', (level, role) => {
+        const { window, document } = createEnv(SSR_CONTAINER);
+
+        window.djust.flash.handleFlash({ action: 'put', level, message: 'Saved.' });
+
+        expect(document.querySelector('.dj-flash').getAttribute('role')).toBe(role);
+    });
+
+    it('a level that is an Object.prototype key is a status, not an alert', () => {
+        const { window, document } = createEnv(SSR_CONTAINER);
+
+        window.djust.flash.handleFlash({ action: 'put', level: 'constructor', message: 'x' });
+        window.djust.flash.handleFlash({ action: 'put', level: '__proto__', message: 'y' });
+
+        const roles = [...document.querySelectorAll('.dj-flash')].map((el) => el.getAttribute('role'));
+        expect(roles).toEqual(['status', 'status']);
+    });
+
+    it('every message is exactly one live region: none sits inside another', () => {
+        const { window, document } = createEnv(SSR_CONTAINER);
+
+        for (const level of ['info', 'success', 'warning', 'error']) {
+            window.djust.flash.handleFlash({ action: 'put', level, message: level });
+        }
+
+        const messages = document.querySelectorAll('.dj-flash');
+        expect(messages.length).toBe(4);
+        for (const message of messages) {
+            expect(liveRegionsOnPath(message)).toEqual([message]);
+            // the role carries the politeness; an explicit aria-live on top would be a second opinion
+            expect(message.hasAttribute('aria-live')).toBe(false);
+        }
+        expect(isLiveRegion(document.getElementById('dj-flash-container'))).toBe(false);
+    });
+
+    it('the check can fail: a live container around a message is reported as nesting', () => {
+        // The markup {% dj_flash %} rendered before #3968.
+        const { window, document } = createEnv(
+            '<div id="dj-flash-container" aria-live="polite" role="status" data-dj-auto-dismiss="0"></div>'
+        );
+
+        window.djust.flash.handleFlash({ action: 'put', level: 'error', message: 'Nope' });
+
+        const message = document.querySelector('.dj-flash');
+        expect(liveRegionsOnPath(message).length).toBe(2);
+    });
+
+    it('clear still finds messages by level after the role change', () => {
+        const { window, document } = createEnv(SSR_CONTAINER);
+
+        window.djust.flash.handleFlash({ action: 'put', level: 'error', message: 'E' });
+        window.djust.flash.handleFlash({ action: 'put', level: 'info', message: 'I' });
+        window.djust.flash.handleFlash({ action: 'clear', level: 'error' });
+
+        const levels = [...document.querySelectorAll('.dj-flash:not(.dj-flash-removing)')].map((el) =>
+            el.getAttribute('data-dj-flash-level')
+        );
+        expect(levels).toEqual(['info']);
     });
 });
 

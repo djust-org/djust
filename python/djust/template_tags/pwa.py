@@ -18,7 +18,7 @@ Usage in templates::
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, FrozenSet, List, Tuple
 
 from django.utils.html import escape
 
@@ -28,28 +28,78 @@ from . import TagHandler, register
 logger = logging.getLogger(__name__)
 
 
-def _build_django_tag(tag_name: str, kwargs: Dict[str, str]) -> str:
+#: The keyword arguments each PWA tag accepts, by tag name.
+#:
+#: This table is what lets :func:`_tag_source_and_context` build Django source
+#: out of CONSTANTS only (#3824). A tag name or a keyword that is not in it never
+#: reaches the source: it raises, the ``except`` arm of
+#: :func:`_render_django_tag` logs it and returns the marked diagnostic. It
+#: mirrors the signatures of the Django tags in ``djust.templatetags.djust_pwa``
+#: (``icons`` is left out: it takes a list of dicts, which the ``str`` kwargs
+#: this bridge builds can never be); ``test_pwa_tag_template_injection_3824``
+#: pins the two against each other.
+_TAG_PARAMS: Dict[str, FrozenSet[str]] = {
+    "djust_pwa_head": frozenset({"name", "theme_color"}),
+    "djust_pwa_manifest": frozenset(
+        {
+            "name",
+            "short_name",
+            "description",
+            "theme_color",
+            "background_color",
+            "display",
+            "start_url",
+        }
+    ),
+    "djust_sw_register": frozenset({"sw_url", "scope"}),
+    "djust_offline_indicator": frozenset(
+        {"online_text", "offline_text", "online_class", "offline_class", "show_when"}
+    ),
+}
+
+
+def _tag_source_and_context(tag_name: str, kwargs: Dict[str, str]) -> Tuple[str, Dict[str, str]]:
     """
-    Build a Django template string for a tag with keyword arguments.
+    Build the Django template source for a PWA tag, and the context it renders in.
+
+    The SOURCE is made of constants only: the library load, a tag name and
+    keyword names that were checked against :data:`_TAG_PARAMS`, and one
+    context-variable reference per keyword (``name=kw_name``). Every VALUE
+    travels in the returned context and is resolved by Django as data, so no
+    value, however it is spelled, can close a quote, a ``%}`` or a ``{{`` and
+    become template code (#3824). The previous form wrote each resolved value
+    into the source as ``key="value"``, which let a context value carrying a
+    quote and ``%}`` end the tag early and write its own markup after it.
 
     Parameters
     ----------
     tag_name : str
         The Django template tag name (e.g. "djust_pwa_head").
     kwargs : dict
-        Keyword arguments to pass to the tag.
+        Keyword arguments to pass to the tag, already resolved to strings.
 
     Returns
     -------
-    str
-        A Django template string ready for rendering.
+    tuple
+        ``(source, context)`` for ``Template(source).render(Context(context))``.
+
+    Raises
+    ------
+    ValueError
+        If ``tag_name`` is not a PWA tag, or a keyword is not one the tag takes.
     """
-    parts = ["{%", "load djust_pwa", "%}{%", tag_name]
+    allowed = _TAG_PARAMS.get(tag_name)
+    if allowed is None:
+        raise ValueError("not a PWA tag")
+    values: Dict[str, str] = {}
+    parts = ["{% load djust_pwa %}{%", tag_name]
     for key, value in kwargs.items():
-        # Values are already resolved strings
-        parts.append('%s="%s"' % (key, value))
+        if key not in allowed:
+            raise ValueError("unsupported argument %r for a PWA tag" % key)
+        parts.append("%s=kw_%s" % (key, key))
+        values["kw_" + key] = value
     parts.append("%}")
-    return " ".join(parts)
+    return " ".join(parts), values
 
 
 def _render_django_tag(tag_name: str, kwargs: Dict[str, str]) -> str:
@@ -70,11 +120,11 @@ def _render_django_tag(tag_name: str, kwargs: Dict[str, str]) -> str:
     """
     from django.template import Template, Context as DjangoContext
 
-    tpl_str = _build_django_tag(tag_name, kwargs)
     try:
+        tpl_str, values = _tag_source_and_context(tag_name, kwargs)
         # Django is untyped under the lenient global config; Template.render
         # returns ``Any`` to mypy but a real ``SafeString`` (str) at runtime.
-        return str(Template(tpl_str).render(DjangoContext({})))
+        return str(Template(tpl_str).render(DjangoContext(values)))
     except Exception:
         logger.exception("Error rendering {%% %s %%}", tag_name)
         # MARKED, so the diagnostic stays an invisible HTML comment (#2434).

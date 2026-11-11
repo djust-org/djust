@@ -6,6 +6,7 @@ Tests the extract_template_variables function exposed via PyO3 binding.
 
 import pytest
 from djust._rust import extract_template_variables
+from djust.tests._growth import assert_scales_linearly
 
 
 class TestBasicExtraction:
@@ -373,26 +374,10 @@ class TestRealWorldTemplates:
 class TestPerformance:
     """Test performance characteristics."""
 
-    def test_large_template(self):
-        """Test extraction from a 100-block template completes within a
-        catastrophic-regression budget — a flake-resistant smoke check,
-        not a benchmark.
-
-        Typical local runtime is well under 1ms (~0.5ms warm). The 500ms
-        ceiling is set to absorb worst-case CI variance under busy
-        parallel suite load + py3.13 free-threaded scheduling, not to
-        catch fine-grained regressions. A future change that introduces
-        a ~1000× slowdown (algorithmic regression, accidental N²) will
-        still trip this; small constant-factor regressions will not.
-        For tight perf tracking use ``pytest-benchmark`` runs in CI.
-        Closes #1189 — the prior 100ms bound flaked on busy runners and
-        the v0.9.0rc3 retry surfaced the same class of flake.
-        """
-        import time
-
-        # Generate a large template
+    @staticmethod
+    def _template(blocks):
         template_parts = []
-        for i in range(100):
+        for i in range(blocks):
             template_parts.append(f"""
                 {{% for obj{i} in list{i} %}}
                     {{{{ obj{i}.field1 }}}}
@@ -400,20 +385,57 @@ class TestPerformance:
                     {{{{ obj{i}.field3.deeply.nested.value }}}}
                 {{% endfor %}}
             """)
-        template = "\n".join(template_parts)
+        return "\n".join(template_parts)
 
-        start = time.time()
-        result = extract_template_variables(template)
-        elapsed = time.time() - start
+    def test_large_template(self):
+        """Extraction does not blow up as the template grows — a smoke check, not a
+        benchmark.
 
-        # Catastrophic-regression bound: 500ms (typical local ~0.5ms;
-        # CI / free-threaded variance dictates the wide headroom).
-        # Sized to catch ~1000× regressions, not constant-factor ones —
-        # see docstring.
-        assert elapsed < 0.5, f"Extraction took {elapsed:.3f}s, expected < 0.5s"
+        Judged by growth, not by seconds (#3711, closes the class of #1189): the prior
+        100 ms bound flaked on busy runners and the 500 ms replacement still asserted a
+        claim about the machine. Doubling the blocks (100 -> 200) must cost under 25x as
+        much. That is a catastrophic-regression guard (exponential, or a factor worse
+        than today's), NOT a linearity claim: see ``test_large_template_is_linear``. For tight perf tracking use
+        ``pytest-benchmark`` runs in CI.
+        """
+        templates = {scale: self._template(100 * scale) for scale in (1, 2)}
+        assert_scales_linearly(
+            lambda scale: extract_template_variables(templates[scale]),
+            factor=2,
+            limit=25.0,
+            what="extracting template variables",
+        )
 
         # Verify we got results
-        assert len(result) > 0
+        assert len(extract_template_variables(templates[1])) > 0
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            pytest.param(None, id="for-loops"),
+            pytest.param("{% if x %}{{ y }}{% endif %}", id="if-var"),
+            pytest.param("\n  {{ y.name }}\n  {% if c %}shown{% endif %}\n", id="whitespace-sep"),
+        ],
+    )
+    def test_large_template_is_linear(self, block):
+        """Four times the blocks must cost under ten times as much.
+
+        It cost ~7x per doubling (roughly n^2.9) until #3724: ``is_inside_html_tag_at``
+        walked back over every preceding token for each ``{{ }}`` and ``{% if %}``
+        whenever the text between tags held no ``>``, which is every template whose
+        blocks are separated by whitespace, as the default shape's are. The ``if-var``
+        shape is the issue's reproduction (no text at all between tags), and
+        ``whitespace-sep`` has text between tags that still never holds a ``>``.
+        """
+        build = self._template if block is None else (lambda n: block * n)
+        # The shapes with less text per block need more of them before the old walk's
+        # token-by-token cost rises above the clock's noise.
+        base = {None: 100, "{% if x %}{{ y }}{% endif %}": 3200}.get(block, 400)
+        templates = {scale: build(base * scale) for scale in (1, 4)}
+        assert_scales_linearly(
+            lambda scale: extract_template_variables(templates[scale]),
+            what="extracting template variables",
+        )
 
 
 class TestComplexExpressions:

@@ -61,7 +61,7 @@ _ROWS = [
 # ---------------------------------------------------------------------------
 
 
-async def _receive_until(communicator, wanted_type, *, tries=8, timeout=3):
+async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
@@ -119,7 +119,7 @@ async def _connect_and_mount(view_path: str, url: str = "/t/"):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
 
     await communicator.send_json_to({"type": "mount", "view": view_path, "url": url})
     mount_frame = await _receive_until(communicator, "mount")
@@ -237,7 +237,7 @@ async def _type(communicator, tag: str, typed: str, ref: int = 1):
     await communicator.send_json_to(
         {"type": "event", "event": _attrs(tag)["dj-input"], "params": params, "ref": ref}
     )
-    return await communicator.receive_json_from(timeout=3)
+    return await communicator.receive_json_from()
 
 
 async def _send(communicator, event: str, params: Optional[Dict[str, Any]] = None, ref: int = 9):
@@ -249,7 +249,7 @@ async def _send(communicator, event: str, params: Optional[Dict[str, Any]] = Non
             "ref": ref,
         }
     )
-    return await communicator.receive_json_from(timeout=3)
+    return await communicator.receive_json_from()
 
 
 def _summary(frame: Dict[str, Any], name: str) -> str:

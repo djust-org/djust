@@ -3,19 +3,25 @@ RequestMixin - HTTP GET/POST request handling for LiveView.
 """
 
 import asyncio
+import contextvars
+import hashlib
 import inspect
 import json
 from types import MappingProxyType
 import logging
+import sys
+import threading
 import time
 from contextlib import contextmanager
 from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
+    Callable,
     Dict,
     Iterator,
     List,
+    Mapping,
     Optional,
     Tuple,
     cast,
@@ -46,18 +52,70 @@ from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler, is_push_only
 from ..hooks import run_on_mount_hooks
 from .._exposure import uses_legacy_exposure
-from .._tenant_state import UNSAVED_PRIVATE_SUFFIX
+from .._tenant_state import MOUNT_WORK_SUFFIX, UNSAVED_PRIVATE_SUFFIX
 from .._view_hooks import call_async_result_sync, call_hook_sync
+from .async_work import has_pending_async_work
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
 
 logger = logging.getLogger(__name__)
 
+#: ``LiveView.http_status_of_state`` as the framework declares it (#3706): an empty read-only map. It is
+#: one object, so ``view.http_status_of_state is UNDECLARED_STATUS_MAP`` tells a view that declares
+#: nothing (read ``LIVEVIEW_CONFIG["http_status_of_state"]``) from one that declares ``{}`` (a map of
+#: its own, which is empty: it opts out of the project's). It compares equal to ``{}`` and is falsy.
+UNDECLARED_STATUS_MAP: Mapping[str, int] = MappingProxyType({})
+
 #: How many times queued background work may queue more before the fallback
 #: gives up and says so. A task that schedules the next page of a load is a
 #: handful of rounds; a loop that never ends would hold the request open.
 _HTTP_BACKGROUND_MAX_ROUNDS = 8
+
+#: Name prefix of the worker threads that run background work under a deadline.
+_HTTP_BACKGROUND_THREAD_PREFIX = "djust-http-bg"
+
+#: How many background worker threads may hold a slot in this process at once
+#: (a thread started under the deadline, or an abandoned one that has not
+#: ended). A sync callback the deadline stopped waiting for cannot be cancelled
+#: and keeps running, and any thread in flight can become one, so bounding the
+#: slots (reserved atomically before a worker starts) is what makes "at most this
+#: many abandoned threads are alive" true under concurrent POSTs. Past it a new
+#: task is not started: it is refused with a warning and a ``TimeoutError`` for
+#: ``handle_async_result``, so a callback that hangs on every POST cannot pile up
+#: threads (each holding a database connection) without limit. The slots of a
+#: thread that finishes, or of an abandoned one that ends, are released.
+_HTTP_BACKGROUND_MAX_ABANDONED = 16
+
+_ABANDONED_WORKERS: "set[threading.Thread]" = set()
+_WORKERS_RESERVED = 0  # in flight for a POST that is still waiting
+_ABANDONED_LOCK = threading.Lock()
+
+
+def _reserve_worker_slot() -> Optional[int]:
+    """Take a worker slot, or return how many are held when none is free.
+
+    ``None`` means a slot is now reserved and :func:`_release_worker_slot` must
+    follow. Counting and reserving are one step under a lock, so concurrent POSTs
+    cannot all pass the check before any of them starts.
+    """
+    global _WORKERS_RESERVED
+    with _ABANDONED_LOCK:
+        _ABANDONED_WORKERS.difference_update([t for t in _ABANDONED_WORKERS if not t.is_alive()])
+        held = len(_ABANDONED_WORKERS) + _WORKERS_RESERVED
+        if held >= _HTTP_BACKGROUND_MAX_ABANDONED:
+            return held
+        _WORKERS_RESERVED += 1
+        return None
+
+
+def _release_worker_slot(abandoned: Optional[threading.Thread] = None) -> None:
+    """Give a reserved slot back; an abandoned worker keeps one until it ends."""
+    global _WORKERS_RESERVED
+    with _ABANDONED_LOCK:
+        _WORKERS_RESERVED -= 1
+        if abandoned is not None:
+            _ABANDONED_WORKERS.add(abandoned)
 
 
 def _http_url_params(request: Any) -> Dict[str, Any]:
@@ -71,7 +129,7 @@ def _http_url_params(request: Any) -> Dict[str, Any]:
 
 
 def _run_http_handle_params(view: Any, request: Any) -> None:
-    """Call ``view.handle_params(params, uri)`` the way the GET does.
+    """Run the view's params hook the way the GET does.
 
     The GET and the socket mount call it right after ``mount()``. The page-POST
     fallback builds a fresh view and calls ``mount()`` on it, so it calls this
@@ -80,8 +138,9 @@ def _run_http_handle_params(view: Any, request: Any) -> None:
     a page the browser never showed (#3624). The browser POSTs to
     ``window.location.href``, so the query string is on the POST's request.
     """
-    if hasattr(view, "handle_params"):
-        call_hook_sync(view.handle_params, _http_url_params(request), request.get_full_path())
+    from .._params_form import run_handle_params_sync
+
+    run_handle_params_sync(view, _http_url_params(request), request.get_full_path())
 
 
 def _take_queued_background_work(view: Any) -> List[Tuple[str, Any, Any, Any]]:
@@ -98,7 +157,128 @@ def _take_queued_background_work(view: Any) -> List[Tuple[str, Any, Any, Any]]:
     return tasks
 
 
-def _run_http_background_work(view: Any) -> None:
+class _BackgroundBudget:
+    """The time one fallback request may spend waiting for background work (#3634).
+
+    One budget per request, shared by every call to
+    :func:`_run_http_background_work` (mount's work, the handler's, the page's
+    after a child's), not one per task: what the deadline bounds is the POST, and
+    per-task deadlines would let N tasks hold it for N times as long. The clock
+    starts when the first task does, so a slow handler does not spend it.
+    """
+
+    def __init__(self, timeout: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self.timeout = timeout
+        self._clock = clock
+        self._deadline: Optional[float] = None
+
+    def remaining(self) -> float:
+        """Seconds left; the first call starts the clock."""
+        now = self._clock()
+        if self._deadline is None:
+            self._deadline = now + self.timeout
+        return max(0.0, self._deadline - now)
+
+    def spent(self) -> bool:
+        """True once the time is up: no further task may start."""
+        return self._deadline is not None and self._clock() >= self._deadline
+
+
+def _http_background_budget() -> Optional[_BackgroundBudget]:
+    """A fresh budget for this request, or ``None`` when no deadline is configured."""
+    from ..config import http_fallback_background_timeout
+
+    timeout = http_fallback_background_timeout()
+    return None if timeout is None else _BackgroundBudget(timeout)
+
+
+class _BackgroundRun:
+    """One task running on a worker thread the request may stop waiting for."""
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.lock = threading.Lock()
+        self.result: Any = None
+        self.error: Optional[BaseException] = None
+        self.abandoned = False
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.task: Optional["asyncio.Future[Any]"] = None
+        self.thread: Optional[threading.Thread] = None
+
+    def abandon(self) -> None:
+        """Ask the task to stop (an ``async def`` callback honours it) and stop waiting."""
+        with self.lock:
+            self.abandoned = True
+            if self.task is not None and self.loop is not None:
+                try:
+                    self.loop.call_soon_threadsafe(self.task.cancel)
+                except RuntimeError:
+                    logger.debug("[djust HTTP] background task's loop was already closed")
+
+
+def _start_background_run(
+    view: Any, name: str, callback: Any, args: Any, kwargs: Any
+) -> _BackgroundRun:
+    """Start ``callback`` on a worker thread and return the handle to wait on.
+
+    Not on the request thread: ``async_to_sync`` runs a sync callback (through
+    ``sync_to_async``) on the thread that called it, so a timeout on the
+    coroutine awaiting it can never free the request. Called from a worker, the
+    callback runs on the worker, which the request is free to leave behind. The
+    thread is a daemon, runs inside a copy of the request's context (tenant,
+    turn state) and closes the database connections it opened when it ends.
+    """
+    from asgiref.sync import async_to_sync
+
+    from ..mixins.async_work import run_async_callback
+
+    run = _BackgroundRun()
+
+    async def runner() -> Any:
+        task = asyncio.ensure_future(run_async_callback(callback, args, kwargs, owner=view))
+        with run.lock:
+            run.loop = asyncio.get_running_loop()
+            run.task = task
+            if run.abandoned:
+                task.cancel()
+        return await task
+
+    def body() -> None:
+        from django.db import connections
+
+        completed = False
+        try:
+            run.result = async_to_sync(runner)()
+            completed = True
+        except (Exception, asyncio.CancelledError) as exc:
+            # Handed back to the request thread (a cancelled task as well).
+            run.error = exc
+            completed = True
+        finally:
+            if not completed:
+                # Anything else (SystemExit, KeyboardInterrupt) is not swallowed
+                # here: it ends the thread, and the request thread gets the very
+                # same exception, as it would without a deadline, instead of an
+                # outcome that reads as success.
+                run.error = sys.exc_info()[1]
+            try:
+                connections.close_all()
+            except Exception:  # noqa: BLE001 - nothing to do for a failed close
+                logger.debug("[djust HTTP] closing a background worker's connections failed")
+            run.done.set()
+
+    thread = threading.Thread(
+        target=contextvars.copy_context().run,
+        args=(body,),
+        name="%s-%s" % (_HTTP_BACKGROUND_THREAD_PREFIX, sanitize_for_log(name)[:32]),
+        daemon=True,
+    )
+    run.thread = thread
+    thread.start()
+    return run
+
+
+def _run_http_background_work(view: Any, budget: Optional[_BackgroundBudget] = None) -> None:
     """Run ``view``'s ``start_async`` / ``@background`` work inside this request.
 
     On the socket the handler's state is flushed, then the work runs and its
@@ -117,6 +297,15 @@ def _run_http_background_work(view: Any) -> None:
     task or ``handle_async_result`` queues in turn runs in the next round, up to
     :data:`_HTTP_BACKGROUND_MAX_ROUNDS`; whatever is still queued after that is
     dropped, with a warning.
+
+    With ``budget`` (``LIVEVIEW_CONFIG["http_fallback_background_timeout"]``, one
+    per request) each task runs on a worker thread and the request waits for it
+    only while the budget lasts. A task still running when it is spent is
+    abandoned: an ``async def`` callback is cancelled, a sync one keeps running
+    (a thread cannot be cancelled) and its late result is discarded. Either way
+    ``handle_async_result`` receives a ``TimeoutError`` as ``error=``, and every
+    task still queued is not started and receives one too. With no budget the
+    callback runs on the request thread and nothing bounds it.
     """
     from asgiref.sync import async_to_sync
 
@@ -128,13 +317,68 @@ def _run_http_background_work(view: Any) -> None:
         tasks = _take_queued_background_work(view)
         if not tasks:
             return
+        dropped: List[str] = []
         for name, callback, args, kwargs in tasks:
             if _consume_async_cancel(view, name):
                 continue
             result: Any = None
             error: Optional[BaseException] = None
             try:
-                result = async_to_sync(run_async_callback)(callback, args, kwargs, owner=view)
+                if budget is None:
+                    result = async_to_sync(run_async_callback)(callback, args, kwargs, owner=view)
+                elif budget.spent():
+                    dropped.append(name)
+                    error = TimeoutError(
+                        "start_async task %r was not started: the %.4g second budget of "
+                        "http_fallback_background_timeout was spent" % (name, budget.timeout)
+                    )
+                else:
+                    held = _reserve_worker_slot()
+                    if held is not None:
+                        logger.warning(
+                            "[djust HTTP] start_async task %s on %s was not started: %d background "
+                            "worker threads (abandoned or still running) hold the %d slots. A "
+                            "callback that hangs on every POST would pile up threads; fix it or "
+                            "guard it off the fallback.",
+                            sanitize_for_log(name),
+                            view.__class__.__name__,
+                            held,
+                            _HTTP_BACKGROUND_MAX_ABANDONED,
+                        )
+                        error = TimeoutError(
+                            "start_async task %r was not started: %d background worker threads "
+                            "(abandoned or still running) hold the %d slots"
+                            % (name, held, _HTTP_BACKGROUND_MAX_ABANDONED)
+                        )
+                    else:
+                        abandoned_thread: Optional[threading.Thread] = None
+                        try:
+                            run = _start_background_run(view, name, callback, args, kwargs)
+                            finished = run.done.wait(budget.remaining())
+                            if not finished:
+                                run.abandon()
+                                abandoned_thread = run.thread
+                        finally:
+                            _release_worker_slot(abandoned_thread)
+                        if finished:
+                            if run.error is not None:
+                                raise run.error
+                            result = run.result
+                        else:
+                            logger.warning(
+                                "[djust HTTP] start_async task %s on %s did not finish within the "
+                                "%.4g second budget of http_fallback_background_timeout; the "
+                                "fallback stopped waiting for it and answers without its result. "
+                                "A sync callback keeps running on its worker thread.",
+                                sanitize_for_log(name),
+                                view.__class__.__name__,
+                                budget.timeout,
+                            )
+                            error = TimeoutError(
+                                "start_async task %r did not finish within the %.4g second budget "
+                                "of http_fallback_background_timeout; the fallback stopped waiting"
+                                % (name, budget.timeout)
+                            )
             except asyncio.CancelledError:
                 continue  # cancelled while it ran: no result, as on the socket
             except Exception as exc:  # noqa: BLE001 - routed to handle_async_result below
@@ -164,6 +408,14 @@ def _run_http_background_work(view: Any) -> None:
                     view.__class__.__name__,
                     traceback=True,
                 )
+        if dropped:
+            logger.warning(
+                "[djust HTTP] %d start_async task(s) on %s were not started (%s): the "
+                "http_fallback_background_timeout budget was spent.",
+                len(dropped),
+                view.__class__.__name__,
+                ", ".join(sanitize_for_log(n) for n in dropped),
+            )
     if _take_queued_background_work(view):
         logger.warning(
             "%s kept queueing background work (start_async) after %d rounds on the "
@@ -189,6 +441,57 @@ def _save_unsaved_private_keys(
         session[key] = unsaved
     else:
         session.pop(key, None)
+
+
+def _saved_state_digest(session: Any, view_key: str) -> Optional[str]:
+    """A digest of the state ``session`` holds for ``view_key`` (state and private).
+
+    Canonicalized through one JSON round trip, so the value written during a
+    request and the one the next request reads back from the session store
+    digest alike (tuples become lists, integer keys become strings). ``None``
+    when the state cannot be digested, which records nothing.
+    """
+    try:
+        parts = [session.get(view_key), session.get(f"{view_key}__private")]
+        canonical = json.loads(json.dumps(parts, default=str))
+        return hashlib.sha256(json.dumps(canonical, sort_keys=True).encode("utf-8")).hexdigest()
+    except (TypeError, ValueError):
+        return None
+
+
+def _set_mount_work_marker(session: Any, view_key: Optional[str], owed: bool) -> None:
+    """Record whether the state just saved is still a loading state (#3635).
+
+    ``owed`` is true when the work ``mount()`` / ``handle_params()`` queued
+    (``start_async``, ``assign_async``) has not run for the state saved under
+    ``view_key``: the GET never runs it (the socket or SSE mount does), and a
+    fallback POST that could not run it saves the same loading state again. The
+    marker is a digest of that saved state, so any other writer that saves a
+    different state under the key (a socket turn) invalidates it without having
+    to know it exists. Tasks are closures and cannot be saved; the fact that
+    they are owed can.
+    """
+    if view_key is None:
+        return
+    key = f"{view_key}{MOUNT_WORK_SUFFIX}"
+    digest = _saved_state_digest(session, view_key) if owed else None
+    if digest is None:
+        session.pop(key, None)
+    else:
+        session[key] = digest
+
+
+def _mount_work_is_owed(session: Any, view_key: Optional[str]) -> bool:
+    """True when the state saved under ``view_key`` is still the loading state a GET saved."""
+    if view_key is None:
+        return False
+    recorded = session.get(f"{view_key}{MOUNT_WORK_SUFFIX}")
+    if not isinstance(recorded, str):
+        return False
+    # Plain equality: the digest is not a secret, and ``hmac.compare_digest``
+    # raises ``TypeError`` on a ``str`` with non-ASCII characters.
+    current = _saved_state_digest(session, view_key)
+    return current is not None and recorded == current
 
 
 def _drain_http_side_channels(view: Any, resp_data: Dict[str, Any]) -> None:
@@ -309,7 +612,7 @@ def _initial_parameter_contracts(view: Any, view_path: str) -> Optional[str]:
     page, as the socket path keeps a legacy session's frame shape.
     """
     from .._parameter_metadata import parameter_contract_manifest
-    from ..security import escape_json_for_script
+    from ..security.json_script import escape_json_for_script  # the defining module (#3820)
     from ..validation import _strict_possible
 
     try:
@@ -394,6 +697,8 @@ class RequestMixin:
         _cached_context: Optional[Dict[str, Any]]
         _child_views: Dict[str, Any]
         _explicit_child_vdom_bindings: Dict[str, Any]
+        http_status_of_state: Mapping[str, int]
+        state_attribute: str
 
         def _apply_context_processors(
             self, context: Dict[str, Any], request: Any
@@ -684,6 +989,11 @@ class RequestMixin:
                         private_state, state_roundtrip=True
                     )
                 _save_unsaved_private_keys(self, request.session, view_key, private_state)
+                # The GET never runs the work mount() / handle_params() queued (the
+                # socket or SSE mount does), and it cannot tell whether this client
+                # will ever open one. Record that the state above is a loading
+                # state, so a page-POST fallback can run the work (#3635).
+                _set_mount_work_marker(request.session, view_key, has_pending_async_work(self))
                 t0_sc = time.perf_counter()
                 self._save_components_to_session(request, _cached)
         else:
@@ -894,9 +1204,46 @@ class RequestMixin:
             def get_http_status(self):
                 return 404 if self.document is None else None
 
+        A project that draws its own not-found state need not override this on
+        every view. Set ``http_status_of_state`` once (on a base view) and the
+        default reads the state the view already has::
+
+            class AppView(LiveView):
+                abstract = True
+                http_status_of_state = {"not_found": 404, "gone": 410}
+
+            class ArticleView(AppView):
+                def mount(self, request, slug="", **kwargs):
+                    self.state = "ready" if load(slug) else "not_found"
+
+        A project that has several base views sets the map once, for all of
+        them, in ``LIVEVIEW_CONFIG["http_status_of_state"]``. The view's own
+        ``http_status_of_state`` wins and the config is read only for a view
+        that declares none, so the two are never merged: a view that declares a
+        map answers by that map alone, and one that declares ``{}`` opts out of
+        the project's.
+
+        ``state_attribute`` names the attribute that holds the state (``"state"``
+        by default); only a ``str`` is looked up, so any other value, or a name
+        the map does not hold, answers 200. An override still replaces all of
+        this; ``manage.py check`` reports one (``djust.V025``) while a
+        project-wide map is configured.
+
         Only the HTTP response uses it.
         """
-        return None
+        statuses = self.http_status_of_state
+        if statuses is UNDECLARED_STATUS_MAP:
+            # The view declares no map: the project-wide one (#3706). A view's own attribute, even
+            # an empty one, wins; the two are never merged. The config validated it when it loaded.
+            from ..config import config
+
+            statuses = config.get("http_status_of_state") or {}
+        if not statuses:
+            return None
+        state = getattr(self, self.state_attribute, None)
+        if not isinstance(state, str):
+            return None
+        return statuses.get(state)
 
     def _fill_lazy_slots(self, html: str) -> str:
         """Run this page's lazily-deferred slots into ``html`` (#3252).
@@ -1485,6 +1832,12 @@ class RequestMixin:
             # view's in the session; the empty state below runs mount() first.
             session_state = legacy_exposure and view_key is not None and view_state_in_session()
             saved_state = request.session.get(view_key, {}) if session_state else {}
+            # The saved state is still the loading state a GET saved while the
+            # page's mount-queued work had not run (#3635); read before anything
+            # below changes the session.
+            mount_work_owed = bool(
+                session_state and saved_state and _mount_work_is_owed(request.session, view_key)
+            )
 
             # #2252: the write side tagged every Decimal
             # (``normalize_django_value(..., state_roundtrip=True)`` above), so
@@ -1528,6 +1881,9 @@ class RequestMixin:
             # (object permission, handler permission, rate limit, parameter
             # validation), so a refused request starts none of it.
             mount_work_pending = False
+            # One budget for every wait on background work in this request
+            # (#3634); ``None`` unless ``http_fallback_background_timeout`` is set.
+            bg_budget = _http_background_budget()
             if not legacy_exposure:
                 from .._exposure_sessions import load_server_state
 
@@ -1554,7 +1910,7 @@ class RequestMixin:
                 # mount()'s defaults (#3624).
                 _run_http_handle_params(self, request)
                 mount_work_pending = True
-            elif unsaved_private:
+            elif unsaved_private or mount_work_owed:
                 # The socket's instance kept every private attribute; this one
                 # is rebuilt from the session, which could not hold some of
                 # them. mount() rebuilds them, then the saved state goes back on
@@ -1564,13 +1920,25 @@ class RequestMixin:
                 self._snapshot_user_private_attrs()
                 # handle_params() may build private state from the URL too.
                 _run_http_handle_params(self, request)
-                # The page already has mount()'s background results, and the
-                # saved state below puts them back; running them again would
-                # only repeat the read.
-                self.__dict__.pop("_async_tasks", None)
-                self.__dict__.pop("_async_pending", None)
+                if mount_work_owed:
+                    # What the GET saved is mount()'s loading state: its work never
+                    # ran (the GET cannot run it, and this client opened no socket
+                    # or stream to run it). The saved state goes back on top, so the
+                    # page the browser shows is kept, and the tasks mount() queued
+                    # run right before the handler, over it (#3635).
+                    mount_work_pending = True
+                else:
+                    # The page already has mount()'s background results, and the
+                    # saved state below puts them back; running them again would
+                    # only repeat the read.
+                    self.__dict__.pop("_async_tasks", None)
+                    self.__dict__.pop("_async_pending", None)
                 restore_public_state(self, saved_state)
-                if private_state:
+                # Not over work that is about to run: the private bookkeeping a
+                # task closes over (``assign_async``'s generation counter) belongs
+                # to this ``mount()``, and the saved copy would mark the task
+                # superseded so its result was dropped (#3635).
+                if private_state and not mount_work_owed:
                     self._restore_private_state(private_state)
                 if callable(bind_route):
                     bind_route(kwargs)
@@ -1695,11 +2063,15 @@ class RequestMixin:
                 # Server-push only (#3002): to a browser it is a method that
                 # does not exist, as on the WebSocket and SSE paths.
                 handler = None
-            if handler is None and owner is not self:
+            if handler is None or not callable(handler):
+                # Same answer for the page view as for a component: an event
+                # that resolves to no callable must not fall through to a
+                # render and a state save as if a handler had run (the socket
+                # transports refuse it with an error frame).
                 logger.warning(
-                    "HTTP POST handler '%s' not found on component %s",
+                    "HTTP POST handler '%s' not found on %s",
                     event_name,
-                    component_id,
+                    component_id if owner is not self else type(self).__name__,
                 )
                 return JsonResponse({"error": "Event handler not found"}, status=400)
             if handler and callable(handler):
@@ -1787,7 +2159,8 @@ class RequestMixin:
                 # (#3624). Not for an event with no handler: that one passes no
                 # @rate_limit check, so it must not start the page's reads.
                 if mount_work_pending:
-                    _run_http_background_work(self)
+                    _run_http_background_work(self, bg_budget)
+                    mount_work_pending = False
                 from ..components._interactive import DropdownMenu
 
                 if isinstance(owner, DropdownMenu) and event_name == "observe_toggle":
@@ -1806,9 +2179,9 @@ class RequestMixin:
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
                 # The handler's ``start_async`` / ``@background`` work runs here,
                 # before the render, so the one answer carries its result (#3624).
-                _run_http_background_work(owner)
+                _run_http_background_work(owner, bg_budget)
                 if owner is not self:
-                    _run_http_background_work(self)
+                    _run_http_background_work(self, bg_budget)
 
             if child_view is not None:
                 return self._http_child_response(
@@ -1870,6 +2243,9 @@ class RequestMixin:
                 }
                 if session_state:
                     request.session[view_key] = normalize_django_value(state, state_roundtrip=True)
+                    # Still owed when this POST could not run mount's work (an event
+                    # the view does not define): the state saved is a loading state.
+                    _set_mount_work_marker(request.session, view_key, mount_work_pending)
                     self._save_components_to_session(request, updated_context)
             else:
                 from .._exposure_sessions import save_server_state
@@ -2027,10 +2403,10 @@ class RequestMixin:
             cache_request_id = params.get("_cacheRequestId")
 
             # Inject debug info for the debug panel (HTTP-only mode)
-            from django.conf import settings as _settings
+            from ..config import debug_panel_enabled
 
             def _inject_debug(resp_data: Dict[str, Any]) -> None:
-                if _settings.DEBUG:
+                if debug_panel_enabled():
                     try:
                         debug_info = self.get_debug_update()
                         debug_info["_eventName"] = event_name

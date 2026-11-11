@@ -125,6 +125,9 @@ logger = logging.getLogger(__name__)
 #: (measured: 15 suite failures).
 _UNBRIDGED_PREFIXES = ("djust.templatetags.",)
 
+#: Modules that ship inside djust. A refusal of one of their tags is expected (#3655).
+_DJUST_OWN_MODULE_PREFIX = "djust."
+
 #: The exceptions to :data:`_UNBRIDGED_PREFIXES` (#2958): tags of djust's own
 #: libraries that have NO native Rust handler, and so failed in every root
 #: LiveView template with "Invalid block tag". They bridge through the generic
@@ -325,7 +328,7 @@ _filter_owner: Dict[str, str] = {}
 _refused_tags: Dict[str, Set[str]] = {}
 
 #: (library label, tag name) refusals already warned about (N-47).
-_warned_refused_tags: Set[Tuple[str, str]] = set()
+_warned_refused_tags: Set[Tuple[str, str, bool]] = set()
 
 
 # Weak references keep node-level engine selection from extending backend lifetime.
@@ -708,14 +711,41 @@ def _find_library(name: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _entry_module(fn: Any) -> str:
+    """The module one tag's compile function or one filter was defined in."""
+    return str(getattr(fn, "__module__", None) or "")
+
+
+def _library_modules(library: Any) -> FrozenSet[str]:
+    """Every module a ``Library``'s tags and filters were defined in."""
+    return frozenset(
+        module
+        for mapping in (getattr(library, "tags", {}), getattr(library, "filters", {}))
+        for module in map(_entry_module, mapping.values())
+        if module
+    )
+
+
 def _library_module(library: Any) -> str:
-    """The module a ``Library``'s entries were defined in (``""`` if empty)."""
-    for mapping in (getattr(library, "tags", {}), getattr(library, "filters", {})):
-        for fn in mapping.values():
-            module = getattr(fn, "__module__", None)
-            if module:
-                return str(module)
-    return ""
+    """The module a ``Library`` is keyed on in the module-keyed tables
+    (``_UNBRIDGED_PREFIXES``, ``_DJUST_TAGS_BRIDGED``, ``_NATIVE_SCOPE_TAGS``, …).
+
+    The one module EVERY entry was defined in, ``""`` otherwise (an empty library,
+    or one spread over several modules such as ``djust_components``): no table is
+    keyed on such a library, and it bridges like any other. It used to be the
+    module of the first-registered entry, which made a multi-module library's
+    policy depend on the import order of its sub-modules, and let one
+    re-exported function decide for a whole third-party library (#3668).
+    """
+    modules = _library_modules(library)
+    return next(iter(modules)) if len(modules) == 1 else ""
+
+
+def _library_identity(library: Any) -> str:
+    """What makes two ``Library`` objects the same definition: the modules their
+    entries come from, in a fixed order. Equal to :func:`_library_module` for a
+    library defined in one module."""
+    return "|".join(sorted(_library_modules(library)))
 
 
 def _still_bridged(label: str, library: Any, module: str) -> bool:
@@ -781,7 +811,7 @@ def _bridge_library(label: str, library: Any) -> None:
         return
     from .template_filters import bridge_library_filters
 
-    _note_shared_names(label, library, module)
+    _note_shared_names(label, library)
     _arm_scope_tags(module)
     bridge_library_filters(library, refuse=refused_filters(module))
     native = tuple(_NATIVE_SCOPE_TAGS.get(module, ())) + tuple(_NATIVE_TAG_SKIPS.get(module, ()))
@@ -818,7 +848,7 @@ def _bridge_library(label: str, library: Any) -> None:
 _warned_shared_names: Set[Tuple[str, str, FrozenSet[str]]] = set()
 
 
-def _note_shared_names(label: str, library: Any, module: str) -> None:
+def _note_shared_names(label: str, library: Any) -> None:
     """Warn once per tag or filter name this library takes from another one.
 
     Django scopes ``{% load %}`` to the template; the Rust engine keeps one
@@ -830,6 +860,7 @@ def _note_shared_names(label: str, library: Any, module: str) -> None:
     up front (``djust.T026``, :func:`shared_library_names`).
     """
     loaded = _engine_state("_loaded", _loaded)
+    identity = _library_identity(library)
     for kind, names, owners in (
         ("tag", library.tags, _engine_state("_tag_owner", _tag_owner)),
         ("filter", library.filters, _engine_state("_filter_owner", _filter_owner)),
@@ -838,10 +869,10 @@ def _note_shared_names(label: str, library: Any, module: str) -> None:
             previous = owners.get(name)
             if previous is None or previous == label:
                 continue
-            other_module = _library_module(loaded.get(previous)) if previous in loaded else ""
-            if other_module == module:
-                continue  # one module under two labels: the same definition
-            key = (kind, name, frozenset((other_module or previous, module)))
+            other = _library_identity(loaded[previous]) if previous in loaded else ""
+            if other == identity:
+                continue  # one library under two labels: the same definition
+            key = (kind, name, frozenset((other or previous, identity)))
             if key in _warned_shared_names:
                 continue
             _warned_shared_names.add(key)
@@ -885,7 +916,8 @@ def shared_library_names(
             logger.debug("Template library '%s' could not be imported", label)
             continue
         module = _library_module(library)
-        if not module:
+        identity = _library_identity(library)
+        if not identity:
             continue
         if module.startswith(_UNBRIDGED_PREFIXES):
             allowed = _DJUST_TAGS_BRIDGED.get(module)
@@ -898,10 +930,10 @@ def shared_library_names(
         refused = refused_filters(module)
         for name in library.tags:
             if name not in native:
-                by_name.setdefault(("tag", name), {}).setdefault(module, label)
+                by_name.setdefault(("tag", name), {}).setdefault(identity, label)
         for name in library.filters:
             if name not in refused:
-                by_name.setdefault(("filter", name), {}).setdefault(module, label)
+                by_name.setdefault(("filter", name), {}).setdefault(identity, label)
     return sorted(
         (kind, name, tuple(sorted(modules.values())))
         for (kind, name), modules in by_name.items()
@@ -956,7 +988,7 @@ def _bridge_raw_block_tag(label: str, name: str, compile_func: Callable[..., Any
     even when the compile function is shared.
     """
     if not _may_override(name):
-        _warn_refused(label, name)
+        _warn_refused(label, name, compile_func)
         return False
     from djust._rust import register_raw_block_tag_handler, unregister_tag_handler
 
@@ -974,7 +1006,7 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> bool
     """Register one library tag; ``False`` when djust already provides the name."""
     kind = _classify(compile_func)
     if not _may_override(name):
-        _warn_refused(label, name)
+        _warn_refused(label, name, compile_func)
         return False
     from djust._rust import (
         register_block_tag_handler,
@@ -1005,7 +1037,7 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> bool
         # library bridges normally — and the message names the reason. The
         # Rust parser reads `REFUSE_AT_PARSE` and raises Django's
         # `TemplateSyntaxError`.
-        probe_args = _PROBE_ARGS.get((getattr(compile_func, "__module__", ""), name), [])
+        probe_args = _PROBE_ARGS.get((_entry_module(compile_func), name), [])
         reason = _wrapper_refusal(name, compile_func, probe_args)
         if reason is None:
             if not isinstance(handler, LibraryBlockTagHandler) or handler.name != name:
@@ -1036,11 +1068,36 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> bool
     return True
 
 
-def _warn_refused(label: str, name: str) -> None:
-    """Warn once per process that ``label``'s ``name`` tag is not bridged."""
-    if (label, name) in _warned_refused_tags:
+def _warn_refused(label: str, name: str, compile_func: Optional[Callable[..., Any]] = None) -> None:
+    """Warn once per process that ``label``'s ``name`` tag is not bridged.
+
+    A library that ships inside djust (``djust.components.templatetags``,
+    ``djust.theming.templatetags``) meeting djust's own native handler is a design
+    choice, not a collision anyone can act on: it is logged at DEBUG, so the ~200 of
+    them do not bury a real clash with a third-party library (#3655). The refusal
+    itself is unchanged.
+
+    Whose tag it is comes from ``compile_func``'s own module — the tag being
+    refused — not from the library's other entries, so neither the order a
+    library registered its tags in nor one re-exported function decides it
+    (#3668). A tag with no compile function here (a Django bespoke tag) is
+    Django's, never djust's.
+    """
+    # Keyed on whether the tag is djust's own as well, so a DEBUG-level refusal of
+    # one engine's djust library never hides a real clash that another engine's
+    # library of the same label (not djust's) has with the same tag.
+    own = _entry_module(compile_func).startswith(_DJUST_OWN_MODULE_PREFIX)
+    if (label, name, own) in _warned_refused_tags:
         return
-    _warned_refused_tags.add((label, name))
+    _warned_refused_tags.add((label, name, own))
+    if own:
+        logger.debug(
+            "djust's own template library '%s' registers tag '%s', which djust already "
+            "provides natively; the native handler is used.",
+            label,
+            name,
+        )
+        return
     logger.warning(
         "Template library '%s' registers tag '%s', which djust already provides; "
         "the library's version is not bridged (the built-in wins process-wide).",
@@ -1053,10 +1110,21 @@ def _may_override(name: str) -> bool:
     """Collision policy: never displace a handler this module does not own."""
     if name in _engine_state("_owned_tags", _owned_tags) or name in _owned_tags:
         return True
-    from djust._rust import has_assign_tag_handler, has_block_tag_handler, has_tag_handler
+    from djust._rust import (
+        has_assign_tag_handler,
+        has_block_tag_handler,
+        has_raw_block_tag_handler,
+        has_tag_handler,
+    )
 
     return not (
-        has_tag_handler(name) or has_block_tag_handler(name) or has_assign_tag_handler(name)
+        has_tag_handler(name)
+        or has_block_tag_handler(name)
+        or has_assign_tag_handler(name)
+        # The raw-block registry is a fourth, separate one (``tabs`` and
+        # ``split_pane`` live only there): without it a library could displace a
+        # djust raw-block handler, and the native tag counted as the library's (#3668).
+        or has_raw_block_tag_handler(name)
     )
 
 
@@ -1459,6 +1527,9 @@ def _render_node(
     from django.template import Context
     from django.utils.safestring import mark_safe
 
+    from ._include_guard import include_guard_scope
+    from .template_bridge_floor import floor_scope
+
     before = dict(context)
     # `dict(context)`, NOT `context` — identical to the raw-block handler's
     # `render` below, which is the same construction on a parallel path
@@ -1471,7 +1542,13 @@ def _render_node(
         ctx.request = context["request"]
     ctx.template = _stub_template_with(*_render_engine_options())
     _share_render_context(ctx, shares_render_context)
-    output = node.render(ctx)
+    # #3771: every `Variable` the node resolves against `ctx` is walked through the serialization
+    # floor, as `{{ }}` is; see `template_bridge_floor`.
+    # #3880: a node Django renders may render a TEMPLATE (an inclusion tag's) through Django's
+    # engine; its `{% include obj %}` is held to the template-call guard like every other one.
+    with include_guard_scope():
+        with floor_scope(ctx):
+            output = node.render(ctx)
     after = ctx.dicts[-1]
     bindings = {
         key: value for key, value in after.items() if key not in before or before[key] is not value
@@ -1874,9 +1951,13 @@ def _resolve_cache_operand(token: str, context: Dict[str, Any]) -> Any:
     """
     from django.template import Context as DjangoContext
 
+    from .template_bridge_floor import floor_scope
+
     ctx = DjangoContext(dict(context))
     ctx.template = _stub_template_with(*_render_engine_options())
-    return _parser([]).compile_filter(token.strip()).resolve(ctx)
+    # #3771: a vary-on / expiry operand is a template author's path like any other.
+    with floor_scope(ctx):
+        return _parser([]).compile_filter(token.strip()).resolve(ctx)
 
 
 def _bridge_bespoke_block_tag(label: str, name: str) -> bool:
@@ -1974,6 +2055,8 @@ class LibraryRawBlockTagHandler:
         from django.template import Context
         from django.utils.safestring import mark_safe
 
+        from .template_bridge_floor import floor_scope
+
         try:
             before = dict(context)
             use_l10n, use_tz = _current_format_flags.get()
@@ -1982,7 +2065,8 @@ class LibraryRawBlockTagHandler:
             ctx.template = _stub_template_with(string_if_invalid, debug)
             # The same as `_render_node` (#3044, #1646).
             _share_render_context(ctx, self.shares_render_context)
-            output = self._compile(list(args), body).render(ctx)
+            with floor_scope(ctx):
+                output = self._compile(list(args), body).render(ctx)
             after = ctx.dicts[-1]
             bindings = {
                 key: value

@@ -14,7 +14,7 @@ Sources design data from DesignSystem objects in theme_packs.py.
 
 from functools import lru_cache
 
-from ._config import get_theme_config
+from ._config import _validate_css_prefix, get_theme_config
 from .theme_packs import DesignSystem, get_design_system
 from .css_generator import ThemeCSSGenerator as ColorCSSGenerator
 
@@ -210,7 +210,9 @@ class CompleteThemeCSSGenerator:
         self.ds: DesignSystem = ds
 
         self.color_preset = color_preset or "default"
-        self.css_prefix = css_prefix
+        # A prefix handed in by a caller is printed into ``.{prefix}btn {`` rules just like the
+        # configured one, so it goes through the same validator (#3779).
+        self.css_prefix = _validate_css_prefix(css_prefix)
 
         # Initialize color generator
         self.color_generator = ColorCSSGenerator(preset_name=self.color_preset)

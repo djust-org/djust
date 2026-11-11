@@ -18,6 +18,8 @@ Usage:
 """
 
 import json
+import logging
+import re
 from typing import Any
 
 from django import template
@@ -29,6 +31,51 @@ from django.utils.safestring import SafeString, mark_safe
 from ..utils import get_csp_nonce
 
 register = template.Library()
+
+logger = logging.getLogger(__name__)
+
+# A CSS colour as a PWA tag takes it: ``#007bff``, ``red``, ``rgb(0, 0, 0)``,
+# ``hsl(210 50% 40% / 0.5)``. A character class rather than a colour grammar:
+# the point is that a value which is not colour-shaped (markup, quotes, a
+# newline, a ``{%``) is refused before it reaches ``<meta content>`` or the
+# manifest, not that every CSS spelling is parsed (#3824). Output escaping is
+# the control that keeps a value inert; this is the shape check on top of it.
+_COLOR_RE = re.compile(r"[#A-Za-z0-9(),.%/+\- ]{1,64}")
+
+# URL schemes a service-worker URL must never carry. ``register()`` refuses
+# them in a browser anyway; refusing them here keeps them out of the page.
+_REFUSED_SW_SCHEMES = ("javascript:", "data:", "vbscript:", "blob:")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _checked_color(value: str | None, param: str) -> str | None:
+    """Return ``value`` if it is colour-shaped, else ``None`` (use the default).
+
+    ``None`` and ``""`` pass through as "not given", so the caller's
+    ``value or default`` fallback applies. An invalid value is logged by
+    parameter NAME only: the value is untrusted text and does not belong in a
+    log line.
+    """
+    if not value:
+        return value
+    if _COLOR_RE.fullmatch(str(value)):
+        return value
+    logger.warning("djust_pwa: ignoring a %s that is not a colour", param)
+    return None
+
+
+def _checked_sw_url(value: str | None) -> str | None:
+    """Return ``value`` if it is usable as a service-worker URL, else ``None``."""
+    if not value:
+        return value
+    text = str(value)
+    # Browsers drop tabs/newlines/spaces inside a scheme, so look at the
+    # compacted form, not the written one.
+    compact = re.sub(r"[\x00-\x20]", "", text).lower()
+    if _CONTROL_CHARS_RE.search(text) or compact.startswith(_REFUSED_SW_SCHEMES):
+        logger.warning("djust_pwa: ignoring a sw_url that is not a service-worker URL")
+        return None
+    return value
 
 
 def _nonce_attr(context: Context | None) -> str:
@@ -89,6 +136,8 @@ def djust_pwa_manifest(
             {% djust_pwa_manifest name="My App" theme_color="#007bff" %}
         </head>
     """
+    theme_color = _checked_color(theme_color, "theme_color")
+    background_color = _checked_color(background_color, "background_color")
     manifest = {
         "name": name or getattr(settings, "DJUST_PWA_NAME", "djust App"),
         "short_name": short_name or getattr(settings, "DJUST_PWA_SHORT_NAME", "djust"),
@@ -159,6 +208,7 @@ def djust_sw_register(
         {% load djust_pwa %}
         {% djust_sw_register %}
     """
+    sw_url = _checked_sw_url(sw_url)
     if not sw_url:
         static_url = getattr(settings, "STATIC_URL", "/static/")
         sw_url = "%ssw.js" % static_url
@@ -461,6 +511,7 @@ def djust_pwa_head(
             {% djust_pwa_head name="My App" theme_color="#007bff" %}
         </head>
     """
+    theme_color = _checked_color(theme_color, "theme_color")
     return {
         "name": name or getattr(settings, "DJUST_PWA_NAME", "djust App"),
         "theme_color": theme_color or getattr(settings, "DJUST_PWA_THEME_COLOR", "#007bff"),

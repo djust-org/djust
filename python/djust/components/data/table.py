@@ -7,6 +7,7 @@ Provides data tables with sorting, selection, and actions.
 from typing import Any, Dict, List
 
 from django.utils.html import conditional_escape, escape
+from djust.components.utils import attr_text
 from django.utils.safestring import SafeString
 
 from ...decorators import event_handler
@@ -311,7 +312,7 @@ class TableComponent(LiveComponent):
         rather than the parent view (#2776 — the parent has no ``sort_by``, so
         without it the click raised ``No handler found for event: sort_by``),
         and ``data-column`` carrying the key the handler takes as ``column``."""
-        return f'dj-click="sort_by" data-component-id="{conditional_escape(self.component_id)}" data-column="{conditional_escape(key)}"'
+        return f'dj-click="sort_by" data-component-id="{conditional_escape(self.component_id)}" data-column="{attr_text(key)}"'
 
     @event_handler()
     def sort_by(self, column: str = "", **kwargs: Any) -> None:

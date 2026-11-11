@@ -78,12 +78,12 @@ async def _connect_and_mount():
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to(
         {"type": "mount", "view": f"{_MODULE}._DeepView", "url": "/deep/"}
     )
     for _ in range(6):
-        frame = await communicator.receive_json_from(timeout=3)
+        frame = await communicator.receive_json_from()
         if frame.get("type") == "mount":
             return communicator
     raise AssertionError("never received a mount frame")

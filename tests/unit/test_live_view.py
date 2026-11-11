@@ -245,16 +245,10 @@ class TestErrorHandling:
         view = SimpleView()
 
         # Simulate POST with non-existent handler
-        # Note: Currently the code silently ignores missing handlers and returns HTML
         post_request._body = json.dumps({"event": "nonexistent", "params": {}}).encode()
         response = view.post(post_request)
 
-        # Currently returns 200 with HTML (not an error)
-        # This is a design choice - silently ignore unknown events
-        assert response.status_code == 200
-        # JsonResponse.content is bytes, need to decode and parse
-        import json
-
+        # Refused outright, as the socket transports do: no render, no save.
+        assert response.status_code == 400
         data = json.loads(response.content.decode())
-        # Should return HTML or version, not an error
-        assert "html" in data or "version" in data
+        assert data == {"error": "Event handler not found"}

@@ -26,6 +26,7 @@ that proves session-driven reconnect continuity.
 from __future__ import annotations
 
 import inspect
+import threading
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -470,7 +471,7 @@ async def test_ws_event_save_block_writes_through_to_session(generous_save_timeo
         assert connected, "WebsocketCommunicator must connect"
 
         # 1. Drain the initial connect frame.
-        connect_msg = await communicator.receive_json_from(timeout=2)
+        connect_msg = await communicator.receive_json_from()
         assert connect_msg.get("type") == "connect"
 
         # 2. Send the mount frame — runs handle_mount, which stashes
@@ -484,7 +485,7 @@ async def test_ws_event_save_block_writes_through_to_session(generous_save_timeo
                 "url": "/counter/",
             }
         )
-        mount_resp = await communicator.receive_json_from(timeout=3)
+        mount_resp = await communicator.receive_json_from()
         assert mount_resp.get("type") == "mount", (
             f"expected mount response, got {mount_resp.get('type')!r}: {mount_resp}"
         )
@@ -501,10 +502,7 @@ async def test_ws_event_save_block_writes_through_to_session(generous_save_timeo
         )
         # Drain any frames sent in response (state diff / push / etc.).
         # We don't care about the response shape — only the session write.
-        try:
-            await communicator.receive_json_from(timeout=3)
-        except Exception:  # noqa: BLE001 — response timing is incidental here
-            pass
+        await communicator.receive_json_from()
 
         await communicator.disconnect()
 
@@ -588,7 +586,7 @@ async def test_ws_event_save_block_skipped_when_state_snapshot_opt_out():
         assert connected
 
         # Drain connect frame.
-        await communicator.receive_json_from(timeout=2)
+        await communicator.receive_json_from()
 
         # Mount + increment.
         await communicator.send_json_to(
@@ -598,7 +596,7 @@ async def test_ws_event_save_block_skipped_when_state_snapshot_opt_out():
                 "url": "/default-counter/",
             }
         )
-        mount_resp = await communicator.receive_json_from(timeout=3)
+        mount_resp = await communicator.receive_json_from()
         assert mount_resp.get("type") == "mount"
 
         await communicator.send_json_to(
@@ -609,10 +607,7 @@ async def test_ws_event_save_block_skipped_when_state_snapshot_opt_out():
                 "ref": 1,
             }
         )
-        try:
-            await communicator.receive_json_from(timeout=3)
-        except Exception:  # noqa: BLE001
-            pass
+        await communicator.receive_json_from()
 
         await communicator.disconnect()
 
@@ -663,6 +658,12 @@ def test_save_block_gates_on_enable_state_snapshot_source():
     ), "All gates must be AND'd in the save-block condition (#1475, #3211)."
 
 
+#: Held by the slow session's writes until the end-to-end timeout test releases it. Set
+#: (open) by default so a write outside that test never blocks.
+_SLOW_SAVE_RELEASE = threading.Event()
+_SLOW_SAVE_RELEASE.set()
+
+
 class _WSSlowOptInCounter(LiveView):
     """Opt-in view whose ``mount`` injects a slow session so the save
     block exceeds the 150ms timeout — end-to-end fixture for the wrapper's
@@ -682,22 +683,22 @@ class _WSSlowOptInCounter(LiveView):
     enable_state_snapshot = True
 
     def mount(self, request, **kwargs):
-        import time as _time
-
         class _SlowSession:
             def get(self, key, default=None):
                 return default
 
             def __setitem__(self, key, value):
-                # 250ms > 150ms wrapper timeout → the deadline passes in
-                # the save body's first write.
-                _time.sleep(0.25)
+                # Blocks until the test releases it, which it does only AFTER the
+                # event response arrived (#3711: an ordering, not a sleep raced
+                # against a wall-clock bound). The valve only ends a hung run. The
+                # 150ms wrapper timeout therefore expires inside the first write.
+                _SLOW_SAVE_RELEASE.wait(timeout=30)
 
             def pop(self, key, default=None):
                 return default
 
             def save(self):
-                _time.sleep(0.25)
+                _SLOW_SAVE_RELEASE.wait(timeout=30)
 
         request.session = _SlowSession()
         self.count = 0
@@ -722,7 +723,8 @@ async def test_save_block_timeout_logs_and_continues_end_to_end(caplog):
     - WARNING log fires with the ``exceeded 150ms`` marker.
     - ``handle_event`` completes without raising (saves never break
       event handling — the event response still goes out).
-    - Total elapsed is bounded by the timeout, not the slow body.
+    - The WARNING appears while the slow body is still blocked: the wrapper
+      stops waiting for it at its own timeout (#3711).
 
     Sabotage check: if the ``except asyncio.TimeoutError`` branch were
     deleted from the wrapper, the TimeoutError would propagate up and
@@ -762,7 +764,7 @@ async def test_save_block_timeout_logs_and_continues_end_to_end(caplog):
         assert connected
 
         # Drain connect frame.
-        await communicator.receive_json_from(timeout=2)
+        await communicator.receive_json_from()
 
         # Mount — view.mount() injects the SlowSession into
         # request.session, which gets stashed as
@@ -774,46 +776,48 @@ async def test_save_block_timeout_logs_and_continues_end_to_end(caplog):
                 "url": "/slow-counter/",
             }
         )
-        mount_resp = await communicator.receive_json_from(timeout=3)
+        mount_resp = await communicator.receive_json_from()
         assert mount_resp.get("type") == "mount"
 
-        t0 = _asyncio.get_event_loop().time()
-        await communicator.send_json_to(
-            {
-                "type": "event",
-                "event": "bump",
-                "params": {},
-                "ref": 1,
-            }
-        )
-        # Drain the event response — it MUST arrive (saves don't break
-        # event handling). If wait_for's exception propagated up,
-        # handle_event would crash and no normal response would come.
+        def warning_logs():
+            return [
+                r
+                for r in caplog.records
+                if r.levelno == _logging.WARNING and "exceeded 150ms" in r.getMessage()
+            ]
+
+        _SLOW_SAVE_RELEASE.clear()  # the next save write blocks until we say so
         try:
-            await communicator.receive_json_from(timeout=3)
-        except Exception:  # noqa: BLE001
-            pass
-
-        elapsed = _asyncio.get_event_loop().time() - t0
+            await communicator.send_json_to(
+                {
+                    "type": "event",
+                    "event": "bump",
+                    "params": {},
+                    "ref": 1,
+                }
+            )
+            # The wrapper's WARNING must appear while the slow save body is STILL
+            # blocked: nothing but the wrapper's own 150ms timeout can have ended
+            # the wait, because the body cannot finish before the release below.
+            # That is the ordering this test asserts (#3711), instead of a duration
+            # compared with a number of seconds. If the wrapper waited for the body,
+            # or let the TimeoutError propagate, no WARNING appears and this poll
+            # reaches its deadline (which only a hung turn does). The deadline is the
+            # same 30 s every communicator wait has.
+            loop = _asyncio.get_running_loop()
+            deadline = loop.time() + 30
+            while not warning_logs():
+                assert loop.time() < deadline, (
+                    "Wrapper must log a WARNING containing 'exceeded 150ms' when the "
+                    "save body times out. The except asyncio.TimeoutError branch in "
+                    "handle_event is the regression guard. caplog records: "
+                    f"{[(r.levelname, r.getMessage()[:140]) for r in caplog.records]!r}"
+                )
+                await _asyncio.sleep(0.01)
+        finally:
+            _SLOW_SAVE_RELEASE.set()  # let the blocked save thread finish
+        # Drain the event response: it MUST arrive (saves don't break event handling).
+        # If the timeout's exception propagated up, handle_event would have crashed
+        # and no normal response would come.
+        await communicator.receive_json_from()
         await communicator.disconnect()
-
-        # Load-bearing: WARNING log fired with the wrapper's marker.
-        warning_logs = [
-            r
-            for r in caplog.records
-            if r.levelno == _logging.WARNING and "exceeded 150ms" in r.getMessage()
-        ]
-        assert len(warning_logs) >= 1, (
-            "Wrapper must log a WARNING containing 'exceeded 150ms' when "
-            "the save body times out. The except asyncio.TimeoutError "
-            "branch in handle_event is the regression guard. caplog "
-            f"records: {[(r.levelname, r.getMessage()[:140]) for r in caplog.records]!r}"
-        )
-
-        # Bounded elapsed — wrapper cancels at 150ms. If the timeout
-        # were absent, the slow aset alone would burn 250ms. Allow
-        # generous headroom for CI scheduler jitter.
-        assert elapsed < 2.0, (
-            f"Event round-trip took {elapsed:.3f}s — far longer than the "
-            "150ms timeout suggests. Wrapper may not be cancelling the slow body."
-        )

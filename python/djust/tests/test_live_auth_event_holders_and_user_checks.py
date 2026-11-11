@@ -56,6 +56,7 @@ from djust.auth import core  # noqa: E402
 from djust.auth.core import check_view_auth, live_auth_refusals  # noqa: E402
 from djust.components.base import LiveComponent  # noqa: E402
 from djust.decorators import event_handler  # noqa: E402
+from djust.tests._ws_frames import drain_extra, receive_until  # noqa: E402
 
 #: This line's policy for a decorator or URLconf wrapper djust cannot classify.
 EXPECT_UNKNOWN_REFUSED = True
@@ -438,9 +439,36 @@ def _with_user(app, user_cls):
     return mw
 
 
+def _mount_or_close(frames):
+    """Nothing more is coming for a mount: the view mounted, or the socket closed."""
+    return any(f.get("type") in ("mount", "websocket.close") for f in frames)
+
+
+def _answered(refs):
+    """``done`` predicate: every event in ``refs`` was answered, or the socket closed.
+
+    An event is answered by a frame carrying its ``ref`` (``patch``, ``noop``, ...)
+    or by the ``error`` that refuses it.
+    """
+
+    def done(frames):
+        if any(f.get("type") in ("error", "websocket.close") for f in frames):
+            return True
+        return set(refs) <= {f.get("ref") for f in frames}
+
+    return done
+
+
 async def _ws(user_cls, view_name, events=()):
     """Mount ``view_name`` over the real consumer, then send ``events``
-    (``(name, params)`` pairs)."""
+    (``(name, params)`` pairs).
+
+    Returns the frames received, each decoded (a close is the raw ASGI message,
+    whose ``type`` is ``websocket.close``). The mount, and each event, is always
+    answered, so the waits are ``receive_until`` (a 10 s deadline that only a hung
+    turn reaches): a short window here gave up when a runner stalled and left the assertions a list with
+    nothing in it (#3726).
+    """
     from channels.testing import WebsocketCommunicator
 
     from djust.websocket import LiveViewConsumer
@@ -448,29 +476,28 @@ async def _ws(user_cls, view_name, events=()):
     communicator = WebsocketCommunicator(_with_user(LiveViewConsumer.as_asgi(), user_cls), "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    try:
-        await communicator.receive_json_from(timeout=2)  # connect ack
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        pass
+    await communicator.receive_json_from()  # connect ack
     await communicator.send_json_to(
         {"type": "mount", "view": f"{_MOD}.{view_name}", "params": {}, "url": "/x/"}
     )
-    outputs = []
-    pending = list(events)
-    try:
-        while True:
-            out = await communicator.receive_output(timeout=2)
-            outputs.append(out)
-            if out.get("type") == "websocket.close":
-                break
-            if '"type": "mount"' in (out.get("text") or ""):
-                for ref, (event, params) in enumerate(pending, start=1):
-                    await communicator.send_json_to(
-                        {"type": "event", "event": event, "params": dict(params), "ref": ref}
-                    )
-                pending = []
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        pass
+    outputs = await receive_until(
+        communicator,
+        _mount_or_close,
+        allow_close=True,
+        what="the mount or the close that refuses it",
+    )
+    if events and outputs[-1].get("type") == "mount":
+        refs = []
+        for ref, (event, params) in enumerate(events, start=1):
+            refs.append(ref)
+            await communicator.send_json_to(
+                {"type": "event", "event": event, "params": dict(params), "ref": ref}
+            )
+        outputs += await receive_until(
+            communicator, _answered(refs), allow_close=True, what="the answer to each event"
+        )
+        if outputs[-1].get("type") != "websocket.close":
+            outputs += await drain_extra(communicator)  # "and nothing else arrived"
     try:
         await communicator.disconnect()
     except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -479,7 +506,7 @@ async def _ws(user_cls, view_name, events=()):
 
 
 def _frames(outputs):
-    return [json.loads(o["text"]) for o in outputs if o.get("text")]
+    return [o for o in outputs if o.get("type") != "websocket.close"]
 
 
 def _mounted(outputs):

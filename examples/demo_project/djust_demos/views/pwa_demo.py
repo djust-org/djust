@@ -93,12 +93,14 @@ class PWADemoView(PWAMixin, BaseViewWithNavbar):
         # pre-render and inject with {{ pwa_head_html|safe }}.
         from django.template import Template, Context as DjangoContext
 
+        # The values go in the render CONTEXT, never into the template source
+        # (#3824): source assembled from values is template injection.
         pwa_head_tpl = (
-            '{%% load djust_pwa %%}'
-            '{%% djust_pwa_head name="%s" theme_color="%s" %%}'
-            % (self.pwa_name, self.pwa_theme_color)
+            "{% load djust_pwa %}{% djust_pwa_head name=pwa_name theme_color=pwa_theme_color %}"
         )
-        self.pwa_head_html = Template(pwa_head_tpl).render(DjangoContext({}))
+        self.pwa_head_html = Template(pwa_head_tpl).render(
+            DjangoContext({"pwa_name": self.pwa_name, "pwa_theme_color": self.pwa_theme_color})
+        )
         context["pwa_head_html"] = self.pwa_head_html
 
         return context

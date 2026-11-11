@@ -18,16 +18,16 @@ later for every locator at once: see ``test_root_selection_3031.py``.)
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from djust.mixins.template import (
     _DJ_ROOT_RE,
     _DJ_VIEW_RE,
     _mask_for_root_search,
+    _mask_for_root_search_uncached,
     _search_dj_root_open,
 )
+from djust.tests._growth import FACTOR, assert_scales_linearly
 
 
 def _python_root(html: str) -> str:
@@ -85,6 +85,9 @@ class TestQuotedValues3030:
         ],
     )
     def test_the_walk_is_linear_on_tag_soup(self, html):
-        start = time.perf_counter()
-        _mask_for_root_search(html)
-        assert time.perf_counter() - start < 1.0
+        # Time the walk itself, excluding input construction and identity-cache hits.
+        inputs = {1: html, FACTOR: html * FACTOR}
+        assert_scales_linearly(
+            lambda scale: _mask_for_root_search_uncached(inputs[scale]),
+            what="root mask on tag soup",
+        )

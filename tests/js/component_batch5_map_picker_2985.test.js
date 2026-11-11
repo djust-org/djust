@@ -105,6 +105,7 @@ describe('the shipped hook never replaces an app hook (#2985 batch 5)', () => {
 
     it('registers a hook, so mounting logs no "No hook registered"', async () => {
         const env = await boot(MAP());
+        expect(typeof env.window.DjustHooks?.MapPicker?.mounted).toBe('function');
         expect(env.warnings.filter((w) => w.includes('No hook registered'))).toEqual([]);
         expect(probe(env)).toBe(true);
     });
@@ -118,6 +119,7 @@ describe('the shipped hook never replaces an app hook (#2985 batch 5)', () => {
     it('an app hook in window.djust.hooks registered first is the one that runs', async () => {
         const mounted = vi.fn();
         const env = await boot(MAP(), { preRegister: (w) => { w.djust.hooks = { MapPicker: { mounted } }; } });
+        expect(env.window.DjustHooks?.MapPicker).toBeUndefined();
         expect(mounted).toHaveBeenCalledTimes(1);
         expect(probe(env)).toBe(false);
     });
@@ -256,7 +258,7 @@ describe('Leaflet is loaded on demand, once per page, with its integrity values'
     });
 
     it('never fetches from an attribute that is not an http(s) or root-relative URL', async () => {
-        for (const bad of ['javascript:alert(1)', 'data:text/javascript,1', '//evil.example/x.js', 'x y']) {
+        for (const bad of ['javascript:alert(1)', 'data:text/javascript,1', '//other.example/x.js', '/\\other.example/x.js', 'x y']) {
             const env = await bootCold(MAP({ cfg: { ...CFG, js: bad } }));
             expect(injected(env).scripts, bad).toHaveLength(0);
             expect(env.$('.dj-map-picker__notice').textContent).toBe('The map could not be loaded.');
@@ -586,7 +588,7 @@ describe('tiles and attribution', () => {
         const env = await boot(MAP());
         expect(env.$$('img.leaflet-tile').length).toBeGreaterThan(0);
         expect(env.$('img.leaflet-tile').src).toMatch(/^https:\/\/tiles\.example\/13\/\d+\/\d+\.png$/);
-        for (const bad of ['', 'javascript:alert(1)/{z}/{x}/{y}', 'https://x.example/tile.png', 'https://x.example/{z}/{x}/{y}/{k}', '//x.example/{z}/{x}/{y}']) {
+        for (const bad of ['', 'javascript:alert(1)/{z}/{x}/{y}', 'https://x.example/tile.png', 'https://x.example/{z}/{x}/{y}/{k}', '//x.example/{z}/{x}/{y}', '/\\x.example/{z}/{x}/{y}']) {
             const none = await boot(MAP({ tiles: bad }));
             expect(none.$$('img.leaflet-tile'), bad).toHaveLength(0);
             expect(none.$$('.leaflet-map-pane')).toHaveLength(1); // the picker still works

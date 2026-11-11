@@ -10,27 +10,23 @@ skill's §"State file templates" for the precedence logic.
 
 ## What's customized vs. the upstream templates
 
-### PR target branch — `1.1` (not `main`)
+### PR target branch - `main`
 
-All three templates set `"pr_target_branch": "1.1"`. After the 2026-05-23
-release-branch cut (1.0 stabilization + 1.1 active dev, per ADR-019 and
-ROADMAP §v1.1.0), pipeline-{run, next, ship} target `1.1` so feature/bugfix
-PRs land on the active-dev line, not on `main`.
+All templates target `main` (`default_branch: main` in `CLAUDE.md`). Until 2026-11-05 three of them
+targeted `1.1`, the active-dev branch of the 2026-05-23 release-branch cut; that branch last moved on
+2026-10-16 while `main` carried the work (the squash-merged 1.2/1.3 line), so a `/pipeline-run` would have
+diffed and opened PRs against a three-week-old branch. `--target <branch>` (pipeline-run Arguments)
+still overrides it for a PR that must land on a stabilization line.
 
-**Why not `main`?** With the release-branch model in place, `main` becomes
-the trunk that next-major (v1.2+) work eventually targets. Until v1.2
-planning starts, `main` carries no active dev — every feature/bugfix
-intended for v1.1 belongs on `1.1`.
+### Agent briefs - `briefs/`
 
-**When v1.1 ships** (final tag cut, post-soak re-strategize complete):
-flip `pr_target_branch` to `"1.2"` and cut a `1.2` release branch from
-main. Same template, same workflow — just the target moves forward one
-version. (Suggested PR title: `chore(pipeline): flip pr_target_branch to 1.2`.)
-
-**WebView-mode escape hatch.** If a bugfix MUST land on `1.0` (the
-stabilization line — e.g., a P0 regression before GA cuts), override per
-pipeline-run by passing `--target 1.0` (see pipeline-run §Arguments) or
-edit the state file's `pr_target_branch` after `/pipeline-next` creates it.
+`briefs/implementer.md` and `briefs/reviewer-deep.md` are the versioned briefs for subagents (the
+stage-11 `subagent_prompt` is the shallow reviewer). They hold the standing rules: local tests are
+targeted and CI is the full-suite evidence (`tests/local_load_guard.py` enforces it), a time budget, the
+fold-in rule, gate-off discipline, worktree/scratch hygiene, and posting the review to the PR. Render
+them (fill the placeholders) rather than retyping, and record the file path and git hash in the PR body
+so a brief is reproducible and auditable. The Implementation stage of `feature-state.json` and
+`bugfix-state.json` carries the same rules as a mandatory checklist item.
 
 ### Stage 7 (feature-state.json) / Stage 3 (ship-state.json) Self-Review
 
@@ -139,8 +135,7 @@ differences, written into the stage `_note` / `checklist` / `subagent_prompt`:
   `docs/TEMPLATE_BACKEND.md` claim line, and the generated support lists
   (`scripts/generate-template-backend-lists.py --write`).
 
-`pr_target_branch` is `main` (the 1.2 line is `main`; see the release-branch
-note above for the older `1.1` value the other two templates still carry).
+`pr_target_branch` is `main`, as in the other templates.
 
 ## Worktree environments — `make worktree-env` (#2526)
 

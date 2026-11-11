@@ -2005,3 +2005,207 @@ def check_reserved_view_attributes(app_configs: Any, **kwargs: Any) -> list[Chec
                         )
                     )
     return messages
+
+
+@register("djust")
+def check_params_form_declarations(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V023 (Error): a ``params_form`` the request path cannot use (#3706, #3874).
+
+    The framework binds the URL's parameters with ``form_class(data=...)`` and
+    nothing else (``djust._params_form.bind_params``). A ``params_form`` that is
+    not a form class raises ``ImproperlyConfigured``, and a form whose
+    ``__init__`` needs another argument raises ``TypeError``, both on the first
+    request of the view. The verdicts are the runtime's own
+    (``form_class_problem`` / ``construction_problem``) for every failure
+    visible in the signature. No view is constructed and no form is
+    instantiated, so an ``__init__`` that raises, a positional-only ``data``
+    that the form's own ``super().__init__`` rejects, or a lazy object wrapping
+    a form class is not found here and still fails on the first request.
+
+    A view that declares a ``params_form`` is also held to a known
+    ``params_form_fallback`` (``fallback_problem``): the request path reads it
+    on every request of such a view and raises ``ImproperlyConfigured`` on a
+    typo, rather than silently keeping the default.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V023"):
+        return messages
+    try:
+        from djust._params_form import (
+            FALLBACK_INITIAL,
+            construction_problem,
+            fallback_problem,
+            form_class_problem,
+        )
+        from djust.live_view import LiveView
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if _is_framework_internal_class(cls):
+            continue
+        # Read from the class, as the request path does: an inherited
+        # declaration is the subclass's declaration too.
+        declared = getattr(cls, "params_form", None)
+        if declared is None:
+            continue
+        label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        problems: list[tuple[str, str, str]] = []  # (attribute, problem, hint)
+        problem = form_class_problem(declared)
+        if problem is not None:
+            problems.append(
+                (
+                    "params_form",
+                    problem,
+                    "Set params_form to a Django form class (a subclass of "
+                    "django.forms.Form), not an instance, a dotted path or another "
+                    "object. Without this the first request raises ImproperlyConfigured.",
+                )
+            )
+        else:
+            problem = construction_problem(declared)
+            if problem is not None:
+                problems.append(
+                    (
+                        "params_form",
+                        problem,
+                        "The framework calls %s(data=...) with the URL's parameters and "
+                        "nothing else. Give every other __init__ argument a default, or "
+                        "read it from the view in handle_params() instead. Without this "
+                        "the first request raises TypeError." % declared.__name__,
+                    )
+                )
+        # The fallback mode is read with the form, on every request of a view that
+        # declares one (#3874), so a typo is as broken as a bad form class.
+        problem = fallback_problem(getattr(cls, "params_form_fallback", FALLBACK_INITIAL))
+        if problem is not None:
+            problems.append(
+                (
+                    "params_form_fallback",
+                    problem,
+                    "Use 'initial' (the default) or 'fields'. Without this the first "
+                    "request raises ImproperlyConfigured.",
+                )
+            )
+        for attribute, problem, hint in problems:
+            messages.append(
+                DjustError(
+                    "%s.%s %s." % (label, attribute, problem),
+                    hint=hint,
+                    id="djust.V023",
+                    fix_hint="Fix the `%s` declaration of `%s`." % (attribute, cls.__qualname__),
+                )
+            )
+    return messages
+
+
+@register("djust")
+def check_query_budget_declarations(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V024 (Error): a ``query_budget`` nothing can enforce (#3701).
+
+    The smoke test raises ``ValueError`` on it, the run-time meter logs it and
+    measures nothing, and ``djust_audit`` lists it as invalid; this reports it at
+    ``manage.py check``, before any of those run. The verdict is
+    ``djust._query_budget.declared_budget``, the one reader of the attribute: an
+    unknown key, a bool or negative number, a handler named in ``events`` that the
+    view does not have, or one a budget cannot be enforced on (``async def``,
+    ``@background``). No view is constructed.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V024"):
+        return messages
+    try:
+        from djust._query_budget import declared_budget, is_declared
+        from djust.live_view import LiveView
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if _is_framework_internal_class(cls) or not is_declared(cls):
+            continue
+        try:
+            declared_budget(cls)
+        except ValueError as exc:
+            messages.append(
+                DjustError(
+                    "%s.%s has an invalid query_budget: %s"
+                    % (cls.__module__, cls.__qualname__, exc),
+                    hint=(
+                        "An invalid query_budget is not measured at run time and fails the smoke "
+                        "test. Use an int, or a dict with 'mount', 'render', 'event' and 'events' "
+                        "({handler: n} for synchronous @event_handler methods of this view)."
+                    ),
+                    id="djust.V024",
+                    fix_hint="Fix the `query_budget` of `%s`." % cls.__qualname__,
+                )
+            )
+    return messages
+
+
+@register("djust")
+def check_get_http_status_overrides(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V025 (Warning): ``get_http_status()`` overridden while a project-wide map is configured (#3706).
+
+    ``LIVEVIEW_CONFIG["http_status_of_state"]`` exists so no view repeats the same
+    ``get_http_status()`` just to answer 404 for its not-found state (#3688). An
+    override replaces the default and with it the map, so the copies the map was
+    meant to remove would creep back one view at a time. This reports each class
+    that defines the method, once, wherever it is inherited from, while the map is
+    configured. It is a Warning: an override can be a real special case (a status
+    that is not a function of one state), and one that calls ``super()`` still
+    reads the map.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V025"):
+        return messages
+    try:
+        from djust.config import config
+        from djust.live_view import LiveView
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    if not config.get("http_status_of_state"):
+        return messages
+
+    owners: dict[type, None] = {}
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in candidates:
+        # The class whose body defines the method the view runs: the same lookup the
+        # request path does, so an override inherited from a mixin is found too.
+        owner = next((c for c in cls.__mro__ if "get_http_status" in vars(c)), None)
+        if owner is None or _is_framework_internal_class(owner):
+            continue
+        owners[owner] = None
+
+    for owner in sorted(owners, key=lambda c: (c.__module__, c.__qualname__)):
+        label = "%s.%s" % (owner.__module__, owner.__qualname__)
+        owner_file = ""
+        owner_line = None
+        try:
+            owner_file = inspect.getfile(owner)
+            owner_line = inspect.getsourcelines(vars(owner)["get_http_status"])[1]
+        except (OSError, TypeError):
+            pass  # Source introspection may fail for built-in or C-extension classes
+        messages.append(
+            DjustWarning(
+                "%s overrides get_http_status() while LIVEVIEW_CONFIG['http_status_of_state'] "
+                "is configured; the override replaces the project-wide map for every view that "
+                "uses it." % label,
+                hint=(
+                    "Delete the override and set self.state to a state the map names, so the "
+                    "project-wide map answers; or keep it for a real special case and call "
+                    "super().get_http_status() first so the map still applies. Suppress with "
+                    "DJUST_CONFIG = {'suppress_checks': ['V025']}."
+                ),
+                id="djust.V025",
+                fix_hint=(
+                    "Remove `get_http_status()` from `%s`, or have it fall back to "
+                    "`super().get_http_status()`." % owner.__qualname__
+                ),
+                file_path=owner_file,
+                line_number=owner_line,
+            )
+        )
+    return messages

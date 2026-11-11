@@ -13,9 +13,44 @@ import copy
 import logging
 import os
 import threading
+from collections.abc import Mapping
 from typing import Any, ClassVar, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+#: Django's ``DATA_UPLOAD_MAX_NUMBER_FIELDS`` / ``DATA_UPLOAD_MAX_MEMORY_SIZE`` defaults, the defaults of
+#: ``max_form_fields`` / ``max_form_data_size`` (#3834). Defined here, not in ``_form_data_bounds``,
+#: because the config loads at ``django.setup()`` and that module must not.
+DEFAULT_MAX_FORM_FIELDS = 1000
+DEFAULT_MAX_FORM_DATA_SIZE = 2_621_440
+#: ``max_form_members`` (#3844): how many keys, values and nested containers a form's data may hold.
+#: 100x Django's field limit; at the per-member cost of an event (~0.7 us in the state sync, measured
+#: in #3844) it keeps an event at the cap to ~70 ms where the size limit alone allowed ~1.8 s.
+DEFAULT_MAX_FORM_MEMBERS = 100_000
+#: The three form-data limits (#3834, #3844). Every one is a non-negative integer (``0`` = no limit),
+#: validated when the config loads AND when a value is written in code (``set`` / ``update``, #3858).
+_FORM_LIMIT_KEYS = ("max_form_fields", "max_form_data_size", "max_form_members")
+
+#: The project-wide default of ``LiveView.http_status_of_state`` (#3706): a mapping of a state name to
+#: the HTTP status the page answers for it. Validated like the form limits, on load and on every
+#: ``set`` / ``update`` that names it; a bad value is the default (no map, the page answers 200).
+_STATUS_MAP_KEY = "http_status_of_state"
+#: Every key whose written value is sanitized, so what a reload replays is what is stored (#3858).
+_SANITIZED_KEYS = _FORM_LIMIT_KEYS + (_STATUS_MAP_KEY,)
+
+
+def valid_http_status_map(value: Any) -> bool:
+    """Whether *value* is a usable ``http_status_of_state``: a mapping of state names (``str``) to HTTP
+    status codes (``int``, not ``bool``, 100-599). Empty is valid and means "no map"."""
+    if not isinstance(value, Mapping):
+        return False
+    return all(
+        isinstance(state, str)
+        and isinstance(status, int)
+        and 100 <= status <= 599  # also refuses True / False (== 1 / 0)
+        for state, status in value.items()
+    )
+
 
 #: Flat ``DJUST_*`` settings aliasing keys of the ``service_worker`` dict.
 _SERVICE_WORKER_ALIASES = (("DJUST_STATE_SNAPSHOT_ENABLED", "state_snapshot_enabled", bool),)
@@ -103,6 +138,17 @@ class LiveViewConfig:
         # for a view: handler, mount, handle_params, start_async callback,
         # get_context_data. None (default) = no wrapper. See djust.sync_turn.
         "sync_turn_wrapper": None,
+        # Run-time measurement of ``LiveView.query_budget`` (#3701): None
+        # (default) = log a warning for a phase over its budget while DEBUG is
+        # on or under pytest, nothing otherwise; "warn" / "error" = measure
+        # regardless of DEBUG and log / raise QueryBudgetExceeded; "off" =
+        # never. A view that declares no query_budget is never measured. See
+        # djust._query_budget.
+        "query_budget": None,
+        # The HTTP status a page answers for a state it renders itself, for every view that does
+        # not declare ``http_status_of_state`` itself (#3706): ``{"not_found": 404, "gone": 410}``.
+        # A view's own attribute wins, then this; ``{}`` = no project-wide map.
+        "http_status_of_state": {},
         # With worker_threads on: True (default) pins each WebSocket session to
         # one pool thread; False gives it a lane, its calls one at a time and
         # in order on any free thread of the pool, so a slow hop of one session
@@ -111,6 +157,16 @@ class LiveViewConfig:
         "worker_pinning": True,
         # Maximum incoming WebSocket message size in bytes (0 = no limit)
         "max_message_size": 65536,  # 64KB
+        # How much a client may put into one form's submitted data over the socket (#3834): the
+        # field count and the characters of keys + values, defaulting to Django's
+        # DATA_UPLOAD_MAX_NUMBER_FIELDS (1000) and DATA_UPLOAD_MAX_MEMORY_SIZE (2.5 MB). A frame is
+        # bounded by max_message_size; a form's data is the sum of many frames. 0 = no limit.
+        "max_form_fields": DEFAULT_MAX_FORM_FIELDS,
+        "max_form_data_size": DEFAULT_MAX_FORM_DATA_SIZE,
+        # How many members (keys, values, nested containers) a form's data may hold. The size limit
+        # bounds characters, not the time an event takes: millions of tiny members fit in 2.5 MB and
+        # each is walked on every event (#3844). 0 = no limit.
+        "max_form_members": DEFAULT_MAX_FORM_MEMBERS,
         # How many views one WebSocket may host besides the page view: the
         # ``dj-lazy`` and ``mount_batch`` views, each a view of its own (#3252).
         "max_views_per_connection": 64,
@@ -137,6 +193,11 @@ class LiveViewConfig:
         "websocket_compression": True,
         # Debug settings
         "debug_vdom": False,  # Enable detailed VDOM patching debug logs
+        # DEBUG-only browser debug panel (debug-panel.js/.css, its toolbar
+        # button and the per-event ``_debug`` payload). Set False to keep the
+        # rest of the DEBUG tooling (client-dev.js hot reload, error overlay)
+        # without the panel. Read through ``debug_panel_enabled()``.
+        "debug_panel": True,
         "debug_panel_max_history": 50,  # Maximum number of events/patches to keep in debug panel history
         "debug_auto_open_on_error": False,  # Auto-open debug panel on first error/warning (DEBUG mode only)
         # Colocated JS hook namespacing (Phoenix 1.1 parity).
@@ -217,6 +278,19 @@ class LiveViewConfig:
         # debug_components / component_wrapper_class / component_loading_class
         # were removed in 1.3 (#2984): nothing read them.
         "serialization_max_depth": 3,  # Max depth for nested model serialization (e.g., lease.tenant.user = 3 levels)
+        # Rows read through a related manager's ``.all`` (``{% for g in
+        # u.groups.all %}``, ``{{ u.groups.all|length }}``). The relation is an
+        # unevaluated QuerySet, and the serializer read all of it with no
+        # bound (#3788). At most this many rows are read per ``.all`` -- a SQL
+        # LIMIT on an unevaluated QuerySet -- the rest are dropped and a
+        # warning is logged. The default is a ceiling no ordinary page reaches
+        # (a template rendering 100,000 related rows is already past usable);
+        # lower it to bound memory, ``0`` removes it. A cap is not
+        # free of cost to correctness: ``{{ u.groups.all|length }}`` reports
+        # the capped count, so a template that needs a total should read
+        # ``.count`` (never capped, one query), and one that needs one row
+        # ``.first`` / ``.exists``.
+        "queryset_all_row_cap": 100_000,
         # Serialization behavior (issue #292)
         # When False (default): non-serializable values are converted via str() fallback with a warning log
         # When True: non-serializable values raise TypeError with actionable error message
@@ -252,6 +326,18 @@ class LiveViewConfig:
         # view (a "load more" offset, a form draft) resets on each fallback
         # POST. Must be a bool (system check ``djust.C027``).
         "view_state_in_session": True,
+        # Seconds one page-POST fallback request waits, in total, for the
+        # ``start_async`` / ``@background`` work it runs before answering
+        # (#3634). ``None`` (default) = no deadline: a task that does not return
+        # holds the POST open for as long as it runs, and a sync callback runs
+        # on the request thread. A positive number runs each task on a worker
+        # thread the request does not join; when the budget is spent the
+        # fallback stops waiting, cancels an ``async def`` callback, hands
+        # ``handle_async_result`` a ``TimeoutError`` and answers. A sync
+        # callback cannot be cancelled: it keeps running, abandoned. Anything
+        # that is not a number from above 0 up to ``threading.TIMEOUT_MAX`` means
+        # no deadline (system check ``djust.C028``). Does not touch the socket or SSE transports.
+        "http_fallback_background_timeout": None,
         # `virtual_keyed_ops`, `django_value_repr` and `template_auto_call`
         # were kill switches that defaulted ON; 2.0 hard-wired all three and
         # removed the keys (see `djust._removed_settings`).
@@ -265,6 +351,11 @@ class LiveViewConfig:
         "sensitive_field_types": [],
         # CSS Framework
         "css_framework": "bootstrap5",  # Options: 'bootstrap4', 'bootstrap5', 'tailwind', None
+        # Theme classes for the form adapters (as_live / as_live_field), by slot:
+        # {"input": "...", "label": "...", "radio_group": "...", ...}. A slot set
+        # here wins over the framework section below; "" means no class. The slots
+        # are djust.frameworks.FORM_CLASS_SLOTS.
+        "form_classes": {},
         # Bootstrap 4 classes (NYC Core Framework, gov sites, legacy projects)
         "bootstrap4": {
             "field_class": "form-control",
@@ -280,6 +371,8 @@ class LiveViewConfig:
             "radio_class": "custom-control-input",
             "radio_label_class": "custom-control-label",
             "radio_wrapper_class": "custom-control custom-radio",
+            "legend_class": "col-form-label pt-0",
+            "invalid_class": "is-invalid",
             "field_wrapper_class": "form-group",
             "button_primary_class": "btn btn-primary",
             "button_secondary_class": "btn btn-secondary",
@@ -299,6 +392,8 @@ class LiveViewConfig:
             "radio_class": "form-check-input",
             "radio_label_class": "form-check-label",
             "radio_wrapper_class": "form-check",
+            "legend_class": "col-form-label pt-0",
+            "invalid_class": "is-invalid",
             "field_wrapper_class": "mb-3",
             "button_primary_class": "btn btn-primary",
             "button_secondary_class": "btn btn-secondary",
@@ -511,6 +606,37 @@ class LiveViewConfig:
             del self._programmatic[existing]
         self._programmatic[key] = (copy.deepcopy(value), dict(self._contrib))
 
+    def _validate_form_limits(self, target: Dict[str, Any]) -> None:
+        """Replace each form-data limit in *target* that is not a non-negative integer by its default.
+
+        Run when the config loads and again on every ``set`` / ``update`` that names one (#3858): a
+        ``'abc'`` written in code made every form event raise ``TypeError``, ``-5`` refused everything,
+        and ``3.7`` / ``True`` were accepted as limits. A bad value is the default, never "no limit"."""
+        for key in _FORM_LIMIT_KEYS:
+            val = target.get(key)
+            if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+                logger.warning(
+                    "Invalid %s=%r (must be an integer >= 0; 0 = no limit). Using default %s.",
+                    key,
+                    val,
+                    self._defaults[key],
+                )
+                target[key] = self._defaults[key]
+
+    def _validate_status_map(self, target: Dict[str, Any]) -> None:
+        """Replace ``http_status_of_state`` in *target* by the default (no map) when it is not a mapping
+        of state names to HTTP statuses (#3706). Run where the form limits are, so a value written in
+        code is sanitized before it is stored and recorded."""
+        val = target.get(_STATUS_MAP_KEY)
+        if not valid_http_status_map(val):
+            logger.warning(
+                "Invalid %s=%r (must be a mapping of state name to HTTP status, 100-599, e.g. "
+                "{'not_found': 404}). Using the default: no project-wide map, pages answer 200.",
+                _STATUS_MAP_KEY,
+                val,
+            )
+            target[_STATUS_MAP_KEY] = {}
+
     def _validate_config(self, target: Optional[Dict[str, Any]] = None) -> None:
         """Validate security-critical config values (the live config when
         ``target`` is omitted)."""
@@ -525,6 +651,10 @@ class LiveViewConfig:
                 valid_modes,
             )
             target["event_security"] = "strict"
+
+        # A limit that is not a non-negative integer is the default, never "no limit" (#3834).
+        self._validate_form_limits(target)
+        self._validate_status_map(target)
 
         # Validate rate_limit values
         defaults = self._defaults["rate_limit"]
@@ -562,6 +692,13 @@ class LiveViewConfig:
                 logger.warning(
                     "max_message_size is 0 (no limit) with DEBUG=False. "
                     "Consider setting a message size limit in production."
+                )
+            unlimited = [key for key in _FORM_LIMIT_KEYS if target.get(key) == 0]
+            if unlimited:
+                logger.warning(
+                    "%s is 0 (no limit) with DEBUG=False. "
+                    "A client can grow a form's data without bound across events.",
+                    ", ".join(unlimited),
                 )
             if target.get("event_security") == "open":
                 logger.warning(
@@ -620,6 +757,12 @@ class LiveViewConfig:
         with self._lock:
             new = _detached(self._config)
             _set_path(new, key, _detached(value))
+            if key in _SANITIZED_KEYS:
+                # The default replaces a bad value, and that is what is recorded, so a reload replays
+                # the sanitized value and not the one written (#3858, #3706).
+                self._validate_form_limits(new)
+                self._validate_status_map(new)
+                value = new[key]
             self._record_programmatic(key, value)
             self._config = new
 
@@ -698,8 +841,10 @@ class LiveViewConfig:
         with self._lock:
             new = _detached(self._config)  # copy-on-write, as in ``set()``
             new.update(_detached(config_dict))
+            self._validate_form_limits(new)  # the same rule ``set()`` applies (#3858)
+            self._validate_status_map(new)
             for key, value in config_dict.items():
-                self._record_programmatic(key, value)
+                self._record_programmatic(key, new[key] if key in _SANITIZED_KEYS else value)
             self._config = new
 
     def as_dict(self) -> Dict[str, Any]:
@@ -782,4 +927,68 @@ def view_state_in_session() -> bool:
         return get_config().get("view_state_in_session", True) is not False
     except Exception:  # pragma: no cover - defensive
         logger.debug("[djust] view_state_in_session read failed; keeping the default")
+        return True
+
+
+def valid_http_fallback_background_timeout(value: Any) -> bool:
+    """Whether ``value`` is a usable ``http_fallback_background_timeout``.
+
+    A number of seconds greater than 0 and at most ``threading.TIMEOUT_MAX``
+    (about 9.2e9, nearly three centuries: the longest a thread can wait, so a
+    larger value could never be waited on and is rejected, not clamped). A bool
+    is not a number here (``True`` would read as one second). Total: any value,
+    however odd (a huge int, ``nan``, a container), answers ``False`` instead of
+    raising.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        # An int is compared exactly (no float conversion, so 10**400 is fine);
+        # ``nan`` fails both comparisons.
+        return bool(0 < value <= threading.TIMEOUT_MAX)
+    except (OverflowError, TypeError, ValueError):  # pragma: no cover - defensive
+        return False
+
+
+def http_fallback_background_timeout() -> Optional[float]:
+    """The deadline, in seconds, for background work on the page-POST fallback.
+
+    The single reader of ``LIVEVIEW_CONFIG['http_fallback_background_timeout']``
+    (also read from ``DJUST_CONFIG``). ``None`` means no deadline, which is also
+    what any value that is not a number from above 0 up to
+    ``threading.TIMEOUT_MAX`` means; system check ``djust.C028`` reports such a
+    value. A config read that raises means no deadline.
+    """
+    try:
+        value = get_config().get("http_fallback_background_timeout")
+        return float(value) if valid_http_fallback_background_timeout(value) else None
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("[djust] http_fallback_background_timeout read failed; no deadline")
+        return None
+
+
+def debug_panel_enabled() -> bool:
+    """Whether the browser debug panel is served on this request's pages.
+
+    The single reader of ``LIVEVIEW_CONFIG['debug_panel']`` (also read from
+    ``DJUST_CONFIG``). The panel needs ``settings.DEBUG``; with DEBUG on, only
+    ``False`` turns it off, so the default keeps the panel. Every panel entry
+    point consults this: the ``debug-panel.js`` / ``debug-panel.css`` /
+    ``window.DJUST_DEBUG_INFO`` injection (``mixins/post_processing.py``), the
+    per-event ``_debug`` payload on WebSocket (``websocket.py``) and HTTP
+    (``mixins/request.py``) responses, and the service-worker precache list
+    (``management/commands/generate_sw.py``). A config read that raises keeps
+    the default.
+    """
+    try:
+        from django.conf import settings
+
+        if not getattr(settings, "DEBUG", False):
+            return False
+    except Exception:  # pragma: no cover - defensive
+        return False
+    try:
+        return get_config().get("debug_panel", True) is not False
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("[djust] debug_panel read failed; keeping the default")
         return True

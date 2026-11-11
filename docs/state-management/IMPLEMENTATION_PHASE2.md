@@ -436,7 +436,7 @@ from djust import LiveView
 from djust.decorators import debounce
 
 class DebounceSearchView(LiveView):
-    template_string = """
+    template = """
     <div>
         <h2>Debounce Demo</h2>
         <input type="text" dj-input="search" placeholder="Search...">
@@ -463,7 +463,7 @@ from djust import LiveView
 from djust.decorators import throttle
 
 class ThrottleScrollView(LiveView):
-    template_string = """
+    template = """
     <div style="height: 2000px;">
         <div style="position: fixed; top: 0; background: white;">
             <h2>Throttle Demo</h2>

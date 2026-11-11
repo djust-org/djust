@@ -62,22 +62,51 @@
     }
   }
 
+  // The value is normalised the way a browser reads a URL (WHATWG "basic URL
+  // parser"): leading and trailing C0 controls and spaces are dropped and every
+  // TAB / LF / CR is removed. The normalised text is tested, and it is what
+  // navigate() receives.
+  function normaliseHref(href) {
+    return String(href)
+      .replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "")
+      .replace(/[\t\n\r]/g, "");
+  }
+
+  // The navigation target for a row's `data-href`, or "" to refuse it. The rule:
+  // normalise, then refuse a protocol-relative value and any scheme other than
+  // http(s). This is NOT an origin guard: an absolute http(s) URL to any host is
+  // allowed on purpose, as it is in an `<a href>`.
+  //   - an absolute http(s) URL: allowed;
+  //   - a path with a single leading `/`, or starting with `.`: allowed;
+  //   - anything else is refused.
+  function safeRowHref(href) {
+    if (typeof href !== "string") return "";
+    var s = normaliseHref(href);
+    if (/^https?:\/\//i.test(s)) return s;
+    if (/^\/(?![\/\\])/.test(s) || s.charAt(0) === ".") return s;
+    return "";
+  }
+
+  if (typeof window !== "undefined") {
+    window.djustDataTableRowClick = window.djustDataTableRowClick || {};
+    window.djustDataTableRowClick.safeRowHref = safeRowHref;
+  }
+
   function navigateForRow(tr) {
     // Static-URL path: navigate via dataset.href.
     var href = tr.dataset && tr.dataset.href;
     if (href) {
-      // Only allow http(s) and SAME-ORIGIN relative-path URLs to defend
-      // against a hostile data-href value sneaking in (e.g. javascript:
-      // URIs or protocol-relative `//evil.com/...` cross-origin redirects).
-      // Developer-controlled values from `reverse()` are always either
-      // absolute or relative paths, never `javascript:` schemes.
-      // The `(?!\/)` lookahead on the leading `/` rejects `//host` while
-      // still allowing single-leading-slash absolute paths.
-      if (/^(https?:\/\/|\/(?!\/)|\.)/.test(href)) {
+      // Refuse a data-href value that is not a web URL or path (a javascript: URI, a
+      // protocol-relative URL). Absolute http(s) URLs are allowed, so this is
+      // not an origin check. Developer-controlled values from `reverse()` are
+      // always either absolute or relative paths. The decision is made on the
+      // browser-normalised text (safeRowHref).
+      var target = safeRowHref(href);
+      if (target) {
         // Dispatch through the namespace so tests can vi.spyOn() the
         // navigate property. Production path is the default function
         // installed on the namespace above.
-        window.djustDataTableRowClick.navigate(href);
+        window.djustDataTableRowClick.navigate(target);
       }
       return true;
     }

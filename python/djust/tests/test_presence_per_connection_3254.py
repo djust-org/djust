@@ -866,7 +866,7 @@ async def _connect(session_key):
     communicator.scope["user"] = AnonymousUser()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect ack
+    await communicator.receive_json_from()  # connect ack
     communicator.consumer = CONSUMERS[-1]
     return communicator
 
@@ -1094,13 +1094,16 @@ async def test_a_dead_tab_expires_without_removing_the_users_other_tab(ws_env):
 
         # Tab B stopped heartbeating a minute and a half ago; tab A pings.
         ws_env._heartbeats[(WS_ROOM, member_b)] = time.time() - 90
-        ws_env._heartbeats[(WS_ROOM, member_a)] = time.time() - 59
+        aged = time.time() - 59
+        ws_env._heartbeats[(WS_ROOM, member_a)] = aged
         await tab_a.send_json_to({"type": "ping"})
         await _ws_until(tab_a, "pong")
 
         assert await _present(WS_ROOM) == [user]
         assert set(ws_env._groups[WS_ROOM]) == {member_a}  # only B's connection went
-        assert time.time() - ws_env._heartbeats[(WS_ROOM, member_a)] < 5
+        # The ping refreshed A's heartbeat: it moved forward from the aged stamp. A
+        # comparison with "within 5 s of now" would assert how fast the runner is (#3711).
+        assert ws_env._heartbeats[(WS_ROOM, member_a)] > aged
     finally:
         await _close(tab_a)
         await _close(tab_b)

@@ -1,0 +1,264 @@
+{
+  "_comment": "The batch gate-off tool gate-off'd with the single-mutation harness (#3905). Run from a COPY of the files it names so nothing in your checkout is ever mutated: copy scripts/gate_off.py, scripts/gate_off_batch.py, this file, tests/__init__.py, tests/git_env.py, docs/testing-strategy.md and tests/unit/test_gate_off_batch_3905.py into a scratch directory with the same layout, then `python scripts/gate_off.py scripts/gate-off-batch-selfcheck.json` there (about 10-15 minutes). Surviving mutants are listed in the PR; an equivalent mutant or two mechanisms shadowing each other are expected to be named, not hidden. The RSS ceiling the fixtures hand the tool (300 MB) is the only memory bound mutated indirectly: no mutation here removes the bound itself, which belongs to gate_off.py and is pinned by tests/unit/test_gate_off_3714.py.",
+  "root": ".",
+  "command": [
+    "{python}",
+    "-m",
+    "pytest",
+    "-q",
+    "-p",
+    "no:cacheprovider",
+    "-p",
+    "no:django",
+    "--noconftest",
+    "-n",
+    "2",
+    "tests/unit/test_gate_off_batch_3905.py",
+    "--deselect",
+    "tests/unit/test_gate_off_batch_3905.py::test_every_selfcheck_mutation_text_still_applies"
+  ],
+  "deadline": 600,
+  "rss_mb": 4096,
+  "mutations": [
+    {
+      "label": "attribution: an ambiguous failure is handed to its first claimant instead of being re-run",
+      "file": "scripts/gate_off_batch.py",
+      "old": "        elif len(owners) == 1:",
+      "new": "        elif len(owners) >= 1:"
+    },
+    {
+      "label": "attribution: a failure nobody claims no longer forces a re-run (the rest are declared survivors)",
+      "file": "scripts/gate_off_batch.py",
+      "old": "    if attribution.unclaimed:\n",
+      "new": "    if False:\n"
+    },
+    {
+      "label": "attribution: a contested failure no longer forces a re-run of its claimants",
+      "file": "scripts/gate_off_batch.py",
+      "old": "    if attribution.contested.get(index):",
+      "new": "    if False:"
+    },
+    {
+      "label": "attribution: a survivor of the batch is re-run alone anyway",
+      "file": "scripts/gate_off_batch.py",
+      "old": "    return \"survived\", \"\"",
+      "new": "    return \"single\", \"x\""
+    },
+    {
+      "label": "attribution: an empty name claims every failure",
+      "file": "scripts/gate_off_batch.py",
+      "old": "if any(name and name in failure.text for name in mutation.names):",
+      "new": "if any(name in failure.text for name in mutation.names):"
+    },
+    {
+      "label": "attribution: declared test-id patterns are ignored",
+      "file": "scripts/gate_off_batch.py",
+      "old": "    return any(re.search(pattern, failure.id) for pattern in mutation.test_ids)",
+      "new": "    return False"
+    },
+    {
+      "label": "attribution: a component alone no longer names its site",
+      "file": "scripts/gate_off_batch.py",
+      "old": "        if component and not names and not test_ids:",
+      "new": "        if False:"
+    },
+    {
+      "label": "junit: erroring tests are no longer counted, only failures",
+      "file": "scripts/gate_off_batch.py",
+      "old": "        for kind in (\"failure\", \"error\"):",
+      "new": "        for kind in (\"failure\",):"
+    },
+    {
+      "label": "batch: an empty or missing junit report is no longer sent to single runs",
+      "file": "scripts/gate_off_batch.py",
+      "old": "    if not run.failures:",
+      "new": "    if False:"
+    },
+    {
+      "label": "batch: a batch that did not collect is attributed instead of re-run member by member",
+      "file": "scripts/gate_off_batch.py",
+      "old": "    if verdict.status == INVALID:",
+      "new": "    if False:"
+    },
+    {
+      "label": "plan: two mutations of one component may share a batch",
+      "file": "scripts/gate_off_batch.py",
+      "old": "                if mutation.component and any(",
+      "new": "                if False and any("
+    },
+    {
+      "label": "plan: overlapping texts in one file may share a batch",
+      "file": "scripts/gate_off_batch.py",
+      "old": "spans[j][0] == path and start < spans[j][2] and spans[j][1] < end for j in batch",
+      "new": "False for j in batch"
+    },
+    {
+      "label": "plan: different run configurations may share a batch",
+      "file": "scripts/gate_off_batch.py",
+      "old": "                    or _batch_key(first) != _batch_key(mutation)",
+      "new": "                    or False"
+    },
+    {
+      "label": "plan: an unattributable mutation may join a batch",
+      "file": "scripts/gate_off_batch.py",
+      "old": "        if mutation.attributable and max_batch > 1:",
+      "new": "        if max_batch > 1:"
+    },
+    {
+      "label": "plan: the batch size cap is ignored",
+      "file": "scripts/gate_off_batch.py",
+      "old": "                    len(batch) >= max_batch",
+      "new": "                    False"
+    },
+    {
+      "label": "plan: the second worker's share is not balanced",
+      "file": "scripts/gate_off_batch.py",
+      "old": "        slot = loads.index(min(loads))",
+      "new": "        slot = 0"
+    },
+    {
+      "label": "combine: overlapping edits are applied anyway",
+      "file": "scripts/gate_off_batch.py",
+      "old": "            if start < position:",
+      "new": "            if False:"
+    },
+    {
+      "label": "combine: the combined source is no longer compiled",
+      "file": "scripts/gate_off_batch.py",
+      "old": "        if path.suffix == \".py\":\n            try:\n                compile(out",
+      "new": "        if False:\n            try:\n                compile(out"
+    },
+    {
+      "label": "combine: text that stopped matching exactly once is located anyway",
+      "file": "scripts/gate_off_batch.py",
+      "old": "    if not old or original.count(old) != 1:",
+      "new": "    if not old:"
+    },
+    {
+      "label": "validate: a text expected more than once is accepted in batch mode",
+      "file": "scripts/gate_off_batch.py",
+      "old": "        if mutation.expect != 1:",
+      "new": "        if False:"
+    },
+    {
+      "label": "run: the pre-run clear of the touched file's bytecode is dropped",
+      "file": "scripts/gate_off_batch.py",
+      "old": "            landed.append(path)\n            go._clear_pycache(path)",
+      "new": "            landed.append(path)\n            pass"
+    },
+    {
+      "label": "run: files are no longer restored when the bytes on disk differ (the finally)",
+      "file": "scripts/gate_off_batch.py",
+      "old": "                if path in landed or path.read_bytes() != saved[path].data:",
+      "new": "                if False:"
+    },
+    {
+      "label": "run: a restore failure is swallowed instead of raised",
+      "file": "scripts/gate_off_batch.py",
+      "old": "        if problems:\n            raise problems[0]",
+      "new": "        if problems:\n            pass"
+    },
+    {
+      "label": "run: one failed restore stops the remaining files being restored",
+      "file": "scripts/gate_off_batch.py",
+      "old": "                problems.append(exc)",
+      "new": "                raise"
+    },
+    {
+      "label": "run: a single mutation that hit a bound is no longer probed for an import-time hang",
+      "file": "scripts/gate_off_batch.py",
+      "old": "            if probe:",
+      "new": "            if False:"
+    },
+    {
+      "label": "judge: an import-time hang is reported as a catch",
+      "file": "scripts/gate_off_batch.py",
+      "old": "        if probe is not None and (probe.verdict or probe.returncode != 0):",
+      "new": "        if False:"
+    },
+    {
+      "label": "judge: a hang or runaway is no longer a catch",
+      "file": "scripts/gate_off_batch.py",
+      "old": "            status=CAUGHT,\n            kind=outcome.verdict.lower(),",
+      "new": "            status=INVALID,\n            kind=outcome.verdict.lower(),"
+    },
+    {
+      "label": "verify: --verify-survivors is ignored",
+      "file": "scripts/gate_off_batch.py",
+      "old": "    if not ctx.verify_survivors:",
+      "new": "    if True:"
+    },
+    {
+      "label": "git: the tree is no longer required to be clean at the start",
+      "file": "scripts/gate_off_batch.py",
+      "old": "                if dirty:\n                    raise DirtyTree(",
+      "new": "                if False:\n                    raise DirtyTree("
+    },
+    {
+      "label": "git: a difference from git after the run is no longer a restore failure",
+      "file": "scripts/gate_off_batch.py",
+      "old": "                    if finished:",
+      "new": "                    if False:"
+    },
+    {
+      "label": "git: a hook's repository variables reach git",
+      "file": "scripts/gate_off_batch.py",
+      "old": "    return {k: v for k, v in os.environ.items() if k not in _GIT_EXECUTION_VARS}",
+      "new": "    return dict(os.environ)"
+    },
+    {
+      "label": "cli: -x / --maxfail are no longer refused",
+      "file": "scripts/gate_off_batch.py",
+      "old": "        if token in (\"-x\", \"--exitfirst\") or token.startswith(\"--maxfail\"):",
+      "new": "        if False:"
+    },
+    {
+      "label": "cli: duplicate labels are no longer refused",
+      "file": "scripts/gate_off_batch.py",
+      "old": "    if len(set(labels)) != len(labels):",
+      "new": "    if False:"
+    },
+    {
+      "label": "jobs: more than two workers are accepted",
+      "file": "scripts/gate_off_batch.py",
+      "old": "    if jobs < 1 or jobs > MAX_JOBS:",
+      "new": "    if jobs < 1:"
+    },
+    {
+      "label": "cli: --survivors-only re-runs every mutation, not the survivors",
+      "file": "scripts/gate_off_batch.py",
+      "old": "        wanted = {r[\"label\"] for r in previous[\"rows\"] if r[\"status\"] == SURVIVED}",
+      "new": "        wanted = {r[\"label\"] for r in previous[\"rows\"]}"
+    },
+    {
+      "label": "cli: a --survivors-only run drops the rows it did not re-run",
+      "file": "scripts/gate_off_batch.py",
+      "old": "        kept = [Row(**r) for r in previous[\"rows\"] if r[\"label\"] not in redone]",
+      "new": "        kept = []"
+    },
+    {
+      "label": "watchdog: the test command's group is not killed when the tool that started it is gone",
+      "file": "scripts/gate_off_batch.py",
+      "old": "            os.killpg(os.getpgrp(), signal.SIGKILL)",
+      "new": "            pass"
+    },
+    {
+      "label": "watchdog: the test command is not wrapped by it at all",
+      "file": "scripts/gate_off_batch.py",
+      "old": "            _guarded(list(command) + [f\"--junitxml={junit}\"]), ctx.root, deadline, ceiling",
+      "new": "            list(command) + [f\"--junitxml={junit}\"], ctx.root, deadline, ceiling"
+    },
+    {
+      "label": "gate_off.py: a deadline / RSS kill reaches only the group leader, not its descendants",
+      "file": "scripts/gate_off.py",
+      "old": "        os.killpg(pgid, signal.SIGKILL)",
+      "new": "        os.kill(pgid, signal.SIGKILL)"
+    },
+    {
+      "label": "report: HUNG is not counted in the summary",
+      "file": "scripts/gate_off_batch.py",
+      "old": "    if s[\"hung\"]:",
+      "new": "    if False:"
+    }
+  ]
+}

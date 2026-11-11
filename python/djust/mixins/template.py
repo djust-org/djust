@@ -671,6 +671,10 @@ class TemplateMixin:
 
         def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
 
+        def _context_for_render(
+            self, preloaded_context: Optional[Dict[str, Any]] = None
+        ) -> Dict[str, Any]: ...
+
         def _apply_context_processors(
             self, context: Dict[str, Any], request: Any
         ) -> Dict[str, Any]: ...
@@ -972,17 +976,20 @@ class TemplateMixin:
         # django-csp is not installed or the request doesn't carry one —
         # backward compatible with apps still using 'unsafe-inline'.
         req = request if request is not None else getattr(self, "request", None)
+        from ..security.json_script import escape_json_for_script
         from ..utils import get_csp_nonce
 
         nonce = get_csp_nonce(req)
         nonce_attr = f' nonce="{nonce}"' if nonce else ""
 
-        # Build script tag
+        # Build script tag. ``metadata`` is handler names and decorator settings written by the
+        # developer, but ``json.dumps`` leaves ``<``, ``>`` and ``&`` raw, so the JSON is
+        # script-escaped here rather than trusted (#3819).
         script = f"""
 <script{nonce_attr}>
 // Handler metadata for client-side decorators
 window.handlerMetadata = window.handlerMetadata || {{}};
-Object.assign(window.handlerMetadata, {json.dumps(metadata)});
+Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadata))});
 </script>"""
 
         # Inject once, before the document's real </body> (else its real
@@ -1940,22 +1947,25 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             safe_keys = []
             context_for_sidecar: Optional[Dict[str, Any]] = None
             if serialized_context is not None:
-                from ..serialization import normalize_django_value
+                from ..serialization import normalize_django_value, without_form_values
                 from ..mixins.rust_bridge import _collect_safe_keys
 
                 # #3061: the HTTP GET passes the context WITH processor output
                 # applied. Keep the non-serializable request-scoped values
                 # out of the normalizer, as ``_sync_state_to_rust`` does for
                 # the dj-root (#1786); they reach the shell via the sidecar.
+                #
+                # #3767: a form (or a container holding one) is not state; the
+                # sidecar built from the same context below answers for it.
                 json_compatible_context = normalize_django_value(
-                    _drop_request_scoped_values(self, serialized_context)
+                    without_form_values(_drop_request_scoped_values(self, serialized_context))
                 )
                 for key, value in json_compatible_context.items():
                     safe_keys.extend(_collect_safe_keys(value, key))
             else:
-                from ..sync_turn import run_sync_step
-
-                context = run_sync_step(self, "render", self.get_context_data)
+                # Same decision as the dj-root render above (#3725): a cached
+                # context is read, not evaluated a second time.
+                context = self._context_for_render()
                 context = self._apply_context_processors(context, request)
 
                 from django.http import HttpRequest
@@ -1992,10 +2002,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 }
                 context_for_sidecar = context
 
-                from ..serialization import normalize_django_value
+                from ..serialization import normalize_django_value, without_form_values
                 from ..mixins.rust_bridge import _collect_safe_keys
 
-                json_compatible_context = normalize_django_value(rendered_context)
+                json_compatible_context = normalize_django_value(
+                    without_form_values(rendered_context)
+                )
                 for key, value in json_compatible_context.items():
                     safe_keys.extend(_collect_safe_keys(value, key))
 
@@ -2324,6 +2336,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 preloaded_context=None,
             )
         html, patches_json, version = result
+        # ``static_render`` (#3626): keep no diff baseline. Released before the
+        # re-store below, so the backend's snapshot holds no tree and no context.
+        from .._static_render import release_render_baseline
+
+        release_render_baseline(self)
         # The state backend holds a snapshot, not this object; record the
         # render so the next reader of the key starts from it.
         from .._render_provenance import RenderedDiffHTML

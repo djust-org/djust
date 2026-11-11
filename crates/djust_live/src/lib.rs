@@ -30,8 +30,9 @@ use djust_templates::render_env::RenderEnvGuard;
 use djust_templates::{CompiledTemplate, Template};
 use djust_vdom::{
     cache_ignore_subtree_html_in, diff_in, find_paths_by_attr, parse_html_continue_with_namespace,
-    parse_html_fragment, parse_html_with_namespace, reset_id_counter, splice_ignore_subtrees,
-    sync_ids, try_text_only_vdom_update_inplace, Namespace, SourceOpenElements, VNode,
+    parse_html_fragment, parse_html_with_namespace, reset_id_counter, splice_accumulating_subtrees,
+    splice_ignore_subtrees, sync_ids, try_text_only_vdom_update_inplace, Namespace,
+    SourceOpenElements, VNode,
 };
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
@@ -354,6 +355,9 @@ impl djust_templates::inheritance::TemplateLoader for PartialRootRecordingLoader
 
 struct PreparedPartialPage {
     owned_diff_version: Option<u64>,
+    /// Rows an accumulating container dropped while this page was prepared (#3647); added
+    /// to the view's count only when the page is committed.
+    accumulate_dropped: usize,
     child_vdom_ids: Vec<(String, String)>,
     ignore_vdom_ids: HashSet<String>,
     root_spans: Vec<(usize, usize)>,
@@ -363,6 +367,24 @@ struct PreparedPartialPage {
     fields: Vec<String>,
     vdom: VNode,
     namespace: Namespace,
+}
+
+/// Whether `node` is a `dj-update="append"` / `"prepend"` container named in `ids`.
+fn is_accumulating_container(node: &VNode, ids: &HashSet<String>) -> bool {
+    matches!(
+        node.attrs.get("dj-update").map(String::as_str),
+        Some("append" | "prepend")
+    ) && node.attrs.get("id").is_some_and(|id| ids.contains(id))
+}
+
+/// Whether `node` or anything under it is such a container.
+fn holds_accumulating_container(node: &VNode, ids: &HashSet<String>) -> bool {
+    !ids.is_empty()
+        && (is_accumulating_container(node, ids)
+            || node
+                .children
+                .iter()
+                .any(|child| holds_accumulating_container(child, ids)))
 }
 
 /// A LiveView component that manages state and rendering (Rust backend)
@@ -435,6 +457,15 @@ pub struct RustLiveViewBackend {
     /// renders don't modify the index because they only change text
     /// content, not text-node positions or count.
     text_node_index: Option<Vec<TextNodeEntry>>,
+    /// The `id`s of the `dj-update="append"` / `"prepend"` containers that
+    /// accumulate children across renders (#3639): those whose rows come from a
+    /// `temporary_assigns` key, which a render lists only for the rows just
+    /// assigned. Set from Python on every sync, from the template; not
+    /// persisted.
+    accumulate_ids: HashSet<String>,
+    /// Rows without an `id` that an accumulating container dropped since Python
+    /// last asked (`take_accumulate_dropped`), so it can say so once.
+    accumulate_dropped: usize,
     /// Sidecar map of raw Python objects keyed by top-level context
     /// name. Populated by Python's `set_raw_py_values` so the Rust
     /// template engine can fall back to `getattr` for attributes
@@ -519,6 +550,8 @@ impl RustLiveViewBackend {
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
+            accumulate_ids: HashSet::new(),
+            accumulate_dropped: 0,
             raw_py_values: None,
             // Default-OFF (#1967 / split-foundation #1122); flipped by
             // set_loop_render_cache_enabled from the Python config flag.
@@ -595,6 +628,20 @@ impl RustLiveViewBackend {
                 self.changed_keys = Some(keys.into_iter().collect());
             }
         }
+    }
+
+    /// Name the `dj-update="append"` / `"prepend"` containers (by `id`) that
+    /// accumulate children across renders instead of being diffed as an
+    /// ordinary list (#3639). Python works them out from the template: the
+    /// containers whose rows come from a `temporary_assigns` key.
+    fn set_accumulate_containers(&mut self, ids: Vec<String>) {
+        self.accumulate_ids = ids.into_iter().collect();
+    }
+
+    /// How many rows without an `id` an accumulating container dropped since
+    /// the last call. The client drops them too (it adds a child only by `id`).
+    fn take_accumulate_dropped(&mut self) -> usize {
+        std::mem::take(&mut self.accumulate_dropped)
     }
 
     /// Enable or disable the per-item loop render cache (#1967).
@@ -1132,6 +1179,14 @@ impl RustLiveViewBackend {
             if let Some(old) = &self.last_vdom {
                 splice_ignore_subtrees(old, &mut page.vdom);
             }
+            // The same accumulating-container splice the ordinary diff path does (#3647):
+            // a `dj-update="append"` / `"prepend"` container keeps the rows the page shows.
+            // Counted on the page, not the view, until `commit_owned_diff` accepts it.
+            page.accumulate_dropped = splice_accumulating_subtrees(
+                self.last_vdom.as_ref(),
+                &mut page.vdom,
+                &self.accumulate_ids,
+            );
             let patches = if let Some(old) = &self.last_vdom {
                 let patches = diff_in(old, &page.vdom, page.namespace);
                 sync_ids(old, &mut page.vdom);
@@ -1168,6 +1223,7 @@ impl RustLiveViewBackend {
                     "owned diff version changed",
                 ));
             }
+            self.accumulate_dropped += page.accumulate_dropped;
             self.install_committed_page(
                 page.vdom,
                 page.namespace,
@@ -1602,6 +1658,11 @@ impl RustLiveViewBackend {
             if let Some(old_vdom) = &self.last_vdom {
                 splice_ignore_subtrees(old_vdom, &mut new_vdom);
             }
+            self.accumulate_dropped += splice_accumulating_subtrees(
+                self.last_vdom.as_ref(),
+                &mut new_vdom,
+                &self.accumulate_ids,
+            );
 
             // Phase 3: VDOM diff
             let t_diff_start = Instant::now();
@@ -1701,6 +1762,7 @@ impl RustLiveViewBackend {
             use std::time::Instant;
             let t_start = Instant::now();
 
+            let accumulate_ids = self.accumulate_ids.clone();
             let (Some(vdom), Some(root_ns)) = (self.last_vdom.as_mut(), self.last_root_ns) else {
                 return Ok(None);
             };
@@ -1732,6 +1794,7 @@ impl RustLiveViewBackend {
                 if ancestors.iter().any(|n| {
                     n.attrs.get("dj-update").map(String::as_str) == Some("ignore")
                         || n.attrs.contains_key("dj-virtual")
+                        || is_accumulating_container(n, &accumulate_ids)
                 }) {
                     return Ok(None);
                 }
@@ -1759,6 +1822,11 @@ impl RustLiveViewBackend {
             }
             let mut new_node = roots.pop().expect("one root");
             if new_node.attrs.get("data-component-id") != Some(&component_id) {
+                return Ok(None);
+            }
+            // The full path accumulates a `dj-update` container's rows (they are
+            // spliced from the whole tree); a fragment holding one is left to it.
+            if holds_accumulating_container(&new_node, &accumulate_ids) {
                 return Ok(None);
             }
             // The fragment was parsed on its own, so it may be as deep as a
@@ -1844,6 +1912,24 @@ impl RustLiveViewBackend {
         self.text_node_index = None;
         // Reset ID counter so next render starts fresh
         reset_id_counter();
+    }
+
+    /// Drop the diff baseline (the rendered tree and the render caches built
+    /// from it) but keep the version counter (``static_render``, #3626).
+    ///
+    /// Unlike ``reset`` the version is not restarted: the HTTP fallback and SSE
+    /// stamp this counter on their frames and the client checks it is
+    /// consecutive. The next ``render_with_diff`` has nothing to diff against,
+    /// so it returns full HTML and no patches, as a first render does. The
+    /// state is left alone (``retain_state_keys([])`` clears it).
+    fn release_baseline(&mut self) {
+        self.last_vdom = None;
+        self.last_root_ns = None;
+        self.last_html = None;
+        self.node_html_cache = Vec::new();
+        self.changed_keys = None;
+        self.fragment_text_map = None;
+        self.text_node_index = None;
     }
 
     /// Serialize the RustLiveView state to MessagePack bytes
@@ -1947,6 +2033,9 @@ impl RustLiveViewBackend {
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
+            // Transient (#3639): Python re-sets it on every sync.
+            accumulate_ids: HashSet::new(),
+            accumulate_dropped: 0,
             raw_py_values: None,
             // Transient cache — not deserialized; rebuilt fresh, default-OFF
             // until the Python flag re-enables it post-restore (#1967).
@@ -2091,6 +2180,7 @@ impl RustLiveViewBackend {
         if !possible.load(Ordering::Relaxed) {
             if let Ok(root) = candidate {
                 return Ok(PreparedPartialPage {
+                    accumulate_dropped: 0,
                     owned_diff_version: None,
                     child_vdom_ids: root.child_vdom_ids,
                     ignore_vdom_ids: root.ignore_vdom_ids,
@@ -2115,6 +2205,7 @@ impl RustLiveViewBackend {
                     }
                 }
                 Ok(PreparedPartialPage {
+                    accumulate_dropped: 0,
                     owned_diff_version: None,
                     child_vdom_ids: root.child_vdom_ids,
                     ignore_vdom_ids: root.ignore_vdom_ids,
@@ -2163,6 +2254,7 @@ impl RustLiveViewBackend {
                 }
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
                 Ok(PreparedPartialPage {
+                    accumulate_dropped: 0,
                     owned_diff_version: None,
                     child_vdom_ids: Vec::new(),
                     ignore_vdom_ids: HashSet::new(),
@@ -2204,6 +2296,9 @@ impl RustLiveViewBackend {
         if let Some(old) = &self.last_vdom {
             splice_ignore_subtrees(old, &mut vdom);
         }
+        // As on the ordinary diff path (#3647); this IS the commit, so the view counts it.
+        self.accumulate_dropped +=
+            splice_accumulating_subtrees(self.last_vdom.as_ref(), &mut vdom, &self.accumulate_ids);
         let patches = if let Some(old) = &self.last_vdom {
             let patches = diff_in(old, &vdom, namespace);
             sync_ids(old, &mut vdom);
@@ -2690,6 +2785,11 @@ impl RustLiveViewBackend {
                 if let Some(old_vdom) = &self.last_vdom {
                     splice_ignore_subtrees(old_vdom, &mut new_vdom);
                 }
+                self.accumulate_dropped += splice_accumulating_subtrees(
+                    self.last_vdom.as_ref(),
+                    &mut new_vdom,
+                    &self.accumulate_ids,
+                );
 
                 // VDOM diff
                 let t_diff_start = Instant::now();
@@ -3133,6 +3233,9 @@ fn clear_live_handles_in(value: &mut Value) {
     match value {
         Value::Encoded(encoded) => {
             encoded.live = None;
+            // A deferred text holds its own handle to the same object (#3769): it goes too, or
+            // the form it would ask stays alive through `display` after the clear.
+            encoded.display.release_handle();
             for nested in encoded.attrs.values_mut() {
                 clear_live_handles_in(nested);
             }
@@ -5362,15 +5465,19 @@ fn json_value_to_py(py: Python, value: &serde_json::Value) -> PyResult<Py<PyAny>
 /// paths = ['user.email', 'user.get_full_name', 'active_leases.0.property.name', 'phone']
 /// result_list = serialize_queryset(tenants, paths)  # Returns Python list directly!
 /// ```
-#[pyfunction(name = "serialize_queryset")]
+#[pyfunction(name = "serialize_queryset", signature = (objects, field_paths, all_row_cap=None))]
 fn serialize_queryset_py(
     py: Python,
     objects: &Bound<'_, PyList>,
     field_paths: Vec<String>,
+    all_row_cap: Option<usize>,
 ) -> PyResult<Py<PyList>> {
     guard_panic("serialize_queryset_py", move || {
-        // Parse paths into tree structure for efficient traversal
-        let path_tree = build_field_tree(&field_paths);
+        // Parse paths into tree structure for efficient traversal. A path the
+        // template reads whole AND walks into (`groups.all` next to
+        // `groups.all.name`) is marked, because the tree alone cannot tell
+        // `{% for g in u.groups.all %}` from `{{ u.groups.all.count }}` (#3788).
+        let path_tree = build_field_tree(&with_whole_marks(&field_paths));
 
         // Create Python list to hold results
         let result_list = PyList::empty(py);
@@ -5381,7 +5488,7 @@ fn serialize_queryset_py(
 
         // Iterate over objects
         for obj in objects.iter() {
-            let serialized = serialize_object_with_paths(py, &obj, &path_tree, gate)?;
+            let serialized = serialize_object_with_paths(py, &obj, &path_tree, gate, all_row_cap)?;
             result_list.append(serialized)?;
         }
 
@@ -5395,7 +5502,14 @@ fn serialize_queryset_py(
 /// - Simple types (str, int, float, bool, None): pass through
 /// - Lists/tuples: recursively serialize
 /// - Dicts: recursively serialize
-/// - Components: call .render() and wrap in {"render": ...}
+/// - Components: call .render() and wrap in {"render": ...} — unless `render`
+///   carries `alters_data` / `do_not_call_in_templates` (`template_call_guard`)
+/// - Django models: `model_to_dict` plus four fixed `get_*` methods, every name
+///   held to the serialization gate (the floor) and every method to the same
+///   call guard (#3778). Not used by any production path; see #3778.
+/// - The walk is bounded (#3814): a container or model row it is already
+///   inside of, or anything past `SERIALIZE_CONTEXT_MAX_DEPTH` levels, crosses
+///   as `str(obj)`. A `render()` that returns a non-`str` does too.
 /// - Django types (datetime, UUID): convert to strings
 /// - `Decimal`: **converts to a float, not a string** (#2214). The branch below
 ///   intends a string and is dead, because `extract::<f64>()` above it honours
@@ -5414,9 +5528,10 @@ fn serialize_context_py(py: Python, context: &Bound<'_, PyDict>) -> PyResult<Py<
         // Snapshotted before recursing (#2510, round 4) — same shape as
         // every other site this bug class was found in.
         let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = context.iter().collect();
+        let mut walk = SerializeWalk::default();
         for (key, value) in pairs {
             let key_str: String = key.extract()?;
-            let serialized_value = serialize_python_value(py, &value)?;
+            let serialized_value = serialize_nested(py, &value, &mut walk)?;
             result_dict.set_item(key_str, serialized_value)?;
         }
 
@@ -5424,8 +5539,89 @@ fn serialize_context_py(py: Python, context: &Bound<'_, PyDict>) -> PyResult<Py<
     })
 }
 
-/// Recursively serialize a Python value to JSON-compatible form
-fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+/// How many levels [`serialize_python_value`] descends before an element crosses as `str(obj)`
+/// instead (#3814). A level is one container, one model, or one model's dict, so a hop through a
+/// related manager (model -> its dict -> the manager's list -> the next model) is three.
+///
+/// The all-fields model arm has no field paths to bound it, so a RELATION is unbounded: with
+/// `Person.friends = ManyToManyField("self")` and A <-> B, `model_to_dict(a)` holds `[b]`, whose
+/// `model_to_dict` holds `[a']` (a FRESH instance each time, so no identity check ends it), and the
+/// recursion ran until the stack overflowed (`Fatal Python error: Segmentation fault`, which
+/// `guard_panic` cannot catch: it is the process's stack, not a panic). A cycle is ended by
+/// [`SerializeWalk`]; this ceiling is what bounds a chain of DISTINCT rows (a long `next` link).
+/// It is sized by frame cost, not by data: far below `djust_core::MAX_CONVERSION_DEPTH` (1000,
+/// CPython's own `repr` limit), because a level here carries a `String`, a `Vec` and a Python
+/// call's worth of locals, and nothing a context holds is meant to nest related rows this deep.
+const SERIALIZE_CONTEXT_MAX_DEPTH: usize = 128;
+
+/// What a [`SerializeWalk`] remembers about an object it is inside of.
+#[derive(PartialEq)]
+enum WalkKey {
+    /// A list or dict, by address: a container that holds itself is the same object.
+    Container(usize),
+    /// A model row, by class and primary key: a relation hands back a FRESH instance of the row
+    /// it came from, so the address says nothing and the row is what repeats.
+    Row(usize, String),
+}
+
+/// The objects [`serialize_python_value`] is currently inside of, and how deep it is (#3814).
+#[derive(Default)]
+struct SerializeWalk {
+    inside: Vec<WalkKey>,
+    depth: usize,
+}
+
+/// [`serialize_python_value`] one level down, or `str(value)` when going down is unsafe: past
+/// [`SERIALIZE_CONTEXT_MAX_DEPTH`], or into a container the walk is already inside of (a list that
+/// holds itself). Every recursive step goes through here, so no arm can forget the check (#1646).
+fn serialize_nested(
+    py: Python,
+    value: &Bound<'_, PyAny>,
+    walk: &mut SerializeWalk,
+) -> PyResult<Py<PyAny>> {
+    // Lists and dicts only: a tuple cannot hold itself without a list or dict in between, and those
+    // are tracked, so a cycle through a tuple is ended at the container that closes it.
+    let key = (value.cast::<PyList>().is_ok() || value.cast::<PyDict>().is_ok())
+        .then(|| WalkKey::Container(value.as_ptr() as usize));
+    if walk.depth >= SERIALIZE_CONTEXT_MAX_DEPTH
+        || key.as_ref().is_some_and(|k| walk.inside.contains(k))
+    {
+        let str_repr = value.str()?.to_string();
+        return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
+    }
+    walk.depth += 1;
+    let pushed = key.is_some();
+    if let Some(key) = key {
+        walk.inside.push(key);
+    }
+    let out = serialize_python_value(py, value, walk);
+    if pushed {
+        walk.inside.pop();
+    }
+    walk.depth -= 1;
+    out
+}
+
+/// The model row `value` is, as a [`WalkKey`]: its class and its primary key (its address when it
+/// has none, an unsaved row).
+fn row_key(value: &Bound<'_, PyAny>) -> WalkKey {
+    let class = value.get_type().as_ptr() as usize;
+    match value.getattr("pk") {
+        Ok(pk) if !pk.is_none() => match pk.str() {
+            Ok(text) => WalkKey::Row(class, text.to_string()),
+            Err(_) => WalkKey::Container(value.as_ptr() as usize),
+        },
+        _ => WalkKey::Container(value.as_ptr() as usize),
+    }
+}
+
+/// Recursively serialize a Python value to JSON-compatible form. Recurse through
+/// [`serialize_nested`], never by calling this directly: it is what keeps the walk bounded (#3814).
+fn serialize_python_value(
+    py: Python,
+    value: &Bound<'_, PyAny>,
+    walk: &mut SerializeWalk,
+) -> PyResult<Py<PyAny>> {
     // Fast path: None
     if value.is_none() {
         return Ok(py.None());
@@ -5445,7 +5641,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         let raw: Vec<Bound<'_, PyAny>> = list.iter().collect();
         let result_list = PyList::empty(py);
         for item in raw {
-            let serialized = serialize_python_value(py, &item)?;
+            let serialized = serialize_nested(py, &item, walk)?;
             result_list.append(serialized)?;
         }
         return Ok(result_list.into());
@@ -5455,7 +5651,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         let raw: Vec<Bound<'_, PyAny>> = tuple.iter().collect();
         let result_list = PyList::empty(py);
         for item in raw {
-            let serialized = serialize_python_value(py, &item)?;
+            let serialized = serialize_nested(py, &item, walk)?;
             result_list.append(serialized)?;
         }
         return Ok(result_list.into());
@@ -5468,7 +5664,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         let result_dict = PyDict::new(py);
         for (k, v) in pairs {
             let key_str: String = k.extract()?;
-            let serialized = serialize_python_value(py, &v)?;
+            let serialized = serialize_nested(py, &v, walk)?;
             result_dict.set_item(key_str, serialized)?;
         }
         return Ok(result_dict.into());
@@ -5479,7 +5675,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         // Call list() on the QuerySet to force evaluation
         if let Ok(list_fn) = py.eval(c"list", None, None) {
             if let Ok(as_list) = list_fn.call1((value,)) {
-                return serialize_python_value(py, &as_list);
+                return serialize_nested(py, &as_list, walk);
             }
         }
     }
@@ -5530,18 +5726,33 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         return Ok(f.into_pyobject(py)?.to_owned().into_any().unbind());
     }
 
-    // Components: Check if object has 'render' method
+    // Components: Check if object has 'render' method.
+    //
+    // The call is made under `template_call_guard`, the one statement of
+    // Django's `alters_data` / `do_not_call_in_templates` rule (#3772), so a
+    // `render` that carries either marker is NOT called and the value falls
+    // through to the arms below (a model, else `str()`), exactly as a template
+    // walking to that callable would leave it alone (#3778). The name is fixed,
+    // not template-chosen, but this entry point accepts any object a caller
+    // hands it, and `render` is a common name for a method that writes.
     if value.hasattr("render")? {
         // Call .render() method
         let render_method = value.getattr("render")?;
-        if render_method.is_callable() {
+        if render_method.is_callable() && djust_core::template_call_guard(&render_method).may_call()
+        {
             match render_method.call0() {
                 Ok(rendered) => {
-                    // Wrap in {"render": ...} dict
-                    let wrapper = PyDict::new(py);
-                    let rendered_str: String = rendered.extract()?;
-                    wrapper.set_item("render", rendered_str)?;
-                    return Ok(wrapper.into());
+                    // Wrap in {"render": ...} dict. A `render()` that returns something other than
+                    // a `str` (an int, a list, `None`) is a render that did not produce markup:
+                    // it falls back to `str(value)` exactly as a raising one does, and does NOT
+                    // raise `TypeError` out of this function (#3814).
+                    if let Ok(rendered_str) = rendered.extract::<String>() {
+                        let wrapper = PyDict::new(py);
+                        wrapper.set_item("render", rendered_str)?;
+                        return Ok(wrapper.into());
+                    }
+                    let str_repr = value.str()?.to_string();
+                    return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
                 }
                 Err(_) => {
                     // Render failed, fallback to str()
@@ -5570,47 +5781,105 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
     }
 
-    // Django model instances: serialize to dict using model_to_dict + methods
+    // Django model instances: serialize to dict using model_to_dict + methods.
+    //
+    // Every name that leaves here goes through the serialization gate
+    // (`resolve_attr_gate` -> `emittable_names`), the same chokepoint the
+    // queryset serializer asks, and every method is called only if
+    // `template_call_guard` allows it (#3778). Before this, `model_to_dict`
+    // shipped `password`, `is_superuser` and `is_staff` of a `User` verbatim —
+    // the floor `serialize_queryset` and the eager channels hold (#2685, #2614)
+    // — and the four `get_*` methods ran whatever they carried. Fail CLOSED: if
+    // the gate cannot be resolved the model falls through to `str()` rather
+    // than shipping ungated fields (the queryset serializer's own rule).
     if value.hasattr("_meta")? {
-        // Use Django's model_to_dict to serialize the model fields
-        if let Ok(forms_module) = py.import("django.forms.models") {
-            if let Ok(model_to_dict_fn) = forms_module.getattr("model_to_dict") {
-                if let Ok(model_dict) = model_to_dict_fn.call1((value,)) {
-                    // Convert to PyDict so we can add method results
-                    if let Ok(result_dict) = model_dict.cast::<PyDict>() {
-                        // Call specific, known-safe get_* methods commonly used in templates
-                        // This is safer than calling all get_* methods which can cause infinite recursion
-                        let safe_methods = vec![
-                            "get_full_name",
-                            "get_short_name",
-                            "get_absolute_url",
-                            "get_username",
-                        ];
-
-                        for method_name in safe_methods {
-                            if let Ok(attr) = value.getattr(method_name) {
-                                if attr.is_callable() {
-                                    if let Ok(result) = attr.call0() {
-                                        // Convert result to string to avoid recursive serialization
-                                        if let Ok(result_str) = result.str() {
-                                            let _ = result_dict.set_item(method_name, result_str);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Recursively serialize the enhanced dict
-                        return serialize_python_value(py, result_dict.as_any());
-                    }
-                }
-            }
+        if let Some(serialized) = serialize_model_gated(py, value, walk) {
+            return serialized;
         }
     }
 
     // Fallback: convert to string representation
     let str_repr = value.str()?.to_string();
     Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind())
+}
+
+/// The model arm of [`serialize_python_value`] (#3778): `model_to_dict` plus the
+/// four fixed `get_*` methods, each name held to the serialization gate and each
+/// method to `template_call_guard`.
+///
+/// `None` means "this arm did not apply" (no gate, no `model_to_dict`, an
+/// unreadable dict) and the caller falls through to `str()` — never to an
+/// ungated dict. A name the gate refuses is dropped from the dict, as the
+/// queryset serializer drops it; a method that is refused, or raises, is simply
+/// absent. Nothing here logs an exception (ADR-038).
+///
+/// A row the walk is already inside of (the other end of a symmetrical relation, a
+/// `ManyToManyField("self")` that comes back to where it started) is also "did not apply": it
+/// crosses as `str(row)`, and it is checked BEFORE `model_to_dict` runs, which is the query that
+/// would fetch the next ring of the cycle (#3814).
+fn serialize_model_gated(
+    py: Python,
+    value: &Bound<'_, PyAny>,
+    walk: &mut SerializeWalk,
+) -> Option<PyResult<Py<PyAny>>> {
+    // Called with these names, in this order, only when permitted. Specific,
+    // known get_* methods: calling every get_* method can recurse forever.
+    const METHODS: [&str; 4] = [
+        "get_full_name",
+        "get_short_name",
+        "get_absolute_url",
+        "get_username",
+    ];
+
+    let row = row_key(value);
+    if walk.inside.contains(&row) {
+        return None;
+    }
+    let gate = resolve_attr_gate(py).ok()?;
+    let model_to_dict = py
+        .import("django.forms.models")
+        .ok()?
+        .getattr("model_to_dict")
+        .ok()?;
+    let model_dict = model_to_dict.call1((value,)).ok()?;
+    let result_dict = model_dict.cast::<PyDict>().ok()?;
+
+    // Snapshot before mutating (#2510): the keys are removed below.
+    let field_names: Vec<String> = result_dict
+        .keys()
+        .iter()
+        .filter_map(|k| k.extract::<String>().ok())
+        .collect();
+    let mut names: Vec<&str> = field_names.iter().map(String::as_str).collect();
+    names.extend(METHODS);
+    let permitted = permitted_among(py, value, &names, gate.bind(py)).ok()?;
+
+    for name in &field_names {
+        if !permitted.contains(name) {
+            let _ = result_dict.del_item(name);
+        }
+    }
+    for method_name in METHODS {
+        if !permitted.contains(method_name) {
+            continue;
+        }
+        if let Ok(attr) = value.getattr(method_name) {
+            if attr.is_callable() && djust_core::template_call_guard(&attr).may_call() {
+                if let Ok(result) = attr.call0() {
+                    // Convert result to string to avoid recursive serialization
+                    if let Ok(result_str) = result.str() {
+                        let _ = result_dict.set_item(method_name, result_str);
+                    }
+                }
+            }
+        }
+    }
+
+    // Recursively serialize the enhanced dict, with this row marked as one the walk is inside of.
+    walk.inside.push(row);
+    let serialized = serialize_nested(py, result_dict.as_any(), walk);
+    walk.inside.pop();
+    Some(serialized)
 }
 
 /// Build a tree structure from flat field paths for efficient nested traversal
@@ -5774,15 +6043,361 @@ fn gated_names(
     tree: &std::collections::HashMap<String, PathNode>,
     gate: &Bound<'_, PyAny>,
 ) -> PyResult<std::collections::HashSet<String>> {
-    let names: Vec<&str> = tree.keys().map(|k| k.as_str()).collect();
-    let permitted = gate.call1((obj, PyTuple::new(py, &names)?))?;
+    let names: Vec<&str> = tree
+        .keys()
+        .map(|k| k.as_str())
+        .filter(|k| *k != WHOLE_MARK)
+        .collect();
+    permitted_among(py, obj, &names, gate)
+}
+
+/// The subset of *names* the gate permits for *obj* — the one place the gate
+/// is called and its answer read, shared by the queryset serializer
+/// ([`gated_names`], keyed by a path tree) and the model arm of
+/// `serialize_python_value`, keyed by a field/method name list (#3778). Two
+/// callers of one gate, one implementation (#1646).
+fn permitted_among(
+    py: Python,
+    obj: &Bound<'_, PyAny>,
+    names: &[&str],
+    gate: &Bound<'_, PyAny>,
+) -> PyResult<std::collections::HashSet<String>> {
+    let permitted = gate.call1((obj, PyTuple::new(py, names)?))?;
     let mut out = std::collections::HashSet::new();
-    for name in names {
+    for name in names.iter().copied() {
         if permitted.contains(name)? {
             out.insert(name.to_string());
         }
     }
     Ok(out)
+}
+
+/// What a template's `.all` step iterates, for a path that names `all` (#3777).
+///
+/// `{% for g in u.groups.all %}{{ g.name }}{% endfor %}` extracts as the paths
+/// `groups.all` and `groups.all.name`: `all` is the related manager's METHOD,
+/// not a field. This serializer walks the path tree with `getattr`, so before
+/// this helper existed it handed the bound method `all` to the nested walk,
+/// found no `name` on a method, and shipped `{"groups": {"all": {}}}` — the
+/// loop ran over an empty dict and rendered nothing. The leaf spelling
+/// (`{{ u.groups.all|length }}`) shipped the QuerySet's `repr` as a string.
+///
+/// The Python codegen twin has always iterated it
+/// (`optimization/codegen.py`, the `attr_name == "all"` branch), which is why
+/// a `list[Model]` rendered the names and a QuerySet did not (#1646). The
+/// caller's key-count fallback to that codegen never fires, because the
+/// `groups` key IS present.
+///
+/// What a call to `all` came to.
+enum CalledAll<'py> {
+    /// `template_call_guard` refused: the name is OMITTED, as the leaf arm
+    /// omits a refused callable, so the sidecar walk (which refuses the same
+    /// callables) answers instead.
+    Refused,
+    /// `all` raised one of the two exceptions the codegen twin swallows
+    /// (`TypeError`, `AttributeError`): an empty relation, not an error.
+    Empty,
+    /// What `all()` returned — a QuerySet for a related manager.
+    Called(Bound<'py, PyAny>),
+}
+
+/// Call `value` (an `all` method) under the one call guard.
+///
+/// Errors follow the codegen (`_generate_nested_access` catches
+/// `(TypeError, AttributeError)` and nothing else): a `TypeError` /
+/// `AttributeError` (an `all` that takes arguments) is an empty list, and ANY
+/// OTHER exception — a database error mid-evaluation,
+/// `SynchronousOnlyOperation` — PROPAGATES. It reaches the caller's
+/// `[JIT ERROR]` handler, which logs it through the exposure diagnostics and
+/// falls back to the generic serializer, rather than rendering a user with no
+/// groups or permissions and saying nothing (#3777 review). This function
+/// never logs an exception itself (ADR-038).
+fn call_all<'py>(value: &Bound<'py, PyAny>) -> PyResult<CalledAll<'py>> {
+    if !djust_core::template_call_guard(value).may_call() {
+        return Ok(CalledAll::Refused);
+    }
+    match value.call0() {
+        Ok(queryset) => Ok(CalledAll::Called(queryset)),
+        Err(err) if codegen_swallows(value.py(), &err) => Ok(CalledAll::Empty),
+        Err(err) => Err(err),
+    }
+}
+
+/// The rows a called `all` yields, at most `cap` of them (#3788).
+///
+/// A related manager's `all()` is an UNEVALUATED QuerySet, and iterating it
+/// loads the whole relation: `{{ u.groups.all.0.name }}` over 60,000 rows
+/// built 60,000 model instances for one name (0.75 s against Django's
+/// `LIMIT 1`). With a cap the read is `qs[:cap + 1]` — a SQL `LIMIT` on an
+/// unevaluated QuerySet, a slice of the result cache on a prefetched one — so
+/// the cost is bounded by the cap, not by the relation. One row past the cap is
+/// read only to learn the relation was longer; it is dropped, and the
+/// truncation is logged (a template still gets every row up to the cap).
+fn capped_rows<'py>(
+    queryset: &Bound<'py, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    let py = queryset.py();
+    let Some(cap) = cap else {
+        return queryset
+            .try_iter()
+            .and_then(|iterator| iterator.collect::<PyResult<Vec<_>>>());
+    };
+    let limit = cap.saturating_add(1);
+    let window = queryset
+        .get_item(pyo3::types::PySlice::new(
+            py,
+            0,
+            isize::try_from(limit).unwrap_or(isize::MAX),
+            1,
+        ))
+        .unwrap_or_else(|_| queryset.clone());
+    let mut rows = window
+        .try_iter()
+        .and_then(|iterator| iterator.take(limit).collect::<PyResult<Vec<_>>>())?;
+    if rows.len() > cap {
+        rows.truncate(cap);
+        warn_rows_capped(py, cap);
+    }
+    Ok(rows)
+}
+
+/// [`capped_rows`] with the codegen's error rule: a `TypeError` /
+/// `AttributeError` while reading the rows is an empty relation, anything else
+/// propagates (#3777 review).
+fn capped_rows_or_empty<'py>(
+    queryset: &Bound<'py, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    match capped_rows(queryset, cap) {
+        Err(err) if codegen_swallows(queryset.py(), &err) => Ok(Vec::new()),
+        other => other,
+    }
+}
+
+/// Say that a relation was longer than the cap (#3788). A plain warning with
+/// the cap as its only argument — no exception, no row data (ADR-038).
+fn warn_rows_capped(py: Python<'_>, cap: usize) {
+    let logged = py
+        .import("logging")
+        .and_then(|logging| logging.getattr("getLogger"))
+        .and_then(|get_logger| get_logger.call1(("djust.optimization.codegen",)))
+        .and_then(|logger| {
+            logger.call_method1(
+                "warning",
+                (
+                    "A related manager's .all read by the queryset serializer has more than %s rows; only the first %s are sent. Raise LIVEVIEW_CONFIG['queryset_all_row_cap'] (0 disables it), read .count / .first / .exists, or paginate.",
+                    cap,
+                    cap,
+                ),
+            )
+        });
+    drop(logged);
+}
+
+/// `None` when the call guard refused; an empty list for a swallowed error.
+fn called_all_rows<'py>(
+    value: &Bound<'py, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Option<Vec<Bound<'py, PyAny>>>> {
+    match call_all(value)? {
+        CalledAll::Refused => Ok(None),
+        CalledAll::Empty => Ok(Some(Vec::new())),
+        CalledAll::Called(queryset) => capped_rows_or_empty(&queryset, cap).map(Some),
+    }
+}
+
+/// The exceptions the Python codegen twin swallows around a `.all()` step.
+fn codegen_swallows(py: Python<'_>, err: &PyErr) -> bool {
+    err.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+        || err.is_instance_of::<pyo3::exceptions::PyAttributeError>(py)
+}
+
+/// Is `value` a Django `QuerySet` — or any subclass of it?
+///
+/// An `isinstance`, not a class-name test: `SomeQS.as_manager()` and a related
+/// manager's `all()` hand back the model's OWN queryset class, whose name is
+/// not `QuerySet`, and the name test left `|length`, `{% if %}` and `|join`
+/// wrong for exactly those (#3777 review).
+fn is_django_queryset(value: &Bound<'_, PyAny>) -> bool {
+    value
+        .py()
+        .import("django.db.models")
+        .and_then(|m| m.getattr("QuerySet"))
+        .and_then(|cls| value.is_instance(&cls))
+        .unwrap_or(false)
+}
+
+/// `value` as a list when it is a QuerySet (the result of a called `all`),
+/// otherwise unchanged (#3777). The template named the relation whole
+/// (`{{ u.groups.all|length }}`, `{% if u.groups.all %}`), so every row is
+/// wanted, and a QuerySet is neither a list nor a tuple to
+/// [`queryset_template_value`]. Errors as in [`call_all`]: the codegen's two
+/// are tolerated (the value stays as it is), anything else propagates.
+fn called_all_to_list<'py>(
+    py: Python<'py>,
+    value: &Bound<'py, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Bound<'py, PyAny>> {
+    if !is_django_queryset(value) {
+        return Ok(value.clone());
+    }
+    let rows = capped_rows(value, cap).and_then(|rows| PyList::new(py, rows));
+    match rows {
+        Ok(list) => Ok(list.into_any()),
+        Err(err) if codegen_swallows(py, &err) => Ok(value.clone()),
+        Err(err) => Err(err),
+    }
+}
+
+/// A row a called `all` yielded, serialized under `tree`. A dict / list / tuple
+/// row (a model METHOD named `all` that returns plain data) carries data keys,
+/// not model attributes, so it is preserved whole exactly as the sibling arm
+/// preserves such an attribute value; anything else is walked and gated
+/// (#3777 review).
+fn serialize_all_row(
+    py: Python,
+    row: &Bound<'_, PyAny>,
+    tree: &std::collections::HashMap<String, PathNode>,
+    gate: &Bound<'_, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Py<PyAny>> {
+    if row.is_instance_of::<PyDict>()
+        || row.is_instance_of::<PyList>()
+        || row.is_instance_of::<PyTuple>()
+    {
+        queryset_template_value(row, 0)
+    } else {
+        serialize_object_with_paths(py, row, tree, gate, cap)
+    }
+}
+
+/// The path-tree key that records a node's own name is ALSO read whole (#3788).
+/// It is never an attribute: [`gated_names`] drops it, so no walk reads it.
+const WHOLE_MARK: &str = "__djust_whole__";
+
+/// The QuerySet methods a template can chain after `.all`.
+const ALL_CHAIN_METHODS: [&str; 4] = ["count", "exists", "first", "last"];
+
+/// `paths` plus a [`WHOLE_MARK`] child under every `…all` path that the template
+/// reads whole as well as walks into (#3788).
+///
+/// `{% for g in u.groups.all %}{{ g.name }}{% endfor %}` extracts as
+/// `groups.all` and `groups.all.name`; `{{ u.groups.all.count }}` extracts as
+/// `groups.all.count` alone. The tree built from those is the same shape (an
+/// `all` node with a `count` child), so without this mark a template that
+/// loops over the rows and ALSO prints their count would be indistinguishable
+/// from one that prints only the count. A path whose next segment is an index
+/// is not marked: `build_field_tree` already turns that node into a list.
+fn with_whole_marks(paths: &[String]) -> Vec<String> {
+    let known: std::collections::HashSet<&str> = paths.iter().map(|p| p.as_str()).collect();
+    let mut marks: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for path in paths {
+        let mut end = 0;
+        for segment in path.split('.') {
+            end += segment.len();
+            if end < path.len() && matches!(segment, "all" | "first" | "last") {
+                let prefix = &path[..end];
+                let next = path[end + 1..].split('.').next().unwrap_or("");
+                if known.contains(prefix) && next.parse::<usize>().is_err() {
+                    marks.insert(format!("{prefix}.{WHOLE_MARK}"));
+                }
+            }
+            end += 1;
+        }
+    }
+    let mut out = paths.to_vec();
+    out.extend(marks);
+    out
+}
+
+/// Does the template read `all` ONLY through QuerySet methods
+/// (`u.groups.all.count`, `.all.first.name`, `.all.exists`) — and is that
+/// reading unambiguous for these rows? (#3788)
+///
+/// The tree cannot say whether `count` is `qs.count()` or the `count` FIELD of
+/// a row in `{% for i in o.items.all %}{{ i.count }}`: both extract to
+/// `items.all.count`. It is a method read only when nothing else about the
+/// node asks for rows — the relation is not read whole ([`WHOLE_MARK`]), every
+/// child is a QuerySet method name, and the row model has no attribute of that
+/// name. Otherwise the node stays a list of rows, as it was.
+fn all_is_read_through_methods(
+    queryset: &Bound<'_, PyAny>,
+    nested: &std::collections::HashMap<String, PathNode>,
+) -> bool {
+    if nested.is_empty()
+        || nested.contains_key(WHOLE_MARK)
+        || !nested
+            .keys()
+            .all(|name| ALL_CHAIN_METHODS.contains(&name.as_str()))
+        || !is_django_queryset(queryset)
+    {
+        return false;
+    }
+    let Ok(model) = queryset.getattr("model") else {
+        return false;
+    };
+    nested
+        .keys()
+        .all(|name| !model.hasattr(name.as_str()).unwrap_or(true))
+}
+
+/// `{"count": 2, "exists": true, "first": {...}}` for an `all` the template
+/// reads through QuerySet methods (#3788).
+///
+/// Each method runs on the QuerySet `all()` returned, so Django's own SQL
+/// applies: `count` is `COUNT(*)` (or the length of a prefetched cache),
+/// `exists` is `EXISTS`, `first` / `last` read ONE row. The relation is never
+/// materialized. Every method goes through the one call guard like `all`
+/// itself, and a `first` / `last` row goes through the serialization gate like
+/// any other row.
+fn serialize_all_methods(
+    py: Python,
+    queryset: &Bound<'_, PyAny>,
+    nested: &std::collections::HashMap<String, PathNode>,
+    gate: &Bound<'_, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Py<PyAny>> {
+    let out = PyDict::new(py);
+    for (name, node) in nested {
+        let Ok(method) = queryset.getattr(name.as_str()) else {
+            continue;
+        };
+        if !djust_core::template_call_guard(&method).may_call() {
+            continue;
+        }
+        let value = match method.call0() {
+            Ok(value) => value,
+            Err(err) if codegen_swallows(py, &err) => continue,
+            Err(err) => return Err(err),
+        };
+        if value.is_none() {
+            out.set_item(name, py.None())?;
+            continue;
+        }
+        let shipped = match node {
+            PathNode::Object(row_tree) if name == "first" || name == "last" => {
+                let row = serialize_all_row(py, &value, row_tree, gate, cap)?;
+                // `{{ u.groups.all.first }}` beside `{{ u.groups.all.first.name }}`
+                // reads the row whole AND by field. A dict prints as its repr, so
+                // the row carries the text a serialized model carries for that:
+                // `__str__` (Display renders a dict that has one as that text).
+                if row_tree.contains_key(WHOLE_MARK)
+                    && !(value.is_instance_of::<PyDict>()
+                        || value.is_instance_of::<PyList>()
+                        || value.is_instance_of::<PyTuple>())
+                {
+                    if let Ok(dict) = row.bind(py).cast::<PyDict>() {
+                        dict.set_item("__str__", value.str()?.to_string())?;
+                    }
+                }
+                row
+            }
+            _ => queryset_template_value(&value, 0)?,
+        };
+        out.set_item(name, shipped)?;
+    }
+    Ok(out.into_any().unbind())
 }
 
 /// Serialize a single Python object based on path tree
@@ -5791,6 +6406,7 @@ fn serialize_object_with_paths(
     obj: &Bound<'_, PyAny>,
     tree: &std::collections::HashMap<String, PathNode>,
     gate: &Bound<'_, PyAny>,
+    cap: Option<usize>,
 ) -> PyResult<Py<PyAny>> {
     let result = PyDict::new(py);
 
@@ -5824,14 +6440,46 @@ fn serialize_object_with_paths(
             PathNode::Leaf => {
                 // Check if it's a callable (method) - try calling it first
                 if attr_value.is_callable() {
+                    // Django's callable block, asked of the ONE rule the sidecar
+                    // walk asks (`djust_core::template_call_guard`): an
+                    // `alters_data` callable is never called and a
+                    // `do_not_call_in_templates` one is never called either.
+                    // Before #3772 this arm `call0()`-ed EVERYTHING it was
+                    // handed, so `{{ users.delete }}` ran `Model.delete()` on
+                    // every row of the queryset, `{{ u.groups.clear }}` ran the
+                    // related manager's `clear`, and `{{ u.save }}` saved. The
+                    // name is OMITTED, as a denied name is, so the template
+                    // renders `string_if_invalid` — or, when the value is still
+                    // reachable, the guarded sidecar walk answers it.
+                    if !djust_core::template_call_guard(&attr_value).may_call() {
+                        continue;
+                    }
                     // It's a method - try calling it
                     match attr_value.call0() {
                         Ok(method_result) => {
+                            // `u.groups.all` named whole (`|length`, `{% if %}`,
+                            // `{{ g }}` in the loop) is a sequence of rows. A
+                            // QuerySet is not a list/tuple, so it fell through
+                            // to its `repr` string: `|length` counted the
+                            // characters and an EMPTY relation was truthy
+                            // (#3777).
+                            let method_result = if attr_name == "all" {
+                                called_all_to_list(py, &method_result, cap)?
+                            } else {
+                                method_result
+                            };
                             // Method call succeeded - use the result
                             result
                                 .set_item(attr_name, queryset_template_value(&method_result, 0)?)?;
                         }
-                        Err(_) => {
+                        Err(err) => {
+                            // A call that raises something other than the
+                            // codegen's two is a real failure of the relation
+                            // (a database error), not "needs arguments"; it
+                            // propagates for `all` (#3777).
+                            if attr_name == "all" && !codegen_swallows(py, &err) {
+                                return Err(err);
+                            }
                             // Method call failed - skip this attribute (don't insert null)
                             // This can happen if the method requires arguments
                             continue;
@@ -5843,6 +6491,33 @@ fn serialize_object_with_paths(
                 }
             }
             PathNode::Object(nested_tree) => {
+                // `u.groups.all.name`: `all` is the manager's method and its
+                // children are read off each ROW it yields (#3777).
+                if attr_name == "all" && attr_value.is_callable() {
+                    let rows = match call_all(&attr_value)? {
+                        CalledAll::Refused => continue,
+                        CalledAll::Empty => Vec::new(),
+                        CalledAll::Called(queryset) => {
+                            // `u.groups.all.count` / `.first.name` / `.exists`
+                            // (#3788): the template asks the QuerySet, not its
+                            // rows.
+                            if all_is_read_through_methods(&queryset, nested_tree) {
+                                result.set_item(
+                                    attr_name,
+                                    serialize_all_methods(py, &queryset, nested_tree, gate, cap)?,
+                                )?;
+                                continue;
+                            }
+                            capped_rows_or_empty(&queryset, cap)?
+                        }
+                    };
+                    let mut serialized = Vec::with_capacity(rows.len());
+                    for row in &rows {
+                        serialized.push(serialize_all_row(py, row, nested_tree, gate, cap)?);
+                    }
+                    result.set_item(attr_name, PyList::new(py, serialized)?)?;
+                    continue;
+                }
                 // JSONField and computed containers carry data keys, not model
                 // attributes. Preserve them just as the codegen root path does.
                 let nested_result = if attr_value.is_instance_of::<PyDict>()
@@ -5851,7 +6526,7 @@ fn serialize_object_with_paths(
                 {
                     queryset_template_value(&attr_value, 0)?
                 } else {
-                    serialize_object_with_paths(py, &attr_value, nested_tree, gate)?
+                    serialize_object_with_paths(py, &attr_value, nested_tree, gate, cap)?
                 };
                 result.set_item(attr_name, nested_result)?;
             }
@@ -5861,7 +6536,26 @@ fn serialize_object_with_paths(
 
                 // For Django QuerySets/Managers, we need to evaluate them first
                 // Try to call .all() if it exists (for QuerySets/Managers)
-                let iterable = if let Ok(all_method) = attr_value.getattr("all") {
+                //
+                // `all` is a callable the template never named, so it goes
+                // through the same guard as the leaf above (#3772): a model
+                // whose own `all` is stamped `alters_data` (or
+                // `do_not_call_in_templates`) is iterated as it is, not called.
+                //
+                // `u.groups.all.0.name` is the same step spelled with an index:
+                // the attribute IS the `all` method, so its rows are what the
+                // index reads (#3777).
+                let rows_are_called_all = attr_name == "all" && attr_value.is_callable();
+                let iterable = if rows_are_called_all {
+                    let Some(rows) = called_all_rows(&attr_value, cap)? else {
+                        continue;
+                    };
+                    PyList::new(py, rows)?.into_any()
+                } else if let Some(all_method) = attr_value
+                    .getattr("all")
+                    .ok()
+                    .filter(|m| djust_core::template_call_guard(m).may_call())
+                {
                     // It has .all() method - call it to get the QuerySet
                     if let Ok(queryset) = all_method.call0() {
                         // Convert QuerySet to Python list for iteration
@@ -5888,8 +6582,11 @@ fn serialize_object_with_paths(
                             Ok(obj) => obj,
                             Err(_) => continue,
                         };
-                        let item_result =
-                            serialize_object_with_paths(py, &item_obj, nested_tree, gate)?;
+                        let item_result = if rows_are_called_all {
+                            serialize_all_row(py, &item_obj, nested_tree, gate, cap)?
+                        } else {
+                            serialize_object_with_paths(py, &item_obj, nested_tree, gate, cap)?
+                        };
                         list_results.push(item_result);
                     }
                 }
@@ -7581,6 +8278,11 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;
     m.add_function(wrap_pyfunction!(crosses_as_encoded, m)?)?;
     m.add_function(wrap_pyfunction!(crosses_as_encoded_by_conversion, m)?)?;
+    // This build asks `djust.serialization._protect_sidecar_walk` (the leaf floor PLUS the model
+    // forms) after every segment of a template path (#3790). An older extension asks the leaf floor
+    // only, so a Python that has the form arms loses them silently; `DjustConfig.ready()` reads this
+    // name and says so.
+    m.add("WALK_FLOOR_COVERS_FORMS", true)?;
     // The conversion's recursion ceiling (#2624), exported so the test that
     // pins it against the worker-stack measurement reads the real constant.
     m.add("MAX_CONVERSION_DEPTH", djust_core::MAX_CONVERSION_DEPTH)?;
@@ -8960,6 +9662,61 @@ mod fast_path_flag_tests {
         };
         assert!(!path_of(&fast).is_empty(), "fast: {fast}");
         assert_eq!(path_of(&fast), path_of(&full), "fast: {fast} full: {full}");
+    }
+
+    /// ``["label"]`` without the conversion spellings the provenance inventory
+    /// pins (`crates/djust_templates/tests/fixtures/provenance_flatten_sites.txt`
+    /// lists every such line of this file): this is a test fixture, not a flatten site.
+    fn label_changed() -> Vec<String> {
+        ["label"].iter().copied().map(String::from).collect()
+    }
+
+    /// `static_render` (#3626): `release_baseline` drops EVERY structure the last
+    /// render built from the tree, not only the tree. The cached HTML and the
+    /// per-node cache are each about the size of the page, and the two indexes
+    /// are built from the tree; none of them is in the serialized snapshot, so
+    /// only this test sees them go.
+    #[test]
+    fn release_baseline_drops_the_tree_and_every_cache_built_from_it() {
+        let mut view = mounted();
+        view.update_state_rust(state("v1", 0, 107));
+        view.set_changed_keys(label_changed());
+        view.render_with_diff_detached().expect("fast path");
+        view.set_changed_keys(label_changed());
+        // Premises: the render left each of them behind, or the asserts below
+        // would pass on a view that never had them.
+        assert!(view.last_vdom.is_some(), "premise: the tree");
+        assert!(view.last_root_ns.is_some(), "premise: the root namespace");
+        assert!(view.last_html.is_some(), "premise: the cached HTML");
+        assert!(!view.node_html_cache.is_empty(), "premise: the node cache");
+        assert!(
+            view.changed_keys.is_some(),
+            "premise: a pending changed set"
+        );
+        assert!(
+            view.fragment_text_map.is_some(),
+            "premise: the fragment map"
+        );
+        assert!(view.text_node_index.is_some(), "premise: the text index");
+        let version = view.version;
+
+        view.release_baseline();
+
+        assert!(view.last_vdom.is_none(), "the tree");
+        assert!(view.last_root_ns.is_none(), "the root namespace");
+        assert!(view.last_html.is_none(), "the cached HTML");
+        assert!(view.node_html_cache.is_empty(), "the node cache");
+        assert!(view.changed_keys.is_none(), "the pending changed set");
+        assert!(view.fragment_text_map.is_none(), "the fragment map");
+        assert!(view.text_node_index.is_none(), "the text index");
+        assert_eq!(view.version, version, "the version counter is kept");
+
+        // Nothing to diff against: the next render is full and keeps counting.
+        view.update_state_rust(state("v2", 0, 107));
+        let (html, patches, next) = view.render_with_diff_detached().expect("re-render");
+        assert!(html.contains("v2"), "html: {html}");
+        assert!(patches.is_none(), "a released view has no tree to diff");
+        assert_eq!(next, version + 1);
     }
 
     #[test]

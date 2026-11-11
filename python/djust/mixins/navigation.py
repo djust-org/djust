@@ -43,7 +43,13 @@ def same_origin_target(url: str) -> str:
     """
     from urllib.parse import urlsplit
 
-    parts = urlsplit(url.replace("\\", "/"))
+    try:
+        parts = urlsplit(url.replace("\\", "/"))
+    except ValueError:
+        # ``urlsplit`` refuses a netloc that is not valid after NFKC normalisation (for
+        # example a fullwidth slash after ``//``): the URL names no usable target, so the
+        # safe answer is the site root.
+        return "/"
     path = "/" + parts.path.lstrip("/")
     return path + ("?" + parts.query if parts.query else "")
 
@@ -147,7 +153,8 @@ class NavigationMixin:
 
         This is the standard place to derive view state from URL parameters.
         It fires:
-        1. After ``mount()`` completes during the initial WebSocket connect.
+        1. After ``mount()`` on the HTTP render, and after ``mount()`` completes
+           during the initial WebSocket connect.
         2. On ``live_patch`` (server-initiated URL change without remount).
         3. On browser back/forward navigation (popstate).
 
@@ -155,13 +162,85 @@ class NavigationMixin:
         duplicating URL-parsing logic between ``mount()`` and event handlers.
 
         Args:
-            params: The URL query parameters as a dict.
+            params: The URL query parameters as a dict. Raw strings (a repeated
+                key is a list) unless the view sets ``params_form``, in which
+                case it is that form's ``cleaned_data``.
             uri: The full URI string (path + query string).
+
+        Query parameters arrive as untrusted strings, so declare them. A view
+        that sets ``params_form`` gets validated, typed values on every
+        transport, and a bad value is a message in the page instead of a 500.
 
         Example::
 
-            def handle_params(self, params, uri):
-                self.category = params.get("category", "all")
-                self.page = int(params.get("page", 1))
+            class ListParams(forms.Form):
+                category = forms.ChoiceField(
+                    choices=[("all", "All"), ("books", "Books")],
+                    required=False,
+                    initial="all",
+                )
+                page = forms.IntegerField(min_value=1, required=False, initial=1)
+
+            class ListView(LiveView):
+                params_form = ListParams
+
+                def handle_params(self, params, uri):
+                    self.category = params["category"]
+                    self.page = params["page"]
+
+        Invalid input goes to :meth:`handle_invalid_params` instead, and the
+        messages are in the template as ``params_errors``.
         """
         pass
+
+    def handle_invalid_params(self, form: Any, uri: str) -> None:
+        """
+        Called instead of :meth:`handle_params` when ``params_form`` rejects the URL.
+
+        ``form`` is the bound form (``form.errors`` holds the messages); ``uri``
+        is the page URL. The framework has already put the messages on
+        ``self.params_errors`` (``{field: [messages]}``, errors that belong to no
+        field under ``"__all__"``) for the template::
+
+            {% if params_errors.page %}<p>{{ params_errors.page.0 }}</p>{% endif %}
+
+        The default hands :meth:`handle_params` the form's initial values, so the
+        page renders its defaults and shows the errors. Set
+        ``params_form_fallback = "fields"`` to keep what validated: the fields
+        that passed arrive as they would on a valid URL and only the ones in
+        ``form.errors`` take their initial value, so ``?page=abc&sort=name``
+        keeps ``sort``. As on a valid URL, a field the URL left out or empty takes
+        its initial value after ``clean()`` (a ``clean()`` that writes into it loses
+        to the initial value, if it has one). A form-level error (``clean()`` raising without naming a
+        field) still falls back to the initial values, because the fields that
+        passed one by one are the combination the form refused, and so does a
+        merged result the form's ``clean()`` rejects when run once more on it
+        (a kept field paired with a replaced field's initial value, or a field the URL
+        left out paired with its own, such as a default ``start`` next to a supplied
+        ``end``). That second
+        ``clean()`` runs where ``super()`` is called: from an ``async def``
+        override it is on the event loop, where a ``clean()`` that uses the ORM
+        fails and the plain initial values are used (with a logged warning).
+        **``clean()`` must be idempotent** to use ``params_form_fallback = "fields"``:
+        it is re-run on values it already cleaned, so a ``clean()`` that multiplies a
+        price by 100 hands ``handle_params`` 50000 where a valid URL hands 500.
+        Override it to refuse the URL instead::
+
+            def handle_invalid_params(self, form, uri):
+                raise Http404("No such page.")
+
+        or to answer 400 and keep the page (set a flag here and return 400 from
+        ``get_http_status()``). Call ``super().handle_invalid_params(form, uri)``
+        to keep the default as well (a sync override only: an ``async def``
+        override calls its own ``handle_params`` instead). Over a WebSocket or SSE mount, an exception
+        raised here fails the mount like one from ``handle_params``; a ``Http404``
+        is a Django 404 only on the HTTP render.
+        """
+        from .._params_form import declared_fallback, fallback_values
+        from .._view_hooks import call_hook_sync
+
+        # Run to completion here, so an override that calls ``super()`` without
+        # ``return`` (or an ``async def handle_params``) cannot drop the call.
+        call_hook_sync(
+            self.handle_params, fallback_values(form, declared_fallback(self), self), uri
+        )

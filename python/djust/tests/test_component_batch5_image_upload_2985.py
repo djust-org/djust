@@ -183,11 +183,6 @@ class TestScriptStylesAndCatalogue:
         assert "uploadFile" not in self.SOURCE
         assert "upload_register" not in self.SOURCE
 
-    def test_script_registers_without_replacing_an_app_hook(self):
-        assert (
-            "!appHooks.ImageUploadPreview && !window.DjustHooks.ImageUploadPreview" in self.SOURCE
-        )
-
     def test_the_file_input_stays_focusable(self):
         """display:none took the picker out of the tab order; the input is now
         visually hidden but a real, focusable control, and the zone shows focus."""

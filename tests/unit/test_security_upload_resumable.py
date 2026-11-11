@@ -82,6 +82,9 @@ class TestCompaction:
     def test_compact_empty(self):
         assert compact_chunks([]) == []
 
+    def test_compact_single(self):
+        assert compact_chunks([5]) == [(5, 5)]
+
     def test_compact_contiguous(self):
         assert compact_chunks([0, 1, 2, 3]) == [(0, 3)]
 
@@ -90,6 +93,11 @@ class TestCompaction:
 
     def test_compact_dedupes_and_sorts(self):
         assert compact_chunks([2, 0, 1, 1, 3, 3]) == [(0, 3)]
+        assert compact_chunks([5, 1, 2, 0, 5, 6, 1]) == [(0, 2), (5, 6)]
+
+    def test_expand_roundtrip(self):
+        original = [0, 1, 2, 5, 6, 9, 10, 11]
+        assert sorted(expand_ranges(compact_chunks(original))) == original
 
     def test_expand_empty_and_none(self):
         assert expand_ranges([]) == []
@@ -105,6 +113,7 @@ class TestCompaction:
     def test_bytes_received_from_ranges(self):
         # 3 chunks (indices 0,1,2) × 1024 bytes = 3072 bytes
         assert bytes_received_from_ranges([[0, 2]], chunk_size=1024) == 3072
+        assert bytes_received_from_ranges([(0, 2)], chunk_size=64 * 1024) == 192 * 1024
 
     def test_bytes_received_ignores_malformed(self):
         assert bytes_received_from_ranges([[0, 1], "bad", [3]], chunk_size=100) == 200

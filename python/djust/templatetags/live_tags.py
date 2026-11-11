@@ -39,9 +39,11 @@ from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.template import Context, Node, Template, TemplateSyntaxError
 from django.template.base import NodeList, Parser, Token
-from django.utils.html import escape, format_html, format_html_join
+from django.utils.html import conditional_escape, escape, format_html, format_html_join
 from django.utils.safestring import SafeString, mark_safe
 
+from .._attr_policy import passthrough_attrs
+from .._include_guard import include_guard_scope
 from .._html import build_tag
 from ..auth._login_required_middleware import mark_embedded
 from ..config import config
@@ -606,6 +608,11 @@ def _collect_passthrough_attrs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     Known configuration kwargs are stripped; everything else passes through
     to the rendered tag as an attribute, with ``_`` in keys converted to
     ``-`` (so ``aria_label="Search"`` becomes ``aria-label="Search"``).
+
+    The result is judged by :func:`djust._attr_policy.passthrough_attrs` (#3818): an ``on*``
+    NAME raises ``ValueError``; a VALUE never does (it can come from data): a URL the shared
+    allowlist rejects renders ``#`` and a ``type`` of ``image`` / ``submit`` / ``reset`` /
+    ``button`` is left out, so the field keeps its own type.
     """
     _KNOWN = {
         "handler",
@@ -618,6 +625,7 @@ def _collect_passthrough_attrs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
         "choices",
         "checked",
         "label",  # reserved for radio label text, not an HTML attribute
+        "legend",  # a radio group's legend text, not an HTML attribute
     }
     out: Dict[str, Any] = {}
     for k, v in kwargs.items():
@@ -626,7 +634,9 @@ def _collect_passthrough_attrs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
         # Normalize underscores to dashes for HTML attributes
         attr = k.replace("_", "-")
         out[attr] = v
-    return out
+    # The one policy every passthrough writer shares (#3818): event-handler attributes and a
+    # ``type`` that submits / navigates are refused, URL-valued attributes are judged.
+    return passthrough_attrs(out)
 
 
 def _render_text_like(
@@ -745,6 +755,16 @@ def _render_checkbox(
     return build_tag("input", attrs)
 
 
+#: The passthrough attributes that describe a radio GROUP rather than one radio (see ``_render_radio``).
+_RADIO_GROUP_ATTRS = (
+    "aria-label",
+    "aria-labelledby",
+    "aria-describedby",
+    "aria-invalid",
+    "aria-required",
+)
+
+
 def _render_radio(
     handler: str,
     value: Any,
@@ -753,8 +773,16 @@ def _render_radio(
     event: Optional[str],
     choices: Any,
     passthrough: Dict[str, Any],
+    legend: Optional[str] = None,
 ) -> str:
-    """Render a set of ``<label><input type="radio">...</label>`` rows.
+    """Render a radio group: ``<label><input type="radio">...</label>`` rows in a ``radiogroup``.
+
+    The rows are wrapped in ``<div role="radiogroup">`` (no default browser styling), so a screen
+    reader announces them as one control. With ``legend=`` the wrapper is a
+    ``<fieldset>`` named by a ``<legend>``. ``aria-label`` / ``aria-labelledby`` /
+    ``aria-describedby`` / ``aria-invalid`` / ``aria-required`` describe the GROUP, so they go
+    on it and not on every radio (where ``aria_label="Plan"`` would rename each radio "Plan"); a
+    ``required`` passthrough also sets ``aria-required`` on the group and stays on each radio.
 
     ``choices`` may be:
       * a list of ``(value, label)`` tuples/lists
@@ -764,6 +792,14 @@ def _render_radio(
 
     if choices is None:
         choices = []
+
+    group_attrs: Dict[str, Any] = {"class": "dj-radio-group", "role": "radiogroup"}
+    for key in _RADIO_GROUP_ATTRS:
+        if key in passthrough:
+            group_attrs[key] = passthrough[key]
+    passthrough = {k: v for k, v in passthrough.items() if k not in _RADIO_GROUP_ATTRS}
+    if passthrough.get("required") not in (None, False, "", "false", "False", "0"):
+        group_attrs.setdefault("aria-required", "true")
 
     html_parts = []
     for choice in choices:
@@ -784,7 +820,16 @@ def _render_radio(
         input_html = build_tag("input", attrs)
         html_parts.append(f"<label>{input_html}{escape(str(cl))}</label>")
 
-    return "".join(html_parts)
+    if legend:
+        legend_id = re.sub(r"[^A-Za-z0-9_-]", "-", str(name or handler)) + "-legend"
+        group_attrs["aria-labelledby"] = legend_id
+        html_parts.insert(
+            0,
+            build_tag("legend", {"id": legend_id, "class": "dj-radio-group__legend"}, str(legend)),
+        )
+    return build_tag(
+        "fieldset" if legend else "div", group_attrs, "".join(html_parts), content_is_safe=True
+    )
 
 
 # Field-type registry — each entry is a callable accepting the normalized
@@ -867,6 +912,7 @@ def live_input(field_type: str = "text", **kwargs: Any) -> Any:
     throttle: Optional[str] = kwargs.pop("throttle", None)
     choices = kwargs.pop("choices", None)
     checked: bool = bool(kwargs.pop("checked", False))
+    legend: Optional[str] = kwargs.pop("legend", None)
 
     if field_type not in _FIELD_RENDERERS and field_type not in (
         "textarea",
@@ -942,6 +988,7 @@ def live_input(field_type: str = "text", **kwargs: Any) -> Any:
             event=event,
             choices=choices,
             passthrough=passthrough,
+            legend=legend,
         )
     else:
         # text-like types dispatched through the lambda registry
@@ -1839,7 +1886,7 @@ def _render_sticky_child_html(
 
     inline = getattr(child, "template", None)
     if inline:
-        with active_parent_view(child):
+        with active_parent_view(child), include_guard_scope():
             rendered_inner = Template(inline).render(Context(child_context))
     else:
         template_name = getattr(child, "template_name", None)
@@ -1848,7 +1895,7 @@ def _render_sticky_child_html(
                 "{%% live_render %%} child %r has neither ``template`` nor "
                 "``template_name`` set" % view_path
             )
-        with active_parent_view(child):
+        with active_parent_view(child), include_guard_scope():
             rendered_inner = get_template(template_name).render(child_context, request)
 
     # Record the child's dj-model auto-allowlist from its own TEMPLATE SOURCE
@@ -2327,6 +2374,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             def _render_eager() -> str:
                 # Eager mount + render path — same as the non-lazy
                 # branch below. Returns the stamped child HTML.
+                from ..sync_turn import run_sync_step
+
                 child = child_cls()
                 mark_embedded(child)
                 child.request = request
@@ -2335,7 +2384,10 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     raise PermissionError("child %r denied access (auth gate)" % view_path)
                 mount_fn = getattr(child, "mount", None)
                 if callable(mount_fn):
-                    mount_fn(request, **captured_kwargs)
+                    # This runs on its own worker thread (``sync_to_async`` below), outside
+                    # the parent's render hop, so the child's hooks enter their own
+                    # ``sync_turn_wrapper`` steps (#3646).
+                    run_sync_step(child, "mount", mount_fn, request, **captured_kwargs)
                 # Object-permission check (ADR-017) for the lazy embedded child
                 # — same as the eager path (finding #12). No-op unless the child
                 # overrides get_object; fail-closed otherwise.
@@ -2355,7 +2407,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 get_ctx_fn = getattr(child, "get_context_data", None)
                 if callable(get_ctx_fn):
                     try:
-                        child_context = dict(get_ctx_fn())
+                        child_context = dict(run_sync_step(child, "render", get_ctx_fn))
                     except Exception:  # noqa: BLE001
                         # Aliased so the names stay local to this closure: the
                         # enclosing live_render imports them only after the
@@ -2378,7 +2430,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 child_context.setdefault("view", child)
                 inline_template = getattr(child, "template", None)
                 if inline_template:
-                    rendered_inner = Template(inline_template).render(Context(child_context))
+                    with include_guard_scope():
+                        rendered_inner = Template(inline_template).render(Context(child_context))
                 else:
                     template_name = getattr(child, "template_name", None)
                     if not template_name:
@@ -2386,7 +2439,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                             "child %r has neither ``template`` nor "
                             "``template_name`` set" % view_path
                         )
-                    rendered_inner = get_template(template_name).render(child_context, request)
+                    with include_guard_scope():
+                        rendered_inner = get_template(template_name).render(child_context, request)
                 # Record the child's dj-model auto-allowlist from its own
                 # TEMPLATE SOURCE so child update_model events (gated on the
                 # child's _dj_model_fields) accept its dj-model inputs — this
@@ -2485,9 +2539,14 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         # — parsed as HTMLUnknownElement on browsers without a
         # registered custom-element class; fully selectable via
         # querySelector and replaceable via replaceWith.
+        #
+        # The placeholder follows Django's own rule (#3819): a marked-safe value
+        # (``mark_safe`` / ``format_html`` / a ``SafeString``, anything with ``__html__``)
+        # is markup and is spliced in as written; a plain ``str`` is TEXT and is escaped,
+        # so a ``lazy={"placeholder": some_data}`` cannot inject markup.
         custom_placeholder = lazy_config["placeholder"]
         if custom_placeholder:
-            inner = str(custom_placeholder)
+            inner = str(conditional_escape(custom_placeholder))
         else:
             inner = ""
         # #1147 — propagate ``request.csp_nonce`` onto the <dj-lazy-slot>
@@ -2840,7 +2899,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
 
     inline = getattr(child, "template", None)
     if inline:
-        rendered_inner = Template(inline).render(Context(child_context))
+        with include_guard_scope():
+            rendered_inner = Template(inline).render(Context(child_context))
     else:
         template_name = getattr(child, "template_name", None)
         if not template_name:
@@ -2848,7 +2908,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 "{%% live_render %%} child %r has neither ``template`` nor "
                 "``template_name`` set" % view_path
             )
-        rendered_inner = get_template(template_name).render(child_context, request)
+        with include_guard_scope():
+            rendered_inner = get_template(template_name).render(child_context, request)
 
     # Record the child's dj-model auto-allowlist from its own TEMPLATE SOURCE
     # so child update_model events (gated on the child's _dj_model_fields)
