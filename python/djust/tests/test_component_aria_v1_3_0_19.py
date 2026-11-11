@@ -378,16 +378,28 @@ class TestProgress:
         assert "dj-progress-w-100" in out
         no_inline_style(out)
 
-    @pytest.mark.parametrize("renderer", PROGRESS_RENDERERS)
-    def test_a_value_that_is_not_a_number_is_not_drawn_as_a_width(self, renderer):
-        """The tag's own clamp refuses it (#3667); no width class may carry its text."""
-        try:
-            out = _progress_markup(renderer, "abc")
-        except Exception:  # noqa: BLE001 - the Django tag raises, which is its contract
-            return
-        assert "abc" not in "".join(
-            c for n in parse(out).walk() for c in n.cls() if c.startswith("dj-progress-w-")
-        )
+    @pytest.mark.parametrize(
+        ("renderer", "value", "error"),
+        [
+            ("django", "abc", ValueError),
+            ("django", None, TypeError),
+            ("rust", "abc", ValueError),
+            ("rust", None, TypeError),
+            ("class", "abc", TypeError),
+            ("class", None, TypeError),
+        ],
+    )
+    def test_a_value_that_is_not_a_number_is_refused_not_drawn(self, renderer, value, error):
+        """What every renderer does today, asserted per renderer: it RAISES, so no width class
+        (and no width) is ever built from a non-numeric value. The tags share the tag's own
+        ``int()`` clamp (#3667), the class divides by ``max``."""
+        with pytest.raises(error):
+            _progress_markup(renderer, value)
+
+    @pytest.mark.parametrize("engine", ENGINES)
+    def test_a_numeric_string_is_drawn_as_its_whole_percent(self, engine):
+        fill = _fill(parse(_progress_markup(engine, "50")))
+        assert "dj-progress-w-50" in fill.cls()
 
 
 # ---------------------------------------------------------------------------
