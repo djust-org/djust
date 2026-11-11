@@ -78,6 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`toggle_group` no longer lets a marked-safe value out of an attribute.** `name` (`data-name`), `event` (`dj-click`), `size` (the class suffix) and `mode` (`data-mode`) were written with `conditional_escape`, which keeps a value marked safe, so a `mark_safe` string closed the attribute and injected markup; the native handler also did this for each option's `data-value`, and for all five when a typed argument or a direct call handed it the real value. All five now go through `attr_text`, in the Django tag and the native handler. The change also restores the safe-markup audit baseline that `main` failed (`ToggleGroupHandler.render` was unaudited after #3962); pinned in `python/djust/tests/test_component_form_buttons.py`.
+
+
 - **`rustix` 1.1.4 to 1.1.6 (RUSTSEC-2026-0486, #3985).** An unsound-class advisory (xattr functions marking unwritten bytes as initialized for a zero-length buffer) that the repository's audit policy denies. `rustix` is reached only as a dev-dependency (`tempfile` via `proptest` in `djust_vdom` and `djust_templates`), so it is not in the shipped extension. `bincode` 2.0.1 (RUSTSEC-2025-0141, unmaintained) stays an allowed warning under `.cargo/audit.toml`.
 
 ## [1.3.2] - 2026-11-10
