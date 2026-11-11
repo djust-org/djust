@@ -263,7 +263,7 @@ See [Typed values & targets](#typed-values--targets) below for
 
 ### Methods
 
-**`this.pushEvent(event, payload)`** -- Send an event to the server LiveView.
+**`this.pushEvent(event, payload)`** -- Send an event to the server LiveView. It returns a promise that resolves with the server's reply frame once the event is acknowledged, or with `null` when the event was cancelled or there is no live connection.
 
 ```javascript
 this.pushEvent('item_clicked', { id: this.values.itemId });

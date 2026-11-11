@@ -86,25 +86,29 @@ function _createHookInstance(hookDef, el) {
     instance.el = el;
     instance.viewName = el.closest('[dj-view]')?.getAttribute('dj-view') || '';
 
-    // pushEvent: send a custom event to the server
+    // pushEvent: send a custom event to the server.
+    //
+    // #3990: through the transport's own event path (`sendEvent`), not a frame
+    // built here. The hand-built frame had no `ref`, so the server's reply
+    // could not be told from the reply to another event: with one other event
+    // pending it resolved THAT event's promise, and the hook itself got no
+    // acknowledgment at all. Returns the promise `sendEvent` returns: it
+    // resolves with the server's reply frame, or `null` when the event was
+    // cancelled or there is no live connection to send it on.
     instance.pushEvent = function(event, payload = {}) {
         const transport = window.djust.liveViewInstance;
-        const frame = {
-            type: 'event',
-            event: event,
-            params: payload,
-            // A hook inside a view mounted beside the page view talks to
-            // that view, not the page view (#3252).
-            ...slotFrameFields(slotIdFor(el)),
-        };
-        if (transport && transport.ws) {
-            transport.ws.send(JSON.stringify(frame));
-        } else if (transport && transport.transportName === 'sse' && transport.viewMounted) {
-            // The SSE transport posts the frame, as it does for every event.
-            transport.sendMessage(frame);
-        } else {
+        // A hook inside a view mounted beside the page view talks to that
+        // view, not the page view (#3252): its slot is named explicitly, and
+        // the hook's element is not passed as the trigger, so it takes no
+        // loading state from its own events.
+        const sent = transport && typeof transport.sendEvent === 'function'
+            ? transport.sendEvent(event, payload, null, slotIdFor(el))
+            : false;
+        if (!sent) {
             console.warn(`[dj-hook] Cannot pushEvent "${event}" — no live connection`);
+            return Promise.resolve(null);
         }
+        return sent;
     };
 
     // handleEvent: register a callback for server-pushed events
@@ -216,8 +220,36 @@ function _safeCallHook(fn, label, ...args) {
  * Scan the DOM for elements with dj-hook and mount their hooks.
  * Called on init. For post-patch and post-navigation updates, use updateHooks().
  */
-function mountHooks(root) {
+// #3992: the page's first sweep runs as soon as the client script has, and a
+// script after it (an official adapter under ext/, or the app's own
+// deferred script) registers its hook a moment later. That sweep used to warn
+// "No hook registered" for it on every load and leave the element unmounted
+// until some later patch swept again. The first sweep now waits instead: one
+// retry when the document's deferred scripts have run, which mounts the hook or,
+// if it is still missing, says so. `var`, read during init (#1370).
+var _missingHookRetryArmed = false; // eslint-disable-line no-var
+
+function _deferMissingHookSweep() {
+    if (document.readyState === 'complete') return false;
+    if (!_missingHookRetryArmed) {
+        _missingHookRetryArmed = true;
+        let done = false;
+        const retry = () => {
+            if (done) return;
+            done = true;
+            mountHooks(document);
+        };
+        // DOMContentLoaded follows the deferred scripts; `load` covers a client
+        // script that was itself added after DOMContentLoaded.
+        document.addEventListener('DOMContentLoaded', retry, { once: true });
+        window.addEventListener('load', retry, { once: true });
+    }
+    return true;
+}
+
+function mountHooks(root, options) {
     _ensureHooksInit();
+    const deferMissing = Boolean(options && options.deferMissing);
     root = root || document;
     const hooks = _getHookDefs();
     const elements = root.querySelectorAll('[dj-hook]');
@@ -234,6 +266,7 @@ function mountHooks(root) {
         // eslint-disable-next-line security/detect-object-injection
         const hookDef = hooks[hookName];
         if (!hookDef) {
+            if (deferMissing && _deferMissingHookSweep()) return;
             console.warn(`[dj-hook] No hook registered for "${hookName}"`);
             return;
         }
