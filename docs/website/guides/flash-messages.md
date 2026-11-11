@@ -18,7 +18,7 @@ djust provides Phoenix-style flash messages for showing transient notifications 
 - **`{% dj_flash %}`** -- Template tag that renders the flash container
 - **Auto-dismiss** -- Messages disappear after a configurable timeout
 - **Per-level CSS classes** -- Style each level (`info`, `success`, `warning`, `error`) independently
-- **ARIA attributes** -- Accessible by default with `role="alert"` and `aria-live="polite"`
+- **ARIA attributes** -- Accessible by default: each message is its own live region, `role="status"` for `info` and `success` and `role="alert"` for `warning` and `error` (the container itself is not a live region)
 
 ## Quick Start
 
