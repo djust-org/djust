@@ -35,6 +35,6 @@ def test_make_version_regenerates_the_distribution_sbom():
     makefile = (PKG.parents[1] / "Makefile").read_text()
     recipe = makefile.split("\nversion:", 1)[1].split("\n.PHONY:", 1)[0]
     bump = recipe.index("pyproject.toml.tmp")
-    regen = recipe.index("-m djust.assets.sbom --distribution")
+    regen = recipe.index("-m assets.sbom --distribution")
     assert regen > bump
     assert "djust.cdx.json" in recipe.splitlines()[0]  # the help text says so
