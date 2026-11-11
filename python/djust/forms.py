@@ -382,7 +382,7 @@ class FormMixin:
         self._init_form_state()
 
         # Create initial form instance (private, not serialized)
-        if self._form_instance is None and self.get_form_class():
+        if self._form_instance is None and self.get_form_class() and self._form_available():
             self._form_instance = self._create_form()
 
     def _init_form_state(self) -> None:
@@ -397,16 +397,18 @@ class FormMixin:
         # it doesn't render missing keys as empty, which would clear user input
         self.form_data = {}
         self.form_choices = {}
+        self._form_instance = None
         if self.get_form_class():
-            form = self._create_form()
-            self._form_instance = form
-            self.form_data = self._initial_form_data(form)
-            for field_name, field in form.fields.items():
-                # Expose serializable choices for template iteration
-                if hasattr(field, "choices"):
-                    self.form_choices[field_name] = [(str(k), str(v)) for k, v in field.choices]
-            # ADR-038 D-e: refuse a sensitive opt-in for a dynamic form class.
-            _check_persisted_form_input(type(self), type(form))
+            if self._form_available():
+                form = self._create_form()
+                self._form_instance = form
+                self.form_data = self._initial_form_data(form)
+                for field_name, field in form.fields.items():
+                    # Expose serializable choices for template iteration
+                    if hasattr(field, "choices"):
+                        self.form_choices[field_name] = [(str(k), str(v)) for k, v in field.choices]
+                # ADR-038 D-e: refuse a sensitive opt-in for a dynamic form class.
+                _check_persisted_form_input(type(self), type(form))
         elif _persisted_form_inputs(type(self)):
             raise ExposureConfigurationError("persisted_form_input() requires a form class")
 
@@ -415,6 +417,19 @@ class FormMixin:
         self.is_valid = False
         self.success_message = ""
         self.error_message = ""
+
+    def _form_available(self) -> bool:
+        """Whether there is anything to build the form around.
+
+        Always, for a plain form. ``ModelFormMixin`` has none while no record is selected
+        (``object_optional``, #3967): the form state is then empty and no form is built.
+        """
+        return True
+
+    def _require_form(self) -> None:
+        """Refuse an event that needs a form while there is none to build (#3967)."""
+        if not self._form_available():
+            raise PermissionDenied("No authorized object to edit.")
 
     def _ensure_form_state(self) -> None:
         """Repair form state when ``FormMixin.mount()`` never ran (#2667).
@@ -492,7 +507,7 @@ class FormMixin:
     @property
     def form_instance(self) -> Optional[forms.Form]:
         """Access the form instance (re-creates if lost after serialization)."""
-        if self._form_instance is None and self.get_form_class():
+        if self._form_instance is None and self.get_form_class() and self._form_available():
             self._ensure_model_instance()
             self._form_instance = self._create_form()
         return self._form_instance
@@ -689,6 +704,7 @@ class FormMixin:
 
         # Ensure form state is initialized (defensive check — see #2667)
         self._ensure_form_state()
+        self._require_form()
 
         # Update form data
         if self._refuse_form_data({field_name: value}):
@@ -750,6 +766,7 @@ class FormMixin:
         Validates all fields and calls form_valid() or form_invalid().
         """
         self._ensure_form_state()
+        self._require_form()
 
         # Merge kwargs into form_data (for fields submitted with the form)
         incoming = {self._form_event_field_name(name): value for name, value in kwargs.items()}
@@ -871,6 +888,7 @@ class FormMixin:
         # reset_form() writes every attribute below EXCEPT form_choices, so an
         # unmounted view would still be missing that one (#2667).
         self._ensure_form_state()
+        self._require_form()
 
         # Reset form_data with all field keys initialized (matching mount() behavior)
         # This ensures consistent VDOM state and prevents alternating patches/html_update
@@ -1067,10 +1085,16 @@ _MODEL_FORM_CONFIGURATION = frozenset(
         "slug_field",
         "query_pk_and_slug",
         "context_object_name",
+        "object_recheck",
+        "object_read_only_events",
+        "object_optional",
         "kwargs",
         "object",
     }
 )
+
+#: ``object_recheck`` values (#3967).
+_OBJECT_RECHECK_MODES = ("every_event", "writes")
 
 _MANAGED_OBJECT_PROVIDER = "djust.forms.object"
 
@@ -1124,6 +1148,22 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
     persisted: only the route identifies the record. It can be replaced by the
     same record (``self.object = form.save()``); anything else is a
     ``ValueError``. ``form_valid`` decides whether and how to save.
+
+    Two opt-ins loosen that for views that need it (#3967); neither changes the
+    default, and neither lets a WRITE skip the check.
+
+    * ``object_recheck = "writes"``: an event that cannot write reuses the record
+      authorized earlier on the same connection instead of resolving and
+      authorizing it again. Only the framework's own ``validate_field`` and the
+      events named in ``object_read_only_events`` qualify; every other event
+      (``submit_form``, ``reset_form``, any handler of yours) is a write and gets
+      the full check, exactly as under the default ``"every_event"``.
+    * ``get_object_lookup()`` / ``object_optional``: the record is selected by
+      something other than the route, for example a ``?open=<id>`` query
+      parameter a page keeps in ``handle_params``, and "no record selected" is a
+      supported state: ``object`` is ``None`` and there is no form, rather than a
+      denial. A record that IS selected but missing, filtered out or forbidden is
+      still the same ``PermissionDenied``.
     """
 
     model: Optional[Type[_ModelT]] = None
@@ -1134,10 +1174,24 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
     query_pk_and_slug: bool = False
     context_object_name: Optional[str] = None
 
+    #: How an event re-checks the record (ADR-017; #3967). ``"every_event"`` (the default):
+    #: resolve and authorize it again before every event. ``"writes"``: events declared
+    #: read-only reuse the record authorized earlier on this connection, while it is
+    #: unchanged and the route, the lookup and the user are the same; every other event
+    #: resolves and authorizes it again. Access revoked between two read-only events is
+    #: then seen at the next event that is not one: the trade a view makes by choosing it.
+    object_recheck: str = "every_event"
+    #: Handlers (by method name) the view declares read-only, in addition to
+    #: ``validate_field``: with ``object_recheck = "writes"`` they reuse the authorized
+    #: record. List one only if it neither writes nor shows the person anything the
+    #: record's authorization is meant to protect; an event not listed is a write.
+    object_read_only_events: FrozenSet[str] = frozenset()
+    #: Whether "no record selected" is a state of this view rather than a denial
+    #: (``object`` is ``None``, there is no form). See :meth:`get_object_lookup`.
+    object_optional: bool = False
+
     kwargs: Dict[str, Any]
 
-    # The ADR-017 object lifecycle treats "no object" as a denial for this view.
-    _djust_object_required = True
     _djust_configuration_names = _MODEL_FORM_CONFIGURATION
     _djust_injects_context = FormMixin._djust_injects_context | frozenset({"object"})
     _djust_context_providers = (_managed_object_provider,)
@@ -1146,6 +1200,11 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
         # Allocated before LiveView records its framework slots, so the legacy
         # session never mistakes the verdict for user private state.
         self._djust_authorized_object: Optional[tuple] = None
+        # What a read-only event may reuse (``object_recheck = "writes"``) and which record
+        # the form state was built for. Framework slots: never persisted, so a restored
+        # view re-resolves its record before it reuses one.
+        self._djust_object_stamp: Optional[tuple] = None
+        self._djust_form_object: Optional[tuple] = None
         super().__init__(*args, **kwargs)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -1159,6 +1218,21 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
                     "ModelFormMixin resolves self.object from the route; "
                     "remove _model_instance." % cls.__name__
                 )
+        if cls.object_recheck not in _OBJECT_RECHECK_MODES:
+            raise ImproperlyConfigured(
+                "%s.object_recheck must be one of %s, not %r."
+                % (cls.__name__, " or ".join(map(repr, _OBJECT_RECHECK_MODES)), cls.object_recheck)
+            )
+        read_only = cls.object_read_only_events
+        if (
+            isinstance(read_only, str)
+            or not hasattr(read_only, "__iter__")
+            or not all(type(name) is str for name in read_only)
+        ):
+            raise ImproperlyConfigured(
+                "%s.object_read_only_events must be a collection of handler names, "
+                "not %r." % (cls.__name__, read_only)
+            )
         alias = cls.context_object_name
         if alias is not None and (
             type(alias) is not str
@@ -1173,6 +1247,12 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
             )
 
     # -- the managed object --------------------------------------------------
+
+    @property
+    def _djust_object_required(self) -> bool:
+        """Whether "no object" is a denial (ADR-035 D3). It is, except while nothing is selected
+        on a view that is ``object_optional``: a record that IS selected must resolve."""
+        return not (self.object_optional and not self._has_selection())
 
     @property
     def object(self) -> Optional[_ModelT]:
@@ -1264,31 +1344,79 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
         """The model field a route slug is matched against."""
         return self.slug_field
 
-    def get_object(self, queryset: Optional["models.QuerySet[_ModelT]"] = None) -> _ModelT:
-        """Look up the route's record in ``queryset`` (default ``get_queryset()``).
+    def get_object_lookup(self) -> Optional[Mapping[str, Any]]:
+        """The values that select the record, keyed like the route's URL kwargs (#3967).
 
-        The result is not authorized by this call; the framework runs
-        ``has_object_permission()`` on it before it becomes ``self.object``.
+        ``{pk_url_kwarg: ...}`` and/or ``{slug_url_kwarg: ...}``; ``get_object()`` filters the
+        queryset with them. The default is the route's own kwargs, so a view routed with a
+        ``pk`` / ``slug`` behaves exactly as before. Override it to select from something
+        else the view keeps, such as a query parameter read in ``handle_params``::
+
+            class ReviewQueue(ModelFormMixin[Review], LiveView):
+                object_optional = True            # nothing is open until one is picked
+
+                def handle_params(self, params, uri):
+                    self.open_id = params.get("open")
+
+                def get_object_lookup(self):
+                    return {self.pk_url_kwarg: getattr(self, "open_id", None)}
+
+        The same ``get_queryset()`` scoping, ``has_object_permission()`` and per-event
+        re-check apply as for a routed record: this changes only where the key comes from,
+        never who may use it. A client controls such a value, so what it selects is only
+        ever what the queryset allows; a value that is not a valid key (``?open=abc`` for an
+        integer key) is the same denial as a record that does not exist.
+
+        Return ``None``, an empty mapping or empty values for "no record selected"; that is a
+        denial unless ``object_optional`` is set. Called on every event and render path: read
+        view state, do not query.
+        """
+        return getattr(self, "kwargs", None) or {}
+
+    def _lookup_values(self) -> Tuple[Any, Any]:
+        """``(pk, slug)`` of :meth:`get_object_lookup`, with ``""`` counted as not given."""
+        lookup = self.get_object_lookup() or {}
+        pk = lookup.get(self.pk_url_kwarg)
+        slug = lookup.get(self.slug_url_kwarg)
+        return (None if pk == "" else pk), (None if slug == "" else slug)
+
+    def _has_selection(self) -> bool:
+        """Whether :meth:`get_object_lookup` selects a record."""
+        pk, slug = self._lookup_values()
+        return pk is not None or slug is not None
+
+    def get_object(
+        self, queryset: Optional["models.QuerySet[_ModelT]"] = None
+    ) -> Optional[_ModelT]:
+        """Look up the record :meth:`get_object_lookup` selects in ``queryset`` (default ``get_queryset()``).
+
+        ``None`` when nothing is selected and the view is ``object_optional``. The result is
+        not authorized by this call; the framework runs ``has_object_permission()`` on it
+        before it becomes ``self.object``.
         """
         if queryset is None:
             queryset = self.get_queryset()
-        route = getattr(self, "kwargs", None) or {}
-        pk = route.get(self.pk_url_kwarg)
-        slug = route.get(self.slug_url_kwarg)
-        if pk is not None:
-            queryset = queryset.filter(pk=pk)
-        if slug is not None and (pk is None or self.query_pk_and_slug):
-            queryset = queryset.filter(**{self.get_slug_field(): slug})
+        pk, slug = self._lookup_values()
         if pk is None and slug is None:
+            if self.object_optional:
+                return None
             raise ImproperlyConfigured(
                 "%s must be routed with a %r or %r URL kwarg; client mount "
                 "parameters never select the object."
                 % (type(self).__name__, self.pk_url_kwarg, self.slug_url_kwarg)
             )
         try:
+            if pk is not None:
+                queryset = queryset.filter(pk=pk)
+            if slug is not None and (pk is None or self.query_pk_and_slug):
+                queryset = queryset.filter(**{self.get_slug_field(): slug})
             obj: _ModelT = queryset.get()
         except queryset.model.DoesNotExist:
             raise Http404("No object matches the route")
+        except (ValueError, TypeError, ValidationError):
+            # A key the model's field cannot hold (``?open=abc``, a malformed UUID) selects
+            # nothing: the same answer as a record that is not there.
+            raise Http404("No object matches the lookup")
         return obj
 
     # -- lifecycle -----------------------------------------------------------
@@ -1303,7 +1431,14 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
         if "kwargs" not in self.__dict__:
             # Nothing bound the route: never fall back to the mount parameters.
             self.kwargs = {}
-        if not self._authorize_object(request):
+        if type(self).get_object_lookup is not ModelFormMixin.get_object_lookup:
+            # The view selects its record from state it may only set after mount (a query
+            # parameter read in ``handle_params``): authorizing the record before that would
+            # authorize the wrong one. The check that follows mount and ``handle_params`` on
+            # every transport resolves and authorizes it; the form is built then.
+            self._object = None
+            self._djust_authorized_object = None
+        elif not self._authorize_object(request):
             # Denied: no object and no form. The object-permission check that
             # follows mount on every transport reports the denial.
             return
@@ -1319,8 +1454,92 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
             self._object = None
             self._djust_authorized_object = (request, None)
             return False
-        self._djust_authorized_object = (request, self._object)
+        # Nothing selected on an optional view is not a verdict to hand on: the check that
+        # follows mount (and ``handle_params``) decides again, on what is selected by then.
+        self._djust_authorized_object = (
+            (request, self._object) if self._object is not None else None
+        )
         return True
+
+    # -- the record the form and a read-only event rely on (#3967) -----------------------
+
+    def _form_available(self) -> bool:
+        return self.object is not None
+
+    def _object_key(self) -> Optional[Tuple[str, Any]]:
+        obj = self.object
+        return None if obj is None else (obj._meta.concrete_model._meta.label, obj.pk)
+
+    def _init_form_state(self) -> None:
+        super()._init_form_state()
+        self._djust_form_object = self._object_key()
+
+    def _djust_note_authorized_object(self, request: Any) -> None:
+        """Framework hook: ``self.object`` was just resolved and authorized for ``request``.
+
+        Keeps what hangs off the record in step with it: the form state is built for the record
+        that is selected NOW (a different record, or none, starts from that record's initial
+        values, never from the previous record's input), and the verdict is stamped for a
+        read-only event to reuse (``object_recheck = "writes"``).
+        """
+        obj = self.object
+        self._djust_object_stamp = (
+            (self._principal(request), self._lookup_key(), self._fingerprint(obj))
+            if obj is not None
+            else None
+        )
+        if not hasattr(self, "form_data"):
+            return  # mount() has not built the form state yet; it will
+        key = self._object_key()
+        built = self._djust_form_object
+        if built == key:
+            return
+        self._djust_form_object = key
+        if built is None and self.form_data:
+            # A restored view: the form state arrived with its input (``mount()`` ran with no
+            # selection, then the saved state was applied) and is the selected record's.
+            return
+        self._init_form_state()
+
+    @staticmethod
+    def _principal(request: Any) -> Any:
+        return getattr(getattr(request, "user", None), "pk", None)
+
+    def _lookup_key(self) -> Tuple[Any, ...]:
+        pk, slug = self._lookup_values()
+        return (None if pk is None else str(pk), None if slug is None else str(slug))
+
+    @staticmethod
+    def _fingerprint(obj: Any) -> Dict[str, Any]:
+        """The record's field values now, to tell a changed record from the one authorized."""
+        return {name: value for name, value in vars(obj).items() if name != "_state"}
+
+    def _is_read_only_event(self, handler: Any) -> bool:
+        if getattr(handler, "__func__", None) is FormMixin.__dict__["validate_field"]:
+            return True
+        return getattr(handler, "__name__", None) in self.object_read_only_events
+
+    def _djust_reuses_authorized_object(self, handler: Any, request: Any) -> bool:
+        """Framework hook (``check_object_permission_for_event``): may this event reuse the record?
+
+        Only with ``object_recheck = "writes"``, only for a handler declared read-only, and only
+        while everything the authorization was for still holds: the record unchanged since it
+        was authorized (every field value, so the primary key too), the same lookup (route and
+        params), the same user.
+        Anything else, and every other event, gets the full check.
+        """
+        if self.object_recheck != "writes" or not self._is_read_only_event(handler):
+            return False
+        obj = self.object
+        stamp = self._djust_object_stamp
+        if obj is None or stamp is None:
+            return False
+        principal, lookup, fingerprint = stamp
+        return bool(
+            principal == self._principal(request)
+            and lookup == self._lookup_key()
+            and fingerprint == self._fingerprint(obj)
+        )
 
     def get_form(self, form_class: Optional[Type[forms.Form]] = None) -> forms.Form:
         form_class = form_class or self.get_form_class()

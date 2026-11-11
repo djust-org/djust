@@ -37,12 +37,18 @@ Template context provided on every render:
 
 Event handlers available to templates via dj-click / dj-submit:
 
-    next_step               — validate current step, advance if valid
+    next_step               — merge the fields the step's form posted, validate the
+                              current step, advance if valid
     prev_step               — go back one step (no validation)
     go_to_step              — jump to a completed step (data-step_index=N)
     update_step_field       — update a single field value (data-field=name)
-    validate_field          — bridge for as_live_field() dj-change events
-    submit_wizard           — validate all steps, call on_wizard_complete()
+    validate_field          — bridge for as_live_field() dj-change events: stores the
+                              value and validates that one field
+    submit_wizard           — merge the last step's posted fields, validate all steps,
+                              call on_wizard_complete()
+
+Hooks: get_wizard_initial() / get_wizard_step() resume stored progress at mount;
+on_step_saved() runs when next_step has validated a step.
 
 Implementation notes
 --------------------
@@ -66,7 +72,9 @@ Several design decisions here work around known djust serialization constraints:
 import logging
 import math
 from collections.abc import Mapping
-from typing import Any, ClassVar, Dict
+from typing import Any, ClassVar, Dict, Optional, Union
+
+from django.core.exceptions import ValidationError
 
 from . import _form_data_bounds
 from ._exposure import ProviderContract
@@ -188,7 +196,13 @@ class WizardMixin:
     # ------------------------------------------------------------------
 
     def mount(self, request: Any, **kwargs: Any) -> None:
-        """Initialise wizard state on first load."""
+        """Initialise wizard state on first load.
+
+        The wizard starts at the step ``get_wizard_step()`` names, with the
+        answers ``get_wizard_initial()`` returns; both default to "the first
+        step, nothing answered", so a wizard that overrides neither behaves as
+        before (#3965).
+        """
         # WizardMixin is mixed into a LiveView subclass at runtime; the MRO
         # supplies mount()/get_context_data(). mypy only sees object here.
         super().mount(request, **kwargs)  # type: ignore[misc]
@@ -196,6 +210,109 @@ class WizardMixin:
         self.wizard_step_data: dict[str, dict[str, Any]] = {}
         self.wizard_step_errors: dict[str, dict[str, list]] = {}
         self.wizard_completed_steps: list[int] = []
+        self._resume_wizard()
+
+    # ------------------------------------------------------------------
+    # Resuming stored progress (#3965)
+    # ------------------------------------------------------------------
+
+    def get_wizard_initial(self) -> Dict[str, Dict[str, Any]]:
+        """The answers a wizard starts with: ``{step_name: {field_name: value}}``.
+
+        Called by ``mount()`` (``self.request`` is set). Override it to resume
+        a wizard from stored progress, e.g. rows an application form saved as
+        the person went. The default returns ``{}``: nothing answered.
+
+        A value may be what the field's widget shows or a Python object the
+        field accepts (a ``date``, a model instance for a choice field): it is
+        stored as the text the browser would submit, because
+        ``wizard_step_data`` is public, JSON-serialised state. A step the
+        wizard does not declare, a step without a form, and a name the step's
+        form does not have are ignored (logged at warning level).
+        """
+        return {}
+
+    def get_wizard_step(self) -> Union[int, str]:
+        """The step a wizard starts at: its index, or its ``"name"``.
+
+        Called by ``mount()`` after ``get_wizard_initial()``. The default is
+        ``0``. Override it to open at the first step the person has not
+        finished. A step that does not exist (an index out of range, an
+        unknown name) starts at ``0``, with a warning in the log. Every step
+        before the one named counts as completed, so ``go_to_step`` can return
+        to it; ``next_step`` still validates the step it advances from, and
+        ``submit_wizard`` validates all of them again.
+        """
+        return 0
+
+    def _resume_wizard(self) -> None:
+        """Apply ``get_wizard_initial()`` / ``get_wizard_step()`` to the fresh state."""
+        steps = self._steps
+        if not steps:
+            return
+        initial = self.get_wizard_initial()
+        if initial:
+            self.wizard_step_data = self._wizard_initial_data(steps, initial)
+        wanted = self.get_wizard_step()
+        index = self._wizard_step_index_for(steps, wanted)
+        if index is None:
+            logger.warning(
+                "%s.get_wizard_step() returned %r, which is not a step of the wizard "
+                "(%d steps); starting at the first step",
+                type(self).__name__,
+                wanted,
+                len(steps),
+            )
+            index = 0
+        self.wizard_step_index = index
+        self.wizard_completed_steps = list(range(index))
+
+    @staticmethod
+    def _wizard_step_index_for(steps: list, wanted: Any) -> Optional[int]:
+        """The index of the step *wanted* names (an index or a name), or ``None``."""
+        if isinstance(wanted, bool):
+            return None
+        if isinstance(wanted, int):
+            return wanted if 0 <= wanted < len(steps) else None
+        if isinstance(wanted, str):
+            for position, step in enumerate(steps):
+                if step.get("name") == wanted:
+                    return position
+        return None
+
+    def _wizard_initial_data(
+        self, steps: list, initial: Mapping[str, Any]
+    ) -> Dict[str, Dict[str, Any]]:
+        """*initial* as ``wizard_step_data``: declared form steps and fields only, JSON-plain."""
+        by_name = {step.get("name"): step for step in steps}
+        data: Dict[str, Dict[str, Any]] = {}
+        for step_name, answers in initial.items():
+            step = by_name.get(step_name)
+            form_class = step.get("form_class") if step else None
+            if form_class is None or not isinstance(answers, Mapping):
+                logger.warning(
+                    "%s.get_wizard_initial() has answers for %r, which is not a step "
+                    "with a form; ignored",
+                    type(self).__name__,
+                    step_name,
+                )
+                continue
+            fields = form_class().fields
+            kept: Dict[str, Any] = {}
+            for field_name, value in answers.items():
+                field = fields.get(field_name)
+                if field is None:
+                    logger.warning(
+                        "%s.get_wizard_initial() has a value for %r, which the form of "
+                        "step %r does not have; ignored",
+                        type(self).__name__,
+                        field_name,
+                        step_name,
+                    )
+                    continue
+                kept[field_name] = _submittable(field, field.prepare_value(value))
+            data[step_name] = kept
+        return data
 
     # ------------------------------------------------------------------
     # Callable initials (#3063)
@@ -512,13 +629,36 @@ class WizardMixin:
 
     @event_handler()
     def next_step(self, **kwargs: Any) -> None:
-        """Validate the current step and advance to the next one."""
+        """Validate the current step and advance to the next one.
+
+        A step rendered as ``<form dj-submit="next_step">`` posts its fields as
+        keyword arguments. The ones the current step's form declares are merged
+        into ``wizard_step_data`` first, so the step is validated against what
+        was submitted, whether or not each field also sent a ``validate_field``
+        event (#3964). Anything else in the post (the CSRF token, another
+        step's field names) is ignored.
+        """
         if not self._steps or self.wizard_step_index >= len(self._steps) - 1:
             return
+        if not self._store_submitted_fields(kwargs):
+            return
         if self._validate_current_step():
+            step_name = self._steps[self.wizard_step_index]["name"]
+            # Before the step moves on: a hook that raises (a failed save) leaves the
+            # person on the step they filled in, not one ahead of what was stored.
+            self.on_step_saved(step_name, self.wizard_step_data.get(step_name, {}))
             if self.wizard_step_index not in self.wizard_completed_steps:
                 self.wizard_completed_steps.append(self.wizard_step_index)
             self.wizard_step_index += 1
+
+    def on_step_saved(self, step_name: str, data: dict[str, Any]) -> None:
+        """Called when ``next_step`` has validated a step, just before it moves on.
+
+        Override it to save progress as the person goes (and pair it with
+        ``get_wizard_initial()`` / ``get_wizard_step()`` to resume), instead of
+        overriding the handlers. *data* is the step's raw submitted values, as
+        in ``on_wizard_complete()``. The default does nothing (#3965).
+        """
 
     @event_handler()
     def prev_step(self, **kwargs: Any) -> None:
@@ -538,13 +678,14 @@ class WizardMixin:
         if step_index in self.wizard_completed_steps or step_index == self.wizard_step_index:
             self.wizard_step_index = step_index
 
-    def _store_step_field(self, name: str, value: Any) -> None:
-        """Keep one client-named field of the current step, unless that takes the step's data past
+    def _store_step_fields(self, incoming: Mapping[str, Any]) -> bool:
+        """Keep client-named fields of the current step, unless that takes the step's data past
         ``max_form_fields`` / ``max_form_data_size`` / ``max_form_members`` (#3834): ``wizard_step_data``
         outlives the frame that filled it and is bound to the step's form on every event. The field limit
         is the step's (a step is a form); the characters and members are the wizard's TOTAL, every step's
-        data together (#3858). A refusal stores nothing and says so in the step's errors (``__all__``, Django's key for errors of no field); the next
-        accepted field clears that message."""
+        data together (#3858). A refusal stores NOTHING of *incoming* and says so in the step's errors
+        (``__all__``, Django's key for errors of no field); the next accepted event clears that message.
+        True when *incoming* was stored."""
         step = self._steps[self.wizard_step_index]
         step_name = step["name"]
         data = self.wizard_step_data.setdefault(step_name, {})
@@ -554,16 +695,40 @@ class WizardMixin:
             for held_name, held in self.wizard_step_data.items()
             if held_name != step_name and isinstance(held, Mapping)
         ]
-        message = _form_data_bounds.refusal(data, {name: value}, declared, beside)
+        message = _form_data_bounds.refusal(data, incoming, declared, beside)
         earlier = self.__dict__.pop("_form_data_refusal", None)
         if message is not None:
             _form_data_bounds.warn(self, message)
             self._form_data_refusal = message
             self.wizard_step_errors[step_name] = {"__all__": [message]}
-            return
+            return False
         if earlier is not None and self.wizard_step_errors.get(step_name) == {"__all__": [earlier]}:
             del self.wizard_step_errors[step_name]
-        data[name] = value
+        data.update(incoming)
+        return True
+
+    def _store_step_field(self, name: str, value: Any) -> bool:
+        """Keep one client-named field of the current step (:meth:`_store_step_fields`)."""
+        return self._store_step_fields({name: value})
+
+    def _store_submitted_fields(self, submitted: Mapping[str, Any]) -> bool:
+        """Merge what a step's form posted into ``wizard_step_data`` (#3964).
+
+        Only the fields the CURRENT step's form has: the post of a ``dj-submit``
+        also carries whatever else the browser sent (the CSRF token, hidden
+        inputs), and a field of another step is not this step's to set. False
+        when the bounds refused the merge, after which the step is not validated:
+        the refusal is already in the step's errors.
+        """
+        step = self._steps[self.wizard_step_index]
+        form_class = step.get("form_class")
+        if form_class is None or not submitted:
+            return True
+        names = form_class().fields
+        incoming = {name: value for name, value in submitted.items() if name in names}
+        if not incoming:
+            return True
+        return self._store_step_fields(incoming)
 
     @event_handler()
     def update_step_field(self, field: str = "", value: Any = "", **kwargs: Any) -> None:
@@ -583,7 +748,7 @@ class WizardMixin:
     def validate_field(
         self, field: str = "", field_name: str = "", value: Any = "", **kwargs: Any
     ) -> None:
-        """Store a field value triggered by as_live_field() dj-change events.
+        """Store a field value triggered by as_live_field() dj-change events, and validate it.
 
         ``as_live_field()`` generates ``dj-change="validate_field"`` and
         ``name="<name>"``. The name arrives as ``field`` because
@@ -594,11 +759,55 @@ class WizardMixin:
         data-* attributes are mapped to parameters generally, which is
         ``extractTypedParams`` on the click/poll paths (#2137). The
         ``field_name`` parameter is accepted for backwards compatibility.
+
+        The field is then cleaned the way ``FormMixin.validate_field`` cleans
+        one: ``field.clean()`` and the form's ``clean_<name>()``. A failure is
+        put in ``wizard_step_errors[step][field]`` right away, so the message
+        shows while the person types, not only on Next (#3964). Only the one
+        field is validated: the others may not have been filled in yet.
         """
         name = field or field_name
         if not name or not self._steps:
             return
-        self._store_step_field(name, value)
+        if not self._store_step_field(name, value):
+            return
+        self._validate_one_field(name)
+
+    def _validate_one_field(self, name: str) -> None:
+        """Clean the stored value of one field of the current step; keep or clear its error.
+
+        Mirrors the per-field half of ``FormMixin.validate_field``. The other
+        fields' errors, and the step's non-field errors, are left as they are.
+        """
+        step = self._steps[self.wizard_step_index]
+        form_class = step.get("form_class")
+        if form_class is None:
+            return
+        step_name = step["name"]
+        form = form_class(data=self.wizard_step_data.get(step_name, {}))
+        form_field = form.fields.get(name)
+        if form_field is None:
+            return
+        errors = self.wizard_step_errors.get(step_name)
+        if errors is not None and name in errors:
+            del errors[name]
+            if not errors:
+                del self.wizard_step_errors[step_name]
+        try:
+            bound = form[name]
+            cleaned = form_field.clean(
+                form.get_initial_for_field(form_field, name) if form_field.disabled else bound.data
+            )
+            form.cleaned_data = {name: cleaned}
+            clean_method = getattr(form, f"clean_{name}", None)
+            if clean_method:
+                clean_method()
+        except ValidationError as exc:
+            from .serialization import scrub_error_messages
+
+            self.wizard_step_errors.setdefault(step_name, {})[name] = [
+                str(message) for message in scrub_error_messages(form, name, exc.messages)
+            ]
 
     @event_handler()
     def submit_wizard(self, **kwargs: Any) -> None:
@@ -619,6 +828,11 @@ class WizardMixin:
                 self.wizard_step_index,
                 last_index,
             )
+            return
+
+        # The last step's form posts its fields to this handler, as a step's form
+        # does to ``next_step`` (#3964).
+        if not self._store_submitted_fields(kwargs):
             return
 
         if not self._validate_current_step():

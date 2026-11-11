@@ -293,7 +293,7 @@ async def test_permission_and_object_checks_still_hop_when_they_can_touch_the_db
     ws = MagicMock(send_error=AsyncMock(), close=AsyncMock(), _client_ip="127.0.0.1")
     handler = await wu._validate_event_security(ws, "guarded", view, MagicMock())
     assert handler is not None
-    assert hops == ["check_handler_permission", "check_object_permission"]
+    assert hops == ["check_handler_permission", "check_object_permission_for_event"]
 
 
 # ---------------------------------------------------------------------------
