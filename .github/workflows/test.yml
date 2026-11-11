@@ -822,6 +822,14 @@ jobs:
           # (loading_attribute / cache_decorator / draft_mode / nav_hooks) can
           # be flaky; only the stable two-class browser-smoke canary gates.
 
+      # #3995: the README's "add djust to an existing project" steps, copied
+      # verbatim into a fresh project and driven in a browser. It starts its own
+      # uvicorn server (README step 4) and does not use the demo server above.
+      # Non-gating here until it has been green on the runner (#1534); promote it
+      # beside browser-smoke after that.
+      - name: README existing-project flow in a real browser (#3995)
+        run: .venv/bin/python tests/playwright/test_readme_existing_project.py
+
       - name: Upload server logs on failure
         if: failure()
         uses: actions/upload-artifact@v7
