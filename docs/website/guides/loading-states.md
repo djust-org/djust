@@ -375,6 +375,8 @@ For simple text replacement on submit buttons, use `dj-disable-with` instead of 
 </button>
 ```
 
+`dj-disable-with` puts the button's original text back (and re-enables it) just before the server's response is applied, so a label the same response re-renders (a "Next" button that becomes "Finish") shows what the server rendered, and a button the response renders `disabled` stays disabled. Only what the submit itself disabled is re-enabled: a button that was already disabled before the submit stays disabled.
+
 `dj-disable-with` is the simpler choice for most cases. Use loading directives when you need more complex layouts (spinners, icons, multiple elements reacting to the same event).
 
 ### Full-Page Overlay
