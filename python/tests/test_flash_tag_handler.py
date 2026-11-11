@@ -4,7 +4,53 @@ Tests for DjFlashTagHandler — the Rust template engine tag handler for dj_flas
 Covers rendering with defaults, custom args, and XSS sanitization of position.
 """
 
+from html.parser import HTMLParser
+
+import pytest
+
 from djust.template_tags.flash import DjFlashTagHandler
+from djust.templatetags.djust_flash import dj_flash
+
+
+class _Attrs(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.elements = []
+
+    def handle_starttag(self, tag, attrs):
+        self.elements.append((tag, dict(attrs)))
+
+
+def _container(markup):
+    parser = _Attrs()
+    parser.feed(markup)
+    (element,) = parser.elements
+    return element
+
+
+class TestContainerIsNotALiveRegion:
+    """Each message the client adds is its own live region (``23-flash.js``, #3968); a container
+    that is one too nests ``role="alert"`` inside ``role="status"``, which leaves the announcement
+    (twice, or at the wrong urgency) to each screen reader. BOTH renderers of the container."""
+
+    @pytest.mark.parametrize(
+        "render",
+        [
+            lambda: str(dj_flash()),
+            lambda: DjFlashTagHandler().render([], {}),
+            lambda: str(dj_flash(auto_dismiss=0, position="top-right")),
+            lambda: DjFlashTagHandler().render(["auto_dismiss=0", "position='top-right'"], {}),
+        ],
+        ids=["django", "rust", "django-args", "rust-args"],
+    )
+    def test_no_role_and_no_aria_live(self, render):
+        tag, attrs = _container(render())
+        assert tag == "div" and attrs["id"] == "dj-flash-container"
+        assert attrs["dj-update"] == "ignore" and "data-dj-auto-dismiss" in attrs
+        assert "role" not in attrs and "aria-live" not in attrs, attrs
+
+    def test_the_two_renderers_agree(self):
+        assert str(dj_flash()) == DjFlashTagHandler().render([], {})
 
 
 class TestDjFlashTagHandlerDefaults:
@@ -16,7 +62,6 @@ class TestDjFlashTagHandlerDefaults:
         assert 'class="dj-flash-container"' in html
         assert 'data-dj-auto-dismiss="5000"' in html
         assert 'dj-update="ignore"' in html
-        assert 'aria-live="polite"' in html
 
     def test_render_custom_auto_dismiss(self):
         handler = DjFlashTagHandler()

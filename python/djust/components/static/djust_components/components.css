@@ -518,6 +518,12 @@ html a.btn:where(:hover) { color: hsl(var(--foreground)); }
 .form-radio:checked { background: hsl(var(--primary)); border-color: hsl(var(--primary)); box-shadow: inset 0 0 0 3px hsl(var(--card)); }
 .form-radio:focus-visible { outline: none; box-shadow: 0 0 0 3px hsl(var(--ring) / 0.3); }
 .form-radio-label { font-size: var(--text-sm); color: hsl(var(--foreground)); cursor: pointer; font-family: inherit; user-select: none; }
+/* Radio group ({% dj_radio_group %}; {% live_input "radio" %} with legend=): the fieldset without the browser's border and padding.
+   Its rows are `.form-radio-wrapper` blocks, so they stack; a live_input group without a legend is a plain div and keeps its inline flow. */
+fieldset.dj-radio-group { min-width: 0; margin: 0; padding: 0; border: 0; }
+.dj-radio-group__legend { padding: 0; margin-bottom: var(--space-1); }
+.dj-radio-option + .dj-radio-option { margin-top: var(--space-2); }
+.dj-radio-group[aria-invalid="true"] .form-radio { border-color: hsl(var(--destructive)); }
 
 /* Textarea */
 .form-textarea { display: block; width: 100%; box-sizing: border-box; padding: var(--space-2) var(--space-3); background: hsl(var(--input-background, var(--card))); border: 1px solid hsl(var(--input, var(--border))); border-radius: var(--radius-md); font-family: inherit; font-size: var(--text-sm); color: hsl(var(--foreground)); line-height: var(--leading-relaxed); resize: vertical; min-height: 6rem; transition: border-color var(--duration-fast) var(--ease-in-out, ease), box-shadow var(--duration-fast) var(--ease-in-out, ease); }
@@ -629,10 +635,13 @@ html a.btn:where(:hover) { color: hsl(var(--foreground)); }
 .timeline-time { font-size: var(--text-xs); color: hsl(var(--muted-foreground)); margin: 0 0 var(--space-2); }
 .timeline-body { font-size: var(--text-sm); color: hsl(var(--muted-foreground)); line-height: var(--leading-relaxed); }
 
-/* Stepper (rendered: .stepper, .stepper-step, .stepper-number, .stepper-label, -active/-complete) */
-.stepper { display: flex; flex-direction: row; align-items: flex-start; gap: 0; }
+/* Stepper (rendered: ol.stepper > li.stepper-step > button.stepper-step-button > .stepper-number + .stepper-label, -active/-complete)
+   The <li> is the flex item and carries the connector; the <button> is the focus target. */
+.stepper { display: flex; flex-direction: row; align-items: flex-start; gap: 0; list-style: none; margin: 0; padding: 0; }
 .stepper-vertical { flex-direction: column; }
-.stepper-step { display: flex; flex-direction: column; align-items: center; text-align: center; flex: 1; position: relative; padding: 0 var(--space-2, 0.5rem); background: none; border: none; cursor: pointer; font-family: inherit; color: hsl(var(--muted-foreground)); }
+.stepper-step { display: flex; flex-direction: column; align-items: center; text-align: center; flex: 1; position: relative; padding: 0 var(--space-2, 0.5rem); color: hsl(var(--muted-foreground)); }
+.stepper-step-button { display: flex; flex-direction: column; align-items: center; width: 100%; padding: 0; background: none; border: none; border-radius: var(--radius-sm, 0.25rem); cursor: pointer; font: inherit; color: inherit; text-align: center; }
+.stepper-step-button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
 .stepper-step:not(:last-child)::after { content: ''; position: absolute; top: 1rem; left: calc(50% + 1.25rem); right: calc(-50% + 1.25rem); height: 2px; background: hsl(var(--border)); }
 .stepper-step-complete:not(:last-child)::after { background: hsl(var(--success)); }
 .stepper-number, .stepper-step-circle { width: 2rem; height: 2rem; border-radius: 9999px; border: 2px solid hsl(var(--border)); display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 600; color: hsl(var(--muted-foreground)); background-color: hsl(var(--card)); flex-shrink: 0; transition: all var(--duration-normal, 0.2s) var(--ease-in-out, ease); margin-bottom: 0.5rem; }
@@ -2800,7 +2809,8 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 
 /* --- Progress (djust.components.Progress and {% progress %}) ---
    The class renders `dj-progress-track` / `dj-progress-bar` (single dash);
-   the tag renders `dj-progress__track` / `dj-progress__fill` (BEM). */
+   the tag renders `dj-progress__track` / `dj-progress__fill` (BEM); the Rust handler
+   renders `progress-track` / `progress-bar` (above). */
 .dj-progress { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1, 0.25rem) var(--space-2, 0.5rem); width: 100%; }
 .dj-progress-label, .dj-progress__label { font-size: var(--text-sm, 0.875rem); font-weight: var(--font-medium, 500); color: hsl(var(--foreground)); }
 .dj-progress-label { flex-basis: 100%; }
@@ -2821,6 +2831,20 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .dj-progress__fill--warning { background: hsl(var(--warning)); }
 .dj-progress__fill--danger { background: hsl(var(--destructive)); }
 @media (prefers-reduced-motion: reduce) { .dj-progress-bar, .dj-progress__fill { transition: none; } }
+/* The fill's width: one class per whole percent, so no element carries `style="width:N%"`
+   (an inline style attribute is refused by a `style-src` without 'unsafe-inline', #3969).
+   Used by `{% progress %}` (both engines) and `djust.components.Progress`. */
+.dj-progress-w-0 { width: 0%; } .dj-progress-w-1 { width: 1%; } .dj-progress-w-2 { width: 2%; } .dj-progress-w-3 { width: 3%; } .dj-progress-w-4 { width: 4%; } .dj-progress-w-5 { width: 5%; } .dj-progress-w-6 { width: 6%; } .dj-progress-w-7 { width: 7%; } .dj-progress-w-8 { width: 8%; } .dj-progress-w-9 { width: 9%; }
+.dj-progress-w-10 { width: 10%; } .dj-progress-w-11 { width: 11%; } .dj-progress-w-12 { width: 12%; } .dj-progress-w-13 { width: 13%; } .dj-progress-w-14 { width: 14%; } .dj-progress-w-15 { width: 15%; } .dj-progress-w-16 { width: 16%; } .dj-progress-w-17 { width: 17%; } .dj-progress-w-18 { width: 18%; } .dj-progress-w-19 { width: 19%; }
+.dj-progress-w-20 { width: 20%; } .dj-progress-w-21 { width: 21%; } .dj-progress-w-22 { width: 22%; } .dj-progress-w-23 { width: 23%; } .dj-progress-w-24 { width: 24%; } .dj-progress-w-25 { width: 25%; } .dj-progress-w-26 { width: 26%; } .dj-progress-w-27 { width: 27%; } .dj-progress-w-28 { width: 28%; } .dj-progress-w-29 { width: 29%; }
+.dj-progress-w-30 { width: 30%; } .dj-progress-w-31 { width: 31%; } .dj-progress-w-32 { width: 32%; } .dj-progress-w-33 { width: 33%; } .dj-progress-w-34 { width: 34%; } .dj-progress-w-35 { width: 35%; } .dj-progress-w-36 { width: 36%; } .dj-progress-w-37 { width: 37%; } .dj-progress-w-38 { width: 38%; } .dj-progress-w-39 { width: 39%; }
+.dj-progress-w-40 { width: 40%; } .dj-progress-w-41 { width: 41%; } .dj-progress-w-42 { width: 42%; } .dj-progress-w-43 { width: 43%; } .dj-progress-w-44 { width: 44%; } .dj-progress-w-45 { width: 45%; } .dj-progress-w-46 { width: 46%; } .dj-progress-w-47 { width: 47%; } .dj-progress-w-48 { width: 48%; } .dj-progress-w-49 { width: 49%; }
+.dj-progress-w-50 { width: 50%; } .dj-progress-w-51 { width: 51%; } .dj-progress-w-52 { width: 52%; } .dj-progress-w-53 { width: 53%; } .dj-progress-w-54 { width: 54%; } .dj-progress-w-55 { width: 55%; } .dj-progress-w-56 { width: 56%; } .dj-progress-w-57 { width: 57%; } .dj-progress-w-58 { width: 58%; } .dj-progress-w-59 { width: 59%; }
+.dj-progress-w-60 { width: 60%; } .dj-progress-w-61 { width: 61%; } .dj-progress-w-62 { width: 62%; } .dj-progress-w-63 { width: 63%; } .dj-progress-w-64 { width: 64%; } .dj-progress-w-65 { width: 65%; } .dj-progress-w-66 { width: 66%; } .dj-progress-w-67 { width: 67%; } .dj-progress-w-68 { width: 68%; } .dj-progress-w-69 { width: 69%; }
+.dj-progress-w-70 { width: 70%; } .dj-progress-w-71 { width: 71%; } .dj-progress-w-72 { width: 72%; } .dj-progress-w-73 { width: 73%; } .dj-progress-w-74 { width: 74%; } .dj-progress-w-75 { width: 75%; } .dj-progress-w-76 { width: 76%; } .dj-progress-w-77 { width: 77%; } .dj-progress-w-78 { width: 78%; } .dj-progress-w-79 { width: 79%; }
+.dj-progress-w-80 { width: 80%; } .dj-progress-w-81 { width: 81%; } .dj-progress-w-82 { width: 82%; } .dj-progress-w-83 { width: 83%; } .dj-progress-w-84 { width: 84%; } .dj-progress-w-85 { width: 85%; } .dj-progress-w-86 { width: 86%; } .dj-progress-w-87 { width: 87%; } .dj-progress-w-88 { width: 88%; } .dj-progress-w-89 { width: 89%; }
+.dj-progress-w-90 { width: 90%; } .dj-progress-w-91 { width: 91%; } .dj-progress-w-92 { width: 92%; } .dj-progress-w-93 { width: 93%; } .dj-progress-w-94 { width: 94%; } .dj-progress-w-95 { width: 95%; } .dj-progress-w-96 { width: 96%; } .dj-progress-w-97 { width: 97%; } .dj-progress-w-98 { width: 98%; } .dj-progress-w-99 { width: 99%; }
+.dj-progress-w-100 { width: 100%; }
 
 /* --- Avatar (djust.components.Avatar and {% avatar %}) ---
    Sizes: the class renders `dj-avatar-<size>`, the tag `dj-avatar--<size>`.

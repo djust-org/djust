@@ -60,6 +60,7 @@ djust_components:dj_divider,DIFFERENT,8,classes:5+escaping:3+tags:8+text:6,,13,2
 djust_components:dj_input,DIFFERENT,23,classes:7+data/dj-attrs:1+escaping:9+ids:2+other-attrs:8+tags:10+text:6,rust_only_keys:python,23,11/11,24
 djust_components:dj_label,DIFFERENT-escape-policy-only,3,escaping:3,,11,3/3,11
 djust_components:dj_radio,DIFFERENT,17,data/dj-attrs:1+escaping:5+ids:17+other-attrs:1+tags:17+text:3,rust_only_keys:python,17,7/7,18
+djust_components:dj_radio_group,IDENTICAL,0,,,29,13/13,29
 djust_components:dj_select,DIFFERENT,21,classes:11+data/dj-attrs:1+escaping:7+ids:2+other-attrs:1+tags:12+text:11,rust_only_keys:python,21,10/10,22
 djust_components:dj_tag,DIFFERENT-escape-policy-only,6,classes:1+data/dj-attrs:1+escaping:6+tags:3+text:3,,17,5/5,17
 djust_components:dj_textarea,DIFFERENT,23,classes:23+data/dj-attrs:1+escaping:8+ids:2+other-attrs:1+tags:12+text:6,,23,10/10,23
@@ -136,7 +137,7 @@ djust_components:pivot_table,DIFFERENT-escape-policy-only,2,escaping:2+tags:1+te
 djust_components:popconfirm,DIFFERENT-escape-policy-only,10,escaping:10+tags:4+text:4,,25,9/9,25
 djust_components:popover,DIFFERENT-escape-policy-only,5,escaping:5+tags:3+text:3,,15,4/4,15
 djust_components:presence_avatars,DIFFERENT-escape-policy-only,2,escaping:2,,17,7/7,17
-djust_components:progress,DIFFERENT,13,a11y:13+classes:13+escaping:4+other-attrs:13+tags:3+text:3,,13,5/5,13
+djust_components:progress,DIFFERENT,13,a11y:1+classes:13+escaping:4+tags:3+text:3,,13,5/5,13
 djust_components:progress_circle,DIFFERENT,8,classes:7+escaping:3,,12,5/5,12
 djust_components:prompt_editor,DIFFERENT-escape-policy-only,5,escaping:5+tags:2+text:2,,19,6/6,19
 djust_components:qr_code,DIFFERENT-escape-policy-only,3,escaping:3,,16,5/5,16
@@ -169,8 +170,8 @@ djust_components:spinner,DIFFERENT,12,a11y:12+classes:12+escaping:3+tags:12+text
 djust_components:split_button,DIFFERENT-escape-policy-only,5,classes:1+escaping:5+tags:3+text:3,,22,10/10,22
 djust_components:split_pane,IDENTICAL,0,,,2,3/3,2
 djust_components:stat_card,DIFFERENT,17,classes:17+escaping:5+tags:6+text:6,,17,5/5,17
-djust_components:status_indicator,DIFFERENT,9,classes:7+escaping:4+tags:2+text:2,,15,5/5,15
-djust_components:stepper,DIFFERENT,8,classes:8+data/dj-attrs:1+escaping:2+tags:8,rust_only_keys:python,13,5/5,14
+djust_components:status_indicator,DIFFERENT,9,classes:7+escaping:4+tags:2+text:2,,15,6/6,15
+djust_components:stepper,DIFFERENT,8,classes:8+tags:7+text:7,rust_only_keys:python,13,8/8,14
 djust_components:streaming_text,DIFFERENT-escape-policy-only,4,escaping:4+tags:2+text:2,,17,6/6,17
 djust_components:switch,DIFFERENT,17,classes:12+data/dj-attrs:1+escaping:6+ids:17+other-attrs:8+tags:4+text:4,,17,6/6,17
 djust_components:table_of_contents,DIFFERENT-escape-policy-only,2,data/dj-attrs:1+escaping:2+tags:2+text:2,rust_only_keys:python,15,7/7,9

@@ -621,11 +621,19 @@ class ProgressHandler:
             label_row = f'<div class="progress-label-row">{label_part}{pct_part}</div>'
         track_size = {"sm": "progress-track-sm", "lg": "progress-track-lg"}.get(str(size), "")
         color_class = "" if color == "primary" else color
+        # The fill's width is a class, not ``style="width:N%"``: a ``style-src`` without
+        # ``'unsafe-inline'`` refuses the attribute and the bar drew empty (#3969). The track
+        # carries the role, the value and a name, as the Python tag's does.
+        # An attribute, so ``escape`` (always) and not ``conditional_escape`` (#3898). Named by
+        # the label only when there is one, as the Python tag's is.
+        name = escape(str(kw.get("label", "")))
+        name_attr = f' aria-label="{name}"' if name else ""
         return _safe(
             f'<div class="progress-wrapper">'
             f"{label_row}"
-            f'<div class="progress-track {track_size}">'
-            f'<div class="progress-bar {color_class}" style="width:{value}%"></div>'
+            f'<div class="progress-track {track_size}" role="progressbar" '
+            f'aria-valuenow="{value}" aria-valuemin="0" aria-valuemax="100"{name_attr}>'
+            f'<div class="progress-bar {color_class} dj-progress-w-{value}"></div>'
             f"</div>"
             f"</div>"
         )
@@ -890,6 +898,8 @@ class TagChipHandler:
 
 class StepperHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
+        from djust.components.templatetags.djust_components import render_stepper
+
         kw = _parse_args(args, context)
         steps = _passed_or_context(kw, "steps", context, default=[])
         if not isinstance(steps, (list, tuple)):
@@ -898,27 +908,32 @@ class StepperHandler:
             active = int(cast("str | int | float", kw.get("active", 0)))
         except (ValueError, TypeError):
             active = 0
-        event = conditional_escape(kw.get("event", "set_step"))
-        parts = []
+        event = kw.get("event", "set_step")
+        entries = []
         for i, step in enumerate(steps):
             if isinstance(step, dict):
-                label = conditional_escape(step.get("label", f"Step {i + 1}"))
-                complete = step.get("complete", i < active)
+                label = str(step.get("label", f"Step {i + 1}"))
+                complete = bool(step.get("complete", i < active))
             else:
-                label = conditional_escape(str(step))
+                label = str(step)
                 complete = i < active
             cls = "stepper-step"
             if i == active:
                 cls += " stepper-step-active"
             elif complete:
                 cls += " stepper-step-complete"
-            parts.append(
-                f'<div class="{cls}" dj-click="{event}" data-value="{i}">'
-                f'<div class="stepper-step-circle">{i + 1}</div>'
-                f'<div class="stepper-step-label">{label}</div>'
-                f"</div>"
+            entries.append((label, cls, complete))
+        # The structure (an ordered list of buttons, ``aria-current``, the completed text) is the
+        # Python tag's own, so the two engines cannot drift on it (#3970).
+        return str(
+            render_stepper(
+                entries,
+                active,
+                event,
+                number_class="stepper-step-circle",
+                label_class="stepper-step-label",
             )
-        return _safe(f'<div class="stepper">{"".join(parts)}</div>')
+        )
 
 
 class DjButtonHandler:
@@ -2454,6 +2469,7 @@ OBJECT_ARGUMENT_TAGS = frozenset(
         "avatar_group",
         "combobox",
         "conversation_thread",
+        "dj_radio_group",
         "field_error",
         "form_errors",
         "notification_popover",
@@ -3604,6 +3620,10 @@ class StatusIndicatorHandler:
         label = kw.get("label", "")
         pulse = kw.get("pulse", False)
         size = conditional_escape(kw.get("size", "md"))
+        # The Python tag's own reading of the flag (``"false"`` / ``""`` / ``0`` are off).
+        from djust.components.templatetags.djust_components import _truthy_flag
+
+        live = _truthy_flag(kw.get("live", False))
 
         e_label = conditional_escape(str(label))
 
@@ -3622,7 +3642,8 @@ class StatusIndicatorHandler:
         dot_html = '<span class="dj-status-indicator__dot"></span>'
         label_html = f'<span class="dj-status-indicator__label">{e_label}</span>' if label else ""
 
-        return _safe(f'<span class="{cls}" role="status">{dot_html}{label_html}</span>')
+        role = ' role="status"' if live else ""
+        return _safe(f'<span class="{cls}"{role}>{dot_html}{label_html}</span>')
 
 
 # Register status/progress indicator inline handlers

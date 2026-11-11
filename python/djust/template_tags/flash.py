@@ -60,7 +60,7 @@ class DjFlashTagHandler(TagHandler):
         return str(
             format_html(
                 '<div id="dj-flash-container" class="{}" dj-update="ignore"'
-                ' data-dj-auto-dismiss="{}" aria-live="polite" role="status"></div>',
+                ' data-dj-auto-dismiss="{}"></div>',
                 css_class,
                 auto_dismiss,
             )

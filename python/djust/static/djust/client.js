@@ -16484,7 +16484,9 @@ window.djust.bindModelElements = bindModelElements;
 
         const el = document.createElement('div');
         el.className = 'dj-flash dj-flash-' + level;
-        el.setAttribute('role', 'alert');
+        // One live region per message, its politeness by level. The container is not a live
+        // region: an alert inside a status region leaves the announcement to each screen reader.
+        el.setAttribute('role', level === 'warning' || level === 'error' ? 'alert' : 'status');
         el.setAttribute('data-dj-flash-level', level);
         el.textContent = message;
 

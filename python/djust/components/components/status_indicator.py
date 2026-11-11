@@ -36,6 +36,9 @@ class StatusIndicator(Component):
         pulse: Whether to animate with pulse (default: False)
         size: Size variant (sm, md, lg)
         custom_class: Additional CSS classes
+        live: Render as a polite live region (``role="status"``) for the one
+            indicator that changes in place (default: False). A static label is
+            not a status message, so an indicator is not a live region by default.
     """
 
     STATUS_COLORS = {
@@ -52,6 +55,7 @@ class StatusIndicator(Component):
         pulse: bool = False,
         size: str = "md",
         custom_class: str = "",
+        live: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -60,6 +64,7 @@ class StatusIndicator(Component):
             pulse=pulse,
             size=size,
             custom_class=custom_class,
+            live=live,
             **kwargs,
         )
         self.status = status
@@ -67,6 +72,7 @@ class StatusIndicator(Component):
         self.pulse = pulse
         self.size = size
         self.custom_class = custom_class
+        self.live = live
 
     @property
     def color(self) -> str:
@@ -96,4 +102,5 @@ class StatusIndicator(Component):
                 f'<span class="dj-status-indicator__label">{html.escape(self.label)}</span>'
             )
 
-        return f'<span class="{class_str}">{dot_html}{label_html}</span>'
+        role = ' role="status"' if self.live else ""
+        return f'<span class="{class_str}"{role}>{dot_html}{label_html}</span>'
