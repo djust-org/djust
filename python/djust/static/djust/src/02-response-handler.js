@@ -249,7 +249,10 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             document.querySelectorAll('[data-djust-original-text]').forEach(el => {
                 el.textContent = el.getAttribute('data-djust-original-text');
                 el.removeAttribute('data-djust-original-text');
-                el.disabled = false;
+                // Only what the submit itself disabled: a button that was
+                // already disabled stays so.
+                if (!el.hasAttribute('data-djust-was-disabled')) el.disabled = false;
+                el.removeAttribute('data-djust-was-disabled');
             });
         }
 

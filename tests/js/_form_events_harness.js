@@ -21,8 +21,13 @@ export const legacy = () => ({policy: 'legacy'});
  * @param {object} handlers handler name -> contract (strict(...) / legacy())
  * @param {(request) => object} respond builds the JSON response body for each
  *        request ({event, params, calls, window}); default is an empty patch list.
+ * @param {{transport?: 'http'|'ws'}} options `ws` drives the real WebSocket client
+ *        against a recording socket; `sent()` then holds the event frames'
+ *        {event, params}, and `raw()` the exact JSON that left the client
+ *        (the HTTP body, or the whole frame).
  */
-export function setup(body, handlers = {}, respond = () => ({patches: []})) {
+export function setup(body, handlers = {}, respond = () => ({patches: []}), options = {}) {
+    const ws = options.transport === 'ws';
     const contracts = {version: 1, owners: [{view_id: null, component_id: null, handlers}]};
     const block = `<script type="application/json" data-djust-parameter-contracts>${
         JSON.stringify({view: 'app.Page', contracts})}</script>`;
@@ -31,11 +36,23 @@ export function setup(body, handlers = {}, respond = () => ({patches: []})) {
         {runScripts: 'dangerously', url: 'http://localhost/'});
     const win = dom.window;
     win._sent = [];
+    win._raw = [];
     win._errors = [];
     win._respond = (event, params, calls) => respond({event, params, calls, window: win});
     win.eval(`
-        window.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} };
-        window.DJUST_USE_WEBSOCKET = false;
+        ${ws ? `window.WebSocket = class {
+            static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
+            constructor() { this.readyState = 1; }
+            send(data) {
+                const frame = JSON.parse(data);
+                if (frame.type === 'event') {
+                    window._raw.push(data);
+                    window._sent.push({event: frame.event, params: frame.params});
+                }
+            }
+            close() {}
+        };` : `window.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} };
+        window.DJUST_USE_WEBSOCKET = false;`}
         window.location.reload = function() {};
         Object.defineProperty(document, 'hidden', {value: false, writable: true, configurable: true});
         window.addEventListener('djust:error', e => window._errors.push(e.detail));
@@ -43,6 +60,7 @@ export function setup(body, handlers = {}, respond = () => ({patches: []})) {
         window.fetch = async function(url, opts) {
             const event = opts.headers['X-Djust-Event'];
             const params = JSON.parse(opts.body);
+            window._raw.push(opts.body);
             window._sent.push({event, params});
             const body = window._respond(event, params, window._sent.length);
             window._version++;
@@ -55,9 +73,16 @@ export function setup(body, handlers = {}, respond = () => ({patches: []})) {
     win.console.error = () => {};
     win.eval(source);
     win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    const ready = ws ? win.djust.liveViewInstance.handleMessage({
+        // The socket's contracts arrive on its mount frame (the page block is
+        // the HTTP fallback's); the html is the page as it is, so the morph is a no-op.
+        type: 'mount', view: 'app.Page', version: 1,
+        html: win.document.querySelector('[dj-view]').outerHTML,
+        parameter_contracts: contracts,
+    }) : Promise.resolve();
     const $ = selector => win.document.querySelector(selector);
     const settle = (ms = 30) => new Promise(resolve => setTimeout(resolve, ms));
-    return {dom, win, $, settle, sent: () => win._sent, errors: () => win._errors};
+    return {dom, win, $, settle, ready, sent: () => win._sent, raw: () => win._raw, errors: () => win._errors};
 }
 
 /** Press a submit button the way the browser does: a real `submit` event whose `submitter` is the button. */
