@@ -414,13 +414,20 @@ every API call. Two mitigations:
    for API callers.
 
 ```python
-class MyView(LiveView):
+from djust import LiveView
+from djust.presence import PresenceMixin
+
+
+class MyView(PresenceMixin, LiveView):
     def mount(self, request, **kwargs):
-        self.subscribe_presence()  # Only needed for live browser sessions
+        self.track_presence()  # Only needed for live browser sessions
         self._seed()
 
     def api_mount(self, request):
-        self._seed()  # Skip the presence subscription
+        self._seed()  # Skip the presence tracking
+
+    def _seed(self):
+        self.items = []
 ```
 
 ---

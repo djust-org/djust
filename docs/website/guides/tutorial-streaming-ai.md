@@ -77,7 +77,8 @@ tokens you'll never display).
 
 ```python
 # myapp/views.py
-from djust import LiveView, action, rate_limit, state
+from djust import LiveView, action, state
+from djust.decorators import rate_limit
 
 _STREAM = "reply"  # matches dj-stream="reply" in the template
 

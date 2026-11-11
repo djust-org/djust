@@ -486,6 +486,10 @@ class DashboardView(LiveView):
     def mount(self, request, **kwargs):
         self.sales_data = self.fetch_sales()
 
+    def fetch_sales(self):
+        # Your own query; a list the chart can plot.
+        return [120, 180, 150, 210]
+
     @event_handler()
     def refresh_data(self, **kwargs):
         self.sales_data = self.fetch_sales()

@@ -28,7 +28,7 @@ from djust.decorators import event_handler
 
 
 class CounterView(LiveView):
-    template = "<div>{{ count }}</div>"
+    template = "<div dj-root>{{ count }}</div>"
 
     # Opt into time-travel debugging for this view.
     time_travel_enabled = True

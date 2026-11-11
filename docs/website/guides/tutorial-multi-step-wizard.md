@@ -116,7 +116,13 @@ Two `@event_handler`s plus the final `@action` for submit:
 
 ```python
 class SignupWizardView(LiveView):
-    # ... state as above ...
+    # the state from Step 1
+    step = state(1)
+    name = state("")
+    email = state("")
+    plan = state("")
+    cycle = state("monthly")
+    errors = state(default_factory=dict)
 
     def _values(self) -> dict:
         return {f: getattr(self, f) for fields in STEP_FIELDS.values() for f in fields}
