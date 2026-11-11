@@ -69,6 +69,14 @@ Rules:
   authorizes each one. Override at least one (check `djust.S013`).
 - Missing, filtered-out and forbidden records get the same denial, and no form
   or hook runs. Every event looks the record up and checks it again.
+- Opt-ins (added after 1.3.2; neither changes a write): `object_recheck = "writes"`
+  lets only read-only events (`validate_field`, plus names in
+  `object_read_only_events`) reuse the authorized record; every other event,
+  including `submit_form` and every handler of yours, is checked in full.
+  `get_object_lookup()` (keys `pk_url_kwarg` / `slug_url_kwarg`) selects the
+  record from view state such as a `?open=<id>` param kept in `handle_params`;
+  with `object_optional = True` "nothing selected" is `object = None` and no
+  form, while a selected record that does not resolve is still a denial.
 - `self.object` renders as `object` (plus `context_object_name` if set) and is
   never persisted. Only `self.object = form.save()` (the same record) may be
   assigned; anything else raises `ValueError`.

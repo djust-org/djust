@@ -119,8 +119,8 @@ That's it. The wizard handles validation, navigation, and data collection automa
 ## How It Works
 
 1. `mount()` initializes step state (index, data, errors, completed steps)
-2. User fills in fields -- `dj-change="validate_field"` stores each value as it changes (no validation yet). A field with a callable `initial` (`UUIDField(initial=uuid.uuid4)`, `initial=timezone.now`) is drawn once, when its step first renders, and stored in the step's data as the text the widget shows, so the value on the page is the value the step submits
-3. User clicks "Continue" -- `next_step` validates the current step, advances if valid
+2. User fills in fields -- `dj-change="validate_field"` stores each value as it changes and validates that one field (`field.clean()` plus the form's `clean_<name>()`), so its error shows right away in `step_errors`. A field with a callable `initial` (`UUIDField(initial=uuid.uuid4)`, `initial=timezone.now`) is drawn once, when its step first renders, and stored in the step's data as the text the widget shows, so the value on the page is the value the step submits
+3. User clicks "Continue" -- `next_step` merges the fields the current step's form was submitted with (if it was a `dj-submit`), validates the step, and advances if valid
 4. User clicks "Back" -- `prev_step` goes back without validation (data is preserved)
 5. On the last step, "Submit" calls `submit_wizard` which re-validates ALL steps, then calls `on_wizard_complete()`
 
@@ -130,12 +130,12 @@ All handlers are available via `dj-click` or `dj-submit` in templates:
 
 | Handler              | Description                                                |
 | -------------------- | ---------------------------------------------------------- |
-| `next_step`          | Validate current step, advance if valid                    |
+| `next_step`          | Merge the fields the step's form posted, validate the step, advance if valid |
 | `prev_step`          | Go back one step (no validation, data preserved)           |
 | `go_to_step`         | Jump to a completed step (`data-step_index="N"`)           |
 | `update_step_field`  | Store a single field value (`data-field="name"`)           |
-| `validate_field`     | Store a field's value as the user edits it (used by `as_live_field()`); validation runs on `next_step` / `submit_wizard` |
-| `submit_wizard`      | Validate all steps, call `on_wizard_complete()` if valid   |
+| `validate_field`     | Store a field's value as the user edits it and validate that one field (used by `as_live_field()`) |
+| `submit_wizard`      | Merge the last step's posted fields, validate all steps, call `on_wizard_complete()` if valid |
 
 ### Jumping to a Step
 
@@ -198,7 +198,53 @@ The Rust template engine cannot call Python methods with arguments, so form fiel
 {{ field_html.email|safe }}
 ```
 
-Each field carries `dj-change="validate_field"` (or `dj-input` for text widgets when `wizard_input_event = "dj-input"`) and its `name="<field>"`, which the handler receives as `field`. `validate_field` only stores the value; validation runs on `next_step` / `submit_wizard`.
+Each field carries `dj-change="validate_field"` (or `dj-input` for text widgets when `wizard_input_event = "dj-input"`) and its `name="<field>"`, which the handler receives as `field`. `validate_field` stores the value and validates that one field, so its error appears while the person types (a field that is still empty is not reported when another field changes). `next_step` / `submit_wizard` validate the whole step.
+
+Every render builds `field_html` for every field of the current step. A template that writes its own inputs, and does not use `field_html`, pays for that on every event: set `wizard_rendered_fields = ()` on the view (or `"rendered_fields": ()` on a step) to skip it. A list of names renders just those fields.
+
+## Your Own Markup: Submit the Step's Form
+
+A step does not have to use `field_html`. A plain `<form dj-submit="next_step">` works: the fields it posts reach `next_step` as keyword arguments, and the wizard validates the step against what was submitted, whether or not each field also sent a `validate_field` event:
+
+```html
+<form dj-submit="next_step">
+    {% csrf_token %}
+    <input name="email" value="{{ form_data.email }}">
+    {% for error in step_errors.email %}<span class="error">{{ error }}</span>{% endfor %}
+    <button type="submit">Next</button>
+</form>
+```
+
+Only the fields the current step's form declares are kept; the CSRF token and any other name in the post are ignored, and a field of another step can't be set from this step. The last step's form posts to `submit_wizard` the same way. A post that would take the step's stored data past `max_form_fields` / `max_form_data_size` / `max_form_members` is refused whole and says so in the step's errors.
+
+## Resuming Stored Progress
+
+`mount()` starts at the first step with nothing answered. A wizard whose steps save as you go (a long application form) can start from what was saved, so a reload, or a reconnect that mounts the view again, doesn't send the person back to step 1:
+
+<!-- djust-example: skip -- needs an application model (Application) -->
+```python
+class ApplicationWizard(WizardMixin, LiveView):
+    wizard_steps = [...]
+
+    def get_wizard_initial(self):
+        # {step_name: {field_name: value}} -- values the form fields accept
+        saved = Application.objects.filter(owner=self.request.user).first()
+        return saved.answers if saved else {}
+
+    def get_wizard_step(self):
+        # the index or the "name" of the first step still to do
+        saved = Application.objects.filter(owner=self.request.user).first()
+        return saved.next_step if saved else 0
+
+    def on_step_saved(self, step_name, data):
+        Application.objects.update_or_create(
+            owner=self.request.user, defaults={"answers": {step_name: data}}
+        )
+```
+
+- `get_wizard_initial()` and `get_wizard_step()` are called by `mount()`; the defaults return `{}` and `0`, so a wizard that overrides neither behaves as before. Values are stored as the text the browser would submit (a `date` becomes `"2024-02-29"`), because wizard state is JSON. A step without a form, a step the wizard does not have and a field the step's form does not have are ignored, with a warning in the log.
+- A step that does not exist (an index out of range, an unknown name) starts at the first step, with a warning. Every step before the one named counts as completed, so `go_to_step` can return to it; `next_step` still validates the step it leaves and `submit_wizard` validates all of them again, so stale stored answers can't skip validation.
+- `on_step_saved(step_name, data)` runs when `next_step` has validated a step, just before the wizard moves on. If it raises (a failed save), the person stays on the step. `prev_step` does not call it: the step it leaves is not validated.
 
 You can also render fields manually in `get_context_data()`:
 
