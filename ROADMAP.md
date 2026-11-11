@@ -258,19 +258,20 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P2** | **A.** #3971 — `{% status_indicator %}` renders `role="status"`, making every indicator a live region | v1.3.0 |
-| **P2** | **A.** #3968 — Flash messages are announced through nested live regions (`role="alert"` inside `role="status"`) | v1.3.0 |
-| **P2** | **A.** #3970 — `{% stepper %}` steps are click-only divs: not keyboard operable, no `aria-current`, not a list | v1.3.0 |
-| **P2** | **A.** #3969 — `{% progress %}` fill is an inline style (blocked by a strict CSP) and the bar has no `progressbar` role | v1.3.0 |
-| **P2** | **A.** #3961 — Radio components have no group semantics (`dj_radio`, `live_input type="radio"`) | v1.3.0 |
-| **P3** | **A.** #3973 — `djust.Y005` flags an `<svg>` inside an `aria-hidden="true"` ancestor | v1.3.0 |
-| **P1** | **B.** #3964 — `WizardMixin.next_step` ignores the submitted step form, and `validate_field` does not validate | v1.3.0 |
-| **P1** | **B.** #3966 — `FormSetHelpersMixin.add_row` / `remove_row` drop `instance`, `queryset` and the other formset kwargs | v1.3.0 |
-| **P2** | **B.** #3965 — `WizardMixin.mount` always restarts at step 0, with no hook to resume stored progress | v1.3.0 |
-| **P2** | **B.** #3967 — `ModelFormMixin`: let read-only events reuse the authorized object, and take the lookup from params (design call: ADR-017 guarantee for writes stays) | v1.3.0 |
-| **P1** | **C.** #3959 — Multi-value form fields lose values: `dj-submit` keeps only the last `FormData` entry, `dj-change` on a checkbox sends its checked state | v1.3.0 |
-| **P2** | **C.** #3958 — `dj-submit`: the pressed submit button is lost under strict event parameters (ADR-036) | v1.3.0 |
-| **P2** | **C.** #3963 — `dj-disable-with` restores a button's old text over the text the server just rendered | v1.3.0 |
+| ~~**P2**~~ | ~~**A.** #3971 — `{% status_indicator %}` renders `role="status"`, making every indicator a live region~~ ✅ (#3980) | v1.3.0 |
+| **P2** | **A.** #3968 — Flash messages are announced through nested live regions (`role="alert"` inside `role="status"`) — fix merged in #3980; left open until a screen reader (VoiceOver/NVDA) confirms the announcements | v1.3.0 |
+| ~~**P2**~~ | ~~**A.** #3970 — `{% stepper %}` steps are click-only divs: not keyboard operable, no `aria-current`, not a list~~ ✅ (#3980) | v1.3.0 |
+| ~~**P2**~~ | ~~**A.** #3969 — `{% progress %}` fill is an inline style (blocked by a strict CSP) and the bar has no `progressbar` role~~ ✅ (#3980) | v1.3.0 |
+| ~~**P2**~~ | ~~**A.** #3961 — Radio components have no group semantics (`dj_radio`, `live_input type="radio"`)~~ ✅ (#3980) | v1.3.0 |
+| ~~**P3**~~ | ~~**A.** #3973 — `djust.Y005` flags an `<svg>` inside an `aria-hidden="true"` ancestor~~ ✅ (#3980) | v1.3.0 |
+| ~~**P1**~~ | ~~**B.** #3964 — `WizardMixin.next_step` ignores the submitted step form, and `validate_field` does not validate~~ ✅ (#3981) | v1.3.0 |
+| ~~**P1**~~ | ~~**B.** #3966 — `FormSetHelpersMixin.add_row` / `remove_row` drop `instance`, `queryset` and the other formset kwargs~~ ✅ (#3981) | v1.3.0 |
+| ~~**P2**~~ | ~~**B.** #3965 — `WizardMixin.mount` always restarts at step 0, with no hook to resume stored progress~~ ✅ (#3981) | v1.3.0 |
+| ~~**P2**~~ | ~~**B.** #3967 — `ModelFormMixin`: let read-only events reuse the authorized object, and take the lookup from params (design call: ADR-017 guarantee for writes stays)~~ ✅ (#3981) | v1.3.0 |
+| ~~**P1**~~ | ~~**C.** #3959 — Multi-value form fields lose values: `dj-submit` keeps only the last `FormData` entry, `dj-change` on a checkbox sends its checked state~~ ✅ (#3976) | v1.3.0 |
+| ~~**P2**~~ | ~~**C.** #3958 — `dj-submit`: the pressed submit button is lost under strict event parameters (ADR-036)~~ ✅ (#3976) | v1.3.0 |
+| ~~**P2**~~ | ~~**C.** #3963 — `dj-disable-with` restores a button's old text over the text the server just rendered~~ ✅ (#3976) | v1.3.0 |
+| **P3** | Follow-ups filed from the group reviews: #3975 (`dj-lock` restore order), #3978 (draft manager / `dj-model` / adapters flatten multi-value fields), #3977 (`LiveViewTestClient.mount()` cannot mount a routed `ModelFormMixin` view), #3979 (inline-width progress fills in `ui/` variants and docs), #3982 (`on_wizard_complete` undeclared names), #3983 (record fingerprint cost) | v1.4.0 |
 | ~~**P2**~~ | ~~#3972 — `{% toggle_group %}` form mode~~ covered by open PR #3962 (`form_field=True`); closes with it | v1.3.0 |
 
 ## Next: v1.2.1 — non-breaking fixes (drain)
