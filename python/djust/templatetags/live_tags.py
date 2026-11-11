@@ -2815,7 +2815,9 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         if explicit_values is not None:
             for name, value in explicit_values.items():
                 safe_setattr(child, name, value, allow_private=False, raise_on_blocked=True)
-            explicit_child_restored = True
+        # Read after the block, not set inside it: the block above is pinned to exactly
+        # this shape by test_decimal_state_tag_2252.py (the child's JSON-only restore).
+        explicit_child_restored = explicit_values is not None
 
     # 4c. Object-permission check (ADR-017) for the embedded child. The child's
     #     view-level auth ran above (check_view_auth); the object-level step
