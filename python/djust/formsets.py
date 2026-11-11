@@ -188,10 +188,46 @@ def _schema_keys(
     return frozenset(own)
 
 
+def _seeded(
+    formset_cls: Type[BaseFormSet],
+    prefix: str,
+    data: Dict[str, Any],
+    formset_kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
+    """*data*, or the formset's own rows as bound data when there is nothing bound yet (#3966).
+
+    A formset built with ``instance`` (inline), ``queryset`` (model) or ``initial`` already shows rows
+    the caller has no bound data for: a view that starts with ``_formset_data = {}`` has bound nothing.
+    Rebuilding it from that empty dict with one more row would show only the new row, and for an inline
+    formset the existing rows would be missing from the submission. So when *data* has no management
+    form and the caller passed formset kwargs, the starting point is the formset those kwargs build
+    (unbound), written out the way a browser would post it: its management form and one key per field
+    of every row, existing rows first. With no formset kwargs the unbound formset holds nothing the
+    caller could lose, and *data* is used as it is. *data* itself is never changed.
+    """
+    if not formset_kwargs or f"{prefix}-TOTAL_FORMS" in data:
+        return data
+    from .wizard import _submittable
+
+    unbound = formset_cls(prefix=prefix, **formset_kwargs)
+    seeded: Dict[str, Any] = {
+        f"{prefix}-TOTAL_FORMS": str(unbound.total_form_count()),
+        f"{prefix}-INITIAL_FORMS": str(unbound.initial_form_count()),
+    }
+    for form in unbound.forms:
+        for name, field in form.fields.items():
+            value = form[name].value()
+            if value is not None:
+                seeded[form.add_prefix(name)] = _submittable(field, value)
+    seeded.update(data)
+    return seeded
+
+
 def add_row(
     formset_cls: Type[BaseFormSet],
     data: Optional[Dict[str, Any]] = None,
     prefix: Optional[str] = None,
+    **formset_kwargs: Any,
 ) -> BaseFormSet:
     """Return a new formset instance with one additional empty row.
 
@@ -203,24 +239,31 @@ def add_row(
             instantiates the formset with a custom prefix (e.g.
             ``FS(prefix="addresses")``) — without it, the management fields
             under ``addresses-*`` will never be updated.
+        **formset_kwargs: Every other argument the formset is built with, passed
+            through to ``formset_cls(data, prefix=prefix, **formset_kwargs)``:
+            ``instance`` (an inline formset's parent), ``queryset`` (a model
+            formset's rows), ``form_kwargs``, ``initial``, ``auto_id``. Without
+            them the rebuilt formset has lost its parent and its rows (#3966).
+            When *data* holds no management form yet, the formset these kwargs
+            build is the starting point, so its existing rows are kept.
 
     Caps at ``formset_cls.max_num`` when set, otherwise at ``absolute_max``.
     Data for existing rows is preserved; the new row's fields are empty.
     When already at the cap, the call is a logged no-op.
     """
-    data = dict(data) if data else {}
     prefix = _resolve_prefix(formset_cls, prefix)
+    data = dict(_seeded(formset_cls, prefix, dict(data) if data else {}, formset_kwargs))
     total_key = f"{prefix}-TOTAL_FORMS"
     current = int(data.get(total_key, 0))
     cap = _effective_cap(formset_cls)
     if current >= cap:
         logger.debug("add_row: %s at cap %d — no-op", prefix, cap)
-        return formset_cls(data or None, prefix=prefix)
+        return formset_cls(data or None, prefix=prefix, **formset_kwargs)
     data[total_key] = str(current + 1)
     data.setdefault(f"{prefix}-INITIAL_FORMS", "0")
     data.setdefault(f"{prefix}-MIN_NUM_FORMS", "0")
     data.setdefault(f"{prefix}-MAX_NUM_FORMS", str(cap))
-    return formset_cls(data, prefix=prefix)
+    return formset_cls(data, prefix=prefix, **formset_kwargs)
 
 
 def remove_row(
@@ -228,6 +271,7 @@ def remove_row(
     row_prefix: str,
     data: Optional[Dict[str, Any]] = None,
     prefix: Optional[str] = None,
+    **formset_kwargs: Any,
 ) -> BaseFormSet:
     """Mark the row with ``row_prefix`` for deletion.
 
@@ -238,6 +282,8 @@ def remove_row(
             ``prefix="addresses"``.
         data: Current bound data.
         prefix: Optional custom formset prefix for re-instantiation.
+        **formset_kwargs: Every other argument the formset is built with (``instance``,
+            ``queryset``, ``form_kwargs``, ``initial``, ``auto_id``), as for :func:`add_row` (#3966).
 
     Follows Django's standard formset delete protocol: sets ``DELETE="on"``
     on the row so ``formset.deleted_forms`` picks it up during validation.
@@ -251,8 +297,8 @@ def remove_row(
     keys that are not the formset's own), ``max_form_data_size`` or ``max_form_members``, nothing is
     stored and the call is a logged no-op (#3858).
     """
-    data = dict(data) if data else {}
     prefix = _resolve_prefix(formset_cls, prefix)
+    data = dict(_seeded(formset_cls, prefix, dict(data) if data else {}, formset_kwargs))
     key = f"{row_prefix}-DELETE"
     # ``row_prefix`` is the client's (``dj-value-prefix``), so the key it names is judged like any other
     # key a client names in a form's data (#3858, #3834): past ``max_form_fields`` / ``max_form_data_size``
@@ -262,9 +308,9 @@ def remove_row(
     )
     if message is not None:
         logger.warning("remove_row refused form data: %s", message)
-        return formset_cls(data or None, prefix=prefix)
+        return formset_cls(data or None, prefix=prefix, **formset_kwargs)
     data[key] = "on"
-    return formset_cls(data, prefix=prefix)
+    return formset_cls(data, prefix=prefix, **formset_kwargs)
 
 
 class FormSetHelpersMixin:
@@ -298,6 +344,42 @@ class FormSetHelpersMixin:
             )
         return cls
 
+    #: Arguments ``get_formset_kwargs()`` may not return: the helpers pass them themselves.
+    _RESERVED_FORMSET_KWARGS = frozenset({"data", "prefix"})
+
+    def get_formset_kwargs(self, name: str) -> Dict[str, Any]:
+        """The arguments formset *name* is built with, besides its data and prefix (#3966).
+
+        ``add_row`` and ``remove_row`` rebuild the formset from its bound data on
+        every call; without this hook everything it was first built with (an inline
+        formset's ``instance``, a model formset's ``queryset``, ``form_kwargs``,
+        ``initial``, ``auto_id``) is lost. Override it and build the formset in
+        ``mount()`` with the same method, so there is one place that says how::
+
+            def get_formset_kwargs(self, name):
+                return {"instance": self.order}
+
+            def mount(self, request, pk=None, **kwargs):
+                self.order = Order.objects.get(pk=pk)
+                self.items = ItemFormSet(prefix="items", **self.get_formset_kwargs("items"))
+                self._formset_data = {}
+
+        The default returns ``{}``. ``data`` and ``prefix`` are not accepted: the
+        mixin passes the formset's name as its prefix.
+        """
+        return {}
+
+    def _formset_kwargs(self, name: str) -> Dict[str, Any]:
+        """``get_formset_kwargs(name)``, refusing the arguments the helpers set themselves."""
+        kwargs = dict(self.get_formset_kwargs(name))
+        clash = sorted(self._RESERVED_FORMSET_KWARGS.intersection(kwargs))
+        if clash:
+            raise ValueError(
+                f"{type(self).__name__}.get_formset_kwargs({name!r}) returned {clash}; "
+                f"the formset's data and prefix are set by add_row/remove_row, not by this hook."
+            )
+        return kwargs
+
     def _require_formset_data(self) -> Dict[str, Any]:
         """Return ``self._formset_data``, raising a clear error if the user forgot to init it."""
         data = getattr(self, "_formset_data", None)
@@ -321,7 +403,7 @@ class FormSetHelpersMixin:
             return
         cls = self._resolve_formset_class(formset)
         data = self._require_formset_data()
-        updated = add_row(cls, data=data, prefix=formset)
+        updated = add_row(cls, data=data, prefix=formset, **self._formset_kwargs(formset))
         self._formset_data = updated.data
         setattr(self, formset, updated)
 
@@ -338,6 +420,8 @@ class FormSetHelpersMixin:
             return
         cls = self._resolve_formset_class(formset)
         data = self._require_formset_data()
-        updated = remove_row(cls, row_prefix=prefix, data=data, prefix=formset)
+        updated = remove_row(
+            cls, row_prefix=prefix, data=data, prefix=formset, **self._formset_kwargs(formset)
+        )
         self._formset_data = updated.data
         setattr(self, formset, updated)

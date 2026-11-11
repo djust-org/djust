@@ -1886,6 +1886,45 @@ def check_object_permission(view_instance: Any, request: Any) -> None:
     )
     if outcome is not None:
         view_instance._object = outcome[0]
+        # A view that keeps something beside the object (ADR-035's form state, the
+        # record an event may reuse) learns here that ``_object`` was just resolved
+        # and authorized for ``request``. Only a successful check gets this far.
+        note = getattr(view_instance, "_djust_note_authorized_object", None)
+        if callable(note):
+            note(request)
+
+
+def check_object_permission_for_event(view_instance: Any, request: Any, handler: Any) -> None:
+    """:func:`check_object_permission` for the event ``handler`` is about to run.
+
+    The per-event check of ADR-017. It is the full check, unless the view says that
+    ``handler`` may reuse the object it already authorized
+    (``view._djust_reuses_authorized_object(handler, request)``; ``ModelFormMixin``
+    with ``object_recheck = "writes"``, for its read-only events only, #3967). A view
+    without that method, and every handler it does not name, gets the full check.
+    The hook is the view's own code: it is asked, and a hook that raises means "no":
+    the full check runs, so an error here can only cost a lookup, never skip one.
+
+    Every transport's event path calls this and no other; do not call
+    :func:`check_object_permission` directly for an event (#1646).
+    """
+    reuse = getattr(view_instance, "_djust_reuses_authorized_object", None)
+    if callable(reuse):
+        try:
+            if reuse(handler, request):
+                return
+        except Exception as exc:  # noqa: BLE001 — the hook is app code; a failure means "check in full"
+            from .._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger,
+                (view_instance,),
+                exc,
+                "_djust_reuses_authorized_object raised on %s; checking the object in full",
+                view_instance.__class__.__name__,
+                level="warning",
+            )
+    check_object_permission(view_instance, request)
 
 
 def _resolve_object_permission(view_instance: Any, request: Any) -> Optional[Tuple[Any]]:
