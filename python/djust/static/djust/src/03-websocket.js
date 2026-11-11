@@ -276,6 +276,26 @@ function storeSignedSnapshot(data, primaryViewPath) {
     }
 }
 
+// #3988: the token a reconnecting page view sends back with its mount frame.
+//
+// `storeSignedSnapshot` keeps the newest signed token for the page view, and
+// until now only navigation echoed it (18-navigation.js), so a
+// `state(persist="client")` field reset on an ordinary reconnect: the server
+// restores only from a token the mount frame carries. The token is opaque and
+// echoed verbatim; the server validates its signature, age and binding, and
+// ignores one it does not accept. Shared by the WebSocket and SSE mounts (#1646).
+// Only a reconnect sends it: a first mount has no earlier state to bring back.
+function reconnectStateSnapshot(viewPath) {
+    if (!(window.djust && window.djust._isReconnect)) return null;
+    const bag = window.djust._clientState;
+    if (!bag || typeof viewPath !== 'string' || !viewPath ||
+        !Object.prototype.hasOwnProperty.call(bag, viewPath)) return null;
+    // eslint-disable-next-line security/detect-object-injection
+    const token = bag[viewPath];
+    if (typeof token !== 'string' || !token) return null;
+    return { view_slug: viewPath, state_json: token };
+}
+
 // #1610: morph the HTTP-prerendered DOM against a mount frame's HTML, so
 // mount-context state (per-connection values, and ADR-034's per-instance
 // component identities) reaches the page. Shared by the WebSocket and SSE
@@ -1502,6 +1522,10 @@ class LiveViewWebSocket {
         if (options.primary && trackStatic) {
             Object.assign(frame, trackStatic.mountFields(Boolean(window.djust._isReconnect)));
         }
+        // #3988: the page view's client-held state comes back on a reconnect.
+        // Never for a view mounted beside it: the server ships no token for one.
+        const snapshot = options.primary ? reconnectStateSnapshot(viewPath) : null;
+        if (snapshot) frame.state_snapshot = snapshot;
         this.sendMessage(frame);
         return true;
     }

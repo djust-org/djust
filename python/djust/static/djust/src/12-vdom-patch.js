@@ -313,6 +313,34 @@ function isSignificantChild(child, preserveWhitespace = false) {
  *   indices).
  * @returns {Object|null} Saved focus state, or null if no form element is focused.
  */
+// Patch types that can put a new element on the page.
+const _INSERTING_PATCH_TYPES = new Set(['InsertChild', 'InsertSubtree', 'Replace', 'VirtualInsert']);
+
+function _patchCanInsert(patch) {
+    return _INSERTING_PATCH_TYPES.has(patch.type);
+}
+
+/**
+ * Focus the first [autofocus] element the batch inserted (#617, #3987).
+ *
+ * `prior` is the set of [autofocus] elements that were on the page before the
+ * batch, or null when nothing should be focused: a form field the user is in
+ * keeps focus, and a batch that inserts nothing has nothing new to focus.
+ * An element that was already there is never focused again. The old guard
+ * (`!focusState.id`, a field saveFocusState never sets) was always true, so
+ * every patch focused the page's [autofocus] element: `blur` and `focusout`
+ * fired on the field being typed in, and a clicked button lost focus to it.
+ */
+function _focusInsertedAutofocus(scope, prior) {
+    if (!prior) return;
+    for (const el of scope.querySelectorAll('[autofocus]')) {
+        if (!prior.has(el)) {
+            if (document.activeElement !== el) el.focus();
+            return;
+        }
+    }
+}
+
 function saveFocusState(rootEl = null) {
     const active = document.activeElement;
     if (!active || active === document.body || active === document.documentElement) {
@@ -3345,6 +3373,12 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
     // Save focus state before any DOM mutations (#559 follow-up: focus preservation)
     const focusState = saveFocusState(rootEl);
     const autofocusScope = rootEl || document;
+    // #3987: only an element THIS batch inserts can ask for focus. Remember the
+    // [autofocus] elements already on the page, and only when a patch can insert
+    // one, so a text or attribute update costs no query at all.
+    const priorAutofocus = !focusState && patches.some(_patchCanInsert)
+        ? new Set(autofocusScope.querySelectorAll('[autofocus]'))
+        : null;
 
     // #2999: one model for every batch size — resolve removals against the
     // pre-batch DOM, remove, place inserts + moves (children and dj-if spans)
@@ -3354,12 +3388,7 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
     if (failedCount > 0) {
         console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (${successCount} succeeded; indices: ${failedIndices.join(', ')})`);
         // Still handle autofocus even when some patches failed (#617)
-        if (!focusState || !focusState.id) {
-            const autoFocusEl = autofocusScope.querySelector('[autofocus]');
-            if (autoFocusEl && document.activeElement !== autoFocusEl) {
-                autoFocusEl.focus();
-            }
-        }
+        _focusInsertedAutofocus(autofocusScope, priorAutofocus);
         restoreFocusState(focusState, rootEl);
         return false;
     }
@@ -3371,12 +3400,7 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
     // Handle autofocus on dynamically inserted elements (#617)
     // Browser only honors autofocus on initial page load, so we
     // manually focus the first element with autofocus after a patch.
-    if (!focusState || !focusState.id) {
-        const autoFocusEl = autofocusScope.querySelector('[autofocus]');
-        if (autoFocusEl && document.activeElement !== autoFocusEl) {
-            autoFocusEl.focus();
-        }
-    }
+    _focusInsertedAutofocus(autofocusScope, priorAutofocus);
 
     restoreFocusState(focusState, rootEl);
     return true;

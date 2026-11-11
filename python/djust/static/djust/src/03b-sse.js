@@ -585,14 +585,18 @@ class LiveViewSSE {
         let tz = null;
         try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* noop */ }
         // dj-track-static URLs ride the stream GET, not this frame (#2966).
-        return this.sendMessage({
+        const frame = {
             type: 'mount',
             view: viewPath,
             params,
             url: window.location.pathname,
             has_prerendered: false,
             client_timezone: tz,
-        });
+        };
+        // #3988: as the WebSocket mount does (reconnectStateSnapshot, 03-websocket.js).
+        const snapshot = reconnectStateSnapshot(viewPath);
+        if (snapshot) frame.state_snapshot = snapshot;
+        return this.sendMessage(frame);
     }
 
     /**
