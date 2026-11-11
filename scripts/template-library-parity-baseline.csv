@@ -184,7 +184,7 @@ djust_components:time_picker,DIFFERENT-escape-policy-only,5,escaping:5+tags:2+te
 djust_components:timeline,DIFFERENT,1,classes:1+tags:1,,20,7/7,20
 djust_components:timeline_item,DIFFERENT,11,classes:11+escaping:3+tags:11+text:4,,11,2/2,11
 djust_components:toast_container,IDENTICAL,0,,,13,2/2,13
-djust_components:toggle_group,DIFFERENT-escape-policy-only,4,classes:1+data/dj-attrs:1+escaping:4,rust_only_keys:python,21,10/10,22
+djust_components:toggle_group,NOT-RENDERABLE-IN-ONE-ENGINE,0,,rust_only_keys:python,21,10/10,22
 djust_components:token_counter,DIFFERENT-escape-policy-only,3,escaping:3+tags:2+text:2,,11,5/5,11
 djust_components:toolbar,DIFFERENT,15,classes:15+escaping:5+ids:7+tags:15,,16,4/4,16
 djust_components:toolbar_overflow,IDENTICAL,0,,,19,7/7,19
