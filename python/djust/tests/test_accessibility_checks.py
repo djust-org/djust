@@ -1398,3 +1398,99 @@ class TestReviewFixes3685Round2:
     def test_unquoted_img_alt_names_a_legend_item(self, tmp_path, settings):
         html = '<ul class="legend"><li><img src="/m.png" alt=Measured></li></ul>'
         assert _scan(tmp_path, settings, html, "djust.Y006") == []
+
+
+class TestY005AriaHiddenAncestor3973:
+    """An svg / ``role="img"`` inside an ``aria-hidden="true"`` ancestor is not exposed (#3973).
+
+    ``aria-hidden="true"`` removes the element and its whole subtree from the accessibility
+    tree, so nothing inside needs a name. The check used to look at the svg's OWN attributes
+    only. Both directions are pinned: the hiding ancestor clears the finding, and everything
+    that is NOT a hiding ancestor still reports.
+    """
+
+    _SVG = '<svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>'
+
+    def _y005(self, html):
+        from djust.checks.accessibility import _find_unnamed_images
+
+        return _find_unnamed_images(html)
+
+    @pytest.mark.parametrize(
+        "html",
+        [
+            # the report: the wrapper carries the size and colour, the svg is a plain child
+            '<span class="icon" aria-hidden="true">{svg}</span>',
+            # a deeper ancestor
+            '<div aria-hidden="true"><span><i>{svg}</i></span></div>',
+            # same-name nesting: the OUTER div hides, the inner div is a plain child
+            '<div aria-hidden="true"><div>{svg}</div></div>',
+            # aria-hidden="false" on a descendant does not unhide it (ARIA 1.2)
+            '<div aria-hidden="true"><span aria-hidden="false">{svg}</span></div>',
+            # unquoted and single-quoted, any case
+            "<span aria-hidden=true>{svg}</span>",
+            "<span aria-hidden='true'>{svg}</span>",
+            '<SPAN ARIA-HIDDEN="TRUE">{svg}</SPAN>',
+            # a role="img" element is hidden the same way
+            '<span aria-hidden="true"><div role="img"></div></span>',
+            # the hiding ancestor's own attributes carry other things
+            '<span class="a b" data-x="1>2" aria-hidden="true">{svg}</span>',
+        ],
+    )
+    def test_a_hiding_ancestor_clears_the_finding(self, html):
+        source = html.replace("{svg}", self._SVG)
+        assert self._y005(source) == [], source
+
+    @pytest.mark.parametrize(
+        "html",
+        [
+            # the unhidden svg is still reported (the module note: flagged by design)
+            "{svg}",
+            '<span class="icon">{svg}</span>',
+            # aria-hidden="false" on the ancestor hides nothing
+            '<span aria-hidden="false">{svg}</span>',
+            # a sibling AFTER the hidden wrapper closed is not inside it
+            '<span aria-hidden="true"></span>{svg}',
+            '<div aria-hidden="true"><div></div></div>{svg}',
+            # a self-closing tag has no content
+            '<span aria-hidden="true"/>{svg}',
+            # a void element is never an ancestor
+            '<img src="/x.png" alt="" aria-hidden="true">{svg}',
+            # a different attribute whose NAME contains aria-hidden
+            '<span data-aria-hidden="true">{svg}</span>',
+            # an ancestor whose close never comes is not guessed to cover the rest
+            '<div aria-hidden="true">{svg}',
+            # the hidden element is a sibling branch, not an ancestor
+            '<div><span aria-hidden="true"></span><span>{svg}</span></div>',
+        ],
+    )
+    def test_everything_that_is_not_a_hiding_ancestor_still_reports(self, html):
+        source = html.replace("{svg}", self._SVG)
+        found = self._y005(source)
+        assert [label for _, label in found] == ["<svg>"], source
+
+    def test_a_role_img_outside_the_hidden_wrapper_still_reports(self):
+        html = '<span aria-hidden="true"></span><div role="img"></div>'
+        assert [label for _, label in self._y005(html)] == ['role="img"']
+
+    def test_only_the_unhidden_svg_of_two_is_reported_at_its_own_offset(self):
+        hidden = f'<span aria-hidden="true">{self._SVG}</span>'
+        html = hidden + "\n" + self._SVG
+        ((offset, label),) = self._y005(html)
+        assert label == "<svg>" and offset == html.rindex("<svg")
+
+    def test_the_real_check_reports_the_unhidden_svg_only(self, tmp_path, settings):
+        html = (
+            f'<span class="icon" aria-hidden="true">{self._SVG}</span>\n'
+            f'<div aria-hidden="true"><b>{self._SVG}</b></div>\n'
+            f"{self._SVG}\n"
+        )
+        found = _scan(tmp_path, settings, html, "djust.Y005")
+        assert [f.line_number for f in found] == [3]
+
+    def test_the_issue_reproducer_is_clean(self):
+        html = (
+            '<span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24">'
+            '<path d="M5 12l5 5 9-10"/></svg></span>'
+        )
+        assert self._y005(html) == []

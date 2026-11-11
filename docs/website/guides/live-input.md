@@ -106,7 +106,7 @@ class NotesView(LiveView):
 | `hidden` | — | No event. For carrying server state. |
 | `select` | `dj-change` | Requires `choices=`. Selected option based on `value=`. |
 | `checkbox` | `dj-change` | Requires `checked=` (bool). Repeating the tag with the same `handler` and no `name=` makes a group of same-named checkboxes, whose `dj-change` sends the **list** of checked values; give each its own `name=` to keep a per-box boolean (see [Fields with several values](forms.md#fields-with-several-values)). |
-| `radio` | `dj-change` | Requires `choices=`. Renders a set of `<label>` wrappers. |
+| `radio` | `dj-change` | Requires `choices=`. Renders a set of `<label>` wrappers inside a `<div role="radiogroup">`; with `legend=` the group is a `<fieldset>` named by a `<legend>`. |
 
 ## Kwargs reference
 
@@ -121,7 +121,19 @@ class NotesView(LiveView):
 | `throttle` | `str` | Forwarded as `dj-throttle="..."`. Milliseconds. |
 | `choices` | list | `[(value, label), ...]` or `[label, ...]` for `select` and `radio`. |
 | `checked` | `bool` | For `checkbox` — whether the box is checked. |
+| `legend` | `str` | For `radio` — the group's name. Renders a `<fieldset>` with a `<legend>` and `aria-labelledby`. |
 | `**kwargs` | | Any other kwarg is forwarded as an HTML attribute. Keys with `_` are normalised to `-` (e.g. `aria_label="Search"` → `aria-label="Search"`). |
+
+### Radio groups
+
+A `radio` renders its rows inside `<div class="dj-radio-group" role="radiogroup">`, so a screen
+reader announces them as one control. Name it with `legend=` (a `<fieldset>` and `<legend>`;
+`components.css` removes the fieldset's browser border) or with `aria_label=` / `aria_labelledby=`.
+The attributes that describe the GROUP (`aria_label`, `aria_labelledby`, `aria_describedby`,
+`aria_invalid`, `aria_required`) go on the group and not on every radio, where
+`aria_label="Plan"` would have renamed each radio "Plan". `required=True` stays on each radio and
+also sets `aria-required="true"` on the group. For a group with help text, an error and a
+`BoundField`, use `{% dj_radio_group %}` from `djust_components`.
 
 ### Which keyword attributes are forwarded
 

@@ -35,7 +35,8 @@ logger = logging.getLogger(__name__)
 # Y004 — positive tabindex (WCAG 2.4.3, Focus Order anti-pattern).
 # Y005 — `role="img"` element or inline <svg> with no accessible name
 #        (WCAG 1.1.1, A-level; #3685). Not near-zero false positives: a
-#        decorative <svg> with no aria-hidden is flagged by design.
+#        decorative <svg> with no aria-hidden on it or on an ancestor is
+#        flagged by design.
 # Y006 — legend item that is only a colour swatch, no text (WCAG 1.4.1,
 #        A-level; #3685).
 #
@@ -354,6 +355,19 @@ def _find_unnamed_images(source: str) -> list[tuple[int, str]]:
         if tag.name == "a" and tag.start in anchors and _HREF_ATTR_RE.search(tag.attrs)
     ]
     control_starts, control_ends = _merge_spans(control_spans)
+    # ``aria-hidden="true"`` removes an element and its whole subtree from the accessibility
+    # tree, so an svg anywhere inside needs no name (#3973). Only an element with a matched
+    # close hides what follows: a self-closing or void tag has no content, and an unclosed one
+    # is not guessed to cover the rest of the file. ``aria-hidden="false"`` below a hiding
+    # ancestor does not expose the subtree again, so only the ``true`` form is looked for.
+    hidden_spans = [
+        (tag.start, close[1])
+        for tag in index.opens
+        if not tag.self_closing
+        and _ARIA_HIDDEN_TRUE_RE.search(tag.attrs)
+        and (close := index.pairs(tag.name).get(tag.start))
+    ]
+    hidden_starts, hidden_ends = _merge_spans(hidden_spans)
     svg_pairs = index.pairs("svg")
     outer_end = 0  # end of the outermost svg being read; later svgs inside it are nested
     found: list[tuple[int, str]] = []
@@ -385,6 +399,8 @@ def _find_unnamed_images(source: str) -> list[tuple[int, str]]:
                 continue
             if _SVG_TITLE_CHILD_RE.search(inner):
                 continue
+        if _in_spans(hidden_starts, hidden_ends, tag.start):
+            continue
         if _ARIA_HIDDEN_TRUE_RE.search(tag.attrs) or _NONBLANK_NAME_ATTR_RE.search(tag.attrs):
             continue
         # {% ... %} / {{ ... }} between the attributes may inject the name.
@@ -494,9 +510,10 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     - **Y005** — a ``role="img"`` element or an inline ``<svg>`` with no
       accessible name (WCAG 1.1.1, Level A): no non-blank ``aria-label`` /
       ``aria-labelledby`` / ``title`` attribute and, for an svg, no
-      ``<title>`` child. ``aria-hidden="true"``, ``role="presentation"``,
-      an svg inside a ``<button>`` / ``<a href>``, a nested svg and a
-      hidden sprite sheet are not flagged.
+      ``<title>`` child. ``aria-hidden="true"`` (on the element or on an
+      ancestor that wraps it), ``role="presentation"``, an svg inside a
+      ``<button>`` / ``<a href>``, a nested svg and a hidden sprite sheet
+      are not flagged.
     - **Y006** — a ``<li>`` inside a legend (an element whose ``class``
       has a ``legend`` token, e.g. ``chart-legend``) with no text and no name
       attribute, so the series differ only by colour (WCAG 1.4.1).
