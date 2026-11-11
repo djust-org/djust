@@ -46,7 +46,7 @@ class TodoView(LiveView):
 
 That's it. `dj-submit` prevents the default submit, collects all form fields via `FormData`, and sends them to your handler as keyword arguments. The view re-renders automatically.
 
-> **Strict parameter policy.** Under the opt-in strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive every value as before. A strict `dj-submit` handler therefore gets only the fields it names, or all of them through `**form_data`.
+> **Strict parameter policy.** Under the opt-in strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields (and the pressed submit button's `name=value`) for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive every value as before. A strict `dj-submit` handler therefore gets only the fields it names, or all of them through `**form_data`.
 
 
 ## HTTP fallback does not require a second view
@@ -179,6 +179,74 @@ When a `dj-submit` form is submitted:
 5. `form_valid()` or `form_invalid()` is called
 6. The view re-renders with updated state
 
+### Fields with several values
+
+A group of same-named checkboxes (a `CheckboxSelectMultiple`), a `<select multiple>` and
+any other name that appears more than once arrive as a **list**, in document order, the
+way Django's `QueryDict.getlist` sees a native POST:
+
+```html
+<form dj-submit="submit_form">
+    {% csrf_token %}
+    <input type="checkbox" name="tags" value="x" checked>
+    <input type="checkbox" name="tags" value="y" checked>
+    <button type="submit">Save</button>
+</form>
+```
+
+`submit_form` receives `tags=["x", "y"]`, and a `MultipleChoiceField` validates it. Two
+rules keep the list honest:
+
+- A checkbox group (two or more checkboxes of one name in the same form) and a
+  `<select multiple>` are lists even with one value selected (`["x"]`) or none (`[]`).
+  An unticked group is sent as `[]`, not left out, so the list the server held before is
+  replaced rather than kept. A **lone** checkbox stays scalar, as on a native post: its
+  value when ticked, absent when not. A `CheckboxSelectMultiple` with a single choice is
+  therefore a lone checkbox to the browser.
+- Any other repeated name is a list too. A handler that read a repeated name as one
+  string (the hidden-input-plus-checkbox idiom, `<input type="hidden" name="x" value="0">`
+  then `<input type="checkbox" name="x" value="1">`, used to see the last value) now sees
+  `["0", "1"]`: take the last element, or give the inputs different names.
+
+`dj-change` on one box of a group sends `value` as the list of every checked value in
+that form (`value=["x", "y"]`), and on a `<select multiple>` the list of selected
+options, so `validate_field` receives what the field needs. A lone checkbox keeps
+sending its `checked` boolean. Under the strict policy declare the parameter as
+`list[str]` (or `Any`, as `FormMixin.validate_field` does):
+
+```python
+from djust.decorators import event_handler
+
+
+@event_handler(parameter_policy="strict")
+def save_tags(self, tags: list[str]):
+    self.tags = tags
+```
+
+### Which submit button was pressed
+
+With the strict policy (ADR-036) the pressed button's own `name=value` is a form field,
+as on a native post, so a handler tells two buttons apart by declaring the name:
+
+```html
+<form dj-submit="save">
+    <input name="title">
+    <button type="submit" name="intent" value="draft">Save draft</button>
+    <button type="submit" name="intent" value="submit">Submit</button>
+</form>
+```
+
+A strict `save(self, title: str, intent: str = "")` receives `intent="draft"` or
+`intent="submit"`. Like every generated value it is sent only to a handler that declares
+that name or has a `**` catch-all, so naming a button cannot add a parameter to a closed
+handler. A button with no name sends nothing, and a name that could not be a Python
+parameter (`save-draft`) is not sent rather than rejecting the event. A button that
+shares a field's name joins it as a list.
+
+Legacy handlers (the default) are unchanged: the pressed button is reported as
+`_target` (its `name`, else its `id`) and no new field is sent, because a legacy closed
+signature rejects an unexpected parameter.
+
 ## Real-Time Validation
 
 `dj-change` fires on the `change` event (blur for text inputs, selection for dropdowns/checkboxes):
@@ -188,7 +256,7 @@ When a `dj-submit` form is submitted:
        dj-change="validate_field">
 ```
 
-When the user leaves the field, djust sends `validate_field(field="email", value="user@example.com")`. The field is validated against the Django Form, and errors update instantly.
+When the user leaves the field, djust sends `validate_field(field="email", value="user@example.com")`. The field is validated against the Django Form, and errors update instantly. On a group of same-named checkboxes or a `<select multiple>`, `value` is the list of checked / selected values (see [Fields with several values](#fields-with-several-values)).
 
 > **Overriding `validate_field`?** The field name arrives as **`field`**, not `field_name` — the client hardcodes that key and reads it from `data-field`, the element's `name`, then its `id`. `field_name` is accepted as a backwards-compatible alias, so `def validate_field(self, field="", value=None, **kwargs)` is the shape to write. This guide previously documented `field_name` as the parameter, which produced overrides that ran on every keystroke and silently received nothing (#2137).
 
