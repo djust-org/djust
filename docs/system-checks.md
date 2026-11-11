@@ -1114,7 +1114,7 @@ the full narrative.
 - **Method**: Tag scan (template file scan)
 - **What it detects**: An element with `role="img"`, or an inline `<svg>`, with no non-blank `aria-label` / `aria-labelledby` / `title` attribute and (for an `<svg>`) no non-empty `<title>` child (WCAG 1.1.1, Level A) — a screen reader announces a hand-built chart as just "image"
 - **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y005']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y005"]`
-- **False positives**: Low — `aria-hidden="true"`, `role="presentation"`/`"none"` on an `<svg>`, an `<svg>` inside a `<button>` or `<a href>`, a nested `<svg>`, a hidden sprite sheet, an opening tag with `{{ }}`/`{% %}` between its attributes, `<img>` (Y002's), HTML comments and `<script>`/`<style>` bodies are not flagged. A purely decorative icon `<svg>` with no `aria-hidden` outside a control is flagged by design: mark it `aria-hidden="true"`
+- **False positives**: Low — `aria-hidden="true"`, `role="presentation"`/`"none"` on an `<svg>`, an `<svg>` inside a `<button>` or `<a href>`, a nested `<svg>`, a hidden sprite sheet, an opening tag with `{{ }}`/`{% %}` between its attributes, `<img>` (Y002's), HTML comments and `<script>`/`<style>` bodies are not flagged. So is a graphic inside an element with `aria-hidden="true"` (the wrapper carries the size and colour, the `<svg>` is a plain child); `aria-hidden="false"` on the wrapper hides nothing, and a wrapper with no closing tag is not guessed to cover the rest of the file. A purely decorative icon `<svg>` with no `aria-hidden` on it or on an ancestor, outside a control, is flagged by design: mark it `aria-hidden="true"`
 
 ### Y006 — legend item told apart by colour alone
 - **Severity**: Warning

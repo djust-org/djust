@@ -2090,7 +2090,7 @@ These scan LiveView templates. All are Warnings, so a false positive never fails
 
 **Severity**: Warning
 
-**What causes it**: '<file>:<line> -- role="img" has no accessible name (WCAG 1.1.1).' or '... -- <svg> has no accessible name (WCAG 1.1.1).' An element with `role="img"`, or an inline `<svg>`, has no non-blank `aria-label`, `aria-labelledby` or `title`, and an `<svg>` has no `<title>` child. `aria-hidden="true"` graphics, an `<svg>` inside a `<button>` or `<a href>`, and a nested `<svg>` are not flagged.
+**What causes it**: '<file>:<line> -- role="img" has no accessible name (WCAG 1.1.1).' or '... -- <svg> has no accessible name (WCAG 1.1.1).' An element with `role="img"`, or an inline `<svg>`, has no non-blank `aria-label`, `aria-labelledby` or `title`, and an `<svg>` has no `<title>` child. `aria-hidden="true"` graphics (on the element or on an ancestor that wraps it), an `<svg>` inside a `<button>` or `<a href>`, and a nested `<svg>` are not flagged.
 
 **Fix**: Add `aria-label="..."` (or `aria-labelledby`, or a `<title>` in an `<svg>`), or mark a purely decorative graphic `aria-hidden="true"`. An empty `aria-label=""` is not a name.
 

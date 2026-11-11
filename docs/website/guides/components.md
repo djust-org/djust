@@ -905,7 +905,7 @@ label stays on `--foreground`, so no label's contrast depends on a status hue.
 | --- | --- |
 | `{% badge %}` | `dj-badge`, `dj-badge--<status>` (`default`, `online`, `offline`, `warning`, `error`, `info`), `dj-badge__dot`, `dj-badge__dot--pulse`, `dj-badge__label` |
 | `{% avatar %}` | `dj-avatar`, `dj-avatar--<size>`, `dj-avatar__img`, `dj-avatar__initials`, `dj-avatar__status`, `dj-avatar__status--<status>` |
-| `{% progress %}` | `dj-progress`, `dj-progress--<size>`, `dj-progress__header`, `dj-progress__label`, `dj-progress__value`, `dj-progress__track`, `dj-progress__fill`, `dj-progress__fill--<color>` |
+| `{% progress %}` | `dj-progress`, `dj-progress--<size>`, `dj-progress__header`, `dj-progress__label`, `dj-progress__value`, `dj-progress__track`, `dj-progress__fill`, `dj-progress__fill--<color>`, `dj-progress-w-<0..100>` |
 | `{% toast_container %}` | `dj-toast-container`, `dj-toast`, `dj-toast--<type>`, `dj-toast__icon`, `dj-toast__message`, `dj-toast__dismiss` |
 
 To restyle one, write a rule for the same class after the stylesheet. The
@@ -918,6 +918,34 @@ reads the `--dj-toast-*` properties its docstring lists (`--dj-toast-bg`,
 `{% toast_container %}` toasts read only the six base properties
 (`--dj-toast-bg`, `-fg`, `-border`, `-radius`, `-padding`, `-shadow`), not
 the per-type ones.
+
+### Roles, keyboard and strict CSP of four components
+
+All of these render the same markup under the Django engine (the first HTTP render) and the Rust
+engine (every socket render).
+
+- **`{% progress %}`** draws its fill with a width class, `dj-progress-w-0` to `dj-progress-w-100`
+  (one per whole percent, in `components.css`), and never with `style="width:N%"`: a
+  `style-src` without `'unsafe-inline'` refuses an inline `style` attribute, and the bar drew empty.
+  The track is `role="progressbar"` with `aria-valuenow`, `aria-valuemin`, `aria-valuemax` and an
+  `aria-label` (the `label=`; an unlabelled bar has no name, so give one). `value` is clamped to 0-100; the `Progress` class
+  draws to the whole percent and keeps the exact value in `aria-valuenow`. The Bootstrap/Tailwind
+  `djust.components.ui.Progress` still writes inline styles.
+- **`{% stepper %}`** is an `<ol class="stepper">` of `<li class="stepper-step">`, each holding a
+  `<button type="button">` (focusable, Enter and Space activate it, never submits a form). The
+  current step is `aria-current="step"`; a completed step that is not the current one adds a
+  visually hidden "(completed)".
+- **`{% status_indicator %}`** is a plain `<span>`: a label that is part of the page is not a
+  status message. Pass `live=True` (also on the `StatusIndicator` class) for the one indicator that
+  changes in place; it then renders `role="status"`.
+- **`{% dj_radio_group name="plan" label="Plan" options=plans value=plan event="set_plan" %}`**
+  renders a `<fieldset role="radiogroup">` named by its `<legend>`, one input with its own
+  `<label for>` per option (ids `<group>_<index>`, never the value), `aria-required` for
+  `required=True`, and `helper=` / `error=` as the group's `aria-describedby` (an error also sets
+  `aria-invalid`). `options` is a list of `{"value", "label", "disabled"}` dicts, `(value, label)`
+  pairs or plain values; `field=form.plan` fills everything, choices included, from a `BoundField`.
+  A single `{% dj_radio %}` is still one loose radio: put it inside your own
+  `<fieldset><legend>`.
 
 ### `{% data_table %}` row-level navigation (#1111)
 
@@ -1052,7 +1080,7 @@ touching the theme:
 | Class (`from djust.components import …`) | Classes it renders | Custom properties it reads |
 | --- | --- | --- |
 | `Alert` | `dj-alert`, `dj-alert-<variant>`, `dj-alert-dismissible`, `dj-alert-icon`, `dj-alert-message`, `dj-alert-dismiss` | `--dj-alert-{bg,fg,border,radius,padding}`, `--dj-alert-<variant>-{bg,fg,border}` |
-| `Progress` | `dj-progress`, `dj-progress-<variant>`, `dj-progress-<size>`, `dj-progress-label`, `dj-progress-track`, `dj-progress-bar`, `dj-progress-value` | `--dj-progress-{bg,bar-bg,radius,height}`, `--dj-progress-<variant>-bg` |
+| `Progress` | `dj-progress`, `dj-progress-<variant>`, `dj-progress-<size>`, `dj-progress-label`, `dj-progress-track`, `dj-progress-bar`, `dj-progress-w-<0..100>`, `dj-progress-value` | `--dj-progress-{bg,bar-bg,radius,height}`, `--dj-progress-<variant>-bg` |
 | `Avatar` | `dj-avatar`, `dj-avatar-<size>`, `dj-avatar-img`, `dj-avatar-initials`, `dj-avatar-status`, `dj-avatar-status-<status>` | `--dj-avatar-size`, set on the avatar element itself (its size class sets the property there, so a value on a parent has no effect) |
 
 The `{% theme_alert %}` / `{% theme_progress %}` / `{% theme_avatar %}` tags
