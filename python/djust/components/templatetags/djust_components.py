@@ -1601,15 +1601,22 @@ def dj_radio(
     current_value: Any = "",
     event: Any = "",
     disabled: Any = False,
+    id: Any = "",
 ) -> SafeString:
-    """Render a single radio button."""
+    """Render a single radio button.
+
+    ``id`` sets the input's id; by default it is ``<name>_<value>`` with every
+    character other than a letter, digit, ``_`` or ``-`` replaced by ``-`` (a
+    value with a space made an invalid id). For a group with a legend, render
+    the radios inside your own ``<fieldset><legend>``.
+    """
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")
 
     e_name = conditional_escape(name)
     e_label = conditional_escape(label)
     e_value = conditional_escape(value)
-    radio_id = conditional_escape(f"{name}_{value}")
+    radio_id = conditional_escape(id or _re.sub(r"[^A-Za-z0-9_-]", "-", f"{name}_{value}"))
     dj_event = conditional_escape(event or name)
 
     checked_attr = " checked" if str(value) == str(current_value) else ""
@@ -2733,8 +2740,14 @@ def rating(
     readonly: Any = False,
     event: Any = "set_rating",
     size: Any = "md",
+    name: Any = "",
 ) -> SafeString:
-    """Render a star rating component."""
+    """Render a star rating component.
+
+    The stars are ``<button type="button">``, so a rating inside a form does
+    not submit it. ``name`` posts the current value with the form, from a
+    hidden input named ``name``.
+    """
     try:
         value = float(value)
         max_stars = int(max_stars)
@@ -2760,11 +2773,18 @@ def rating(
             parts.append(f'<span class="{star_cls}">★</span>')
         else:
             parts.append(
-                f'<button class="{star_cls}" dj-click="{e_event}" '
+                f'<button type="button" class="{star_cls}" dj-click="{e_event}" '
                 f'data-value="{i}" title="{i} star{"s" if i > 1 else ""}">★</button>'
             )
 
-    return mark_safe(f'<div class="rating{size_cls}">{"".join(parts)}</div>')
+    hidden = ""
+    if name:
+        shown = int(value) if value == int(value) else value
+        hidden = (
+            f'<input type="hidden" name="{attr_text(name)}" '
+            f'value="{conditional_escape(str(shown))}">'
+        )
+    return mark_safe(f'<div class="rating{size_cls}">{hidden}{"".join(parts)}</div>')
 
 
 # ---------------------------------------------------------------------------
@@ -4396,17 +4416,24 @@ def toggle_group(
     mode: Any = "single",
     disabled: Any = False,
     size: Any = "md",
+    form_field: Any = False,
 ) -> SafeString:
     """Render a segmented toggle button group (radio-style or multi-select).
 
+    The buttons are ``<button type="button">``, so a group inside a form does
+    not submit it.
+
     Args:
-        name: group name for identification
+        name: group name for identification (and the form field name with
+            ``form_field``)
         options: list of dicts with keys: value, label, icon (optional)
         value: currently selected value (or list of values in multi mode)
         event: dj-click event name
         mode: "single" (radio) or "multi" (checkbox-style)
         disabled: disables all buttons
         size: sm, md, lg
+        form_field: post the selected value(s) with the form under ``name``,
+            from hidden inputs (one per value in multi mode)
     """
     if options is None:
         options = []
@@ -4416,6 +4443,7 @@ def toggle_group(
     e_name = conditional_escape(name)
     e_event = conditional_escape(event)
     e_mode = conditional_escape(mode)
+    hidden = _toggle_group_hidden(name, value, mode) if _truthy_flag(form_field) else ""
 
     size_cls = ""
     if size and size != "md":
@@ -4447,7 +4475,7 @@ def toggle_group(
             )
 
         buttons.append(
-            f'<button class="toggle-group-btn{active_cls}" '
+            f'<button type="button" class="toggle-group-btn{active_cls}" '
             f'aria-pressed="{aria_pressed}" '
             f'data-name="{e_name}"{click_attr}{disabled_attr}>'
             f"{icon_html}"
@@ -4458,9 +4486,21 @@ def toggle_group(
     return mark_safe(
         f'<div class="toggle-group{size_cls}{disabled_cls}" '
         f'role="group" data-mode="{e_mode}">'
-        f"{''.join(buttons)}"
+        f"{hidden}{''.join(buttons)}"
         f"</div>"
     )
+
+
+def _toggle_group_hidden(name: Any, value: Any, mode: Any) -> str:
+    """The hidden input(s) that post a toggle group's value with its form."""
+    if not name:
+        return ""
+    if mode == "multi" and isinstance(value, (list, tuple)):
+        values = list(value)
+    else:
+        values = [value]
+    e_name = attr_text(name)
+    return "".join(f'<input type="hidden" name="{e_name}" value="{attr_text(v)}">' for v in values)
 
 
 # ---------------------------------------------------------------------------

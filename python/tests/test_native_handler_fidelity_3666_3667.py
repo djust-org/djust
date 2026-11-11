@@ -1108,10 +1108,12 @@ class TestTypeDispatch:
         measurement must still be the 21,390 cells those were counted over, plus the 135 cells
         #3669 added by making the native handlers read more parameters, plus the 210 cells #3961
         added (the 13 parameters of ``dj_radio_group`` and ``status_indicator``'s ``live``, over
-        the same 15 types; re-measured, not estimated)."""
+        the same 15 types; re-measured, not estimated), plus the 45 cells #3962 added (the three
+        parameters it gave ``dj_radio`` (``id``), ``rating`` (``name``) and ``toggle_group``
+        (``form_field``), over the same 15 types; re-measured, not estimated)."""
         residual = sum(sum(m.values()) for m in RESIDUAL_STANDIN_LOSS.values())
         assert residual < STANDIN_LOSS_BEFORE_3768
-        assert facts["typed_values"]["cells"] == 21390 + 135 + 15 * (13 + 1), (
+        assert facts["typed_values"]["cells"] == 21390 + 135 + 15 * (13 + 1) + 15 * 3, (
             "the cell grid changed: re-derive both counts"
         )
         measured = sum(
