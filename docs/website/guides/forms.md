@@ -46,7 +46,7 @@ class TodoView(LiveView):
 
 That's it. `dj-submit` prevents the default submit, collects all form fields via `FormData`, and sends them to your handler as keyword arguments. The view re-renders automatically.
 
-> **Strict parameter policy.** Under the opt-in strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields (and the pressed submit button's `name=value`) for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive every value as before. A strict `dj-submit` handler therefore gets only the fields it names, or all of them through `**form_data`.
+> **Strict parameter policy.** Under the opt-in strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields (and the pressed submit button's `name=value`) for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive the same values as before, with one change: a repeated field name on `dj-submit`, and a `dj-change` / `dj-input` / `dj-blur` / `dj-focus` on a group of same-named checkboxes or a `<select multiple>`, now arrive as a **list** (see [Fields with several values](#fields-with-several-values)). A strict `dj-submit` handler therefore gets only the fields it names, or all of them through `**form_data`.
 
 
 ## HTTP fallback does not require a second view
@@ -206,11 +206,14 @@ rules keep the list honest:
 - Any other repeated name is a list too. A handler that read a repeated name as one
   string (the hidden-input-plus-checkbox idiom, `<input type="hidden" name="x" value="0">`
   then `<input type="checkbox" name="x" value="1">`, used to see the last value) now sees
-  `["0", "1"]`: take the last element, or give the inputs different names.
+  `["0", "1"]` when the box is ticked and `"0"` when it is not, so a handler that declares
+  `x: str` fails only while the box is ticked: take the last element, or give the inputs
+  different names.
 
 `dj-change` on one box of a group sends `value` as the list of every checked value in
-that form (`value=["x", "y"]`), and on a `<select multiple>` the list of selected
-options, so `validate_field` receives what the field needs. A lone checkbox keeps
+that form (`value=["x", "y"]`; the whole page when the boxes are in no form), and on a
+`<select multiple>` the list of selected options, so `validate_field` receives what the
+field needs. `dj-input`, `dj-blur` and `dj-focus` send the same list. A lone checkbox keeps
 sending its `checked` boolean. Under the strict policy declare the parameter as
 `list[str]` (or `Any`, as `FormMixin.validate_field` does):
 
@@ -222,6 +225,14 @@ from djust.decorators import event_handler
 def save_tags(self, tags: list[str]):
     self.tags = tags
 ```
+
+> **Migrating a per-row toggle.** A `dj-change` handler on a group of same-named
+> checkboxes now receives the list of checked values, not "is this box ticked". A
+> handler `toggle(self, value=False, **kw)` that read `value` as that box's state now
+> sees a list, which is truthy while ANY box of the group is ticked; a handler that
+> declares `value: bool` is rejected with a type error. Read it as a list, or give each
+> box its own `name` (`done_1`, `done_2`) to keep the per-box boolean. This includes
+> `{% live_input "checkbox" %}` repeated with the same `handler` and no `name=`.
 
 ### Which submit button was pressed
 
@@ -239,9 +250,12 @@ as on a native post, so a handler tells two buttons apart by declaring the name:
 A strict `save(self, title: str, intent: str = "")` receives `intent="draft"` or
 `intent="submit"`. Like every generated value it is sent only to a handler that declares
 that name or has a `**` catch-all, so naming a button cannot add a parameter to a closed
-handler. A button with no name sends nothing, and a name that could not be a Python
-parameter (`save-draft`) is not sent rather than rejecting the event. A button that
-shares a field's name joins it as a list.
+handler. A button with no name sends nothing. A name that is not an ASCII identifier
+starting with a letter (`save-draft`, `_x`) is not sent rather than rejecting the event,
+and neither is a name the transports read as protocol: `event` and `params` (the HTTP
+fallback treats a body containing `event` as its `{event, params}` envelope, so a button
+of that name would re-route the call), `component_id`, `view_id`, `csrfmiddlewaretoken`
+and `constructor` / `prototype`. A button that shares a field's name joins it as a list.
 
 Legacy handlers (the default) are unchanged: the pressed button is reported as
 `_target` (its `name`, else its `id`) and no new field is sent, because a legacy closed

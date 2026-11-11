@@ -49,7 +49,7 @@ directly on view attributes.
 {% live_input "radio" handler="set_plan" value=plan choices=plan_choices %}
 ```
 
-> **Strict parameter policy.** Under the opt-in strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields (and the pressed submit button's `name=value`) for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive every value as before.
+> **Strict parameter policy.** Under the opt-in strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields (and the pressed submit button's `name=value`) for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive the same values as before, with one change: a repeated field name on `dj-submit`, and a `dj-change` / `dj-input` / `dj-blur` / `dj-focus` on a group of same-named checkboxes or a `<select multiple>`, now arrive as a **list** (see [Fields with several values](forms.md#fields-with-several-values)).
 
 With the matching LiveView:
 
@@ -105,7 +105,7 @@ class NotesView(LiveView):
 | `number` | `dj-input` | Supports `min=` / `max=` / `step=`. |
 | `hidden` | — | No event. For carrying server state. |
 | `select` | `dj-change` | Requires `choices=`. Selected option based on `value=`. |
-| `checkbox` | `dj-change` | Requires `checked=` (bool). Single checkbox only; for multi-checkbox lists, repeat the tag. |
+| `checkbox` | `dj-change` | Requires `checked=` (bool). Repeating the tag with the same `handler` and no `name=` makes a group of same-named checkboxes, whose `dj-change` sends the **list** of checked values; give each its own `name=` to keep a per-box boolean (see [Fields with several values](forms.md#fields-with-several-values)). |
 | `radio` | `dj-change` | Requires `choices=`. Renders a set of `<label>` wrappers. |
 
 ## Kwargs reference

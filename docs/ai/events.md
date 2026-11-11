@@ -41,6 +41,7 @@ class ItemView(LiveView):
 Legacy policy:
 
 Legacy `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names.
+A repeated field name on `dj-submit`, and `dj-change`/`dj-input` on a group of same-named checkboxes or a `<select multiple>`, arrive as a list: read `value` as a list, or give the boxes distinct names.
 
 <!-- djust-example: skip -- legacy-policy handler fragments with no view class; import-checked by scripts/check-doc-snippets.py -->
 ```python
