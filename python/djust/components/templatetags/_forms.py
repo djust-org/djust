@@ -1012,6 +1012,24 @@ def _get_choices(bound_field: Any) -> Any:
     return []
 
 
+def _selected_values(raw: Any, field_type: str) -> frozenset:
+    """The choice values a field's current value selects, as strings.
+
+    A multi-valued field's value is a LIST (what ``dj-submit`` / ``dj-change`` send for a checkbox
+    group or a ``<select multiple>``, #3959, and what ``MultipleChoiceField`` cleans to), so each
+    member selects its own choice. A scalar is one choice, and a ``checkbox_group`` given a
+    comma-separated string keeps selecting each part (the form that reached this renderer before
+    #3959). Rendering the list through ``str()`` selected nothing, so the multi-value fix did not
+    survive a re-render: the user's ticked boxes un-ticked.
+    """
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        return frozenset(str(item) for item in raw)
+    text = str(raw)
+    if field_type == "checkbox_group":
+        return frozenset(text.split(",")) if text else frozenset()
+    return frozenset({text}) if text else frozenset()
+
+
 def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
     """Render a single Django BoundField as the appropriate djust component HTML."""
     field_type = _get_field_type(bound_field)
@@ -1033,10 +1051,12 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
 
     # Get current value
     value = ""
+    selected_values: frozenset = frozenset()
     if hasattr(bound_field, "value"):
         v = _bound_field_value(bound_field)
         if v is not None:
             value = str(v)
+            selected_values = _selected_values(v, field_type)
 
     e_name = conditional_escape(name)
     e_label = conditional_escape(label)
@@ -1101,7 +1121,15 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
         select_error_cls = " form-select-error" if error_msg else ""
         options_html = ""
         for ov, ol in choices:
-            selected_attr = " selected" if str(ov) == str(value) else ""
+            selected_attr = (
+                " selected"
+                if (
+                    str(ov) in selected_values
+                    if field_type == "select_multiple"
+                    else str(ov) == value
+                )
+                else ""
+            )
             options_html += (
                 f'<option value="{attr_text(ov)}"{selected_attr}>{conditional_escape(ol)}</option>'
             )
@@ -1140,8 +1168,6 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
 
     if field_type == "checkbox_group":
         choices = _get_choices(bound_field)
-        # value might be a list for multiple checkboxes
-        selected_values = value.split(",") if value else []
         checks = ""
         for ov, ol in choices:
             checked_attr = " checked" if ov in selected_values else ""
