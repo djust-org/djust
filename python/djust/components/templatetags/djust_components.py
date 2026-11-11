@@ -4440,14 +4440,15 @@ def toggle_group(
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")
 
-    e_name = conditional_escape(name)
-    e_event = conditional_escape(event)
-    e_mode = conditional_escape(mode)
+    # Every one of these lands in an attribute: ``attr_text`` escapes it whatever it is marked as (#3898)
+    e_name = attr_text(name)
+    e_event = attr_text(event)
+    e_mode = attr_text(mode)
     hidden = _toggle_group_hidden(name, value, mode) if _truthy_flag(form_field) else ""
 
     size_cls = ""
     if size and size != "md":
-        size_cls = f" toggle-group-{conditional_escape(size)}"
+        size_cls = f" toggle-group-{attr_text(size)}"
     disabled_cls = " toggle-group-disabled" if disabled else ""
 
     buttons = []
