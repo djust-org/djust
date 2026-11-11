@@ -436,15 +436,16 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (RH, 'icon = self.STATUS_ICONS.get(status, "&#9711;")'),
         (RH, "STATUS_ICONS = {", "AgentStepHandler"),
     ),
-    (RH, "AppShellHandler.render"): S(
+    (RH, "_root_layout_html"): S(
         1,
-        "id and class conditional_escape'd; `sidebar` and `rest` are the two halves of `content`, the block body the engine hands a handler as an already-rendered SafeString (registry.rs, call_block_handler_with_py_sidecar, #2379; pinned by test_safe_markup_guard_3820.py), split at a parsed </aside> and emitted in the same markup, strip() only trims whitespace",
-        (RH, 'shell_id = conditional_escape(kw.get("id", "app-shell"))'),
-        (RH, "sidebar, rest = _split_app_shell_sidebar(content)"),
+        "the one renderer of the four core layout handlers (AppShell, AppSidebar, AppHeader, AppContent): it joins, in the order `_render_root_parts` lists them, byte slices of `content` and wrapper text. `content` is the block body the engine hands a handler as an already-rendered SafeString (registry.rs, call_block_handler_with_py_sidecar and call_core_root_layout, #2379; pinned by test_safe_markup_guard_3820.py), and a slice is cut where `_layout_body_part` put it: at the UTF-8 offsets of str positions, so no character is split. The wrapper text is constant markup, except AppShellHandler's opening tag, whose id and class are conditional_escape'd",
+        (RH, "body = content.encode()"),
+        (RH, 'shell_id = conditional_escape(kw.get("id", "app-shell"))', "AppShellHandler._render_root_parts"),
+        (RH, 'custom_class = conditional_escape(kw.get("class", ""))', "AppShellHandler._render_root_parts"),
         (
             RH,
-            "return content[parser.start : parser.end], content[: parser.start] + content[parser.end :]",
-            "_split_app_shell_sidebar",
+            'return (len(content[:start].encode()), len(content[:end].encode())), ""',
+            "_layout_body_part",
         ),
     ),
     (RH, "CalendarHeatmapHandler.render"): S(
@@ -548,6 +549,19 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (RH, 'variant_cls = self.VARIANT_MAP.get(str(variant), "dj-ribbon--primary")'),
         (RH, 'classes.append(f"dj-ribbon--{pos}")'),
         (RH, "e_text = conditional_escape(str(text))"),
+    ),
+    (RH, "ToggleGroupHandler.render"): S(
+        1,
+        "every value that lands in an attribute is attr_text'd, which escapes it whatever it is marked as (conditional_escape keeps a marked-safe value, #3898): name (data-name), event (dj-click), size (the class suffix), mode (data-mode) and each option value (data-value); option label and icon are conditional_escape'd (text slots); the classes and `disabled` are constants. `hidden` is _toggle_group_hidden() from djust_components.py, which the guard cannot follow into ANOTHER file (the same helper the Django tag calls, where it is local and proven): it writes name and every value through attr_text and nothing else, so it is the one value here the guard cannot clear itself. Escaping pinned for both engines, and for a marked-safe value handed straight to the handler, in python/djust/tests/test_component_form_buttons.py",
+        (RH, 'name = attr_text(kw.get("name", ""))'),
+        (RH, 'event = attr_text(kw.get("event", "toggle_select"))'),
+        (RH, 'size_cls = f" toggle-group-{attr_text(size)}"'),
+        (RH, 'opt_value = attr_text(opt.get("value", ""))'),
+        (RH, 'opt_label = conditional_escape(str(opt.get("label", "")))'),
+        (RH, 'data-mode="{attr_text(mode)}">\''),
+        (RH, '_toggle_group_hidden(kw.get("name", ""), value, mode)'),
+        (DC, "e_name = attr_text(name)", "_toggle_group_hidden"),
+        (DC, 'value="{attr_text(v)}">\' for v in values', "_toggle_group_hidden"),
     ),
     (DT, "FileTreeNode.render"): S(
         1,

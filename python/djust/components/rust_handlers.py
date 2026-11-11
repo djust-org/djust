@@ -47,7 +47,7 @@ from djust.components.utils import (
     data_url_attr,
     srcset_attr,
 )
-from djust.components.utils import _exact_str
+from djust.components.utils import _exact_str, attr_text
 from djust.template_tags import TYPED_ARGS_KEY
 
 
@@ -3276,14 +3276,16 @@ class ToggleGroupHandler:
 
     def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
-        name = conditional_escape(kw.get("name", ""))
+        # Every value below that lands in an attribute goes through ``attr_text``: it escapes
+        # whatever the value is marked as, where ``conditional_escape`` keeps a marked-safe one (#3898).
+        name = attr_text(kw.get("name", ""))
         options = kw.get("options", [])
         if not isinstance(options, (list, tuple)):
             options = []
         value = kw.get("value", "")
         # In multi mode, value can be a list
         mode = kw.get("mode", "single")
-        event = conditional_escape(kw.get("event", "toggle_select"))
+        event = attr_text(kw.get("event", "toggle_select"))
         disabled = kw.get("disabled", False)
         size = kw.get("size", "md")
         from djust.components.templatetags.djust_components import (
@@ -3299,14 +3301,14 @@ class ToggleGroupHandler:
 
         size_cls = ""
         if size and size != "md":
-            size_cls = f" toggle-group-{conditional_escape(size)}"
+            size_cls = f" toggle-group-{attr_text(size)}"
         disabled_cls = " toggle-group-disabled" if disabled else ""
 
         buttons = []
         for opt in options:
             if not isinstance(opt, dict):
                 continue
-            opt_value = conditional_escape(str(opt.get("value", "")))
+            opt_value = attr_text(opt.get("value", ""))  # only in data-value=
             opt_label = conditional_escape(str(opt.get("label", "")))
             opt_icon = opt.get("icon", "")
 
@@ -3338,7 +3340,7 @@ class ToggleGroupHandler:
 
         return _safe(
             f'<div class="toggle-group{size_cls}{disabled_cls}" '
-            f'role="group" data-mode="{conditional_escape(mode)}">'
+            f'role="group" data-mode="{attr_text(mode)}">'
             f"{hidden}{''.join(buttons)}"
             f"</div>"
         )

@@ -127,6 +127,61 @@ class TestRating:
         assert _buttons(render("{% rating value=4 readonly=True %}")) == []
 
 
+HOSTILE = '"><script>alert(1)</script>'
+
+#: Every ``toggle_group`` argument that is written into an ATTRIBUTE (audited in
+#: ``scripts/lib/safe_markup_audit.py``, ``ToggleGroupHandler.render``): ``name`` (``data-name`` and
+#: the hidden inputs), ``event`` (``dj-click``), ``size`` (the class suffix), ``mode``
+#: (``data-mode``) and each option ``value`` (``data-value``). A marked-safe value must not leave
+#: the attribute, in either engine, in either mode.
+ATTRIBUTE_ARGUMENTS = ("name", "event", "size", "mode", "option value")
+
+
+def _toggle_group_source(hostile_argument: str, mode: str) -> tuple[str, dict]:
+    values = {
+        "name": "grp",
+        "event": "toggle_select",
+        "size": "md",
+        "mode": mode,
+        "option value": "day",
+    }
+    values[hostile_argument] = mark_safe(HOSTILE)
+    selected = ["day", values["option value"]] if mode == "multi" else values["option value"]
+    body = "{% toggle_group name=n options=o value=v event=e mode=m size=s form_field=True %}"
+    return body, {
+        "n": values["name"],
+        "o": [{"value": values["option value"], "label": "L"}, {"value": "x", "label": "X"}],
+        "v": selected,
+        "e": values["event"],
+        "m": values["mode"],
+        "s": values["size"],
+    }
+
+
+@pytest.mark.parametrize("render", RENDERERS, ids=RENDERER_IDS)
+@pytest.mark.parametrize("mode", ["single", "multi"])
+@pytest.mark.parametrize("argument", ATTRIBUTE_ARGUMENTS)
+def test_toggle_group_attribute_arguments_are_escaped_whatever_they_are_marked_as(
+    render, mode, argument
+):
+    body, context = _toggle_group_source(argument, mode)
+    html = render(body, **context)
+    assert "<script>" not in html, (argument, html)
+
+
+@pytest.mark.parametrize("argument", ATTRIBUTE_ARGUMENTS)
+def test_the_native_handler_escapes_a_marked_safe_argument_handed_to_it(argument):
+    """The engine hands the handler text, but a typed argument and a direct call hand it the real
+    value: a marked-safe ``name`` / ``event`` / ``size`` / ``mode`` / option value reached the
+    attribute unescaped (``conditional_escape`` keeps it)."""
+    from djust.components.rust_handlers import ToggleGroupHandler
+
+    body, context = _toggle_group_source(argument, "single")
+    args = ["name=n", "options=o", "value=v", "event=e", "mode=m", "size=s", "form_field=True"]
+    html = str(ToggleGroupHandler().render(args, context))
+    assert "<script>" not in html, (argument, html)
+
+
 def test_component_classes_render_type_button():
     rating = Rating(value=2).render()
     toggle = ToggleGroup(name="p", options=OPTIONS, value="day").render()
