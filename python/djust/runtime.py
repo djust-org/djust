@@ -4160,6 +4160,15 @@ class ViewRuntime(RuntimeTurnPort):
                                 allow_private=False,
                                 raise_on_blocked=True,
                             )
+                        # #3989: the declared state came back AFTER mount() ran, so
+                        # mount() never saw it. The same hook the legacy restore and
+                        # the HTTP fallback call lets the view act on what was
+                        # restored: read rows again from a restored id, or clear a
+                        # persisted "running" flag whose background work did not
+                        # survive the reconnect (#1646: three restore paths, one hook).
+                        handle_restore = getattr(view_instance, "handle_restore", None)
+                        if callable(handle_restore):
+                            await call_hook(handle_restore, request)
                         mounted_from_restore = True
                         view_instance._force_full_html = True
             except Exception as exc:

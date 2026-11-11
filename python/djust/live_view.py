@@ -1802,9 +1802,21 @@ class LiveView(
                 self._rows = Chat.objects.filter(pk=self.chat_id)   # chat_id was restored
 
         It runs on the HTTP page-POST fallback (after the object permission
-        check, before the event handler) and on a WebSocket/SSE mount restored
-        from the session (``enable_state_snapshot``). It does not run after a
-        plain ``mount()``. May be ``async def``.
+        check, before the event handler), on a WebSocket/SSE mount restored
+        from the session (``enable_state_snapshot``), and on a WebSocket/SSE
+        mount of an explicit view whose declared ``state(persist=...)`` fields
+        were restored (after ``mount()``, with the restored values in place).
+        It does not run after a plain ``mount()``. May be ``async def``.
+
+        Background work does not survive a reconnect or a restart: a job
+        started with ``start_async`` / ``@background`` belongs to the connection
+        that started it. A view that persists a "running" flag must clear it
+        here, or the page comes back showing a job that no longer exists::
+
+            def handle_restore(self, request):
+                if self.generating:          # restored, but the job is gone
+                    self.generating = False
+                    self.error = "Interrupted. Please try again."
         """
         pass
 
