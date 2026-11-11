@@ -2781,7 +2781,7 @@ def rating(
     if name:
         shown = int(value) if value == int(value) else value
         hidden = (
-            f'<input type="hidden" name="{conditional_escape(name)}" '
+            f'<input type="hidden" name="{attr_text(name)}" '
             f'value="{conditional_escape(str(shown))}">'
         )
     return mark_safe(f'<div class="rating{size_cls}">{hidden}{"".join(parts)}</div>')
@@ -4499,7 +4499,7 @@ def _toggle_group_hidden(name: Any, value: Any, mode: Any) -> str:
         values = list(value)
     else:
         values = [value]
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     return "".join(f'<input type="hidden" name="{e_name}" value="{attr_text(v)}">' for v in values)
 
 

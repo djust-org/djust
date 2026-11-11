@@ -59,7 +59,7 @@ djust_components:dj_checkbox,DIFFERENT,15,data/dj-attrs:1+escaping:5+ids:15+othe
 djust_components:dj_divider,DIFFERENT,8,classes:5+escaping:3+tags:8+text:6,,13,2/2,13
 djust_components:dj_input,DIFFERENT,23,classes:7+data/dj-attrs:1+escaping:9+ids:2+other-attrs:8+tags:10+text:6,rust_only_keys:python,23,11/11,24
 djust_components:dj_label,DIFFERENT-escape-policy-only,3,escaping:3,,11,3/3,11
-djust_components:dj_radio,DIFFERENT,17,data/dj-attrs:1+escaping:5+ids:17+other-attrs:1+tags:17+text:3,rust_only_keys:python,17,7/7,18
+djust_components:dj_radio,DIFFERENT,19,data/dj-attrs:1+escaping:6+ids:19+other-attrs:1+tags:19+text:3,rust_only_keys:python,19,8/8,20
 djust_components:dj_radio_group,IDENTICAL,0,,,29,13/13,29
 djust_components:dj_select,DIFFERENT,21,classes:11+data/dj-attrs:1+escaping:7+ids:2+other-attrs:1+tags:12+text:11,rust_only_keys:python,21,10/10,22
 djust_components:dj_tag,DIFFERENT-escape-policy-only,6,classes:1+data/dj-attrs:1+escaping:6+tags:3+text:3,,17,5/5,17
@@ -141,7 +141,7 @@ djust_components:progress,DIFFERENT,13,a11y:1+classes:13+escaping:4+tags:3+text:
 djust_components:progress_circle,DIFFERENT,8,classes:7+escaping:3,,12,5/5,12
 djust_components:prompt_editor,DIFFERENT-escape-policy-only,5,escaping:5+tags:2+text:2,,19,6/6,19
 djust_components:qr_code,DIFFERENT-escape-policy-only,3,escaping:3,,16,5/5,16
-djust_components:rating,DIFFERENT-escape-policy-only,3,classes:1+escaping:3,,15,5/5,15
+djust_components:rating,DIFFERENT-escape-policy-only,3,classes:1+escaping:3,,17,6/6,17
 djust_components:reactions,DIFFERENT-escape-policy-only,2,escaping:2,,15,5/5,15
 djust_components:relative_time,IDENTICAL,0,,,13,4/4,13
 djust_components:resizable_panel,DIFFERENT-escape-policy-only,3,escaping:3,,17,7/7,17
@@ -184,7 +184,7 @@ djust_components:time_picker,DIFFERENT-escape-policy-only,5,escaping:5+tags:2+te
 djust_components:timeline,DIFFERENT,1,classes:1+tags:1,,20,7/7,20
 djust_components:timeline_item,DIFFERENT,11,classes:11+escaping:3+tags:11+text:4,,11,2/2,11
 djust_components:toast_container,IDENTICAL,0,,,13,2/2,13
-djust_components:toggle_group,DIFFERENT-escape-policy-only,4,classes:1+data/dj-attrs:1+escaping:4,rust_only_keys:python,19,9/9,20
+djust_components:toggle_group,DIFFERENT-escape-policy-only,4,classes:1+data/dj-attrs:1+escaping:4,rust_only_keys:python,21,10/10,22
 djust_components:token_counter,DIFFERENT-escape-policy-only,3,escaping:3+tags:2+text:2,,11,5/5,11
 djust_components:toolbar,DIFFERENT,15,classes:15+escaping:5+ids:7+tags:15,,16,4/4,16
 djust_components:toolbar_overflow,IDENTICAL,0,,,19,7/7,19

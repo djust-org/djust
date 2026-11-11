@@ -15,6 +15,7 @@ import re
 
 import pytest
 from django.template import engines
+from django.utils.safestring import mark_safe
 
 from djust.components.components.rating import Rating
 from djust.components.components.toggle_group import ToggleGroup
@@ -52,13 +53,17 @@ RENDERER_IDS = ["django", "rust"]
 @pytest.mark.parametrize("render", RENDERERS, ids=RENDERER_IDS)
 class TestToggleGroup:
     def test_every_button_is_type_button(self, render):
-        html = render('{% toggle_group name="period" options=options value="day" %}', options=OPTIONS)
+        html = render(
+            '{% toggle_group name="period" options=options value="day" %}', options=OPTIONS
+        )
         buttons = _buttons(html)
         assert len(buttons) == 2
         assert all('type="button"' in b for b in buttons)
 
     def test_no_form_field_by_default(self, render):
-        html = render('{% toggle_group name="period" options=options value="day" %}', options=OPTIONS)
+        html = render(
+            '{% toggle_group name="period" options=options value="day" %}', options=OPTIONS
+        )
         assert _hidden(html) == []
 
     def test_form_field_posts_the_value(self, render):
@@ -85,6 +90,18 @@ class TestToggleGroup:
         assert "<script>" not in html
         assert len(_hidden(html)) == 1
 
+    def test_a_marked_safe_name_cannot_leave_the_attribute(self, render):
+        # ``name`` is written into an attribute: it is escaped whatever it is marked as (#3898).
+        html = render(
+            '{% toggle_group name=n options=options value="day" form_field=True %}',
+            options=OPTIONS,
+            n=mark_safe('x"><script>y</script>'),
+        )
+        # The hidden input this change adds (the buttons' ``data-name`` is a separate slot).
+        hidden = re.findall(r'<input type="hidden"[^>]*>', html)
+        assert len(hidden) == 1 and "<script>" not in hidden[0]
+        assert len(_hidden(html)) == 1
+
 
 @pytest.mark.parametrize("render", RENDERERS, ids=RENDERER_IDS)
 class TestRating:
@@ -97,6 +114,11 @@ class TestRating:
     def test_name_posts_the_value(self, render):
         assert _hidden(render('{% rating value=4 name="score" %}')) == [("score", "4")]
         assert _hidden(render('{% rating value=3.5 name="score" %}')) == [("score", "3.5")]
+
+    def test_a_marked_safe_name_cannot_leave_the_attribute(self, render):
+        html = render("{% rating value=4 name=n %}", n=mark_safe('x"><script>y</script>'))
+        assert "<script>" not in html
+        assert len(_hidden(html)) == 1
 
     def test_no_name_no_field(self, render):
         assert _hidden(render("{% rating value=4 %}")) == []
