@@ -69,6 +69,14 @@ Rules:
   authorizes each one. Override at least one (check `djust.S013`).
 - Missing, filtered-out and forbidden records get the same denial, and no form
   or hook runs. Every event looks the record up and checks it again.
+- Opt-ins (added after 1.3.2; neither changes a write): `object_recheck = "writes"`
+  lets only read-only events (`validate_field`, plus names in
+  `object_read_only_events`) reuse the authorized record; every other event,
+  including `submit_form` and every handler of yours, is checked in full.
+  `get_object_lookup()` (keys `pk_url_kwarg` / `slug_url_kwarg`) selects the
+  record from view state such as a `?open=<id>` param kept in `handle_params`;
+  with `object_optional = True` "nothing selected" is `object = None` and no
+  form, while a selected record that does not resolve is still a denial.
 - `self.object` renders as `object` (plus `context_object_name` if set) and is
   never persisted. Only `self.object = form.save()` (the same record) may be
   assigned; anything else raises `ValueError`.
@@ -135,7 +143,9 @@ def save(self, **form_data):
 ```
 
 Rules:
-- Strict policy (opt-in, ADR-036): a strict `dj-submit` handler receives only the form fields it declares, or all of them through `**form_data`, and never `_target`
+- Strict policy (opt-in, ADR-036): a strict `dj-submit` handler receives only the form fields it declares (the pressed submit button's `name=value` is one of them), or all of them through `**form_data`, and never `_target`
+- Several values: a checkbox group (2+ same-named checkboxes in one form), a `<select multiple>` and any repeated name reach `dj-submit` as a list (`tags=["x", "y"]`; `[]` when a group is unticked), and `dj-change` on a group/`<select multiple>` sends `value` as that list. A lone checkbox stays scalar, so a per-row `dj-change` toggle whose boxes share a name now gets the list (read it as a list, or give the boxes distinct names). Declare `list[str]` under the strict policy
+- Pressed button: under the strict policy a `dj-submit` handler declaring `intent` receives the pressed `<button name="intent" value="...">`; legacy handlers keep `_target` and get no new field
 - Set `_model_instance` BEFORE calling `super().mount()` for edit forms
 - FormMixin provides `submit_form` handler automatically
 - `form_valid`/`form_invalid` are called after validation

@@ -21,7 +21,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from django import template
-from django.utils.html import conditional_escape
+from django.utils.html import conditional_escape, format_html, format_html_join
 from django.utils.safestring import SafeString
 
 from djust._template_guards import call_method_for_template
@@ -1695,6 +1695,153 @@ def dj_textarea(
 
 
 # ---------------------------------------------------------------------------
+# 19b. Radio group (#3961)
+# ---------------------------------------------------------------------------
+
+
+def _radio_group_options(options: Any, field: Any) -> list[tuple[Any, Any, bool]]:
+    """``(value, label, disabled)`` per option of a radio group.
+
+    ``options`` is a list of dicts (``value``, ``label``, optional ``disabled``), of
+    ``(value, label)`` pairs or of plain values. With ``field=`` and no ``options``, a Django
+    choice field's own choices (optgroups flattened).
+    """
+    if options is None and field is not None:
+        choices = getattr(getattr(field, "field", None), "choices", None) or []
+        options = []
+        for choice_value, choice_label in choices:
+            if isinstance(choice_label, (list, tuple)):  # an optgroup
+                options.extend({"value": v, "label": lb} for v, lb in choice_label)
+            else:
+                options.append({"value": choice_value, "label": choice_label})
+    out: list[tuple[Any, Any, bool]] = []
+    for opt in options or []:
+        if isinstance(opt, dict):
+            out.append(
+                (opt.get("value", ""), opt.get("label", ""), _truthy_flag(opt.get("disabled")))
+            )
+        elif isinstance(opt, (list, tuple)) and len(opt) == 2:
+            out.append((opt[0], opt[1], False))
+        else:
+            out.append((opt, opt, False))
+    return out
+
+
+@register.simple_tag
+def dj_radio_group(
+    name: Any = "",
+    label: Any = "",
+    options: Any = None,
+    value: Any = "",
+    event: Any = "",
+    error: Any = "",
+    helper: Any = "",
+    required: Any = False,
+    disabled: Any = False,
+    describedby: Any = "",
+    invalid: Any = False,
+    field: Any = None,
+    id: Any = "",
+) -> SafeString:
+    """Render a group of radio buttons that assistive technology reads as one control.
+
+    A lone ``{% dj_radio %}`` is announced with no group name, no required state and no
+    description. This renders the group: a ``<fieldset role="radiogroup">`` named by its
+    ``<legend>``, one ``<input type="radio">`` with its own ``<label for>`` per option (ids
+    ``<group id>_<index>``, never the option value), and the help text and error as the group's
+    ``aria-describedby`` (an error also sets ``aria-invalid``).
+
+    Args:
+        name: the radios' shared ``name``
+        label: the group's name, rendered as the ``<legend>``
+        options: list of dicts ``{"value", "label", "disabled"}``, of ``(value, label)`` pairs, or
+            of plain values
+        value: the checked option's value
+        event: ``dj-change`` event for every radio (default: ``name``)
+        error / helper: text that describes the group
+        required: ``aria-required`` on the group and ``required`` on each radio
+        disabled: disables every radio
+        describedby: extra element ids for the group's ``aria-describedby``
+        invalid: sets ``aria-invalid`` (an ``error`` does too)
+        field: a Django BoundField; fills name, label, value, options (its choices), error, help
+            text and required, and its ``auto_id`` becomes the group's id
+        id: the group's id (default: ``name``); the legend, help and error ids derive from it
+    """
+    if field is not None:
+        filled = _from_bound_field(
+            field,
+            {
+                "name": name,
+                "label": label,
+                "value": value,
+                "error": error,
+                "helper": helper,
+                "required": required,
+            },
+        )
+        name, label, value = filled["name"], filled["label"], filled["value"]
+        error, helper, required = filled["error"], filled["helper"], filled["required"]
+        auto_id = getattr(field, "auto_id", None)
+        if not id and auto_id:
+            id = auto_id
+    required = _truthy_flag(required)
+    disabled = _truthy_flag(disabled)
+
+    # One id scheme, every character a valid id: a value or a name with a space or a bracket
+    # made an invalid id (and a ``<label for>`` that pointed nowhere).
+    group_id = attr_text(_re.sub(r"[^A-Za-z0-9_-]", "-", str(id or name or "radio-group")))
+    legend_id = f"{group_id}-legend"
+    e_name = attr_text(name)
+    e_event = attr_text(event or name)
+    e_error = conditional_escape(error)
+    e_helper = conditional_escape(helper)
+
+    group_attrs = f' id="{group_id}" class="dj-radio-group" role="radiogroup"'
+    if label:
+        group_attrs += f' aria-labelledby="{legend_id}"'
+    if required:
+        group_attrs += ' aria-required="true"'
+    group_attrs += field_aria_attrs(str(group_id), error, helper, describedby, invalid)
+
+    required_span = '<span class="form-required" aria-hidden="true"> *</span>' if required else ""
+    legend_html = (
+        f'<legend id="{legend_id}" class="dj-radio-group__legend form-label">'
+        f"{conditional_escape(label)}{required_span}</legend>"
+        if label
+        else ""
+    )
+
+    required_attr = " required" if required else ""
+    options_html = ""
+    for index, (raw_value, option_label, option_disabled) in enumerate(
+        _radio_group_options(options, field)
+    ):
+        option_id = f"{group_id}_{index}"
+        # The RAW text decides "checked" (#3927); escaping is for output only.
+        checked_attr = " checked" if _exact_str(raw_value) == _exact_str(value) else ""
+        disabled_attr = " disabled" if disabled or option_disabled else ""
+        options_html += (
+            f'<div class="form-radio-wrapper dj-radio-option">'
+            f'<input class="form-radio" type="radio" name="{e_name}" id="{option_id}" '
+            f'value="{attr_text(raw_value)}" dj-change="{e_event}"'
+            f"{checked_attr}{disabled_attr}{required_attr}>"
+            f'<label class="form-radio-label" for="{option_id}">'
+            f"{conditional_escape(option_label)}</label>"
+            f"</div>"
+        )
+
+    helper_html = (
+        f'<span class="form-helper" id="{group_id}-helper">{e_helper}</span>' if helper else ""
+    )
+    error_html = (
+        f'<span class="form-error-message" id="{group_id}-error">{e_error}</span>' if error else ""
+    )
+    return mark_safe(
+        f"<fieldset{group_attrs}>{legend_html}{options_html}{helper_html}{error_html}</fieldset>"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 20. Form Group (block tag)
 # ---------------------------------------------------------------------------
 
@@ -2078,9 +2225,55 @@ def do_timeline_item(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 
+#: What a screen reader adds to a completed step that is not the current one. The state used to be a
+#: CSS class only, so it reached nobody who could not see the colour (WCAG 1.3.1, 1.4.1).
+_STEP_COMPLETED = mark_safe('<span class="sr-only"> (completed)</span>')
+_STEP_CURRENT = mark_safe(' aria-current="step"')
+
+
+def render_stepper(
+    entries: Any, active: int, event: Any, *, number_class: str, label_class: str
+) -> SafeString:
+    """The markup of ``{% stepper %}``, shared by the Django tag and the Rust handler (#3970).
+
+    An ordered list, one ``<li>`` per step. A step is a real ``<button type="button">``, so it
+    takes focus, Enter and Space activate it, and it never submits a form it sits in; the
+    current step carries ``aria-current="step"`` and a completed one says so in text.
+
+    ``entries`` is ``(label, li_class, completed)`` per step. The caller decides which classes a
+    step wears (the two engines differ on when a step counts as complete, which is the
+    template-library parity issue, #3663); the structure is decided here, once. ``event`` is
+    escaped for an attribute, whatever it is marked as (#3898).
+    """
+    items = format_html_join(
+        "",
+        '<li class="{}"><button type="button" class="stepper-step-button"{} '
+        'dj-click="{}" data-value="{}"><span class="{}">{}</span> <span class="{}">{}</span>{}'
+        "</button></li>",
+        (
+            (
+                li_class,
+                _STEP_CURRENT if i == active else "",
+                attr_text(event),
+                i,
+                number_class,
+                i + 1,
+                label_class,
+                label,
+                _STEP_COMPLETED if completed and i != active else "",
+            )
+            for i, (label, li_class, completed) in enumerate(entries)
+        ),
+    )
+    return format_html('<ol class="stepper">{}</ol>', items)
+
+
 @register.simple_tag
 def stepper(steps: Any = None, active: Any = 0, event: Any = "set_step") -> SafeString:
     """Render a step indicator.
+
+    The steps are an ordered list of buttons; the current one is
+    ``aria-current="step"`` and a completed one is announced as such.
 
     Args:
         steps: list of dicts {"label":..., "complete": False} or list of strings
@@ -2088,19 +2281,18 @@ def stepper(steps: Any = None, active: Any = 0, event: Any = "set_step") -> Safe
         event: dj-click event name for step navigation
     """
     if not steps:
-        return mark_safe('<div class="stepper"></div>')
+        return render_stepper([], 0, event, number_class="", label_class="")
 
     try:
         active = int(active)
     except (ValueError, TypeError):
         active = 0
 
-    e_event = conditional_escape(event)
-    parts = []
+    entries = []
     for i, step in enumerate(steps):
         if isinstance(step, dict):
             lbl = step.get("label", "")
-            complete = step.get("complete", False)
+            complete = bool(step.get("complete", False))
         else:
             lbl = str(step)
             complete = False
@@ -2110,15 +2302,11 @@ def stepper(steps: Any = None, active: Any = 0, event: Any = "set_step") -> Safe
             cls += " stepper-step-active"
         if complete:
             cls += " stepper-step-complete"
+        entries.append((lbl, cls, complete))
 
-        parts.append(
-            f'<button class="{cls}" dj-click="{e_event}" data-value="{i}">'
-            f'<span class="stepper-number">{i + 1}</span>'
-            f'<span class="stepper-label">{conditional_escape(lbl)}</span>'
-            f"</button>"
-        )
-
-    return mark_safe(f'<div class="stepper">{"".join(parts)}</div>')
+    return render_stepper(
+        entries, active, event, number_class="stepper-number", label_class="stepper-label"
+    )
 
 
 # ===========================================================================
@@ -4941,6 +5129,7 @@ class StatusIndicatorNode(template.Node):
         pulse = kw.get("pulse", False)
         size = kw.get("size", "md")
         custom_class = kw.get("custom_class", "")
+        live = _truthy_flag(kw.get("live", False))
 
         e_label = conditional_escape(str(label))
         e_size = conditional_escape(str(size))
@@ -4964,7 +5153,11 @@ class StatusIndicatorNode(template.Node):
         dot_html = '<span class="dj-status-indicator__dot"></span>'
         label_html = f'<span class="dj-status-indicator__label">{e_label}</span>' if label else ""
 
-        return mark_safe(f'<span class="{cls}" role="status">{dot_html}{label_html}</span>')
+        # A label that is part of the page is not a status message (WCAG 4.1.3): a live role on
+        # every instance announces each one when its text changes, and a table with one per row
+        # has dozens. ``live=True`` is for the one indicator that updates in place.
+        role = ' role="status"' if live else ""
+        return mark_safe(f'<span class="{cls}"{role}>{dot_html}{label_html}</span>')
 
 
 @register.tag("status_indicator")

@@ -34,6 +34,12 @@ def dj_flash(auto_dismiss: int = 5000, position: str = "") -> SafeString:
     ``dj-update="ignore"`` so morphdom does not clobber active flash
     messages during DOM patches.
 
+    The container is NOT a live region.  Each message the client adds is its
+    own one: ``role="status"`` (polite) for ``info`` / ``success`` and
+    ``role="alert"`` (assertive) for ``warning`` / ``error``.  A live region
+    inside a live region leaves the announcement (twice, or at the wrong
+    urgency) to each screen reader.
+
     Args:
         auto_dismiss: Milliseconds before a flash message auto-dismisses.
             Set to ``0`` to disable auto-dismiss.  Default ``5000``.
@@ -49,7 +55,7 @@ def dj_flash(auto_dismiss: int = 5000, position: str = "") -> SafeString:
 
     return format_html(
         '<div id="dj-flash-container" class="{}" dj-update="ignore"'
-        ' data-dj-auto-dismiss="{}" aria-live="polite" role="status"></div>',
+        ' data-dj-auto-dismiss="{}"></div>',
         css_class,
         auto_dismiss,
     )

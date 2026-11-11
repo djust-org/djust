@@ -250,6 +250,12 @@ class TestObjectArguments:
             'id="id_name"',
         ),
         (
+            "dj_radio_group: BoundField",
+            "{% dj_radio_group field=bound_form.name options=opts %}",
+            lambda: {"bound_form": _bound_form(), "opts": [{"value": "a", "label": "A"}]},
+            'id="id_name"',
+        ),
+        (
             "rich_select: BoundField",
             '{% rich_select name="x" field=bound_form.name options=opts %}',
             lambda: {"bound_form": _bound_form(), "opts": [{"value": "a", "label": "A"}]},
@@ -596,7 +602,7 @@ class TestBridgedTagsAreDjangos:
         """A tag that was native accepted any keyword; the bridged tag accepts the keywords
         the Python tag does. Derived per tag from the Python tag's signature: a
         ``simple_tag`` / ``inclusion_tag`` without ``**kwargs`` refuses, a raw tag that reads
-        ``key=value`` pairs ignores. Both engines agree for every one of the nine."""
+        ``key=value`` pairs ignores. Both engines agree for every one of the ten."""
         import inspect
 
         from djust.components import rust_handlers
@@ -693,7 +699,7 @@ print(json.dumps(out))
         assert emitted <= hidden, sorted(emitted - hidden)
 
     def test_an_inclusion_tag_needs_the_template_loader_in_both_engines(self, tmp_path):
-        """``toast_container`` is the one inclusion tag of the nine: its node loads
+        """``toast_container`` is the one inclusion tag of the ten: its node loads
         ``djust_components/toast.html``. With no ``APP_DIRS`` and no ``DIRS`` the Python tag
         fails with ``TemplateDoesNotExist`` under Django's own engine too, so this is the tag's
         contract, not something the bridge added; the native handlers (and the bridged tags that
@@ -1100,11 +1106,12 @@ class TestTypeDispatch:
         """The headline number, derived rather than restated (#2727): the recorded residual's size
         is computed from the pin, the before-count is the measurement the issue reported, and the
         measurement must still be the 21,390 cells those were counted over, plus the 135 cells
-        #3669 added by making the native handlers read more parameters (re-measured, with the
-        grid still 15 types, not estimated)."""
+        #3669 added by making the native handlers read more parameters, plus the 210 cells #3961
+        added (the 13 parameters of ``dj_radio_group`` and ``status_indicator``'s ``live``, over
+        the same 15 types; re-measured, not estimated)."""
         residual = sum(sum(m.values()) for m in RESIDUAL_STANDIN_LOSS.values())
         assert residual < STANDIN_LOSS_BEFORE_3768
-        assert facts["typed_values"]["cells"] == 21390 + 135, (
+        assert facts["typed_values"]["cells"] == 21390 + 135 + 15 * (13 + 1), (
             "the cell grid changed: re-derive both counts"
         )
         measured = sum(

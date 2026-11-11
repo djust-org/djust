@@ -219,9 +219,15 @@ non-empty `<title>` child.
 
 <!-- Not flagged — decorative -->
 <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M0 0"/></svg>
+
+<!-- Not flagged — decorative, hidden by the wrapper -->
+<span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M0 0"/></svg></span>
 ```
 
-These are not flagged: `aria-hidden="true"`; `role="presentation"` or
+These are not flagged: `aria-hidden="true"` on the element or on any ancestor
+that contains it (`aria-hidden="false"` on the wrapper hides nothing, and a
+wrapper whose closing tag is missing is not guessed to cover the rest of the
+file); `role="presentation"` or
 `role="none"` on an `<svg>`; an `<svg>` inside a `<button>` or `<a href>` (the
 control owns the name, and Y001 covers a control that has none); an `<svg>`
 nested in another `<svg>` (only the outer graphic is judged); a hidden sprite

@@ -365,6 +365,7 @@ LEAVES: Dict[Tuple[str, str], Tuple[str, Optional[str]]] = {
     ("auth/core.py", "check_event_auth"): ("run_guarded_step", "auth"),
     ("auth/core.py", "check_handler_permission"): ("run_guarded_step", "auth"),
     ("auth/core.py", "enforce_object_permission"): ("check_object_permission", None),
+    ("auth/core.py", "check_object_permission_for_event"): ("check_object_permission", None),
     ("auth/core.py", "check_view_auth_lightweight"): ("check_view_auth", None),
     ("auth/core.py", "run_pre_mount_auth"): ("check_view_auth", None),
     # lifecycle
@@ -849,7 +850,7 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ),
     ("websocket_utils.py", "_validate_event_security", "check_handler_permission"): leaf(),
     ("websocket_utils.py", "_post_only_rules_deny", "check_event_auth"): leaf(),
-    ("websocket_utils.py", "_validate_event_security", "check_object_permission"): leaf(),
+    ("websocket_utils.py", "_validate_event_security", "check_object_permission_for_event"): leaf(),
     ("worker_pool.py", "_SlotExecutor.submit", "_run_checked"): outside(
         "the worker pool's own executor machinery"
     ),
@@ -976,6 +977,28 @@ HOOKS: Dict[str, str] = {
     "BaseAdapter._merge_widget_attrs": "unwrapped:template-time:called while the form adapter renders a widget at template time: no step is open",
     "DraftModeMixin.get_draft_key": "inside:event|render@drafts.py::DraftModeMixin.get_context_data",
     "WizardMixin.on_wizard_complete": "inside:event@wizard.py::WizardMixin.submit_wizard",
+    "WizardMixin.mount": "stepped:mount",
+    "WizardMixin.get_wizard_initial": (
+        "unwrapped:not-threaded:called by WizardMixin._resume_wizard from WizardMixin.mount, in "
+        "the thread and the mount step of the mount that called it; no thread hand-off names it"
+    ),
+    "WizardMixin.get_wizard_step": (
+        "unwrapped:not-threaded:called by WizardMixin._resume_wizard from WizardMixin.mount, in "
+        "the thread and the mount step of the mount that called it; no thread hand-off names it"
+    ),
+    "WizardMixin.on_step_saved": (
+        "unwrapped:not-threaded:called by WizardMixin.next_step, an event handler, in the thread "
+        "and the event step it runs in; no thread hand-off names it"
+    ),
+    "FormSetHelpersMixin.get_formset_kwargs": (
+        "unwrapped:not-threaded:called by the add_row / remove_row event handlers, in their event "
+        "step, and by the app's own mount(); no thread hand-off names it"
+    ),
+    "ModelFormMixin.get_object_lookup": (
+        "unwrapped:not-threaded:called by ModelFormMixin.get_object inside the auth step, and by "
+        "the view's own selection and reuse checks in the thread of the check that asked; it "
+        "reads view state (its docstring says not to query) and no thread hand-off names it"
+    ),
     "ReactMixin.get_react_components": "unwrapped:not-threaded:no framework code calls it (render_react_component is an app helper), so it runs wherever the app calls it; the step is whatever that is",
     # ---- the data table ----
     "DataTableMixin.handle_cell_edit": (

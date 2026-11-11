@@ -621,6 +621,7 @@ def _collect_passthrough_attrs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
         "choices",
         "checked",
         "label",  # reserved for radio label text, not an HTML attribute
+        "legend",  # a radio group's legend text, not an HTML attribute
     }
     out: Dict[str, Any] = {}
     for k, v in kwargs.items():
@@ -750,6 +751,16 @@ def _render_checkbox(
     return build_tag("input", attrs)
 
 
+#: The passthrough attributes that describe a radio GROUP rather than one radio (see ``_render_radio``).
+_RADIO_GROUP_ATTRS = (
+    "aria-label",
+    "aria-labelledby",
+    "aria-describedby",
+    "aria-invalid",
+    "aria-required",
+)
+
+
 def _render_radio(
     handler: str,
     value: Any,
@@ -758,8 +769,16 @@ def _render_radio(
     event: Optional[str],
     choices: Any,
     passthrough: Dict[str, Any],
+    legend: Optional[str] = None,
 ) -> str:
-    """Render a set of ``<label><input type="radio">...</label>`` rows.
+    """Render a radio group: ``<label><input type="radio">...</label>`` rows in a ``radiogroup``.
+
+    The rows are wrapped in ``<div role="radiogroup">`` (no default browser styling), so a screen
+    reader announces them as one control. With ``legend=`` the wrapper is a
+    ``<fieldset>`` named by a ``<legend>``. ``aria-label`` / ``aria-labelledby`` /
+    ``aria-describedby`` / ``aria-invalid`` / ``aria-required`` describe the GROUP, so they go
+    on it and not on every radio (where ``aria_label="Plan"`` would rename each radio "Plan"); a
+    ``required`` passthrough also sets ``aria-required`` on the group and stays on each radio.
 
     ``choices`` may be:
       * a list of ``(value, label)`` tuples/lists
@@ -769,6 +788,14 @@ def _render_radio(
 
     if choices is None:
         choices = []
+
+    group_attrs: Dict[str, Any] = {"class": "dj-radio-group", "role": "radiogroup"}
+    for key in _RADIO_GROUP_ATTRS:
+        if key in passthrough:
+            group_attrs[key] = passthrough[key]
+    passthrough = {k: v for k, v in passthrough.items() if k not in _RADIO_GROUP_ATTRS}
+    if passthrough.get("required") not in (None, False, "", "false", "False", "0"):
+        group_attrs.setdefault("aria-required", "true")
 
     html_parts = []
     for choice in choices:
@@ -789,7 +816,16 @@ def _render_radio(
         input_html = build_tag("input", attrs)
         html_parts.append(f"<label>{input_html}{escape(str(cl))}</label>")
 
-    return "".join(html_parts)
+    if legend:
+        legend_id = re.sub(r"[^A-Za-z0-9_-]", "-", str(name or handler)) + "-legend"
+        group_attrs["aria-labelledby"] = legend_id
+        html_parts.insert(
+            0,
+            build_tag("legend", {"id": legend_id, "class": "dj-radio-group__legend"}, str(legend)),
+        )
+    return build_tag(
+        "fieldset" if legend else "div", group_attrs, "".join(html_parts), content_is_safe=True
+    )
 
 
 # Field-type registry — each entry is a callable accepting the normalized
@@ -872,6 +908,7 @@ def live_input(field_type: str = "text", **kwargs: Any) -> Any:
     throttle: Optional[str] = kwargs.pop("throttle", None)
     choices = kwargs.pop("choices", None)
     checked: bool = bool(kwargs.pop("checked", False))
+    legend: Optional[str] = kwargs.pop("legend", None)
 
     if field_type not in _FIELD_RENDERERS and field_type not in (
         "textarea",
@@ -947,6 +984,7 @@ def live_input(field_type: str = "text", **kwargs: Any) -> Any:
             event=event,
             choices=choices,
             passthrough=passthrough,
+            legend=legend,
         )
     else:
         # text-like types dispatched through the lambda registry

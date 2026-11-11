@@ -585,7 +585,7 @@ class LiveViewTestClient:
         from django.core.exceptions import PermissionDenied
 
         from .auth import check_handler_permission
-        from .auth.core import _has_custom_get_object, check_object_permission
+        from .auth.core import _has_custom_get_object, check_object_permission_for_event
 
         view = self.view_instance
         request = getattr(view, "request", None)
@@ -596,7 +596,7 @@ class LiveViewTestClient:
         if request is None:
             return "Access denied for this object." if _has_custom_get_object(view) else None
         try:
-            check_object_permission(view, request)
+            check_object_permission_for_event(view, request, handler)
         except PermissionDenied:
             return "Access denied for this object."
         except Exception:  # noqa: BLE001 — fail closed, as the consumer does

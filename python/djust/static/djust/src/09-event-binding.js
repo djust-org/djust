@@ -601,6 +601,8 @@ function _applyDisableWith(element) {
     if (!disableText) return;
     if (!element.hasAttribute('data-djust-original-text')) {
         element.setAttribute('data-djust-original-text', element.textContent);
+        // Already disabled before the submit: the restore must not enable it.
+        if (element.disabled) element.setAttribute('data-djust-was-disabled', '');
     }
     element.textContent = disableText;
     element.disabled = true;
@@ -940,6 +942,83 @@ function _handleDjCopy(element, e) {
 }
 
 /**
+ * The checkboxes sharing `field`'s name in its form (the page when it has
+ * none), or null for a lone checkbox. A group is one multi-valued field.
+ */
+function _checkboxGroup(field) {
+    if (field.type !== 'checkbox' || !field.name) return null;
+    const scope = field.form || field.ownerDocument;
+    const group = Array.from(scope.querySelectorAll('input[type="checkbox"]'))
+        .filter(box => box.name === field.name);
+    return group.length > 1 ? group : null;
+}
+
+/**
+ * The list a multi-valued control holds (#3959): the checked values of a
+ * checkbox group, the selected options of a <select multiple> (Django's
+ * `getlist`); undefined for any other control.
+ */
+function _multiValue(field) {
+    if (field.type === 'select-multiple') return Array.from(field.selectedOptions, option => option.value);
+    const group = _checkboxGroup(field);
+    return group ? group.filter(box => box.checked && !box.disabled).map(box => box.value) : undefined;
+}
+
+/** The value a dj-input / dj-blur / dj-focus on `field` sends: its list when multi-valued. */
+function _fieldValue(field) {
+    const list = _multiValue(field);
+    return list === undefined ? field.value : list;
+}
+
+/** The value a dj-change on `field` sends: a lone checkbox keeps its checked boolean. */
+function _changeValue(field) {
+    return field.type === 'checkbox' && !_checkboxGroup(field) ? field.checked : _fieldValue(field);
+}
+
+// A submitter name a strict handler could declare as a parameter; anything
+// else is not sent (it could not bind, and rejecting would break a page that
+// worked before the submitter was a field). So is a name the transports read
+// as protocol: `event` / `params` switch the HTTP fallback's flat body to its
+// {event, params} envelope (a button named `event` re-routed the call),
+// `component_id` / `view_id` address a component or embedded view,
+// `csrfmiddlewaretoken` is the form's own token field; `_`-names (_target) fail
+// the identifier rule, and the prototype keys are UNSAFE_KEYS.
+const _SUBMITTER_NAME = /^[a-zA-Z][a-zA-Z0-9_]*$/;
+const _SUBMITTER_RESERVED = ['event', 'params', 'component_id', 'view_id', 'csrfmiddlewaretoken', ...UNSAFE_KEYS];
+
+/**
+ * The fields of a dj-submit form as event params (#3959, #3958): a repeated
+ * name is a list in document order, a checkbox group and a <select multiple>
+ * are lists even when one or no value is selected (an absent name would leave
+ * the server's earlier list in place), everything else stays scalar. With
+ * `submitter`, the pressed button's own name=value is a field too, as on a
+ * native post.
+ */
+function _submitParams(form, submitter) {
+    const data = new FormData(form);
+    if (submitter && submitter.name && !submitter.disabled
+        && _SUBMITTER_NAME.test(submitter.name) && !_SUBMITTER_RESERVED.includes(submitter.name)) {
+        data.append(submitter.name, submitter.value);
+    }
+    const boxes = new Set();
+    const multi = new Set();
+    for (const field of form.elements) {
+        if (!field.name) continue;
+        if (field.type === 'select-multiple') multi.add(field.name);
+        else if (field.type === 'checkbox') {
+            if (boxes.has(field.name)) multi.add(field.name);
+            boxes.add(field.name);
+        }
+    }
+    const entries = Array.from(new Set(data.keys()), name => {
+        const all = data.getAll(name);
+        return [name, all.length > 1 || multi.has(name) ? all : all[0]];
+    });
+    for (const name of multi) if (!data.has(name)) entries.push([name, []]);
+    return Object.fromEntries(entries);
+}
+
+/**
  * Handle dj-submit events on forms via delegation.
  * @param {HTMLElement} element - Form element with dj-submit attribute
  * @param {Event} e - The original submit event
@@ -949,8 +1028,11 @@ async function _handleDjSubmit(element, e) {
 
     // ADR-036: form fields are generated values; a strict handler receives
     // only the fields it declares (all of them with **form_data), no _target.
+    // The pressed button is one of them (#3958): _target does not exist under
+    // strict (Q2), and a legacy handler's closed signature would reject a new
+    // field, so legacy keeps _target alone.
     const strictParams = _strictBinding(element, element.getAttribute('dj-submit'),
-        Object.fromEntries(new FormData(element).entries()), []);
+        _submitParams(element, e.submitter), []);
     if (strictParams === false) return;
 
     // dj-lock: skip if already locked
@@ -994,8 +1076,7 @@ async function _handleDjSubmit(element, e) {
     if (strictParams) {
         params = strictParams;
     } else {
-        const formData = new FormData(element);
-        params = Object.fromEntries(formData.entries());
+        params = _submitParams(element, null);
 
         // Merge dj-value-* attributes from the form element
         Object.assign(params, collectDjValues(element));
@@ -1022,7 +1103,7 @@ async function _handleDjSubmit(element, e) {
  * @param {Event} e - The original change event
  */
 async function _handleDjChange(element, e) {
-    const changeValue = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+    const changeValue = _changeValue(e.target);
     const strictParams = _strictFormBinding(element.getAttribute('dj-change'), e.target, changeValue);
     if (strictParams === false) return;
 
@@ -1071,7 +1152,7 @@ async function _handleDjChange(element, e) {
  * @param {Event} e - The original input event
  */
 async function _handleDjInput(element, e) {
-    const strictParams = _strictFormBinding(element.getAttribute('dj-input'), e.target, e.target.value);
+    const strictParams = _strictFormBinding(element.getAttribute('dj-input'), e.target, _fieldValue(e.target));
     if (strictParams === false) return;
 
     // dj-lock: skip if already locked
@@ -1086,7 +1167,7 @@ async function _handleDjInput(element, e) {
     const inputHandler = element.getAttribute('dj-input');
     const parsedInput = parseEventHandler(inputHandler);
 
-    const params = strictParams || buildFormEventParams(e.target, e.target.value);
+    const params = strictParams || buildFormEventParams(e.target, _fieldValue(e.target));
     if (!strictParams && parsedInput.args.length > 0) {
         params._args = parsedInput.args;
     }
@@ -1104,7 +1185,7 @@ async function _handleDjInput(element, e) {
  * @param {Event} e - The original focusout event
  */
 async function _handleDjBlur(element, e) {
-    const strictParams = _strictFormBinding(element.getAttribute('dj-blur'), e.target, e.target.value);
+    const strictParams = _strictFormBinding(element.getAttribute('dj-blur'), e.target, _fieldValue(e.target));
     if (strictParams === false) return;
 
     // dj-lock: skip if already locked
@@ -1119,7 +1200,7 @@ async function _handleDjBlur(element, e) {
     const blurHandler = element.getAttribute('dj-blur');
     const parsedBlur = parseEventHandler(blurHandler);
 
-    const params = strictParams || buildFormEventParams(e.target, e.target.value);
+    const params = strictParams || buildFormEventParams(e.target, _fieldValue(e.target));
     if (!strictParams && parsedBlur.args.length > 0) {
         params._args = parsedBlur.args;
     }
@@ -1133,7 +1214,7 @@ async function _handleDjBlur(element, e) {
  * @param {Event} e - The original focusin event
  */
 async function _handleDjFocus(element, e) {
-    const strictParams = _strictFormBinding(element.getAttribute('dj-focus'), e.target, e.target.value);
+    const strictParams = _strictFormBinding(element.getAttribute('dj-focus'), e.target, _fieldValue(e.target));
     if (strictParams === false) return;
 
     // dj-lock: skip if already locked
@@ -1148,7 +1229,7 @@ async function _handleDjFocus(element, e) {
     const focusHandler = element.getAttribute('dj-focus');
     const parsedFocus = parseEventHandler(focusHandler);
 
-    const params = strictParams || buildFormEventParams(e.target, e.target.value);
+    const params = strictParams || buildFormEventParams(e.target, _fieldValue(e.target));
     if (!strictParams && parsedFocus.args.length > 0) {
         params._args = parsedFocus.args;
     }
@@ -2540,6 +2621,7 @@ function _processFormRecovery() {
     // Collect fields to recover
     const fields = _formRecoveryFields(root);
     const pendingEvents = [];
+    const replayedGroups = new Set();
 
     for (let i = 0; i < fields.length; i++) {
         // eslint-disable-next-line security/detect-object-injection
@@ -2563,7 +2645,20 @@ function _processFormRecovery() {
         let domValue;
         let serverDefault;
 
-        if (fieldType === 'checkbox') {
+        const group = _checkboxGroup(field);
+        if (group || fieldType === 'select-multiple') {
+            // A multi-valued field replays as ONE list, like a live dj-change
+            // (#3959): one event per checkbox group, not one boolean per box.
+            if (group) {
+                if (replayedGroups.has(group[0])) continue;
+                replayedGroups.add(group[0]);
+            }
+            domValue = _changeValue(field);
+            serverDefault = (group || Array.from(field.options))
+                .filter(member => member.hasAttribute(group ? 'checked' : 'selected'))
+                .map(member => member.value);
+            if (JSON.stringify(domValue) === JSON.stringify(serverDefault)) continue;
+        } else if (fieldType === 'checkbox') {
             domValue = field.checked;
             serverDefault = field.hasAttribute('checked');
         } else if (fieldType === 'radio') {
