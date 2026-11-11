@@ -355,6 +355,9 @@ impl djust_templates::inheritance::TemplateLoader for PartialRootRecordingLoader
 
 struct PreparedPartialPage {
     owned_diff_version: Option<u64>,
+    /// Rows an accumulating container dropped while this page was prepared (#3647); added
+    /// to the view's count only when the page is committed.
+    accumulate_dropped: usize,
     child_vdom_ids: Vec<(String, String)>,
     ignore_vdom_ids: HashSet<String>,
     root_spans: Vec<(usize, usize)>,
@@ -1176,6 +1179,14 @@ impl RustLiveViewBackend {
             if let Some(old) = &self.last_vdom {
                 splice_ignore_subtrees(old, &mut page.vdom);
             }
+            // The same accumulating-container splice the ordinary diff path does (#3647):
+            // a `dj-update="append"` / `"prepend"` container keeps the rows the page shows.
+            // Counted on the page, not the view, until `commit_owned_diff` accepts it.
+            page.accumulate_dropped = splice_accumulating_subtrees(
+                self.last_vdom.as_ref(),
+                &mut page.vdom,
+                &self.accumulate_ids,
+            );
             let patches = if let Some(old) = &self.last_vdom {
                 let patches = diff_in(old, &page.vdom, page.namespace);
                 sync_ids(old, &mut page.vdom);
@@ -1212,6 +1223,7 @@ impl RustLiveViewBackend {
                     "owned diff version changed",
                 ));
             }
+            self.accumulate_dropped += page.accumulate_dropped;
             self.install_committed_page(
                 page.vdom,
                 page.namespace,
@@ -2168,6 +2180,7 @@ impl RustLiveViewBackend {
         if !possible.load(Ordering::Relaxed) {
             if let Ok(root) = candidate {
                 return Ok(PreparedPartialPage {
+                    accumulate_dropped: 0,
                     owned_diff_version: None,
                     child_vdom_ids: root.child_vdom_ids,
                     ignore_vdom_ids: root.ignore_vdom_ids,
@@ -2192,6 +2205,7 @@ impl RustLiveViewBackend {
                     }
                 }
                 Ok(PreparedPartialPage {
+                    accumulate_dropped: 0,
                     owned_diff_version: None,
                     child_vdom_ids: root.child_vdom_ids,
                     ignore_vdom_ids: root.ignore_vdom_ids,
@@ -2240,6 +2254,7 @@ impl RustLiveViewBackend {
                 }
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
                 Ok(PreparedPartialPage {
+                    accumulate_dropped: 0,
                     owned_diff_version: None,
                     child_vdom_ids: Vec::new(),
                     ignore_vdom_ids: HashSet::new(),
@@ -2281,6 +2296,9 @@ impl RustLiveViewBackend {
         if let Some(old) = &self.last_vdom {
             splice_ignore_subtrees(old, &mut vdom);
         }
+        // As on the ordinary diff path (#3647); this IS the commit, so the view counts it.
+        self.accumulate_dropped +=
+            splice_accumulating_subtrees(self.last_vdom.as_ref(), &mut vdom, &self.accumulate_ids);
         let patches = if let Some(old) = &self.last_vdom {
             let patches = diff_in(old, &vdom, namespace);
             sync_ids(old, &mut vdom);

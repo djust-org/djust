@@ -1361,8 +1361,17 @@ class TestProtectingAMultiValueDictKeepsItsType:
             return qd
 
         src = "{% querystring qd page=4 %}"
-        # Django's own engine still renders it: this is a divergence we pin, not parity.
-        assert "u=alice" in django_render(src, {"qd": _qd()})
+        expected = django_render(src, {"qd": _qd()})
+        assert "u=alice" in expected
+        if django.VERSION >= (6, 0):
+            # Django 6 builds the new query without ``QueryDict.copy()``, so nothing copies the
+            # proxy and there is nothing to refuse: the tag prints the model's text, exactly as
+            # Django does, and the floor still holds (no field of the model is read).
+            for html in (backend_render(src, {"qd": _qd()}), self._liveview_html(src, _qd)):
+                assert expected in html
+                assert "pbkdf2" not in html and "hunter2" not in html
+            return
+        # Django 5.x: the engine still renders it, so this is a divergence we pin, not parity.
         with pytest.raises(copy.Error):
             backend_render(src, {"qd": _qd()})
         with pytest.raises(copy.Error):

@@ -328,9 +328,20 @@ class _TypedOperands:
         args, kwargs = self._adjust(args, kwargs)
         return self._handler.render(*args, **kwargs)
 
+    def _render_root_parts(self, *args: Any, **kwargs: Any) -> Any:
+        """The core layout protocol (2.0), with the same arguments ``render`` hands on.
+
+        The engine calls this in place of ``render`` for the four built-in layout handlers
+        when it tracks the page root. Defined here so the call does not fall through
+        ``__getattr__`` to the handler and skip ``_adjust``. A handler without the protocol
+        raises ``AttributeError``, as it would unwrapped.
+        """
+        args, kwargs = self._adjust(args, kwargs)
+        return self._handler._render_root_parts(*args, **kwargs)
+
     def _adjust(self, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
         """The arguments the wrapped handler is called with; a subclass changes them here, so
-        ``render`` keeps one signature for every wrapper."""
+        ``render`` and ``_render_root_parts`` keep one signature for every wrapper."""
         return args, kwargs
 
     def __getattr__(self, name: str) -> Any:

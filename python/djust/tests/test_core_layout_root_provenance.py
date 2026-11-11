@@ -164,3 +164,139 @@ def test_core_layout_bridge_keeps_lazy_super_snapshot_alive(tmp_path, monkeypatc
     html, _, _, _ = view.prepare_authenticated_page()
     assert seen == ["PARENT"]
     assert "CHILD" in html
+
+
+# ---- the framework's argument wrappers (main #3676 / #3871) around the layout handlers ----
+
+
+def _registered_chain(name):
+    """The handler classes ``register_with_rust_engine`` builds for ``name``, outermost first."""
+    from djust._positional_args import with_argument_contract
+    from djust.components import rust_handlers
+    from djust.components.templatetags.djust_components import register as library
+
+    inner = dict((tag, handler) for tag, _end, handler in rust_handlers.BLOCK_HANDLERS)[name]
+    wrapped = with_argument_contract(name, rust_handlers._with_typed_block_operands(inner), library)
+    chain = [type(wrapped).__name__]
+    while "_handler" in vars(wrapped):
+        wrapped = vars(wrapped)["_handler"]
+        chain.append(type(wrapped).__name__)
+    return chain
+
+
+@pytest.mark.parametrize(
+    "name,cls",
+    [
+        ("app_shell", "AppShellHandler"),
+        ("app_sidebar", "AppSidebarHandler"),
+        ("app_header", "AppHeaderHandler"),
+        ("app_content", "AppContentHandler"),
+    ],
+)
+def test_the_layout_handlers_are_registered_inside_exactly_the_two_wrappers_the_engine_peels(
+    name, cls
+):
+    """The engine recognises a core layout by peeling these two classes and no others. If the
+    registration ever wraps differently, the layouts silently lose root proof, so pin the shape."""
+    assert _registered_chain(name) == ["DjangoCheckedTagHandler", "_TypedBlockOperands", cls]
+
+
+def test_a_wrapped_layout_handler_keeps_core_layout_authority():
+    view = RustLiveView("{% app_content %}<main dj-root>body</main>{% endapp_content %}", [])
+    view.set_authenticated_partial_root(True)
+    html, _, _, _ = view.prepare_authenticated_page()
+    assert view.prepared_page_has_root()
+    assert "<main dj-root>body</main>" in html
+
+
+def _wrap_like_the_framework(handler):
+    from djust._positional_args import DjangoCheckedTagHandler
+    from djust.components.rust_handlers import _TypedBlockOperands
+    from djust.components.templatetags.djust_components import register as library
+
+    return DjangoCheckedTagHandler(
+        _TypedBlockOperands(handler), "app_content", library.tags["app_content"]
+    )
+
+
+class _OpaqueLayout:
+    def _render_root_parts(self, args, content, context):
+        return [(None, "<div>"), ((0, len(content.encode())), ""), (None, "</div>")]
+
+    def render(self, args, content, context):
+        return "<div>" + content + "</div>"
+
+
+def _subclass_of(base):
+    return type("Lookalike", (base,), {})
+
+
+def _wrapper_variants():
+    from djust._positional_args import DjangoCheckedTagHandler
+    from djust.components.rust_handlers import AppContentHandler, _TypedBlockOperands
+    from djust.components.templatetags.djust_components import register as library
+
+    compile_func = library.tags["app_content"]
+    return {
+        # the real wrappers around something that is not a layout class
+        "framework-wrappers-around-opaque": lambda: _wrap_like_the_framework(_OpaqueLayout()),
+        # the real wrappers around a SUBCLASS of a layout class
+        "framework-wrappers-around-subclass": lambda: _wrap_like_the_framework(
+            _subclass_of(AppContentHandler)()
+        ),
+        # a subclass of the outer wrapper around the real layout
+        "subclassed-outer-wrapper": lambda: _subclass_of(DjangoCheckedTagHandler)(
+            _TypedBlockOperands(AppContentHandler()), "app_content", compile_func
+        ),
+        # a subclass of the inner wrapper around the real layout
+        "subclassed-inner-wrapper": lambda: DjangoCheckedTagHandler(
+            _subclass_of(_TypedBlockOperands)(AppContentHandler()), "app_content", compile_func
+        ),
+        # a look-alike wrapper that only carries a `_handler` attribute
+        "lookalike-wrapper": lambda: type(
+            "DjangoCheckedTagHandler",
+            (),
+            {
+                "__init__": lambda self: setattr(self, "_handler", AppContentHandler()),
+                "render": lambda self, a, c, x: self._handler.render(a, c, x),
+                "_render_root_parts": lambda self, a, c, x: self._handler._render_root_parts(
+                    a, c, x
+                ),
+            },
+        )(),
+    }
+
+
+@pytest.mark.parametrize("variant", sorted(_wrapper_variants()))
+def test_only_the_exact_wrapper_chain_around_an_exact_layout_class_gains_authority(variant):
+    from djust._rust import register_block_tag_handler
+
+    register_block_tag_handler("app_content", "endapp_content", _wrapper_variants()[variant]())
+    view = RustLiveView("{% app_content %}<main dj-root>body</main>{% endapp_content %}", [])
+    view.set_authenticated_partial_root(True)
+    with pytest.raises(ImproperlyConfigured, match="authored"):
+        view.prepare_authenticated_page()
+
+
+def test_the_core_layout_call_still_blanks_an_operand_that_did_not_resolve():
+    """#3871 through the core protocol: `class=nope` names a variable that is not in the context,
+    so the class is empty; the variable's NAME must not become the class. `app_shell` is the
+    layout tag that reads `class`."""
+    source = "{% app_shell class=NAME %}<main dj-root>body</main>{% endapp_shell %}"
+
+    view = RustLiveView(source.replace("NAME", "nope"), [])
+    view.set_authenticated_partial_root(True)
+    html, _, _, _ = view.prepare_authenticated_page()
+    assert view.prepared_page_has_root()
+    assert "nope" not in html
+
+    resolved = RustLiveView(source.replace("NAME", "extra"), [])
+    resolved.set_authenticated_partial_root(True)
+    resolved.update_state({"extra": "wide"})
+    html, _, _, _ = resolved.prepare_authenticated_page()
+    assert resolved.prepared_page_has_root()
+    assert 'class="dj-app-shell wide"' in html
+    # the tracked render and the ordinary one agree on the wrapper's markup
+    plain = RustLiveView(source.replace("NAME", "extra"), [])
+    plain.update_state({"extra": "wide"})
+    assert 'class="dj-app-shell wide"' in plain.render()

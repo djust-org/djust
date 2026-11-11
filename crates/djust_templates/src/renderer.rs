@@ -5263,7 +5263,14 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 context.take_provenance_flatten();
                 let resolved = resolve_block_tag_args(name, args, context);
                 context.take_provenance_flatten();
-                let values = bridged_context_map(context)?;
+                let mut values = bridged_context_map(context)?;
+                // The same typed-operand channel the ordinary block call gets (#3768): the
+                // layout handlers are registered inside the typed-operand wrapper, which
+                // blanks an operand the engine could not resolve (#3871) by reading it.
+                if crate::registry::block_handler_wants_typed_args(name) {
+                    let only = crate::registry::block_handler_typed_standins_only(name);
+                    add_typed_operands(&mut values, args, context, only);
+                }
                 let raw = context.render_raw_py_objects();
                 let (html, copies) = crate::registry::call_core_root_layout(
                     name,

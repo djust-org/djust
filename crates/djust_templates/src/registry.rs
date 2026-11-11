@@ -2753,6 +2753,31 @@ pub fn is_core_root_layout(name: &str) -> Result<bool, DjangoRustError> {
 }
 
 fn core_root_layout_object(py: Python<'_>, handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+    // `register_with_rust_engine` registers each native handler inside the framework's two
+    // argument wrappers (the Django-checked tag handler around the typed block operands,
+    // #3676 / #3871). Each layer is peeled only when its type IS that framework class, so a
+    // subclass, a look-alike wrapper or a wrapper around anything else gains nothing, and the
+    // innermost object still has to be one of the four exact layout classes below.
+    let mut handler = handler.clone();
+    for (module, class) in [
+        ("djust._positional_args", "DjangoCheckedTagHandler"),
+        ("djust.components.rust_handlers", "_TypedBlockOperands"),
+    ] {
+        let wrapper = py.import(module)?.getattr(class)?;
+        if handler.get_type().as_any().is(&wrapper) {
+            // The wrapper's own instance attribute, read from its `__dict__`: no `__getattr__`
+            // forwarding and no descriptor can answer for it.
+            let inner = handler
+                .getattr("__dict__")?
+                .cast_into::<pyo3::types::PyDict>()?
+                .get_item("_handler")?;
+            let Some(inner) = inner else {
+                return Ok(false);
+            };
+            handler = inner;
+        }
+    }
+    let handler = &handler;
     let ty = handler.get_type();
     let name = ty.name()?;
     let name = name.to_str()?;
