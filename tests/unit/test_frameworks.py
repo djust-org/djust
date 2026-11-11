@@ -151,7 +151,7 @@ class TestPlainAdapter:
 
     def test_help_text_uses_small_tag(self):
         html = self.adapter.render_field(self.form.fields["name"], "name", "", [])
-        assert "<small>" in html
+        assert '<small id="id_name-help">' in html
 
     def test_error_class(self):
         html = self.adapter.render_errors(["Something went wrong"])

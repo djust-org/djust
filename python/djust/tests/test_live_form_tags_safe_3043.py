@@ -108,8 +108,8 @@ def test_escaping_is_exact_where_it_matters():
     assert 'value="&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"' in form
     # the label, as text
     assert "Name &lt;required&gt;" in form
-    # a choice value in both the input's value and the label's for=
-    assert 'value="r&quot;x"' in form and 'for="id_colour_r&quot;x"' in form
+    # a choice value in the input's value; the ids are the choice's index, never its value
+    assert 'value="r&quot;x"' in form and 'for="id_colour_0"' in form
     # a choice label
     assert "Red &lt;b&gt;" in form
     errors = _django('{% live_errors view "name" %}', view)

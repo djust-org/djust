@@ -2950,6 +2950,14 @@ trigger the rule.
 Alternatively use
 `{% rich_select name="field" options=options event="on_change" searchable=True %}`.
 
+For a Django form field, pass the bound field and validate through
+`FormMixin`:
+`{% combobox field=view.form_instance.country options=country_options event="validate_field" %}`.
+The form adapters (`{% live_field %}`, `as_live_field`) render a native
+`<select>`, which is the accessible default for a short list; X102 reads
+template source and does not see their output, so use the combobox for a
+long list yourself.
+
 **Suppression**: Add `{# djust: noqa X102 #}` on the `<select>` opening line.
 
 ---
