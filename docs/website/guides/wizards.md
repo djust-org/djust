@@ -237,14 +237,18 @@ class ApplicationWizard(WizardMixin, LiveView):
         return saved.next_step if saved else 0
 
     def on_step_saved(self, step_name, data):
+        # one row, updated step by step: keep the earlier steps' answers
+        saved = Application.objects.filter(owner=self.request.user).first()
+        answers = {**(saved.answers if saved else {}), step_name: data}
         Application.objects.update_or_create(
-            owner=self.request.user, defaults={"answers": {step_name: data}}
+            owner=self.request.user, defaults={"answers": answers}
         )
 ```
 
 - `get_wizard_initial()` and `get_wizard_step()` are called by `mount()`; the defaults return `{}` and `0`, so a wizard that overrides neither behaves as before. Values are stored as the text the browser would submit (a `date` becomes `"2024-02-29"`), because wizard state is JSON. A step without a form, a step the wizard does not have and a field the step's form does not have are ignored, with a warning in the log.
 - A step that does not exist (an index out of range, an unknown name) starts at the first step, with a warning. Every step before the one named counts as completed, so `go_to_step` can return to it; `next_step` still validates the step it leaves and `submit_wizard` validates all of them again, so stale stored answers can't skip validation.
-- `on_step_saved(step_name, data)` runs when `next_step` has validated a step, just before the wizard moves on. If it raises (a failed save), the person stays on the step. `prev_step` does not call it: the step it leaves is not validated.
+- `on_step_saved(step_name, data)` runs when `next_step` has validated a step, just before the wizard moves on. *data* holds only the fields the step's form declares. If it raises (a failed save), the person stays on the step. It runs once per successful `next_step`, not once per step: after `prev_step` and `next_step` again it runs a second time for the same step, so make the save an update, as above. `prev_step` does not call it (the step it leaves is not validated), and the last step has no `next_step`: `on_wizard_complete()` is its hook.
+- `validate_field` and `update_step_field` store whatever name the page sends for the current step (within the `max_form_*` bounds); a name the step's form does not declare is kept in `step_data` but is not handed to `on_step_saved()`. Only the `dj-submit` path (`next_step` / `submit_wizard` with posted fields) ignores undeclared names.
 
 You can also render fields manually in `get_context_data()`:
 

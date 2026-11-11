@@ -432,3 +432,20 @@ def test_a_failing_on_step_saved_leaves_the_person_on_the_step():
     assert not result["success"]
     assert client.view_instance.wizard_step_index == 0
     assert client.view_instance.wizard_completed_steps == []
+
+
+def test_on_step_saved_is_handed_only_the_fields_the_steps_form_declares():
+    client = _client()
+    client.send_event("validate_field", field="is_admin", value="1")  # made up by the page
+    client.send_event("validate_field", field="pin", value="1234")  # another step's field
+    client.send_event("next_step", email="a@example.com")
+    assert SAVED == [("contact", {"email": "a@example.com"})]
+
+
+def test_on_step_saved_runs_again_after_back_then_next_so_a_save_must_be_an_update():
+    client = _client()
+    client.send_event("next_step", email="a@example.com")
+    client.send_event("prev_step")
+    client.send_event("next_step", email="b@example.com")
+    assert [name for name, _data in SAVED] == ["contact", "contact"]
+    assert SAVED[-1][1]["email"] == "b@example.com"

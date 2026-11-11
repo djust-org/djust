@@ -5,6 +5,7 @@ This module provides seamless integration between Django's forms system and Live
 enabling real-time validation, error display, and reactive form handling.
 """
 
+import copy
 import logging
 import math
 from typing import (
@@ -426,11 +427,6 @@ class FormMixin:
         """
         return True
 
-    def _require_form(self) -> None:
-        """Refuse an event that needs a form while there is none to build (#3967)."""
-        if not self._form_available():
-            raise PermissionDenied("No authorized object to edit.")
-
     def _ensure_form_state(self) -> None:
         """Repair form state when ``FormMixin.mount()`` never ran (#2667).
 
@@ -704,7 +700,6 @@ class FormMixin:
 
         # Ensure form state is initialized (defensive check — see #2667)
         self._ensure_form_state()
-        self._require_form()
 
         # Update form data
         if self._refuse_form_data({field_name: value}):
@@ -766,7 +761,6 @@ class FormMixin:
         Validates all fields and calls form_valid() or form_invalid().
         """
         self._ensure_form_state()
-        self._require_form()
 
         # Merge kwargs into form_data (for fields submitted with the form)
         incoming = {self._form_event_field_name(name): value for name, value in kwargs.items()}
@@ -888,7 +882,6 @@ class FormMixin:
         # reset_form() writes every attribute below EXCEPT form_choices, so an
         # unmounted view would still be missing that one (#2667).
         self._ensure_form_state()
-        self._require_form()
 
         # Reset form_data with all field keys initialized (matching mount() behavior)
         # This ensures consistent VDOM state and prevents alternating patches/html_update
@@ -1193,18 +1186,25 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
     kwargs: Dict[str, Any]
 
     _djust_configuration_names = _MODEL_FORM_CONFIGURATION
-    _djust_injects_context = FormMixin._djust_injects_context | frozenset({"object"})
+    _djust_injects_context = FormMixin._djust_injects_context | frozenset(
+        {"object", "form_object_key"}
+    )
+
+    #: Which record ``form_data`` was built for (``"app.Model:pk"``, ``""`` while no record is
+    #: selected). Public so that it is saved and restored WITH the form input it describes: a
+    #: restored view must not bind record A's input to record B (#3967).
+    form_object_key: str
+    #: The functions ``object_read_only_events`` named, resolved where the set was declared.
+    _djust_read_only_funcs: FrozenSet[Any] = frozenset()
     _djust_context_providers = (_managed_object_provider,)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         # Allocated before LiveView records its framework slots, so the legacy
         # session never mistakes the verdict for user private state.
         self._djust_authorized_object: Optional[tuple] = None
-        # What a read-only event may reuse (``object_recheck = "writes"``) and which record
-        # the form state was built for. Framework slots: never persisted, so a restored
-        # view re-resolves its record before it reuses one.
+        # What a read-only event may reuse (``object_recheck = "writes"``). A framework slot:
+        # never persisted, so a restored view re-resolves its record before it reuses one.
         self._djust_object_stamp: Optional[tuple] = None
-        self._djust_form_object: Optional[tuple] = None
         super().__init__(*args, **kwargs)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -1233,6 +1233,20 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
                 "%s.object_read_only_events must be a collection of handler names, "
                 "not %r." % (cls.__name__, read_only)
             )
+        if "object_read_only_events" in vars(cls):
+            # Resolve the names to the functions they mean HERE; an override in a subclass
+            # that does not declare its own set is then a different function, and a write.
+            funcs = []
+            for name in read_only:
+                attr = getattr(cls, name, None)
+                func = getattr(attr, "__func__", attr)
+                if not callable(func):
+                    raise ImproperlyConfigured(
+                        "%s.object_read_only_events names %r, which is not a method of the view."
+                        % (cls.__name__, name)
+                    )
+                funcs.append(func)
+            cls._djust_read_only_funcs = frozenset(funcs)
         alias = cls.context_object_name
         if alias is not None and (
             type(alias) is not str
@@ -1252,7 +1266,12 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
     def _djust_object_required(self) -> bool:
         """Whether "no object" is a denial (ADR-035 D3). It is, except while nothing is selected
         on a view that is ``object_optional``: a record that IS selected must resolve."""
-        return not (self.object_optional and not self._has_selection())
+        try:
+            return not (self.object_optional and not self._has_selection())
+        except AttributeError:
+            # A property that raises AttributeError is read as "absent" by ``getattr(..., False)``,
+            # which would mean "not required": a lookup that reads state not set yet fails closed.
+            return True
 
     @property
     def object(self) -> Optional[_ModelT]:
@@ -1466,13 +1485,14 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
     def _form_available(self) -> bool:
         return self.object is not None
 
-    def _object_key(self) -> Optional[Tuple[str, Any]]:
+    def _object_key(self) -> str:
+        """Identity of the record the form state is for: ``"app.Model:pk"``, ``""`` for none."""
         obj = self.object
-        return None if obj is None else (obj._meta.concrete_model._meta.label, obj.pk)
+        return "" if obj is None else "%s:%s" % (obj._meta.concrete_model._meta.label, obj.pk)
 
     def _init_form_state(self) -> None:
         super()._init_form_state()
-        self._djust_form_object = self._object_key()
+        self.form_object_key = self._object_key()
 
     def _djust_note_authorized_object(self, request: Any) -> None:
         """Framework hook: ``self.object`` was just resolved and authorized for ``request``.
@@ -1491,13 +1511,20 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
         if not hasattr(self, "form_data"):
             return  # mount() has not built the form state yet; it will
         key = self._object_key()
-        built = self._djust_form_object
+        built = self.__dict__.get("form_object_key")
         if built == key:
             return
-        self._djust_form_object = key
-        if built is None and self.form_data:
-            # A restored view: the form state arrived with its input (``mount()`` ran with no
-            # selection, then the saved state was applied) and is the selected record's.
+        if (
+            built is None
+            and key
+            and self.form_data
+            and type(self).get_object_lookup is ModelFormMixin.get_object_lookup
+        ):
+            # A restored view whose record the ROUTE names: the saved state is keyed by path,
+            # so it is this record's. (A view that selects its record from params has no such
+            # guarantee: the same session path holds whichever record was open last, so state
+            # that arrives without its ``form_object_key`` is not trusted and starts over.)
+            self.form_object_key = key
             return
         self._init_form_state()
 
@@ -1511,13 +1538,31 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
 
     @staticmethod
     def _fingerprint(obj: Any) -> Dict[str, Any]:
-        """The record's field values now, to tell a changed record from the one authorized."""
-        return {name: value for name, value in vars(obj).items() if name != "_state"}
+        """The record's field values now, to tell a changed record from the one authorized.
+
+        A deep copy of each value, so a ``JSONField`` list or dict edited in place is a
+        change too. Taken from a snapshot of the instance namespace, never by iterating it
+        live (#3151: another thread may set an attribute meanwhile on a free-threaded build).
+        A value that cannot be copied is compared by identity.
+        """
+        snapshot: Dict[str, Any] = {}
+        for name, value in namespace(obj).items():
+            if name == "_state":
+                continue
+            try:
+                snapshot[name] = copy.deepcopy(value)
+            except Exception:  # noqa: BLE001 - an uncopyable value: fall back to the value itself
+                snapshot[name] = value
+        return snapshot
 
     def _is_read_only_event(self, handler: Any) -> bool:
-        if getattr(handler, "__func__", None) is FormMixin.__dict__["validate_field"]:
-            return True
-        return getattr(handler, "__name__", None) in self.object_read_only_events
+        """The framework's own ``validate_field``, or a function listed in
+        ``object_read_only_events`` where it was listed. By FUNCTION, not by name: a subclass
+        that redefines either (and so may write) is a write, and gets the full check."""
+        func = getattr(handler, "__func__", None)
+        if func is None:
+            return False
+        return func is FormMixin.__dict__["validate_field"] or func in self._djust_read_only_funcs
 
     def _djust_reuses_authorized_object(self, handler: Any, request: Any) -> bool:
         """Framework hook (``check_object_permission_for_event``): may this event reuse the record?

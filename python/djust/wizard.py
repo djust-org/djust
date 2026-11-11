@@ -646,7 +646,7 @@ class WizardMixin:
             step_name = self._steps[self.wizard_step_index]["name"]
             # Before the step moves on: a hook that raises (a failed save) leaves the
             # person on the step they filled in, not one ahead of what was stored.
-            self.on_step_saved(step_name, self.wizard_step_data.get(step_name, {}))
+            self.on_step_saved(step_name, self._declared_step_data(step_name))
             if self.wizard_step_index not in self.wizard_completed_steps:
                 self.wizard_completed_steps.append(self.wizard_step_index)
             self.wizard_step_index += 1
@@ -657,8 +657,23 @@ class WizardMixin:
         Override it to save progress as the person goes (and pair it with
         ``get_wizard_initial()`` / ``get_wizard_step()`` to resume), instead of
         overriding the handlers. *data* is the step's raw submitted values, as
-        in ``on_wizard_complete()``. The default does nothing (#3965).
+        in ``on_wizard_complete()``, limited to the fields the step's form declares
+        (a name the page made up through ``validate_field`` is not handed on). It
+        runs once per successful ``next_step``: after ``prev_step`` and ``next_step``
+        again it runs again for the same step, so make the save an update, not an
+        append. The last step has no ``next_step``; ``on_wizard_complete()`` is its
+        hook. The default does nothing (#3965).
         """
+
+    def _declared_step_data(self, step_name: str) -> dict[str, Any]:
+        """The stored data of step *step_name*, without keys its form does not declare."""
+        step: dict[str, Any] = next((s for s in self._steps if s.get("name") == step_name), {})
+        form_class = step.get("form_class")
+        held = self.wizard_step_data.get(step_name, {})
+        if form_class is None:
+            return {}
+        names = form_class().fields
+        return {key: value for key, value in held.items() if key in names}
 
     @event_handler()
     def prev_step(self, **kwargs: Any) -> None:
@@ -708,7 +723,12 @@ class WizardMixin:
         return True
 
     def _store_step_field(self, name: str, value: Any) -> bool:
-        """Keep one client-named field of the current step (:meth:`_store_step_fields`)."""
+        """Keep one client-named field of the current step (:meth:`_store_step_fields`).
+
+        Any name is kept, declared or not: ``update_step_field`` / ``validate_field`` have always
+        stored what the page sent (bounded, #3834), and the bounds tests pin that. Only the
+        ``dj-submit`` path and the data ``on_step_saved`` receives are limited to the step's
+        declared fields."""
         return self._store_step_fields({name: value})
 
     def _store_submitted_fields(self, submitted: Mapping[str, Any]) -> bool:

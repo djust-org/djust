@@ -910,3 +910,190 @@ async def test_a_restored_view_keeps_the_input_typed_for_the_selected_record():
         assert await _name(mine) == "Typed, unsaved"
     finally:
         await socket.disconnect()
+
+
+async def _restore(view_class, url_path, user, session, selected, typed_for):
+    """GET and a typed ``validate_field`` over HTTP for record ``typed_for``, then a socket restore
+    of the same session path with ``selected`` chosen in the mount params. Returns the open socket
+    (the caller disconnects it) and the mount frame."""
+    from channels.testing import WebsocketCommunicator
+    from djust.websocket import LiveViewConsumer
+
+    def http(method, body=None):
+        url = "%s?open=%s" % (url_path, typed_for.pk)
+        if method == "get":
+            request = RequestFactory().get(url)
+        else:
+            request = RequestFactory().post(
+                url, data=json.dumps(body), content_type="application/json"
+            )
+        request.user, request.session, request.tenant = user, session, None
+        return view_class.as_view()(request)
+
+    assert (await sync_to_async(http)("get")).status_code == 200
+    typed = {"event": "validate_field", "params": {"field": "name", "value": "TYPED-FOR-A"}}
+    assert (await sync_to_async(http)("post", typed)).status_code == 200
+    await sync_to_async(session.save)()
+    socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    socket.scope.update(session=session, user=user, tenant=None)
+    assert (await socket.connect())[0]
+    await socket.receive_json_from()
+    await socket.send_json_to(
+        {
+            "type": "mount",
+            "view": __name__ + "." + view_class.__name__,
+            "url": url_path,
+            "params": {"open": str(selected.pk)},
+            "has_prerendered": True,
+        }
+    )
+    return socket, await socket.receive_json_from()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_restored_view_does_not_bind_one_records_input_to_another():
+    """The saved state is keyed by path, so the same session holds whichever record was open
+    last. Input typed for A, then a restore with B selected: B starts from B's own values."""
+    from django.contrib.sessions.backends.db import SessionStore
+
+    alice, a, _ = await sync_to_async(_world)()
+    b = await sync_to_async(Group.objects.create)(name="Bee " + uuid.uuid4().hex[:6])
+    await sync_to_async(alice.groups.add)(b)
+    session = await sync_to_async(SessionStore)()
+    await sync_to_async(session.create)()
+    socket, frame = await _restore(QueueSnapshot, "/queue-snapshot/", alice, session, b, a)
+    try:
+        assert frame["type"] == "mount", frame
+        assert "TYPED-FOR-A" not in json.dumps(frame), frame
+        frames = await _event(socket, 1, "submit_form", {})
+        assert not _denied(frames), frames
+        assert await _name(b) == b.name
+        assert await _name(a) == a.name
+    finally:
+        await socket.disconnect()
+
+
+@pytest.mark.django_db
+def test_the_record_key_is_saved_with_the_form_input_it_describes():
+    alice, mine, _ = _world()
+    view, _request = _mounted(Writes, alice, mine.pk)
+    assert view.form_object_key == "auth.Group:%s" % mine.pk
+
+
+class WritesOverridePeek(Writes):
+    """Overrides the LISTED handler (without re-declaring the list): it may write now."""
+
+    @event_handler()
+    def peek(self, **kwargs):
+        EVENTS.append(("peek-override", self.object.pk))
+        self.object.name = "WRITTEN-AFTER-REVOKE"
+        self.object.save()
+
+
+class WritesRelisted(Writes):
+    """Re-declares the list: the override is vouched for by the subclass that wrote it."""
+
+    object_read_only_events = frozenset({"peek"})
+
+    @event_handler()
+    def peek(self, **kwargs):
+        EVENTS.append(("peek-relisted",))
+
+
+urlpatterns.append(path("override-peek/<int:pk>/", WritesOverridePeek.as_view()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_an_override_of_a_listed_handler_is_a_write_and_is_checked_in_full():
+    alice, mine, _ = await sync_to_async(_world)()
+    socket, mounted = await _open(WritesOverridePeek, alice, "/override-peek/%s/" % mine.pk)
+    try:
+        assert mounted["type"] == "mount", mounted
+        REVOKED.add(mine.pk)
+        EVENTS.clear()
+        frames = await _event(socket, 1, "peek", {})
+        assert _denied(frames), frames
+        assert _kinds("peek-override") == [], EVENTS
+        assert await _name(mine) == mine.name
+    finally:
+        await socket.disconnect()
+
+
+@pytest.mark.django_db
+def test_a_subclass_that_redeclares_the_list_vouches_for_its_own_override():
+    alice, mine, _ = _world()
+    view, request = _mounted(WritesRelisted, alice, mine.pk)
+    assert view._djust_reuses_authorized_object(view.peek, request) is True
+    other, request = _mounted(WritesOverridePeek, alice, mine.pk)
+    assert other._djust_reuses_authorized_object(other.peek, request) is False
+
+
+def test_a_listed_name_that_is_not_a_method_is_a_configuration_error():
+    with pytest.raises(ImproperlyConfigured, match="not a method"):
+
+        class Typo(ModelFormMixin[Group], LiveView):
+            object_read_only_events = frozenset({"no_such_handler"})
+
+
+def test_the_fingerprint_sees_an_in_place_change_to_a_mutable_value():
+    class Row:
+        pass
+
+    row = Row()
+    row.name, row.data = "n", {"roles": ["viewer"]}
+    before = ModelFormMixin._fingerprint(row)
+    row.data["roles"].append("admin")
+    assert ModelFormMixin._fingerprint(row) != before
+    row.data["roles"].pop()
+    assert ModelFormMixin._fingerprint(row) == before
+
+
+def test_a_lookup_that_raises_attribute_error_is_a_required_object():
+    class Eager(ModelFormMixin[Group], LiveView):
+        object_optional = True
+
+        def get_object_lookup(self):
+            return {"pk": self.never_set}  # read before anything set it
+
+    assert Eager()._djust_object_required is True
+
+
+def _drop_the_saved_key(view):
+    """What a restore that did not carry ``form_object_key`` leaves: form input, no record key."""
+    view.__dict__.pop("form_object_key", None)
+
+
+@pytest.mark.django_db
+def test_restored_input_without_a_record_key_is_kept_for_a_view_the_route_selects():
+    from djust.auth.core import enforce_object_permission
+
+    alice, mine, _ = _world()
+    view, request = _mounted(Writes, alice, mine.pk)
+    view.form_data = {"name": "restored input"}
+    _drop_the_saved_key(view)
+    enforce_object_permission(view, request)
+    assert view.form_data == {"name": "restored input"}
+    assert view.form_object_key == "auth.Group:%s" % mine.pk
+
+
+@pytest.mark.django_db
+def test_restored_input_without_a_record_key_is_not_trusted_for_a_params_selected_view():
+    from djust.auth.core import enforce_object_permission
+
+    alice, mine, _ = _world()
+    request = RequestFactory().get("/")
+    request.user, request.tenant = alice, None
+    view = Queue()
+    view.setup(request)
+    view._djust_bind_route_kwargs({})
+    view.mount(request)
+    view.open_id = str(mine.pk)
+    enforce_object_permission(view, request)
+    assert view.form_data == {"name": mine.name}
+    view.form_data = {"name": "input typed for some other record"}
+    _drop_the_saved_key(view)
+    enforce_object_permission(view, request)
+    assert view.form_data == {"name": mine.name}
+    assert view.form_object_key == "auth.Group:%s" % mine.pk

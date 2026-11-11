@@ -257,6 +257,10 @@ async def test_an_undecorated_handler_makes_no_permission_hops(pool, monkeypatch
             await comm.disconnect()
     assert frame.get("ref") == 1
     assert "check_handler_permission" not in hops
+    # The per-event object check is ``check_object_permission_for_event`` (a view with no
+    # ``get_object`` returns from it at once, on the loop). Match both names: this pin went
+    # vacuous when the hop was renamed, because it matched an exact function ``__name__``.
+    assert "check_object_permission_for_event" not in hops
     assert "check_object_permission" not in hops
 
 

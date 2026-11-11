@@ -467,7 +467,7 @@ shows the person more than the record they were already allowed to see).
 `reset_form` and every handler of yours, whatever it does. The record is
 reused only while it is unchanged since it was authorized (a saved or edited
 record is looked up again), the route and lookup are the same, and the user is
-the same. A view that overrides `validate_field` gets the full check for it.
+the same. Listed handlers are matched by function, where they were listed: a subclass that redefines `validate_field` (or a listed handler) without listing it again gets the full check for it, since the new body may write. The unchanged test covers the record's field values, so a `JSONField` list or dict edited in place counts as a change.
 
 The trade: if access is revoked while the page is open, `validate_field` keeps
 working until the next event that is not read-only, which is denied. The
@@ -516,7 +516,9 @@ class ReviewQueue(ModelFormMixin[Review], LiveView):
   nothing selected is a denial.
 - Selecting another record (a `dj-patch` to `?open=<other>`) starts the form
   from that record's own values; the first record's unsaved input never
-  carries over. Closing the record empties the form.
+  carries over, including across a reconnect or restore (the record a form's
+  input was typed for is saved with it, and input that arrives without it is
+  not trusted). Closing the record empties the form.
 
 ### Moving from `_model_instance`
 
@@ -542,6 +544,7 @@ for a removal, `dj-value-prefix="items-2"`, the row's prefix):
 <!-- djust-example: skip -- needs application models (Order, Item) -->
 ```python
 from django.forms import inlineformset_factory
+from django.shortcuts import get_object_or_404
 from djust import LiveView
 from djust.formsets import FormSetHelpersMixin
 
@@ -555,7 +558,7 @@ class OrderView(FormSetHelpersMixin, LiveView):
         return {"instance": self.order}
 
     def mount(self, request, pk=None, **kwargs):
-        self.order = Order.objects.get(pk=pk)
+        self.order = get_object_or_404(Order, pk=pk, owner=request.user)
         self.items = ItemFormSet(prefix="items", **self.get_formset_kwargs("items"))
         self._formset_data = {}
 ```
