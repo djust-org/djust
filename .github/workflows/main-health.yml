@@ -24,6 +24,13 @@ permissions:
   contents: read
   issues: write
 
+# Two halves (#4074). `suite` is the serial full suite on 3.12: every test, every unit of the
+# exhaustive security sweeps (no `-m`, no DJUST_SWEEP_SAMPLE: tests/sweep_sample.py is full). It
+# is the ONLY place the full sweeps run. `matrix` calls test.yml, so the interpreter matrix
+# (3.13/3.14/3.15) and the Django spread run here, once a day, instead of on every push to main.
+# The report job below files one issue for either half, so a nightly failure reaches a human.
+# A manual run on another branch tests that branch and fails the run instead of filing an issue.
+
 concurrency:
   group: main-health
   cancel-in-progress: false
@@ -36,9 +43,8 @@ jobs:
       failed: ${{ steps.run.outputs.failed }}
       summary: ${{ steps.run.outputs.summary }}
     steps:
+      # The ref the run is for: `main` on the schedule; the dispatched branch on a manual run.
       - uses: actions/checkout@v7
-        with:
-          ref: main
 
       - uses: actions/setup-python@v7
         with:
@@ -133,9 +139,16 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           exit 0
 
+  matrix:
+    name: cross-version matrix (test.yml)
+    uses: ./.github/workflows/test.yml
+    with:
+      # main-health's `suite` above already sweeps every unit once; the matrix samples.
+      full_sweeps: false
+
   report:
     name: open or update the tracking issue
-    needs: suite
+    needs: [suite, matrix]
     # Runs even when `suite` FAILED. Without this, a job-level failure — a
     # broken `uv venv`, a network blip, a Rust build error — skips the report
     # entirely and nobody is told. "Nothing alerted" is the failure mode this
@@ -154,6 +167,8 @@ jobs:
           FAILED: ${{ needs.suite.outputs.failed }}
           SUMMARY: ${{ needs.suite.outputs.summary }}
           SUITE_RESULT: ${{ needs.suite.result }}
+          MATRIX_RESULT: ${{ needs.matrix.result }}
+          ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
         with:
           script: |
             // Three states, not two: green, red, and "the check could not
@@ -162,8 +177,21 @@ jobs:
             const outcome = process.env.SUITE_RESULT;
             const ranAtAll = outcome === 'success';
             const infraFailure = !ranAtAll;
-            const failed = infraFailure || process.env.FAILED === 'true';
-            const summary = process.env.SUMMARY || '(no summary captured)';
+            // The cross-version matrix (#4074) is red when any of its gating jobs failed; a
+            // 3.15 cell is allowed to fail and does not make it red.
+            const matrixRed = process.env.MATRIX_RESULT === 'failure';
+            const failed = infraFailure || process.env.FAILED === 'true' || matrixRed;
+            const matrixLine = matrixRed
+              ? 'The cross-version matrix (test.yml on 3.12-3.15 x Django 5.2-6.1) FAILED: see its jobs in the run.'
+              : `Cross-version matrix: ${process.env.MATRIX_RESULT || 'not run'}.`;
+            const summary = (process.env.SUMMARY || '(no summary captured)') + '\n\n' + matrixLine;
+            // A manual run on a branch reports in the run, not in the tracking issue.
+            if (process.env.ON_MAIN !== 'true') {
+              core.summary.addRaw(summary);
+              await core.summary.write();
+              if (failed) core.setFailed(`branch run is red: ${summary}`);
+              return;
+            }
             const LABEL = 'main-health';
             const RED_TITLE = 'main is RED — the full suite fails on main';
             const INFRA_TITLE = 'main-health check could not run';

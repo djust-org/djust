@@ -36,7 +36,13 @@ def _script() -> str:
     raise AssertionError("no github-script step found in the report job")
 
 
-def _run_script(suite_result: str, failed: str, open_issues: list[dict]) -> dict:
+def _run_script(
+    suite_result: str,
+    failed: str,
+    open_issues: list[dict],
+    matrix_result: str = "success",
+    on_main: str = "true",
+) -> dict:
     """Execute the workflow's script and return every API call it made."""
     harness = textwrap.dedent("""
         const calls = [];
@@ -52,6 +58,11 @@ def _run_script(suite_result: str, failed: str, open_issues: list[dict]) -> dict
             },
           },
         };
+        const SUMMARY_OUT = [];
+        const core = {
+          summary: {addRaw: (t) => SUMMARY_OUT.push(t), write: async () => {}},
+          setFailed: (m) => { calls.push({op: 'setFailed', message: m}); },
+        };
         const context = {
           serverUrl: 'https://github.com',
           repo: {owner: 'djust-org', repo: 'djust'},
@@ -60,6 +71,8 @@ def _run_script(suite_result: str, failed: str, open_issues: list[dict]) -> dict
         process.env.SUITE_RESULT = %s;
         process.env.FAILED = %s;
         process.env.SUMMARY = '1 failed, 2 passed';
+        process.env.MATRIX_RESULT = %s;
+        process.env.ON_MAIN = %s;
         (async () => {
         %s
         })().then(() => console.log('@@' + JSON.stringify(calls)));
@@ -67,6 +80,8 @@ def _run_script(suite_result: str, failed: str, open_issues: list[dict]) -> dict
         json.dumps(open_issues),
         json.dumps(suite_result),
         json.dumps(failed),
+        json.dumps(matrix_result),
+        json.dumps(on_main),
         textwrap.indent(_script(), "        "),
     )
     r = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
@@ -277,3 +292,26 @@ def test_the_workflow_parses_ids_the_same_way_the_script_does():
         "the old greedy strip truncates any id whose parameter contains ' - '"
     )
     assert 'substr($0, i, 3) == " - "' in WORKFLOW.read_text()
+
+
+# --- #4074: the cross-version matrix moved here from every push to main ----------------------
+
+
+def test_a_red_cross_version_matrix_opens_the_red_issue_even_when_the_suite_is_green():
+    calls = _run_script("success", "false", [], matrix_result="failure")["calls"]
+    created = [c for c in calls if c["op"] == "create"]
+    assert len(created) == 1 and created[0]["title"] == RED
+    assert "cross-version matrix" in created[0]["body"]
+
+
+def test_a_skipped_or_green_matrix_does_not_make_main_red():
+    for result in ("success", "skipped"):
+        calls = _run_script("success", "false", [], matrix_result=result)["calls"]
+        assert not [c for c in calls if c["op"] == "create"], result
+
+
+def test_a_branch_run_fails_the_run_and_files_no_issue():
+    calls = _run_script("success", "true", [], on_main="false")["calls"]
+    assert [c["op"] for c in calls] == ["setFailed"]
+    calls = _run_script("success", "false", [], on_main="false")["calls"]
+    assert calls == []

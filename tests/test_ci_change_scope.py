@@ -439,7 +439,11 @@ def test_the_queue_is_treated_like_a_pull_request_for_matrix_and_tier():
     jobs = _workflow()["jobs"]
     for name in ("python-build", "python-tests"):
         expr = str(jobs[name]["strategy"]["matrix"]["python-version"])
-        assert "github.event_name != 'merge_group'" in expr, (name, expr)
+        # #4074: only the nightly (schedule, via main-health) and a manual run widen the matrix,
+        # so the queue -- like a PR and the push to main -- runs 3.12 alone.
+        assert "github.event_name == 'schedule'" in expr, (name, expr)
+        assert "github.event_name == 'workflow_dispatch'" in expr, (name, expr)
+        assert "merge_group" not in expr and "pull_request" not in expr, (name, expr)
     step = next(s for s in jobs["python-tests"]["steps"] if "-m pytest" in (s.get("run") or ""))
     assert "github.event_name == 'merge_group'" in step["env"]["PYTEST_MARK"]
 

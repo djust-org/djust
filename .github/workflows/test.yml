@@ -1,7 +1,27 @@
 name: Tests
 
 on:
+  # A manual run is the FULL run: every interpreter, the slow tier and every unit of the
+  # exhaustive sweeps (tests/sweep_sample.py, #4074). Untick full_sweeps to sample them.
   workflow_dispatch:
+    inputs:
+      full_sweeps:
+        description: Run every unit of the exhaustive security sweeps (else a seeded sample)
+        type: boolean
+        default: true
+  # The nightly cross-version run: .github/workflows/main-health.yml calls this workflow on its
+  # schedule (#4074), so `github.event_name` is `schedule` there and the matrix below is full.
+  # The sweeps are sampled in it: main-health's serial suite already runs every unit, once.
+  workflow_call:
+    inputs:
+      full_sweeps:
+        type: boolean
+        default: false
+      # Keeps a called run out of the caller-independent concurrency group below, so the
+      # nightly matrix and a push or a manual run of the same commit never cancel each other.
+      caller:
+        type: string
+        default: main-health
   push:
     branches: [ main, '1.*', '2.*' ]
     paths-ignore:
@@ -28,7 +48,8 @@ on:
   #     below is per-entry: entries never cancel each other.
   #   * There is no `github.event.pull_request` (so no `full-tests` label): the
   #     queue is treated like a pull request (3.12 only, the fast tier), and
-  #     the push to main that follows the merge still runs the full matrix.
+  #     the push to main that follows the merge runs the slow tier on 3.12; the
+  #     other interpreters run nightly (#4074).
   #   * No job here posts a comment or otherwise needs a PR context.
   merge_group:
     types: [checks_requested]
@@ -76,7 +97,7 @@ on:
 # branches and PRs keep cancelling superseded revisions as before.
 # Pinned by tests/test_ci_main_runs_not_cancelled.py.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  group: ${{ inputs.caller }}${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 # Least-privilege GITHUB_TOKEN (#2523). Every job here only reads the
@@ -251,7 +272,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
+        python-version: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
     name: python-build (py${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v7
@@ -301,13 +322,15 @@ jobs:
   # Python tests - runs in parallel with pytest-xdist
   #
   # Matrix-on-PR is the project's #1 minute sink (3 cells × ~10 min each).
-  # On PR (and in the merge queue) we run only the canonical interpreter
-  # (3.12); on push to main
-  # we run the full matrix (3.12/3.13/3.14, plus 3.15 allowed to fail). 3.13 / 3.14 regressions are
-  # caught on push or manual dispatch instead of at PR time — one merge later,
-  # not "never". Historical evidence the matrix has value: PRs #450 / #452
-  # shipped real 3.14-support fixes. Tradeoff accepted because the absolute
-  # cost (~8 min/PR × dependabot volume) outweighed the latency.
+  # On PR, in the merge queue AND on push to main we run only the canonical
+  # interpreter (3.12) against all three Django series; the full interpreter
+  # matrix (3.12/3.13/3.14, plus 3.15 allowed to fail) runs nightly (main-health
+  # calls this workflow on its schedule) and on manual dispatch. 3.13 / 3.14
+  # regressions are therefore caught the next night, not on the merge commit
+  # (#4074: a push to main cost ~800 runner-minutes, ~11 pushes a day, and every
+  # one of those commits had already passed the merge queue on 3.12). Historical
+  # evidence the matrix has value: PRs #450 / #452 shipped real 3.14-support
+  # fixes, so it moved, it was not dropped.
   #
   # SHARDED 4-way with pytest-split. Measured on the last completed run
   # before sharding (run 33681681995): this job was 1191s, of which 1005s
@@ -353,7 +376,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
+        python-version: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
         django-version: ["5.2", "6.0", "6.1"]
         group: [1, 2, 3, 4]
     name: python-tests (py${{ matrix.python-version }}, Django ${{ matrix.django-version }}, shard ${{ matrix.group }}/4)
@@ -524,6 +547,29 @@ jobs:
       # URL-sweep module fixture charged to its first test, #3781), so a normal run prints
       # nothing; the timer fires from a C thread, so it still works when the
       # hang holds the GIL. Pinned by tests/test_ci_hang_dump_3800.py.
+      # The exhaustive sweeps (tests/sweep_sample.py, #4074) always run the cases tied to the
+      # files this change touches; list them. A queue entry may hold several PRs and what its
+      # base_sha means for a group is unverified (docs/testing-strategy.md), so it also diffs
+      # against the tip of its base branch and takes the union, as ci-change-scope.py does.
+      # Empty on schedule / dispatch (no base), and when a base cannot be fetched: the sample
+      # then draws without them, and the log says so.
+      - name: List the changed paths for the sweep sample
+        env:
+          BASES: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }} ${{ github.event.merge_group.base_ref }}
+        run: |
+          out="$RUNNER_TEMP/changed-paths.txt"
+          : > "$out"
+          for base in $BASES; do
+            [ "$base" = "0000000000000000000000000000000000000000" ] && continue
+            if git fetch --no-tags --depth=1 origin "$base" && git diff --name-only FETCH_HEAD HEAD >> "$out"; then
+              echo "diffed against $base"
+            else
+              echo "::warning::could not diff against $base; the sweep sample draws without its changed paths"
+            fi
+          done
+          sort -u -o "$out" "$out"
+          echo "$(wc -l < "$out") changed path(s)"
+
       - name: Run Python tests (parallel with pytest-xdist, shard ${{ matrix.group }}/4)
         # PR fast tier: pull requests skip the duration-derived `slow` tier
         # (tests/slow_tier.py — > 1s in .test_durations: ~1.6% of tests,
@@ -539,9 +585,16 @@ jobs:
           DJUST_COLLECTED_FLOOR: "1"
           # A merge-queue entry has no PR labels, so it is treated like an
           # unlabelled PR (fast tier, 3.12 only): the push to main that follows
-          # the merge still runs the slow tier and the other interpreters.
+          # the merge still runs the slow tier (3.12; other interpreters nightly).
           # Flip to the full tier for the queue by dropping the `merge_group` arm.
           PYTEST_MARK: ${{ ((github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'full-tests')) || github.event_name == 'merge_group') && 'not nightly and not slow' || 'not nightly' }}
+          # #4074: the exhaustive sweeps run a seeded sample here, every unit nightly
+          # (main-health) and on a manual run; a `full-tests` PR label runs every unit too.
+          # The seed differs per commit and per cell, so successive runs rotate through the
+          # whole population; a failing sweep prints the command that re-runs its sample.
+          DJUST_SWEEP_SAMPLE: ${{ (inputs.full_sweeps || contains(github.event.pull_request.labels.*.name, 'full-tests')) && '0' || '1' }}
+          DJUST_SWEEP_SEED: ${{ github.sha }}-py${{ matrix.python-version }}-dj${{ matrix.django-version }}
+          DJUST_SWEEP_CHANGED_FILE: ${{ runner.temp }}/changed-paths.txt
         run: |
           PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto --dist loadfile -m "$PYTEST_MARK" -o faulthandler_timeout=1800 --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
 
