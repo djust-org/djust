@@ -42,7 +42,6 @@ and the restore tests' ``html_update`` assertions go RED while the fresh-mount
 from __future__ import annotations
 
 import contextlib
-import json
 import sys
 import uuid
 from typing import Any, Dict, List, Optional
@@ -54,7 +53,7 @@ from django.test import override_settings
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.runtime import ViewRuntime
-from djust.security import sign_snapshot
+from djust.decorators import state
 
 pytestmark = pytest.mark.django_db
 
@@ -151,7 +150,27 @@ def _register(view_cls):
     return f"{__name__}.{view_cls.__name__}"
 
 
+class _ClientFilterView(LiveView):
+    """The explicit twin: ``n`` is a declared field the browser holds signed."""
+
+    exposure_policy = "explicit"
+    template = '<div dj-root dj-id="0">n={{ n }}</div>'
+    n = state(0, persist="client", client=True)
+
+    def mount(self, request, **kwargs):
+        self.n = 5
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.n += 1
+
+    def get_context_data(self, **kwargs):
+        return {"n": self.n}
+
+
 VIEW_PATH = f"{__name__}._FilterView"
+CLIENT_VIEW_PATH = f"{__name__}._ClientFilterView"
+TOKEN = "state_snapshot_signed"
 PAGE_URL = "/feed/"
 
 
@@ -164,6 +183,12 @@ def _make_db_session():
     s = SessionStore()
     s.create()
     return s
+
+
+def _load_db_session(session_key):
+    from django.contrib.sessions.backends.db import SessionStore
+
+    return SessionStore(session_key=session_key)
 
 
 def _make_request(session):
@@ -189,11 +214,6 @@ async def _mount(runtime, data):
 async def _event(runtime, name, **params):
     with _ALLOWLIST:
         await runtime.dispatch_event({"type": "event", "event": name, "params": params, "ref": 1})
-
-
-def _signed_snapshot(state: Dict[str, Any], *, slug: str, session_key: Optional[str]):
-    inner = json.dumps(state, sort_keys=True, separators=(",", ":"))
-    return {"view_slug": slug, "state_json": sign_snapshot(inner, slug, session_key)}
 
 
 # --------------------------------------------------------------------------- #
@@ -251,38 +271,49 @@ class TestRestoreForcesFullHtmlFirstRender:
         assert view._force_full_html is False, "flag must be consumed after exactly one render"
 
     @pytest.mark.asyncio
-    async def test_signed_snapshot_restore_first_event_is_full_html(self):
-        """Signed-snapshot HMAC restore (the other #1646 restore mechanism) also
-        arms the fix — the first post-restore event is a full ``html_update``."""
+    async def test_signed_client_snapshot_restore_first_event_is_full_html(self, monkeypatch):
+        """The explicit restore (declared ``persist="client"`` fields, from the
+        signed client token) also arms the fix (#1646): the first post-restore
+        event is a full ``html_update``."""
         session = await sync_to_async(_make_db_session)()
-        request = _make_request(session)
-        runtime, transport = _make_runtime(request)
-        snap = _signed_snapshot(
-            {"author": "bob", "n": 7}, slug=VIEW_PATH, session_key=session.session_key
-        )
+        first, first_transport = _make_runtime(_make_request(session))
+        await _mount(first, {"type": "mount", "view": CLIENT_VIEW_PATH, "url": PAGE_URL})
+        token = first_transport.mount_frame[TOKEN]
+        assert token, f"the mount must ship the signed token; got {first_transport.sent!r}"
+        # The reconnect's mount() leaves the default, so 5 can only be restored.
+        monkeypatch.setattr(_ClientFilterView, "mount", lambda self, request, **kwargs: None)
+
+        runtime, transport = _make_runtime(_make_request(session))
         await _mount(
             runtime,
             {
                 "type": "mount",
-                "view": VIEW_PATH,
+                "view": CLIENT_VIEW_PATH,
                 "url": PAGE_URL,
-                "state_snapshot": snap,
+                "state_snapshot": {"view_slug": CLIENT_VIEW_PATH, "state_json": token},
                 "has_prerendered": True,
             },
         )
+
+        async def fresh_event_request(view):
+            # An explicit turn is authorized against a fresh request (ADR-038).
+            return await sync_to_async(_make_request)(
+                await sync_to_async(_load_db_session)(session.session_key)
+            )
+
+        transport.explicit_event_request = fresh_event_request
         view = runtime.view_instance
         assert view is not None
-        assert view._mounted_from_restore is True, "signed snapshot must restore"
-        assert view.author == "bob"
-        assert view._force_full_html is True, "the #1977 fix must arm on signed-snapshot restore"
+        assert view.n == 5, "the signed client snapshot must restore the declared field"
+        assert view._force_full_html is True, "the #1977 fix must arm on a client-token restore"
 
         await _event(runtime, "bump")
 
         assert not transport.frames_of("patch"), (
-            f"signed-snapshot restore first event must not patch; got {transport.sent!r}"
+            f"client-token restore first event must not patch; got {transport.sent!r}"
         )
         assert transport.frames_of("html_update"), (
-            f"signed-snapshot restore first event must html_update; got {transport.sent!r}"
+            f"client-token restore first event must html_update; got {transport.sent!r}"
         )
 
 

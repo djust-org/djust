@@ -8,11 +8,9 @@ not changed by the flag (#3211).
 
 import importlib
 
-import pytest
 
 import djust
 from djust import LiveView, PersistentLiveView
-from djust._exposure import ExposureError
 from djust.checks import check_service_worker_advanced
 from djust.decorators import state
 from djust.live_view import PersistentLiveView as PersistentLiveViewFromModule
@@ -54,7 +52,7 @@ def test_exported_from_package():
     assert importlib.import_module("djust").PersistentLiveView is PersistentLiveView
 
 
-def test_capture_and_restore_round_trip():
+def test_capture_keeps_public_state_only():
     view = Counter()
     view.count = 5
     view.label = "alice"
@@ -63,13 +61,7 @@ def test_capture_and_restore_round_trip():
     assert snapshot["count"] == 5
     assert snapshot["label"] == "alice"
     assert "_private" not in snapshot
-
-    fresh = Counter()
-    fresh.count = 0
-    fresh._restore_snapshot(snapshot)
-    assert fresh.count == 5
-    assert fresh.label == "alice"
-    assert fresh._should_restore_snapshot(None) is True
+    assert Counter()._should_restore_snapshot(None) is True
 
 
 class ExplicitPersistent(PersistentLiveView):
@@ -91,9 +83,6 @@ def test_explicit_subclass_is_constructible_and_flag_is_inert():
     captured = view._capture_snapshot_state()
     assert captured == {}
     assert "UNDECLARED_SENTINEL" not in repr(captured)
-    # The legacy raw restore hook stays closed for explicit views.
-    with pytest.raises(ExposureError):
-        view._restore_snapshot({"saved": "x"})
 
 
 def _c304_messages():

@@ -11,7 +11,6 @@ from django.test import RequestFactory, override_settings
 
 from djust import LiveView, event_handler
 from djust.decorators import state
-from djust.security import unsign_snapshot
 from djust.sse import SSESession
 from djust.websocket import LiveViewConsumer
 
@@ -94,7 +93,7 @@ async def sse_event(session, request, event, params):
 @pytest.mark.parametrize("transport", ["sse", "ws", "ws-notify"])
 @pytest.mark.parametrize("cls", [DeferredLegacy, DeferredExplicit])
 @pytest.mark.parametrize("quiet", [False, True])
-async def test_deferred_turn_is_saved_and_refreshes_token(transport, cls, quiet):
+async def test_deferred_turn_is_saved_and_refreshes_declared_token(transport, cls, quiet):
     request = await sync_to_async(make_request)()
     session = socket = None
     try:
@@ -148,12 +147,11 @@ async def test_deferred_turn_is_saved_and_refreshes_token(transport, cls, quiet)
         else:
             stored = await sync_to_async(fresh.session.load)()
             assert stored[f"liveview_{request.path}"]["count"] == 1, frames
-        assert successes[-1].get(TOKEN), frames
-        if cls is DeferredLegacy:
-            payload = unsign_snapshot(
-                successes[-1][TOKEN], f"{MOD}.{cls.__name__}", request.session.session_key
-            )
-            assert json.loads(payload)["count"] == 1
+        if cls is DeferredExplicit:
+            assert successes[-1].get(TOKEN), frames
+        else:
+            # A legacy view holds no declared client state: nothing is signed.
+            assert not any(TOKEN in f for f in frames), frames
     finally:
         if socket is not None:
             await socket.disconnect()
@@ -163,7 +161,7 @@ async def test_deferred_turn_is_saved_and_refreshes_token(transport, cls, quiet)
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("quiet", [False, True])
-def test_http_post_returns_current_legacy_token(quiet):
+def test_http_post_saves_a_legacy_turn_and_mints_no_token(quiet):
     request = make_request()
     response = DeferredLegacy.as_view()(request)
     assert response.status_code == 200
@@ -176,9 +174,8 @@ def test_http_post_returns_current_legacy_token(quiet):
     response = DeferredLegacy.as_view()(post)
     assert response.status_code == 200, response.content
     body = json.loads(response.content)
-    assert body.get(TOKEN), body
-    state_json = unsign_snapshot(body[TOKEN], f"{MOD}.DeferredLegacy", post.session.session_key)
-    assert json.loads(state_json)["count"] == 1
+    assert TOKEN not in body, body
+    assert post.session[f"liveview_{request.path}"]["count"] == 1
 
 
 @pytest.mark.asyncio
@@ -248,103 +245,3 @@ async def test_deferred_explicit_waits_for_storage(monkeypatch, quiet, outcome):
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         await session.close()
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("control", ["disabled", "not_opted_in", "capture_failure"])
-def test_http_snapshot_respects_opt_in_and_revokes_stale_token(monkeypatch, control):
-    request = make_request()
-    if control == "not_opted_in":
-        monkeypatch.setattr(DeferredLegacy, "enable_state_snapshot", False)
-    assert DeferredLegacy.as_view()(request).status_code == 200
-    if control == "capture_failure":
-
-        def fail_capture(self, **kwargs):
-            raise ValueError("uncapturable state")
-
-        monkeypatch.setattr(DeferredLegacy, "_capture_snapshot_state", fail_capture)
-    post = RequestFactory().post(
-        request.path,
-        json.dumps({"event": "change", "params": {}}),
-        content_type="application/json",
-    )
-    post.session, post.user = request.session, request.user
-    with override_settings(DJUST_STATE_SNAPSHOT_ENABLED=control != "disabled"):
-        response = DeferredLegacy.as_view()(post)
-    assert response.status_code == 200
-    body = json.loads(response.content)
-    if control == "capture_failure":
-        assert TOKEN in body and body[TOKEN] is None
-    else:
-        assert TOKEN not in body
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("cookie", [None, "expired-session-key"])
-@pytest.mark.parametrize("backend", ["db", "signed_cookies"])
-@pytest.mark.parametrize("mode", ["enabled", "disabled", "not_opted_in"])
-def test_http_token_binds_cookie_issued_by_session_middleware(cookie, backend, mode, monkeypatch):
-    from django.conf import settings
-    from django.test import Client
-    from django.urls import path
-
-    if mode == "not_opted_in":
-        monkeypatch.setattr(DeferredLegacy, "enable_state_snapshot", False)
-    with override_settings(
-        DJUST_STATE_SNAPSHOT_ENABLED=mode != "disabled",
-        SESSION_ENGINE=f"django.contrib.sessions.backends.{backend}",
-        ROOT_URLCONF=type(
-            "URLs", (), {"urlpatterns": [path("fallback/", DeferredLegacy.as_view())]}
-        ),
-        MIDDLEWARE=[
-            "django.contrib.sessions.middleware.SessionMiddleware",
-            "django.contrib.auth.middleware.AuthenticationMiddleware",
-        ],
-    ):
-        client = Client()
-        if cookie:
-            client.cookies[settings.SESSION_COOKIE_NAME] = cookie
-        response = client.post(
-            "/fallback/",
-            json.dumps({"event": "change", "params": {}}),
-            content_type="application/json",
-        )
-        assert response.status_code == 200, response.content
-        body = response.json()
-        if mode != "enabled":
-            assert TOKEN not in body
-            return
-        key = client.cookies[settings.SESSION_COOKIE_NAME].value
-        if backend == "signed_cookies":
-            assert TOKEN in body and body[TOKEN] is None
-            return
-        state_json = unsign_snapshot(body[TOKEN], f"{MOD}.DeferredLegacy", key)
-        assert state_json is not None, "HTTP token must match the response session cookie"
-        assert json.loads(state_json)["count"] == 1
-        assert unsign_snapshot(body[TOKEN], f"{MOD}.DeferredLegacy", "other-session") is None
-
-
-@pytest.mark.django_db
-def test_http_missing_module_identity_withholds_token(monkeypatch):
-    class MissingModuleMeta(type(LiveView)):
-        def __getattribute__(cls, name):
-            if name == "__module__" and type.__getattribute__(cls, "_hide_module"):
-                raise AttributeError("__module__")
-            return super().__getattribute__(name)
-
-    class MissingModuleView(DeferredLegacy, metaclass=MissingModuleMeta):
-        _hide_module = False
-
-    endpoint = MissingModuleView.as_view()
-    request = make_request()
-    assert endpoint(request).status_code == 200
-    post = RequestFactory().post(
-        request.path,
-        json.dumps({"event": "change", "params": {}}),
-        content_type="application/json",
-    )
-    post.session, post.user = request.session, request.user
-    monkeypatch.setattr(MissingModuleView, "_hide_module", True)
-    response = endpoint(post)
-    assert response.status_code == 200, response.content
-    assert TOKEN not in json.loads(response.content)
