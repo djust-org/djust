@@ -210,32 +210,24 @@ for each control, use a Django form widget or custom markup that supplies
 Here's how the Radio component looks when integrated into a Django form:
 
 ```python
-from djust import LiveView, event_handler
+from djust import LiveView, event_handler, state
 from djust.components.ui import Radio
 
 class SettingsView(LiveView):
     template_name = 'settings.html'
-
-    def mount(self, request):
-        self.saved_theme = ""
-        self.theme_radio = Radio(
-            name="theme",
-            label="Theme Preference",
-            options=[
-                {'value': 'light', 'label': 'Light'},
-                {'value': 'dark', 'label': 'Dark'},
-                {'value': 'auto', 'label': 'Auto'},
-            ],
-            value="auto",
-            inline=True,
-            help_text="Choose your preferred color theme"
-        )
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['theme_radio'] = self.theme_radio
-        context["saved_theme"] = self.saved_theme
-        return context
+    saved_theme = state("")
+    theme_radio = state(default_factory=lambda: Radio(
+        name="theme",
+        label="Theme Preference",
+        options=[
+            {'value': 'light', 'label': 'Light'},
+            {'value': 'dark', 'label': 'Dark'},
+            {'value': 'auto', 'label': 'Auto'},
+        ],
+        value="auto",
+        inline=True,
+        help_text="Choose your preferred color theme"
+    ))
 
     @event_handler()
     def save_settings(self, theme: str = "", **kwargs):

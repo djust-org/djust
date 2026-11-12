@@ -194,7 +194,6 @@ class PushPage(LiveView):
     """A page with a server-push handler and a signed-snapshot opt-in."""
 
     exposure_policy = "legacy"
-    enable_state_snapshot = True
     template = '<div dj-root dj-view="' + MOD + '.PushPage"><h1>push</h1></div>'
 
     def mount(self, request, **kwargs):

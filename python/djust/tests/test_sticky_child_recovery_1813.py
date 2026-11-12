@@ -11,11 +11,9 @@ child is reset to its ``mount()`` defaults, discarding the user's interactions.
 TWO compounding server-side defects (both fixed here):
 
 (b1) The DAMAGE / structural cure. ``{% live_render sticky=True %}`` (live_tags.py)
-     constructed a FRESH ``child_cls()`` + ``mount()`` on EVERY parent render. The two
-     pre-existing escape hatches (``_sticky_preserved`` auto-reattach; session-backed
-     ``restore_sticky_child_state``) are both inert by default — the latter is gated
-     behind ``enable_state_snapshot=True`` on BOTH parent + child. So in the default
-     case every parent re-render (and therefore every ``_recovery_html`` snapshot taken
+     constructed a FRESH ``child_cls()`` + ``mount()`` on EVERY parent render. The
+     pre-existing escape hatch (``_sticky_preserved`` auto-reattach) only fires on a
+     navigation. So every parent re-render (and therefore every ``_recovery_html`` snapshot taken
      during a parent event) rendered the child at mount defaults. The fix adds a
      live-instance-reuse hatch: if the parent already has a registered live child for
      this ``sticky_id`` (in ``_child_views``), re-render THAT instance's current
@@ -29,7 +27,7 @@ TWO compounding server-side defects (both fixed here):
      it is only safe BECAUSE (b1) makes the fresh parent render faithful to the live
      child's current state.
 
-These tests run under the DEFAULT config (NO ``enable_state_snapshot``) and drive a real
+These tests drive a real
 ``WebsocketCommunicator`` end-to-end — they reproduce the data loss WITHOUT the
 client-side prerender-morph trigger (a), which is exercised separately in
 ``tests/js/ws-mount-prerender-divergence-1813-sticky-djid.test.js``.

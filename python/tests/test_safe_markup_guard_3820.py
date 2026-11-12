@@ -1738,7 +1738,8 @@ class TestWrapperSinks:
     ):
         assert taint.WRAPPER_SINKS <= taint.SINKS
         sites = {fn for (path, fn) in tree_scan if path.endswith("rust_handlers.py")}
-        assert any(name.endswith("Handler.render") for name in sites)
+        # Since 2.0 the one sink left there is the core layout renderer (one render path per tag).
+        assert "_root_layout_html" in sites
 
     @pytest.mark.pr_tier
     def test_a_new_wrapper_around_mark_safe_has_to_be_named(self):

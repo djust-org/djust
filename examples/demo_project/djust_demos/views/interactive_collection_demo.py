@@ -15,6 +15,7 @@ Row "c" has client-owned visibility and an observer.
 from djust import LiveView
 from djust.components.interactive import DropdownMenu
 from djust.decorators import event_handler
+from djust import state
 
 RECORDS = [("a", "Alpha"), ("b", "Beta"), ("c", "Gamma")]
 
@@ -34,7 +35,11 @@ def _row(key, name):
 
 
 class InteractiveCollectionView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    result = state("none")
+    calls = state(0)
+    observed = state("none")
+    order = state()
     template_name = "demos/interactive_collection.html"
     rows = DropdownMenu.collection()
 

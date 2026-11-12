@@ -280,7 +280,6 @@ class Tenanted(_Hooked, LiveView):
 class Restorable(_Hooked, LiveView):
     """Opts in to the session-backed restore: a reconnect skips ``mount()``."""
 
-    enable_state_snapshot = True
     template = '<div dj-root dj-view="' + MOD + '.Restorable"><b>{{ status }}</b></div>'
 
 
@@ -466,30 +465,6 @@ async def test_a_view_the_mount_refuses_gets_neither_hook():
         await _close(communicator)
     assert _calls("connected") == []
     assert _calls("disconnected") == []
-
-
-async def test_connected_runs_when_the_state_is_restored_and_mount_is_skipped():
-    key = await sync_to_async(_fresh_key)()
-    first = await _ws_connect(key)
-    try:
-        await _ws_mount(first, Restorable)
-        await first.send_json_to({"type": "event", "event": "ping", "params": {}})
-        await _ws_until(first, "patch", "html_update", "noop", "error")
-    finally:
-        await _close(first)
-    await _until(lambda: _calls("disconnected"), "the first socket's disconnected()")
-    EVENTS.clear()
-
-    second = await _ws_connect(key)
-    try:
-        frame = await _ws_mount(second, Restorable, has_prerendered=True)
-        assert frame["type"] == "mount", frame
-        tag = _calls("connected")[-1]
-        # mount() was skipped by the restore; connected() still ran.
-        assert _calls("mount") == [], "the restore did not skip mount(); the test proves nothing"
-        assert _order(tag) == ["handle_params", "connected"]
-    finally:
-        await _close(second)
 
 
 @pytest.mark.parametrize("cls", [AsyncBoth, ExtraArgs, RaisingProperty, NestedClass, StateNamed])

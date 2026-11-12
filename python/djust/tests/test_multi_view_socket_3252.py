@@ -1022,42 +1022,11 @@ async def test_a_push_from_one_view_to_another_on_the_same_socket_is_delivered()
 
 
 class SnapPage(_Counted, LiveView):
-    enable_state_snapshot = True
     template = '<div dj-root dj-view="' + MOD + '.SnapPage"><b>page {{ count }}</b></div>'
 
 
 class SnapLazy(_Counted, LiveView):
-    enable_state_snapshot = True
     template = '<div dj-root dj-view="' + MOD + '.SnapLazy"><b>lazy {{ count }}</b></div>'
-
-
-async def test_the_page_view_and_a_lazy_view_keep_separate_saved_state():
-    """They share one URL and one session. Without a scope of their own, each
-    would write the other's state under ``liveview_<path>``."""
-    key = await sync_to_async(_fresh_key)()
-    communicator = await _connect(session=SessionStore(key))
-    try:
-        await _mount_page(communicator, SnapPage)
-        await _hydrate(communicator, SnapLazy, "lazy-1")
-        await _event(communicator, "click")
-        await _event(communicator, "click", target_id="lazy-1")
-        await _event(communicator, "click", target_id="lazy-1")
-        await _event(communicator, "on_push", target_id="lazy-1")
-    finally:
-        await _close(communicator)
-
-    def saved():
-        store = SessionStore(key)
-        return {
-            k: v.get("count")
-            for k, v in store.items()
-            if k.startswith("liveview_") and isinstance(v, dict) and "count" in v
-        }
-
-    assert await sync_to_async(saved)() == {
-        "liveview_/page/": 1,
-        "liveview_slot:lazy-1:/page/": 102,
-    }
 
 
 class ExplicitPage(LiveView):
@@ -1356,7 +1325,6 @@ TENANT: list = [None]
 
 
 class TenantSlot(_Counted, LiveView):
-    enable_state_snapshot = True
     template = '<div dj-root dj-view="' + MOD + '.TenantSlot"><b>t {{ count }}</b></div>'
 
     def get_state_key_prefix(self):
@@ -1369,25 +1337,6 @@ def _saved_counts(key):
         k: v["count"]
         for k, v in session.items()
         if k.startswith("liveview_") and isinstance(v, dict) and "count" in v
-    }
-
-
-async def test_a_slot_of_a_tenant_view_saves_under_the_tenant_and_the_slot():
-    TENANT[0] = "acme"
-    key = await sync_to_async(_fresh_key)()
-    communicator = await _connect(session=SessionStore(key))
-    try:
-        await _mount_page(communicator, SnapPage)
-        await _hydrate(communicator, TenantSlot, "t-1")
-        await _event(communicator, "click", target_id="t-1")
-        await _event(communicator, "click")
-    finally:
-        await _close(communicator)
-        TENANT[0] = None
-    saved = await sync_to_async(_saved_counts)(key)
-    assert saved == {
-        "liveview_/page/": 1,
-        "liveview_tenant:acme:slot:t-1:/page/": 1,
     }
 
 

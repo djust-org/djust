@@ -13,6 +13,7 @@ import pytest
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.tests.test_ws_send_version_1788 import _receive_until
+from djust import state
 
 _BODY = ["Count: {{ count }}"]
 
@@ -47,7 +48,8 @@ async def _connect_and_mount(view_suffix, url):
 
 
 class _StrictHotView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
 
     @property
     def template(self):
@@ -81,7 +83,8 @@ class _LegacyHotView(_StrictHotView):
 
 
 class _StrictPushView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    step = state(0)
     template = (
         '<div dj-view="djust.tests.test_producer_parameter_contracts._StrictPushView" '
         'dj-id="0">Step: {{ step }}</div>'
@@ -212,7 +215,8 @@ class _LegacyPick(LiveComponent):
 
 
 class _OwnerLifecycleView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    owners = state("none")
     template = (
         '<div dj-view="djust.tests.test_producer_parameter_contracts._OwnerLifecycleView" '
         'dj-id="0">Owners: {{ owners }}</div>'

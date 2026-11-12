@@ -18,13 +18,16 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'demo_project.settings')
 django.setup()
 
 from django.urls import path
-from djust import LiveView
+from djust import LiveView, state
 
 
 class ConfirmDemoView(LiveView):
     """Demo of dj-confirm attribute."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
+    selected_option = state("A")
+    items = state(default_factory=lambda: ["Item 1", "Item 2", "Item 3"])
     template_name = 'inline'
 
     def mount(self, request, **kwargs):

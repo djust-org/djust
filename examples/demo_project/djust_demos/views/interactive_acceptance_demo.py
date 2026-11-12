@@ -18,13 +18,18 @@ from djust import LiveView
 from djust.components.interactive import DropdownMenu
 from djust.components.components import DropdownMenu as LegacyDropdownMenu  # noqa: Q004
 from djust.decorators import event_handler
+from djust import state
 
 #: Observer calls per process; the observer itself changes no view state.
 OBSERVED: list = []
 
 
 class InteractiveAcceptanceView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    result = state("none")
+    calls = state(0)
+    observed = state(0)
+    legacy = state()
     template_name = "demos/interactive_acceptance.html"
 
     menu = DropdownMenu(

@@ -76,12 +76,21 @@ function _isContentEditable(el) {
     return attr !== null && attr.toLowerCase() !== 'false';
 }
 
-function _getElementValue(el) {
+function _getElementValue(el, field) {
     if (_isContentEditable(el)) {
         // innerText keeps the line breaks the user typed; jsdom has none.
         return typeof el.innerText === 'string' ? el.innerText : el.textContent;
     }
     if (el.type === 'checkbox') {
+        // A group of same-named checkboxes bound to the same field is one list
+        // value, the checked boxes' values, as a <select multiple> is (#3978).
+        // Each box writing its own boolean made the last one clicked win.
+        if (el.name && field) {
+            const scope = el.closest('form') || document;
+            const group = Array.from(scope.querySelectorAll('input[type="checkbox"]')).filter(
+                box => box.name === el.name && _parseModelAttr(box).field === field);
+            if (group.length > 1) return group.filter(box => box.checked).map(box => box.value);
+        }
         return el.checked;
     }
     if (el.type === 'radio') {
@@ -167,7 +176,7 @@ function _bindModel(el) {
     const eventType = lazy ? (_isContentEditable(el) ? 'focusout' : 'change') : 'input';
 
     const handler = () => {
-        const value = _getElementValue(el);
+        const value = _getElementValue(el, field);
 
         if (debounce > 0) {
             // Keyed by the view the element lives in as well as the field: two

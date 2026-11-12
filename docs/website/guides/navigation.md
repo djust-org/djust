@@ -28,21 +28,14 @@ available — just subclass `LiveView`. Do **not** also inherit `NavigationMixin
 that raises `TypeError: Cannot create a consistent method resolution`.
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class ProductListView(LiveView):
     template_name = 'products/list.html'
-
-    def mount(self, request, **kwargs):
-        self.category = "all"
-        self.page = 1
-        self.products = []
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(category=self.category, page=self.page, products=self.products)
-        return context
+    category = state("all")
+    page = state(1)
+    products = state(default_factory=list)
 
     def handle_params(self, params, uri):
         """Called when URL params change (live_patch or browser back/forward)."""
@@ -120,7 +113,7 @@ field the URL left out or empty (a `BooleanField` too) takes its `initial` value
 ```python
 from django import forms
 
-from djust import LiveView
+from djust import LiveView, state
 
 
 class ListParams(forms.Form):
@@ -133,15 +126,8 @@ class ListParams(forms.Form):
 class ListView(LiveView):
     template_name = "demo/list.html"
     params_form = ListParams
-
-    def mount(self, request, **kwargs):
-        self.category = "all"
-        self.page = 1
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(category=self.category, page=self.page)
-        return context
+    category = state("all")
+    page = state(1)
 
     def handle_params(self, params, uri):
         self.category = params["category"]
@@ -254,18 +240,17 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
   valid path for a field the URL supplied; that is `clean()`'s trust boundary, not the
   fallback's. For a kept field the URL left out or empty **that has an `initial`**, both paths
   apply the `initial` after `clean()`, so the copy does not get out through that field. It
-  can still get out through: a field with no `initial` (nothing is filled); a `clean()` that
-  also writes the field into `self.data` (the field then counts as supplied); and a
-  multi-select field (`MultipleChoiceField`, `CheckboxSelectMultiple`) the URL left out,
-  which both paths treat as supplied ([#3922](https://github.com/djust-org/djust/issues/3922)).
-- A kept field the URL left out that the fallback fills with its `initial` gets a **copy** of
-  a mutable `initial` (a list, a dict), so a `handle_params()` that mutates it does not
-  change the form class's default for later requests. That is not so everywhere: the valid
-  path, `params_form_fallback = "initial"`, and in `"fields"` mode a replaced field's
-  `initial` (and the plain initial values) hand over the object stored on the form class, so
-  a `handle_params()` that mutates a mutable `initial` there changes the default for later
-  requests ([#3926](https://github.com/djust-org/djust/issues/3926)). Copy it in
-  `handle_params()` before changing it.
+  can still get out through: a field with no `initial` (nothing is filled); and a `clean()`
+  that also writes the field into `self.data` (the field then counts as supplied). A
+  multi-select field (`MultipleChoiceField`, `CheckboxSelectMultiple`) the URL left out is
+  not supplied, as a checkbox is not, so it takes its `initial` too
+  ([#3922](https://github.com/djust-org/djust/issues/3922)); a URL cannot ask for "none
+  selected" over a non-empty `initial` (an empty list binds as absent).
+- Every `initial` handed to `handle_params()` is a **copy** of a mutable `initial` (a list,
+  a dict), on the valid path and in both fallback modes, so a `handle_params()` that mutates
+  it does not change the form class's default for later requests
+  ([#3926](https://github.com/djust-org/djust/issues/3926)). An `initial` that cannot be
+  deep-copied is handed over as it is.
 - A kept `ModelChoiceField` value is a deep copy of the instance the first pass produced: equal
   by primary key, not the same object.
   Anything else going wrong in the second call (a `None` comparison, a value that cannot be
@@ -319,7 +304,7 @@ string with `query_params`, and step to another URL with `url_change()`:
 ```python
 from django import forms
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.testing import LiveViewTestClient
 
 
@@ -330,12 +315,7 @@ class PageParams(forms.Form):
 class PagedView(LiveView):
     template = "<div dj-root>{{ page }}</div>"
     params_form = PageParams
-
-    def mount(self, request, **kwargs):
-        self.page = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "page": self.page}
+    page = state(0)
 
     def handle_params(self, params, uri):
         self.page = params["page"]
@@ -456,37 +436,12 @@ same path re-mounts as you asked.
 
 #### Back restores the state the user left
 
-A view with `enable_state_snapshot = True` keeps its state across a re-mount:
-Back to a page you left comes back as you left it, not freshly mounted. Each
-event saves the view's state to the Django session, and Back restores that
-session copy (it wins over the signed token the browser holds).
-
-The save is best effort and bounded to 150 ms, so slow session storage cannot
-stall event handling. A save that misses the bound, cannot start because the
-previous one is still running (SSE and request-pool turns), or fails would
-leave the session older than the last render. djust therefore writes the
-**latest** state once more with a coalesced trailing save:
-
-- A burst of events ends in one trailing write of the final state, not one
-  write per event, and never an older state over a newer one: it waits for the
-  pending save and the runtime orders its saves. The write is the view's state
-  at the moment it runs, which on SSE can include a handler that is still
-  mid-way; the turn's own save then replaces it.
-- Leaving the page (a `live_redirect`, a new mount, a disconnect, an SSE
-  close) waits for the trailing save before the view is released, for at most
-  3 seconds. The wait is cut short as soon as the save in progress has been
-  running for 1 second: a save that slow is treated as hung and abandoned, so
-  unresponsive storage holds a navigation for about 1 second at most. A save
-  still running after 1 second at navigation or close is abandoned, the latest
-  state is dropped with a warning, and Back restores the last copy storage
-  holds.
-- Nothing is written into a session that was logged out or whose key changed
-  since the state was rendered: a logout in another request, a `logout()` in a
-  handler (which flushes the session), or a login that rotates the key. A
-  trailing save never resurrects a logged-out user's state and never writes
-  into the new session.
-- A save that keeps failing is retried once, then the latest state is kept and
-  logged; the next event's save or the teardown tries again.
+Back re-mounts the page: `mount()` runs, then the view's declared
+`state(..., persist="server")` fields come back from the session and its
+`persist="client", client=True` fields from the signed token the browser
+holds, and `handle_restore()` runs. Anything not declared is what `mount()`
+set. (In 1.x a legacy view with `enable_state_snapshot = True` saved its whole
+public state on every event and Back restored that copy; 2.0 removed it.)
 
 #### What the save writes to the session
 
@@ -499,9 +454,8 @@ marker) is not rolled back, and a key deleted elsewhere does not come back.
 What counts as a change is every write or removal made through the session
 object the view holds:
 
-- djust's own keys: `liveview_<path>` and its `__private`, `_components` and
-  `__sticky__…` siblings (tenant- and slot-scoped keys carry their scope in the
-  name), and the `_djust_explicit_*` envelopes of `persist="server"` fields;
+- djust's own keys: the `_djust_explicit_*` envelopes of `persist="server"`
+  fields (tenant- and slot-scoped keys carry their scope in the name);
 - a handler's or `check_permissions`' `request.session["key"] = ...`,
   `.pop(...)`, `del` or `.setdefault(...)`;
 - a mutable value (`dict`, `list`, `set`) your code **read** (`session[key]`,
@@ -713,16 +667,9 @@ explicit, per-link form.
 ```python
 class SearchView(LiveView):  # navigation is built in — no NavigationMixin needed
     template_name = 'search.html'
-
-    def mount(self, request, **kwargs):
-        self.query = ""
-        self.sort = "relevance"
-        self.results = []
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(query=self.query, results=self.results, sort=self.sort)
-        return context
+    query = state("")
+    results = state(default_factory=list)
+    sort = state("relevance")
 
     def handle_params(self, params, uri):
         self.query = params.get("q", "")
@@ -847,12 +794,7 @@ def switch_view(self, view="", **kwargs):
 class DashboardView(LiveView):  # navigation is built in — no NavigationMixin needed
     template_name = 'dashboard.html'
     VALID_TABS = {"overview", "settings", "logs"}
-
-    def mount(self, request, **kwargs):
-        self.active_tab = "overview"
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "active_tab": self.active_tab}
+    active_tab = state("overview")
 
     def handle_params(self, params, uri):
         tab = params.get("tab", "overview")

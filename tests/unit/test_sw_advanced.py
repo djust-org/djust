@@ -66,24 +66,22 @@ class _SimpleCounter(LiveView):
 
 
 class _SnapshotCounter(LiveView):
-    """Counter with state-snapshot restoration opt-in."""
+    """A legacy counter, for the ``_capture_snapshot_state`` cases."""
 
     exposure_policy = "legacy"
-    enable_state_snapshot = True
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
-        self.count = 0  # Default — overridden by snapshot when opt-in fires.
+        self.count = 0
 
     def get_context_data(self, **kwargs):
         return {"count": self.count}
 
 
 class _SnapshotRejecting(LiveView):
-    """Opt-in but rejects all snapshots via _should_restore_snapshot override."""
+    """Rejects every client snapshot via a _should_restore_snapshot override."""
 
     exposure_policy = "legacy"
-    enable_state_snapshot = True
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -92,20 +90,6 @@ class _SnapshotRejecting(LiveView):
 
     def _should_restore_snapshot(self, request):
         return False
-
-    def get_context_data(self, **kwargs):
-        return {"count": self.count}
-
-
-class _NonSnapshot(LiveView):
-    """No enable_state_snapshot — default False; mount() must always run."""
-
-    exposure_policy = "legacy"
-    template = "<div dj-root><span>count={{ count }}</span></div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-        self.mount_was_called = True
 
     def get_context_data(self, **kwargs):
         return {"count": self.count}
@@ -164,12 +148,6 @@ class TestStateSnapshotAPI:
     def test_should_restore_snapshot_override_can_reject(self):
         view = _SnapshotRejecting()
         assert view._should_restore_snapshot(None) is False
-
-    def test_enable_state_snapshot_default_false(self):
-        """Opt-in flag MUST default to False — security-critical."""
-        assert LiveView.enable_state_snapshot is False
-        assert _NonSnapshot.enable_state_snapshot is False
-        assert _SnapshotCounter.enable_state_snapshot is True
 
 
 # ---------------------------------------------------------------------------

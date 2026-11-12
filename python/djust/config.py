@@ -445,9 +445,8 @@ class LiveViewConfig:
             "vdom_cache_enabled": True,
             "vdom_cache_ttl_seconds": 1800,  # 30 minutes
             "vdom_cache_max_entries": 50,
-            # State snapshot (v0.6.0) — opt-in per-view via
-            # ``LiveView.enable_state_snapshot = True``. Master switch
-            # also toggled via ``DJUST_STATE_SNAPSHOT_ENABLED``.
+            # Signed client snapshot of ``state(persist="client")`` fields.
+            # Mirrors ``DJUST_STATE_SNAPSHOT_ENABLED``, its master switch.
             "state_snapshot_enabled": True,
         },
         # @loading attribute configuration (Phase 5)

@@ -24,6 +24,7 @@ from djust.push import view_group_name
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import drain_extra, receive_until, wait_until
+from djust import state
 
 SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 CONSUMERS = []
@@ -36,7 +37,9 @@ class RecordingConsumer(LiveViewConsumer):
 
 
 class ScoreView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    score = state(0)
+    log = state(default_factory=list)
     template = "<div dj-root><b>{{ score }}</b></div>"
 
     def mount(self, request, **kwargs):

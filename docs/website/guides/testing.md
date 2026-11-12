@@ -174,12 +174,10 @@ The test client doesn't need a real subscription.
 
 ```python
 class OrdersView(LiveView):
+    count = state(0)
+
     def mount(self, request, **kwargs):
         self.listen("orders")
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count}
 
     def handle_info(self, message):
         if message.get("type") == "db_notify":

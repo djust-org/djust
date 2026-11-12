@@ -37,19 +37,13 @@ re-rendering would drop local DOM state.
 ```
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
 class TabbedView(LiveView):
-    def mount(self, request, **kwargs):
-        self.profile_visible = True
-        self.notes_visible = False
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(profile_visible=self.profile_visible, notes_visible=self.notes_visible)
-        return context
+    profile_visible = state(True)
+    notes_visible = state(False)
 
     @event_handler
     def switch_tab(self, tab: str = "", **kwargs):

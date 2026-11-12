@@ -8,6 +8,7 @@ Tests @loading.disable, @loading.class, @loading.show, @loading.hide modifiers.
 from djust import LiveView
 from djust.decorators import event_handler
 import time
+from djust import state
 
 
 class LoadingTestView(LiveView):
@@ -22,7 +23,15 @@ class LoadingTestView(LiveView):
     - Multiple modifiers work together
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    test_results = state(default_factory=list)
+    tests_run = state(0)
+    tests_passed = state(0)
+    tests_failed = state(0)
+    all_tests_passed = state(False)
+    slow_call_count = state(0)
+    fast_call_count = state(0)
+    result_message = state("")
     template_name = 'tests/loading_test.html'
 
     def mount(self, request):

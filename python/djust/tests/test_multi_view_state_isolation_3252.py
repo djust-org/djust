@@ -264,3 +264,25 @@ async def test_each_view_runs_its_events_under_its_own_tenant():
         ]
     finally:
         await socket.disconnect()
+
+
+async def test_a_view_owns_its_own_keys_and_not_a_longer_path_s():
+    """Review of #3333: a view at ``/app`` does not own ``liveview_/app/detail``.
+
+    Moved from ``test_multi_view_trailing_save_3252`` (the legacy trailing save
+    went with ``enable_state_snapshot``); ``_is_own`` still decides what the
+    HTTP and lazy-child saves take from the stored session."""
+    from djust._tenant_state import _is_own
+
+    own = "liveview_/app"
+    for key in (
+        own,
+        own + "__private",
+        own + "_components",
+        own + "__sticky_ids",
+        own + "__sticky__dock",
+    ):
+        assert _is_own(key, own), key
+    for key in ("liveview_/app/detail", "liveview_/app/detail__private", "liveview_/other"):
+        assert not _is_own(key, own), key
+    assert not _is_own(own, "")

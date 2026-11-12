@@ -74,7 +74,6 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "LiveView",
-    "PersistentLiveView",
     "live_view",
     "DjangoJSONEncoder",
     "DEFAULT_SESSION_TTL",
@@ -248,7 +247,6 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_websocket_host",
         "_websocket_secure",
         "_django_session_key",
-        "_djust_state_saves_released",
         "_djust_mount_view_path",
         # The ``target_id`` of the slot a view mounted beside the page view
         # (``on_view_instantiated``, #3252); keys its cached Rust view.
@@ -571,8 +569,8 @@ def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None
     .. deprecated:: 2.0
        ``exposure_policy = "legacy"``. Removed in 2.0.0.
 
-    A class shipped in djust that states ``"legacy"`` (``PersistentLiveView``,
-    the admin change list, ...) does not warn, here or through a subclass:
+    A class shipped in djust that states ``"legacy"`` (the admin change list,
+    ...) does not warn, here or through a subclass:
     that statement is not the application's to change.
     """
     if at_class_statement:
@@ -642,13 +640,9 @@ class LiveView(
         class CounterView(LiveView):
             template_name = 'counter.html'
 
-            def mount(self, request, **kwargs):
-                self.count = 0
-
-            def get_context_data(self, **kwargs):
-                # The template gets what is returned here, not the view's
-                # attributes (explicit exposure, the default).
-                return {**super().get_context_data(**kwargs), 'count': self.count}
+            # A declared state() field renders in the template; other
+            # attributes do not (explicit exposure, the default).
+            count = state(0)
 
             @event_handler()
             def increment(self):
@@ -888,16 +882,6 @@ class LiveView(
     # because there is no slot key to match.
     sticky: bool = False
     sticky_id: Optional[str] = None
-
-    # Legacy opt-in: save the view's public state to the session after each
-    # event and restore it, in lieu of ``mount()``, when the WebSocket
-    # reconnects. Legacy exposure policy only; an explicit view declares
-    # ``state(persist="server")`` fields instead.
-    #
-    # Never opt in for views whose public attributes contain credentials
-    # or PII — system check ``djust.C304`` warns on common PII naming
-    # patterns (``password``, ``token``, ``secret``, ``api_key``, ``pii``).
-    enable_state_snapshot: bool = False
 
     # ADR-038: a value reaches a template, the session or the browser only
     # when the view declares it. ``"legacy"`` (every public attribute is
@@ -1179,17 +1163,6 @@ class LiveView(
         # user-private state serialization (it must never be persisted; it is
         # derived from the template each render).
         self._dj_model_fields: frozenset = frozenset()
-
-        # _mounted_from_restore (ADR-022 Iter 3 Phase 3.1): a transient mount-time
-        # flag set by ``ViewRuntime.dispatch_mount`` when the view's state was
-        # restored from a session save / signed snapshot in lieu of calling
-        # mount() (the runtime analogue of WS handle_mount's local ``mounted``
-        # var). Drives the ``skip_html_for_resume`` optimization. Assigned HERE —
-        # BEFORE the _framework_attrs snapshot — so it is treated as a framework
-        # slot: reset on reconnect and EXCLUDED from user-private state
-        # serialization (it must never be persisted; it describes THIS mount, not
-        # user state). #1393 snapshot-order invariant.
-        self._mounted_from_restore: bool = False
 
         # Snapshot framework-set attrs so we can distinguish them from
         # user-defined _private attrs set in mount() or event handlers.
@@ -1720,27 +1693,25 @@ class LiveView(
         pass
 
     def handle_restore(self, request: Any) -> None:
-        """Called after the view was rebuilt from its saved session state.
+        """Called after the view's saved state was put back on a new instance.
 
-        A view rebuilt from the session gets its saved public and private
-        state back, but ``mount()`` either does not run (everything was saved)
-        or runs BEFORE that state is applied (some private attribute could not
-        be saved, so ``mount()`` rebuilds it and the saved state goes back on
-        top). Either way ``mount()`` never sees the restored state, so rows a
-        view keeps out of the session (not JSON, or content that must not be
-        saved) are not read again. Override this to read them from the restored
-        ids and cursors::
+        A reconnect, a Back or an HTTP fallback request gives the user a new
+        view object. ``mount()`` runs first, then the saved state is applied
+        (on the legacy HTTP fallback, a view whose state was all saved skips
+        ``mount()``). Either way ``mount()`` never sees the restored state, so
+        rows a view keeps out of the saved state (not JSON, or content that
+        must not be saved) are not read again. Override this to read them from
+        the restored ids and cursors::
 
             def handle_restore(self, request):
                 self._rows = Chat.objects.filter(pk=self.chat_id)   # chat_id was restored
 
-        It runs on the HTTP page-POST fallback (after the object permission
-        check, before the event handler), on a WebSocket/SSE mount restored
-        from the session (``enable_state_snapshot``), and on a WebSocket/SSE
-        mount of an explicit view whose declared ``state(persist=...)`` fields
-        were restored (after ``mount()``, with the restored values in place).
-        An explicit child embedded with ``{% live_render %}`` gets it the same
-        way. It does not run after a plain ``mount()``. May be ``async def``.
+        It runs on a WebSocket/SSE mount of a view whose declared
+        ``state(persist=...)`` fields were restored (after ``mount()``, with
+        the restored values in place), on an explicit child embedded with
+        ``{% live_render %}`` the same way, and on the HTTP page-POST fallback
+        (after the object permission check, before the event handler). It does
+        not run after a plain ``mount()``. May be ``async def``.
 
         Keep it idempotent: what it changes is not saved until the next event,
         so it runs again on every reconnect until one lands. It also cannot
@@ -2016,41 +1987,6 @@ class LiveView(
         self._object = None
 
 
-class PersistentLiveView(LiveView):
-    """Base class for legacy-exposure views that opt in to state snapshots.
-
-    The only difference from :class:`LiveView` is
-    ``enable_state_snapshot = True``, so every subclass saves its public
-    state through the Django session and restores it on a reconnect or
-    back-navigation instead of running ``mount()`` again (see the scaling
-    guide, "Opt in to state that survives a reconnect").
-
-    * A subclass can set ``enable_state_snapshot = False`` to opt out.
-    * It applies to the ``"legacy"`` exposure policy only. Under
-      ``exposure_policy = "explicit"`` the flag has no effect: such a view
-      persists exactly its ``state(..., persist=...)`` fields, as without
-      this class.
-    * It is a base class, not a routable view (``abstract = True`` is not
-      inherited). Each subclass is still checked on its own: ``djust.C304``
-      warns about PII-like attribute names.
-
-    Security: the flag also drives the signed client snapshot. The view's
-    public state is sent to the browser as a signed but NOT encrypted blob
-    and echoed back on reconnect and back-navigation, so the client can read
-    it. Never use this class (or ``enable_state_snapshot``) for views whose
-    public attributes hold credentials, PII or other users' data, whoever
-    controls the session store. For sensitive fields use explicit exposure
-    with ``state(..., persist="server")``, which stores only the named fields
-    on the server.
-    """
-
-    abstract = True
-    enable_state_snapshot = True
-    # Stated, not inherited from the default: the snapshot this class turns on
-    # exists only under the legacy policy. A subclass may still set "explicit".
-    exposure_policy = "legacy"
-
-
 def live_view(
     template_name: Optional[str] = None, template: Optional[str] = None
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -2115,3 +2051,10 @@ def live_view(
         return wrapper
 
     return decorator
+
+
+def __getattr__(name: str) -> Any:  # PEP 562
+    from ._removed_settings import refuse_removed_name
+
+    refuse_removed_name(__name__, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

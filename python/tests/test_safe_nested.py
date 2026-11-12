@@ -13,12 +13,17 @@ from django.test import RequestFactory
 from django.utils.safestring import mark_safe
 
 from djust import LiveView
+from djust import state
 
 
 class SafeNestedView(LiveView):
     """Test view with SafeString in various nested structures"""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    top_level = state()
+    items = state()
+    data = state()
+    deep = state()
     template_name = None
     template = """
     <div dj-view>

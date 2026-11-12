@@ -67,7 +67,8 @@ TAG_MODULES = (
 #: The Rust-native handlers (#3820): ``_safe(...)`` is a guard sink, so their markup is audited and
 #: swept like the Django tags'. The sweep calls ``handler.render(args, [content,] context)`` the way
 #: the engine does: ``key=__v_key`` operands resolved from the context, the block body as a
-#: ``SafeString`` (registry.rs, #2379).
+#: ``SafeString`` (registry.rs, #2379). Since 2.0 only the kept native twins remain (one render
+#: path per component tag where it costs nothing); every other tag is its Django node, swept above.
 HANDLER_MODULES = ("djust.components.rust_handlers",)
 SHAPES = ("str", "list_str", "list_dict", "dict", "numbers", "matrix", "records")
 #: Parameters that are, by contract, already-rendered (escaped) markup rather than data.
@@ -202,8 +203,8 @@ def kwargs_for(shape: str, mode: str, all_keys: set[str], numeric: set[str]) -> 
 def handlers() -> list[tuple[str, object, bool]]:
     """``(tag, handler instance, takes a block body)`` for every native handler the module registers."""
     module = importlib.import_module(HANDLER_MODULES[0])
-    out: list[tuple[str, object, bool]] = [(t, h, False) for t, h in module.INLINE_HANDLERS]
-    out += [(t, h, True) for t, _end, h in module.BLOCK_HANDLERS]
+    out: list[tuple[str, object, bool]] = [(t, h, False) for t, h in module.NATIVE_INLINE_HANDLERS]
+    out += [(t, h, True) for t, _end, h in module.NATIVE_BLOCK_HANDLERS]
     return out
 
 

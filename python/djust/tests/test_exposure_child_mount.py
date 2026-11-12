@@ -116,7 +116,6 @@ def test_fresh_child_mounts_then_restores_only_declared_state(rf):
 def test_initial_render_saves_without_legacy_browser_snapshot_optin(rf):
     parent = MountParent()
     request = make_request(rf, SessionStore())
-    assert not parent.enable_state_snapshot
     assert "Count=1" in render(parent, request)
     child = parent._get_child_view("counter")
     adapter = child_state_adapter(child, parent, request, "counter", {"object_id": 1})

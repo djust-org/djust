@@ -86,22 +86,20 @@ function updateMetrics() {
 ### After Migration
 
 ```python
-from djust import LiveView
-from djust.decorators import optimistic, debounce
+from djust import LiveView, state
+from djust.decorators import optimistic, debounce, event_handler
 
 class SliderView(LiveView):
     template = """
-    <input type="range" min="0" max="100"
-           value="{{ value }}" dj-input="update_value" />
-    <div>{{ value }}</div>
+    <div dj-root>
+        <input type="range" min="0" max="100"
+               value="{{ value }}" dj-input="update_value" />
+        <div>{{ value }}</div>
+    </div>
     """
+    value = state(50)
 
-    def mount(self, request):
-        self.value = 50
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "value": self.value}
-
+    @event_handler
     @debounce(wait=0.5)
     @optimistic
     def update_value(self, value: int = 0, **kwargs):
@@ -228,16 +226,12 @@ const simulation = d3.forceSimulation(nodes)
 ```python
 # Python view
 class SearchView(LiveView):
-    def mount(self, request):
-        self.query = ""
-        self.results = []
+    query = state("")
+    results = state(default_factory=list)
 
     def search(self, query: str = "", **kwargs):
         self.query = query
         self.results = Product.objects.filter(name__icontains=query)[:20]
-
-    def get_context_data(self):
-        return {"query": self.query, "results": self.results}
 ```
 
 ```html
@@ -276,28 +270,24 @@ searchInput.addEventListener('input', (e) => {
 #### After: Python Decorator (0 lines of JS)
 
 ```python
-from djust import LiveView
-from djust.decorators import debounce
+from djust import LiveView, state
+from djust.decorators import debounce, event_handler
 
 class SearchView(LiveView):
     template = """
-    <input type="text" dj-input="search" value="{{ query }}" />
-    <div>
-        {% for product in results %}
-            <div>{{ product.name }}</div>
-        {% endfor %}
+    <div dj-root>
+        <input type="text" dj-input="search" value="{{ query }}" />
+        <div>
+            {% for product in results %}
+                <div>{{ product.name }}</div>
+            {% endfor %}
+        </div>
     </div>
     """
+    query = state("")
+    results = state(default_factory=list)
 
-    def mount(self, request):
-        self.query = ""
-        self.results = []
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(query=self.query, results=self.results)
-        return context
-
+    @event_handler
     @debounce(wait=0.5)  # That's it!
     def search(self, query: str = "", **kwargs):
         self.query = query
@@ -320,11 +310,7 @@ class SearchView(LiveView):
 
 ```python
 class CounterView(LiveView):
-    def mount(self, request):
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count}
+    count = state(0)
 
     def increment(self, **kwargs):
         self.count += 1
@@ -374,23 +360,19 @@ document.addEventListener('liveview:error', (e) => {
 #### After: Python Decorator (0 lines of JS)
 
 ```python
-from djust import LiveView
-from djust.decorators import optimistic
+from djust import LiveView, state
+from djust.decorators import optimistic, event_handler
 
 class CounterView(LiveView):
     template = """
-    <div>
+    <div dj-root>
         <span>{{ count }}</span>
         <button dj-click="increment">+1</button>
     </div>
     """
+    count = state(0)
 
-    def mount(self, request):
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count}
-
+    @event_handler
     @optimistic  # Automatic optimistic updates!
     def increment(self, **kwargs):
         self.count += 1
@@ -412,11 +394,7 @@ class CounterView(LiveView):
 
 ```python
 class DashboardView(LiveView):
-    def mount(self, request):
-        self.temperature = 72
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "temperature": self.temperature}
+    temperature = state(72)
 
     def update_temperature(self, temperature: int = 0, **kwargs):
         self.temperature = max(0, min(120, temperature))
@@ -491,31 +469,29 @@ function updateChart(temp) { /* ... */ }
 #### After: Python Decorator (0 lines for state bus)
 
 ```python
-from djust import LiveView
-from djust.decorators import client_state, debounce, optimistic
+from djust import LiveView, state
+from djust.decorators import client_state, debounce, optimistic, event_handler
 
 class DashboardView(LiveView):
     template = """
-    <input type="range" dj-input="update_temperature" value="{{ temperature }}" />
+    <div dj-root>
+        <input type="range" dj-input="update_temperature" value="{{ temperature }}" />
 
-    <!-- Components auto-subscribe to 'temperature' -->
-    <div data-subscribe="temperature">{{ temperature }}°F</div>
-    <div id="gauge" data-subscribe="temperature"></div>
-    <canvas id="chart" data-subscribe="temperature"></canvas>
+        <!-- Components auto-subscribe to 'temperature' -->
+        <div data-subscribe="temperature">{{ temperature }}°F</div>
+        <div id="gauge" data-subscribe="temperature"></div>
+        <canvas id="chart" data-subscribe="temperature"></canvas>
 
-    <!-- NOTE: this block used to call subscribe(...) on a StateBus global.
-         That class had zero consumers and was deleted in #2680, and no
-         shipped bundle ever assigned the global. Drive a chart from the
-         value the server already re-rendered into the DOM instead (a
-         dj-hook on that element, or a MutationObserver). -->
+        <!-- NOTE: this block used to call subscribe(...) on a StateBus global.
+             That class had zero consumers and was deleted in #2680, and no
+             shipped bundle ever assigned the global. Drive a chart from the
+             value the server already re-rendered into the DOM instead (a
+             dj-hook on that element, or a MutationObserver). -->
+    </div>
     """
+    temperature = state(72)
 
-    def mount(self, request):
-        self.temperature = 72
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "temperature": self.temperature}
-
+    @event_handler
     @client_state(keys=["temperature"])  # Auto-publishes to state bus
     @debounce(wait=0.5)
     @optimistic
@@ -538,11 +514,7 @@ class DashboardView(LiveView):
 
 ```python
 class CommentFormView(LiveView):
-    def mount(self, request):
-        self.comment_text = ""
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "comment_text": self.comment_text}
+    comment_text = state("")
 
     def save_comment(self, comment_text: str = "", **kwargs):
         Comment.objects.create(text=comment_text, author=self.request.user)
@@ -593,26 +565,24 @@ textarea.addEventListener('input', () => {
 #### After: Python Mixin (0 lines of JS)
 
 ```python
-from djust import LiveView
-from djust.mixins import DraftModeMixin
+from djust import LiveView, state, event_handler
+from djust.drafts import DraftModeMixin
 
 class CommentFormView(DraftModeMixin, LiveView):
     draft_fields = ["comment_text"]  # Auto-saved to localStorage
     draft_restore = True
 
     template = """
-    <form dj-submit="save_comment">
-        <textarea name="comment_text">{{ comment_text }}</textarea>
-        <button type="submit">Save</button>
-    </form>
+    <div dj-root>
+        <form dj-submit="save_comment">
+            <textarea name="comment_text">{{ comment_text }}</textarea>
+            <button type="submit">Save</button>
+        </form>
+    </div>
     """
+    comment_text = state("")
 
-    def mount(self, request):
-        self.comment_text = ""
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "comment_text": self.comment_text}
-
+    @event_handler
     def save_comment(self, comment_text: str = "", **kwargs):
         Comment.objects.create(text=comment_text, author=self.request.user)
         self.comment_text = ""  # Auto-clears draft
@@ -634,14 +604,8 @@ class CommentFormView(DraftModeMixin, LiveView):
 
 ```python
 class AutocompleteView(LiveView):
-    def mount(self, request):
-        self.query = ""
-        self.results = []
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(query=self.query, results=self.results)
-        return context
+    query = state("")
+    results = state(default_factory=list)
 
     def search(self, query: str = "", **kwargs):
         self.query = query
@@ -700,28 +664,24 @@ function displayResults(results) { /* ... */ }
 #### After: Python Decorator (0 lines of JS)
 
 ```python
-from djust import LiveView
-from djust.decorators import cache, debounce
+from djust import LiveView, state
+from djust.decorators import cache, debounce, event_handler
 
 class AutocompleteView(LiveView):
     template = """
-    <input type="text" dj-input="search" value="{{ query }}" />
-    <ul>
-        {% for result in results %}
-            <li>{{ result }}</li>
-        {% endfor %}
-    </ul>
+    <div dj-root>
+        <input type="text" dj-input="search" value="{{ query }}" />
+        <ul>
+            {% for result in results %}
+                <li>{{ result }}</li>
+            {% endfor %}
+        </ul>
+    </div>
     """
+    query = state("")
+    results = state(default_factory=list)
 
-    def mount(self, request):
-        self.query = ""
-        self.results = []
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(query=self.query, results=self.results)
-        return context
-
+    @event_handler
     @cache(ttl=300)      # Auto-caching with 5-min TTL
     @debounce(wait=0.3)
     def search(self, query: str = "", **kwargs):
@@ -792,13 +752,16 @@ document.addEventListener('liveview:error', () => {
 ```python
 class FormView(LiveView):
     template = """
-    <form dj-submit="save_data">
-        <input type="text" name="title" />
-        <button type="submit" @loading-text="Saving...">Save</button>
-        <div @loading>Processing your request...</div>
-    </form>
+    <div dj-root>
+        <form dj-submit="save_data">
+            <input type="text" name="title" />
+            <button type="submit" @loading-text="Saving...">Save</button>
+            <div @loading>Processing your request...</div>
+        </form>
+    </div>
     """
 
+    @event_handler
     def save_data(self, title: str = "", **kwargs):
         time.sleep(2)  # Simulate slow operation
         MyModel.objects.create(title=title)
@@ -822,15 +785,9 @@ class FormView(LiveView):
 
 ```python
 class ProductSearchView(LiveView):
-    def mount(self, request):
-        self.query = ""
-        self.results = []
-        self.filters = {"category": "", "min_price": 0}
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(query=self.query, results=self.results, filters=self.filters)
-        return context
+    query = state("")
+    results = state(default_factory=list)
+    filters = state({"category": "", "min_price": 0})
 
     def search(self, query: str = "", **kwargs):
         self.query = query
@@ -887,15 +844,15 @@ const priceFilter = document.getElementById('min-price');
 ### After: Product Search (35 lines total)
 
 ```python
-from djust import LiveView
-from djust.decorators import cache, debounce, optimistic
-from djust.mixins import DraftModeMixin
+from djust import LiveView, state
+from djust.decorators import cache, debounce, optimistic, event_handler
+from djust.drafts import DraftModeMixin
 
 class ProductSearchView(DraftModeMixin, LiveView):
     draft_fields = ["query", "category", "min_price"]  # Auto-saved
 
     template = """
-    <div>
+    <div dj-root>
         <input type="text" dj-input="search" value="{{ query }}"
                placeholder="Search products..." />
 
@@ -917,23 +874,12 @@ class ProductSearchView(DraftModeMixin, LiveView):
         </div>
     </div>
     """
+    query = state("")
+    results = state(default_factory=list)
+    min_price = state(0)
+    category = state("")
 
-    def mount(self, request):
-        self.query = ""
-        self.results = []
-        self.category = ""
-        self.min_price = 0
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(
-            query=self.query,
-            results=self.results,
-            min_price=self.min_price,
-            category=self.category,
-        )
-        return context
-
+    @event_handler
     @cache(ttl=300)
     @debounce(wait=0.5)
     @optimistic
@@ -941,6 +887,7 @@ class ProductSearchView(DraftModeMixin, LiveView):
         self.query = query
         self.results = self._do_search()
 
+    @event_handler
     @cache(ttl=300)
     @optimistic
     def apply_filters(self, category: str = "", min_price: int = 0, **kwargs):

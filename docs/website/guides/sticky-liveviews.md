@@ -32,22 +32,15 @@ Persistent audio player across Dashboard and Settings.
 
 ```python
 # myapp/views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class AudioPlayerView(LiveView):
     sticky = True
     sticky_id = "audio-player"  # required for sticky=True embeds (no default)
     template_name = "myapp/audio_player.html"
-
-    def mount(self, request, **kwargs):
-        self.track_title = "Nothing playing"
-        self.is_playing = False
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(track_title=self.track_title, is_playing=self.is_playing)
-        return context
+    track_title = state("Nothing playing")
+    is_playing = state(False)
 
     @event_handler
     def toggle_play(self, **kwargs):
@@ -192,15 +185,13 @@ section=section %}` after `section` changed), a child that defines
 class Sidebar(LiveView):
     sticky = True
     sticky_id = "sidebar"
+    collapsed = state(False)
 
     def mount(self, request, section="home", **kwargs):
         self.section = section
-        self.collapsed = False
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(section=self.section, collapsed=self.collapsed)
-        return context
+        return {**super().get_context_data(**kwargs), "section": self.section}
 
     def _on_sticky_update(self, changed):
         if "section" in changed:
@@ -435,8 +426,8 @@ last state as they navigate forward/back.
    (tab backgrounded long enough for idle timeout, network blip, server
    restart), the sticky dies on the server side and the client's
    stash is cleared. Re-mount happens from scratch on reconnect.
-   With `enable_state_snapshot = True` on both the sticky child and
-   its parent, the child's state is restored — see
+   A sticky child under explicit exposure gets its declared
+   `state(..., persist="server")` fields back; see
    [Sticky-Child State Persistence](sticky-child-persistence.md).
 2. **No cross-tab sync**. Two tabs of the same app don't share a
    sticky instance. Each tab has its own WS and its own sticky.

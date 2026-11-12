@@ -32,18 +32,19 @@ In `get_context_data()`, call `super().get_context_data()` and add the QuerySet 
 ## Implementation Pattern
 
 ```python
+from djust import state
 from djust.decorators import event_handler, debounce
 from djust_shared.views import BaseViewWithNavbar
 
 class MyListView(BaseViewWithNavbar):
     template_name = 'my_template.html'
 
+    # Filter/search state: declared fields render in the template
+    search_query = state("")
+    filter_status = state("all")
+
     def mount(self, request, **kwargs):
         """Initialize view state"""
-        # Initialize filter/search state
-        self.search_query = ""
-        self.filter_status = "all"
-
         # Load initial data
         self._refresh_items()
 
@@ -78,12 +79,8 @@ class MyListView(BaseViewWithNavbar):
         #   subsystem has no published measurement — see #TBD)
         context['items'] = self._items
 
-        # STEP 3: Add the plain state the template reads
-        context.update({
-            'search_query': self.search_query,
-            'filter_status': self.filter_status,
-        })
-
+        # search_query and filter_status are declared state() fields: the
+        # context from super() already holds them.
         return context
 ```
 
@@ -96,10 +93,10 @@ class MyListView(BaseViewWithNavbar):
 
 class PropertyListView(BaseViewWithNavbar):
     template_name = 'rentals/property_list.html'
+    search_query = state("")    # declared: the template reads these
+    filter_status = state("all")
 
     def mount(self, request, **kwargs):
-        self.search_query = ""
-        self.filter_status = "all"
         self.filter_type = "all"
         self.sort_by = "name"
         self._refresh_properties()
@@ -135,13 +132,6 @@ class PropertyListView(BaseViewWithNavbar):
         """Hand the QuerySet to the template (JIT serialization)"""
         context = super().get_context_data(**kwargs)
         context['properties'] = self._properties
-
-        # Plain state the template reads
-        context.update({
-            'search_query': self.search_query,
-            'filter_status': self.filter_status,
-        })
-
         return context
 ```
 

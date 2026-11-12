@@ -21,7 +21,6 @@ EXPECTED_CHECKS = {
     "check_configuration",
     "check_service_worker_advanced",
     "check_liveviews",
-    "check_sticky_child_optin",
     "check_sticky_child_own_dj_view",
     "check_security",
     "check_accessibility",

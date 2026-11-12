@@ -4,6 +4,7 @@ Unit tests for LiveView core functionality.
 
 import pytest
 from djust.live_view import LiveView, cleanup_expired_sessions, get_session_stats
+from djust import state
 
 
 class TestLiveViewBasics:
@@ -13,7 +14,7 @@ class TestLiveViewBasics:
         """Test LiveView can be instantiated."""
 
         class SimpleView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>{{ message }}</div>"
 
         view = SimpleView()
@@ -24,7 +25,7 @@ class TestLiveViewBasics:
         """Test get_template returns template string."""
 
         class SimpleView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Hello</div>"
 
         view = SimpleView()
@@ -36,9 +37,10 @@ class TestLiveViewBasics:
         """Test mount method is called on GET request."""
 
         class CounterView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            count = state(0)
             template = "<div>{{ count }}</div>"
-            mount_called = False
+            mount_called = state(False)
 
             def mount(self, request, **kwargs):
                 self.mount_called = True
@@ -73,7 +75,7 @@ class TestSessionCleanup:
 
         # Create a LiveView to populate cache
         class SimpleView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Test</div>"
 
         view = SimpleView()
@@ -141,7 +143,7 @@ class TestTemplateInheritance:
 
         # Test that get_template() extracts liveview-root from resolved template
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "child.html"
 
         view = TestView()
@@ -171,7 +173,7 @@ class TestTemplateInheritance:
         """Test get_template without {% extends %} returns raw source."""
 
         class SimpleView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>{{ message }}</div>"
 
         view = SimpleView()
@@ -207,7 +209,7 @@ class TestTemplateInheritance:
         engines._engines = {}
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test_syntax.html"
 
         view = TestView()
@@ -225,7 +227,7 @@ class TestTemplateInheritance:
         """Test standalone templates still use {{ }} syntax."""
 
         class StandaloneView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = None
             template = "<div>{{ count }}</div>"
 
@@ -245,7 +247,8 @@ class TestErrorHandling:
         import json
 
         class SimpleView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            count = state(0)
             template = "<div>{{ count }}</div>"
 
             def mount(self, request, **kwargs):

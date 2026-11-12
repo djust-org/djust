@@ -35,7 +35,7 @@ class TestT018ExtendsSkipInfo2833:
         from djust.live_view import LiveView
 
         class T018SkipInfoView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = (
                 '{% extends "base.html" %}'
                 "{% block content %}{{ never_set_skip_info }}{% endblock %}"
@@ -77,7 +77,7 @@ class TestT018ExtendsSkipInfo2833:
         from djust.live_view import LiveView
 
         class T018NoExtendsView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>{{ never_set_no_extends }}</div>"
 
             def mount(self, request, **kwargs):

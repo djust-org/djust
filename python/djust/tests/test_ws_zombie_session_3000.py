@@ -28,6 +28,7 @@ from django.test import override_settings
 
 from djust import LiveView, event_handler
 from djust.websocket import LiveViewConsumer
+from djust import state as djust_state
 
 SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 CONSUMERS = []
@@ -50,7 +51,8 @@ class RecordingConsumer(LiveViewConsumer):
 
 
 class TickingView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = djust_state(0)
     template = "<div dj-root>{{ n }}</div>"
     tick_interval = 30
 

@@ -22,14 +22,17 @@ LiveViewTestClient(view_class, request_factory=None, user=None)
 
 ### Methods
 
-#### `mount(via_websocket=True, *, query_params=None, **params) -> LiveViewTestClient`
+#### `mount(via_websocket=True, *, query_params=None, route_kwargs=None, **params) -> LiveViewTestClient`
 
 Initialize the view. Calls `mount()` on the LiveView, then `handle_params(params, uri)`,
 the order the HTTP GET and the socket mount run them in, with an empty dict when there is
 no query string. A view that declares `params_form` therefore gets its form here too. The
 default `via_websocket=True` mounts as the WebSocket path does; pass
 `via_websocket=False` to exercise the HTTP-prerender branch instead. No
-login or permission check runs here.
+login or `check_permissions()` check runs here, but the object-permission check every
+transport runs after `mount()` and `handle_params()` does: a view whose `get_object()` /
+`has_object_permission()` denies raises `PermissionDenied` (a transport answers 403 or a
+`permission_denied` frame).
 
 ```python
 client = LiveViewTestClient(MyView)
@@ -42,7 +45,11 @@ client.mount(query_params="page=2&tag=a&tag=b")                  # the same, as 
 
 `query_params` is the URL's query string (`request.GET` and `handle_params()` see it); the
 other keyword arguments are `mount()`'s URL kwargs. A mapping's list value is a repeated
-key. Returns `self` for chaining.
+key. `route_kwargs` are the kwargs the view's URL route resolves to: a view that looks its
+object up from the route ([`ModelFormMixin`](../guides/forms.md#editing-one-record-with-modelformmixin))
+reads them from there and never from `mount()`'s kwargs, so mount a routed edit view with
+`client.mount(route_kwargs={"pk": article.pk})`; without them its object check denies it.
+They are bound before `mount()` and not passed to it. Returns `self` for chaining.
 
 ---
 
@@ -229,7 +236,7 @@ Auto-discover all `LiveView` subclasses in an app and run smoke tests.
 | `max_queries` | `int`  | `50`    | Fail if mounting + rendering a view exceeds this many DB queries (a view's own `query_budget` or `view_config` `max_queries` takes precedence) |
 | `fuzz`        | `bool` | `True`  | Send XSS and type-mismatch payloads to handlers                             |
 | `skip_views`  | `list` | `[]`    | View classes to skip                                                        |
-| `view_config` | `dict` | `{}`    | Per-view setup: `{ViewClass: {"mount_params": {...}, "user": user, "max_queries": 8, "event_params": {"handler": {...}}}}` |
+| `view_config` | `dict` | `{}`    | Per-view setup: `{ViewClass: {"mount_params": {...}, "route_kwargs": {"pk": 1}, "user": user, "max_queries": 8, "event_params": {"handler": {...}}}}` |
 
 ### Example
 

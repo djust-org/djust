@@ -28,10 +28,12 @@ import pytest
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.testing import LiveViewTestClient
+from djust import state
 
 
 class _SimpleView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(0)
     template = '<div dj-root><div class="c"><span>{{ n }}</span></div></div>'
 
     def mount(self, request, **kwargs):
@@ -42,7 +44,10 @@ class _IfAddView(LiveView):
     """The #1641 shape: a false->true {% if %} add with no {% else %}, plus a
     sibling form control."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    q = state("")
+    show = state(False)
+    status = state("idle")
     template = (
         '<div dj-root><div class="c">'
         '<div class="card">Settings</div>'
@@ -63,7 +68,10 @@ class _IfAddView(LiveView):
 
 
 class _NestedIfElifView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    q = state("")
+    a = state(False)
+    b = state(False)
     template = (
         '<div dj-root><div class="c"><section><div class="b">'
         "<p>v: <strong>{{ q }}</strong></p>"

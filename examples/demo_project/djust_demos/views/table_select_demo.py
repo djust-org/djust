@@ -10,12 +10,14 @@ DOM checkboxes AND the server agree after every click. Exercised by
 
 from djust import LiveView
 from djust.components.data import TableComponent
+from djust import state
 
 
 class TableSelectView(LiveView):
     """Minimal LiveView holding one selectable three-row table."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    table = state()
     template_name = "demos/table_select.html"
 
     def mount(self, request, **kwargs):

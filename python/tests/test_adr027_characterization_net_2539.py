@@ -72,6 +72,7 @@ from typing import Any, Callable
 from unittest import mock
 
 import pytest
+from djust import state
 
 pytest.importorskip("django")
 
@@ -293,7 +294,7 @@ def liveview_render(source: str, context: dict) -> str:
     """The REAL LiveView entry (see the module docstring). Needs `django_db`."""
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request, **kwargs):
             pass
@@ -982,7 +983,8 @@ def render_page_shell(template: str, *, with_serialized_context: bool, card_cls=
     from django.test import RequestFactory
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        c = state()
 
         def mount(self, request, **kwargs):
             self.c = card_cls()

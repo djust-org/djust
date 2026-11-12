@@ -47,11 +47,6 @@ def _feed_paths(**kw) -> dict[str, str]:
         "tag": _tag(
             f'{{% activity_feed events=events stream="act" max={max_items} %}}', events=EVENTS
         ),
-        "handler": str(
-            rh.ActivityFeedHandler().render(
-                ["events=events", "stream='act'", f"max={max_items}"], {"events": EVENTS}
-            )
-        ),
     }
 
 
@@ -73,19 +68,6 @@ def _terminal_paths(**kw) -> dict[str, str]:
             f"show_line_numbers={numbers} max_lines={max_lines} auto_scroll={auto_scroll} %}}",
             output=OUTPUT,
         ),
-        "handler": str(
-            rh.TerminalHandler().render(
-                [
-                    "output=output",
-                    "title='Build'",
-                    "stream_event='out'",
-                    f"show_line_numbers={numbers}",
-                    f"max_lines={max_lines}",
-                    f"auto_scroll={auto_scroll}",
-                ],
-                {"output": OUTPUT},
-            )
-        ),
     }
 
 
@@ -93,9 +75,6 @@ def _tour_paths(active: int = 1) -> dict[str, str]:
     return {
         "class": Tour(steps=STEPS, active=active).render(),
         "tag": _tag(f"{{% tour steps=steps active={active} %}}", steps=STEPS),
-        "handler": str(
-            rh.TourHandler().render(["steps=steps", f"active={active}"], {"steps": STEPS})
-        ),
     }
 
 
@@ -129,7 +108,7 @@ class TestActivityFeedMarkup:
 
     def test_the_three_render_paths_agree(self):
         paths = _feed_paths()
-        assert paths["class"] == paths["tag"] == paths["handler"]
+        assert paths["class"] == paths["tag"]
 
 
 class TestTerminalMarkup:
@@ -159,7 +138,7 @@ class TestTerminalMarkup:
 
     def test_the_three_render_paths_agree(self):
         paths = _terminal_paths(show_line_numbers=True, max_lines=100)
-        assert paths["class"] == paths["tag"] == paths["handler"]
+        assert paths["class"] == paths["tag"]
 
     def test_auto_scroll_false_is_the_only_thing_that_adds_an_attribute(self):
         for path, html in _terminal_paths(auto_scroll=False).items():
@@ -169,7 +148,7 @@ class TestTerminalMarkup:
 
     def test_auto_scroll_agrees_on_the_three_render_paths(self):
         paths = _terminal_paths(show_line_numbers=True, max_lines=100, auto_scroll=False)
-        assert paths["class"] == paths["tag"] == paths["handler"]
+        assert paths["class"] == paths["tag"]
 
     def test_max_lines_is_additive_and_defaults_to_the_old_behaviour(self):
         assert Terminal(output=OUTPUT).max_lines == 0
@@ -211,7 +190,7 @@ class TestTourMarkup:
     def test_the_three_render_paths_agree_on_what_the_hook_reads(self):
         for active in (0, 1, 2):
             paths = _tour_paths(active)
-            for key in ("class", "tag", "handler"):
+            for key in ("class", "tag"):
                 html = paths[key]
                 assert f'data-step="{active}"' in html
                 assert re.findall(r'class="(dj-tour__[a-z-]+)"', html) == re.findall(

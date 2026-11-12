@@ -48,6 +48,7 @@ from django.test import override_settings
 
 from djust.live_view import LiveView
 from djust.utils import clear_template_dirs_cache
+from djust import state
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +104,14 @@ _INDEX_HTML = """\
 class ExtendsHeadView(LiveView):
     """A LiveView whose template ``{% extends %}`` a base with a full ``<head>``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    total_count = state(2)
+    items = state(
+        default_factory=lambda: [
+            {"id": 1, "name": "Alpha", "done": False},
+            {"id": 2, "name": "Beta", "done": True},
+        ]
+    )
     template_name = "demo1801/index.html"
 
     def mount(self, request, **kwargs):

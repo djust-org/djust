@@ -1,23 +1,19 @@
-"""Direct-runtime tests for mount state-restore + run_on_mount_hooks
+"""Direct-runtime tests for run_on_mount_hooks and the fresh legacy mount
 (ADR-022 Iter 3 Phase 3.1, issue #1913).
-
-Phase 3.1 ported the transport-agnostic mount STATE-RESTORE + on-mount hooks
-into :class:`djust.runtime.ViewRuntime.dispatch_mount`, the mount spine every
-transport uses. What is left of it here:
 
 1. **run_on_mount_hooks** — runs registered ``on_mount`` hooks after auth,
    before mount(); a returned redirect → a ``navigate`` frame + abort.
-2. **Session-saved-state restore** — gated on ``enable_state_snapshot``
-   (#1552), runs in lieu of mount() and sets the ``_mounted_from_restore``
-   resume flag.
+2. **A legacy view mounts fresh** — whatever ``liveview_<path>`` holds in the
+   session, ``mount()`` runs and its state is what renders.
 
-The signed state-snapshot restore and emit this file also covered were removed
-in 2.0 with the legacy signed snapshot; the explicit client snapshot is covered
-in ``test_exposure_runtime.py`` and ``test_snapshot_persistence_after_removal.py``.
+The session-saved-state restore and the signed state-snapshot restore and emit
+this file also covered were removed in 2.0 (``enable_state_snapshot``); the
+explicit restore is covered in ``test_exposure_runtime.py`` and
+``test_snapshot_persistence_after_removal.py``.
 
 These tests drive ``runtime.dispatch_mount`` DIRECTLY against a MockTransport
 whose ``build_request`` returns a REAL Django request carrying a REAL DB session,
-so the runtime mount path runs end-to-end (resolve view → auth → hooks → restore
+so the runtime mount path runs end-to-end (resolve view → auth → hooks → mount
 → render → mount frame).
 """
 
@@ -105,24 +101,8 @@ class MockTransport:
 # --------------------------------------------------------------------------- #
 
 
-class _OptInSnapView(LiveView):
-    """Opt-in snapshot view. ``mount`` installs a safe default; a snapshot that
-    survives the HMAC gate would overwrite ``role`` (the injection vector)."""
-
-    exposure_policy = "legacy"
-    enable_state_snapshot = True
-    template = '<div dj-root dj-id="0">role={{ role }} n={{ n }}</div>'
-
-    def mount(self, request, **kwargs):
-        self.role = "user"  # safe default mount() always installs
-        self.n = 0
-
-    def get_context_data(self, **kwargs):
-        return {"role": self.role, "n": self.n}
-
-
 class _DefaultSnapView(LiveView):
-    """Does NOT opt in (#1552: must never restore / emit)."""
+    """A legacy view: it never restores from the session and signs nothing (#1552)."""
 
     exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">role={{ role }} n={{ n }}</div>'
@@ -153,7 +133,6 @@ def _register(view_cls):
     return f"{__name__}.{view_cls.__name__}"
 
 
-VIEW_PATH = f"{__name__}._OptInSnapView"
 DEFAULT_PATH = f"{__name__}._DefaultSnapView"
 REDIRECT_PATH = f"{__name__}._RedirectHookView"
 PAGE_URL = "/snap/"
@@ -195,49 +174,17 @@ async def _mount(runtime, data):
 
 
 # --------------------------------------------------------------------------- #
-# (A) Signed state_snapshot HMAC restore — security boundary (#1046 caps TDD).
-# --------------------------------------------------------------------------- #
-
-
-# --------------------------------------------------------------------------- #
-# (B) state_snapshot_signed EMIT — opt-in only.
-# --------------------------------------------------------------------------- #
-
-
-# --------------------------------------------------------------------------- #
-# (C) Session-saved-state restore — plain reconnect resume.
+# A legacy view mounts fresh whatever the session holds.
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.django_db
-class TestRuntimeSessionRestore:
+class TestRuntimeLegacyMountIsFresh:
     @pytest.mark.asyncio
-    async def test_opt_in_session_saved_state_restores_on_mount(self):
-        """An opt-in view whose state was saved to the session (the #1466
-        per-event save) restores on a runtime reconnect-mount in lieu of mount().
-
-        Reproduce-first (#1200): mount() installs role='user'/n=0; only a
-        surviving session-restore yields role='admin'/n=42.
-        """
-        session = await sync_to_async(_make_db_session)()
-        view_key = f"liveview_{PAGE_URL}"
-        await session.aset(view_key, {"role": "admin", "n": 42})
-        await sync_to_async(session.save)()
-
-        request = _make_request(session)
-        runtime, transport = _make_runtime(request)
-        await _mount(runtime, {"type": "mount", "view": VIEW_PATH, "url": PAGE_URL})
-        view = runtime.view_instance
-        assert view is not None
-        assert view.role == "admin", "session-saved state must restore on opt-in reconnect"
-        assert view.n == 42
-        assert view._mounted_from_restore is True
-
-    @pytest.mark.asyncio
-    async def test_default_view_ignores_session_saved_state(self):
-        """Gate-off (#1552): a non-opt-in view with the SAME saved state in the
-        session does NOT restore — a fresh mount() runs (the #1466 clobbered-
-        baseline regression fix). role stays at mount()'s default.
+    async def test_a_legacy_view_ignores_session_saved_state(self):
+        """A legacy view with saved state in the session (as the HTTP fallback
+        writes it) does NOT restore it on a socket mount: a fresh mount() runs
+        (#1552). role stays at mount()'s default.
         """
         session = await sync_to_async(_make_db_session)()
         view_key = f"liveview_{PAGE_URL}"
@@ -249,22 +196,9 @@ class TestRuntimeSessionRestore:
         await _mount(runtime, {"type": "mount", "view": DEFAULT_PATH, "url": PAGE_URL})
         view = runtime.view_instance
         assert view is not None
-        assert view.role == "user", "non-opt-in view must ignore session state (#1552)"
+        assert view.role == "user", "a legacy view must ignore session state (#1552)"
         assert view.n == 0
-        assert view._mounted_from_restore is False
-
-    @pytest.mark.asyncio
-    async def test_opt_in_no_saved_state_runs_fresh_mount(self):
-        """An opt-in view with NO saved state runs a normal mount() (no-op
-        restore — the SSE 'no snapshot present' default)."""
-        session = await sync_to_async(_make_db_session)()
-        request = _make_request(session)
-        runtime, transport = _make_runtime(request)
-        await _mount(runtime, {"type": "mount", "view": VIEW_PATH, "url": PAGE_URL})
-        view = runtime.view_instance
-        assert view is not None
-        assert view.role == "user"
-        assert view._mounted_from_restore is False
+        assert "role=user" in transport.mount_frame["html"]
 
 
 # --------------------------------------------------------------------------- #

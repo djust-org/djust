@@ -1,38 +1,22 @@
-"""Direct-runtime tests for time-travel record + session/sticky state-save
-(ADR-022 Iter 2 Phase 2.2, issue #1894).
+"""Direct-runtime tests for the time-travel record (ADR-022 Iter 2 Phase 2.2,
+issue #1894), and for what a legacy view's event leaves in the session.
 
-Phase 2.2 ports the three transport-agnostic per-event PERSISTENCE subsystems
-the WS ``_handle_event_inner`` has into :class:`djust.runtime.ViewRuntime` so the
-runtime's ``dispatch_event`` spine, when the Phase 2.3 final flip routes WS
-events through it, persists identically:
+``record_event_start`` / ``record_event_end`` wrap the handler call, and the
+freshly-finalized snapshot is pushed via the ``transport.on_event_recorded``
+hook (WS sends the DEBUG-gated frame, SSE no-ops).
 
-1. **Time-travel record** — ``record_event_start`` / ``record_event_end`` wrap
-   the handler call (single-view, component, and sticky-child branches), and
-   the freshly-finalized snapshot is pushed via the new
-   ``transport.on_event_recorded`` hook (WS sends the DEBUG-gated
-   ``time_travel_event`` frame; SSE no-ops).
-2. **Session state-save (#1466)** — gated on top-level view identity AND
-   ``enable_state_snapshot`` (#1552: default views MUST NOT persist), bounded by
-   a 150ms ``asyncio.wait_for`` (#1475).
-3. **Sticky-child state-save (ADR-018)** — a separate gate
-   (``sticky_child_should_persist``) for ``view_id``-routed child events.
+The per-event session save and the sticky-child save this file also covered
+were removed in 2.0 with ``enable_state_snapshot``; what is left of that is one
+guard: a legacy view's event writes no view state to the session.
 
 These tests drive ``runtime.dispatch_event`` DIRECTLY against a MockTransport so
-the runtime gained the behavior independently of any transport. The WS save
-block (websocket.py) is UNTOUCHED — the #1466/#1552 grep-pins in
-``test_ws_reconnect_state_1465.py`` still own the WS path; Phase 2.3 retires the
-WS copy.
-
-Each subsystem has a **reproduce-first / gate-off** pair (#1468): a positive
-test that fails without the runtime handling, and a gate-off test proving the
-load-bearing guard (the ``enable_state_snapshot`` gate, the time-travel record,
-the ``on_event_recorded`` hook) is real.
+the behavior is independent of any transport. ``MockTransport`` is imported by
+many other test modules.
 """
 
 from __future__ import annotations
 
 import contextlib
-import inspect
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -138,27 +122,8 @@ class MockTransport:
 # ------------------------------------------------------------------ #
 
 
-class _OptInCounter(LiveView):
-    """Top-level view that opts into per-event state persistence."""
-
-    exposure_policy = "legacy"
-    enable_state_snapshot = True
-    template = '<div dj-root dj-id="0">count={{ count }}</div>'
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-        self._secret = "private-seed"  # private attr → __private save key
-
-    @event_handler()
-    def increment(self, amount: int = 1, **kwargs):
-        self.count += amount
-
-    def get_context_data(self, **kwargs):
-        return {"count": self.count, "view": self}
-
-
 class _DefaultCounter(LiveView):
-    """Top-level view that does NOT opt in (#1552: must never persist)."""
+    """A legacy top-level view: its events must never persist state (#1552)."""
 
     exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">count={{ count }}</div>'
@@ -222,47 +187,17 @@ def _make_db_session():
 
 
 # ------------------------------------------------------------------ #
-# Subsystem 2 — session state-save (#1466) + gate (#1552)
+# A legacy event saves nothing (#1552)
 # ------------------------------------------------------------------ #
 
 
 @pytest.mark.django_db
-class TestRuntimeSessionStateSave:
-    @pytest.mark.asyncio
-    async def test_opt_in_event_writes_state_to_session(self, generous_save_timeout):
-        """An ``enable_state_snapshot=True`` view's event, dispatched through the
-        runtime, writes the post-event state to the Django session under
-        ``liveview_{path}``.
-
-        Reproduce-first / non-tautological (#1200): a revert of the save call, a
-        missing ``asave()``, or a broken gate would leave the session key absent.
-        """
-        from asgiref.sync import sync_to_async
-
-        session = await sync_to_async(_make_db_session)()
-        view = _OptInCounter()
-        view.mount(None)
-        view._djust_mount_request = _StashedRequest(session, path="/counter/")
-
-        runtime, _transport = _make_runtime(view)
-
-        await runtime.dispatch_event(
-            {"type": "event", "event": "increment", "params": {"amount": 5}, "ref": 1}
-        )
-
-        assert view.count == 5
-        saved = await session.aget("liveview_/counter/")
-        assert saved is not None, "opt-in view's state must be persisted to the session"
-        assert saved.get("count") == 5
-
+class TestRuntimeLegacyEventSavesNothing:
     @pytest.mark.asyncio
     async def test_default_view_does_not_persist(self):
-        """GATE-OFF target (#1468/#1552): a DEFAULT view (no opt-in) does NOT
-        persist. The session key stays absent.
-
-        This is the test that goes RED if the ``enable_state_snapshot`` gate is
-        removed from the runtime save block (the #1552 regression).
-        """
+        """A legacy view's event persists nothing: the session key stays absent
+        (#1552). 2.0 has no per-event save for a legacy view at all; this goes
+        RED if one is reintroduced."""
         from asgiref.sync import sync_to_async
 
         session = await sync_to_async(_make_db_session)()
@@ -278,38 +213,11 @@ class TestRuntimeSessionStateSave:
 
         assert view.count == 5  # handler still ran
         saved = await session.aget("liveview_/counter/")
-        assert saved is None, (
-            "default (non-opt-in) view MUST NOT persist per-event state (#1552); "
-            "the enable_state_snapshot gate is load-bearing."
-        )
-
-    @pytest.mark.asyncio
-    async def test_private_attrs_saved_under_private_key(self, generous_save_timeout):
-        """Opt-in save also persists private attrs under ``{key}__private``
-        (mirrors HTTP/WS save order)."""
-        from asgiref.sync import sync_to_async
-
-        session = await sync_to_async(_make_db_session)()
-        view = _OptInCounter()
-        view.mount(None)
-        # Mirror the post-mount snapshot the WS/HTTP mount paths run so the
-        # ``_secret`` private attr is tracked in ``_user_private_keys`` and thus
-        # captured by ``_get_private_state``.
-        view._snapshot_user_private_attrs()
-        view._djust_mount_request = _StashedRequest(session, path="/counter/")
-
-        runtime, _transport = _make_runtime(view)
-        await runtime.dispatch_event(
-            {"type": "event", "event": "increment", "params": {}, "ref": 1}
-        )
-
-        priv = await session.aget("liveview_/counter/__private")
-        assert priv is not None
-        assert priv.get("_secret") == "private-seed"
+        assert saved is None, "a legacy view MUST NOT persist per-event state (#1552)"
 
 
 # ------------------------------------------------------------------ #
-# Subsystem 1 — time-travel record + on_event_recorded hook
+# Time-travel record + on_event_recorded hook
 # ------------------------------------------------------------------ #
 
 
@@ -393,245 +301,3 @@ class TestRuntimeTimeTravelRecord:
         )
 
         assert transport.recorded == [], "hook must be skipped for a None snapshot"
-
-
-# ------------------------------------------------------------------ #
-# Runtime-side #1466 source-grep pin (mirrors the WS pin)
-# ------------------------------------------------------------------ #
-
-
-def test_runtime_save_block_present_and_gated():
-    """Runtime-side mirror of the WS #1466/#1552 pin
-    (test_ws_reconnect_state_1465.py:298-331). Pins the ported save block in
-    ``ViewRuntime`` so the gate / key-shape / 150ms-bound cannot silently drop.
-
-    The WS pin asserts these exact strings in
-    ``LiveViewConsumer._handle_event_inner``; this asserts them in the runtime's
-    save path (``_dispatch_event_render`` gate + ``_persist_state_after_event``
-    body). Drift between the two save gates goes red on whichever pin's source
-    lost the string.
-
-    (#1899, ADR-022 Phase 2.3a: the event body was extracted from
-    ``_dispatch_event_inner`` into ``_dispatch_event_render`` so the handler+render
-    runs inside ``transport.event_context``; the save gate moved with the body, so
-    this pin reads ``_dispatch_event_render``.)
-    """
-    import djust.runtime as rt_mod
-
-    gate_src = inspect.getsource(rt_mod.ViewRuntime._dispatch_event_render)
-    body_src = inspect.getsource(rt_mod.ViewRuntime._persist_state_after_event) + (
-        inspect.getsource(rt_mod.ViewRuntime._save_root_state)
-    )
-    gate_collapsed = " ".join(gate_src.split())
-    body_collapsed = " ".join(body_src.split())
-
-    # --- Gate (in _dispatch_event_render): identity AND enable_state_snapshot ---
-    # Mirrors websocket.py:3700-3702 / WS pin line 313 + 320.
-    assert "target_view is self.view_instance" in gate_collapsed, (
-        "Runtime save gate must keep the top-level-identity clause (#1466) — "
-        "the same string the WS pin asserts, so drift between the two is caught."
-    )
-    assert '"enable_state_snapshot"' in gate_collapsed, (
-        "Runtime save gate must read enable_state_snapshot (#1552) — default "
-        "views MUST NOT persist per-event state."
-    )
-
-    # --- Body (in _persist_state_after_event): key shape + writes ---
-    # Mirrors WS pin lines 301-303.
-    assert "save_view_key = _session_view_key(target_view, save_path)" in body_collapsed
-    # #3212: one sync Django-thread hop, so the sync session API.
-    assert "save_session[save_view_key] = _normalize(" in body_collapsed
-    assert "save_merged(save_session, expected_key)" in body_collapsed  # #3347
-    # Private + components paths (WS pin lines 305-308).
-    assert "_get_private_state" in body_collapsed
-    assert 'f"{save_view_key}__private"' in body_collapsed
-    assert "_save_components_to_session" in body_collapsed
-    # Failure handling + 150ms bound (WS pin lines 310 + 329-331).
-    assert "Failed to save LiveView state after runtime event" in body_collapsed
-    # #3212: bounded through the shared one-hop helper, whose deadline starts
-    # when the save starts running (the bound itself is pinned in
-    # test_sticky_child_persistence_1471::test_the_event_save_is_still_bounded).
-    # #3248: the wrapper hands the bound to the save body, which passes it on.
-    body_compact = body_collapsed.replace(" ", "")
-    assert "_save_root_state(target_view,event_name,deadline=EVENT_STATE_SAVE_TIMEOUT_S)" in (
-        body_compact
-    )
-    assert "_run_explicit_save(self,_detached_when(trailing,_save),deadline=deadline)" in (
-        body_compact
-    )
-    assert "asyncio.TimeoutError" in body_collapsed
-
-
-def test_runtime_save_reads_scope_or_mount_request():
-    """The runtime save discovers the session the same way WS does: prefer the
-    stashed ``_djust_mount_request`` session, fall back to the ASGI scope
-    session (websocket.py:3710-3720)."""
-    import djust.runtime as rt_mod
-
-    body = " ".join(
-        (
-            inspect.getsource(rt_mod.ViewRuntime._persist_state_after_event)
-            + inspect.getsource(rt_mod.ViewRuntime._save_root_state)
-        ).split()
-    )
-    assert "_djust_mount_request" in body
-    assert 'self.scope.get("session")' in body
-
-
-# ------------------------------------------------------------------ #
-# Subsystem 3 — sticky-child state-save (ADR-018 Branch B)
-# ------------------------------------------------------------------ #
-
-
-class _StickyOptInChild(LiveView):
-    """A sticky child that opts into per-event persistence (Decision 5)."""
-
-    exposure_policy = "legacy"
-    sticky = True
-    sticky_id = "child"
-    enable_state_snapshot = True
-    template = "<div>child={{ count }}</div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    @event_handler()
-    def bump(self, amount: int = 1, **kwargs):
-        self.count += amount
-
-    def get_context_data(self, **kwargs):
-        return {"count": self.count, "view": self}
-
-
-class _StickyOptInParent(LiveView):
-    """A parent that opts in (Decision 5 requires BOTH child + parent)."""
-
-    exposure_policy = "legacy"
-    enable_state_snapshot = True
-    template = '<div dj-root dj-id="0"><h1>parent={{ parent_count }}</h1></div>'
-
-    def mount(self, request, **kwargs):
-        self.parent_count = 0
-
-    def get_context_data(self, **kwargs):
-        return {"parent_count": self.parent_count, "view": self}
-
-
-@pytest.mark.django_db
-class TestRuntimeStickyChildSave:
-    @pytest.mark.asyncio
-    async def test_view_id_child_event_persists_child_state(self, generous_save_timeout):
-        """A ``view_id``-routed sticky-child event persists the CHILD under its
-        stable sticky key (both opted in). Reproduce-first: a revert of the
-        sticky save would leave the sticky index/child key absent."""
-        from asgiref.sync import sync_to_async
-
-        session = await sync_to_async(_make_db_session)()
-        parent = _StickyOptInParent()
-        parent.mount(None)
-        parent._djust_mount_request = _StashedRequest(session, path="/page/")
-        child = _StickyOptInChild()
-        child.mount(None)
-        parent._register_child("child-1", child)
-
-        runtime, transport = _make_runtime(parent)
-
-        await runtime.dispatch_event(
-            {
-                "type": "event",
-                "event": "bump",
-                "params": {"view_id": "child-1", "amount": 4},
-                "ref": 3,
-            }
-        )
-
-        assert child.count == 4
-        # The sticky index ledger must list the persisted child (the
-        # write_sticky_index_and_prune call ran). The exact index key shape is
-        # owned by mixins/sticky.py; assert SOME sticky-related key landed.
-        await session.aload() if hasattr(session, "aload") else None
-        keys = await sync_to_async(lambda: list(session.keys()))()
-        sticky_keys = [k for k in keys if "sticky" in k or "/page/" in k]
-        assert sticky_keys, (
-            f"sticky-child save must write at least one sticky/child key; got keys={keys}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_gate_off_parent_not_opted_in_skips_save(self):
-        """GATE-OFF (#1468): when the PARENT does not opt in, the both-opt-in
-        predicate (``sticky_child_should_persist``) is False, so NO sticky save
-        runs (Decision 5). The child's state mutates but nothing persists."""
-        from asgiref.sync import sync_to_async
-
-        session = await sync_to_async(_make_db_session)()
-
-        class _NonOptInParent(LiveView):
-            exposure_policy = "legacy"
-            template = '<div dj-root dj-id="0">p={{ parent_count }}</div>'
-
-            def mount(self, request, **kwargs):
-                self.parent_count = 0
-
-            def get_context_data(self, **kwargs):
-                return {"parent_count": self.parent_count, "view": self}
-
-        parent = _NonOptInParent()
-        parent.mount(None)
-        parent._djust_mount_request = _StashedRequest(session, path="/page/")
-        child = _StickyOptInChild()  # child opts in, parent does not → mismatch
-        child.mount(None)
-        parent._register_child("child-1", child)
-
-        runtime, _transport = _make_runtime(parent)
-
-        await runtime.dispatch_event(
-            {
-                "type": "event",
-                "event": "bump",
-                "params": {"view_id": "child-1", "amount": 4},
-            }
-        )
-
-        assert child.count == 4  # handler still ran
-        keys = await sync_to_async(lambda: list(session.keys()))()
-        # No sticky/child key written — the both-opt-in gate skipped the save.
-        sticky_keys = [k for k in keys if "sticky" in k]
-        assert not sticky_keys, (
-            f"sticky save must be skipped when parent is not opted in; got {keys}"
-        )
-
-
-def test_runtime_sticky_save_present_and_gated():
-    """Pin the sticky-child save (ADR-018 Branch B) in the runtime's sticky-child
-    dispatch + its helper. Mirrors the WS sticky markers (websocket.py:3821-3888):
-    the both-opt-in predicate, the helper calls, the 150ms bound, and the
-    opt-in-mismatch warning."""
-    import djust.runtime as rt_mod
-
-    dispatch_src = " ".join(
-        inspect.getsource(rt_mod.ViewRuntime._dispatch_sticky_child_event).split()
-    )
-    helper_src = " ".join(
-        (
-            inspect.getsource(rt_mod.ViewRuntime._persist_sticky_child_after_event)
-            + inspect.getsource(rt_mod.ViewRuntime._save_sticky_state)
-        ).split()
-    )
-
-    # Gate + warning in the dispatch method.
-    assert "sticky_child_should_persist" in dispatch_src
-    assert "warn_sticky_child_optin_skip" in dispatch_src
-    # Helper body: the two ADR-018 sticky helpers + asave + 150ms bound.
-    assert "save_sticky_child_state" in helper_src
-    assert "write_sticky_index_and_prune" in helper_src
-    assert "save_merged(save_session, expected_key)" in helper_src  # #3347
-    # #3212: one Django-thread hop through the shared bounded helper.
-    helper_compact = helper_src.replace(" ", "")
-    assert (
-        "_save_sticky_state(target_view,event_name,deadline=EVENT_STATE_SAVE_TIMEOUT_S)"
-        in helper_compact
-    )
-    assert (
-        "_run_explicit_save(self,_detached_when(trailing,_save_sticky),deadline=deadline)"
-        in helper_compact
-    )

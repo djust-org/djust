@@ -156,8 +156,7 @@ token = state("", persist="server", render=False)  # handlers only, never templa
 - **A save still running after a logout is dropped.** Over SSE a save can
   outlive the request that started it. Before it writes, it looks the session
   up once, and it writes nothing if the session was logged out, flushed or
-  rotated away in another request, or now belongs to another user. Legacy
-  `enable_state_snapshot` saves do the same. With `cache` sessions a logout
+  rotated away in another request, or now belongs to another user. With `cache` sessions a logout
   that lands in the moment between that lookup and the write can still be
   overwritten, as with any two concurrent Django requests; `db`, `cached_db`
   and `file` sessions refuse that write themselves.
@@ -297,7 +296,7 @@ inherit from. There is no setting that changes the default.
 Stating `"legacy"` raises a `DeprecationWarning` when the class is defined, once
 for each class that states it. The policy is removed in djust 2.0: the 2.0
 pre-releases still accept it, and 2.0.0 does not. The views djust itself ships
-that still state it (`PersistentLiveView`, the admin change list and form,
+that still state it (the admin change list and form,
 `TtydTerminalView`, the `@live_view` decorator) do not warn, since that line is
 not yours to change.
 

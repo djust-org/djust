@@ -16,12 +16,14 @@ from djust import LiveView
 from djust.decorators import event_handler
 from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
+from djust import state
 
 
 class SliderTestView(LiveView):
     """Test view with a slider-like input."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    value = state(50)
     template = """<div dj-root>
     <div class="slider-container">
         <span class="value-display">{{ value }}</span>

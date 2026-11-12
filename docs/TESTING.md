@@ -209,7 +209,7 @@ class TestUserModel:
 ```python
 import pytest
 from django.test import RequestFactory
-from djust import LiveView
+from djust import LiveView, state
 
 @pytest.mark.django_db
 class TestCounterView:
@@ -219,12 +219,7 @@ class TestCounterView:
         """Test view initializes with count=0."""
         class CounterView(LiveView):
             template = "<div>{{ count }}</div>"
-
-            def mount(self, request, **kwargs):
-                self.count = 0
-
-            def get_context_data(self, **kwargs):
-                return {**super().get_context_data(**kwargs), "count": self.count}
+            count = state(0)
 
         view = CounterView()
         response = view.get(get_request)
@@ -238,12 +233,7 @@ class TestCounterView:
 
         class CounterView(LiveView):
             template = "<div>{{ count }}</div>"
-
-            def mount(self, request, **kwargs):
-                self.count = 0
-
-            def get_context_data(self, **kwargs):
-                return {**super().get_context_data(**kwargs), "count": self.count}
+            count = state(0)
 
             @event_handler
             def increment(self, **kwargs):
@@ -300,7 +290,7 @@ class TestContactForm:
 
 ```python
 import pytest
-from djust import LiveView
+from djust import LiveView, state
 
 @pytest.mark.django_db
 class TestLiveViewLifecycle:
@@ -310,12 +300,7 @@ class TestLiveViewLifecycle:
         """Test mount() is called on initial load."""
         class TodoView(LiveView):
             template = "<div>{{ todos|length }}</div>"
-
-            def mount(self, request, **kwargs):
-                self.todos = []
-
-            def get_context_data(self, **kwargs):
-                return {**super().get_context_data(**kwargs), "todos": self.todos}
+            todos = state(default_factory=list)
 
         view = TodoView()
         view.get(get_request)
@@ -434,13 +419,9 @@ class TestAlertComponent:
         from demo_app.components.alert import AlertComponent
 
         class DashboardView(LiveView):
-            template = "<div>{{ alert_success }}</div>"
-
-            def mount(self, request, **kwargs):
-                self.alert_success = AlertComponent(
-                    message="Operation successful!",
-                    type="success"
-                )
+            template = "<div dj-root>{{ alert_success }}</div>"
+            # A LiveComponent is declared in the class body; each view gets its own copy.
+            alert_success = AlertComponent(message="Operation successful!", type="success")
 
         view = DashboardView()
         view.get(get_request)
@@ -454,13 +435,8 @@ class TestAlertComponent:
         from demo_app.components.alert import AlertComponent
 
         class DashboardView(LiveView):
-            template = "<div>{{ alert_warning }}</div>"
-
-            def mount(self, request, **kwargs):
-                self.alert_warning = AlertComponent(
-                    message="Warning!",
-                    dismissible=True
-                )
+            template = "<div dj-root>{{ alert_warning }}</div>"
+            alert_warning = AlertComponent(message="Warning!", dismissible=True)
 
             @event_handler
             def dismiss(self, component_id: str = None, **kwargs):
@@ -537,7 +513,7 @@ class TestAuthentication:
 
 ```python
 import pytest
-from djust import LiveView
+from djust import LiveView, state
 
 @pytest.mark.django_db
 class TestVDOMPatching:
@@ -547,12 +523,7 @@ class TestVDOMPatching:
         """Test VDOM generates correct patch for text change."""
         class MessageView(LiveView):
             template = "<div>{{ message }}</div>"
-
-            def mount(self, request, **kwargs):
-                self.message = "Hello"
-
-            def get_context_data(self, **kwargs):
-                return {**super().get_context_data(**kwargs), "message": self.message}
+            message = state("Hello")
 
         view = MessageView()
         view.get(get_request)
@@ -574,12 +545,7 @@ class TestVDOMPatching:
                 {% endif %}
             </div>
             """
-
-            def mount(self, request, **kwargs):
-                self.show = False
-
-            def get_context_data(self, **kwargs):
-                return {**super().get_context_data(**kwargs), "show": self.show}
+            show = state(False)
 
         view = ToggleView()
         view.get(get_request)

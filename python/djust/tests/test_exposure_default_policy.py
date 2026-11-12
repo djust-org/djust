@@ -24,7 +24,7 @@ from djust._exposure_diagnostics import (
     exception_details_allowed_for,
     log_failure_for,
 )
-from djust.live_view import EXPLICIT_EXPOSURE_GUIDE_URL, PersistentLiveView
+from djust.live_view import EXPLICIT_EXPOSURE_GUIDE_URL
 
 LEGACY_WARNING = r'exposure_policy = "legacy" \(stated on '
 
@@ -168,12 +168,14 @@ def test_explicit_and_unstated_views_do_not_warn():
 
 
 def test_a_legacy_statement_shipped_in_djust_does_not_warn_through_a_subclass():
-    """``PersistentLiveView`` states legacy itself; an application cannot change that line."""
-    assert PersistentLiveView.__dict__["exposure_policy"] == "legacy"
+    """``TtydTerminalView`` states legacy itself; an application cannot change that line."""
+    from djust.components.ttyd.terminal import TtydTerminalView
+
+    assert TtydTerminalView.__dict__["exposure_policy"] == "legacy"
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
 
-        class Subclass(PersistentLiveView):
+        class Subclass(TtydTerminalView):
             pass
 
         Subclass()

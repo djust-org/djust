@@ -11,6 +11,7 @@ TypeError when adding NavbarComponent to context.
 # Configure Django settings BEFORE any djust imports
 import django
 from django.conf import settings
+from djust import state
 
 if not settings.configured:
     settings.configure(
@@ -81,7 +82,8 @@ class DemoLiveComponent(LiveComponent):
 class ComponentRenderingView(LiveView):
     """Test view that uses components in context"""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    message = state("Test message")
     template = """
     <div dj-root>
         {{ component }}

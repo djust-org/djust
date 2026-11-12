@@ -432,7 +432,7 @@ class TestProgressRendering(ComponentTestCase):
 
     def test_renders_progress_bar_width(self):
         html = self.render_component("progress", value=75, max=100)
-        self.assert_contains(html, "width: 75")
+        self.assert_contains(html, "progress-w-75")
 
     def test_renders_with_label(self):
         html = self.render_component("progress", value=50, label="Upload")
@@ -450,7 +450,7 @@ class TestProgressRendering(ComponentTestCase):
     def test_zero_value(self):
         html = self.render_component("progress", value=0, max=100)
         self.assert_contains(html, 'aria-valuenow="0"')
-        self.assert_contains(html, "width: 0")
+        self.assert_contains(html, "progress-w-0")
 
     def test_contract_validation(self):
         html = self.render_component("progress", value=50)

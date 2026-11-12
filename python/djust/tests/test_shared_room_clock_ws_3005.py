@@ -308,41 +308,6 @@ async def test_event_started_clock_reaches_starter():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_restore_starts_without_mount_or_first_user_join():
-    sockets = []
-    with override_settings(**SETTINGS):
-        try:
-            socket, consumer = await mount()
-            sockets.append(socket)
-            await TIME.settle()
-            original = consumer.view_instance
-            scope = original.push_scope
-            CLOCK.stop(scope)
-            await TIME.settle()
-            restored = RoomView()
-            restored._tenant = original._tenant
-            restored.room = original.room
-            restored._websocket_session_id = "restored"
-            restored._presence_tracked = True
-            restored._presence_user_id = original._presence_user_id
-            restored._presence_meta = {}
-            with (
-                patch.object(restored, "mount", side_effect=AssertionError("must not mount")),
-                patch.object(restored, "handle_presence_join") as join,
-            ):
-                await sync_to_async(restored._restore_presence)()
-                assert CLOCK.running(scope)
-                join.assert_not_called()
-            await sync_to_async(original.untrack_presence)()
-            await TIME.advance(0.2)
-            assert CLOCK.running(scope)
-            await sync_to_async(restored.untrack_presence)()
-        finally:
-            await close_all(sockets)
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
 async def test_view_without_clocks_creates_no_tasks_pool_or_presence_reads():
     sockets = []
     with (

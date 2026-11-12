@@ -14,6 +14,7 @@ import re
 import pytest
 
 from djust.management.commands.djust_typecheck import _extract_referenced_names
+from djust import state
 
 
 def _names(src):
@@ -55,7 +56,8 @@ def test_t018_fires_only_on_the_undefined_name_3020():
     from djust.live_view import LiveView
 
     class T018Literals3020View(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        app = state(default_factory=lambda: {"status": "running", "builds": []})
         template = (
             "<div dj-root>"
             "{% if app.status == 'running' %}r"

@@ -13,9 +13,17 @@ reported only when it still did not arrive: it was declared
 ``state(render=False)``, or the view's ``get_context_data()`` returned a new
 dict without calling ``super().get_context_data()``.
 
+A name ``X_count`` gets its own notice when ``X`` is in the context as a
+sized value (a QuerySet, list, tuple or set) and nothing supplies
+``X_count`` (#4054). The legacy policy generated ``items_count`` from
+``items``; explicit exposure does not, so a 1.x template reading it renders
+empty. The notice points at ``{{ X|length }}``.
+
 The check runs where the render path settles its context
 (``ContextMixin._context_for_render``). With ``DEBUG`` off it is one settings
-read and returns. It names attributes and never reads their values.
+read and returns. It names attributes and never reads their values (the
+``_count`` check looks at the stem's type, never its contents: a QuerySet is
+not evaluated).
 """
 
 from __future__ import annotations
@@ -104,6 +112,48 @@ def unsupplied_template_names(view: Any, context: Mapping[str, Any]) -> list[str
     )
 
 
+#: The suffix the legacy policy derived a count from (``items`` -> ``items_count``).
+COUNT_SUFFIX = "_count"
+
+
+def _is_sized_collection(value: Any) -> bool:
+    """A value the legacy policy counted: a QuerySet, list, tuple or set.
+
+    A type test only. A QuerySet is not evaluated, and a string or a mapping
+    (sized, but never counted by the legacy policy) does not qualify.
+    """
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return True
+    try:
+        from django.db.models import QuerySet
+    except ImportError:  # pragma: no cover - Django is a hard dependency
+        return False
+    return isinstance(value, QuerySet)
+
+
+def unsupplied_count_names(
+    view: Any, context: Mapping[str, Any], paths: Any = None
+) -> list[tuple[str, str]]:
+    """``(name, stem)`` for each ``stem_count`` the template reads that nothing supplies.
+
+    Only when ``stem`` is in ``context`` as a sized collection and the view
+    does not hold ``stem_count`` itself (that case is the ordinary
+    unsupplied-name notice).
+    """
+    if paths is None:
+        paths = view.template_paths()
+    found = []
+    for name in paths:
+        if type(name) is not str or not name.endswith(COUNT_SUFFIX) or name in context:
+            continue
+        stem = name[: -len(COUNT_SUFFIX)]
+        if not stem or stem not in context or _held_by_view(view, name):
+            continue
+        if _is_sized_collection(context[stem]):
+            found.append((name, stem))
+    return sorted(found)
+
+
 def warn_unsupplied_template_names(view: Any, context: Any) -> None:
     """Log, once per view class and name, each name that will render empty.
 
@@ -124,6 +174,23 @@ def warn_unsupplied_template_names(view: Any, context: Any) -> None:
         reported = _REPORTED.get(cls)
         if reported is None:
             reported = _REPORTED[cls] = set()
+        paths = view.template_paths()
+        for name, stem in unsupplied_count_names(view, context, paths):
+            if name in reported:
+                continue
+            reported.add(name)
+            logger.warning(
+                "%s.%s: the template reads {{ %s }} and nothing supplies it, so it renders "
+                "empty. djust 1.x generated it from %s; explicit exposure does not. Use "
+                "{{ %s|length }} in the template, or return %s from get_context_data(). See %s",
+                cls.__module__,
+                cls.__qualname__,
+                name,
+                stem,
+                stem,
+                name,
+                MIGRATION_GUIDE_URL,
+            )
         for name in unsupplied_template_names(view, context):
             if name in reported:
                 continue

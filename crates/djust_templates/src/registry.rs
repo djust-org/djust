@@ -2206,6 +2206,10 @@ pub fn call_assign_handler_with_py_sidecar(
 struct RawBlockHandlerEntry {
     end_tag: String,
     handler: Py<PyAny>,
+    /// The handler's optional `validate_at_parse(args)`, read with the same reader as the
+    /// other registries: the arguments are checked when the template compiles, before the
+    /// body is collected, as a block tag's are.
+    validator: Option<Py<PyAny>>,
     returns_bindings: bool,
     /// See [`read_wants_autoescape`] (#2556). The fourth registry reads it
     /// with the SAME reader as the other three (#1646): the bridged node
@@ -2238,6 +2242,7 @@ pub fn register_raw_block_tag_handler(
     }
     let returns_bindings = read_returns_bindings(handler_ref)?;
     let wants_autoescape = read_wants_autoescape(handler_ref)?;
+    let validator = read_parse_validator(handler_ref)?;
 
     let mut registry = RAW_BLOCK_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
@@ -2247,6 +2252,7 @@ pub fn register_raw_block_tag_handler(
         RawBlockHandlerEntry {
             end_tag,
             handler,
+            validator,
             returns_bindings,
             wants_autoescape,
         },
@@ -2302,6 +2308,26 @@ pub fn raw_block_handler_exists(name: &str) -> Option<String> {
         .read()
         .map(|registry| registry.get(name).map(|entry| entry.end_tag.clone()))
         .unwrap_or(None)
+}
+
+/// Run the raw-block handler's `validate_at_parse(args)` for `name`, if it declares one: the
+/// tag's arguments are refused when the template compiles, as a block tag's are
+/// ([`validate_tag_arguments`]). Outside the registry lock, like the others.
+pub fn validate_raw_block_arguments(name: &str, args: &[String]) -> djust_core::Result<()> {
+    let validator = Python::attach(|py| -> djust_core::Result<Option<Py<PyAny>>> {
+        let registry = RAW_BLOCK_HANDLERS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+        Ok(registry
+            .get(name)
+            .and_then(|entry| entry.validator.as_ref())
+            .map(|method| method.clone_ref(py)))
+    })?;
+    if let Some(validator) = validator {
+        Python::attach(|py| validator.call1(py, (args.to_vec(),)))
+            .map_err(DjangoRustError::PythonException)?;
+    }
+    Ok(())
 }
 
 /// Internal Rust API — did the raw-block handler for `name` declare

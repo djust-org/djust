@@ -19,6 +19,7 @@ from asgiref.sync import sync_to_async
 
 from djust import LiveView, _rust
 from djust.decorators import event_handler
+from djust import state
 
 _MODULE = __name__
 DEPTH = 40_000  # far past any stack, far below any request-size limit
@@ -37,7 +38,9 @@ def _body(kind: str, salt: str) -> str:
 
 
 class _DeepView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    body = state("")
+    n = state(0)
     template = (
         f'<div dj-view="{_MODULE}._DeepView" dj-root>'
         '{{ body|safe }}<p id="n">{{ n }}</p></div>'

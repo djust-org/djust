@@ -31,6 +31,7 @@ from djust.push import (
 )
 from djust.tenants.mixin import TenantMixin
 from djust.tenants.resolvers import TenantInfo
+from djust import state
 
 pytest.importorskip("channels")
 
@@ -45,7 +46,9 @@ ACME, GLOBEX = "acme.example.com", "globex.example.com"
 
 
 class _RoomView(TenantMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    room = state()
+    messages = state(default_factory=list)
     template = (
         '<div dj-root dj-view="djust.tests.test_push_scope_tenant_isolation._RoomView">'
         "{{ room }}|{% for m in messages %}[{{ m }}]{% endfor %}</div>"
@@ -89,7 +92,9 @@ class _OverridingView(_RoomView):
 class _PlainRoomView(LiveView):
     """Not tenant-scoped: group names and delivery are what they were."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    room = state()
+    messages = state(default_factory=list)
     template = (
         '<div dj-root dj-view="djust.tests.test_push_scope_tenant_isolation._PlainRoomView">'
         "{{ room }}|{% for m in messages %}[{{ m }}]{% endfor %}</div>"
@@ -312,7 +317,7 @@ def test_a_tenant_view_joins_its_tenants_group_and_follows_a_tenant_change():
 
 def test_a_view_that_is_not_tenant_scoped_keeps_its_group():
     class _Plain(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         push_scope = "general"
 
     consumer = _FakeConsumer()

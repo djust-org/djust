@@ -20,12 +20,15 @@ from django.test import Client
 from django.urls import path
 
 from djust import LiveView
+from djust import state as djust_state
 
 
 class ArticleView(LiveView):
     """The issue's repro, with the status declared instead of overridden."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    article = djust_state()
+    state = djust_state()
     login_required = False
     http_status_of_state = {"not_found": 404, "forbidden": 403, "gone": 410}
     template = (
@@ -41,13 +44,14 @@ class ArticleView(LiveView):
 class ArticleBase(LiveView):
     """A project's base view: the map is set once, here."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     abstract = True
     login_required = False
     http_status_of_state = {"not_found": 404}
 
 
 class InheritingView(ArticleBase):
+    state = djust_state("not_found")
     template = "<div dj-root>{{ state }}</div>"
 
     def mount(self, request, **kwargs):
@@ -55,7 +59,9 @@ class InheritingView(ArticleBase):
 
 
 class CustomAttributeView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    state = djust_state("missing")
+    load_state = djust_state()
     login_required = False
     http_status_of_state = {"missing": 404}
     state_attribute = "load_state"
@@ -70,7 +76,8 @@ class CustomAttributeView(LiveView):
 class NoMapView(LiveView):
     """No map declared: a state named ``not_found`` changes nothing (back-compat)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    state = djust_state("not_found")
     login_required = False
     template = "<div dj-root>{{ state }}</div>"
 
@@ -81,7 +88,8 @@ class NoMapView(LiveView):
 class OverridingView(LiveView):
     """A view with a real special case keeps its own ``get_http_status()``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    state = djust_state("not_found")
     login_required = False
     http_status_of_state = {"not_found": 404}
     template = "<div dj-root>{{ state }}</div>"
@@ -101,7 +109,8 @@ class OverridingNoneView(OverridingView):
 class OddStateView(LiveView):
     """A state that is not a string never matches (and never raises)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    state = djust_state()
     login_required = False
     http_status_of_state = {"not_found": 404}
     template = "<div dj-root>odd</div>"

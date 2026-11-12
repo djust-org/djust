@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 
 @dataclass
@@ -34,7 +35,8 @@ def rows(count):
 class StreamFeedView(LiveView):
     """A ``dj-stream`` container driven only by stream operations."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    tail = state("tail")
     template = (
         '<div class="ws-root">\n'
         '  <ul id="feed" dj-stream="rows">\n'
@@ -85,7 +87,9 @@ def _append_template(mode):
 
 
 class _TemporaryRowsView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    rows = state()
+    k = state(0)
     temporary_assigns = {"rows": []}
 
     def mount(self, request, **kwargs):
@@ -124,6 +128,8 @@ class BannerRowsView(_TemporaryRowsView):
     """A block before the list appears in the same event that appends a row, so
     the container sits one position later than where the stored tree has it."""
 
+    banner = state(False)
+
     template = (
         '<div class="ws-root">\n'
         '  {% if banner %}<p class="banner">notice</p>{% endif %}\n'
@@ -152,7 +158,9 @@ class MixedView(LiveView):
     ordinary attribute, re-rendered whole, so a removal or an edit must still
     reach the page."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    items = state()
+    flash = state(default_factory=list)
     temporary_assigns = {"flash": []}
     template = (
         '<div class="ws-root">\n'
@@ -199,7 +207,9 @@ class TaggedRow:
 class DuplicateIdsPrependView(LiveView):
     """A prepend container whose mount rows, and then a batch, repeat an ``id``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    rows = state()
+    k = state(0)
     temporary_assigns = {"rows": []}
     template = _append_template("prepend")
 
@@ -277,6 +287,8 @@ class RenamedRowsView(_TemporaryRowsView):
 
 class NestedContainersView(_TemporaryRowsView):
     """The outer list is an ordinary attribute; only the inner one reads ``rows``."""
+
+    items = state()
 
     template = (
         '<div class="ws-root">\n'

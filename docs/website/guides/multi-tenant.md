@@ -322,9 +322,9 @@ state in two places, and both are scoped by `TenantMixin.get_state_key_prefix()`
   `tenant:<id>:<session>_<page>...`: the Rust view the framework stores per
   session and page.
 - **The Django session**, under `liveview_tenant:<id>:<path>` (plus the
-  `__private`, `_components` and `__sticky__` siblings): the saved public and
-  private state that the HTTP fallback POST restores, and that a WebSocket or
-  SSE reconnect restores when the view sets `enable_state_snapshot = True`.
+  `__private` and `_components` siblings): the saved public and private state
+  that the HTTP fallback POST restores. (A WebSocket or SSE reconnect no longer
+  reads it: 2.0 removed `enable_state_snapshot`.)
 
 A session that reaches two tenants on the same URL (a cookie shared across
 `*.example.com`, a header or session resolver, or `set_tenant()`) therefore
@@ -372,8 +372,8 @@ reset** of the saved view state of tenant views.
 - State backend: the first reconnect or page load of each tenant view builds a
   new Rust view and sends a full render instead of a patch. The orphaned
   entries expire with `SESSION_TTL`.
-- Django session: the first HTTP fallback POST after the deploy, or the first
-  reconnect of a view with `enable_state_snapshot = True`, finds no saved state
+- Django session: the first HTTP fallback POST after the deploy (on 1.3, also
+  the first reconnect of a view with `enable_state_snapshot = True`) finds no saved state
   and re-runs `mount()`, so in-page state (a counter, a half-filled form) is
   lost once. The orphaned `liveview_<path>` entries stay in the session until
   it expires or is cleared.

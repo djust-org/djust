@@ -198,7 +198,17 @@ def _bound_initial(form: Any, name: str, field: Any) -> Any:
     # bound field, so a callable initial is called once per form and the form
     # instance renders the same value this returns.
     initial = field.prepare_value(form[name].initial)
-    return "" if initial is None else initial
+    if initial is None:
+        return ""
+    # ``Field.__deepcopy__`` does not copy ``initial``, so a list or dict here is the object
+    # stored on the form class: ``form_data`` holds a copy, so a handler that mutates it in
+    # place cannot change the default for later requests (#3926).
+    if isinstance(initial, (list, dict, set)):
+        try:
+            return copy.deepcopy(initial)
+        except Exception:  # noqa: BLE001 - an uncopyable member: hand the value over as it is
+            return initial
+    return initial
 
 
 def initial_field_value(form: Any, name: str, field: Any) -> Any:

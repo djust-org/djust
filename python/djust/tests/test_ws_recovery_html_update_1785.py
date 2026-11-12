@@ -26,12 +26,14 @@ from asgiref.sync import sync_to_async
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 
 class _WSForceFullView(LiveView):
     """Module-level view whose event forces the full-HTML (``html_update``) path."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = (
         '<div dj-view="djust.tests.test_ws_recovery_html_update_1785._WSForceFullView" '
         'dj-id="0">Count: {{ count }}</div>'

@@ -573,9 +573,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("live_view.py", "LiveView.as_view.view", "self.dispatch"): entry(_HTTP_ENTRY),
     ("mixins/request.py", "_start_background_run", "body"): entry(_HTTP_BACKGROUND),
     ("mixins/request.py", "RequestMixin._aget_turn_body", "self.get"): entry(_HTTP_ENTRY),
-    ("mixins/sticky.py", "save_sticky_child_state", "child._get_private_state"): plumbing(_STATE),
-    ("mixins/sticky.py", "save_sticky_child_state", "save_session.pop"): plumbing(_SESSION),
-    ("mixins/sticky.py", "write_sticky_index_and_prune", "save_session.pop"): plumbing(_SESSION),
     ("multiloop.py", "_Runner.__init__", "self._run"): outside(
         "the multi-loop runner's own event-loop thread"
     ),
@@ -655,11 +652,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         "ViewRuntime._dispatch_mount_body",
         "view_instance._initialize_temporary_assigns",
     ): plumbing(_STATE),
-    (
-        "runtime.py",
-        "ViewRuntime._dispatch_mount_body",
-        "view_instance._assign_component_ids",
-    ): plumbing(_STATE),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "render_view_with_diff"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "mount_frame_metadata"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._dispatch_sticky_child_event", "resolve_explicit_child"): plumbing(
@@ -675,22 +667,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("runtime.py", "ViewRuntime._check_auth", "run_pre_mount_auth"): leaf(),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "snapshot_codec"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._render_and_send", "render_view_with_diff"): plumbing(_RENDER),
-    ("runtime.py", "ViewRuntime._dispatch_mount_body", "track_session"): plumbing(_SESSION),
-    (
-        "runtime.py",
-        "ViewRuntime._dispatch_mount_body",
-        "view_instance._restore_private_state",
-    ): leaf(),
-    (
-        "runtime.py",
-        "ViewRuntime._dispatch_mount_body",
-        "view_instance._restore_upload_configs",
-    ): plumbing(_STATE),
-    (
-        "runtime.py",
-        "ViewRuntime._dispatch_mount_body",
-        "view_instance._restore_listen_channels",
-    ): plumbing(_STATE),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "load_server_state"): plumbing(_SESSION),
     (
         "runtime.py",
@@ -732,11 +708,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("runtime.py", "ViewRuntime.authorize_explicit_turn", "fresh_socket_request"): plumbing(
         _SESSION
     ),
-    (
-        "runtime.py",
-        "ViewRuntime._dispatch_mount_body",
-        "view_instance._restore_component_state",
-    ): plumbing(_RESTORE),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "snapshot_codec"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "codec.capture"): plumbing(_RENDER),
     ("security/csrf.py", "abind_csrf_cookie", "bind_csrf_cookie"): plumbing(_SESSION),
@@ -935,7 +906,6 @@ HOOKS: Dict[str, str] = {
     "PresenceMixin.update_presence_heartbeat": "stepped:hook",
     "PresenceMixin.get_presence_key": "stepped:hook",
     "TenantMixin.get_presence_key": "stepped:hook",
-    "PresenceMixin._restore_presence": "stepped:hook",
     "PresenceMixin.get_presence_user_id": "inside:mount@presence.py::PresenceMixin.track_presence",
     "PresenceMixin.handle_presence_join": "inside:mount@presence.py::PresenceMixin.track_presence",
     "PresenceMixin.handle_presence_leave": "inside:hook@presence.py::PresenceMixin.untrack_presence",
@@ -999,6 +969,16 @@ HOOKS: Dict[str, str] = {
     "WizardMixin.get_wizard_step": (
         "unwrapped:not-threaded:called by WizardMixin._resume_wizard from WizardMixin.mount, in "
         "the thread and the mount step of the mount that called it; no thread hand-off names it"
+    ),
+    "WizardMixin.get_wizard_steps": (
+        "unwrapped:not-threaded:read through WizardMixin._steps by the wizard's own mount, "
+        "handlers and get_context_data(), in the thread and step of whichever called; it builds "
+        "a list from view state and no thread hand-off names it (#4011)"
+    ),
+    "WizardMixin.resume_wizard": (
+        "unwrapped:not-threaded:called by the view's own mount() (WizardMixin.mount calls "
+        "_resume_wizard), in the thread and the mount step of that mount; no thread hand-off "
+        "names it (#4011)"
     ),
     "WizardMixin.on_step_saved": (
         "unwrapped:not-threaded:called by WizardMixin.next_step, an event handler, in the thread "
@@ -1972,10 +1952,10 @@ def test_the_allowlist_is_keyed_by_file_function_and_text_not_by_a_bare_name():
         "class ViewRuntime:\n"
         "    async def _dispatch_mount_body(self):\n"
         # on ALLOWED for exactly this function
-        "        await sync_to_async(view_instance._restore_listen_channels)()\n"
+        "        await sync_to_async(view_instance._initialize_temporary_assigns)()\n"
         "    async def brand_new(self):\n"
         # the same text in another function is not covered
-        "        await sync_to_async(view_instance._restore_listen_channels)()\n"
+        "        await sync_to_async(view_instance._initialize_temporary_assigns)()\n"
         # a bare name that used to be on the list
         "        def run():\n"
         "            view.get_object()\n"
@@ -1987,7 +1967,7 @@ def test_the_allowlist_is_keyed_by_file_function_and_text_not_by_a_bare_name():
     assert len(problems) == 4, problems
     assert not any("_dispatch_mount_body" in p for p in problems), problems
     for expected in (
-        "_restore_listen_channels",
+        "_initialize_temporary_assigns",
         "(run)",
         "(component.render)",
         "(view.render_with_diff)",

@@ -25,16 +25,9 @@ from djust import LiveView
 
 Either `template_name` or `template` is required.
 
-### `PersistentLiveView`
+### `PersistentLiveView` (removed in 2.0)
 
-A `LiveView` subclass whose only difference is `enable_state_snapshot = True`, so a project can opt a group of legacy-exposure views in to the session-backed state restore described in [Scaling djust](../guides/scaling.md). The class states `exposure_policy = "legacy"` itself, since the restore exists only under that policy, which is deprecated; new code declares `state(..., persist="server")` fields on a plain `LiveView` instead ([explicit exposure](../state/explicit-exposure.md)). A subclass can set the flag back to `False`. A subclass that sets `exposure_policy = "explicit"` ignores the flag and persists only its `state(..., persist=...)` fields. [`djust.C304`](../guides/error-codes.md) still checks each subclass for PII-like attribute names. The flag sends the view's public state to the browser as a signed, not encrypted, blob, so don't use this class for views whose public attributes hold credentials, PII or other users' data.
-
-```python
-from djust import PersistentLiveView
-
-class Dashboard(PersistentLiveView):
-    template_name = "dashboard.html"
-```
+`PersistentLiveView` and the `enable_state_snapshot` attribute it set were removed in 2.0. Importing the class raises `ImportError`, and a view that sets the attribute is refused with `ImproperlyConfigured`. Declare the fields that must survive a reconnect with `state(..., persist="server")` on a plain `LiveView` ([explicit exposure](../state/explicit-exposure.md), [Migrating to 2.0](../guides/migrating-to-2.0.md#python-names)).
 
 ### Lifecycle Methods
 
@@ -136,7 +129,7 @@ It is called once per render, before the JIT. A key it returns wins over a publi
 
 #### `handle_restore(request)`
 
-Called after the view was rebuilt from its saved session state: on the HTTP page-POST fallback (after the object permission check, before the event handler) and on a WebSocket/SSE mount restored from the session (`enable_state_snapshot`). `mount()` never sees that state (it does not run, or runs before the state is put back), so read here what the session does not hold, from the restored ids:
+Called after the view's saved state was put back on a new view object: on a WebSocket/SSE mount that restored declared `state(persist=...)` fields (after `mount()`), on an explicit `{% live_render %}` child the same way, and on the HTTP page-POST fallback (after the object permission check, before the event handler). `mount()` never sees that state (it runs before the state is put back, or not at all on the fallback), so read here what was not saved, from the restored ids:
 
 ```python
 def handle_restore(self, request):
@@ -149,7 +142,7 @@ Not called after a plain `mount()`. May be `async def`.
 
 #### `handle_restore(request)`
 
-Called after the view was rebuilt from its saved session state: on the HTTP page-POST fallback (after the object permission check, before the event handler) and on a WebSocket/SSE mount restored from the session (`enable_state_snapshot`). `mount()` never sees that state (it does not run, or runs before the state is put back), so read here what the session does not hold, from the restored ids:
+Called after the view's saved state was put back on a new view object: on a WebSocket/SSE mount that restored declared `state(persist=...)` fields (after `mount()`), on an explicit `{% live_render %}` child the same way, and on the HTTP page-POST fallback (after the object permission check, before the event handler). `mount()` never sees that state (it runs before the state is put back, or not at all on the fallback), so read here what was not saved, from the restored ids:
 
 ```python
 def handle_restore(self, request):

@@ -548,10 +548,6 @@ EXPECTED_ROUNDTRIP_SITES = {
     # ADR-044: the GET / POST bodies run inside their turn wrappers.
     ("mixins/request.py", "_get_turn_body"),
     ("mixins/request.py", "_post_turn_body"),
-    ("mixins/sticky.py", "save_sticky_child_state"),
-    ("mixins/sticky.py", "save_sticky_child_state_sync"),
-    # The inner `_save` closure of `_persist_state_after_event`.
-    ("runtime.py", "_save"),
     # ADR-033 D6: the tagged form of a plain component's state, reached only
     # from the writers above (and `StateRoundtripJSONEncoder`), so a Decimal
     # or a nested component INSIDE the state takes its tagged form too.

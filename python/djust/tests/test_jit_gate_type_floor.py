@@ -33,6 +33,7 @@ from djust.config import get_config
 from djust.decorators import event_handler
 from djust.optimization import codegen as _codegen
 from djust.serialization import normalize_django_value
+from djust import state
 
 LEAK = "LEAK-TYPE-FLOOR"
 MODULE = "djust.tests.test_jit_gate_type_floor"
@@ -121,7 +122,8 @@ def _cells(var):
 
 
 class _Bump(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state()
 
     @event_handler()
     def bump(self, **kwargs):
@@ -129,6 +131,7 @@ class _Bump(LiveView):
 
 
 class _DirectView(_Bump):
+    m = state()
     template = f'<div dj-view="{MODULE}._DirectView" dj-id="0">n={{{{ n }}}} {_cells("m")}</div>'
 
     def mount(self, request, **kwargs):
@@ -137,6 +140,7 @@ class _DirectView(_Bump):
 
 
 class _ListView(_Bump):
+    rows = state()
     template = (
         f'<div dj-view="{MODULE}._ListView" dj-id="0">n={{{{ n }}}}'
         f"{{% for r in rows %}}<p>{_cells('r')}</p>{{% endfor %}}</div>"
@@ -148,6 +152,7 @@ class _ListView(_Bump):
 
 
 class _FkView(_Bump):
+    child = state()
     template = (
         f'<div dj-view="{MODULE}._FkView" dj-id="0">n={{{{ n }}}} '
         f"title=[{{{{ child.title }}}}] {_cells('child.owner')}</div>"
@@ -162,6 +167,7 @@ class _FkView(_Bump):
 
 
 class _LazyView(_Bump):
+    m = state()
     template = f'<div dj-view="{MODULE}._LazyView" dj-id="0">n={{{{ n }}}} {_cells("m")}</div>'
 
     def mount(self, request, **kwargs):
@@ -170,6 +176,7 @@ class _LazyView(_Bump):
 
 
 class _AllowlistedView(_Bump):
+    m = state()
     template = (
         f'<div dj-view="{MODULE}._AllowlistedView" dj-id="0">n={{{{ n }}}} {_cells("m")}</div>'
     )
@@ -180,6 +187,7 @@ class _AllowlistedView(_Bump):
 
 
 class _OptedOutView(_Bump):
+    m = state()
     template = f'<div dj-view="{MODULE}._OptedOutView" dj-id="0">n={{{{ n }}}} {_cells("m")}</div>'
 
     def mount(self, request, **kwargs):
@@ -188,6 +196,7 @@ class _OptedOutView(_Bump):
 
 
 class _QuerySetView(_Bump):
+    rows = state()
     template = (
         f'<div dj-view="{MODULE}._QuerySetView" dj-id="0">n={{{{ n }}}}'
         f"{{% for r in rows %}}<p>{_cells('r')}</p>{{% endfor %}}</div>"

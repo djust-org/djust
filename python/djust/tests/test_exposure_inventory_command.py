@@ -15,7 +15,6 @@ import pytest
 from django.core.management import call_command
 
 from djust import LiveView, event_handler
-from djust.live_view import PersistentLiveView
 from djust.decorators import state
 
 SECRET = "INVENTORY_SECRET_VALUE_7f3a91"
@@ -91,52 +90,20 @@ class _ShapesMixin:
 
 
 class FreshMountView(_ShapesMixin, LiveView):
-    """Legacy view without snapshot persistence: remounts fresh on a reconnect."""
+    """A legacy view: it remounts fresh on a reconnect."""
 
     exposure_policy = "legacy"
 
 
-class SnapshotFlagView(_ShapesMixin, LiveView):
-    exposure_policy = "legacy"
-    enable_state_snapshot = True
-
-
-class PersistentBaseView(_ShapesMixin, PersistentLiveView):
-    exposure_policy = "legacy"
-    pass
-
-
-class PersistentOptedOutView(_ShapesMixin, PersistentLiveView):
-    exposure_policy = "legacy"
-    enable_state_snapshot = False
-
-
-class ExplicitWithFlagView(_ShapesMixin, LiveView):
-    """Under explicit exposure the flag has no effect, so nothing persists."""
+class ExplicitShapesView(_ShapesMixin, LiveView):
+    """An explicit view: only what it declares with a grant persists."""
 
     exposure_policy = "explicit"
-    enable_state_snapshot = True
-
-
-class DynamicFlagView(_ShapesMixin, LiveView):
-    """A flag that is not a plain class value is not established statically."""
-
-    exposure_policy = "legacy"
-
-    @property
-    def enable_state_snapshot(self):
-        return False
 
 
 # kind -> name in _ShapesMixin
 SHAPES = {"state": "level", "instance": "count", "private": "_cursor"}
-NOT_PERSISTING = (
-    "FreshMountView",
-    "PersistentOptedOutView",
-    "ExplicitWithFlagView",
-    "DynamicFlagView",
-)
-PERSISTING = ("SnapshotFlagView", "PersistentBaseView")
+NOT_PERSISTING = ("FreshMountView", "ExplicitShapesView")
 
 VIEW = f"{__name__}.SecretHoldingView"
 
@@ -299,33 +266,20 @@ def test_plain_declaration_shapes_without_snapshot_persistence(no_construction):
     assert "state(" not in names["_cursor"]["suggestion"]
 
 
-@pytest.mark.parametrize("view_name", PERSISTING)
-def test_server_persistence_is_suggested_where_the_view_persists_today(no_construction, view_name):
-    entry, names = _shape_report(view_name)
-    assert entry["persists_today"] is True
-    assert 'add persist="server"' in names["level"]["suggestion"]
-    assert names["count"]["suggestion"].startswith('count: int = state(persist="server")')
-    assert 'declare cursor: int = state(persist="server")' in names["_cursor"]["suggestion"]
-    for name in SHAPES.values():
-        # Never a client grant: the browser-readable choice is the owner's.
-        assert 'persist="client"' not in names[name]["suggestion"]
-        assert "client=" not in names[name]["suggestion"]
-
-
 def test_text_output_has_no_persist_suggestion_without_snapshot_persistence(no_construction):
     output = run("--view", f"{__name__}.FreshMountView")
     assert "reconnect: fresh mount" in output
     assert "persist=" not in output
-    output = run("--view", f"{__name__}.PersistentBaseView")
-    assert "reconnect: restored (enable_state_snapshot)" in output
-    assert 'persist="server"' in output
 
 
-def test_reported_persistence_matches_the_runtime_flag():
-    """The static read agrees with what the reconnect path reads off an instance."""
-    for view_name in (*NOT_PERSISTING, *PERSISTING):
-        entry, _ = _shape_report(view_name)
-        cls = globals()[view_name]
-        view = cls()
-        legacy = view.exposure_policy == "legacy"
-        assert entry["persists_today"] == (bool(view.enable_state_snapshot) and legacy), view_name
+def test_a_view_that_still_asks_for_snapshot_persistence_does_not_load():
+    """2.0 refuses the flag when the class is created, so the inventory never
+    sees such a view; on 1.3.x, where the flag exists, that release's inventory
+    reports ``reconnect: restored`` and suggests ``persist="server"``."""
+    from django.core.exceptions import ImproperlyConfigured
+
+    with pytest.raises(ImproperlyConfigured, match="enable_state_snapshot"):
+
+        class SnapshotFlagView(_ShapesMixin, LiveView):
+            exposure_policy = "legacy"
+            enable_state_snapshot = True

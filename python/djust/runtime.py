@@ -67,7 +67,7 @@ from typing import (
     runtime_checkable,
 )
 
-from asgiref.sync import async_to_sync, sync_to_async
+from asgiref.sync import sync_to_async
 
 from ._params_form import run_handle_params
 from ._view_hooks import call_async_result, call_hook
@@ -94,17 +94,15 @@ from .websocket_utils import (
     get_handler_coerce_setting,
 )
 
-# How long an event-path state save may take before it is abandoned (#1475).
+# How long an event-path state save may take (#1475).
 #
 # Deliberately bounded: a slow session backend must never stall event handling.
-# The consequence is that a save is BEST-EFFORT, not guaranteed — under enough
-# load the write is dropped and only a warning is logged.
 #
-# It is a named constant rather than two inline literals because a test that
-# asserts a save *landed* is otherwise asserting an unconditional outcome from
-# a time-bounded operation, which makes it pass everywhere except a loaded
-# machine. Such a test should raise this bound so it exercises the save LOGIC
-# rather than racing a wall clock (#2154).
+# It is a named constant because a test that asserts a save *landed* is
+# otherwise asserting an unconditional outcome from a time-bounded operation,
+# which makes it pass everywhere except a loaded machine. Such a test should
+# raise this bound so it exercises the save LOGIC rather than racing a wall
+# clock (#2154).
 #
 # ADR-038 explicit saves are not best-effort (a missed save withholds the
 # success frame). They use this value as the DEFAULT of a configurable
@@ -314,19 +312,6 @@ def _request_save_executor() -> ThreadPoolExecutor:
         return _save_executor
 
 
-def _detached_when(detach: bool, run: Callable[[], None]) -> Callable[[], None]:
-    """``run`` with the pool save's session re-check (#3247) when ``detach``.
-
-    A trailing save (#3248) has no turn waiting for it, even on a WebSocket
-    session's own thread, so another request may have logged the user out
-    while it queued: it re-checks its session like a pool save does."""
-    if not detach:
-        return run
-    from ._late_save import detached
-
-    return detached(run)
-
-
 def _spawn_save(run: Callable[[], None]) -> "asyncio.Future[None]":
     """Start ``run`` in a Django thread, outside any request's executors (#3212).
 
@@ -383,36 +368,6 @@ def _save_running_for(pending: "Optional[asyncio.Future[None]]") -> float:
 #: reload error, as before #3200: storage is not recovering (review I-a).
 _EXPLICIT_MAX_DEFERRALS = 3
 
-#: Legacy trailing save (#3248). A deferred or failed best-effort save leaves
-#: the session older than the last render, and Back restores the session copy
-#: (it wins over the client's token). The latest state is therefore written
-#: once more after the pending save settles. A trailing save is not
-#: interactive, so it gets the explicit save's 10 s cap rather than 150 ms.
-#:
-#: ``_TRAILING_SAVE_ATTEMPTS`` writes are tried, ``_TRAILING_RETRY_DELAY_S``
-#: apart; the state is then kept and one last attempt is made at teardown,
-#: which waits at most ``_TRAILING_FLUSH_TIMEOUT_S`` for the trailing save.
-_TRAILING_SAVE_ATTEMPTS = 2
-_TRAILING_RETRY_DELAY_S = 0.5
-_TRAILING_FLUSH_TIMEOUT_S = 3.0
-#: A save already running this long (loop seconds) is hung, not about to
-#: finish: the trailing save is ordered after it and cannot start, so teardown
-#: does not wait (hung storage must not hold a navigation, #3212).
-_TRAILING_STUCK_AFTER_S = 1.0
-#: How often teardown re-checks whether the pending save has become "stuck".
-_TRAILING_POLL_S = 0.1
-#: The guard of a session whose key is gone (an in-handler ``logout()``): it
-#: equals no real session key, so a trailing save under it is always dropped.
-_SESSION_FLUSHED = "<flushed>"
-#: Flag on a view whose runtime has finished with its saves (teardown).
-_SAVES_RELEASED_ATTR = "_djust_state_saves_released"
-
-#: Outcomes of one legacy state save.
-_SAVED = "saved"  # written, or there is no session to write into
-_DROPPED = "dropped"  # its session was logged out or replaced: nothing written
-_UNSAVED = "unsaved"  # never started (the previous save was running), or failed
-_RUNNING = "running"  # outran its deadline but is still running: it stores the state itself
-
 
 async def _run_explicit_save(
     owner: Any, save: Callable[[], None], *, deadline: Optional[float] = None
@@ -437,9 +392,7 @@ async def _run_explicit_save(
     running at the deadline, this save does not start and is deferred too.
 
     ``deadline`` overrides the configured bound; the catch-up turn passes the
-    10 s cap, since nobody waits on its save interactively, and the legacy
-    best-effort saves pass their fixed ``EVENT_STATE_SAVE_TIMEOUT_S`` (#3212),
-    so every event-path session save of a runtime shares one ordering.
+    10 s cap, since nobody waits on its save interactively.
 
     Raises :class:`ExplicitSaveDeferred` when the deadline passes, and
     re-raises whatever ``save`` raised otherwise.
@@ -2201,14 +2154,6 @@ class WSConsumerTransport:
         await consumer.send_refusal(reason, to)
         return True
 
-    def hosts_other_views(self) -> bool:
-        """Whether this socket has hosted views besides one (#3252).
-
-        Sticky for the life of the socket: the teardown clears the registry
-        before it stores the views' last state, and that save must still read
-        what the others saved."""
-        return bool(getattr(self._consumer, "_hosted_several_views", False))
-
     @property
     def capture_document_title(self) -> bool:
         """True while the consumer mounts a ``live_redirect`` destination
@@ -2588,10 +2533,6 @@ class SSESessionTransport:
             return False
         await session.send_refusal(reason, to)
         return True
-
-    def hosts_other_views(self) -> bool:
-        """Whether this session has hosted views besides one (#3252); sticky."""
-        return bool(getattr(self._session, "_hosted_several_views", False))
 
     def next_mount_version(self, html: Optional[str], rust_version: int = 1) -> int:
         """SSE stamps the raw Rust ``render_with_diff()`` version on its mount frame.
@@ -3016,14 +2957,6 @@ class ViewRuntime(RuntimeTurnPort):
         self._explicit_deferrals = 0
         self._explicit_catch_up: Optional["asyncio.Task[None]"] = None
         self._in_explicit_catch_up = False
-        # #3248: legacy state a best-effort save did not store, by save target
-        # ("root" or a sticky child), and the one trailing task that writes it.
-        # (weak ref to the view, event name, session guard, sticky?). Weak: a
-        # sticky child removed from the page must not be kept alive, or saved.
-        self._unsaved_state: Dict[
-            Any, Tuple["weakref.ref[Any]", Optional[str], Optional[Tuple[Optional[str]]], bool]
-        ] = {}
-        self._trailing_save: Optional["asyncio.Task[None]"] = None
         # #3201: vanished session key -> the replacement session this
         # connection created, so repeated mounts reuse one replacement.
         self._replacement_sessions: Dict[str, str] = {}
@@ -3210,10 +3143,6 @@ class ViewRuntime(RuntimeTurnPort):
         self.mount_document_title = None
         page_url = validate_mount_url(data.get("url", "/"))
         client_timezone = data.get("client_timezone")
-        # has_prerendered (ADR-022 Iter 3 Phase 3.0): the client signals it already
-        # holds server-rendered HTML for this view. Consumed below at the mount
-        # frame to decide ``skip_html_for_resume`` (WS websocket.py:2086).
-        has_prerendered = bool(data.get("has_prerendered", False))
 
         if not view_path:
             await self.transport.send_error("Missing view path in mount request")
@@ -3342,14 +3271,6 @@ class ViewRuntime(RuntimeTurnPort):
             view_instance._django_session_key = (
                 getattr(session_obj, "session_key", None) if session_obj is not None else None
             )
-            if session_obj is not None and getattr(view_instance, "enable_state_snapshot", False):
-                if uses_legacy_exposure(view_instance):
-                    # The post-event saves merge what this object changes into
-                    # the stored session instead of writing it whole (#3347).
-                    # After the key above is read: tracking loads the session.
-                    from ._session_merge import track_session
-
-                    await sync_to_async(track_session)(session_obj)
             if hasattr(view_instance, "_initialize_temporary_assigns"):
                 await sync_to_async(view_instance._initialize_temporary_assigns)()
         except Exception as exc:
@@ -3439,220 +3360,95 @@ class ViewRuntime(RuntimeTurnPort):
         if url_kwargs:
             mount_kwargs.update(url_kwargs)
 
-        # ---- State restoration (ADR-022 Iter 3 Phase 3.1) ----
-        # A legacy view that opts in is restored from its session-saved state
-        # in lieu of calling mount(); that sets the ``_mounted_from_restore``
-        # resume flag the mount-frame construction below reads for
-        # ``skip_html_for_resume``. An explicit view restores its declared
-        # state after mount() (further down).
-        #
-        # GATE (#1552): gated on ``enable_state_snapshot = True``. Default
-        # views never restore — a fresh mount() runs unconditionally for them.
-        mounted_from_restore = False
-
-        # (1) Session-saved-state restore (WS websocket.py:2424-2474). Reattaches
-        # public + private state + per-process side-effect registrations +
-        # component state saved by the per-event session-save (#1466) onto a
-        # plain reconnect. Gated on ``enable_state_snapshot`` (#1552).
-        opt_in = getattr(view_instance, "enable_state_snapshot", False)
         legacy_exposure = uses_legacy_exposure(view_instance)
-        # Explicit server persistence is independent of the legacy opt-in:
-        # never use the legacy session restore for an explicit view.
-        opt_in = opt_in and legacy_exposure
-        session = getattr(request, "session", None)
-        from ._tenant_state import session_view_key
-
-        # None = tenant view with no resolved tenant: restore nothing (#2973).
-        from .config import view_state_in_session
-
-        view_key = session_view_key(view_instance, page_url)
-        # ``view_state_in_session=False``: no saved view state to read.
-        if opt_in and view_state_in_session() and session is not None and view_key is not None:
-            try:
-                saved_state = await session.aget(view_key, {})
-            except Exception:  # noqa: BLE001 — session backend may be absent
-                saved_state = {}
-            if saved_state:
-                from ._state_restore import restore_public_state
-                from .serialization import decode_state_roundtrip
-
-                # #2252: the per-event session save tagged every Decimal
-                # (``normalize_django_value(..., state_roundtrip=True)``).
-                # Never over a method of the view class (same rule as HTTP).
-                restore_public_state(view_instance, decode_state_roundtrip(saved_state))
-
-                # Restore user-defined _private attributes (mirrors WS + HTTP).
-                private_state = await session.aget(f"{view_key}__private", {})
-                if private_state:
-                    await sync_to_async(view_instance._restore_private_state)(private_state)
-
-                # Issues #889/#893/#894 — replay process-wide side effects that
-                # mount() would have re-issued (UploadManager, PresenceManager,
-                # PostgresNotifyListener registrations). hasattr-guarded.
-                if hasattr(view_instance, "_restore_upload_configs"):
-                    await sync_to_async(view_instance._restore_upload_configs)()
-                if hasattr(view_instance, "_restore_presence"):
-                    from .sync_turn import sync_step
-
-                    # Reads ``get_presence_key()``: a ``"hook"`` step (#3637).
-                    await sync_to_async(
-                        sync_step(view_instance, "hook", view_instance._restore_presence)
-                    )()
-                if hasattr(view_instance, "_restore_listen_channels"):
-                    await sync_to_async(view_instance._restore_listen_channels)()
-
-                await sync_to_async(view_instance._initialize_temporary_assigns)()
-                await sync_to_async(view_instance._assign_component_ids)()
-
-                # Restore component state.
-                from .components.base import is_session_component
-
-                component_state = await session.aget(f"{view_key}_components", {})
-                for key, state in component_state.items():
-                    component = getattr(view_instance, key, None)
-                    if component is not None and is_session_component(component):
-                        await sync_to_async(view_instance._restore_component_state)(
-                            component, state
-                        )
-                        from .components._interactive import DropdownMenu, DropdownMenuCollection
-
-                        if isinstance(component, DropdownMenu):
-                            component._renew_observation_lifetime()
-                        elif isinstance(component, DropdownMenuCollection):
-                            component._renew_observation_lifetimes()
-
-                # mount() did not run: let the view read again what the
-                # session does not hold, from the restored state.
-                handle_restore = getattr(view_instance, "handle_restore", None)
-                if callable(handle_restore):
-                    await call_hook(handle_restore, request)
-
-                mounted_from_restore = True
-
-        # Expose the resume flag for the mount-frame construction below
-        # (skip_html_for_resume) — Phase 3.0 wired the read; this sets it.
-        view_instance._mounted_from_restore = mounted_from_restore
-
-        # #1977 — re-sync the diff baseline to the client's LIVE DOM on a
-        # reconnect / state-restore mount. On a resume the fresh view's Rust diff
-        # baseline is primed from a render that does NOT match the client's
-        # pre-disconnect DOM (which already reflects the restored/filtered state);
-        # diffing the FIRST post-restore EVENT against that stale baseline lands
-        # SetText patches on the wrong node (often a bare ``#text`` node) →
-        # ``2/N patches failed`` → an ``html_recovery`` reload/flicker. Forcing the
-        # first post-restore render to emit a FULL-HTML frame makes the client
-        # morph wholesale and re-primes the Rust baseline to the live DOM, so no
-        # stale-baseline diff can ever reach the client.
-        #
-        # RENDER-TIMING (traced, load-bearing): the mount-time ``render_with_diff``
-        # (~line 2375) READS ``_force_full_html``
-        # but never RESETS it — every reset lives in the transport-level EVENT /
-        # url_change dispatch (``_render_and_send`` runtime.py:4093-4094,
-        # ``dispatch_url_change`` runtime.py:3725-3726, and the WS twins
-        # websocket.py:1650-1651 / 4115-4116). On a resume the mount HTML is
-        # dropped (``skip_html_for_resume`` = ``mounted_from_restore and
-        # has_prerendered``), so the flag SURVIVES the mount frame and is consumed
-        # by the FIRST post-restore event render — which discards patches and sends
-        # a full ``html_update``. The flag is snapshot-excluded
-        # (``_FRAMEWORK_INTERNAL_ATTRS``, live_view.py:143) so it never leaks into a
-        # saved snapshot.
-        #
-        # Parallel-path (#1646): this guard covers the legacy session-saved-state
-        # restore (the explicit restore below sets the flag itself); and — since
-        # WS ``handle_mount`` is a thin shim to ``dispatch_mount``
-        # (websocket.py:2209) — it covers WS + SSE + runtime. The HTTP GET path renders the full page
-        # and primes its baseline against the same served state (request.py:276-282,
-        # no cross-event stale baseline); the HTTP POST fallback re-restores +
-        # re-renders atomically in each stateless request — neither has a persistent
-        # mount baseline that a later event diffs against, so neither needs this.
-        if mounted_from_restore:
-            view_instance._force_full_html = True
 
         # ADR-035: a view that looks its object up from the route gets only the
-        # kwargs of its own route, never client params. Bound after both restore
-        # mechanisms, so restored state cannot supply it, and before mount().
+        # kwargs of its own route, never client params. Bound before mount().
         bind_route = getattr(view_instance, "_djust_bind_route_kwargs", None)
         if callable(bind_route):
             bind_route(self._own_route_kwargs(view_instance, page_url))
 
-        if not mounted_from_restore:
-            try:
-                await call_hook(view_instance.mount, request, **mount_kwargs)
-                if not legacy_exposure:
-                    from ._exposure_sessions import load_server_state
-                    from .security import safe_setattr
+        try:
+            await call_hook(view_instance.mount, request, **mount_kwargs)
+            if not legacy_exposure:
+                from ._exposure_sessions import load_server_state
+                from .security import safe_setattr
 
-                    if callable(getattr(view_instance, "resolve_tenant", None)):
-                        request.tenant = getattr(view_instance, "_tenant", None)
-                    restored = await sync_to_async(load_server_state)(view_instance, request)
-                    from django.conf import settings
+                if callable(getattr(view_instance, "resolve_tenant", None)):
+                    request.tenant = getattr(view_instance, "_tenant", None)
+                restored = await sync_to_async(load_server_state)(view_instance, request)
+                from django.conf import settings
 
-                    incoming = data.get("state_snapshot")
-                    if (
-                        getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
-                        and not slot_target
-                        and type(incoming) is dict
-                        and incoming.get("view_slug") == view_path
-                        and await sync_to_async(
-                            _lifecycle_step(view_instance, view_instance._should_restore_snapshot)
-                        )(request)
-                    ):
-                        from ._exposure_snapshots import snapshot_codec
+                incoming = data.get("state_snapshot")
+                if (
+                    getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
+                    and not slot_target
+                    and type(incoming) is dict
+                    and incoming.get("view_slug") == view_path
+                    and await sync_to_async(
+                        _lifecycle_step(view_instance, view_instance._should_restore_snapshot)
+                    )(request)
+                ):
+                    from ._exposure_snapshots import snapshot_codec
 
-                        codec = await sync_to_async(snapshot_codec)(view_instance, request)
-                        client_values = codec.restore(incoming.get("state_json")) if codec else None
-                        if client_values is not None:
-                            # Server/client fields are disjoint by declaration;
-                            # both dictionaries are completely validated first.
-                            restored = {**(restored or {}), **client_values}
-                    if restored is not None:
-                        for key, value in restored.items():
-                            safe_setattr(
-                                view_instance,
-                                key,
-                                value,
-                                allow_private=False,
-                                raise_on_blocked=True,
+                    codec = await sync_to_async(snapshot_codec)(view_instance, request)
+                    client_values = codec.restore(incoming.get("state_json")) if codec else None
+                    if client_values is not None:
+                        # Server/client fields are disjoint by declaration;
+                        # both dictionaries are completely validated first.
+                        restored = {**(restored or {}), **client_values}
+                if restored is not None:
+                    for key, value in restored.items():
+                        safe_setattr(
+                            view_instance,
+                            key,
+                            value,
+                            allow_private=False,
+                            raise_on_blocked=True,
+                        )
+                    # #3989: the declared state came back AFTER mount() ran, so
+                    # mount() never saw it. The same hook the HTTP fallback
+                    # calls lets the view act on what was restored: read rows again from a restored id, or clear a
+                    # persisted "running" flag whose background work did not
+                    # survive the reconnect. The HTTP fallback (mixins/request.py) and an
+                    # embedded child (templatetags/live_tags.py) call it too (#1646).
+                    handle_restore = getattr(view_instance, "handle_restore", None)
+                    if callable(handle_restore):
+                        try:
+                            await call_hook(handle_restore, request)
+                        except Exception as exc:
+                            # Named for what failed: the handler below would
+                            # report this as an error in mount().
+                            response = handle_exception(
+                                exc,
+                                error_type="mount",
+                                view_class=view_path,
+                                logger=logger,
+                                log_message=(
+                                    f"Error in {sanitize_for_log(view_path)}.handle_restore()"
+                                ),
+                                expose_details=_diagnostics_policy_allows(view_instance),
                             )
-                        # #3989: the declared state came back AFTER mount() ran, so
-                        # mount() never saw it. The same hook the legacy restore and
-                        # the HTTP fallback call lets the view act on what was
-                        # restored: read rows again from a restored id, or clear a
-                        # persisted "running" flag whose background work did not
-                        # survive the reconnect. The HTTP fallback (mixins/request.py) and an
-                        # embedded child (templatetags/live_tags.py) call it too (#1646).
-                        handle_restore = getattr(view_instance, "handle_restore", None)
-                        if callable(handle_restore):
-                            try:
-                                await call_hook(handle_restore, request)
-                            except Exception as exc:
-                                # Named for what failed: the handler below would
-                                # report this as an error in mount().
-                                response = handle_exception(
-                                    exc,
-                                    error_type="mount",
-                                    view_class=view_path,
-                                    logger=logger,
-                                    log_message=(
-                                        f"Error in {sanitize_for_log(view_path)}.handle_restore()"
-                                    ),
-                                    expose_details=_diagnostics_policy_allows(view_instance),
-                                )
-                                await self._fail_mount(view_instance, exc, response)
-                                return
-                        mounted_from_restore = True
-                        view_instance._force_full_html = True
-            except Exception as exc:
-                response = handle_exception(
-                    exc,
-                    error_type="mount",
-                    view_class=view_path,
-                    logger=logger,
-                    log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
-                    expose_details=_diagnostics_policy_allows(view_instance),
-                )
-                await self._fail_mount(view_instance, exc, response)
-                return
+                            await self._fail_mount(view_instance, exc, response)
+                            return
+                    # #1977: the client's DOM predates this restore, so the
+                    # Rust diff baseline primed by the mount render does not
+                    # match it. The first event after the restore must send
+                    # full HTML, not a patch against that stale baseline. The
+                    # mount render reads the flag and never resets it; the
+                    # first event's render consumes it.
+                    view_instance._force_full_html = True
+        except Exception as exc:
+            response = handle_exception(
+                exc,
+                error_type="mount",
+                view_class=view_path,
+                logger=logger,
+                log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
+                expose_details=_diagnostics_policy_allows(view_instance),
+            )
+            await self._fail_mount(view_instance, exc, response)
+            return
 
         # ---- Mount-request stash + dirty/private baselines (ADR-022 Iter 3
         # Phase 3.0 transport-agnostic grows) ----
@@ -3661,16 +3457,9 @@ class ViewRuntime(RuntimeTurnPort):
         # check runs after handle_params (below); a denial there clears the
         # explicit binding set here along with the view.
         #
-        # #1895 (KNOWN required fold): stash the mount request + kwargs on the
-        # view. The runtime's OWN per-event session-save fallback
-        # (_persist_state_after_event runtime.py:2030, _persist_sticky_child_
-        # after_event runtime.py:2109) ALREADY reads ``_djust_mount_request`` to
-        # discover the save session + namespace path. Without this stash that
-        # fallback silently degrades to the scope session on the converged
-        # event path; with it, the converged path persists under the SAME
-        # ``liveview_{request.path}`` key the WS bespoke path uses. Stashing it
-        # here makes that fallback LIVE on the runtime/SSE mount path (and, post
-        # 3.3b flip, the WS mount path). Behavioral-parity pin in
+        # #1895: stash the mount request + kwargs on the view, for the code
+        # that needs the request a view was mounted under after the mount
+        # (its path and session). Behavioral-parity pin in
         # test_transport_behavioral_parity.py (gate-off: delete this stash → the
         # mount-stash net goes RED).
         view_instance._djust_mount_request = request
@@ -3893,41 +3682,16 @@ class ViewRuntime(RuntimeTurnPort):
             # which a mount (content only) leaves as the previous view had it.
             mount_msg["root_poll"] = root_poll
 
-        # has_prerendered / skip_html_for_resume (ADR-022 Iter 3 Phase 3.0 grow,
-        # WS websocket.py:2804-2816). When the client carries pre-rendered HTML
-        # AND the view's state was restored from a session snapshot (a resume),
-        # the client's DOM already reflects the saved state, so sending the
-        # freshly-rendered HTML would force a redundant DOM swap — skip the
-        # ``html``/``has_ids`` keys (the ``version`` still flows so patches stay
-        # in sync). ``_mounted_from_restore`` is the runtime analogue of WS's
-        # ``mounted`` flag. Phase 3.0 wired this read while the flag was DORMANT;
-        # Phase 3.1's state-restore block above now SETS it on a session /
-        # signed-snapshot resume, so the resume optimization is LIVE for the
-        # runtime/SSE mount path.
-        mounted_from_restore = getattr(view_instance, "_mounted_from_restore", False)
-        # Explicit restoration can combine fresh server state and a client
-        # snapshot. Cached HTML is not proof that it matches that combination.
-        skip_html_for_resume = (
-            legacy_exposure
-            and bool(mounted_from_restore)
-            and bool(has_prerendered)
-            and not bool(getattr(view_instance, "_component_bindings", {}))
-        )
-        # Interactive bindings must reconcile the browser with current server
-        # declarations/configuration, including newly added or removed items.
-        # A signed historical snapshot is not authority to keep stale controls.
-        if html is not None and not skip_html_for_resume:
+        # The mount frame always carries the freshly rendered HTML: restored
+        # declared state can combine fresh server state and a client snapshot,
+        # and HTML the client already holds is not proof that it matches.
+        if html is not None:
             mount_msg["html"] = html
             mount_msg["has_ids"] = "dj-id=" in html
             if getattr(view_instance, "_component_bindings", {}):
                 # This fresh HTML establishes the current diff baseline; an
                 # unchanged native observation must not force another render.
                 view_instance._force_full_html = False
-        elif skip_html_for_resume:
-            logger.info(
-                "Runtime: skipping mount HTML for resume of %s — client already has DOM",
-                sanitize_for_log(view_path),
-            )
 
         # ADR-019 LVN: for native renderers (NativeRenderer), ``html`` is empty and
         # the wire payload is patches. Ship them in the mount frame so the native
@@ -4464,32 +4228,12 @@ class ViewRuntime(RuntimeTurnPort):
             log_args=(event_name,),
         )
 
-        # Persist updated LiveView state to the Django session (#1466, ADR-022
-        # Iter 2 Phase 2.2). Verbatim gate from the WS save block
-        # (websocket.py:3700-3702): top-level view IDENTITY + ``enable_state_snapshot``
-        # opt-in. The single-view path here only runs for the top-level view
-        # (``component_id`` / ``view_id`` routing already returned earlier), so
-        # ``target_view`` IS ``self.view_instance``; the identity clause is kept
-        # in the condition so the runtime-side #1466 source-grep pin
-        # (test_runtime_state_save_tt_1894) asserts the SAME gate string the WS
-        # pin asserts — drift between the two save gates goes red. Default views
-        # (no opt-in) MUST NOT persist (#1552). Bounded by 150ms (#1475).
-        #
-        # An explicit view commits regardless of the flag, as mount ignores it
-        # (``opt_in and legacy_exposure`` in ``dispatch_mount``). The flag is
-        # the legacy snapshot opt-in; routing an explicit view to the legacy
-        # best-effort save acked a failed save and bypassed E3 (#3211).
+        # An explicit view commits its declared state before the frame goes out
+        # (E3); a legacy view persists nothing after an event.
         from ._exposure import uses_legacy_exposure
 
         target_view = self.view_instance
-        legacy_target = uses_legacy_exposure(target_view)
-        if (
-            target_view is self.view_instance
-            and legacy_target
-            and getattr(self.view_instance, "enable_state_snapshot", False)
-        ):
-            await self._persist_state_after_event(target_view, event_name)
-        elif target_view is self.view_instance and not legacy_target:
+        if not uses_legacy_exposure(target_view):
             # A failed explicit save withholds the success frame (E3); the
             # child tree is saved on the render/noop branches below.
             if not await self.commit_explicit_turn(target_view, source="event", children=False):
@@ -4811,8 +4555,6 @@ class ViewRuntime(RuntimeTurnPort):
             if not await self.commit_explicit_turn(view, source="event", children=False):
                 return
             snapshot_fields = await self._explicit_event_snapshot(view)
-        elif getattr(view, "enable_state_snapshot", False):
-            await self._persist_state_after_event(view, event_name)
 
         # _resolve_skip_render owns the skip decision (#2834/#2847) — the same
         # resolution as dispatch_event / server_push / db_notify / tick. This
@@ -4935,507 +4677,6 @@ class ViewRuntime(RuntimeTurnPort):
                 logger.exception("Runtime: time_travel on_event_recorded hook failed")
             else:
                 logger.error("Protected time-travel notification failed")
-
-    # ------------------------------------------------------------------ #
-    # Per-event state persistence (ADR-022 Iter 2 Phase 2.2)
-    #
-    # Ported VERBATIM from the WS ``_handle_event_inner`` save block
-    # (websocket.py:3666-3804) so WS events routed through the runtime in the
-    # Phase 2.3 final flip persist identically. The WS copy stays UNTOUCHED until
-    # 2.3 (the #1466/#1552 grep-pins in test_ws_reconnect_state_1465.py assert the
-    # exact strings there). Both gates are preserved:
-    #
-    #   * ``target_view is self.view_instance`` — only top-level view identity
-    #     saves to ``liveview_{path}`` (#1466; child LiveComponents never get
-    #     ``_djust_mount_request`` stashed, so they'd write the wrong key);
-    #   * ``enable_state_snapshot`` — default views MUST NOT persist (#1552; an
-    #     unconditional save leaves async session I/O in flight that a host
-    #     snapshot captures unrecoverably — the djustlive 0.9.7rc2 production
-    #     block).
-    #
-    # The save is bounded by 150ms (#1475) so even opt-in views can't extend
-    # close-time tail latency under backend backpressure. It runs through
-    # ``_run_explicit_save`` like the explicit saves: one Django-thread hop,
-    # the deadline counted from when it starts running (#3200, #3212), saves
-    # of one runtime ordered. Saves must never break event handling — timeout
-    # + exception are both caught and logged.
-    # ------------------------------------------------------------------ #
-
-    async def _persist_state_after_event(self, target_view: Any, event_name: Optional[str]) -> bool:
-        """Persist the top-level view's post-event state to the Django session.
-
-        The save itself is :meth:`_save_root_state`. State it could not store
-        (deferred past 150 ms, or failed) is not given up on: it is queued for
-        the trailing save (:meth:`_run_trailing_save`, #3248), so the session
-        ends up with the LATEST state, which is what Back restores.
-
-        Caller MUST have already verified top-level view identity and legacy
-        snapshot opt-in. Legacy views only: an explicit view is refused before
-        any write and commits through :meth:`commit_explicit_turn` instead
-        (#3211).
-
-        Best effort, bounded by 150ms (#1475). The whole save is one sync
-        call in one Django-thread hop, and the deadline starts when that call
-        starts running, so time spent queueing behind other sessions' work on
-        the sync thread is not counted (#3212, as #3200 did for explicit
-        saves). A save that outruns the deadline is logged and not waited
-        for; it keeps running and may still land, and the runtime's next save
-        waits for it, so it can never overwrite a newer one.
-
-        Returns False when the save failed, was deferred or was dropped (#3247),
-        and True otherwise, including when there is no session to save into.
-        (The legacy signed token this result used to gate was removed in 2.0.)"""
-        outcome = await self._save_root_state(
-            target_view, event_name, deadline=EVENT_STATE_SAVE_TIMEOUT_S
-        )
-        self._settle_legacy_save("root", target_view, event_name, outcome, sticky=False)
-        return outcome == _SAVED
-
-    async def _save_root_state(
-        self,
-        target_view: Any,
-        event_name: Optional[str],
-        *,
-        deadline: float,
-        guard: Optional[Tuple[Optional[str]]] = None,
-        trailing: bool = False,
-    ) -> str:
-        """One save of the root's state: ``_SAVED``, ``_DROPPED`` or ``_UNSAVED``.
-
-        ``guard`` is the trailing save's logout safeguard (#3248): the session
-        key the state was rendered under. A save whose session now has another
-        key (logged out, rotated by a login) writes nothing."""
-
-        def _save() -> None:
-            # Discover the session the same way the WS save block does
-            # (websocket.py:3710-3720): prefer the stashed mount request's
-            # session (carries the save-key namespace + path); fall back to the
-            # ASGI scope's session when no mount request was stashed.
-            mount_request = getattr(target_view, "_djust_mount_request", None)
-            from ._exposure import require_legacy_state_api
-
-            # Legacy only. An explicit view commits through
-            # ``commit_explicit_turn`` (E3); this best-effort save would ack a
-            # failed write (#3211). Refused before any read or write.
-            require_legacy_state_api(target_view)
-            from .config import view_state_in_session
-
-            # ``view_state_in_session=False``: nothing of the view goes in the
-            # session; this counts as saved, as a turn with no session does.
-            if not view_state_in_session():
-                return
-            scope_session = (
-                (self.scope.get("session") if self.scope else None)
-                if mount_request is None
-                else None
-            )
-            save_session = (
-                getattr(mount_request, "session", None)
-                if mount_request is not None
-                else scope_session
-            )
-            if save_session is None:
-                return
-            # Read before anything loads the session (#3247, see _late_save).
-            expected_key = getattr(save_session, "session_key", None)
-            if guard is not None and expected_key != guard[0]:
-                raise LateSaveDropped("the session key changed since the state was rendered")
-
-            from .serialization import normalize_django_value as _normalize
-
-            from ._tenant_state import session_view_key as _session_view_key
-
-            save_path = mount_request.path if mount_request is not None else "/"
-            save_view_key = _session_view_key(target_view, save_path)
-            if save_view_key is None:  # tenant view, no tenant resolved (#2973)
-                return
-            # The views beside this one saved into the same session (#3252).
-            if getattr(self.transport, "hosts_other_views", lambda: False)():
-                from ._tenant_state import refresh_other_views_state
-
-                refresh_other_views_state(save_session, save_view_key)
-
-            # Save order mirrors HTTP path (mixins/request.py:593-609): private
-            # attrs FIRST, then public via get_context_data().
-            if hasattr(target_view, "_get_private_state"):
-                _priv = target_view._get_private_state()
-                if _priv:
-                    save_session[f"{save_view_key}__private"] = _normalize(
-                        _priv, state_roundtrip=True
-                    )
-                else:
-                    save_session.pop(f"{save_view_key}__private", None)
-
-            _gcd_save = target_view.get_context_data
-            if inspect.iscoroutinefunction(_gcd_save):
-                save_context = async_to_sync(_gcd_save)()
-            else:
-                from .sync_turn import run_sync_step
-
-                save_context = run_sync_step(target_view, "render", _gcd_save)
-
-            from .mixins.context import legacy_unsaved_keys
-
-            render_only = legacy_unsaved_keys(target_view, save_context)
-            from .components.base import LiveComponent as _LC, is_component_collection
-
-            save_state = {
-                k: v
-                for k, v in save_context.items()
-                if not isinstance(v, _LC)
-                and not is_component_collection(v)
-                and k not in render_only
-            }
-            save_session[save_view_key] = _normalize(save_state, state_roundtrip=True)
-
-            if mount_request is not None and hasattr(target_view, "_save_components_to_session"):
-                target_view._save_components_to_session(mount_request, save_context)
-
-            from ._session_merge import save_merged
-
-            save_merged(save_session, expected_key)
-
-        try:
-            await _run_explicit_save(self, _detached_when(trailing, _save), deadline=deadline)
-        except (asyncio.TimeoutError, ExplicitSaveDeferred) as exc:
-            if trailing:
-                logger.warning("Trailing LiveView state save exceeded its deadline")
-            else:
-                logger.warning(
-                    "Runtime event state save exceeded 150ms for %r — session backend "
-                    "backpressure; not waiting for it (it may still land). "
-                    "The latest state is saved once it settles.",
-                    sanitize_for_log(event_name or ""),
-                )
-            return self._deferred_outcome(exc, "root", target_view, event_name, sticky=False)
-        except LateSaveDropped:
-            return _DROPPED  # its session was logged out; reported at debug (#3247)
-        except Exception as exc:  # noqa: BLE001 — saves must never break event handling
-            from ._exposure_diagnostics import log_failure
-
-            # A storage exception can carry session values.
-            log_failure(
-                logger,
-                exc,
-                "Failed to save LiveView state after runtime event %r",
-                sanitize_for_log(event_name or ""),
-                traceback=True,
-            )
-            return _UNSAVED
-        return _SAVED
-
-    async def _persist_sticky_child_after_event(
-        self, target_view: Any, event_name: Optional[str]
-    ) -> None:
-        """Persist a sticky CHILD view's post-event state (ADR-018 Branch B).
-
-        Ported from the WS sticky-child save (websocket.py:3806-3888). Kept as a
-        SEPARATE method from :meth:`_persist_state_after_event` — exactly as WS
-        keeps it a separate ``if`` — so the child saves under its stable sticky
-        key (Decision 1) gated on the both-opt-in predicate
-        (:func:`sticky_child_should_persist`, Decision 5). Bounded by the same
-        150ms, counted the same way: one Django-thread hop whose deadline starts
-        when it starts running (#3212). Caller MUST have verified the gate.
-
-        Like the root's save, state it could not store is queued for the
-        trailing save (#3248)."""
-        outcome = await self._save_sticky_state(
-            target_view, event_name, deadline=EVENT_STATE_SAVE_TIMEOUT_S
-        )
-        self._settle_legacy_save(id(target_view), target_view, event_name, outcome, sticky=True)
-
-    async def _save_sticky_state(
-        self,
-        target_view: Any,
-        event_name: Optional[str],
-        *,
-        deadline: float,
-        guard: Optional[Tuple[Optional[str]]] = None,
-        trailing: bool = False,
-    ) -> str:
-        """One save of a sticky child's state: ``_SAVED``, ``_DROPPED`` or ``_UNSAVED``."""
-
-        def _save_sticky() -> None:
-            from .mixins.sticky import (
-                save_sticky_child_state_sync,
-                write_sticky_index_and_prune_sync,
-            )
-
-            parent = self.view_instance
-            mount_request = getattr(parent, "_djust_mount_request", None)
-            # Precedence mirrors WS (websocket.py:3845-3847): the mount request's
-            # session is authoritative; the scope session is the fallback.
-            save_session = getattr(mount_request, "session", None) or (
-                self.scope.get("session") if self.scope else None
-            )
-            if save_session is None:
-                return
-            # Read before anything loads the session (#3247, see _late_save).
-            expected_key = getattr(save_session, "session_key", None)
-            if guard is not None and expected_key != guard[0]:
-                raise LateSaveDropped("the session key changed since the state was rendered")
-
-            from ._tenant_state import (
-                refresh_other_views_state,
-                scoped_path,
-                session_view_key,
-            )
-
-            page_path = mount_request.path if mount_request is not None else "/"
-            parent_path = scoped_path(parent, page_path)
-            if parent_path is None:  # tenant parent, no tenant resolved (#2973)
-                return
-            # The views beside this one saved into the same session (#3252).
-            if getattr(self.transport, "hosts_other_views", lambda: False)():
-                refresh_other_views_state(save_session, session_view_key(parent, page_path) or "")
-
-            save_sticky_child_state_sync(target_view, save_session, parent_path)
-            write_sticky_index_and_prune_sync(parent, save_session, parent_path)
-            from ._session_merge import save_merged
-
-            save_merged(save_session, expected_key)
-
-        try:
-            await _run_explicit_save(
-                self, _detached_when(trailing, _save_sticky), deadline=deadline
-            )
-        except (asyncio.TimeoutError, ExplicitSaveDeferred) as exc:
-            if trailing:
-                logger.warning("Trailing sticky-child state save exceeded its deadline")
-            else:
-                logger.warning(
-                    "Runtime event sticky-child state save exceeded 150ms for %r — "
-                    "session backend backpressure; not waiting for it (it may still "
-                    "land). The latest state is saved once it settles.",
-                    sanitize_for_log(event_name or ""),
-                )
-            return self._deferred_outcome(
-                exc, id(target_view), target_view, event_name, sticky=True
-            )
-        except LateSaveDropped:
-            return _DROPPED  # its session was logged out; reported at debug (#3247)
-        except Exception as exc:  # noqa: BLE001 — saves must never break event handling
-            from ._exposure_diagnostics import log_failure
-
-            # A storage exception can carry session values.
-            log_failure(
-                logger,
-                exc,
-                "Failed to save sticky-child state after runtime event %r",
-                sanitize_for_log(event_name or ""),
-                traceback=True,
-            )
-            return _UNSAVED
-        return _SAVED
-
-    # ------------------------------------------------------------------ #
-    # Trailing save (#3248): Back restores the LATEST rendered state.
-    #
-    # A legacy save is best effort and bounded by 150 ms, and the runtime has
-    # at most one save in flight (ordering, #3212). Under slow storage the
-    # first save of a burst runs on, every later one is deferred (nothing is
-    # written), and the session keeps the state the running save read when it
-    # started. Back restores the SESSION copy in preference to the client's
-    # token, so the page came back older than the one the user left.
-    #
-    # So a save that did not store its state records it (``_unsaved_state``,
-    # latest wins per target) and one coalesced task writes it once the
-    # pending save settles. It is strictly AFTER every earlier save (the
-    # runtime's save ordering, with the 10 s cap as its deadline), and what it
-    # writes is the view's state when it runs, so it can never put an older
-    # state over a newer one. Teardown (:meth:`finish_state_saves`) waits for
-    # it, so a navigation or disconnect leaves the latest state stored.
-    #
-    # Logout safeguards: the trailing save carries the session key the state
-    # was rendered under and writes nothing if the session's key is now
-    # another (a login rotated it, a logout flushed it); a session another
-    # request logged out is dropped by ``_late_save.check_session`` as every
-    # pool save is. The restored state is historical view state, not
-    # authority: handlers still check the current request.
-    # ------------------------------------------------------------------ #
-
-    def _deferred_outcome(
-        self, exc: BaseException, slot: Any, view: Any, event_name: Optional[str], *, sticky: bool
-    ) -> str:
-        """Classify a save that missed its deadline.
-
-        One that never started (the previous save was still running) wrote
-        nothing: ``_UNSAVED``. One that started keeps running and stores the
-        state it reads, which is at least what this event rendered: it is
-        ``_RUNNING``, and watched, so a failure of it is queued like any other.
-        """
-        work = getattr(exc, "work", None)
-        if work is None:
-            return _UNSAVED
-
-        def settled(done: "asyncio.Future[None]") -> None:
-            if done.cancelled():
-                return
-            failure = done.exception()
-            if failure is None or isinstance(failure, LateSaveDropped):
-                return
-            self._settle_legacy_save(slot, view, event_name, _UNSAVED, sticky=sticky)
-
-        work.add_done_callback(settled)
-        return _RUNNING
-
-    def _legacy_save_guard(self, view: Any, *, sticky: bool) -> Optional[Tuple[Optional[str]]]:
-        """The session key a trailing save of ``view``'s state may write into.
-
-        ``(key,)`` for a persisted session. A session with no key that HAD one
-        at mount was flushed by a handler's ``logout()``: ``(_SESSION_FLUSHED,)``,
-        which no save matches, so the trailing save is dropped instead of
-        creating a new cookie-less session. A session that never had a key
-        (anonymous, not yet persisted) has no guard: an earlier queued save may
-        create its key, and the state must still be written.
-        """
-        mount_request = getattr(view, "_djust_mount_request", None)
-        if sticky:
-            mount_request = getattr(self.view_instance, "_djust_mount_request", None)
-        session = getattr(mount_request, "session", None) or (
-            self.scope.get("session") if self.scope else None
-        )
-        key = getattr(session, "session_key", None)
-        if key is not None:
-            return (key,)
-        if getattr(self.view_instance, "_django_session_key", None):
-            return (_SESSION_FLUSHED,)
-        return None
-
-    def _settle_legacy_save(
-        self, slot: Any, view: Any, event_name: Optional[str], outcome: str, *, sticky: bool
-    ) -> None:
-        """Record or clear ``slot``'s unsaved state after one save."""
-        if outcome != _UNSAVED:
-            # Stored (and it read the view's current state), dropped with its
-            # session, or still running and about to store it: nothing is left
-            # to write. A running save that then FAILS comes back here.
-            self._unsaved_state.pop(slot, None)
-            return
-        if getattr(view, _SAVES_RELEASED_ATTR, False):
-            return  # torn down: no save may run after it
-        self._unsaved_state[slot] = (
-            weakref.ref(view),
-            event_name,
-            self._legacy_save_guard(view, sticky=sticky),
-            sticky,
-        )
-        self._ensure_trailing_save()
-
-    def _ensure_trailing_save(self) -> None:
-        task = self._trailing_save
-        if task is None or task.done():
-            self._trailing_save = asyncio.ensure_future(self._run_trailing_save())
-
-    async def _run_trailing_save(self) -> None:
-        """Write the unsaved legacy state once the pending save has settled."""
-        from ._exposure_sessions import MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
-
-        _detach_from_finished_request()
-        failures = 0
-        while self._unsaved_state:
-            pending = self._explicit_save_pending
-            if pending is not None and not pending.done():
-                # Without raising: a failed pending save logs through its callback.
-                await asyncio.wait({pending}, timeout=MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S)
-            failed = False
-            for slot in list(self._unsaved_state):
-                entry = self._unsaved_state.pop(slot, None)
-                if entry is None:
-                    continue
-                view_ref, event_name, guard, sticky = entry
-                view = view_ref()
-                if view is None:
-                    continue  # the view is gone (a removed sticky child)
-                if not sticky and view is not self.view_instance:
-                    logger.debug("Trailing state save skipped: its view was replaced")
-                    continue
-                save = self._save_sticky_state if sticky else self._save_root_state
-                outcome = await save(
-                    view,
-                    event_name,
-                    deadline=MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S,
-                    guard=guard,
-                    trailing=True,
-                )
-                if outcome == _UNSAVED:
-                    # Keep it, unless a newer event recorded a fresher entry.
-                    self._unsaved_state.setdefault(slot, entry)
-                    failed = True
-            if not failed:
-                failures = 0
-                continue
-            failures += 1
-            if failures >= _TRAILING_SAVE_ATTEMPTS:
-                logger.warning(
-                    "The latest LiveView state could not be saved after %d attempts; it is "
-                    "kept and written by the next event's save or at teardown",
-                    failures,
-                )
-                return
-            await asyncio.sleep(_TRAILING_RETRY_DELAY_S)
-
-    async def finish_state_saves(self) -> None:
-        """Teardown: store the latest state before the view goes (#3248).
-
-        Called before a view is released (disconnect, ``live_redirect``, a
-        replacing mount, SSE close), so a Back or reconnect finds the state the
-        user left. Waits at most ``_TRAILING_FLUSH_TIMEOUT_S``, and only when
-        some state is unsaved: a save that is merely still running is not
-        waited for (the next runtime's saves are ordered after it, and storage
-        that hangs must not hold a navigation, #3212). One last attempt is
-        made even when the trailing task already gave up. Whatever is still
-        unsaved then is dropped with a warning: no save may run after the
-        view's teardown.
-        """
-        stuck = (
-            bool(self._unsaved_state)
-            and _save_running_for(self._explicit_save_pending) >= _TRAILING_STUCK_AFTER_S
-        )
-        task = self._trailing_save
-        if not stuck and self._unsaved_state and (task is None or task.done()):
-            self._ensure_trailing_save()
-            task = self._trailing_save
-        if task is not None and not task.done():
-            # Poll, not one long wait: a save that started moments ago has not
-            # shown yet whether it is hung. The hold is bounded to about
-            # ``_TRAILING_STUCK_AFTER_S`` from when the hang began.
-            loop = asyncio.get_running_loop()
-            give_up = loop.time() + _TRAILING_FLUSH_TIMEOUT_S
-            while (
-                not stuck
-                and not task.done()
-                and loop.time() < give_up
-                and _save_running_for(self._explicit_save_pending) < _TRAILING_STUCK_AFTER_S
-            ):
-                await asyncio.wait({task}, timeout=_TRAILING_POLL_S)
-            if not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-        if self._unsaved_state:
-            logger.warning(
-                "The latest LiveView state was not saved before teardown; Back "
-                "restores the last state storage holds"
-            )
-        # Only the root is released here. A sticky child a ``live_redirect``
-        # keeps (the flush runs before that decision) must keep saving; one
-        # that is removed is torn down by ``release_root_view``.
-        self._release_saves(self.view_instance)
-        self._unsaved_state.clear()
-        self._trailing_save = None
-
-    @staticmethod
-    def _release_saves(view: Any) -> None:
-        """Flag ``view`` so no later save of its state is recorded or run.
-
-        A flag in the instance dict, not a set: a view that defines ``__eq__``
-        is unhashable."""
-        if view is None:
-            return
-        try:
-            view.__dict__[_SAVES_RELEASED_ATTR] = True
-        except (AttributeError, TypeError):
-            logger.debug("A released view could not be flagged")
 
     # ------------------------------------------------------------------ #
     # Embedded-child routing (ADR-022 Iter 2 Phase 2.1)
@@ -5609,17 +4850,8 @@ class ViewRuntime(RuntimeTurnPort):
             log_args=(event_name,),
         )
 
-        # Sticky-child state save (ADR-018 Branch B, ADR-022 Iter 2 Phase 2.2).
-        # Verbatim from the WS sticky save (websocket.py:3806-3888): persist the
-        # CHILD under its stable sticky key gated on the both-opt-in predicate
-        # (Decision 5). The else-branch fires the one-shot opt-in-mismatch warning
-        # so the silent persistence gap (child opted in, parent did not) is
-        # observable. ``target_view`` is the child here (it is never the top-level
-        # view — that case fell through to the single-view path), so the
-        # WS ``target_view is not self.view_instance`` guard is structurally
-        # satisfied; the predicate carries the opt-in gate.
-        from .mixins.sticky import sticky_child_should_persist, warn_sticky_child_optin_skip
-
+        # An explicit child's declared state is saved with the page (below);
+        # a legacy child keeps nothing across a reconnect.
         if explicit_child:
             try:
                 from .auth.core import enforce_object_permission
@@ -5633,10 +4865,6 @@ class ViewRuntime(RuntimeTurnPort):
                     "Child state unavailable. Please reload the page.", code="state_error"
                 )
                 return True
-        elif sticky_child_should_persist(target_view, self.view_instance):
-            await self._persist_sticky_child_after_event(target_view, event_name)
-        else:
-            warn_sticky_child_optin_skip(target_view, self.view_instance)
 
         # Render just the child's subtree (single-sourced render core) and emit
         # the scoped full-HTML ``embedded_update`` frame. Mirrors the WS
@@ -5846,17 +5074,10 @@ class ViewRuntime(RuntimeTurnPort):
             log_args=(event_name, component_id),
         )
 
-        # Component events return before the ordinary view event save below,
-        # so persist here. An explicit view commits (E3) on EVERY component
+        # Component events return before the ordinary view event commit below,
+        # so commit here. An explicit view commits (E3) on EVERY component
         # event: a declaration's output handler, or a component's
-        # ``send_parent``, can write the view's declared fields, and the
-        # snapshot flag means nothing to it (#3211). A legacy view that opts
-        # in (``enable_state_snapshot``) saves on EVERY component event too,
-        # as the view route does on every event. The save used to run only for
-        # a ``ComponentDeclaration``; a ``send_parent`` from any other
-        # component can change the view's state just the same, and a save
-        # left one event behind restored the state from before the component
-        # event (#3237).
+        # ``send_parent``, can write the view's declared fields (#3211).
         #
         # After the commit, every component frame carries the refreshed signed
         # client snapshot, as the view route's frames do: the commit moved the
@@ -5871,8 +5092,6 @@ class ViewRuntime(RuntimeTurnPort):
                 if not await self.commit_explicit_turn(view, source="event"):
                     return True
                 snapshot_fields = await self._explicit_event_snapshot(view)
-            elif getattr(view, "enable_state_snapshot", False):
-                await self._persist_state_after_event(view, event_name)
 
         from ._async_batch import AsyncBatch
 

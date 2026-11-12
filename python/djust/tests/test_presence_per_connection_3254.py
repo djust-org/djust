@@ -443,7 +443,7 @@ def test_the_mixin_on_an_old_contract_backend_behaves_as_it_always_did(installed
     seen = []
 
     class Room(PresenceMixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         presence_key = ROOM
 
         def get_presence_user_id(self):
@@ -603,7 +603,7 @@ def test_the_builtins_and_a_plain_old_contract_backend_are_classified(installed)
 
 
 class Room(PresenceMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     presence_key = "mixin3254"
     JOINED: list = []
     LEFT: list = []
@@ -669,26 +669,6 @@ def test_untrack_removes_only_this_views_connection(mixin_backend):
     a.untrack_presence()
     assert len(set(mixin_backend._groups[Room.presence_key]) & members) == 1
     assert b._presence_connection_id in next(iter(mixin_backend._groups[Room.presence_key]))
-
-
-def test_a_restored_view_joins_under_a_fresh_connection(mixin_backend):
-    """The connection id in saved state belongs to the connection it was saved
-    from; another tab of the user may still hold it."""
-    live = _tab(ws="ws-live")
-    live.track_presence()
-
-    restored = _tab(ws="ws-restored")
-    restored._presence_tracked = True
-    restored._presence_user_id = "alice"
-    restored._presence_meta = {}
-    restored._presence_connection_id = live._presence_connection_id  # from saved state
-    restored._restore_presence()
-
-    assert restored._presence_connection_id != live._presence_connection_id
-    assert len(mixin_backend._groups[Room.presence_key]) == 2
-    restored.untrack_presence()
-    assert [p["id"] for p in live.list_presences()] == ["alice"]  # live tab untouched
-    assert Room.LEFT == []
 
 
 def test_a_view_with_no_connection_does_not_remove_anyone(mixin_backend):
@@ -772,7 +752,7 @@ class SpyBackend(InMemoryPresenceBackend):
 
 
 class WsRoom(PresenceMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     presence_key = WS_ROOM
     template = '<div dj-root dj-view="' + MOD + '.WsRoom"><b>{{ online_count }}</b></div>'
 
@@ -798,12 +778,12 @@ class OtherRoom(WsRoom):
 
 
 class Plain(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.Plain">plain</div>'
 
 
 class Broken(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.Broken">x</div>'
 
     def mount(self, request, **kwargs):

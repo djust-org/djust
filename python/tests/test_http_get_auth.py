@@ -10,6 +10,7 @@ Covers:
 
 import django
 from django.conf import settings
+from djust import state
 
 if not settings.configured:
     settings.configure(
@@ -53,19 +54,20 @@ from djust.live_view import LiveView
 
 
 class PublicView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = "<div dj-root>public</div>"
 
 
 class ProtectedView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = True
     template = "<div dj-root>protected</div>"
 
 
 class ParamsView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    active_tab = state("default")
     login_required = False
     template = "<div dj-root>{{ active_tab }}</div>"
 

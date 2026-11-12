@@ -12,7 +12,7 @@ from djust.components.interactive import DropdownMenu
 
 
 class SubscriptionView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ project_menu }}</div>"
     login_required = False
     project_menu = DropdownMenu(label="Project", items=[{"label": "Edit", "value": "edit"}])

@@ -41,6 +41,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V006 | LiveView | Warning | Service instance assigned in mount() of a legacy-exposure view — high-confidence subset of V008 |
 | V007 | LiveView | Retired | Retired in 1.3 (ADR-037): recommended `**kwargs` on every handler. Never emitted; the ID is not reused |
 | V008 | LiveView | Info | Non-primitive type assigned in mount() of a legacy-exposure view — broader, lower-confidence (skips V006 patterns) |
+| V011 | LiveView | Retired | Retired in 2.0 with `enable_state_snapshot`: a sticky child opted in to state snapshots and its parent did not. Never emitted; the ID is not reused |
 | V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
 | V013 | LiveView | Warning | HTTP-only setup()/dispatch()/get()/post() override or URLconf wrapper never runs on a WebSocket mount |
 | V014 | LiveView | Warning | Time-travel-enabled view has PII-looking model/form fields not in `time_travel_excluded_fields` |
@@ -88,7 +89,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T023 | Templates | Info | T019-T022 were skipped: no usable template engine (none configured, or it could not be built) |
 | T024 | Templates | Warning | A template an owner renders reads `is_staff`, `is_superuser` or `password` through a `user` variable; djust never serializes them |
 | T025 | Templates | Warning | `dj-view` / `dj-root` on `<html>` or `<head>`: unsupported and ignored, no live view is mounted and the page stays a plain HTTP page (`<body>` is a supported root) |
-| T027 | Templates | Warning | An explicit-exposure view's template reads a name the view holds as an attribute but does not supply from `get_context_data()` (renders blank, no error) |
+| T027 | Templates | Warning | An explicit-exposure view's template reads a name the view holds as an attribute but does not supply (renders blank, no error), or an `X_count` that 1.x generated from a supplied `X` |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -382,6 +383,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Scope**: the same as V006: explicit-exposure views are skipped, because they never serialise a plain attribute (#4032)
 - **Suppression**: `# noqa: V008` inline on the assignment
 - **False positives**: Functions with primitive return-type annotations (e.g. `-> str`, `-> int`) are excluded since PR #398. Other functions returning serialisable types (e.g. dataclasses) may still trigger V008 — suppress with `# noqa: V008`
+
+### V011 — Retired
+- **Retired in**: 2.0 (`enable_state_snapshot` was removed)
+- **What it did**: warned when a view embedded as a sticky child set `enable_state_snapshot = True` and the parent that embedded it did not, so the child's state was not restored on a reconnect
+- **Why it was retired**: `enable_state_snapshot` no longer exists. A view that still sets it is refused with `ImproperlyConfigured`, when the class is created and again on the mount path. An explicit sticky child keeps its declared `state(..., persist="server")` fields with no opt-in on the parent
+- **Migration**: remove `"V011"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
 ### V012 — Sticky child declares its own `dj-view`
 - **Severity**: Warning
@@ -945,18 +952,27 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   extraction as T018 and `djust_typecheck`
 - **What it detects**: A view under explicit exposure (the default since 2.0)
   whose template reads a name that the view sets as a public attribute
-  (`self.count = 0`), declares with `state()`, or defines as a class value or
-  property, and that the view's `get_context_data()` does not return. Under
-  explicit exposure a template gets what `get_context_data()` and the
-  framework's providers supply, so the name renders as empty string with no
-  error. This is what a view written for djust 1.x looks like after the
-  default changed. T018 does not report it, because T018 counts an attribute
-  as defined.
-- **Fix**: Return the name from `get_context_data()`
-  (`return {**super().get_context_data(**kwargs), "count": self.count}`), and
-  declare it with `state()` if it must be persisted or sent to the browser. To
-  keep the 1.x behaviour while migrating, set `exposure_policy = "legacy"` on
-  the view. See [Migrating to djust 2.0](website/guides/migrating-to-2.0.md).
+  (`self.count = 0`) or defines as a class value or property, and that
+  nothing supplies. Under explicit exposure a template gets the declared
+  `state()` fields, what `get_context_data()` returns and what the framework's
+  providers supply, so the name renders as empty string with no error. This is
+  what a view written for djust 1.x looks like after the default changed. A
+  declared field counts as supplied, unless it is `state(render=False)` or the
+  view's `get_context_data()` does not build on `super().get_context_data()`.
+  T018 does not report it, because T018 counts an attribute as defined.
+- **Also detects** (#4054): a template name `X_count` that nothing supplies,
+  when `X` is supplied (returned from `get_context_data()` or a declared
+  field). djust 1.x generated `items_count` from a QuerySet or list `items`;
+  explicit exposure does not. The message points at `{{ X|length }}`. The
+  check cannot see the value's type, so a supplied string `X` with an
+  `X_count` is named too; silence it with the noqa comment below.
+- **Fix**: Declare the name with `state()` (it then renders; persisting it or
+  sending it to the browser takes `persist=` or `client=True`), or return it
+  from `get_context_data()`
+  (`return {**super().get_context_data(**kwargs), "total": self.total}`). For
+  `X_count`, write `{{ X|length }}`. To keep the 1.x behaviour while
+  migrating, set `exposure_policy = "legacy"` on the view. See
+  [Migrating to djust 2.0](website/guides/migrating-to-2.0.md).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T027"]}`, or one name
   with a `{# djust_typecheck: noqa name #}` template comment
 - **Not checked**: a view that states `exposure_policy = "legacy"`; a view
@@ -965,7 +981,8 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   template that uses `{% extends %}`; a name the template reads only through
   an `{% include %}`. With `DEBUG = True` the same condition is logged at
   render time for every view, once per view and name, on the `djust.exposure`
-  logger.
+  logger; at render time the `X_count` notice is given only when `X` is a
+  QuerySet, list, tuple or set (the values 1.x counted).
 
 ### T019–T022 — Template event bindings (ADR-037)
 - **Severity**: Warning (all four, in 1.3)

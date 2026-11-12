@@ -107,6 +107,7 @@ def test_no_split_pane_stub_handler_remains():
     from djust.components import rust_handlers
 
     assert not hasattr(rust_handlers, "SplitPaneHandler")
-    assert all(tag != "split_pane" for tag, _end, _handler in rust_handlers.BLOCK_HANDLERS), (
-        "split_pane is back in BLOCK_HANDLERS — it would hit the two-segment parse error"
+    assert all(tag != "split_pane" for tag, _end, _handler in rust_handlers.NATIVE_BLOCK_HANDLERS)
+    assert "split_pane" in rust_handlers.RAW_BODY_TAGS, (
+        "split_pane must take the raw-body route — the block route hits the two-segment parse error"
     )

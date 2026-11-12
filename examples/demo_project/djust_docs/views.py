@@ -3,6 +3,7 @@
 from djust import LiveView
 from djust.components.layout import NavbarComponent, NavItem
 from djust_shared.views import BaseTemplateView
+from djust import state
 
 
 class DocsView(BaseTemplateView):
@@ -21,7 +22,8 @@ class ComponentsGuideView(LiveView):
     - The badge updates when the counter changes!
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    demo_count = state(0)
     template_name = 'docs/components-guide.html'
 
     def mount(self, request, **kwargs):

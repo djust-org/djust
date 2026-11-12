@@ -56,11 +56,6 @@ def _lightbox_paths() -> dict[str, str]:
     return {
         "class": ImageLightbox(images=IMAGES, active=1, open=True).render(),
         "tag": _tag("{% lightbox images=images active=1 open=True %}", images=IMAGES),
-        "handler": str(
-            rh.LightboxHandler().render(
-                ["images=images", "active=1", "open=True"], {"images": IMAGES}
-            )
-        ),
     }
 
 
@@ -68,9 +63,6 @@ def _tree_paths() -> dict[str, str]:
     return {
         "class": FileTree(nodes=NODES, selected="main.py").render(),
         "tag": _tag("{% file_tree nodes=nodes selected='main.py' %}", nodes=NODES),
-        "handler": str(
-            rh.FileTreeHandler().render(["nodes=nodes", "selected='main.py'"], {"nodes": NODES})
-        ),
     }
 
 
@@ -83,11 +75,6 @@ def _panel_paths() -> dict[str, str]:
             '{% resizable_panel min_size="100px" max_size="600px" initial_size="300px" %}'
             "<p>x</p>{% endresizable_panel %}"
         ),
-        "handler": str(
-            rh.ResizablePanelHandler().render(
-                ["min_size='100px'", "max_size='600px'", "initial_size='300px'"], "<p>x</p>", {}
-            )
-        ),
     }
 
 
@@ -95,9 +82,6 @@ def _number_paths() -> dict[str, str]:
     return {
         "class": AnimatedNumber(value=1234.5, decimals=1, prefix="$").render(),
         "tag": _tag("{% animated_number value=1234.5 decimals=1 prefix='$' %}"),
-        "handler": str(
-            rh.AnimatedNumberHandler().render(["value=1234.5", "decimals=1", "prefix='$'"], {})
-        ),
     }
 
 

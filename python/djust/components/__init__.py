@@ -17,8 +17,10 @@ descriptors, mixins, rust handlers, gallery).
     from djust.components import AlertComponent, CardComponent, Badge
 
     class MyView(LiveView):
-        def mount(self, request):
-            self.alert = AlertComponent(message="Welcome!", type="success")
+        # A LiveComponent is declared in the class body; each view gets its
+        # own copy. A plain component (Badge) is a state() field:
+        # badge = state(default_factory=lambda: Badge("new")).
+        alert = AlertComponent(message="Welcome!", type="success")
 
 **Descriptors (class-attribute style):**
 

@@ -19,12 +19,14 @@ from django import forms
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.validation import validate_handler_params, validated_call_arguments
+from djust import state
 
 RAN: list = []
 
 
 class EnvelopeView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(0)
     template = "<div dj-root><span>{{ n }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -61,7 +63,7 @@ class TestHttpEnvelope:
 
 class TestDjChangeValue:
     class View(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler(parameter_policy="legacy")
         def toggle_untyped(self, value=False, **kw):
@@ -157,7 +159,7 @@ class TestRenderKeepsTheList:
         from djust.forms import FormMixin
 
         class View(FormMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             form_class = TagsForm
 
         view = View()

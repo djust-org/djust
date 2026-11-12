@@ -197,13 +197,9 @@ def dispatch_legacy_child_work(
                     elif error is not None:
                         raise error
                     check_owner()
-                    from .mixins.sticky import sticky_child_should_persist
                     from .websocket import render_embedded_child_html
 
                     html = await sync_to_async(render_embedded_child_html)(child)
-                    check_owner()
-                    if sticky_child_should_persist(child, root):
-                        await runtime._persist_sticky_child_after_event(child, event_name)
                     check_owner()
                     await runtime._send_render_frame(
                         {

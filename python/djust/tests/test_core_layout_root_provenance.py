@@ -175,7 +175,7 @@ def _registered_chain(name):
     from djust.components import rust_handlers
     from djust.components.templatetags.djust_components import register as library
 
-    inner = dict((tag, handler) for tag, _end, handler in rust_handlers.BLOCK_HANDLERS)[name]
+    inner = dict((tag, h) for tag, _end, h in rust_handlers.NATIVE_BLOCK_HANDLERS)[name]
     wrapped = with_argument_contract(name, rust_handlers._with_typed_block_operands(inner), library)
     chain = [type(wrapped).__name__]
     while "_handler" in vars(wrapped):

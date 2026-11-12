@@ -341,14 +341,14 @@ class PresenceMixin:
         super().__init__(**kwargs)
         # The presence key whose sessions a scoped broadcast reaches, and whose
         # presence-scope group this session's WebSocket joins (#3095). Set by
-        # track_presence / _restore_presence; for a session that never tracks,
+        # track_presence; for a session that never tracks,
         # the WebSocket transport fills it in once after mount.
         self._presence_scope_key: Optional[str] = None
         self._presence_tracked = False
         self._presence_user_id: Optional[str] = None
         self._presence_meta: Optional[Dict[str, Any]] = None
         # Which of the user's connections this view is (#3254). One per
-        # tracking view, minted by ``track_presence`` / ``_restore_presence``.
+        # tracking view, minted by ``track_presence``.
         self._presence_connection_id: Optional[str] = None
         self._presence_pending_join: Optional[Callable[[], None]] = None
 
@@ -663,53 +663,8 @@ class PresenceMixin:
 
                 clock_ensure.add_done_callback(after_ensure)
 
-    def _restore_presence(self) -> None:
-        """Re-register this view's presence with the process-wide manager.
-
-        Called by the WebSocket consumer's state-restoration path (issue
-        #893). When ``mount()`` is skipped because pre-rendered session
-        state exists, the restored ``_presence_tracked`` / ``_presence_user_id``
-        / ``_presence_meta`` attrs survive the JSON round-trip, but the
-        side-effect registration with :class:`PresenceManager` does not
-        — it lives in a per-process singleton. This method replays the
-        registration so other users see the restored user and so
-        ``handle_presence_join`` for this user's own join fires.
-
-        No-op if the view was never tracked, if required attrs are
-        missing, or if the backend raises (logged but swallowed —
-        restoration must not break the WS).
-        """
-        if not getattr(self, "_presence_tracked", False):
-            return
-        user_id = getattr(self, "_presence_user_id", None)
-        if not user_id:
-            return
-        meta = getattr(self, "_presence_meta", None) or {}
-        try:
-            presence_key = self.get_presence_key()
-            # A fresh connection, never the id the saved state carries: that one
-            # belongs to the connection the state was saved from, which another
-            # live tab of this user may still hold (#3254).
-            connection_id = self._new_presence_connection_id()
-            PresenceManager.join_connection(presence_key, user_id, connection_id, meta)
-            self._presence_connection_id = connection_id
-            self._presence_scope_key = presence_key
-            self._ensure_room_clock(presence_key)
-            # #1611 / #1614 — also refresh local count and broadcast so the
-            # reconnected session has online_count set for its first
-            # post-restore patch, and peer sessions learn the user came back.
-            self._refresh_online_count()
-            self._broadcast_presence_change()
-        except Exception as exc:  # noqa: BLE001 — restoration must never kill the WS
-            logger.warning(
-                "PresenceMixin._restore_presence: failed to re-register presence "
-                "for user_id=%s (issue #893): %s",
-                user_id,
-                exc,
-            )
-
     def _ensure_room_clock(self, presence_key: str) -> asyncio.Task[bool] | None:
-        """Bind every tracked/restored connection, including silent second tabs.
+        """Bind every tracked connection, including silent second tabs.
 
         Use the actual recorded presence key for liveness. Namespace the clock
         key separately and let its tenant helper add the canonical prefix.

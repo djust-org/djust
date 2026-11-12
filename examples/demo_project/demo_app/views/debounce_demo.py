@@ -4,6 +4,7 @@ Debounce Demo - demonstrates @debounce decorator with search
 
 from djust import LiveView
 from djust.decorators import debounce
+from djust import state
 
 
 class DebounceSearchView(LiveView):
@@ -16,7 +17,9 @@ class DebounceSearchView(LiveView):
     - Demonstrates max_wait forcing execution after 2 seconds
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    query = state("")
+    search_count = state(0)
     template = """
     <div dj-root class="container mt-5">
         <div class="row">

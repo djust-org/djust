@@ -39,6 +39,7 @@ from djust import serialization
 from djust.forms import FormMixin
 from djust.live_view import LiveView
 from djust.testing import LiveViewTestClient
+from djust import state
 
 pytestmark = [pytest.mark.django_db, pytest.mark.pr_tier]
 
@@ -243,7 +244,8 @@ class TestClassicPost:
 
 
 class EditView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    saved = state()
     template = (
         '<div dj-root><form dj-submit="submit_form">{{ form }}<button>go</button></form></div>'
     )

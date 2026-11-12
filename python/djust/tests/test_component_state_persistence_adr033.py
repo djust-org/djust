@@ -14,8 +14,6 @@ from decimal import Decimal
 from typing import Any
 
 import django
-import pytest
-from asgiref.sync import sync_to_async
 from django.conf import settings
 
 if not settings.configured:
@@ -57,7 +55,6 @@ _ALLOWED = "djust.tests.test_component_state_persistence_adr033"
 class RatingView(LiveView):
     exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">{{ rating }}</div>'
-    enable_state_snapshot = True
 
     def mount(self, request: Any, **kwargs: Any) -> None:
         self.rating = Rating(value=4, max_stars=5)
@@ -244,53 +241,3 @@ async def _mount(communicator, view_path, url):
         if frame.get("type") == "mount":
             return frame
     raise AssertionError("no mount frame")
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_reconnect_restores_the_written_value(generous_save_timeout):
-    """ADR-033 verification: reconnect after ``self.rating.value = 5`` and the
-    restored view renders five stars. Two sockets over one session; the
-    second mount is a session restore, so ``mount()`` does not run and the
-    component must come back from the saved state."""
-    pytest.importorskip("channels")
-    from channels.testing import WebsocketCommunicator
-    from django.contrib.sessions.backends.db import SessionStore
-    from django.test import override_settings
-
-    from djust.websocket import LiveViewConsumer
-
-    def _create_session():
-        s = SessionStore()
-        s.create()
-        return s.session_key
-
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED]):
-        session_key = await sync_to_async(_create_session)()
-
-        first = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-        first.scope["session"] = _ScopeSession(session_key)
-        assert (await first.connect())[0]
-        await first.receive_json_from()
-        mounted = await _mount(first, f"{_ALLOWED}.RatingView", "/rating/")
-        assert _full_stars(mounted["html"]) == 4
-        await first.send_json_to(
-            {"type": "event", "event": "set_rating", "params": {"value": "5"}, "ref": 1}
-        )
-        updated = await first.receive_json_from()
-        assert updated.get("type") in ("patch", "html_update", "html_recovery"), updated
-        await first.disconnect()
-
-        saved = await SessionStore(session_key=session_key).aget("liveview_/rating/", None)
-        assert saved and saved["rating"][STATE_COMPONENT_TAG].endswith(".Rating"), saved
-        assert saved["rating"]["state"]["value"] == 5
-
-        second = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-        second.scope["session"] = _ScopeSession(session_key)
-        assert (await second.connect())[0]
-        await second.receive_json_from()
-        remounted = await _mount(second, f"{_ALLOWED}.RatingView", "/rating/")
-        try:
-            assert _full_stars(remounted.get("html", "")) == 5, remounted
-        finally:
-            await second.disconnect()

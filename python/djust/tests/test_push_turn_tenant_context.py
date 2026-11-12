@@ -17,6 +17,7 @@ from djust import LiveView
 from djust.config import config as djust_config
 from djust.push import apush_to_view, push_to_view
 from djust.tenants.mixin import TenantMixin
+from djust import state
 
 pytest.importorskip("channels")
 
@@ -45,7 +46,9 @@ def _bound(where):
 
 
 class _RelayView(TenantMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    room = state()
+    notes = state(default_factory=list)
     template = (
         '<div dj-root dj-view="djust.tests.test_push_turn_tenant_context._RelayView">'
         "{{ room }}|{% for m in notes %}[{{ m }}]{% endfor %}</div>"

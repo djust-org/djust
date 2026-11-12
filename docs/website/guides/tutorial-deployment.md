@@ -290,12 +290,10 @@ One thing the Redis state backend does **not** do is carry a view's
 state to another worker. A default LiveView that reconnects to a
 different process runs `mount()` again, and anything it held in
 memory is lost (typed-in form fields are re-sent by the client, so
-those survive). To keep view state across processes, persist it in
-the session:
-
-- legacy views: set `enable_state_snapshot = True` on the view (or inherit from `djust.PersistentLiveView`, which sets it);
-- [explicit exposure](../state/explicit-exposure.md) views: declare
-  the fields with `state(..., persist="server")`.
+those survive). To keep view state across processes, declare the
+fields with `state(..., persist="server")`
+([explicit exposure](../state/explicit-exposure.md)); they are kept
+in the session.
 
 So: **a view's state never needs sticky sessions**; persist it or
 rebuild it in `mount()`. Use stickiness only when your app keeps

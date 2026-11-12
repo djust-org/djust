@@ -152,13 +152,13 @@ With `False`, djust neither writes nor reads those keys on any path:
 
 - The first GET renders the page and saves nothing of the view in the session.
 - Every page-POST fallback builds a fresh view, runs `mount()`, applies the event and renders. Nothing is restored from or saved to the session.
-- WebSocket and SSE turns save nothing of the view in the session, even for a view with `enable_state_snapshot = True`, and a mount never restores from it. The signed client snapshot of an explicit view's `persist="client"` fields is not stored in the session, so it still works.
+- WebSocket and SSE turns of a legacy view save nothing of it in the session, and a mount never restores from it (that holds without the setting too: 2.0 removed the socket-side save, `enable_state_snapshot`). The signed client snapshot of an explicit view's `persist="client"` fields is not stored in the session, so it still works.
 
 The trade-off: state that lives only on the view resets on each fallback POST, because `mount()` runs again. A "load more" offset, a form draft or a selected tab that a handler set on `self` is back at its `mount()` value on the next POST. Keep such state somewhere `mount()` can read it again (the URL, the database), or use the WebSocket or SSE transport, where the one view instance stays alive between events.
 
 So a form must post what identifies its target. Nothing of the page's open UI state survives between POSTs: a dialog that was open is closed again on the next request, and its submit meets no dialog. Put the target in the form (hidden fields, or `dj-value-*` attributes on the button) and let the handler read it from its parameters, or reopen the dialog from them before it acts. The URL is read again by `handle_params()` on every POST, so state that lives in the query string (a filter, a scope, `?tab=`) needs nothing extra.
 
-The setting does not touch state you opt into elsewhere: a view's `persist="server"` fields under [explicit exposure](../state/explicit-exposure.md) and a [sticky child that opted in to state persistence](sticky-child-persistence.md) still use the session. A value that is not a bool is reported by system check `djust.C027`.
+The setting does not touch state you opt into elsewhere: a view's `persist="server"` fields under [explicit exposure](../state/explicit-exposure.md), including those of an explicit embedded child, still use the session. A value that is not a bool is reported by system check `djust.C027`.
 
 ### Embedded views over the HTTP fallback
 
@@ -170,8 +170,7 @@ So a list of children stays addressable while it changes: a row added in front o
 
 What carries over and what does not:
 
-- A [sticky child that opted in to state persistence](sticky-child-persistence.md) keeps its state across events, saved under its sticky key as on the socket.
-- A child that did not opt in is re-created on each request, as it is on every parent render over HTTP: its state does not accumulate between events (two `inc` events on a counter child both answer `count=1`). Routing works; persistence does not. Give a child that must keep state `sticky=True` with state persistence, or use the WebSocket or SSE transport.
+- A child of a legacy page is re-created on each request, as it is on every parent render over HTTP: its state does not accumulate between events (two `inc` events on a counter child both answer `count=1`). Routing works; persistence does not. (In 1.x a sticky child that opted in with `enable_state_snapshot` was saved under its sticky key; 2.0 removed that, see [Sticky-Child State Persistence](sticky-child-persistence.md).) Make the child explicit and declare the fields it must keep, or use the WebSocket or SSE transport.
 - Each event re-renders the page once to register its children: a second `get_context_data` and a mount per child. Fine for a page; worth knowing for a page with many children.
 - An id that names no child of the page, an [explicit-exposure](../state/explicit-exposure.md) child, and any child of an explicit-exposure page are refused with `{"error": "Embedded view not found"}`. An explicit child's turn is authorized against the mount binding of a socket session, which a stateless request has not.
 - Views mounted beside the page view (lazy and batched views, see [Several LiveViews on One Page](multiple-views.md#transports)) are live over a WebSocket and over the SSE transport, which hosts them as views of its own. The page-POST fallback (a browser without `EventSource`) cannot host them: a lazy view is not hydrated, the client reports it (`djust:error`, `code: "view_unavailable"`), and an event from inside one is refused instead of being posted to the page.
@@ -198,9 +197,6 @@ class CounterView(LiveView):
 
     # Each POST builds a new view: a persisted field is what carries the count over.
     count = state(0, persist="server")
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count}
 
     @event_handler
     def increment(self, **kwargs):

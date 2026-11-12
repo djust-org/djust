@@ -89,7 +89,6 @@ class _PublicView(LiveView):
 
     exposure_policy = "legacy"
     login_required = False
-    enable_state_snapshot = True
     template = (
         '<div dj-view="djust.tests.test_mount_security_sequence_1853._PublicView" '
         'dj-id="0">pub:{{ count }}</div>'

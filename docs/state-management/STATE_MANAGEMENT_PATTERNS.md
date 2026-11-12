@@ -96,7 +96,7 @@ Use this guide when:
 #### Implementation
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, debounce
 
 class ProductSearchView(LiveView):
@@ -121,15 +121,8 @@ class ProductSearchView(LiveView):
     </div>
     </div>
     """
-
-    def mount(self, request):
-        self.query = ""
-        self.results = []
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(query=self.query, results=self.results)
-        return context
+    query = state("")
+    results = state(default_factory=list)
 
     @event_handler
     @debounce(wait=0.5)  # Wait 500ms after last keystroke
@@ -183,7 +176,7 @@ Text inputs bound with `dj-input` are already debounced by 300ms at the element 
 #### Implementation
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class CounterView(LiveView):
@@ -194,12 +187,7 @@ class CounterView(LiveView):
         <button dj-click="increment">+</button>
     </div>
     """
-
-    def mount(self, request):
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count}
+    count = state(0)
 
     @event_handler
     def increment(self, **kwargs):
@@ -237,7 +225,7 @@ class CounterView(LiveView):
 #### Implementation
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from djust.drafts import DraftModeMixin
 
@@ -275,16 +263,9 @@ class BlogPostEditor(DraftModeMixin, LiveView):
     </form>
     </div>
     """
-
-    def mount(self, request):
-        self.title = ""
-        self.body = ""
-        self.tags = ""
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(title=self.title, body=self.body, tags=self.tags)
-        return context
+    title = state("")
+    body = state("")
+    tags = state("")
 
     @event_handler
     def publish_post(self, title: str = "", body: str = "", tags: str = "", **kwargs):
@@ -336,7 +317,7 @@ class BlogPostEditor(DraftModeMixin, LiveView):
 #### Implementation
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, throttle
 
 class TemperatureDashboard(LiveView):
@@ -359,16 +340,9 @@ class TemperatureDashboard(LiveView):
         </div>
     </div>
     """
-
-    def mount(self, request):
-        self.temperature = 72
-        self.celsius = 22.2
-        self.kelvin = 295.4
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(temperature=self.temperature, celsius=self.celsius, kelvin=self.kelvin)
-        return context
+    temperature = state(72)
+    celsius = state(22.2)
+    kelvin = state(295.4)
 
     @event_handler
     @throttle(interval=0.1)  # At most ~10 updates/second while dragging
@@ -405,7 +379,7 @@ class TemperatureDashboard(LiveView):
 #### Implementation
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, cache, debounce
 
 class LanguageAutocomplete(LiveView):
@@ -429,16 +403,9 @@ class LanguageAutocomplete(LiveView):
     </div>
     </div>
     """
-
-    def mount(self, request):
-        self.query = ""
-        self.results = []
-        self.cache_hits = 0
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(query=self.query, results=self.results, cache_hits=self.cache_hits)
-        return context
+    query = state("")
+    results = state(default_factory=list)
+    cache_hits = state(0)
 
     @event_handler
     @cache(ttl=600, key_params=["value"])  # Cache for 10 minutes, keyed on the text
@@ -495,7 +462,7 @@ class LanguageAutocomplete(LiveView):
 #### Implementation
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, throttle
 
 class ColorSliderView(LiveView):
@@ -517,15 +484,8 @@ class ColorSliderView(LiveView):
         </div>
     </div>
     """
-
-    def mount(self, request):
-        self.hue = 180
-        self.server_count = 0
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(hue=self.hue, server_count=self.server_count)
-        return context
+    hue = state(180)
+    server_count = state(0)
 
     @event_handler
     @throttle(interval=0.1)  # At most one request per 100ms while dragging

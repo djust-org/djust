@@ -11,12 +11,14 @@ from djust import LiveView
 from djust.decorators import event_handler
 from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
+from djust import state
 
 
 class ReplaceContainerView(LiveView):
     """View with a data-djust-replace container that switches content."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    show_messages = state(False)
     template = """<div dj-root>
     <div data-djust-replace id="messages">
         {% if show_messages %}
@@ -119,7 +121,8 @@ def test_replace_patch_order_removes_before_inserts():
 class ReplaceWithSiblingView(LiveView):
     """View with a data-djust-replace container that has a sibling element."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    show_messages = state(False)
     template = """<div dj-root>
     <div data-djust-replace id="messages">
         {% if show_messages %}

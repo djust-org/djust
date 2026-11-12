@@ -57,7 +57,6 @@ def _cursor_paths() -> dict[str, str]:
     return {
         "class": CursorsOverlay(users=CURSOR_USERS).render(),
         "tag": _tag("{% cursors users=users %}", users=CURSOR_USERS),
-        "handler": str(rh.CursorsOverlayHandler().render(["users=users"], {"users": CURSOR_USERS})),
     }
 
 
@@ -67,12 +66,6 @@ def _selection_paths(target: str | None = None) -> dict[str, str]:
     return {
         "class": CollabSelection(users=SELECTION_USERS, **kw_class).render(),
         "tag": _tag("{% collab_selection users=users" + kw_tag + " %}", users=SELECTION_USERS),
-        "handler": str(
-            rh.CollabSelectionHandler().render(
-                ["users=users"] + ([f"target={target!r}"] if target is not None else []),
-                {"users": SELECTION_USERS},
-            )
-        ),
     }
 
 
@@ -86,17 +79,6 @@ def _mentions_paths(disabled: bool = False) -> dict[str, str]:
             f"disabled={disabled} %}}",
             users=MENTION_USERS,
         ),
-        "handler": str(
-            rh.MentionsInputHandler().render(
-                [
-                    "name='message'",
-                    "users=users",
-                    "event='send_message'",
-                    f"disabled={disabled}",
-                ],
-                {"users": MENTION_USERS},
-            )
-        ),
     }
 
 
@@ -109,13 +91,6 @@ def _dashboard_paths() -> dict[str, str]:
             "{% dashboard_grid panels=panels columns=4 move_event='mv' resize_event='rs' %}"
             "{% enddashboard_grid %}",
             panels=PANELS,
-        ),
-        "handler": str(
-            rh.DashboardGridHandler().render(
-                ["panels=panels", "columns=4", "move_event='mv'", "resize_event='rs'"],
-                "",
-                {"panels": PANELS},
-            )
         ),
     }
 
@@ -133,7 +108,7 @@ class TestCursorsOverlayMarkup:
 
     def test_the_three_render_paths_agree(self):
         paths = _cursor_paths()
-        assert paths["class"] == paths["tag"] == paths["handler"]
+        assert paths["class"] == paths["tag"]
 
     def test_a_name_is_escaped(self):
         for html in (
@@ -164,7 +139,7 @@ class TestCollabSelectionMarkup:
     def test_the_three_render_paths_agree(self):
         for target in (None, "#doc", "main .body > p"):
             paths = _selection_paths(target=target)
-            assert paths["class"] == paths["tag"] == paths["handler"], target
+            assert paths["class"] == paths["tag"], target
 
     def test_the_target_is_escaped(self):
         for path, html in _selection_paths(target='"><script>alert(1)</script>').items():
@@ -283,11 +258,6 @@ class TestDashboardGridBounds:
                 "{% dashboard_grid panels=panels columns=columns %}{% enddashboard_grid %}",
                 panels=panels,
                 columns=columns,
-            ),
-            "handler": str(
-                rh.DashboardGridHandler().render(
-                    ["panels=panels", "columns=columns"], "", {"panels": panels, "columns": columns}
-                )
             ),
         }
 

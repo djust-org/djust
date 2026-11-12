@@ -84,17 +84,15 @@ class MyView(LiveView):
         <h1>Counter: {{ counter }}</h1>
         {{ badge }}
     """
+    counter = state(0)
 
-    def mount(self, request):
-        self.counter = 0
-
-    def get_context_data(self):
+    def get_context_data(self, **kwargs):
         return {
-            'counter': self.counter,
-            'badge': BadgeComponent(
+            **super().get_context_data(**kwargs),
+            "badge": BadgeComponent(
                 text=str(self.counter),
                 variant='primary' if self.counter > 0 else 'secondary'
-            )
+            ),
         }
 ```
 
@@ -487,17 +485,14 @@ class DashboardView(LiveView):
         <!-- Or using Django template tag (future) -->
         {% livecomponent "profile_tabs" %}
     """
-
-    def mount(self, request):
-        # Create LiveComponent once
-        self.profile_tabs = TabsComponent(
-            tabs=[
-                {"id": "overview", "label": "Overview", "content": "..."},
-                {"id": "settings", "label": "Settings", "content": "..."},
-                {"id": "security", "label": "Security", "content": "...", "badge": "2"},
-            ],
-            active_tab="overview"
-        )
+    profile_tabs = TabsComponent(
+        tabs=[
+            {"id": "overview", "label": "Overview", "content": "..."},
+            {"id": "settings", "label": "Settings", "content": "..."},
+            {"id": "security", "label": "Security", "content": "...", "badge": "2"},
+        ],
+        active_tab="overview"
+    )
 
     def handle_component_event(self, component_id: str, event: str, data: Dict):
         """Handle events from LiveComponents"""

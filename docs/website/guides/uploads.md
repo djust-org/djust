@@ -28,24 +28,21 @@ Event parameters travel in a single WebSocket frame, which the server caps at `L
 ```python
 from uuid import uuid4
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.uploads import UploadMixin
 from djust.decorators import event_handler
 from django.core.files.storage import default_storage
 
 class ProfileView(UploadMixin, LiveView):
     template_name = 'profile.html'
+    avatar_url = state("")
 
     def mount(self, request, **kwargs):
-        self.avatar_url = ""
         self.allow_upload('avatar',
             accept='.jpg,.png,.webp',
             max_entries=1,
             max_file_size=5_000_000,  # 5MB
         )
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "avatar_url": self.avatar_url}
 
     @event_handler()
     def save_avatar(self, **kwargs):
@@ -176,17 +173,14 @@ window.addEventListener('djust:upload:progress', (e) => {
 ```python
 class GalleryView(UploadMixin, LiveView):
     template_name = 'gallery.html'
+    images = state(default_factory=list)
 
     def mount(self, request, **kwargs):
-        self.images = []
         self.allow_upload('photos',
             accept='.jpg,.png,.webp,.gif',
             max_entries=5,
             max_file_size=10_000_000,
         )
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "images": self.images}
 
     @event_handler()
     def upload_photos(self, **kwargs):

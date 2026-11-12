@@ -4,6 +4,7 @@ Cache Demo - demonstrates @cache decorator with debounced search
 
 from djust import LiveView
 from djust.decorators import cache, debounce
+from djust import state
 
 
 # Simulated product database
@@ -37,7 +38,11 @@ class CacheDemoView(LiveView):
     - Uses key_params to cache based on search query only
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    query = state("")
+    results = state(default_factory=list)
+    server_calls = state(0)
+    total_searches = state(0)
     template = """
     <div dj-root class="container mt-5">
         <div class="row">

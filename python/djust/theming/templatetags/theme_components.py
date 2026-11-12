@@ -1269,6 +1269,10 @@ def theme_progress(
         "label": label,
         "is_indeterminate": is_indeterminate,
         "percentage": percentage,
+        # The fill's width as a class, ``<css_prefix>progress-w-<N>`` (one per whole percent,
+        # components.css), never ``style="width:N%"``: a ``style-src`` without 'unsafe-inline'
+        # refuses an inline style attribute (#3979, as ``{% progress %}`` in #3969).
+        "width_percent": round(percentage),
         "attrs": remaining_attrs,
         # `dj_upload_progress="slot"` makes the client drive this bar from
         # that upload slot's progress (#3289).

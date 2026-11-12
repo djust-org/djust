@@ -191,6 +191,9 @@ def mount_http_lazy(parent: Any, request: Any, view_id: str) -> Any:
     from ._view_hooks import call_hook_sync
 
     call_hook_sync(child.mount, request)
+    from ._params_form import _refuse_removed_configuration
+
+    _refuse_removed_configuration(child)
     child._snapshot_user_private_attrs()
     child._djust_slot_target = view_id
     enforce_object_permission(child, request)

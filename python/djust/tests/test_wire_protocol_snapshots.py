@@ -150,9 +150,9 @@ def test_mount_envelope_minimal():
 
 
 def test_mount_envelope_with_signed_snapshot():
-    """Finding #4: when the view opts into state-snapshot
-    (`enable_state_snapshot=True`), the server emits an OPAQUE
-    `state_snapshot_signed` string (a TimestampSigner blob) after `version`.
+    """Finding #4: when the view declares `persist="client"` fields, the
+    server emits an OPAQUE `state_snapshot_signed` string (a TimestampSigner
+    blob) after `version`.
     The legacy unsigned `public_state` dict is no longer sent — the client
     must echo the signed blob back verbatim. Pin the field name + order."""
     response = {

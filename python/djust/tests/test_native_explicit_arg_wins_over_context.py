@@ -9,7 +9,10 @@ context fallback: ``{% data_table rows=empty %}`` draws the empty state, and the
 The rule: an argument that was passed is used as given, even when it is empty; the context is
 consulted only when the argument is ABSENT (the handlers' documented convenience, kept).
 
-Each case renders the same template through BOTH engines.
+Each case renders the same template through BOTH engines. Since 2.0 only ``data_table`` keeps its
+native twin here (one render path per component tag where it costs nothing); the other tags render
+their Python node under the Rust engine, which has no context fallback, and the cases below hold for
+them by construction.
 """
 
 from __future__ import annotations
@@ -72,16 +75,6 @@ def test_an_absent_rows_still_falls_back_to_the_context_rows():
     assert MARKER not in handler.render(["rows=[]"], ctx)
 
 
-def test_an_absent_argument_still_falls_back_to_the_context_variable():
-    for src, ctx in (
-        ("{% breadcrumb %}", {"breadcrumb_items": [{"label": MARKER, "url": "/x/"}]}),
-        ("{% stepper %}", {"steps": [{"label": MARKER}]}),
-        ('{% autocomplete name="n" %}', {"suggestions": [{"value": "v", "label": MARKER}]}),
-        ('{% dependent_select name="n" %}', {"options": [{"value": "v", "label": MARKER}]}),
-    ):
-        assert MARKER in _rust(src, ctx), src
-
-
 # --- the other handlers that read the same way ------------------------------------------------
 
 #: (tag source, context, a marker only the CONTEXT fallback would print)
@@ -93,10 +86,6 @@ CASES = {
     "stepper": (
         "{% stepper steps=no_steps %}",
         {"no_steps": [], "steps": [{"label": MARKER}]},
-    ),
-    "dj_select": (
-        '{% dj_select name="n" options=no_options options_var="big" %}',
-        {"no_options": [], "big": [{"value": "v", "label": MARKER}]},
     ),
     "autocomplete": (
         '{% autocomplete name="n" suggestions=no_sugg %}',
@@ -113,15 +102,6 @@ CASES = {
 def test_an_explicit_empty_argument_does_not_pull_in_the_context_variable(tag):
     src, ctx = CASES[tag]
     assert MARKER not in _rust(src, ctx), f"{tag}: the native handler read the context"
-
-
-def test_a_radio_with_an_explicit_empty_current_value_is_not_checked_from_the_context():
-    """``current_value_var`` is a native-only convenience (the Python tag rejects it); an
-    explicit ``current_value`` wins over it, as the Python tag's ``current_value`` does."""
-    ctx = {"cur": "", "picked": "a"}
-    src = '{% dj_radio name="n" value="a" label="A" current_value=cur current_value_var="picked" %}'
-    assert " checked" not in _rust(src, ctx)
-    assert " checked" in _rust(src.replace("current_value=cur ", ""), ctx), "absent: falls back"
 
 
 # --- the pattern, derived from source ---------------------------------------------------------

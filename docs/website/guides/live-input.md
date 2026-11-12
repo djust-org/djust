@@ -54,34 +54,19 @@ directly on view attributes.
 With the matching LiveView:
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
 class NotesView(LiveView):
     template_name = "notes.html"
-
-    def mount(self, request, **kwargs):
-        self.query = ""
-        self.body = ""
-        self.status = "open"
-        self.notifications_enabled = True
-        self.plan = "free"
-        self.status_choices = [("open", "Open"), ("closed", "Closed")]
-        self.plan_choices = [("free", "Free"), ("pro", "Pro")]
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(
-            query=self.query,
-            body=self.body,
-            status=self.status,
-            notifications_enabled=self.notifications_enabled,
-            plan=self.plan,
-            status_choices=self.status_choices,
-            plan_choices=self.plan_choices,
-        )
-        return context
+    query = state("")
+    body = state("")
+    status = state("open")
+    notifications_enabled = state(True)
+    plan = state("free")
+    status_choices = state([("open", "Open"), ("closed", "Closed")])
+    plan_choices = state([("free", "Free"), ("pro", "Pro")])
 
     @event_handler()
     def search(self, value: str = "", **kwargs):
