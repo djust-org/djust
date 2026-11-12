@@ -336,7 +336,7 @@ class FilterView(LiveView):
         items = Item.objects.all()
         if self.selected_tags:
             items = items.filter(tags__name__in=self.selected_tags)
-        return {"items": items.order_by(self.sort_by)}
+        return {"items": items.order_by(self.sort_by), "selected_tags": self.selected_tags}
 ```
 
 ```html
