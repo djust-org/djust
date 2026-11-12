@@ -24,10 +24,18 @@ its row says otherwise. You can migrate one view and one handler at a time,
 deploy between steps, and install 2.0 once nothing in the app still depends on
 the old behaviour.
 
+If you are already on a 2.0 pre-release with views you have not migrated,
+state `exposure_policy = "legacy"` on them, or once on a base class they
+inherit from, and then migrate them one at a time. Without it an unmigrated
+view renders the names nothing supplies as empty, with no error. See
+[Keeping the legacy policy](../state/explicit-exposure.md#keeping-the-legacy-policy).
+
 > **Where 2.0 is today.** There is no 2.0 release yet. On the development line
 > (`2.0.0.dev0`) the removals listed under [Removed names](#3-replace-removed-names-and-settings)
-> have landed, and the two opt-ins still default to the 1.3 behaviour. 2.0.0
-> final makes them the only behaviour. [What is still to be removed](#4-still-to-be-removed-before-the-final-release)
+> have landed, and explicit exposure is the default: a view that states no
+> policy is explicit, and a view that states `exposure_policy = "legacy"` still
+> works and raises a `DeprecationWarning`. Strict event parameters are still an
+> opt-in there. 2.0.0 final makes both the only behaviour. [What is still to be removed](#4-still-to-be-removed-before-the-final-release)
 > lists the rest.
 
 ## Before you start
@@ -63,7 +71,9 @@ Do this for one view at a time:
 1. Run the inventory command on the view.
 2. Put everything the template reads into `get_context_data()`.
 3. Declare the state you want kept or sent to the browser with `state()`.
-4. Set `exposure_policy = "explicit"` on the class.
+4. Set `exposure_policy = "explicit"` on the class. On 1.3 this is what turns
+   the new behaviour on. On 2.0 it is the default, so the line changes nothing
+   and you can remove it after you upgrade.
 5. Load the page, use it, and check that nothing renders empty.
 
 ### What changes
@@ -100,6 +110,7 @@ from djust.decorators import event_handler
 
 
 class CartView(LiveView):
+    exposure_policy = "legacy"  # the 1.3 default; on 1.3 the line can be left out
     template = """<div dj-root>
         <p>{{ items|length }} items, coupon {{ coupon }}, page {{ page }}</p>
         <button dj-click="add" data-sku="A1">Add</button>
@@ -344,7 +355,11 @@ view must work without a socket, give every field its handlers change
 ### Other things explicit exposure refuses
 
 - **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare them
-  in the class body: `nav = Tabs(active="overview")`.
+  in the class body: `nav = Tabs(active="overview")`. The exception is a plain
+  component that a handler changes (`self.rating.value = value`): a class-body
+  one is a single object shared by every session, so keep it in a private
+  attribute (`self._rating = Rating(...)` in `mount()`) and hand it to the
+  template in `get_context_data()`.
 - **`{% live_render %}` with `lazy=`**, when the child view is explicit.
 - **Actors** (`use_actors = True`). See [What does not survive](#5-what-does-not-survive).
 - **A `state()` grant on a legacy view.** `state(0, persist="server")` on a
@@ -409,6 +424,13 @@ class SearchView(LiveView):
         self.query = "none"
         self.selected = 0
 
+    def get_context_data(self, **kwargs):
+        return {
+            **super().get_context_data(**kwargs),
+            "query": self.query,
+            "selected": self.selected,
+        }
+
     @event_handler()
     def search(self, value="", **kwargs):
         self.query = value
@@ -435,6 +457,13 @@ class SearchView(LiveView):
     def mount(self, request, **kwargs):
         self.query = "none"
         self.selected = 0
+
+    def get_context_data(self, **kwargs):
+        return {
+            **super().get_context_data(**kwargs),
+            "query": self.query,
+            "selected": self.selected,
+        }
 
     @event_handler(parameter_policy="strict")
     def search(self, value: str):
@@ -604,7 +633,7 @@ the only behaviour, before 2.0.0 is released, so finish with them on 1.3.x:
 
 | Still present | Do this now |
 | --- | --- |
-| `exposure_policy = "legacy"`, the default | Set `"explicit"` on every view ([section 1](#1-move-each-view-to-explicit-exposure)) |
+| `exposure_policy = "legacy"`. It is no longer the default: a view has to state it, and stating it warns | Migrate every view that states it, or that you have not checked yet ([section 1](#1-move-each-view-to-explicit-exposure)) |
 | `event_parameter_policy = "legacy"`, the default, and `parameter_policy="legacy"` | Make every handler strict ([section 2](#2-make-event-handlers-strict)) |
 | `event_security` set to `"open"` or `"warn"` | Remove the setting (the default is `"strict"`) and put `@event_handler` on every method a template calls |
 | `enable_state_snapshot = True` and `PersistentLiveView` | `state(..., persist="server")` fields, and `persist="client", client=True` for back-navigation |

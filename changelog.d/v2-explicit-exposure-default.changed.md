@@ -21,7 +21,7 @@
   ```
 
   A base class your views inherit from carries it for all of them. There is no setting that
-  changes the default. To migrate a view, see
+  changes the default. To migrate a view, see [Migrating to djust 2.0](docs/website/guides/migrating-to-2.0.md) and
   [explicit exposure](docs/website/state/explicit-exposure.md#migrating-a-view);
   `manage.py djust_exposure_inventory --view myapp.views.MyView` lists what the view exported.
 
