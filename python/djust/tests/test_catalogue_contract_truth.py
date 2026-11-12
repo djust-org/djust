@@ -153,24 +153,31 @@ class TestDemoHandlersMoveThePreview:
 
 class TestUsageSnippetsAreCodeThatWorks:
     def test_a_handler_never_writes_a_kwarg_the_component_lacks(self):
-        """Every `self.component.<kwarg> = …` a snippet writes is a parameter
-        of that component (`self.component.dismissed` was not)."""
+        """Every `self._component.<kwarg> = …` a snippet writes is a parameter
+        of that component (`self._component.dismissed` was not)."""
         import re
 
         from djust.theming.gallery.component_registry import COMPONENT_CATEGORIES
 
         names = sorted({n for group in COMPONENT_CATEGORIES.values() for n in group})
         wrong = []
+        checked = 0
         for name in names:
             described = describe_component(name)
             if described["component_type"] != "python":
                 continue
             params = {p["name"] for p in described["params"]}
             snippet = _detail(name)._base_ctx["usage_parts"]["view"]
-            for attr in re.findall(r"self\.component\.(\w+) =", snippet):
+            written = re.findall(r"self\._component\.(\w+) =", snippet)
+            checked += len(written)
+            # The public spelling is an error under explicit exposure, and a
+            # snippet using it would also slip past the pattern above.
+            assert "self.component" not in snippet, name
+            for attr in written:
                 if attr not in params:
                     wrong.append(f"{name}.{attr}")
         assert not wrong, wrong
+        assert checked, "no snippet writes to its component: the pattern matches nothing"
 
     def test_the_notification_bell_opens(self):
         from djust.components import NotificationCenter
@@ -178,11 +185,11 @@ class TestUsageSnippetsAreCodeThatWorks:
         assert "notif-center--open" in str(NotificationCenter(is_open=True).render())
         assert "notif-center--open" not in str(NotificationCenter().render())
         snippet = _detail("notification_center")._base_ctx["usage_parts"]["view"]
-        assert "self.component.is_open = not self.component.is_open" in snippet
+        assert "self._component.is_open = not self._component.is_open" in snippet
 
     def test_the_dismiss_handler_does_not_invent_a_dismissed_attribute(self):
         view = _detail("page_alert")
-        assert "self.component.dismissed" not in view._base_ctx["usage_parts"]["view"]
+        assert ".dismissed" not in view._base_ctx["usage_parts"]["view"]
 
     def test_the_copied_example_answers_the_event_its_own_markup_emits(self):
         """The overlay's example carries a demo button; copying the example
@@ -194,8 +201,8 @@ class TestUsageSnippetsAreCodeThatWorks:
     def test_the_month_arrows_show_a_month_expression_not_a_date_dependent_number(self):
         view = _detail("date_picker")
         snippet = view._base_ctx["usage_parts"]["view"]
-        assert "self.component.month % 12 + 1" in snippet
-        assert "(self.component.month - 2) % 12 + 1" in snippet
+        assert "self._component.month % 12 + 1" in snippet
+        assert "(self._component.month - 2) % 12 + 1" in snippet
 
 
 class TestComponentsRenderWhatTheirParametersSay:

@@ -93,8 +93,11 @@ class _ShapesMixin:
 class FreshMountView(_ShapesMixin, LiveView):
     """Legacy view without snapshot persistence: remounts fresh on a reconnect."""
 
+    exposure_policy = "legacy"
+
 
 class SnapshotFlagView(_ShapesMixin, LiveView):
+    exposure_policy = "legacy"
     enable_state_snapshot = True
 
 
@@ -115,6 +118,8 @@ class ExplicitWithFlagView(_ShapesMixin, LiveView):
 
 class DynamicFlagView(_ShapesMixin, LiveView):
     """A flag that is not a plain class value is not established statically."""
+
+    exposure_policy = "legacy"
 
     @property
     def enable_state_snapshot(self):

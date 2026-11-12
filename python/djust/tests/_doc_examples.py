@@ -307,6 +307,65 @@ class Page:
         return response.status_code
 
 
+class LivePage:
+    """A mount, then events on the same connection, as over a WebSocket.
+
+    For examples whose events need the view that rendered the page: under the
+    default exposure policy an interactive component lives with its view, so a
+    request that builds a fresh view (:class:`Page`, the HTTP fallback) cannot
+    reach it. ``event`` answers 200, or 400 when the turn sent an error frame.
+    """
+
+    def __init__(self, view_class: type) -> None:
+        from asgiref.sync import async_to_sync
+
+        from djust.runtime import ViewRuntime
+        from djust.tests.test_exposure_runtime import MockTransport, make_request
+
+        self.view_class = view_class
+        self.initial = make_request()
+        self.transport = MockTransport()
+        self.transport.build_request = lambda: self.initial
+
+        async def fresh_event_request(view):
+            from asgiref.sync import sync_to_async
+
+            return await sync_to_async(make_request)(self.initial.session.session_key)
+
+        self.transport.explicit_event_request = fresh_event_request
+        self.runtime = ViewRuntime(self.transport)
+        from django.test import override_settings
+
+        with override_settings(LIVEVIEW_ALLOWED_MODULES=[view_class.__module__]):
+            async_to_sync(self.runtime.dispatch_mount)(
+                {
+                    "type": "mount",
+                    "view": "%s.%s" % (view_class.__module__, view_class.__name__),
+                    "url": self.initial.path,
+                }
+            )
+        assert not self.transport.errors, self.transport.errors
+        self.view = self.runtime.view_instance
+        assert self.view is not None, self.transport.sent
+        (frame,) = [f for f in self.transport.sent if f.get("type") == "mount"]
+        self.html = frame["html"]
+
+    def ids(self) -> List[str]:
+        return re.findall(r'data-component-id="([^"]+)"', self.html)
+
+    def event(self, name: str, **params: object) -> int:
+        from asgiref.sync import async_to_sync
+
+        before = len(self.transport.sent)
+        async_to_sync(self.runtime.dispatch_event)(
+            {"type": "event", "event": name, "params": params}
+        )
+        if any(frame.get("type") == "error" for frame in self.transport.sent[before:]):
+            return 400
+        self.html = self.view.render()
+        return 200
+
+
 def problems(sections, scenarios) -> List[str]:
     """Everything that makes covered documentation drift from its fixtures."""
     found: List[str] = []

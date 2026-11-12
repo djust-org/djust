@@ -199,7 +199,12 @@ _DEFAULT_LIMITS = StateLimits()
 
 
 def _read_exposure_policy(view: Any) -> Any:
-    """Default only an undeclared policy, never a failing policy descriptor."""
+    """Default only an undeclared policy, never a failing policy descriptor.
+
+    An owner with no ``exposure_policy`` at all (``None``, a stub, an object
+    that is not a view) reads as ``"explicit"``, the ``LiveView`` default: it
+    has not asked for the legacy export, so it is not given it.
+    """
     try:
         return view.exposure_policy
     except AttributeError:
@@ -208,7 +213,28 @@ def _read_exposure_policy(view: Any) -> Any:
         missing = object()
         if getattr_static(view, "exposure_policy", missing) is not missing:
             raise
-        return "legacy"
+        return "explicit"
+
+
+def states_exposure_policy(owner: Any) -> bool:
+    """Whether ``owner`` has an ``exposure_policy`` at all, readable or not.
+
+    False for ``None`` and for an object that is not a view (a component, a
+    formset class). True for a policy descriptor that raises: it is stated,
+    only unreadable. No descriptor is evaluated beyond the one attribute read.
+    """
+    if owner is None:
+        return False
+    try:
+        owner.exposure_policy
+    except AttributeError:
+        from inspect import getattr_static
+
+        missing = object()
+        return getattr_static(owner, "exposure_policy", missing) is not missing
+    except Exception:  # noqa: BLE001 — a failing descriptor is still a statement
+        return True
+    return True
 
 
 def uses_legacy_exposure(view: Any) -> bool:

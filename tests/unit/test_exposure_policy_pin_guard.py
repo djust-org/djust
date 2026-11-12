@@ -1,4 +1,4 @@
-"""The guard that keeps test LiveViews pinned to an exposure policy (plan PR 0d).
+"""The guard that makes every test LiveView state its exposure policy (plan PR 0d, PR 1).
 
 ``tests/exposure_policy_pin_guard.py`` fails, per test, a view created inside a
 test. Views created while a test module is imported have no test to attach to,
@@ -14,7 +14,8 @@ def test_no_module_level_liveview_relies_on_the_default_policy():
     offenders = guard.import_time_offenders()
     assert not offenders, (
         "LiveViews defined at module level without an exposure_policy "
-        '(set exposure_policy = "legacy" or "explicit"): ' + ", ".join(offenders)
+        '(set exposure_policy = "explicit", or "legacy" for a test of that policy): '
+        + ", ".join(offenders)
     )
 
 
@@ -81,3 +82,38 @@ def test_the_fixture_fails_a_test_that_defines_an_unpinned_view(pytester):
     del guard._created[before:]
     result.assert_outcomes(passed=2, errors=1)
     result.stdout.fnmatch_lines(["*LiveView defined without an exposure_policy*test_unpinned*V*"])
+
+
+def test_the_failure_message_names_the_default_and_both_policies(pytester):
+    """The message is the instruction a contributor acts on: it must say what
+    the default is now and that a legacy pin is for a test of that policy."""
+    before = len(guard._created)
+    pytester.makepyfile(
+        """
+        from djust import LiveView
+
+        def test_unpinned():
+            class V(LiveView):
+                template = "<div dj-root></div>"
+        """
+    )
+    result = pytester.runpytest_inprocess(
+        "-p", "tests.exposure_policy_pin_guard", "-p", "no:cacheprovider", "-p", "no:django"
+    )
+    del guard._created[before:]
+    result.assert_outcomes(passed=1, errors=1)
+    result.stdout.fnmatch_lines(
+        ['*Set exposure_policy = "explicit" (or "legacy", for a test of the legacy policy)*']
+    )
+    result.stdout.fnmatch_lines(['*The default is "explicit"*'])
+
+
+def test_a_view_that_states_explicit_is_not_an_offender():
+    """Stating the default is a statement: the guard asks for one, not for legacy."""
+    before = len(guard._created)
+
+    class Stated(LiveView):
+        exposure_policy = "explicit"
+
+    assert not guard.relies_on_default(Stated)
+    assert guard._offenders(guard._created[before:]) == []

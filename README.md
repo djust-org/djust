@@ -32,6 +32,10 @@ class CounterView(LiveView):
     def mount(self, request, **kwargs):
         self.count = 0
 
+    def get_context_data(self, **kwargs):
+        # The template gets what you hand it here, and nothing else.
+        return {**super().get_context_data(**kwargs), "count": self.count}
+
     @event_handler
     def increment(self):
         self.count += 1  # the page updates; no JavaScript
@@ -111,6 +115,9 @@ class CounterView(LiveView):
 
     def mount(self, request, **kwargs):
         self.count = 0
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count}
 
     @event_handler
     def increment(self):

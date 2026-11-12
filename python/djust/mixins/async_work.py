@@ -180,7 +180,7 @@ class AsyncWorkMixin:
     tracking and cancellation.
 
     When the socket closes, an explicit-exposure root's ``start_async`` work
-    is cancelled with the view. A legacy (default-exposure) root's work runs
+    is cancelled with the view. A legacy-exposure root's work runs
     to completion and its late result is discarded (#3234); a view whose work
     only serves the open page (a follower, a live feed) sets
     ``cancel_async_on_disconnect = True`` to have it cancelled

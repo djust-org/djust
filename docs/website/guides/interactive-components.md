@@ -38,6 +38,9 @@ class ProjectView(LiveView):
     def mount(self, request, **kwargs):
         self.selected_action = ""
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "selected_action": self.selected_action}
+
     @project_menu.on.selected
     def on_project_menu_selected(self, component: DropdownMenu, value: str) -> None:
         self.selected_action = value
@@ -124,6 +127,13 @@ class ToolbarView(LiveView):
         self.selected_action = ""
         self.show_account_settings = False
 
+    def get_context_data(self, **kwargs):
+        return {
+            **super().get_context_data(**kwargs),
+            "selected_action": self.selected_action,
+            "show_account_settings": self.show_account_settings,
+        }
+
     @project_menu.on.selected
     def on_project_menu_selected(self, component: DropdownMenu, value: str) -> None:
         self.selected_action = value
@@ -171,6 +181,9 @@ class HelpView(LiveView):
     def mount(self, request, **kwargs):
         self.help_opened = 0
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "help_opened": self.help_opened}
+
     @help_menu.on.toggled
     def on_help_menu_toggled(self, component: DropdownMenu, open: bool) -> None:
         if open:
@@ -213,6 +226,14 @@ class RowActionsView(LiveView):
         self.projects = [{"id": 42, "name": "Alpha"}, {"id": 87, "name": "Beta"}]
         self.selected_project = 0
         self.selected_action = ""
+
+    def get_context_data(self, **kwargs):
+        return {
+            **super().get_context_data(**kwargs),
+            "projects": self.projects,
+            "selected_project": self.selected_project,
+            "selected_action": self.selected_action,
+        }
 
     @event_handler()
     def project_action(self, project_id: int, action: str) -> None:
@@ -261,6 +282,9 @@ class ProjectListView(LiveView):
         self.projects = [{"id": 42, "name": "Alpha"}, {"id": 87, "name": "Beta"}]
         self.selected = ""
         self._sync_menus()
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "selected": self.selected}
 
     def _sync_menus(self):
         self.row_menus.sync(
@@ -328,16 +352,21 @@ still need pagination or virtualization.
 ## Persistence, keyboard and security
 
 - **Persistence.**
-  - A server-owned menu's `open` and `selected` are saved with the view's
-    session state, like its other state. They come back wherever that state
-    does: on every HTTP-fallback request, and on a reconnect when the view
-    sets `enable_state_snapshot = True`. Callbacks and configuration are never
-    saved: they come from your code.
-  - With `enable_state_snapshot = True`, Back navigation restores a page's
-    menus with the same identities. A page with a keyed collection is instead
-    mounted fresh on Back, so `sync()` supplies the current rows and a removed
-    row cannot come back.
-  - Under the explicit exposure policy, menu state is not persisted.
+  - A menu's `open` and `selected` live with the view on its WebSocket or SSE
+    connection. They are not saved. After a reconnect or a new page load the
+    menu starts closed, and `mount()` (and `sync()`, for a collection)
+    supplies it again. Callbacks and configuration are never saved either:
+    they come from your code.
+  - A menu needs that connection. On the HTTP fallback every request builds a
+    new view, so a menu's event does not reach the menu that was rendered and
+    the request is refused.
+  - A view that states `exposure_policy = "legacy"` (deprecated, see
+    [explicit exposure](../state/explicit-exposure.md)) saves a server-owned
+    menu's `open` and `selected` with the view's session state instead. They
+    then come back on every HTTP-fallback request, and on a reconnect or Back
+    navigation when the view sets `enable_state_snapshot = True`. A page with
+    a keyed collection is mounted fresh on Back, so `sync()` supplies the
+    current rows and a removed row cannot come back.
 - **Keyboard and focus.**
   - A server-owned menu's trigger and items are ordinary buttons: Tab to
     them, and press Enter or Space.

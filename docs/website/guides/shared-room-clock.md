@@ -57,6 +57,9 @@ class LobbyView(PresenceMixin, LiveView):
         self.track_presence({})
         self.handle_refresh()
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "version": self.version}
+
     def handle_refresh(self, key="", **kwargs):
         scope = room_clock.scope(self, "lobby")
         with _snapshot_lock:

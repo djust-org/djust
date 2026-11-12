@@ -1,11 +1,15 @@
-"""Fail a test that defines a LiveView relying on the default ``exposure_policy``.
+"""Fail a test that defines a LiveView without stating its ``exposure_policy``.
 
-``LiveView.exposure_policy`` defaults to ``"legacy"`` today and to ``"explicit"``
-in 2.0 (``docs/plans/2.0-exposure-flip.md``, PR 0d and PR 1). Every test and
-example view was pinned to ``"legacy"`` so that changing the default changes no
-test outcome. A view added afterwards without a policy would undo that for
-itself, and nobody would see it until the default moved. This plugin makes it
-visible at once.
+``LiveView.exposure_policy`` defaults to ``"explicit"`` since 2.0
+(``docs/plans/2.0-exposure-flip.md``, PR 1). ``"legacy"`` is still accepted when
+a class states it, and about 1,850 test and example views do (PR 0d), so that
+the flip changed no test outcome. Until the ``"legacy"`` arm is deleted (PR 11)
+both policies run in this suite, and which one a test view runs under is part
+of what the test means: a test written against the attribute walk that states
+nothing would silently run as explicit, and its assertions about context,
+persistence or diagnostics would be about a different policy than its author
+had in mind. So every test view states one, and this plugin makes a missing
+statement visible at once.
 
 It records every ``LiveView`` subclass as Python creates it (class statements,
 ``type(...)`` and source run with ``exec`` alike) and judges each one when the
@@ -40,6 +44,7 @@ UNPINNED_ON_PURPOSE: dict[str, str] = {
     "test_readme_snippets_execute.py": "executes the README's code blocks as written",
     "test_doc_examples.py": "executes the documented examples as written",
     "test_catalogue_ux.py": "executes the shipped catalogue's usage snippets as written",
+    "test_exposure_default_policy.py": "its subject is the default policy itself",
 }
 
 #: One record per LiveView subclass created in this process, in creation order:
@@ -161,8 +166,9 @@ def _no_liveview_relies_on_the_default_policy(request):
         names = ", ".join(offenders)
         pytest.fail(
             "LiveView defined without an exposure_policy: "
-            f'{names}. Set exposure_policy = "legacy" (or "explicit") on the class, '
-            "or on the dict passed to type(...). The default changes in 2.0 "
+            f'{names}. Set exposure_policy = "explicit" (or "legacy", for a test of the '
+            "legacy policy) on the class, or on the dict passed to type(...). The default is "
+            '"explicit"; a test view states its policy while both exist '
             "(docs/plans/2.0-exposure-flip.md). A file that must leave it unset is listed in "
             "UNPINNED_ON_PURPOSE in tests/exposure_policy_pin_guard.py.",
             pytrace=False,

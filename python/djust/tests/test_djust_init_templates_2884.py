@@ -504,6 +504,9 @@ class Counter(LiveView):
     def mount(self, request, **kwargs):
         self.count = 0
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count}
+
     @event_handler()
     def inc(self, **kwargs):
         self.count += 1

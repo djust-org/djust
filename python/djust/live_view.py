@@ -19,6 +19,7 @@ from django.views import View
 
 from ._class_snapshot import namespace as _class_namespace
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
+from ._deprecation import class_statement_stacklevel, warn_deprecated
 from .change_detection import deep_fingerprint, fingerprints_by_content
 from .serialization import (  # noqa: F401
     DjangoJSONEncoder,
@@ -558,6 +559,65 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
     return protected
 
 
+#: Where the deprecation message sends a reader.
+EXPLICIT_EXPOSURE_GUIDE_URL = "https://docs.djust.org/state/explicit-exposure/"
+
+#: Classes whose own ``exposure_policy = "legacy"`` has been warned about, and
+#: classes whose MRO has been searched for one. Weak: tests assert that view
+#: classes can be collected.
+_LEGACY_POLICY_WARNED: "weakref.WeakSet[type]" = weakref.WeakSet()
+_LEGACY_POLICY_SEARCHED: "weakref.WeakSet[type]" = weakref.WeakSet()
+
+
+def _is_framework_class(cls: type) -> bool:
+    """Whether ``cls`` is shipped in ``djust`` (its test modules are not)."""
+    module = getattr(cls, "__module__", "") or ""
+    return module == "djust" or (
+        module.startswith("djust.") and not module.startswith("djust.tests.")
+    )
+
+
+def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None:
+    """Warn, once per class, that the class states ``exposure_policy = "legacy"``.
+
+    The warning is about the class that *states* the policy, because that is
+    the line to change: a subclass that inherits the statement adds no second
+    warning. It is raised when the class is created, pointing at its ``class``
+    statement. A policy assigned to the class afterwards is caught the first
+    time a view of that class is constructed (``at_class_statement=False``).
+
+    A class shipped in djust that states ``"legacy"`` (``PersistentLiveView``,
+    the admin change list, ...) does not warn, here or through a subclass:
+    that statement is not the application's to change.
+    """
+    if at_class_statement:
+        owners = [cls] if "exposure_policy" in cls.__dict__ else []
+    else:
+        if cls in _LEGACY_POLICY_SEARCHED:
+            return
+        _LEGACY_POLICY_SEARCHED.add(cls)
+        owners = [base for base in cls.__mro__ if "exposure_policy" in base.__dict__][:1]
+    for owner in owners:
+        policy = owner.__dict__["exposure_policy"]
+        if type(policy) is not str or policy != "legacy":
+            continue
+        if owner in _LEGACY_POLICY_WARNED or _is_framework_class(owner):
+            continue
+        _LEGACY_POLICY_WARNED.add(owner)
+        warn_deprecated(
+            'exposure_policy = "legacy" (stated on %s.%s)'
+            % (getattr(owner, "__module__", "?"), owner.__qualname__),
+            since="2.0",
+            removed_in="2.0.0",
+            instead=(
+                'exposure_policy = "explicit" (the default: declare state() fields and '
+                "supply template context in get_context_data(); see %s)"
+                % EXPLICIT_EXPOSURE_GUIDE_URL
+            ),
+            stacklevel=class_statement_stacklevel() if at_class_statement else 2,
+        )
+
+
 class LiveView(
     ContextProviderMixin,
     StreamsMixin,
@@ -845,9 +905,11 @@ class LiveView(
     # patterns (``password``, ``token``, ``secret``, ``api_key``, ``pii``).
     enable_state_snapshot: bool = False
 
-    # ADR-038: reserve the policy name now, but never silently claim that
-    # explicit exposure is active before all persistence/export paths use it.
-    exposure_policy: str = "legacy"
+    # ADR-038: a value reaches a template, the session or the browser only
+    # when the view declares it. ``"legacy"`` (every public attribute is
+    # exported) is still accepted when a class states it, and is deprecated:
+    # see ``_warn_legacy_exposure_policy``.
+    exposure_policy: str = "explicit"
 
     # Streaming initial render (v0.6.1 — Phase 1).
     #
@@ -979,6 +1041,7 @@ class LiveView(
             )
         if policy == "explicit":
             return
+        _warn_legacy_exposure_policy(type(self), at_class_statement=False)
         from ._state import StateProperty
 
         # Inspect class dictionaries only: checking configuration must not
@@ -1005,6 +1068,7 @@ class LiveView(
         reject_removed_view_attributes(cls)
 
         cls._component_subscriptions = compile_subscriptions(cls)
+        _warn_legacy_exposure_policy(cls, at_class_statement=True)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)

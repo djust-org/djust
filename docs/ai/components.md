@@ -132,6 +132,9 @@ class ProjectView(LiveView):
     def mount(self, request, **kwargs):
         self.selected_action = ""
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "selected_action": self.selected_action}
+
     @project_menu.on.selected
     def on_project_menu_selected(self, component: DropdownMenu, value: str) -> None:
         self.selected_action = value

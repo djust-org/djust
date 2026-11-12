@@ -292,13 +292,14 @@ Things to know:
 - The form is built with `data=` only, so it cannot take required constructor arguments;
   `manage.py check` reports one that does (V023).
 - A `ModelChoiceField` is fine: validation runs on a worker thread on the socket paths.
-- With `exposure_policy = "explicit"` the view declares what it renders, so declare
-  `params_errors = state(default_factory=dict)` and pass it to `get_context_data()`.
+- A view declares what it renders ([explicit exposure](../state/explicit-exposure.md) is the
+  default), so to show the messages declare `params_errors = state(default_factory=dict)` and
+  pass it to `get_context_data()`.
 - A `params_form` that is not a form class raises `ImproperlyConfigured` on the first
   request; `manage.py check` reports it first (V023).
 - `params_form`, `params_form_fallback`, `http_status_of_state` and `state_attribute` are
-  framework class attributes: an `exposure_policy = "explicit"` view cannot declare a `state()` field
-  under those names, and a legacy view that assigns one on the instance does not publish
+  framework class attributes: a view cannot declare a `state()` field under those names, and
+  a view with `exposure_policy = "legacy"` that assigns one on the instance does not publish
   it as state.
 
 **Testing a view with `params_form`.** `LiveViewTestClient` calls `handle_params()` after
@@ -322,6 +323,9 @@ class PagedView(LiveView):
 
     def mount(self, request, **kwargs):
         self.page = 0
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "page": self.page}
 
     def handle_params(self, params, uri):
         self.page = params["page"]
