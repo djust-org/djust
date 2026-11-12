@@ -5057,6 +5057,13 @@ class ViewRuntime(RuntimeTurnPort):
         pre_assigns: Optional[Dict[str, Any]]
         pre_identity: Optional[Dict[str, int]]
         _pre_box: Dict[str, Any] = {}
+        # S1 spike: on an explicit view, declared state is tracked by
+        # assignment (``_state.ASSIGNMENT_TRACKING``) instead of being walked.
+        from . import _state as _s1_state
+        from ._exposure import uses_legacy_exposure as _s1_legacy
+
+        _s1 = bool(_s1_state.ASSIGNMENT_TRACKING) and not _s1_legacy(view)
+        _s1_box: Dict[str, Any] = {}
         from .worker_pool import offload_enabled
 
         if offload_enabled() and not inspect.iscoroutinefunction(handler):
@@ -5067,7 +5074,11 @@ class ViewRuntime(RuntimeTurnPort):
             _inner_handler = handler
 
             def handler(*args: Any, **kwargs: Any) -> Any:  # noqa: F811
-                _pre_box["assigns"] = _snapshot_assigns(view)
+                _pre_box["assigns"] = (
+                    _snapshot_assigns(view, True) if _s1 else _snapshot_assigns(view)
+                )
+                if _s1:
+                    _s1_box["token"] = _s1_state.s1_before_handler(view)
                 _pre_box["identity"] = {
                     k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs
                 }
@@ -5075,7 +5086,9 @@ class ViewRuntime(RuntimeTurnPort):
 
             pre_assigns = pre_identity = None
         else:
-            pre_assigns = _snapshot_assigns(view)
+            pre_assigns = _snapshot_assigns(view, True) if _s1 else _snapshot_assigns(view)
+            if _s1:
+                _s1_box["token"] = _s1_state.s1_before_handler(view)
             pre_identity = {k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs}
 
         # Call handler. The time-travel record is finalized + pushed in the
@@ -5196,11 +5209,17 @@ class ViewRuntime(RuntimeTurnPort):
             getattr(view, "_child_views", None)
         )
         if not skip_render and not force_html:
-            post_assigns = _snapshot_assigns(view)
-            if pre_assigns == post_assigns and not has_explicit_children:
+            if _s1:
+                _s1_state.s1_after_handler(view, _s1_box.get("token"))
+            post_assigns = _snapshot_assigns(view, True) if _s1 else _snapshot_assigns(view)
+            _s1_assigned = view.__dict__.get(_s1_state.ASSIGNED_ATTR) if _s1 else None
+            if pre_assigns == post_assigns and not has_explicit_children and not _s1_assigned:
                 skip_render = True
             else:
                 view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
+                if _s1_assigned:
+                    # Storage names, as the snapshot reported them.
+                    view._changed_keys |= {"_state_" + n for n in _s1_assigned}
 
         # #700: push_commands-only handlers auto-skip the render. When push events
         # are pending and the *identity* of every public attr is unchanged, the
@@ -5214,7 +5233,11 @@ class ViewRuntime(RuntimeTurnPort):
             pending = getattr(view, "_pending_push_events", None)
             if pending:
                 post_identity = {k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs}
-                if pre_identity == post_identity and not has_explicit_children:
+                if (
+                    pre_identity == post_identity
+                    and not has_explicit_children
+                    and not (_s1 and view.__dict__.get(_s1_state.ASSIGNED_ATTR))
+                ):
                     skip_render = True
 
         from ._async_batch import AsyncBatch

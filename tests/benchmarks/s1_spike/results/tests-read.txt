@@ -1,0 +1,3 @@
+  /Users/tip/.djust-work/wt-s1-spike/.venv/lib/python3.12/site-packages/asgiref/sync.py:608: UserWarning: async_to_sync was passed a non-async-marked callable
+FAILED python/djust/tests/test_stream_only_parity_3639.py::TestCallSiteInventory::test_the_call_sites_are_exactly_the_ones_this_file_covers
+1 failed, 1934 passed, 7 skipped, 62 warnings in 65.59s (0:01:05)

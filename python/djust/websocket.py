@@ -411,7 +411,7 @@ def _should_expose_timing() -> bool:
     )
 
 
-def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
+def _snapshot_assigns(view_instance: Any, skip_declared: bool = False) -> Dict[str, Any]:
     """Identity + structural snapshot of public assigns for change detection.
 
     Uses id() for every value plus :func:`djust.change_detection.deep_fingerprint`
@@ -454,8 +454,22 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
     for name, bound in getattr(view_instance, "_component_bindings", {}).items():
         if isinstance(bound, ComponentDeclaration):
             items.append((name, bound))
+    _declared_slots: Any = ()
+    if skip_declared:
+        # S1 spike: declared ``state()`` slots are tracked by assignment, so
+        # they are not walked; everything else is snapshotted as before.
+        from . import _state as _s1_state
+        from ._state import ASSIGNED_ATTR, UNSYNCED_ATTR, declared_state_fields
+
+        if _s1_state.NAMES_ONLY:
+            return {}
+
+        _declared_slots = set(declared_state_fields(type(view_instance)).values())
+        _declared_slots.update((ASSIGNED_ATTR, UNSYNCED_ATTR, "_reactive_state"))
     for k, v in items:
         if k in _fw_attrs or k in _static_skip or k in _FRAMEWORK_INTERNAL_ATTRS:
+            continue
+        if k in _declared_slots:
             continue
         # Identity + STRUCTURAL fingerprint for mutable containers (#2664):
         # ``deep_fingerprint`` walks dict/list/tuple/set down to the leaves

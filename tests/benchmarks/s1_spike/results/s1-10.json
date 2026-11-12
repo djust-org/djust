@@ -1,0 +1,124 @@
+{
+  "rows": 10,
+  "rounds": 200,
+  "switch": true,
+  "persist": null,
+  "cases": {
+    "bump": {
+      "turn_ms_median": 2.887,
+      "turn_ms_p90": 3.544,
+      "frames": {
+        "patch": 200
+      },
+      "patches_median": 1.0,
+      "phase_ms_median": {
+        "render_with_diff_total": 0.797,
+        "save_server_state": 0.155,
+        "snapshot_assigns": 0.058,
+        "sync.convert_for_render": 0.002,
+        "sync.normalize_django_value": 0.002,
+        "sync_total": 0.717
+      },
+      "phase_calls_last_round": {
+        "snapshot_assigns": 2,
+        "save_server_state": 1,
+        "render_with_diff_total": 1,
+        "sync_total": 1,
+        "sync.convert_for_render": 2,
+        "sync.normalize_django_value": 6
+      },
+      "rust_timing_median": {
+        "diff_ms": 0.0,
+        "fast_path": 2.0,
+        "html_len": 1269.0,
+        "parse_ms": 0.011,
+        "render_ms": 0.006,
+        "serialize_ms": 0.006,
+        "total_ms": 0.027
+      }
+    },
+    "edit_row_reassign": {
+      "turn_ms_median": 3.101,
+      "turn_ms_p90": 4.065,
+      "frames": {
+        "patch": 200
+      },
+      "patches_median": 1.0,
+      "phase_ms_median": {
+        "render_with_diff_total": 0.912,
+        "save_server_state": 0.156,
+        "snapshot_assigns": 0.06,
+        "sync.convert_for_render": 0.014,
+        "sync.normalize_django_value": 0.001,
+        "sync_total": 0.791
+      },
+      "phase_calls_last_round": {
+        "snapshot_assigns": 2,
+        "save_server_state": 1,
+        "render_with_diff_total": 1,
+        "sync_total": 1,
+        "sync.convert_for_render": 3,
+        "sync.normalize_django_value": 5
+      },
+      "rust_timing_median": {
+        "diff_ms": 0.0,
+        "fast_path": 2.0,
+        "html_len": 1271.0,
+        "parse_ms": 0.011,
+        "render_ms": 0.043,
+        "serialize_ms": 0.006,
+        "total_ms": 0.064
+      }
+    },
+    "edit_row_inplace": {
+      "turn_ms_median": 1.65,
+      "turn_ms_p90": 1.822,
+      "frames": {
+        "noop": 200
+      },
+      "patches_median": null,
+      "phase_ms_median": {
+        "save_server_state": 0.14,
+        "snapshot_assigns": 0.051
+      },
+      "phase_calls_last_round": {
+        "snapshot_assigns": 2,
+        "save_server_state": 1
+      },
+      "rust_timing_median": {}
+    },
+    "edit_row_touch": {
+      "turn_ms_median": 2.895,
+      "turn_ms_p90": 3.984,
+      "frames": {
+        "patch": 200
+      },
+      "patches_median": 1.0,
+      "phase_ms_median": {
+        "render_with_diff_total": 0.859,
+        "save_server_state": 0.149,
+        "snapshot_assigns": 0.057,
+        "sync.convert_for_render": 0.013,
+        "sync.normalize_django_value": 0.001,
+        "sync_total": 0.754
+      },
+      "phase_calls_last_round": {
+        "snapshot_assigns": 2,
+        "save_server_state": 1,
+        "render_with_diff_total": 1,
+        "sync_total": 1,
+        "sync.convert_for_render": 3,
+        "sync.normalize_django_value": 5
+      },
+      "rust_timing_median": {
+        "diff_ms": 0.0,
+        "fast_path": 2.0,
+        "html_len": 1271.0,
+        "parse_ms": 0.01,
+        "render_ms": 0.037,
+        "serialize_ms": 0.005,
+        "total_ms": 0.056
+      }
+    }
+  }
+}

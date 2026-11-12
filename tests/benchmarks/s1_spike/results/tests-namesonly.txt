@@ -1,0 +1,17 @@
+    assert "Action failed" in frames
+E   assert 'Action failed' in '[{"type": "noop", "source": "event", "event_name": "save", "ref": 9, "view": "djust.tests.test_exposure_action_errors.ActionErrorView", "state_snapshot_signed": null}]'
+ERROR    djust.decorators:_exposure_diagnostics.py:146 Protected view operation failed
+ERROR    djust.decorators:_exposure_diagnostics.py:146 Protected view operation failed
+  /Users/tip/.djust-work/wt-s1-spike/.venv/lib/python3.12/site-packages/asgiref/sync.py:608: UserWarning: async_to_sync was passed a non-async-marked callable
+FAILED python/djust/tests/test_stream_only_parity_3639.py::TestCallSiteInventory::test_the_call_sites_are_exactly_the_ones_this_file_covers
+FAILED python/djust/tests/test_exposure_action_errors.py::test_action_error_text_reaching_render[explicit-plain]
+FAILED python/djust/tests/test_exposure_action_errors.py::test_action_error_text_reaching_render[explicit-user]
+FAILED python/djust/tests/test_exposure_forms.py::test_password_value_never_reaches_session_frames_snapshot_or_debug
+FAILED python/djust/tests/test_exposure_invalidation.py::test_opaque_attribute_dependency_rerenders_conservatively[explicit]
+FAILED python/djust/tests/test_exposure_invalidation.py::test_policies_produce_identical_render_frames
+FAILED python/djust/tests/test_exposure_invalidation.py::test_provider_tracked_key_change_rerenders_its_keys[explicit]
+FAILED python/djust/tests/test_exposure_invalidation.py::test_provider_tracked_key_in_place_mutation_rerenders[explicit]
+FAILED python/djust/tests/test_exposure_entry_scope_diagnostics.py::test_ws_request_html_failure[prod-explicit]
+FAILED python/djust/tests/test_exposure_entry_scope_diagnostics.py::test_ws_request_html_failure[debug-explicit]
+FAILED python/djust/tests/test_exposure_forms.py::test_validate_field_and_submit_form_render_errors_over_the_runtime[explicit]
+11 failed, 1924 passed, 7 skipped, 62 warnings in 72.64s (0:01:12)

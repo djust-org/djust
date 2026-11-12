@@ -258,6 +258,10 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         # The SSE transport's stream id (``on_view_mounted``), the twin of
         # ``_websocket_session_id`` (#3248 review).
         "_sse_session_id",
+        # S1 spike bookkeeping (``_state.ASSIGNED_ATTR`` & co.).
+        "_djust_assigned",
+        "_djust_unsynced",
+        "_djust_read_fps",
     }
 )
 

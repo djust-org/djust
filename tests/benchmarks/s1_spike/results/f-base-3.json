@@ -1,0 +1,156 @@
+{
+  "rows": 1000,
+  "rounds": 200,
+  "switch": false,
+  "persist": null,
+  "cases": {
+    "bump": {
+      "turn_ms_median": 22.681,
+      "turn_ms_p90": 31.537,
+      "frames": {
+        "patch": 200
+      },
+      "patches_median": 1.0,
+      "phase_ms_median": {
+        "render_with_diff_total": 7.065,
+        "save_server_state": 0.195,
+        "snapshot_assigns": 10.583,
+        "sync.collect_sub_ids": 0.001,
+        "sync.convert_for_render": 0.003,
+        "sync.deep_fingerprint": 3.392,
+        "sync.normalize_django_value": 0.002,
+        "sync_total": 5.223
+      },
+      "phase_calls_last_round": {
+        "snapshot_assigns": 2,
+        "save_server_state": 1,
+        "render_with_diff_total": 1,
+        "sync_total": 1,
+        "sync.collect_sub_ids": 1,
+        "sync.deep_fingerprint": 1,
+        "sync.convert_for_render": 2,
+        "sync.normalize_django_value": 6
+      },
+      "rust_timing_median": {
+        "diff_ms": 0.0,
+        "fast_path": 2.0,
+        "html_len": 116150.0,
+        "parse_ms": 0.839,
+        "render_ms": 0.024,
+        "serialize_ms": 0.3,
+        "total_ms": 1.178
+      }
+    },
+    "edit_row_reassign": {
+      "turn_ms_median": 34.882,
+      "turn_ms_p90": 43.45,
+      "frames": {
+        "patch": 200
+      },
+      "patches_median": 1.0,
+      "phase_ms_median": {
+        "render_with_diff_total": 18.801,
+        "save_server_state": 0.206,
+        "snapshot_assigns": 10.889,
+        "sync.collect_sub_ids": 3.592,
+        "sync.convert_for_render": 0.002,
+        "sync.fingerprint_and_convert": 4.878,
+        "sync.normalize_django_value": 0.002,
+        "sync_total": 14.92
+      },
+      "phase_calls_last_round": {
+        "snapshot_assigns": 2,
+        "save_server_state": 1,
+        "render_with_diff_total": 1,
+        "sync_total": 1,
+        "sync.collect_sub_ids": 11001,
+        "sync.fingerprint_and_convert": 1,
+        "sync.convert_for_render": 2,
+        "sync.normalize_django_value": 6
+      },
+      "rust_timing_median": {
+        "diff_ms": 0.0,
+        "fast_path": 2.0,
+        "html_len": 116152.0,
+        "parse_ms": 0.842,
+        "render_ms": 1.931,
+        "serialize_ms": 0.302,
+        "total_ms": 3.104
+      }
+    },
+    "edit_row_inplace": {
+      "turn_ms_median": 34.203,
+      "turn_ms_p90": 39.399,
+      "frames": {
+        "patch": 200
+      },
+      "patches_median": 1.0,
+      "phase_ms_median": {
+        "render_with_diff_total": 18.4,
+        "save_server_state": 0.198,
+        "snapshot_assigns": 10.665,
+        "sync.collect_sub_ids": 3.558,
+        "sync.convert_for_render": 0.002,
+        "sync.fingerprint_and_convert": 4.745,
+        "sync.normalize_django_value": 0.002,
+        "sync_total": 14.59
+      },
+      "phase_calls_last_round": {
+        "snapshot_assigns": 2,
+        "save_server_state": 1,
+        "render_with_diff_total": 1,
+        "sync_total": 1,
+        "sync.collect_sub_ids": 11001,
+        "sync.fingerprint_and_convert": 1,
+        "sync.convert_for_render": 2,
+        "sync.normalize_django_value": 6
+      },
+      "rust_timing_median": {
+        "diff_ms": 0.0,
+        "fast_path": 2.0,
+        "html_len": 116152.0,
+        "parse_ms": 0.833,
+        "render_ms": 1.925,
+        "serialize_ms": 0.299,
+        "total_ms": 3.088
+      }
+    },
+    "edit_row_touch": {
+      "turn_ms_median": 33.352,
+      "turn_ms_p90": 37.954,
+      "frames": {
+        "patch": 200
+      },
+      "patches_median": 1.0,
+      "phase_ms_median": {
+        "render_with_diff_total": 17.76,
+        "save_server_state": 0.19,
+        "snapshot_assigns": 9.624,
+        "sync.collect_sub_ids": 3.533,
+        "sync.convert_for_render": 0.002,
+        "sync.fingerprint_and_convert": 4.553,
+        "sync.normalize_django_value": 0.002,
+        "sync_total": 14.046
+      },
+      "phase_calls_last_round": {
+        "snapshot_assigns": 2,
+        "save_server_state": 1,
+        "render_with_diff_total": 1,
+        "sync_total": 1,
+        "sync.collect_sub_ids": 11001,
+        "sync.fingerprint_and_convert": 1,
+        "sync.convert_for_render": 2,
+        "sync.normalize_django_value": 6
+      },
+      "rust_timing_median": {
+        "diff_ms": 0.0,
+        "fast_path": 2.0,
+        "html_len": 116152.0,
+        "parse_ms": 0.825,
+        "render_ms": 1.896,
+        "serialize_ms": 0.298,
+        "total_ms": 3.034
+      }
+    }
+  }
+}

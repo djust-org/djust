@@ -770,6 +770,16 @@ class RustBridgeMixin:
             cls._djust_template_hash_slot = slot
         return slot
 
+    def touch(self, *names: str) -> None:
+        """S1 spike: declare that the named ``state()`` fields changed in place."""
+        from .._state import declared_state_fields, record_assignment
+
+        fields = declared_state_fields(type(self))
+        for name in names:
+            if name not in fields:
+                raise AttributeError("touch(): %r is not a declared state() field" % name)
+            record_assignment(self, name)
+
     def set_changed_keys(self, keys: Union[str, Iterable[str], None] = None) -> None:
         """Mark one or more public attrs as changed, forcing a re-render.
 
@@ -1073,6 +1083,33 @@ class RustBridgeMixin:
             def _is_structural(value: Any) -> bool:
                 return isinstance(value, (dict, list, tuple)) or fingerprints_by_content(value)
 
+            # S1 spike: a context value that IS the object held by a declared
+            # ``state()`` slot changed exactly when that field was assigned
+            # since the last sync. It is neither fingerprinted nor is a
+            # fingerprint of it kept. Derived containers keep the old rule.
+            from .. import _state as _s1_state
+            from .._exposure import uses_legacy_exposure as _s1_legacy
+
+            _s1 = bool(_s1_state.ASSIGNMENT_TRACKING) and not _s1_legacy(self)
+            _s1_owner: Dict[int, str] = {}
+            _s1_unsynced: Set[str] = set()
+            if _s1:
+                _s1_state._trace("sync")
+                _self_dict = self.__dict__
+                for _fname, _slot in _s1_state.declared_state_fields(type(self)).items():
+                    _held = _self_dict.get(_slot, _MISSING)
+                    if _held is not _MISSING and _is_structural(_held):
+                        _s1_owner[id(_held)] = _fname
+                _s1_unsynced = _self_dict.get(_s1_state.UNSYNCED_ATTR) or set()
+                _self_dict[_s1_state.UNSYNCED_ATTR] = set()
+
+            def _structural_changed(key: str, value: Any) -> bool:
+                if _s1:
+                    owner = _s1_owner.get(id(value))
+                    if owner is not None:
+                        return owner in _s1_unsynced
+                return bool(prev_fps.get(key, _MISSING) != _fp_of(key, value))
+
             def _fp_of(key: str, value: Any, convert: bool = False) -> Any:
                 fp = new_fps.get(key, _MISSING)
                 if fp is _MISSING:
@@ -1104,7 +1141,7 @@ class RustBridgeMixin:
                     # comparison which produces false positives due to Python
                     # int cache misses on the double-sync path.
                     changed_sub_ids: Set[int] = set()
-                    for key in changed_keys:
+                    for key in () if _s1 else changed_keys:
                         val = getattr(self, key, None) or full_context.get(key)
                         if val is not None:
                             _collect_sub_ids(val, changed_sub_ids)
@@ -1146,7 +1183,7 @@ class RustBridgeMixin:
                         elif changed_sub_ids and id(value) in changed_sub_ids:
                             context[key] = value  # sub-object of changed (#703)
                         elif _is_structural(value):
-                            if prev_fps.get(key, _MISSING) != _fp_of(key, value):
+                            if _structural_changed(key, value):
                                 context[key] = value
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
                             # Immutable: compare by value to catch derived
@@ -1168,7 +1205,7 @@ class RustBridgeMixin:
                         elif getattr(value, "_dirty", False):
                             context[key] = value  # TypedState dirty flag
                         elif _is_structural(value):
-                            if prev_fps.get(key, _MISSING) != _fp_of(key, value):
+                            if _structural_changed(key, value):
                                 context[key] = value
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
                             if prev_immutables.get(key, _MISSING) != value:
@@ -1207,7 +1244,9 @@ class RustBridgeMixin:
             self._prev_context_fingerprints = {
                 k: _fp_of(k, v, convert=context.get(k, _MISSING) is v)
                 for k, v in full_context.items()
-                if k not in _request_scoped_keys and _is_structural(v)
+                if k not in _request_scoped_keys
+                and _is_structural(v)
+                and not (_s1 and id(v) in _s1_owner)
             }
             self._sync_done_this_cycle = True
             self._changed_keys = None  # Clear
