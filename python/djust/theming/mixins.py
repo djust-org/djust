@@ -41,6 +41,11 @@ from .presets import THEME_PRESETS
 #: them and are never assigned, so they are never part of the state.
 _RENDERED_THEME_NAMES = ("theme_head", "theme_css", "theme_switcher", "theme_presets")
 
+#: The three small values ``_setup_theme_context`` assigns as view attributes.
+#: The legacy attribute walk renders them; a view with explicit exposure gets
+#: them from :meth:`ThemeMixin._apply_context_processors` (ADR-038 Step R, PR 0c).
+_THEME_STATE_NAMES = ("theme_preset", "theme_mode", "theme_resolved_mode")
+
 
 class _RenderedOnRead:
     """A read-only class attribute whose value is computed on each access.
@@ -305,10 +310,27 @@ class ThemeMixin:
         # as a request-scoped key: change detection tracks it like any value.
         if "theme_presets_count" not in own and "theme_presets_count" not in self.__dict__:
             result["theme_presets_count"] = len(presets)
+        # The three small state values are view attributes. A legacy view's
+        # attribute walk has already put them in ``context``; a view with
+        # explicit exposure renders nothing it is not given, so they are
+        # supplied here, where the other theme names are. The view's value wins
+        # over a ``theme_context`` processor's, as it did under the walk. They
+        # are not registered as provider keys: a processor that supplies a
+        # different value for a provider key is a collision error, and a
+        # project may run ``theme_context`` next to the mixin. Unlike the lazy
+        # chunks they stay change-tracked, so a template that branches on
+        # ``theme_mode`` re-renders when it changes.
+        supplied = set()
+        for name in _THEME_STATE_NAMES:
+            if name not in own and name in self.__dict__:
+                result[name] = self.__dict__[name]
+                supplied.add(name)
         # Record them as framework-supplied, like the processor keys: that is
         # what keeps them out of the change-detection fingerprint and, for the
         # lazy chunks, out of the stored state.
-        self._context_processor_keys = set(getattr(self, "_context_processor_keys", ())) | added
+        self._context_processor_keys = (
+            set(getattr(self, "_context_processor_keys", ())) | added
+        ) - supplied
         return result
 
     def _push_theme_update(

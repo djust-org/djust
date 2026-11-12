@@ -40,7 +40,9 @@ from django.forms import BaseFormSet
 from django.forms.models import BaseModelFormSet
 
 from . import _form_data_bounds
+from ._exposure import ProviderContract, uses_legacy_exposure
 from ._exposure_diagnostics import log_failure_for
+from ._exposure_providers import provide_context
 from .decorators import event_handler
 
 
@@ -313,6 +315,19 @@ def remove_row(
     return formset_cls(data, prefix=prefix, **formset_kwargs)
 
 
+_FORMSETS_PROVIDER = "djust.formsets"
+
+
+def _formsets_provider(view_class: type) -> ProviderContract:
+    """The formset names a ``FormSetHelpersMixin`` view declares in ``formset_classes``."""
+    declared = getattr(view_class, "formset_classes", None)
+    names = declared if isinstance(declared, dict) else {}
+    return ProviderContract(
+        _FORMSETS_PROVIDER,
+        rendered=frozenset(name for name in names if isinstance(name, str) and name.isidentifier()),
+    )
+
+
 class FormSetHelpersMixin:
     """LiveView mixin with pre-baked ``add_row`` / ``remove_row`` event handlers.
 
@@ -334,6 +349,32 @@ class FormSetHelpersMixin:
 
     #: Map of ``dj-value-formset`` name → Django ``BaseFormSet`` subclass.
     formset_classes: Dict[str, Type[BaseFormSet]] = {}
+
+    _djust_context_providers = (_formsets_provider,)
+
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        """Render the declared formsets for a view with explicit exposure.
+
+        ``add_row`` / ``remove_row`` assign the rebuilt formset to the attribute
+        named in ``formset_classes``. A legacy view is untouched: its attribute
+        walk already renders that attribute. An explicit view renders nothing it
+        is not given, so the mixin provides each declared name the view has
+        assigned. Render-only: the formset and ``_formset_data`` are neither
+        persisted nor sent to the browser as data.
+        """
+        # FormSetHelpersMixin is mixed into a LiveView at runtime; the MRO
+        # supplies get_context_data(). mypy only sees object here.
+        context: Dict[str, Any] = (
+            super().get_context_data(**kwargs)  # type: ignore[misc]
+            if hasattr(super(), "get_context_data")
+            else {}
+        )
+        if uses_legacy_exposure(self):
+            return context
+        for name in sorted(_formsets_provider(type(self)).rendered):
+            if name in self.__dict__:
+                provide_context(self, context, _FORMSETS_PROVIDER, name, self.__dict__[name])
+        return context
 
     def _resolve_formset_class(self, name: str) -> Type[BaseFormSet]:
         cls = self.formset_classes.get(name)

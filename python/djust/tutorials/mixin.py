@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Awaitable, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Dict, List, Optional
 
+from djust._exposure import ProviderContract, uses_legacy_exposure
+from djust._exposure_providers import provide_context
 from djust.decorators import background, event_handler
 from djust.js import JS, JSChain
 
@@ -19,6 +21,18 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger("djust.tutorials")
+
+#: The names ``TutorialMixin`` renders under explicit exposure (ADR-038 Step R,
+#: PR 0c): the three progress values and the highlight class. These are the
+#: mixin names the legacy attribute walk rendered. ``tutorial_steps`` is not
+#: among them: the walk skipped it too (#694, ``TutorialStep`` is not data).
+_TUTORIAL_CONTEXT_NAMES = (
+    "tutorial_running",
+    "tutorial_current_step",
+    "tutorial_total_steps",
+    "default_highlight_class",
+)
+TUTORIAL_PROVIDER = ProviderContract("djust.tutorials", rendered=frozenset(_TUTORIAL_CONTEXT_NAMES))
 
 
 class TutorialMixin:
@@ -95,6 +109,7 @@ class TutorialMixin:
     # Default highlight class if a step doesn't specify one. Apps can
     # override this at the class level to change the default look.
     default_highlight_class: str = "tour-highlight"
+    _djust_context_providers = (TUTORIAL_PROVIDER,)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Move ``tutorial_steps`` to ``_tutorial_steps`` at class creation.
@@ -163,6 +178,25 @@ class TutorialMixin:
     @tutorial_total_steps.setter
     def tutorial_total_steps(self, value: int) -> None:
         self._tutorial_total_steps = value
+
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        """Render the tour's progress values for a view with explicit exposure.
+
+        A legacy view is untouched: its attribute walk already renders these
+        names. Render-only: nothing here is persisted or sent to the browser
+        as data, and a tour does not survive a reconnect under either policy.
+        """
+        # TutorialMixin is mixed into a LiveView at runtime; the MRO supplies
+        # get_context_data(). mypy only sees object here.
+        context: Dict[str, Any] = (
+            super().get_context_data(**kwargs)  # type: ignore[misc]
+            if hasattr(super(), "get_context_data")
+            else {}
+        )
+        if not uses_legacy_exposure(self):
+            for name in _TUTORIAL_CONTEXT_NAMES:
+                provide_context(self, context, TUTORIAL_PROVIDER.name, name, getattr(self, name))
+        return context
 
     # ------------------------------------------------------------------
     # Event handlers

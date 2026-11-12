@@ -71,7 +71,8 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from django.core.cache import cache
 
-from ._exposure import uses_legacy_exposure
+from ._exposure import ProviderContract, uses_legacy_exposure
+from ._exposure_providers import provide_context
 from .decorators import event_handler
 from .push import push_to_presence_scope, push_to_view, view_push_scopes
 
@@ -262,6 +263,12 @@ class PresenceManager:
             backend.heartbeat_connection(presence_key, user_id, connection_id)
 
 
+#: ``PresenceMixin``'s render-only context under explicit exposure (ADR-038
+#: Step R, PR 0c). ``online_count`` is an ordinary view attribute the mixin
+#: refreshes; the legacy attribute walk rendered it, and nothing else does.
+PRESENCE_PROVIDER = ProviderContract("djust.presence", rendered=frozenset({"online_count"}))
+
+
 class PresenceMixin:
     """
     Mixin that provides presence tracking capabilities to LiveView.
@@ -281,6 +288,7 @@ class PresenceMixin:
 
     room_clock: Any = None  # Opt-in ADR-042 presence-bound process clock
     presence_key: Optional[str] = None
+    _djust_context_providers = (PRESENCE_PROVIDER,)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -369,6 +377,29 @@ class PresenceMixin:
         except Exception as exc:  # noqa: BLE001 — backend errors must not break track/untrack
             logger.debug("PresenceMixin._refresh_online_count: %s", exc)
             self.online_count = getattr(self, "online_count", 0)
+
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        """Render ``online_count`` for a view with explicit exposure.
+
+        A legacy view is untouched: its attribute walk already renders the
+        attribute. An explicit view renders nothing it is not given, so the
+        mixin provides the one name it publishes. It is provided only once
+        the mixin has set it (``track_presence`` or a presence change), which
+        is exactly when the walk rendered it. Render-only: it is neither
+        persisted nor sent to the browser as data.
+        """
+        # PresenceMixin is mixed into a LiveView at runtime; the MRO supplies
+        # get_context_data(). mypy only sees object here.
+        context: Dict[str, Any] = (
+            super().get_context_data(**kwargs)  # type: ignore[misc]
+            if hasattr(super(), "get_context_data")
+            else {}
+        )
+        if not uses_legacy_exposure(self) and "online_count" in self.__dict__:
+            provide_context(
+                self, context, PRESENCE_PROVIDER.name, "online_count", self.__dict__["online_count"]
+            )
+        return context
 
     def _presence_broadcast_is_scoped(self) -> bool:
         """Whether a join or leave wakes only the sessions sharing the presence
