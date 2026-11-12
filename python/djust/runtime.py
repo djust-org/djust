@@ -3368,9 +3368,12 @@ def _derive_missing_principal(request: Any) -> None:
     the same way: mount and event then name the same principal, which the
     event check requires.
 
-    Called after the pre-mount auth sequence has passed with the request as
-    the stack built it, so which views that stack admits is unchanged: a
-    ``login_required`` or ``permission_required`` view is still refused there.
+    Called after the pre-mount auth sequence and the ``on_mount`` hooks have
+    passed with the request as the stack built it, so which views that stack
+    admits is unchanged: a ``login_required`` or ``permission_required`` view
+    is still refused there. Later gates keep judging it that way
+    (``auth.core.request_as_the_stack_built_it``); the view's own code, the
+    state binding, presence, rate limits and tenant resolution see the user.
     A ``user`` the stack supplied is never replaced, and a legacy view is
     never given one. Without ``django.contrib.auth`` there is nothing to read
     and the binding's own refusal stands.
@@ -3856,9 +3859,6 @@ class ViewRuntime(RuntimeTurnPort):
             self.view_instance = None
             return
 
-        if not uses_legacy_exposure(view_instance):
-            await sync_to_async(_derive_missing_principal)(request)
-
         # ---- on_mount hooks (after auth, before mount) ----
         # Ported from WS handle_mount (websocket.py:2383-2401), placed at the
         # SAME point: AFTER the pre-mount auth sequence, BEFORE mount(). The
@@ -3884,6 +3884,11 @@ class ViewRuntime(RuntimeTurnPort):
             self.view_instance = None
             return
         # ---- End on_mount hooks ----
+
+        # After every admission decision (the auth sequence and the on_mount
+        # hooks judged the request as the stack built it), before mount().
+        if not uses_legacy_exposure(view_instance):
+            await sync_to_async(_derive_missing_principal)(request)
 
         # Transport-specific identity + post-mount setup hook (#1887 / #1919):
         # SSE stamps _sse_session_id / _sse_session + the real query string here so

@@ -118,7 +118,11 @@ def DjustMiddlewareStack(inner: Any, *, validate_origin: bool = True) -> Any:
     ``permission_required`` is refused behind it. A view with explicit
     exposure that passes that check still needs a principal to bind its state
     to: its mount reads the user from the session, as each of its events does
-    (``django.contrib.auth.get_user``), so the two agree.
+    (``django.contrib.auth.get_user``), so the two agree. That user is what the
+    view's own code, the state binding, presence, rate limits and tenant
+    resolution see. It grants nothing: every access decision (view and handler
+    permissions, ``check_permissions``, ``has_object_permission``, ``on_mount``
+    hooks) is still made against the request as this stack built it.
 
     Args:
         inner: The ASGI application to wrap (typically a ``URLRouter``).

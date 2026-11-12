@@ -172,8 +172,16 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
   stack authenticated. Behind the session-only `DjustMiddlewareStack` the
   request has no user: a `login_required` view is refused there, and a view
   that passes the access check reads its user from the session
-  (`django.contrib.auth.get_user`), at mount and at every event. A consumer
-  routed with no session middleware is refused.
+  (`django.contrib.auth.get_user`), at mount and at every event. That user is
+  for the view, not for access. Every access decision is still made against
+  what the stack supplied, so behind the session-only stack `login_required`,
+  `permission_required` (on a view or a handler), `check_permissions`,
+  `has_object_permission`, `on_mount` hooks and the access control on `post()`
+  all see no user and refuse, for a child view as for a page. What does see the
+  session's user: the view's own code (`mount`, handlers, `get_object`,
+  `get_context_data`), the binding of persisted state, presence identity,
+  rate-limit keys and tenant resolution. A consumer routed with no session
+  middleware is refused.
 - **Uploads.** `uploads` renders each entry's progress and a sanitized file
   name. The raw client file name and the writer's result are not included.
   Uploads in flight are not resumed after a reconnect; the client registers

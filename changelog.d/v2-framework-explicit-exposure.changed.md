@@ -43,9 +43,10 @@
   one, so it used to be refused. The mount now reads the user from the session, as each
   explicit event already does, after the usual access check has run on the request as the
   stack built it: a `login_required` or `permission_required` view is still refused behind
-  that stack, and a legacy view still gets no `request.user` there. The access check judges
-  every request that way, so a gated child embedded in a public page is refused there as it
-  would be as a page of its own. The same holds over SSE on a project without
+  that stack, and a legacy view still gets no `request.user` there. Every access decision
+  judges the request that way (view and handler permissions, `check_permissions`,
+  `has_object_permission`, `on_mount` hooks), so a gated child embedded in a public page, or
+  a permission-gated handler on one, is refused there as it would be on a legacy view. The same holds over SSE on a project without
   `AuthenticationMiddleware`: the stream's mount and each event POST read the user from the
   session.
 

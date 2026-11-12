@@ -20,11 +20,14 @@ import uuid
 import pytest
 from asgiref.sync import sync_to_async
 from django.contrib.sessions.backends.db import SessionStore
+from django.contrib.auth.decorators import login_required as django_login_required
 from django.test import Client, RequestFactory
+from django.utils.decorators import method_decorator
 from django.urls import path
 
 from djust import LiveView, event_handler
-from djust.decorators import state
+from djust.decorators import permission_required, state
+from djust.hooks import on_mount
 from djust.tests.test_admin_page_render import _session_cookie
 from djust.tests.test_exposure_framework_views import (
     _EVENT_ANSWERS,
@@ -96,6 +99,78 @@ class Plain(LiveView):
         self.event_who = _who(self.request)
 
 
+class Gates(LiveView):
+    """Public and explicit, with a permission-gated handler."""
+
+    exposure_policy = "explicit"
+    login_required = False
+    template = "<div dj-root><b>ran={{ ran }}</b></div>"
+
+    def mount(self, request, **kwargs):
+        self.ran = 0
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(ran=self.ran, **kwargs)
+
+    @permission_required("auth.view_group")
+    @event_handler()
+    def guarded(self, **kwargs):
+        self.ran += 1
+
+
+class LegacyGates(Gates):
+    exposure_policy = "legacy"
+
+
+@method_decorator(django_login_required, name="post")
+class PostGated(LiveView):
+    """Public page whose ``post()`` (so every event) is for signed-in users."""
+
+    exposure_policy = "explicit"
+    login_required = False
+    template = "<div dj-root><b>ran={{ ran }}</b></div>"
+
+    def mount(self, request, **kwargs):
+        self.ran = 0
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(ran=self.ran, **kwargs)
+
+    @event_handler()
+    def touch(self, **kwargs):
+        self.ran += 1
+
+
+@on_mount
+def _signed_in_only(view, request, **kwargs):
+    if not getattr(getattr(request, "user", None), "is_authenticated", False):
+        return "/login/"
+    return None
+
+
+class HookGated(LiveView):
+    """Public and explicit; admitted by an ``on_mount`` hook."""
+
+    exposure_policy = "explicit"
+    login_required = False
+    on_mount = [_signed_in_only]
+    template = "<div dj-root>HOOK_GATED</div>"
+
+
+class StaffObject(LiveView):
+    """Public and explicit; its object is for staff only."""
+
+    exposure_policy = "explicit"
+    login_required = False
+    template = "<div dj-root>STAFF_OBJECT</div>"
+
+    def get_object(self):
+        return {"id": 1}
+
+    def has_object_permission(self, request, obj):
+        return bool(getattr(getattr(request, "user", None), "is_staff", False))
+
+
 class GatedChild(LiveView):
     exposure_policy = "explicit"
     login_required = True
@@ -129,6 +204,10 @@ urlpatterns = [
     path("who/", Who.as_view()),
     path("who-next/", WhoNext.as_view()),
     path("plain/", Plain.as_view()),
+    path("gates/", Gates.as_view()),
+    path("post-gated/", PostGated.as_view()),
+    path("staff-object/", StaffObject.as_view()),
+    path("hook-gated/", HookGated.as_view()),
     path("parent/", EmbeddingParent.as_view()),
     path("sticky-parent/", StickyParent.as_view()),
 ]
@@ -361,3 +440,153 @@ async def test_the_same_child_as_a_root_is_refused_behind_the_session_only_stack
     async with _StackSocket("session-only", _session_cookie(browser)) as ws:
         frame = await ws.answer(_mount_frame(MODULE + "." + child, URL), *_MOUNT_ANSWERS)
     assert frame.get("type") != "mount", frame
+
+
+# --------------------------------------------------------------------------
+# Every gate judges the request as the stack built it
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("view", ["Gates", "LegacyGates"])
+@pytest.mark.parametrize("stack, granted", [("session-only", False), ("auth(djust)", True)])
+async def test_a_permission_gated_handler_follows_the_stack(
+    django_user_model, view, stack, granted
+):
+    """A superuser's session behind a stack that authenticated nobody does not
+    satisfy ``@permission_required``, on an explicit view as on a legacy one."""
+    browser = await _logged_in(django_user_model)
+    async with _StackSocket(stack, _session_cookie(browser)) as ws:
+        mounted = await ws.answer(_mount_frame(MODULE + "." + view, "/gates/"), *_MOUNT_ANSWERS)
+        assert mounted.get("type") == "mount", mounted
+        answered = await ws.answer(_event("guarded"), *_EVENT_ANSWERS)
+    if granted:
+        assert "ran=1" in json.dumps(answered), answered
+    else:
+        assert answered.get("type") in ("error", "permission_denied"), answered
+        assert "ran=1" not in json.dumps(answered)
+
+
+@pytest.mark.parametrize("stack, granted", [("session-only", False), ("auth(djust)", True)])
+async def test_access_control_on_post_follows_the_stack(django_user_model, stack, granted):
+    browser = await _logged_in(django_user_model)
+    async with _StackSocket(stack, _session_cookie(browser)) as ws:
+        mounted = await ws.answer(
+            _mount_frame(MODULE + ".PostGated", "/post-gated/"), *_MOUNT_ANSWERS
+        )
+        assert mounted.get("type") == "mount", mounted
+        answered = await ws.answer(_event("touch"), *_EVENT_ANSWERS)
+    assert ("ran=1" in json.dumps(answered)) is granted, answered
+
+
+@pytest.mark.parametrize("stack, granted", [("session-only", False), ("auth(djust)", True)])
+async def test_has_object_permission_follows_the_stack(django_user_model, stack, granted):
+    browser = await _logged_in(django_user_model)
+    async with _StackSocket(stack, _session_cookie(browser)) as ws:
+        frame = await ws.answer(
+            _mount_frame(MODULE + ".StaffObject", "/staff-object/"), *_MOUNT_ANSWERS
+        )
+    if granted:
+        assert frame.get("type") == "mount" and "STAFF_OBJECT" in frame["html"], frame
+    else:
+        assert frame.get("type") != "mount" and "STAFF_OBJECT" not in json.dumps(frame), frame
+
+
+@pytest.mark.parametrize("stack, granted", [("session-only", False), ("auth(djust)", True)])
+async def test_an_on_mount_hook_follows_the_stack(django_user_model, stack, granted):
+    browser = await _logged_in(django_user_model)
+    async with _StackSocket(stack, _session_cookie(browser)) as ws:
+        frame = await ws.answer(
+            _mount_frame(MODULE + ".HookGated", "/hook-gated/"), *_MOUNT_ANSWERS
+        )
+    assert (frame.get("type") == "mount") is granted, frame
+
+
+async def test_a_permission_gated_handler_is_denied_over_sse_without_auth_middleware(
+    django_user_model,
+):
+    from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+
+    browser = await _logged_in(django_user_model)
+    key = await sync_to_async(lambda: browser.session.session_key)()
+    sid = str(uuid.uuid4())
+    stream = RequestFactory().get(
+        "/djust/sse/%s/" % sid, data={"view": MODULE + ".Gates", "_djust_url": "/gates/"}
+    )
+    stream.session = SessionStore(key)
+    assert (await DjustSSEStreamView().get(stream, session_id=sid)).status_code == 200
+    session = _sse_sessions[sid]
+    try:
+        post = RequestFactory().post(
+            "/djust/sse/%s/message/" % sid,
+            data=json.dumps({"type": "event", "event": "guarded", "params": {}}),
+            content_type="application/json",
+        )
+        post.session = SessionStore(key)
+        await DjustSSEMessageView().post(post, session_id=sid)
+        assert session.view_instance.ran == 0
+    finally:
+        _sse_sessions.pop(sid, None)
+
+
+#: The gates of ``djust.auth.core`` and how each comes to judge the request as
+#: the stack built it: by calling the wrapper itself, or by going through a
+#: gate that does. A new function there that takes a request and decides
+#: access has to be added here, which is the point.
+_CALLS_THE_WRAPPER = {
+    "check_view_auth",
+    "acheck_view_auth",
+    "check_event_auth",
+    "check_handler_permission",
+    "_resolve_object_permission",
+}
+_GOES_THROUGH = {
+    "check_view_auth_lightweight": "check_view_auth",
+    "acheck_view_auth_lightweight": "acheck_view_auth",
+    "run_pre_mount_auth": "check_view_auth",
+    "arun_pre_mount_auth": "acheck_view_auth",
+    "check_object_permission": "_resolve_object_permission",
+    "check_object_permission_for_event": "check_object_permission",
+    "enforce_object_permission": "check_object_permission",
+}
+
+
+def test_every_gate_judges_the_request_as_the_stack_built_it():
+    import ast
+    from pathlib import Path
+
+    from djust.auth import core
+
+    tree = ast.parse(Path(core.__file__).read_text(encoding="utf-8"))
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def calls(name):
+        return {
+            n.func.id
+            for n in ast.walk(functions[name])
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        } | {n.id for n in ast.walk(functions[name]) if isinstance(n, ast.Name)}
+
+    gates = {
+        name
+        for name, node in functions.items()
+        if "request" in {a.arg for a in node.args.args}
+        and name.lstrip("_").split("_")[0]
+        in {"check", "acheck", "enforce", "run", "arun", "resolve"}
+        and name not in {"request_as_the_stack_built_it"}
+    }
+    # Step functions of check_view_auth: they receive the request it already wrapped.
+    inner = {
+        "_check_view_auth",
+        "_check_login_and_permission",
+        "_check_after_custom",
+        "_check_django_access_mixins",
+    }
+    assert gates - inner == _CALLS_THE_WRAPPER | set(_GOES_THROUGH), sorted(gates - inner)
+    for name in _CALLS_THE_WRAPPER:
+        assert "request_as_the_stack_built_it" in calls(name), name
+    for name, through in _GOES_THROUGH.items():
+        assert through in calls(name), (name, through)
