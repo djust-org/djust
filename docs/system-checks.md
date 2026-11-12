@@ -46,8 +46,10 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V014 | LiveView | Warning | Time-travel-enabled view has PII-looking model/form fields not in `time_travel_excluded_fields` |
 | V015 | LiveView | Warning | LIVEVIEW_ALLOWED_MODULES rejects a djust LiveView the URLconf routes (add `"djust"`) |
 | V016 | LiveView | Error | Strict-policy handler declaration that strict dispatch rejects (ADR-036) |
+| V017 | LiveView | Retired | Retired in 2.0 with the actor system: async strict event handler on an actor view. Never emitted; the ID is not reused |
 | V018 | LiveView | Warning | `@event_handler(params=[...])` disagrees with a strict handler's signature |
 | V019 | LiveView | Warning | A `dj-auto-recover` handler declares `parameter_policy="strict"`; recovery always runs under legacy policy |
+| V020 | LiveView | Retired | Retired in 2.0 with the actor system: interactive component declared on an actor view. Never emitted; the ID is not reused |
 | V021 | LiveView | Info / Warning | A subclass overrides a `@push_handler` method without the marker (Info; still push-only), or gives the override `@event_handler` (Warning; browsers are still refused) |
 | V022 | LiveView | Warning | View code assigns an attribute djust's `LiveView` keeps its own state under (`self._streams = ...`) |
 | V023 | LiveView | Error | A `params_form` the request path cannot use: not a form class, or a form whose `__init__` needs arguments beyond `data=`; or a `params_form_fallback` that is not `"initial"` or `"fields"` |
@@ -421,6 +423,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V016"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V016"]` (dispatch still rejects the events)
 - **False positives**: None: the check and dispatch share one compiled contract.
 
+### V017 — Retired
+- **Retired in**: 2.0 (the actor system was removed)
+- **What it did**: reported a strict-policy `async def` event handler on a `use_actors = True` view, which actor dispatch rejected before the handler ran
+- **Why it was retired**: `use_actors` no longer exists. A view that still sets it is refused with `ImproperlyConfigured`, when the class is created and again on the mount path
+- **Migration**: remove `"V017"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
+
 ### V018 — `params=` disagrees with a strict handler's signature
 - **Severity**: Warning
 - **Method**: Runtime (decorator metadata compared with the compiled strict contract)
@@ -433,6 +441,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: a handler that a `dj-auto-recover` binding targets and that declares `parameter_policy="strict"`. Recovery handlers receive the `_form_values` / `_data_attrs` dictionaries, so dispatch always runs them under the legacy policy (ADR-036 decision R1), whatever the declaration or project policy. Recovery targets are not otherwise checked by V016.
 - **Limitation**: this startup check sees only the view's own template source. A binding in an included or parent template, or with a dynamic value, is not reported here, but dispatch still treats the handler as legacy once a render contains it.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V019"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V019"]`
+
+### V020 — Retired
+- **Retired in**: 2.0 (the actor system was removed)
+- **What it did**: reported a `use_actors = True` view that declared an interactive component from `djust.components.interactive`
+- **Why it was retired**: `use_actors` no longer exists. A view that still sets it is refused with `ImproperlyConfigured`, when the class is created and again on the mount path
+- **Migration**: remove `"V020"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
 ### V021 — Override of a `@push_handler` method
 - **Severity**: Info; Warning when the override carries `@event_handler`

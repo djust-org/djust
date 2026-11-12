@@ -738,6 +738,14 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 ---
 
+### V017: Retired
+
+**Retired in 2.0** with the actor system. V017 reported a strict-policy `async def`
+event handler on a `use_actors = True` view. djust no longer emits V017, and the ID
+is never reused. Existing suppressions of V017 have no effect and can be removed.
+
+---
+
 ### V019: Strict declaration on a dj-auto-recover handler
 
 **Severity**: Warning
@@ -755,6 +763,14 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 **What causes it**: `@event_handler(params=[...])` lists different parameters from a strict handler's signature. Under the strict policy the signature is the contract, so the list is ignored by validation and only misleads tooling.
 
 **Fix**: Remove `params=` or make it match the signature.
+
+---
+
+### V020: Retired
+
+**Retired in 2.0** with the actor system. V020 reported a `use_actors = True` view
+that declared an interactive component. djust no longer emits V020, and the ID is
+never reused. Existing suppressions of V020 have no effect and can be removed.
 
 ---
 

@@ -8,10 +8,13 @@
   `actors` module, and `djust._rust.create_session_actor`, `get_actor_stats`,
   `SessionActorHandle` and `SupervisorStatsPy`. System checks `djust.V017`
   (async strict handler on an actor view) and `djust.V020` (interactive
-  component on an actor view) reported only on actor views and are gone too.
+  component on an actor view) reported only on actor views and are retired;
+  the IDs are not reused.
 
   A `LiveView` subclass that sets a truthy `use_actors` now raises
-  `ImproperlyConfigured` when the class is created, naming the class. Delete
+  `ImproperlyConfigured` when the class is created, naming the class; a value
+  set on the instance or assigned to the class later raises the same error
+  right after `mount()`, over HTTP, WebSocket and SSE. Delete
   the attribute: the view runs on the standard runtime, which already runs one
   turn at a time per connection, and `start_async()` / `@background` cover
   work that should not block a turn. `djust_audit` no longer prints an

@@ -406,12 +406,14 @@ class OrderView(LiveView):
 actor in the Rust extension. It was experimental, WebSocket-only, and could not
 run under explicit exposure. djust `2.0.0` removed it, together with
 `djust._rust.create_session_actor`, `get_actor_stats`, `SessionActorHandle` and
-`SupervisorStatsPy`, and the system checks `djust.V017` and `djust.V020`, which
-only reported on actor views.
+`SupervisorStatsPy`. The system checks `djust.V017` and `djust.V020`, which
+only reported on actor views, are retired; their IDs are not reused.
 
 A `LiveView` subclass that sets a truthy `use_actors` raises
-`ImproperlyConfigured` when the class is created, naming the class. Delete the
-attribute:
+`ImproperlyConfigured` when the class is created, naming the class. A value the
+class-creation check cannot see (set on the instance, or assigned to the class
+later) raises the same error right after `mount()`, on every transport. Delete
+the attribute:
 
 ```python
 # Before

@@ -2045,7 +2045,7 @@ impl RustLiveViewBackend {
     }
 }
 
-// Rust API (non-Python entry points, used by this crate's Rust tests)
+// Non-Python entry points
 impl RustLiveViewBackend {
     /// Render once and classify only the output and templates actually loaded.
     /// In particular, do not evaluate dynamic include expressions in a planner.
@@ -2855,34 +2855,6 @@ impl RustLiveViewBackend {
         result
     }
 
-    /// Create a new RustLiveViewBackend (Rust API)
-    pub fn new_rust(template_source: String) -> Self {
-        Self::new(template_source, None)
-    }
-
-    /// Update state (Rust API)
-    pub fn update_state_rust(&mut self, updates: HashMap<String, Value>) {
-        self.apply_state_update(updates)
-    }
-
-    /// Full-context truth for pure-Rust callers (#2592, the twin of
-    /// #2564): drop every state key absent from `keys`, returning the removed
-    /// keys.
-    ///
-    /// Same core as the Python `retain_state_keys` (state removal + safe-grant
-    /// revocation), plus the second half the Python bridge does for itself in
-    /// `rust_bridge.py` — joining the removed keys to the changed set so a
-    /// partial `render_with_diff` re-renders their regions instead of serving
-    /// the OLD text from the node cache. A Rust caller has no Python step
-    /// after this call, so the join lives here. Its production caller was
-    /// the actor system (removed in 2.0); it remains as the Rust tests' door
-    /// into `retain_state_keys`.
-    ///
-    /// The join is into a PENDING changed set only. Creating one from nothing
-    /// would flip the next `render_with_diff` onto the partial path with the
-    /// removed keys as the only "changes", skipping every region the caller
-    /// actually changed; with no pending set the next render is a full one,
-    /// which re-renders the removed regions without any hint.
     /// ADR-032 D3: after a scoped patch, `state[component_id]` is the
     /// component's new HTML (safe) so a later page render sees what the page
     /// shows. A copy-on-write door like `set_state` — a render holding the
@@ -2893,16 +2865,8 @@ impl RustLiveViewBackend {
         self.safe_keys.insert(component_id);
     }
 
-    pub fn retain_state_keys_rust(&mut self, keys: Vec<String>) -> Vec<String> {
-        let removed = self.retain_state_keys(keys);
-        if let Some(changed) = &mut self.changed_keys {
-            changed.extend(removed.iter().cloned());
-        }
-        removed
-    }
-
     /// Shared core of `update_state` (the Python entry point) and
-    /// `update_state_rust` (the pure-Rust entry point: the
+    /// `update_state_rust` (the Rust tests' entry point: the
     /// `HashMap<String, Value>` a Rust caller builds has no live Python
     /// container backing it, so it carries no #2510-class reentrancy risk).
     /// `update_state` does the safe, snapshot-based Python-dict-to-HashMap
@@ -2930,12 +2894,6 @@ impl RustLiveViewBackend {
             }
         }
         std::sync::Arc::make_mut(&mut self.state).extend(updates);
-    }
-
-    /// Render the template (Rust API)
-    pub fn render_rust(&mut self) -> Result<String, djust_core::DjangoRustError> {
-        self.render()
-            .map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))
     }
 
     // ---------------------------------------------------------------------
@@ -7847,6 +7805,24 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
+/// Entry points for this crate's Rust tests: build a backend, feed it a
+/// Rust-built state map and render it, with no Python object involved.
+#[cfg(test)]
+impl RustLiveViewBackend {
+    pub(crate) fn new_rust(template_source: String) -> Self {
+        Self::new(template_source, None)
+    }
+
+    pub(crate) fn update_state_rust(&mut self, updates: HashMap<String, Value>) {
+        self.apply_state_update(updates)
+    }
+
+    pub(crate) fn render_rust(&mut self) -> Result<String, djust_core::DjangoRustError> {
+        self.render()
+            .map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod rendered_root_span_tests {
     //! The rendered-HTML root API Python calls: the element span (with and
@@ -9204,105 +9180,6 @@ mod fast_path_flag_tests {
 }
 
 #[cfg(test)]
-mod retain_state_keys_rust_2592 {
-    //! The pure-Rust truth entry (#2592, the twin of #2564). Its production
-    //! caller was the actor system, removed in 2.0;
-    //! these pin the half the Python bridge does for itself — the removed
-    //! keys joining the changed set — and the landmine the join must not
-    //! step on (creating a changed set from nothing).
-    use super::*;
-
-    const SECRET: &str = "SECRET-A";
-    const TEMPLATE: &str =
-        "<div><span>{{ n }}</span><p>{% if secret %}{{ secret }}{% endif %}</p></div>";
-
-    fn state(n: i64, with_secret: bool) -> HashMap<String, Value> {
-        let mut s = HashMap::new();
-        s.insert("n".to_string(), Value::Integer(n));
-        if with_secret {
-            s.insert("secret".to_string(), Value::String(SECRET.to_string()));
-        }
-        s
-    }
-
-    /// A backend after one diff render, so the node cache is populated and
-    /// a pending changed set would take the PARTIAL path.
-    fn mounted() -> RustLiveViewBackend {
-        Python::initialize();
-        let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
-        view.update_state_rust(state(0, true));
-        let (html, _, _) = view.render_with_diff_detached().expect("initial render");
-        assert!(html.contains(SECRET), "premise: {html:?}");
-        view
-    }
-
-    #[test]
-    fn joins_the_removed_keys_to_a_pending_changed_set() {
-        let mut view = mounted();
-        view.set_changed_keys(vec!["n".to_string()]);
-        let removed = view.retain_state_keys_rust(vec!["n".to_string()]);
-        assert_eq!(removed, vec!["secret".to_string()]);
-        view.update_state_rust(state(1, false));
-        let (html, patches, _) = view.render_with_diff_detached().expect("re-render");
-        assert!(
-            html.contains(">1</span>"),
-            "premise: the other change rendered: {html:?}"
-        );
-        assert!(
-            !html.contains(SECRET),
-            "the partial render served the removed key's region from the node cache: {html:?}"
-        );
-        let patches = patches.expect("a diff render returns patches");
-        assert!(!patches.contains(SECRET), "patches: {patches}");
-    }
-
-    #[test]
-    fn does_not_create_a_changed_set_from_nothing() {
-        // No pending changed set: the next render must stay a FULL render.
-        // A join that created `Some(["secret"])` would flip it onto the
-        // partial path with the removed key as the only "change", and the
-        // region for `n` — which the caller changed — would be served stale.
-        let mut view = mounted();
-        let removed = view.retain_state_keys_rust(vec!["n".to_string()]);
-        assert_eq!(removed, vec!["secret".to_string()]);
-        assert!(
-            view.changed_keys.is_none(),
-            "a changed set was created from nothing"
-        );
-        view.update_state_rust(state(1, false));
-        let (html, _, _) = view.render_with_diff_detached().expect("re-render");
-        assert!(
-            html.contains(">1</span>"),
-            "the changed key was served stale: {html:?}"
-        );
-        assert!(!html.contains(SECRET), "{html:?}");
-    }
-
-    #[test]
-    fn revokes_the_safe_grant_through_the_rust_entry() {
-        Python::initialize();
-        let mut view = RustLiveViewBackend::new_rust("{{ p }}".to_string());
-        let mut s = HashMap::new();
-        s.insert("p".to_string(), Value::String("<b>x</b>".to_string()));
-        view.update_state_rust(s);
-        view.mark_safe_keys(vec!["p".to_string()]);
-        assert_eq!(view.render().unwrap(), "<b>x</b>");
-        assert_eq!(view.retain_state_keys_rust(vec![]), vec!["p".to_string()]);
-        let mut s = HashMap::new();
-        s.insert(
-            "p".to_string(),
-            Value::String("<img src=x onerror=alert(1)>".to_string()),
-        );
-        view.update_state_rust(s);
-        let out = view.render().unwrap();
-        assert!(
-            !out.contains("<img"),
-            "the grant outlived the removed key: {out:?}"
-        );
-    }
-}
-
-#[cfg(test)]
 mod span_aware_call_sites_2557 {
     //! Structural pin: EVERY `Template::new` in this crate attaches the
     //! parse error's source span (#2557).
@@ -9445,7 +9322,7 @@ mod state_is_shared_not_copied_2737 {
             (
                 "retain_state_keys",
                 Box::new(|v: &mut RustLiveViewBackend| {
-                    v.retain_state_keys_rust(vec![]);
+                    v.retain_state_keys(vec![]);
                 }),
             ),
             (

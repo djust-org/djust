@@ -696,7 +696,6 @@ PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
 PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
 Some("[]".to_string())
 let prefix = format!("{key}.");
-.map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))
 let open = format!("<{tag} ");
 let close = format!("</{tag}>");
 for children in node.child_lists().into_iter().flatten() {
@@ -786,6 +785,7 @@ offsets.extend(span.close.map(|(s, e)| [s, e]).into_iter().flatten());
 offsets.extend(stamp.flatten());
 PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Template parsing error: {e}"))
 Ok(py_dict.into())
+.map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))
 let mut out = html.to_string();
 out.push_str(&format!("{:?}", node.text.as_deref().unwrap_or("")));
 out.push_str(&format!("<{} {attrs:?}>", node.tag));
@@ -837,20 +837,6 @@ let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
 view.set_changed_keys(vec!["label".to_string()]);
 view.set_changed_keys(vec!["rows".to_string()]);
 view.set_changed_keys(vec!["highlight_id".to_string()]);
-s.insert("n".to_string(), Value::Integer(n));
-s.insert("secret".to_string(), Value::String(SECRET.to_string()));
-let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
-view.set_changed_keys(vec!["n".to_string()]);
-let removed = view.retain_state_keys_rust(vec!["n".to_string()]);
-assert_eq!(removed, vec!["secret".to_string()]);
-let removed = view.retain_state_keys_rust(vec!["n".to_string()]);
-assert_eq!(removed, vec!["secret".to_string()]);
-let mut view = RustLiveViewBackend::new_rust("{{ p }}".to_string());
-s.insert("p".to_string(), Value::String("<b>x</b>".to_string()));
-view.mark_safe_keys(vec!["p".to_string()]);
-assert_eq!(view.retain_state_keys_rust(vec![]), vec!["p".to_string()]);
-"p".to_string(),
-Value::String("<img src=x onerror=alert(1)>".to_string()),
 let mut view = RustLiveViewBackend::new_rust("<p>hello</p>".to_string());
 view.update_state_rust(HashMap::from([("rows".to_string(), Value::List(rows))]));
 view.set_state("n".to_string(), Value::Integer(1));

@@ -39,9 +39,11 @@ REMOVED_CONFIG_KEYS: dict[str, str] = {
     "django_value_repr": "{{ value }} always renders as Django's str() does",
 }
 
-#: View class attributes 2.0 removed. A truthy value is refused when the class
-#: is created, so the module fails to import instead of the view quietly
-#: running without the behaviour it asked for.
+#: View attributes 2.0 removed. A truthy value is refused when the class is
+#: created, so the module fails to import instead of the view quietly running
+#: without the behaviour it asked for. The mount path checks the instance again
+#: (``_params_form.run_handle_params``), which also sees a value set on the
+#: instance, assigned to the class later, or hidden from ``__init_subclass__``.
 REMOVED_VIEW_ATTRIBUTES: dict[str, str] = {
     "use_actors": (
         "the Tokio actor system was removed; delete the attribute. The view runs on "
@@ -51,10 +53,15 @@ REMOVED_VIEW_ATTRIBUTES: dict[str, str] = {
 }
 
 
-def reject_removed_view_attributes(cls: type) -> None:
-    """Raise ``ImproperlyConfigured`` if ``cls`` turns on a removed view attribute."""
+def reject_removed_view_attributes(view: Any) -> None:
+    """Raise ``ImproperlyConfigured`` if a view turns on a removed attribute.
+
+    ``view`` is a view class (at class creation) or a view instance (on the
+    mount path, after ``mount()``).
+    """
+    cls = view if isinstance(view, type) else type(view)
     for name, replacement in REMOVED_VIEW_ATTRIBUTES.items():
-        if getattr(cls, name, False):
+        if getattr(view, name, False):
             from django.core.exceptions import ImproperlyConfigured
 
             raise ImproperlyConfigured(
