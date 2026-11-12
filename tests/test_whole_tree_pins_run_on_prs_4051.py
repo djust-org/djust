@@ -42,14 +42,14 @@ PIN_TEST = re.compile(r"ratchet|only_falls|exactly_the_known|known_ones|structur
 
 #: Slow-tier tests that match the patterns and may stay out of the PR tier.
 #: Keyed by node-id prefix (a file, a class or a test); the value is the reason.
+#: A ``@pytest.mark.sweep(...)`` test counts as in the PR tier: a seeded sample of it runs on
+#: every PR and every unit nightly (``tests/sweep_sample.py``, #4074), so ``TestPayloadSweep``
+#: needs no entry here any more.
 ALLOWED: dict[str, str] = {
     "python/tests/test_safe_markup_audit_3774.py::TestEverySinkIsReached": (
-        "runs every audited sink under a tracer (about 6 min recorded per test); a "
-        "runtime sweep, not a read of the tree, and the site audit beside it is pr_tier"
-    ),
-    "python/tests/test_safe_markup_audit_3774.py::TestPayloadSweep": (
-        "an exhaustive payload sweep through every sink (about 6.5 min recorded); "
-        "runtime behaviour, not a read of the tree"
+        "nightly (#4074): asks whether EVERY audited sink ran under a tracer (about 6 min "
+        "recorded per test), so it needs the whole payload sweep, which a PR only samples; "
+        "the site audit beside it is pr_tier"
     ),
 }
 
@@ -81,8 +81,21 @@ def _is_pr_tier_marker(node: ast.expr) -> bool:
     )
 
 
+def _is_sweep_marker(node: ast.expr) -> bool:
+    """``pytest.mark.sweep("<population>")``: sampled on PRs, full nightly (#4074)."""
+    func = node.func if isinstance(node, ast.Call) else None
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "sweep"
+        and isinstance(func.value, ast.Attribute)
+        and func.value.attr == "mark"
+        and isinstance(func.value.value, ast.Name)
+        and func.value.value.id == "pytest"
+    )
+
+
 def _is_pr_tier(decorators: list[ast.expr]) -> bool:
-    return any(_is_pr_tier_marker(d) for d in decorators)
+    return any(_is_pr_tier_marker(d) or _is_sweep_marker(d) for d in decorators)
 
 
 @lru_cache(maxsize=None)

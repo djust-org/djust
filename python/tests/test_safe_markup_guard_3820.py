@@ -53,6 +53,7 @@ from django.utils.safestring import SafeData, mark_safe
 from scripts.lib import safe_markup_audit as audit
 from scripts.lib import safe_markup_taint as taint
 from scripts.lib.safe_markup_taint import find_unsafe_markup
+from tests import sweep_sample
 
 pytestmark = pytest.mark.components
 
@@ -1261,15 +1262,36 @@ def tree_scan():
     return audit.scan()
 
 
+#: Tiers (#4074). The fixed-seed survey and the directed rows run in full on every pull request;
+#: the other seeds and the mutants are ``@pytest.mark.sweep``: before merge a seeded sample, every
+#: one nightly, and every one whenever the analysis or the fuzzer changes (``SHARED_PATHS``), which
+#: is when a mutant can newly survive.
+SWEEP_POPULATIONS = {
+    "guard-fuzz/seeds": lambda: ["1", "2", "3"],
+    "guard-fuzz/mutants": lambda: sorted(MUTANTS),
+}
+SHARED_PATHS = (
+    "scripts/lib/safe_markup_taint.py",
+    "python/tests/flow_fuzz_3820.py",
+    "python/tests/test_safe_markup_guard_3820.py",
+    "tests/sweep_sample.py",
+)
+#: Units a sampled run draws beyond the ones a change forces (about a minute together).
+SEED_BUDGET = 1
+MUTANT_BUDGET = 6
+
+
 class TestTheDifferentialFuzz:
     PROGRAMS = 700
     MUTANT_PROGRAMS = 350
     SEED = 20260811
 
+    @pytest.mark.pr_tier
     def test_no_sink_that_held_a_raw_value_at_runtime_was_cleared(self):
         result = _baseline_survey(self.PROGRAMS, self.SEED)
         assert result["false_negatives"] == [], result["false_negatives"][:1]
 
+    @pytest.mark.pr_tier
     def test_the_fuzz_is_not_vacuous(self):
         """A guard that flagged everything would pass the check above; these counts say it did not."""
         result = _baseline_survey(self.PROGRAMS, self.SEED)
@@ -1277,14 +1299,22 @@ class TestTheDifferentialFuzz:
         assert result["tainted"] >= 300, result  # sinks that really received a raw value
         assert result["cleared_and_executed"] >= 500, result  # sinks the guard cleared that ran
 
+    @pytest.mark.sweep("guard-fuzz/seeds")
     @pytest.mark.parametrize("seed", [1, 2, 3])
     def test_other_seeds_agree(self, seed):
+        sweep_sample.skip_unless_sampled(
+            "guard-fuzz/seeds", str(seed), ["1", "2", "3"], budget=SEED_BUDGET, shared=SHARED_PATHS
+        )
         assert fuzz.survey(250, seed)["false_negatives"] == []
 
+    @pytest.mark.sweep("guard-fuzz/mutants")
     @pytest.mark.parametrize("mutant", sorted(MUTANTS))
     def test_a_broken_analysis_is_caught(self, mutant, monkeypatch):
         """The oracle can fail (#1468): break the analysis one way and either the fuzz or a directed
         row above must notice. A mutant nothing notices would mean its rule is decorative."""
+        sweep_sample.skip_unless_sampled(
+            "guard-fuzz/mutants", mutant, sorted(MUTANTS), budget=MUTANT_BUDGET, shared=SHARED_PATHS
+        )
         MUTANTS[mutant](monkeypatch)
         result = fuzz.survey(self.MUTANT_PROGRAMS, self.SEED)
         caught = result["false_negatives"] or _directed_false_negatives()
@@ -1702,6 +1732,7 @@ class TestWrapperSinks:
         ]
         assert flagged("def f(x):\n    s = '<i>' + x\n    return safe_html(s)\n") == ["f"]
 
+    @pytest.mark.pr_tier
     def test_the_wrappers_are_sinks_of_the_guard_and_the_scan_finds_them_in_the_tree(
         self, tree_scan
     ):
@@ -1709,6 +1740,7 @@ class TestWrapperSinks:
         sites = {fn for (path, fn) in tree_scan if path.endswith("rust_handlers.py")}
         assert any(name.endswith("Handler.render") for name in sites)
 
+    @pytest.mark.pr_tier
     def test_a_new_wrapper_around_mark_safe_has_to_be_named(self):
         """Every function in the package whose body is one call of a sink on its own parameter must be a
         sink by name, or the next one is invisible exactly as `_safe` and `safe_html` were."""
@@ -2451,6 +2483,7 @@ class TestNoEscaperIsImportedThroughAReExport:
         "python/djust/security/__init__.py",
     }
 
+    @pytest.mark.pr_tier
     def test_every_module_imports_an_escaper_from_the_module_that_defines_it(self):
         offenders = []
         for path in audit.package_files():
@@ -2520,6 +2553,7 @@ class TestTheLimitsArePinned:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.pr_tier
 class TestTheRealTree:
     def test_the_baseline_shrank_and_every_entry_is_still_a_site(self, tree_scan):
         found = tree_scan

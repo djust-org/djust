@@ -25,6 +25,7 @@ pytest_plugins = [
     "tests.corpus_shards",  # share the full differential sweep within one CI shard
     "tests.local_load_guard",  # outside CI: <=2 xdist workers, no whole-suite run (laptop load)
     "tests.slow_tier",  # mark tests > 1s in .test_durations `slow` (fast tier: -m "not slow")
+    "tests.sweep_sample",  # #4074: exhaustive sweeps run sampled before merge, full nightly
     "tests.timing_report",  # #3715: each process reports its worst GC pause and stall
     "tests.db_row_isolation",  # #3782: rows another connection commits do not outlive their test
     "tests.short_param_ids",  # #3800: a 65 KB parametrize id hides the rest of a CI log from `gh`
