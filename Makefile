@@ -387,6 +387,20 @@ test-nightly: ## Run nightly/exhaustive differential tests (-m nightly)
 	@echo "$(GREEN)Running nightly differential tests...$(NC)"
 	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -m nightly
 
+# The exhaustive security sweeps (#4074): CI samples them before merge and runs every unit in
+# the nightly main-health suite. `make test-sweeps` re-runs the sample (SEED=<printed seed>,
+# CHANGED=<paths> reproduce a CI one); `make test-sweeps-full` runs every unit (about 70 min of
+# recorded runner time serially; the xdist workers split it by file).
+SWEEP_TEST_FILES = python/djust/tests/test_marked_safe_attribute_sweep_3898.py python/tests/test_safe_markup_audit_3774.py python/tests/test_safe_markup_guard_3820.py python/tests/test_sweep_tiers_4074.py
+
+.PHONY: test-sweeps
+test-sweeps: ## The exhaustive security sweeps as PR CI runs them: a seeded sample (SEED=, CHANGED= optional)
+	@DJUST_SWEEP_SAMPLE=1 DJUST_SWEEP_SEED='$(SEED)' $(if $(CHANGED),DJUST_SWEEP_CHANGED='$(CHANGED)') PYTHONPATH=. $(PYTHON) -m pytest $(SWEEP_TEST_FILES) -n 2 --dist loadfile -q
+
+.PHONY: test-sweeps-full
+test-sweeps-full: ## The exhaustive security sweeps in full, every unit (the nightly tier)
+	@DJUST_SWEEP_SAMPLE=0 PYTHONPATH=. $(PYTHON) -m pytest $(SWEEP_TEST_FILES) -n 2 --dist loadfile -q
+
 # The whole-tree meta tests: gates that read every test file (or the shard and
 # parity configuration built from them), so they pass on a PR's own tree and can
 # fail on the merge of two PRs (#3757; main went red on a54278ebd after a
