@@ -9,7 +9,10 @@ re-exports :func:`alters_data` as the public spelling.
 
 import logging
 import threading
+from collections import OrderedDict
 from typing import Any, Callable, TypeVar
+
+from django.utils.functional import LazyObject, empty
 
 logger = logging.getLogger(__name__)
 
@@ -130,29 +133,74 @@ def refused_marker(obj: Any) -> str | None:
 
 
 #: ``"module.Type.method"`` keys already warned about, so a refusal that repeats on every
-#: LiveView event logs once per process, not once per render. Capped: a program that makes
-#: classes dynamically cannot grow it without bound (past the cap a new key is not logged).
-_WARNED: set[str] = set()
+#: LiveView event logs once per process, not once per render. Bounded, least recently seen
+#: first out (#3928): a program that makes classes dynamically cannot grow it without limit,
+#: and a NEW refusal past the bound is still logged (it evicts the oldest key, which may then
+#: be logged once more if it recurs) instead of being dropped for the rest of the process.
+_WARNED: "OrderedDict[str, None]" = OrderedDict()
 _WARNED_CAP = 256
 _WARNED_LOCK = threading.Lock()
+
+
+def _log_label(text: Any) -> str:
+    """``text`` as one printable log token: never raises, never a second line (#3928).
+
+    A type's ``__module__`` / ``__qualname__`` are whatever its class body set; a non-``str``
+    (whose ``__str__`` may raise) becomes ``"?"`` and a control character (a newline that would
+    forge a second log line) is written as its escape.
+    """
+    if not isinstance(text, str):
+        return "?"
+    if text.isprintable():
+        return text
+    return text.encode("unicode_escape").decode("ascii")
+
+
+def _logged_type(owner: Any) -> type:
+    """The type to name for ``owner``: a ``LazyObject``'s wrapped object's, when it is set.
+
+    ``type(SimpleLazyObject(...))`` is the proxy class for every wrapped type, so keying on it
+    would log the first refusal through a lazy object and none after it (#3928). The wrapped
+    object is read from the instance dict (no proxy call, no ``_setup``); an unevaluated lazy
+    object is named as the proxy.
+    """
+    kind = type(owner)
+    for _ in range(8):  # a lazy object wrapping a lazy object ...
+        if not issubclass(kind, LazyObject):
+            break
+        try:
+            wrapped = object.__getattribute__(owner, "__dict__").get("_wrapped", empty)
+        except Exception:  # noqa: BLE001 -- a hostile class: name the proxy
+            break
+        if wrapped is empty:
+            break
+        owner, kind = wrapped, type(wrapped)
+    return kind
 
 
 def warn_refused_once(where: str, owner: Any, name: str, marker: str) -> None:
     """Log, once per (type, method) per process, that a template-reachable call was refused.
 
     Only the type name, the method name and the marker are logged: never the object, its
-    ``str()`` or an exception (the log-exposure pin).
+    ``str()`` or an exception (the log-exposure pin). The type's names are read defensively
+    (:func:`_log_label`), so a class with a hostile ``__module__`` or a newline in its name
+    cannot make the refusal raise or forge a log line.
     """
-    kind = type(owner)
-    key = f"{kind.__module__}.{kind.__qualname__}.{name}"
+    kind = _logged_type(owner)
+    module = _log_label(getattr(kind, "__module__", None))
+    qualname = _log_label(getattr(kind, "__qualname__", None))
+    key = f"{module}.{qualname}.{name}"
     with _WARNED_LOCK:
-        if key in _WARNED or len(_WARNED) >= _WARNED_CAP:
+        if key in _WARNED:
+            _WARNED.move_to_end(key)
             return
-        _WARNED.add(key)
+        _WARNED[key] = None
+        while len(_WARNED) > _WARNED_CAP:
+            _WARNED.popitem(last=False)
     logger.warning(
         "%s: %s.%s() is marked %s and was not called by a template (#3815)",
         where,
-        kind.__qualname__,
+        qualname,
         name,
         marker,
     )

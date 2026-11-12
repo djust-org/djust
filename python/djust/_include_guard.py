@@ -26,6 +26,9 @@ The shape (the one ``template_bridge_floor`` uses for ``Variable._resolve_lookup
   Django's code, not a copy of it: the original ``render`` runs on a stand-in for the
   node whose operand is the value already resolved.
 
+A patch of ``IncludeNode.render`` made by someone else does not switch the guard off: the
+guard is put over it and delegates to it (#3931).
+
 A refusal renders ``""`` with one WARNING per (type, method) per process, the same as the
 five entries #3879 guards (``warn_refused_once``); a marker read that raises refuses.
 """
@@ -119,47 +122,102 @@ class _NodeWithResolvedOperand:
         return isinstance(other, _NodeWithResolvedOperand) and other._node is self._node
 
 
-def guarded_include_render(self: IncludeNode, context: Any) -> Any:
-    if not _active.get():
-        return _ORIGINAL(self, context)
-    operand: FilterExpression = self.template
-    value = operand.resolve(context)
-    # Django's own "does this quack like a Template" test; a name or a list of names does not.
-    if callable(getattr(value, "render", None)):
-        # Django calls the INNER template of a backend wrapper (`obj.template.render`), else
-        # `obj.render`. Bind that one callable, read its markers, and run exactly it.
-        inner = getattr(value, "template", _NO_INNER)  # read ONCE, as `render` is below
-        target = value if inner is _NO_INNER else inner
-        render = target.render
-        marker = refused_marker(render)
-        if marker is not None:
-            warn_refused_once("{% include %}", target, "render", marker)
-            return ""
-        value = _Pinned(render)
-    return _ORIGINAL(_NodeWithResolvedOperand(self, value), context)
+def _call(delegate: Any, node: Any, context: Any) -> Any:
+    """Call ``delegate`` as ``IncludeNode.render`` would have been called, with ``node`` as self.
+
+    ``delegate`` is the raw class-dict entry: a function binds, a ``staticmethod`` does not, a
+    callable instance without ``__get__`` is called with the context alone.
+    """
+    getter = getattr(type(delegate), "__get__", None)
+    if getter is None:
+        return delegate(context)
+    return getter(delegate, node, IncludeNode)(context)
 
 
-guarded_include_render._djust_original = _ORIGINAL  # type: ignore[attr-defined]
+def _make_guard(delegate: Any) -> Callable[..., Any]:
+    """The guard, delegating to ``delegate``: Django's own ``render`` or a patch found in its place.
+
+    Outside a scope it is ``delegate``, untouched. Inside one it resolves and checks the operand,
+    then hands ``delegate`` the node with the operand already resolved (and pinned to the bound
+    ``render`` it checked), so a patch that wraps Django's ``render`` keeps working and is held to
+    the guard too (#3931).
+    """
+
+    def guarded_include_render(self: IncludeNode, context: Any) -> Any:
+        if not _active.get():
+            return _call(delegate, self, context)
+        operand: FilterExpression = self.template
+        value = operand.resolve(context)
+        # Django's own "does this quack like a Template" test; a name or a list of names does not.
+        if callable(getattr(value, "render", None)):
+            # Django calls the INNER template of a backend wrapper (`obj.template.render`), else
+            # `obj.render`. Bind that one callable, read its markers, and run exactly it.
+            inner = getattr(value, "template", _NO_INNER)  # read ONCE, as `render` is below
+            target = value if inner is _NO_INNER else inner
+            render = target.render
+            marker = refused_marker(render)
+            if marker is not None:
+                warn_refused_once("{% include %}", target, "render", marker)
+                return ""
+            value = _Pinned(render)
+        return _call(delegate, _NodeWithResolvedOperand(self, value), context)
+
+    # The mark is the function ITSELF, so a ``functools.wraps`` wrapper (which copies ``__dict__``)
+    # is not taken for the guard; it is followed to the guard through ``__wrapped__``.
+    guarded_include_render._djust_include_guard = guarded_include_render  # type: ignore[attr-defined]
+    # ... and the scope flag it reads: a guard left on the class by a copy of this module that was
+    # loaded again reads THAT copy's flag, which this copy's scopes do not set, so it is not ours.
+    guarded_include_render._djust_active = _active  # type: ignore[attr-defined]
+    guarded_include_render._djust_original = _ORIGINAL  # type: ignore[attr-defined]
+    if delegate is not _ORIGINAL:
+        guarded_include_render.__wrapped__ = delegate  # type: ignore[attr-defined]
+    return guarded_include_render
 
 
-def _wraps_the_guard(render: Callable[..., Any]) -> bool:
-    """Is the guard in ``render``'s ``functools.wraps`` chain (e.g. after an ``importlib.reload``)?"""
-    for _ in range(16):
-        if render is guarded_include_render:
+#: The guard over Django's own ``render``: what :func:`install` puts on a stock class.
+guarded_include_render = _make_guard(_ORIGINAL)
+
+#: How far down a ``__wrapped__`` chain to look for the guard. Past it the chain is treated as
+#: not carrying one and gets its own (a second check of the same operand is harmless).
+_CHAIN_LIMIT = 256
+
+
+def _is_guard(render: Any) -> bool:
+    try:
+        return (
+            getattr(render, "_djust_include_guard", None) is render
+            and getattr(render, "_djust_active", None) is _active
+        )
+    except Exception:  # noqa: BLE001 -- an attribute that raises: not ours
+        return False
+
+
+def _carries_the_guard(render: Callable[..., Any]) -> bool:
+    """Is a guard in ``render``'s ``functools.wraps`` chain (itself included)?
+
+    Never raises: a ``__wrapped__`` that raises, or a cycle, ends the walk (#3931).
+    """
+    seen: set[int] = set()
+    current: Any = render
+    for _ in range(_CHAIN_LIMIT):
+        if current is None or id(current) in seen:
+            return False
+        if _is_guard(current):
             return True
-        render = getattr(render, "__wrapped__", None)  # type: ignore[assignment]
-        if render is None:
+        seen.add(id(current))
+        try:
+            current = getattr(current, "__wrapped__", None)
+        except Exception:  # noqa: BLE001 -- a hostile property: the chain ends here
             return False
     return False
 
 
 @functools.lru_cache(maxsize=None)
-def _warn_guard_inactive(replacement: str) -> None:
-    """Log, once per process and replacement type, that the guard is not in place."""
-    logger.warning(
-        "IncludeNode.render was replaced by a %s with no functools.wraps link to the "
-        "template-call guard: unless it calls the guard, {%% include %%} in view and "
-        "component renders is not guarded (#3880)",
+def _note_wrapped(replacement: str) -> None:
+    """Log, once per process and replacement type, that the guard was put over a patch."""
+    logger.debug(
+        "IncludeNode.render was replaced by a %s that does not carry the template-call "
+        "guard; the guard now wraps it and delegates to it (#3931)",
         replacement,
     )
 
@@ -176,19 +234,23 @@ def install() -> None:
       wrapper is left alone;
     * ``render`` is Django's own: the guard is installed (two threads doing so write the same
       constant);
-    * someone replaced ``render`` WITHOUT wrapping the guard: their patch is left alone and
-      the guard is NOT active unless that patch calls the guard; a WARNING says so once per
-      process (the replacement's type name only). A patch that wraps ``IncludeNode.render``
-      should use ``functools.wraps`` and call the render it replaced; one that calls Django's
-      own ``render`` directly takes the guard with it.
+    * someone replaced ``render`` with something that does not carry the guard (a patch of
+      Django's ``render``, with or without ``functools.wraps``): a guard that DELEGATES to that
+      patch is put on top of it (#3931). Outside a scope the patch runs exactly as before; inside
+      one the operand is checked and the patch is handed the resolved, pinned operand. Before
+      #3931 such a patch switched the guard off for the process. A patch that calls the guard
+      itself without a ``functools.wraps`` link is wrapped too; the operand is then checked
+      twice, which changes nothing.
     """
     current = IncludeNode.render
-    if _wraps_the_guard(current):
+    if _carries_the_guard(current):
         return
     if current is _ORIGINAL:
         IncludeNode.render = guarded_include_render  # type: ignore[method-assign]
         return
-    _warn_guard_inactive(type(current).__name__)
+    raw = vars(IncludeNode).get("render", current)  # unbound as stored: a staticmethod stays one
+    IncludeNode.render = _make_guard(raw)  # type: ignore[method-assign]
+    _note_wrapped(type(raw).__name__)
 
 
 def uninstall() -> None:
