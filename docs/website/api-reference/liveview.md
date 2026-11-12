@@ -27,7 +27,7 @@ Either `template_name` or `template` is required.
 
 ### `PersistentLiveView`
 
-A `LiveView` subclass whose only difference is `enable_state_snapshot = True`, so a project can opt a group of legacy-exposure views in to the session-backed state restore described in [Scaling djust](../guides/scaling.md). A subclass can set the flag back to `False`. Views with `exposure_policy = "explicit"` ignore the flag and persist only their `state(..., persist=...)` fields. [`djust.C304`](../guides/error-codes.md) still checks each subclass for PII-like attribute names. The flag sends the view's public state to the browser as a signed, not encrypted, blob, so don't use this class for views whose public attributes hold credentials, PII or other users' data.
+A `LiveView` subclass whose only difference is `enable_state_snapshot = True`, so a project can opt a group of legacy-exposure views in to the session-backed state restore described in [Scaling djust](../guides/scaling.md). The class states `exposure_policy = "legacy"` itself, since the restore exists only under that policy, which is deprecated; new code declares `state(..., persist="server")` fields on a plain `LiveView` instead ([explicit exposure](../state/explicit-exposure.md)). A subclass can set the flag back to `False`. A subclass that sets `exposure_policy = "explicit"` ignores the flag and persists only its `state(..., persist=...)` fields. [`djust.C304`](../guides/error-codes.md) still checks each subclass for PII-like attribute names. The flag sends the view's public state to the browser as a signed, not encrypted, blob, so don't use this class for views whose public attributes hold credentials, PII or other users' data.
 
 ```python
 from djust import PersistentLiveView
