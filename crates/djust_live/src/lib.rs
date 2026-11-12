@@ -5750,7 +5750,7 @@ fn serialize_all_methods(
 }
 
 /// `djust.serialization.model_identity`, resolved once per process (#3911).
-fn row_identity(py: Python) -> PyResult<&Py<PyAny>> {
+fn row_identity(py: Python<'_>) -> PyResult<&Py<PyAny>> {
     static FN: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
     FN.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
         Ok(py
