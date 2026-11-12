@@ -85,7 +85,7 @@ def test_observer_injects_bound_source_without_assigning_visibility_or_dirtying_
     assert observations == [(menu, True)]
     assert menu.state == {"open": False, "selected": ""}
     assert not _compute_changed_keys(before, _snapshot_assigns(view))
-    assert "observation" not in json.dumps(view._capture_snapshot_state(strict=True))
+    assert "observation" not in json.dumps(view._capture_snapshot_state())
 
 
 def test_duplicate_reordered_and_stale_lifetime_reports_do_not_invoke_observer():
@@ -116,7 +116,7 @@ def test_missing_subscription_and_server_owned_mode_reject_browser_observation()
         report(mounted().menu)
 
 
-def test_session_bookkeeping_is_explicit_but_signed_snapshots_do_not_replay_it():
+def test_session_bookkeeping_is_explicit():
     source = page()
     report(source.menu, 7)
     saved = source._extract_component_state(source.menu)
@@ -126,11 +126,6 @@ def test_session_bookkeeping_is_explicit_but_signed_snapshots_do_not_replay_it()
     assert target.menu._observation_lifetime == source.menu._observation_lifetime
     report(target.menu, 7)
     assert len(observations) == 1
-    signed = source._capture_snapshot_state(strict=True)
-    fresh = ObserverPage()
-    fresh._restore_snapshot(signed)
-    assert fresh.menu._observation_lifetime != source.menu._observation_lifetime
-    assert fresh.menu._observation_sequence == 0
 
 
 @pytest.mark.parametrize(
@@ -324,21 +319,23 @@ def test_storage_failure_does_not_invoke_observer(monkeypatch):
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("changes_state", [False, True])
 async def test_native_ws_observation_uses_normal_noop_or_render_path(changes_state):
+    from channels.testing import WebsocketCommunicator
     from django.test import override_settings
-    from djust.security import unsign_snapshot
-    from djust.tests.test_state_snapshot_signing import _connect, _make_session_key, _receive_mount
+    from djust.websocket import LiveViewConsumer
     import re
 
     cls = RenderingObserverPage if changes_state else ObserverPage
     slug = __name__ + "." + cls.__name__
-    session = await _make_session_key()
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-        socket = await _connect(session)
+        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        assert (await socket.connect())[0]
+        await socket.receive_json_from()  # the connect frame
         try:
             await socket.send_json_to({"type": "mount", "view": slug, "url": "/"})
-            frame = await _receive_mount(socket)
-            state = json.loads(unsign_snapshot(frame["state_snapshot_signed"], slug, session))
-            identity = state["__interactive_bindings__"]["bindings"]["menu"]["binding_id"]
+            frame = await socket.receive_json_from()
+            assert frame["type"] == "mount", frame
+            # The observed menu renders first; its binding id is in its markup.
+            identity = re.search('data-component-id="([^"]+)"', frame["html"])[1]
             lifetime = re.search('data-dj-observe-lifetime="([^"]+)"', frame["html"])[1]
             await socket.send_json_to(
                 {
@@ -359,59 +356,5 @@ async def test_native_ws_observation_uses_normal_noop_or_render_path(changes_sta
                 assert "opened" in response["html"]
             else:
                 assert len(observations) == 1 and observations[0][1] is True
-        finally:
-            await socket.disconnect()
-
-
-@pytest.mark.asyncio
-@pytest.mark.django_db(transaction=True)
-async def test_signed_resume_rotates_observation_lifetime_and_first_report_stays_noop():
-    import re
-    from django.test import override_settings
-    from djust.security import unsign_snapshot
-    from djust.tests.test_state_snapshot_signing import _connect, _make_session_key, _receive_mount
-
-    slug = __name__ + ".ObserverPage"
-    session = await _make_session_key()
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-        socket = await _connect(session)
-        await socket.send_json_to({"type": "mount", "view": slug, "url": "/"})
-        first = await _receive_mount(socket)
-        old = re.search('data-dj-observe-lifetime="([^"]+)"', first["html"])[1]
-        blob = first["state_snapshot_signed"]
-        state = json.loads(unsign_snapshot(blob, slug, session))
-        identity = state["__interactive_bindings__"]["bindings"]["menu"]["binding_id"]
-        await socket.disconnect()
-        socket = await _connect(session)
-        try:
-            await socket.send_json_to(
-                {
-                    "type": "live_redirect_mount",
-                    "view": slug,
-                    "url": "/",
-                    "has_prerendered": True,
-                    "state_snapshot": {"view_slug": slug, "state_json": blob},
-                }
-            )
-            restored = await _receive_mount(socket)
-            current = re.search('data-dj-observe-lifetime="([^"]+)"', restored["html"])[1]
-            assert current != old
-            for lifetime, count in [(old, 0), (current, 1)]:
-                await socket.send_json_to(
-                    {
-                        "type": "event",
-                        "event": "observe_toggle",
-                        "ref": 2,
-                        "params": {
-                            "component_id": identity,
-                            "lifetime": lifetime,
-                            "sequence": 1,
-                            "open": True,
-                        },
-                    }
-                )
-                response = await socket.receive_json_from()
-                assert response["type"] == "noop", response
-                assert len(observations) == count
         finally:
             await socket.disconnect()

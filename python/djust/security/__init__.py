@@ -26,6 +26,8 @@ Example Usage:
     response = handle_exception(exception, error_type="event", event_name="click")
 """
 
+from typing import Any
+
 from .attribute_guard import (
     safe_setattr,
     is_safe_attribute_name,
@@ -52,13 +54,6 @@ from .mount import (
     is_view_path_allowed,
     resolve_view_class,
     validate_mount_url,
-)
-from .state_snapshot import (
-    sign_snapshot,
-    unsign_snapshot,
-    get_max_age,
-    SNAPSHOT_SALT,
-    DEFAULT_MAX_AGE,
 )
 
 __all__ = [
@@ -87,10 +82,26 @@ __all__ = [
     "is_view_path_allowed",
     "resolve_view_class",
     "validate_mount_url",
-    # Signed state-snapshot envelope (CWE-345/CWE-915 fix)
-    "sign_snapshot",
-    "unsign_snapshot",
+    # Lifetime of the signed client snapshot (resolved lazily)
     "get_max_age",
-    "SNAPSHOT_SALT",
     "DEFAULT_MAX_AGE",
 ]
+
+#: Names served from the module that now owns them. Lazy: that module imports
+#: the exposure contract, which this package must not load at import time.
+_MOVED = {
+    "get_max_age": "djust._exposure_snapshots",
+    "DEFAULT_MAX_AGE": "djust._exposure_snapshots",
+}
+
+
+def __getattr__(name: str) -> Any:  # PEP 562
+    moved = _MOVED.get(name)
+    if moved is not None:
+        import importlib
+
+        return getattr(importlib.import_module(moved), name)
+    from .._removed_settings import refuse_removed_name
+
+    refuse_removed_name(__name__, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

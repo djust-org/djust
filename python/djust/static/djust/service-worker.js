@@ -60,7 +60,7 @@ let VDOM_TTL_MS = 1800 * 1000; // 30 minutes
 let VDOM_MAX_ENTRIES = 50;
 const STATE_MAX_ENTRIES = 50;
 // ADR-038 D-n: default state-entry lifetime, matching the server's
-// DEFAULT_MAX_AGE in python/djust/security/state_snapshot.py. The client
+// DEFAULT_MAX_AGE in python/djust/_exposure_snapshots.py. The client
 // forwards the server's configured value on each lookup when it knows it.
 const STATE_DEFAULT_MAX_AGE_S = 3600;
 // Size cap for client-submitted state_json (defense in depth).

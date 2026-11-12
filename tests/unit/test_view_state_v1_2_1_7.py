@@ -4,8 +4,9 @@
   live in per-instance ``_state_<name>`` slots.
 - #2912: they must also see a class-level component's State, which lives in a
   ``_component_<name>`` slot.
-- #2896: the signed back-navigation snapshot captures ``__components__``;
-  ``_restore_snapshot`` must apply it, to registered components only.
+- #2896: a captured snapshot carries ``__components__``;
+  ``restore_components_snapshot`` (the time-travel restore's dispatch) must
+  apply it, to registered components only.
 - #2959: a legacy view must not save ``state()`` backing slots or
   ``_reactive_state`` in the private session; the public-state restore already
   carries ``state()`` values through the descriptor.
@@ -157,8 +158,14 @@ class TestDirtyClassLevelComponent2912:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #2896 — _restore_snapshot applies __components__
+# #2896 — restore_components_snapshot applies __components__
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def _restore(view: Any, components_state: Any) -> bool:
+    from djust.live_view import restore_components_snapshot
+
+    return restore_components_snapshot(view, components_state, source="time_travel")
 
 
 class TestSnapshotRestoresComponents2896:
@@ -166,19 +173,17 @@ class TestSnapshotRestoresComponents2896:
         src = ComponentView()
         src.mount(None)
         src.counter.n = 5
-        snap = json.loads(json.dumps(src._capture_snapshot_state(strict=True)))
+        snap = json.loads(json.dumps(src._capture_snapshot_state()))
         assert snap["__components__"]["counter"]["n"] == 5
 
-        # A fresh view restored from the snapshot, mount() skipped (the
-        # runtime's restore path): the component has not been accessed yet.
+        # A fresh view, mount() skipped: the component has not been accessed yet.
         dst = ComponentView()
-        dst._restore_snapshot(snap)
+        _restore(dst, snap["__components__"])
         assert dst.counter.n == 5
-        assert dst.label == "x"
 
     def test_unknown_component_id_is_ignored(self):
         dst = ComponentView()
-        dst._restore_snapshot({"__components__": {"nope": {"n": 1}, "counter": {"n": 2}}})
+        _restore(dst, {"nope": {"n": 1}, "counter": {"n": 2}})
         assert not hasattr(dst, "nope")
         assert "nope" not in dst._components
         assert dst.counter.n == 2
@@ -188,20 +193,19 @@ class TestSnapshotRestoresComponents2896:
         targets — never an arbitrary attribute named like a component id."""
         dst = ComponentView()
         dst.label = "keep"
-        dst._restore_snapshot({"__components__": {"label": {"upper": "x"}}})
+        _restore(dst, {"label": {"upper": "x"}})
         assert dst.label == "keep"
 
     def test_private_and_dunder_component_keys_are_blocked(self):
         dst = ComponentView()
-        dst._restore_snapshot({"__components__": {"counter": {"_secret": 1, "__class__": 2}}})
+        _restore(dst, {"counter": {"_secret": 1, "__class__": 2}})
         assert "_secret" not in dst.counter.state
         assert dst.counter.n == 0
 
     def test_malformed_components_value_is_ignored(self):
         dst = ComponentView()
-        dst._restore_snapshot({"__components__": ["counter"], "label": "y"})
-        dst._restore_snapshot({"__components__": {"counter": "n=3"}})
-        assert dst.label == "y"
+        _restore(dst, ["counter"])
+        _restore(dst, {"counter": "n=3"})
         assert dst.counter.n == 0
 
     def test_instance_component_registered_in_registry_is_restored(self):
@@ -220,7 +224,7 @@ class TestSnapshotRestoresComponents2896:
         dst = V()
         w = Widget(component_id="w1")
         dst._components["w1"] = w
-        dst._restore_snapshot({"__components__": {"w1": {"n": 4, "component_id": "evil"}}})
+        _restore(dst, {"w1": {"n": 4, "component_id": "evil"}})
         assert w.n == 4
         assert w.component_id == "w1"
 

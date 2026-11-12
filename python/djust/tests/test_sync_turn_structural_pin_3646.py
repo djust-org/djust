@@ -373,7 +373,6 @@ LEAVES: Dict[Tuple[str, str], Tuple[str, Optional[str]]] = {
     ("_child_lifecycle.py", "run_view_disconnected"): ("run_sync_step", "lifecycle"),
     ("_child_lifecycle.py", "begin_live_connection"): ("sync_step", "lifecycle"),
     ("live_view.py", "LiveView._restore_private_state"): ("run_guarded_step", "lifecycle"),
-    ("security/state_snapshot.py", "legacy_snapshot_fields"): ("run_sync_step", "lifecycle"),
     # teardown hooks (#3646): every site that calls one goes through call_teardown_hook
     ("_child_lifecycle.py", "call_teardown_hook"): ("run_teardown_step", "lifecycle"),
     ("_child_lifecycle.py", "dispose_child_subtree"): ("call_teardown_hook", None),
@@ -595,7 +594,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("runtime.py", "ViewRuntime._build_request", "self._attach_socket_tenant"): plumbing(
         _SCOPE_INPUT
     ),
-    ("runtime.py", "ViewRuntime._legacy_event_snapshot", "legacy_snapshot_fields"): leaf(),
     ("runtime.py", "ViewRuntime._render_async_result", "view.render_with_diff"): plumbing(
         _RENDER, _GET_TEMPLATE
     ),
@@ -905,9 +903,11 @@ HOOKS: Dict[str, str] = {
     # ---- lifecycle ----
     "(app).connected": "stepped:lifecycle",
     "(app).disconnected": "stepped:lifecycle",
-    "LiveView._restore_snapshot": "stepped:lifecycle",
     "LiveView._should_restore_snapshot": "stepped:lifecycle",
-    "LiveView._capture_snapshot_state": "stepped:lifecycle",
+    "LiveView._capture_snapshot_state": (
+        "unwrapped:not-threaded:djust 2.0 removed the legacy signed snapshot, its only stepped "
+        "caller; time-travel recording calls it in its caller's thread, with no step open"
+    ),
     "StickyChildRegistry._on_sticky_unmount": "inside:lifecycle|none@_child_lifecycle.py::dispose_child_subtree",
     "(app)._cleanup_on_unregister": "inside:lifecycle|none@_child_lifecycle.py::dispose_child_subtree",
     "UploadMixin._cleanup_uploads": "inside:lifecycle|none@_child_lifecycle.py::dispose_child_subtree",

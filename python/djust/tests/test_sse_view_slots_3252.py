@@ -93,12 +93,14 @@ class Persisted(LiveView):
 
 
 class Snap(LiveView):
-    exposure_policy = "legacy"
-    enable_state_snapshot = True
-    template = '<div dj-view="' + MOD + '.Snap"><b>n={{ n }}</b></div>'
+    """A view whose ``n`` the browser holds in the signed client snapshot."""
 
-    def mount(self, request, **kwargs):
-        self.n = 0
+    exposure_policy = "explicit"
+    template = '<div dj-view="' + MOD + '.Snap"><b>n={{ n }}</b></div>'
+    n = state(0, persist="client", client=True)
+
+    def get_context_data(self, **kwargs):
+        return {"n": self.n}
 
     @event_handler()
     def bump(self, **kwargs):

@@ -204,10 +204,6 @@ class PushPage(LiveView):
     def handle_pushed(self, **kwargs):
         note("push_handler")
 
-    def _capture_snapshot_state(self, *, strict=False):
-        note("capture_snapshot")
-        return {"count": self.count}
-
 
 class Dest(LiveView):
     exposure_policy = "legacy"
@@ -722,17 +718,6 @@ async def test_a_server_push_handler_runs_inside_the_wrapper_in_both_turn_shapes
 # --------------------------------------------------------------------------- #
 # The per-event signed-snapshot refresh (#3098) enters the step the mount does
 # --------------------------------------------------------------------------- #
-
-
-async def test_the_event_snapshot_refresh_captures_state_inside_a_lifecycle_step():
-    from djust.security.state_snapshot import legacy_snapshot_fields
-
-    view = PushPage()
-    view.count = 1
-    fields = await sync_to_async(legacy_snapshot_fields)(view, MOD + ".PushPage", "session-key")
-
-    assert fields["view"] == MOD + ".PushPage"
-    assert [step for step, _thread in seen("capture_snapshot")] == ["lifecycle"], SEEN
 
 
 # --------------------------------------------------------------------------- #

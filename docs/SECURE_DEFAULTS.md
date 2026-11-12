@@ -463,63 +463,66 @@ Trusting it verbatim is CWE-345 (insufficient authenticity) / CWE-915 (mass
 assignment).
 
 **Canonical site.**
-`python/djust/security/state_snapshot.py`:
+`python/djust/_exposure_snapshots.py` (the signed client snapshot of a view's
+`state(..., persist="client", client=True)` fields):
 
-- `sign_snapshot(state_json, view_slug, session_key, tenant_scope)` — wraps the
-  serialized public state in a `django.core.signing.TimestampSigner`
-  (`SNAPSHOT_SALT = "djust.state_snapshot"`, line 66; keyed on `SECRET_KEY`) and
-  **binds** the payload to the view slug, a keyed HMAC digest of the Django
-  session key, and the view's tenant scope (`snapshot_tenant_scope()` in
-  `_tenant_state.py`). The payload is signed, not encrypted, so it carries only
-  the digest, never the session key itself.
-- `unsign_snapshot(...)` (line 151) — verifies signature **+ TTL**
-  (`DEFAULT_MAX_AGE = 3600`, line 71; overridable via
-  `DJUST_STATE_SNAPSHOT_MAX_AGE` — `get_max_age()`, line 74) **+ identity**
-  (slug + session + tenant). Returns **`None`** (fail-closed) on any of: non-string
-  input, tamper, expiry, cross-view replay (slug mismatch), or cross-session
-  replay (sid mismatch). A `None` return means the caller MUST discard and fall
-  through to a clean `mount()` — no legacy-plaintext bypass.
+- `ClientSnapshot.capture(view)` signs only the fields the view declared for
+  the client, in a `django.core.signing.TimestampSigner` with its own salt
+  (`_SALT`; keyed on `SECRET_KEY`). The envelope **binds** the payload to the
+  session, the user, the tenant and the route (`request_binding()` in
+  `python/djust/_exposure_sessions.py`), and carries a `created` timestamp and
+  a digest of the declared schema. It is signed, not encrypted, so it carries
+  only the binding digest, never the session key itself.
+- `ClientSnapshot.restore(token)` verifies signature **+ TTL** (`get_max_age()`
+  in the same module: `DJUST_STATE_SNAPSHOT_MAX_AGE`, 3600 s by default, capped
+  at 86400) **+ binding + exact keyset**. It returns **`None`** (fail-closed)
+  on any of: non-string input, tamper, expiry, a token for another session,
+  user, tenant or route, an unknown or missing key, or a value outside the
+  declared bounds. A `None` return means the caller MUST discard the token and
+  keep the freshly mounted state.
 
-The wiring lives in `python/djust/websocket.py`: the server signs on emit
-(`from .security import sign_snapshot`, line 2727) and verifies on receive
-(`from .security import unsign_snapshot`, line 2467) before trusting any client
-bytes.
+The wiring lives in `ViewRuntime.dispatch_mount` (`python/djust/runtime.py`):
+the server signs on emit (`state_snapshot_signed` on the mount and event
+frames) and verifies on receive, after the pre-mount auth sequence, before any
+client byte reaches the view.
+
+The legacy signed snapshot of djust 1.x (`sign_snapshot` / `unsign_snapshot`,
+which signed every public attribute of an `enable_state_snapshot` view) was
+removed in 2.0; a token it issued is refused.
 
 **Shape to copy** for a new feature that accepts state back from the client:
 
 ```python
-# EMIT — sign before sending to the client.
-response["my_token_signed"] = sign_snapshot(state_json, view_slug, session_key)
+# EMIT — sign before sending to the client, bound to who may send it back.
+signer = TimestampSigner(salt="myapp.my-token.v1")
+response["my_token_signed"] = signer.sign(json.dumps({"binding": binding, "state": state}))
 
-# RECEIVE — verify before trusting. None ⇒ reject and fall through to a clean path.
-raw = unsign_snapshot(signed_blob, view_slug, session_key)
-if raw is None:
-    raw = None  # rejected: tampered / expired / wrong view / wrong session
-    # ... fall through to the unprivileged default (e.g. fresh mount()).
+# RECEIVE — verify before trusting. Any failure ⇒ reject and fall through.
+try:
+    envelope = json.loads(signer.unsign(signed_blob, max_age=max_age))
+except (BadSignature, ValueError):
+    envelope = None  # rejected: tampered / expired / not ours
+if envelope is None or envelope.get("binding") != binding:
+    ...  # fall through to the unprivileged default (e.g. the fresh mount()).
 ```
 
-### Private-attr signing boundary — READ THIS
+### Private-attr boundary — READ THIS
 
-The HMAC signature covers **public state only**. `_capture_snapshot_state()`
-(`python/djust/live_view.py`, line 757) **skips every `_`-prefixed attribute**
-when building the snapshot, so private (`_*`) attrs are *never* in the signed
-blob.
+The signature covers **declared client fields only**. Nothing a view does not
+declare with `persist="client"` is ever in the signed token.
 
-Private attrs are restored on a **separate, unsigned** path:
-`_restore_private_state()` (`python/djust/live_view.py`, line 740) iterates the
-saved private dict and assigns each `_*` key with a plain `setattr` — there is no
-HMAC verification on this path. It is fed from the **server-side Django session**
-(`request.session[...__private]`), restored in
-`websocket.py` at the `_restore_private_state(...)` call (line 2390), which is
-trusted *because it is server-side session storage* — not because it is signed.
+A legacy view's private (`_*`) attributes travel on a **separate, unsigned**
+path: `_restore_private_state()` (`python/djust/live_view.py`) assigns each
+saved `_*` key from the **server-side Django session**
+(`request.session[...__private]`). That path is trusted *because it is
+server-side session storage*, not because it is signed.
 
 **Implication:** do **not** store auth/ownership/PII state in `_*` attributes
-expecting cryptographic integrity. The integrity guarantee is HMAC for public
-snapshot state; for private state the guarantee is "lives in the server-side
-session, never signed." If a private attr's value would be dangerous to trust
-when the session backend is compromised, that is the wrong place for it —
-re-derive ownership/auth from the request on each event instead of persisting it
-in `_*`.
+expecting cryptographic integrity. For private state the guarantee is "lives in
+the server-side session, never signed." If a private attr's value would be
+dangerous to trust when the session backend is compromised, that is the wrong
+place for it — re-derive ownership/auth from the request on each event instead
+of persisting it in `_*`.
 
 ---
 
@@ -721,10 +724,11 @@ happy path:
    (`_resolve_sensitive_fields()`), not "expose all fields". The
    `_ALWAYS_EXCLUDED_FIELDS` floor is unconditional. → Pattern 1.
 
-2. **Does it accept state back from the client?** Sign on emit
-   (`sign_snapshot`), verify on receive (`unsign_snapshot`), treat a `None`
-   verdict as "reject and fall through to the unprivileged default". Remember the
-   signing boundary: HMAC covers *public* state only — don't put auth/ownership/
+2. **Does it accept state back from the client?** Sign on emit, verify on
+   receive (`ClientSnapshot.capture` / `.restore` is the model), bind the token
+   to who may send it back, and treat a failed verdict as "reject and fall
+   through to the unprivileged default". Remember the signing boundary: the
+   signature covers *declared client fields* only — don't put auth/ownership/
    PII in `_*` attrs expecting integrity. → Pattern 2.
 
 3. **Does it expose an endpoint or diagnostic surface?** Gate it with a
