@@ -822,6 +822,16 @@ A view that declares a `params_form` is also held to its `params_form_fallback`:
 
 **Fix**: Delete the override and set `self.state` to a state the map names. For a real special case, call `super().get_http_status()` first so the map still applies. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V025"]}`.
 
+### V026: plain component in a legacy view's class body
+
+**Severity**: Warning
+
+**What causes it**: A view with `exposure_policy = "legacy"` (or a mixin it inherits) declares a plain `Component` instance in its class body, such as `badge = Badge("new")`. A plain component has no descriptor, so it is one object shared by every session of the worker process, and a legacy view renders it. A handler that writes to it (`self.badge.label = request.user.email`) shows that value on every other user's next render and on every later page load. Message: "<class> declares the plain component '<name>' in its class body. It is one object shared by every session of the worker, ..."
+
+**Fix**: Create the component per view: assign `self._badge = Badge(...)` in `mount()` and return it from `get_context_data()`, or build it in `get_context_data()`. A component that no handler writes to can stay. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V026"]}`.
+
+On an explicit view the same declaration is refused when the class is created, with an `ExposureConfigurationError` that names the attribute and the working forms.
+
 ---
 
 ## Security Errors (S0xx)

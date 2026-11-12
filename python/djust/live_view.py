@@ -1048,6 +1048,14 @@ class LiveView(
         from ._removed_settings import reject_removed_view_attributes
 
         reject_removed_view_attributes(cls)
+        # #4045: a plain component in an explicit view's class body is one
+        # object shared by every session. The mount path checks again
+        # (``_params_form._refuse_removed_configuration``).
+        from ._exposure_providers import class_level_plain_component_error
+
+        shared = class_level_plain_component_error(cls)
+        if shared is not None:
+            raise shared
 
         cls._component_subscriptions = compile_subscriptions(cls)
         _warn_legacy_exposure_policy(cls, at_class_statement=True)
