@@ -248,7 +248,34 @@ class ApplicationWizard(WizardMixin, LiveView):
 - `get_wizard_initial()` and `get_wizard_step()` are called by `mount()`; the defaults return `{}` and `0`, so a wizard that overrides neither behaves as before. Values are stored as the text the browser would submit (a `date` becomes `"2024-02-29"`), because wizard state is JSON. A step without a form, a step the wizard does not have and a field the step's form does not have are ignored, with a warning in the log.
 - A step that does not exist (an index out of range, an unknown name) starts at the first step, with a warning. Every step before the one named counts as completed, so `go_to_step` can return to it; `next_step` still validates the step it leaves and `submit_wizard` validates all of them again, so stale stored answers can't skip validation.
 - `on_step_saved(step_name, data)` runs when `next_step` has validated a step, just before the wizard moves on. *data* holds only the fields the step's form declares. If it raises (a failed save), the person stays on the step. It runs once per successful `next_step`, not once per step: after `prev_step` and `next_step` again it runs a second time for the same step, so make the save an update, as above. `prev_step` does not call it (the step it leaves is not validated), and the last step has no `next_step`: `on_wizard_complete()` is its hook.
-- `validate_field` and `update_step_field` store whatever name the page sends for the current step (within the `max_form_*` bounds); a name the step's form does not declare is kept in `step_data` but is not handed to `on_step_saved()`. Only the `dj-submit` path (`next_step` / `submit_wizard` with posted fields) ignores undeclared names.
+- `validate_field` and `update_step_field` store whatever name the page sends for the current step (within the `max_form_*` bounds); a name the step's form does not declare is kept in `wizard_step_data` but is not handed to `on_step_saved()` or `on_wizard_complete()`: both hooks receive each step's declared fields only ([#3982](https://github.com/djust-org/djust/issues/3982)). Only the `dj-submit` path (`next_step` / `submit_wizard` with posted fields) ignores undeclared names.
+
+## Steps That Depend on the Record
+
+`wizard_steps` is fixed per class. When the steps depend on the record being edited (a follow-up form where a reviewer chose which sections this person must answer), override `get_wizard_steps()`, and call `resume_wizard()` at the end of your `mount()` once the record is loaded:
+
+<!-- djust-example: skip -- needs an application model (Record) -->
+```python
+SECTIONS = {"a": SectionAForm, "b": SectionBForm, "c": SectionCForm}
+
+class FollowUpWizard(WizardMixin, LiveView):
+    wizard_steps = []  # unknown until the record is read
+
+    def mount(self, request, pk=None, **kwargs):
+        super().mount(request, **kwargs)  # no steps yet: nothing to resume
+        self._record = Record.objects.get(pk=pk)
+        self.asked = self._record.asked_sections  # e.g. ["a", "c"]: names, kept in state
+        self.resume_wizard()  # now get_wizard_initial() / get_wizard_step() apply
+
+    def get_wizard_steps(self):
+        return [{"name": key, "title": key, "form_class": SECTIONS[key]} for key in self.asked]
+
+    def get_wizard_initial(self):
+        return {key: self._record.answers_for(key) for key in self.asked}
+```
+
+- `get_wizard_steps()` defaults to the class's `wizard_steps`. It is called many times per event, so keep it cheap, and return the same form classes in the same order each time for the same state. Keep step names or keys in state and map them to form classes, as above; never store the form classes themselves on the view (wizard state is JSON).
+- `WizardMixin.mount()` resumes before your own `mount()` has loaded anything, so with no steps yet it does nothing. `resume_wizard()` applies `get_wizard_initial()` and `get_wizard_step()` to the fresh state; call it from `mount()` only, because it replaces the answers and the current step.
 
 You can also render fields manually in `get_context_data()`:
 

@@ -47,8 +47,11 @@ Event handlers available to templates via dj-click / dj-submit:
     submit_wizard           — merge the last step's posted fields, validate all steps,
                               call on_wizard_complete()
 
-Hooks: get_wizard_initial() / get_wizard_step() resume stored progress at mount;
-on_step_saved() runs when next_step has validated a step.
+Hooks: get_wizard_steps() returns the steps (``wizard_steps`` by default; override
+it for steps that depend on the record, #4011); get_wizard_initial() /
+get_wizard_step() resume stored progress at mount, and resume_wizard() applies them
+again for a view whose steps are known only after its own load; on_step_saved()
+runs when next_step has validated a step.
 
 Implementation notes
 --------------------
@@ -58,11 +61,13 @@ Several design decisions here work around known djust serialization constraints:
   Private (_) attrs are wiped between WebSocket events — they cannot hold state
   that must survive across user interactions.
 
-- _steps property reads from type(self).wizard_steps, not self.wizard_steps.
-  djust serializes ALL public instance attributes to JSON, including class-level
-  ones. Django form classes are not JSON-serializable, so they come back as None
-  after the first event.  Reading from the class definition always returns the
-  original value.
+- _steps property calls get_wizard_steps(), which reads type(self).wizard_steps,
+  not self.wizard_steps. djust serializes ALL public instance attributes to JSON,
+  including class-level ones. Django form classes are not JSON-serializable, so
+  they come back as None after the first event.  Reading from the class
+  definition always returns the original value. An override of
+  get_wizard_steps() builds the steps from state it keeps (step names, keys)
+  and maps them to form classes each time; it never stores the classes.
 
 - Never store form.cleaned_data in wizard_step_data. Django's cleaned_data
   contains Python objects (datetime.date, Decimal, etc.) that are not JSON-
@@ -182,12 +187,25 @@ class WizardMixin:
 
     @property
     def _steps(self) -> list:
-        """Read wizard_steps from the CLASS definition, not the instance.
+        """The wizard's steps: what :meth:`get_wizard_steps` returns."""
+        return self.get_wizard_steps()
 
-        djust serializes all public instance attributes to JSON between
-        WebSocket events. Django form classes in wizard_steps are not
-        JSON-serializable and come back as None after the first event.
-        Reading from type(self) always returns the original class value.
+    def get_wizard_steps(self) -> list:
+        """The step dicts of this wizard. The default is the class's ``wizard_steps``.
+
+        Read from the CLASS definition, not the instance: djust serializes all
+        public instance attributes to JSON between events, and the form classes
+        in ``wizard_steps`` are not JSON-serializable.
+
+        Override it for steps that depend on the instance, such as the record
+        being edited (#4011): build the list from state the view keeps (step
+        names or keys, public or private) and map them to form classes, for
+        example through a module-level dict. It is called many times per event,
+        so keep it cheap, and it must return the same steps (the same form
+        classes, in the same order) each time for the same state. Never store
+        the form classes on the instance. A view whose steps are known only
+        after its own ``mount()`` has loaded something calls
+        :meth:`resume_wizard` at the end of that ``mount()``.
         """
         return type(self).wizard_steps
 
@@ -210,7 +228,7 @@ class WizardMixin:
         self.wizard_step_data: dict[str, dict[str, Any]] = {}
         self.wizard_step_errors: dict[str, dict[str, list]] = {}
         self.wizard_completed_steps: list[int] = []
-        self._resume_wizard()
+        self.resume_wizard()
 
     # ------------------------------------------------------------------
     # Resuming stored progress (#3965)
@@ -219,7 +237,8 @@ class WizardMixin:
     def get_wizard_initial(self) -> Dict[str, Dict[str, Any]]:
         """The answers a wizard starts with: ``{step_name: {field_name: value}}``.
 
-        Called by ``mount()`` (``self.request`` is set). Override it to resume
+        Called by ``mount()`` (``self.request`` is set), and again by
+        :meth:`resume_wizard` when a view calls it. Override it to resume
         a wizard from stored progress, e.g. rows an application form saved as
         the person went. The default returns ``{}``: nothing answered.
 
@@ -245,8 +264,17 @@ class WizardMixin:
         """
         return 0
 
-    def _resume_wizard(self) -> None:
-        """Apply ``get_wizard_initial()`` / ``get_wizard_step()`` to the fresh state."""
+    def resume_wizard(self) -> None:
+        """Apply ``get_wizard_initial()`` / ``get_wizard_step()`` to the fresh state.
+
+        ``WizardMixin.mount()`` calls it, and does nothing here when the wizard
+        has no steps yet. A view whose steps come from a record it loads in its
+        own ``mount()`` after ``super().mount()`` (an override of
+        :meth:`get_wizard_steps`, #4011) calls it again at the end of that
+        ``mount()``, once the steps are known. Call it from ``mount()`` only: it
+        replaces the answers and the current step, so calling it later throws
+        away what the person has entered.
+        """
         steps = self._steps
         if not steps:
             return
@@ -875,7 +903,21 @@ class WizardMixin:
 
         if self.wizard_step_index not in self.wizard_completed_steps:
             self.wizard_completed_steps.append(self.wizard_step_index)
-        self.on_wizard_complete(self.wizard_step_data)
+        self.on_wizard_complete(self._declared_wizard_data())
+
+    def _declared_wizard_data(self) -> dict[str, dict[str, Any]]:
+        """``wizard_step_data`` for ``on_wizard_complete()``: each form step's declared fields.
+
+        ``update_step_field`` / ``validate_field`` store any name the page sends (bounded,
+        #3834), so the stored data can hold names no step declares, or another step's
+        fields under this step. The hook is handed what ``on_step_saved`` is handed for
+        each step, so the two agree (#3982).
+        """
+        return {
+            step["name"]: self._declared_step_data(step["name"])
+            for step in self._steps
+            if step.get("form_class") is not None and step.get("name") in self.wizard_step_data
+        }
 
     # ------------------------------------------------------------------
     # Hook for subclasses
@@ -888,9 +930,14 @@ class WizardMixin:
 
         Args:
             step_data:  ``{step_name: {field_name: raw_string_value}}`` for
-                        every step that has a form_class.  Values are the raw
-                        strings entered by the user, not cleaned_data Python
-                        objects (see serialization note in module docstring).
+                        every step that has a form_class, limited to the
+                        fields each step's form declares (a name the page sent
+                        through ``validate_field`` / ``update_step_field`` that
+                        no step declares is not handed on, #3982).  Values are
+                        the raw strings entered by the user, not cleaned_data
+                        Python objects (see serialization note in module
+                        docstring). ``self.wizard_step_data`` still holds
+                        everything that was stored.
 
         Example::
 
