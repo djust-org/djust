@@ -489,12 +489,7 @@ DJUST_CONFIG = {"suppress_checks": ["V001"]}  # honored as of #1604
 ```python
 class MyView(LiveView):
     template_name = "my_template.html"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count}
+    count = state(0)
 ```
 
 ---
@@ -534,14 +529,10 @@ Without the decorator, the method cannot be called from templates via `dj-click`
 **Fix**:
 
 ```python
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 
 class MyView(LiveView):
-    def mount(self, request, **kwargs):
-        self.sidebar_open = False
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "sidebar_open": self.sidebar_open}
+    sidebar_open = state(False)
 
     @event_handler()
     def toggle_sidebar(self, **kwargs):
@@ -1198,11 +1189,7 @@ In your LiveView, read the URL parameter in the `handle_params()` lifecycle hook
 
 ```python
 class MyView(LiveView):
-    def mount(self, request, **kwargs):
-        self.current_view = "dashboard"
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "current_view": self.current_view}
+    current_view = state("dashboard")
 
     def handle_params(self, params, uri):
         # Called after mount and on every dj-patch / back-forward URL change
@@ -1435,9 +1422,10 @@ directories loads are compared, so a library only Django's own engine renders
 **Severity**: Warning
 
 **What causes it**: A view under explicit exposure (the default since 2.0) has
-a template that reads a name the view holds as an attribute, and the view's
-`get_context_data()` does not return it. The name renders as empty string,
-with no error. A view written for djust 1.x looks like this:
+a template that reads a name the view holds as an attribute, and nothing
+supplies it: it is not a declared `state()` field and `get_context_data()`
+does not return it. The name renders as empty string, with no error. A view
+written for djust 1.x looks like this:
 
 <!-- djust-example: skip -- the view T027 reports, shown as the cause -->
 <!-- doc-snippet-check: anti-pattern -->
@@ -1452,25 +1440,28 @@ class CounterView(LiveView):
 Message: "<view> -- the template reads 'count' at line 1 (<inline>) and the
 view holds it as an attribute, but nothing supplies it to the template: ..."
 
-**Fix**: Supply the name:
+**Fix**: Declare the name with `state()`, which renders it (or return it from
+`get_context_data()`):
 
 <!-- djust-example: skip -- executed by tests/test_doc_snippets_execute.py -->
 ```python
-from djust import LiveView
+from djust import LiveView, state
 
 
 class CounterView(LiveView):
     template = "<div dj-root>{{ count }}</div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count}
+    count = state(0)
 ```
 
-Declare it with `state()` as well if it must be persisted or sent to the
-browser ([explicit exposure](../state/explicit-exposure.md)). To keep the 1.x
+Persisting the field or sending it to the browser takes its own grant
+(`persist=`, `client=True`; see [explicit exposure](../state/explicit-exposure.md)).
+
+T027 also names a template `X_count` that nothing supplies when `X` is
+supplied (#4054): djust 1.x generated `items_count` from a QuerySet or list
+`items`, and explicit exposure does not. Write `{{ items|length }}`, or return
+`items_count` from `get_context_data()`.
+
+To keep the 1.x
 behaviour while you migrate, set `exposure_policy = "legacy"` on the view
 ([Migrating to djust 2.0](migrating-to-2.0.md)). The check skips a view whose
 `get_context_data()` it cannot read statically and a template that uses
