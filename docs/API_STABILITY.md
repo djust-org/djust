@@ -280,6 +280,8 @@ djust `2.0.0`. Importing them now raises `ImportError` (or `AttributeError` for
 deprecated in 1.3, were removed too, as were the eight component mixins and the
 `social_auth_providers` context processor, which had also warned since 1.3.
 
+<!-- BEGIN GENERATED removed-sections:2.0: do not edit by hand; edit docs/removed/2.0/stability/ and run make generated-docs -->
+
 ### `@event` → `@event_handler`
 
 `@event` was a deprecated alias for `@event_handler`, with identical behavior.
@@ -613,6 +615,8 @@ class CartView(LiveView):
 view's public and private state from the session between requests. `djust.C304` now warns about a `client=True` field with a
 credential-like name.
 
+<!-- END GENERATED removed-sections:2.0 -->
+
 ## Template-Syntax Deprecations
 
 djust has a **second** deprecation track, separate from Python
@@ -689,3 +693,5 @@ release**. They are an explicit exception to the stable 1.x surface while the
 API is evaluated. Existing per-session ticks and push/presence behavior retain
 their stability commitments. Phases 1–3 are process-local; distributed ownership
 is deferred.
+
+<!-- generated-doc prose-sha256: 62bba659ac12 -->

@@ -565,6 +565,21 @@ check-changelog: ## Validate CHANGELOG test-count claims against actual tests (c
 	@$(PYTHON) scripts/check-changelog-test-counts.py
 	@$(PYTHON) scripts/changelog-fragments.py check
 
+.PHONY: generated-docs
+generated-docs: ## Regenerate the system-check and removed-name doc tables from docs/checks/ and docs/removed/ (#4080)
+	@$(PYTHON) scripts/system-check-docs.py write
+	@$(PYTHON) scripts/removed-names-docs.py write
+
+.PHONY: check-generated-docs
+check-generated-docs: ## Fail if a generated doc region differs from docs/checks/ or docs/removed/ (#4080)
+	@$(PYTHON) scripts/system-check-docs.py check
+	@$(PYTHON) scripts/removed-names-docs.py check
+
+.PHONY: new-check-id
+new-check-id: ## Print the next free system-check ID: make new-check-id FAMILY=V (or C3, audio.W) (#4080)
+	@test -n "$(FAMILY)" || { echo "usage: make new-check-id FAMILY=V"; exit 2; }
+	@$(PYTHON) scripts/system-check-docs.py next-id $(FAMILY)
+
 .PHONY: changelog-preview
 changelog-preview: ## Print [Unreleased] as it would read with changelog.d/ fragments folded in
 	@$(PYTHON) scripts/changelog-fragments.py preview

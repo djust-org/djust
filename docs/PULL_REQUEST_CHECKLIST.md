@@ -186,6 +186,7 @@ console.error(error); // ❌ Won't be captured in production
 - [ ] **New features documented** - User-facing changes have guide updates
 - [ ] **Breaking changes documented** - Migration path provided
 - [ ] **Changelog fragment added** - `changelog.d/<issue-or-slug>.<section>.md` with the bullet (mandatory for `feat:` and `fix:` PRs). Do NOT edit `CHANGELOG.md`'s `[Unreleased]` directly; the release cut compiles fragments. See `changelog.d/README.md`
+- [ ] **Generated doc entries added** - a new system check has `docs/checks/<ID>.md` with an ID from `make new-check-id`, a removed name has a `docs/removed/2.0/` row, and `make generated-docs` was run; nothing edited by hand between `BEGIN GENERATED` / `END GENERATED` markers (#4080)
 - [ ] **API references updated** - If public API changes
 - [ ] **No internal tracking documents** - Completion checklists, internal status docs (e.g., `*_COMPLETE.md`), and private planning docs must not be committed to the public repo
 

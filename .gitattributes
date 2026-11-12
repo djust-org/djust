@@ -11,3 +11,14 @@ RETRO.md merge=union
 # byte by `make vendor-check`: git must never rewrite their line endings, whatever core.autocrlf says.
 python/djust/components/static/djust_components/vendor/** -text
 python/djust/components/static/djust_components/vendor/**/*.LICENSE.txt -text
+
+# Docs with regions generated from one-file-per-entry sources (#4080). Union-merge
+# so two branches that each regenerated a region (each adding its own check or
+# removed name) merge without a conflict; `make check-generated-docs` then fails
+# until `make generated-docs` re-sorts the region. Two branches that both edited
+# the hand-written text leave two fingerprint lines, which the check refuses
+# until the merged text is compared by hand. See scripts/lib/generated_docs.py.
+docs/system-checks.md merge=union
+docs/website/guides/error-codes.md merge=union
+docs/website/guides/migrating-to-2.0.md merge=union
+docs/API_STABILITY.md merge=union

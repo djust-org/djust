@@ -58,6 +58,8 @@ python manage.py djust_audit --permissions permissions.yaml --strict
 
 ## Configuration Errors (C0xx)
 
+<!-- BEGIN GENERATED check-sections:C: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
+
 ### C001: ASGI_APPLICATION not set
 
 **Severity**: Error
@@ -356,16 +358,6 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
-### C029: Invalid query_budget mode
-
-**Severity**: Error
-
-**What causes it**: `LIVEVIEW_CONFIG['query_budget']` is set to something other than `None`, `"off"`, `"warn"` or `"error"` (`True`, `"WARN"`, `1`). The request path reads any such value as `"warn"` and logs it once.
-
-**Fix**: Set it to `"warn"`, `"error"` or `"off"`, or remove it. See [Per-view query budgets](../testing/index.md#per-view-query-budgets).
-
----
-
 ### C028: Invalid http_fallback_background_timeout
 
 **Severity**: Error
@@ -373,6 +365,16 @@ In development, pages render without Tailwind utilities until you compile the CS
 **What causes it**: `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is set to something other than `None` or a number of seconds greater than 0 and at most `threading.TIMEOUT_MAX` (about 9.2e9, the longest a thread can wait), such as `"30"`, `0`, `True` or `1e10`. A value above the maximum is rejected, not clamped. Any other value is read as no deadline, so the page-POST fallback keeps waiting for a `start_async` task that never returns.
 
 **Fix**: Set it to a number of seconds such as `30`, or remove it. See [Deadline](http-only-mode.md#what-the-page-post-fallback-keeps-between-events). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C028"]}`.
+
+---
+
+### C029: Invalid query_budget mode
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['query_budget']` is set to something other than `None`, `"off"`, `"warn"` or `"error"` (`True`, `"WARN"`, `1`). The request path reads any such value as `"warn"` and logs it once.
+
+**Fix**: Set it to `"warn"`, `"error"` or `"off"`, or remove it. See [Per-view query budgets](../testing/index.md#per-view-query-budgets).
 
 ---
 
@@ -444,9 +446,13 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **Fix**: Set a positive integer (the default is 100).
 
+<!-- END GENERATED check-sections:C -->
+
 ---
 
 ## Validation Errors (V0xx)
+
+<!-- BEGIN GENERATED check-sections:V: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### V001: Missing template_name
 
@@ -748,16 +754,6 @@ is never reused. Existing suppressions of V017 have no effect and can be removed
 
 ---
 
-### V019: Strict declaration on a dj-auto-recover handler
-
-**Severity**: Warning
-
-**What causes it**: A handler targeted by `dj-auto-recover` in the view's template declares `parameter_policy="strict"`. Recovery handlers receive the `_form_values` and `_data_attrs` dictionaries, so they always run under the legacy policy.
-
-**Fix**: Remove `parameter_policy="strict"` from the recovery handler.
-
----
-
 ### V018: params= disagrees with a strict signature
 
 **Severity**: Warning
@@ -765,6 +761,16 @@ is never reused. Existing suppressions of V017 have no effect and can be removed
 **What causes it**: `@event_handler(params=[...])` lists different parameters from a strict handler's signature. Under the strict policy the signature is the contract, so the list is ignored by validation and only misleads tooling.
 
 **Fix**: Remove `params=` or make it match the signature.
+
+---
+
+### V019: Strict declaration on a dj-auto-recover handler
+
+**Severity**: Warning
+
+**What causes it**: A handler targeted by `dj-auto-recover` in the view's template declares `parameter_policy="strict"`. Recovery handlers receive the `_form_values` and `_data_attrs` dictionaries, so they always run under the legacy policy.
+
+**Fix**: Remove `parameter_policy="strict"` from the recovery handler.
 
 ---
 
@@ -840,9 +846,13 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Fix**: Rename the field (for example `selected_user`), or declare it `state(..., render=False)` if no template reads it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V027"]}`.
 
+<!-- END GENERATED check-sections:V -->
+
 ---
 
 ## Security Errors (S0xx)
+
+<!-- BEGIN GENERATED check-sections:S: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### S001: mark_safe() with f-string
 
@@ -1057,9 +1067,13 @@ not trigger it.
 
 **Fix**: Declare the form field `disabled=True` (Django then ignores the posted value and keeps the stored one; a `FormMixin` view that edits an existing row sets it for you), leave the field out of `Meta.fields`, or opt the model field out of the floor with `djust_serialize_sensitive_fields`. HTML `disabled` / `readonly` does not protect the column. Suppress one form with `# noqa: S014` on its class line, or all with `DJUST_CONFIG = {"suppress_checks": ["S014"]}`.
 
+<!-- END GENERATED check-sections:S -->
+
 ---
 
 ## Template Errors (T0xx)
+
+<!-- BEGIN GENERATED check-sections:T: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### T001: Deprecated @event syntax
 
@@ -1475,9 +1489,13 @@ time for those too. Suppress with
 `DJUST_CONFIG = {"suppress_checks": ["T027"]}` or a
 `{# djust_typecheck: noqa count #}` template comment.
 
+<!-- END GENERATED check-sections:T -->
+
 ---
 
 ## Code Quality (Q0xx)
+
+<!-- BEGIN GENERATED check-sections:Q: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### Q001: print() statement
 
@@ -1566,11 +1584,15 @@ if (globalThis.djustDebug) {
 
 **Fix**: Use `dj-patch="?tab=value"` and read the value in `handle_params()` (see T010), or add `# noqa: Q010` on the handler.
 
+<!-- END GENERATED check-sections:Q -->
+
 ---
 
 ## Audit / Static Security Checks (A0xx)
 
 These checks were added as follow-ups to the 2026-04-10 a downstream consumer penetration test. They extend `djust_audit` / `djust_check` with configuration-level security checks that catch misconfigurations Django's own `check --deploy` cannot see. All A0xx checks fire during `manage.py check --tag djust` and appear alongside the C0xx/S0xx findings.
+
+<!-- BEGIN GENERATED check-sections:A: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### A001: WebSocket router missing an Origin validator
 
@@ -1800,7 +1822,6 @@ Recognized packages: `axes`, `defender`, `brutebuster`, `ratelimit`, `django_rat
 
 **Fix**: Informational. Suppress with `DJUST_CONFIG = {"suppress_checks": ["A090"]}`. See [Streaming Markdown](streaming-markdown.md).
 
-
 ### A100: Account backend can't be loaded
 
 **Severity**: Error
@@ -1869,11 +1890,15 @@ Recognized packages: `axes`, `defender`, `brutebuster`, `ratelimit`, `django_rat
 
 **Fix**: Base your class on the djust one in `djust.auth.accounts.backends.allauth_integration` (`DjustAccountAdapter`, `DjustSignupForm`, `DjustSocialAccountAdapter`, `DjustSocialSignupForm`) and add your changes there.
 
+<!-- END GENERATED check-sections:A -->
+
 ---
 
 ## Vendored Assets and SBOMs (B0xx)
 
 See [Vendoring third-party JS](vendored-assets.md) and [Scanning a djust app](scanning.md) (ADR-040).
+
+<!-- BEGIN GENERATED check-sections:B: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### B001: Manifest unparseable or fails schema
 
@@ -1992,9 +2017,13 @@ See [Vendoring third-party JS](vendored-assets.md) and [Scanning a djust app](sc
 
 **Fix**: Run `collectstatic` (or `manage.py djust_sbom -o PATH`) as part of your build.
 
+<!-- END GENERATED check-sections:B -->
+
 ---
 
 ## Database Notification Checks (D0xx)
+
+<!-- BEGIN GENERATED check-sections:D: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### D001: Postgres LISTEN/NOTIFY unavailable
 
@@ -2004,9 +2033,13 @@ See [Vendoring third-party JS](vendored-assets.md) and [Scanning a djust app](sc
 
 **Fix**: `pip install 'psycopg[binary]>=3.2'`, or silence with `SILENCED_SYSTEM_CHECKS = ["djust.D001"]` if you don't use `db.notifications`. See [Database Notifications](database-notifications.md).
 
+<!-- END GENERATED check-sections:D -->
+
 ---
 
 ## Update Notice (U0xx)
+
+<!-- BEGIN GENERATED check-sections:U: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### U001: Newer djust release or security advisory
 
@@ -2016,6 +2049,8 @@ See [Vendoring third-party JS](vendored-assets.md) and [Scanning a djust app](sc
 
 **Fix**: Upgrade djust. Disable the notice with `DJUST_CONFIG = {"update_check": False}` or the `DJUST_NO_UPDATE_CHECK=1` environment variable. It is also skipped when `CI` is set.
 
+<!-- END GENERATED check-sections:U -->
+
 ---
 
 ## AI Capability Discovery (I0xx)
@@ -2024,6 +2059,8 @@ These are INFO messages registered with the `djust` tag. They do not fail
 checks at the default ERROR threshold. **Behavior change:** agent-run
 `manage.py check --fail-level INFO` now fails unless I001 is silenced;
 unsilenced I002/I003 can also fail that threshold.
+
+<!-- BEGIN GENERATED check-sections:I: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### I001: Capability discovery for AI agents
 
@@ -2079,9 +2116,13 @@ Silence with `SILENCED_SYSTEM_CHECKS = ["djust.I003"]` or
 `DJUST_CONFIG = {"suppress_checks": ["I003"]}`. `DJUST_AI_HINTS=0` does
 not silence I003.
 
+<!-- END GENERATED check-sections:I -->
+
 ## Accessibility Checks (Y0xx)
 
 These scan LiveView templates. All are Warnings, so a false positive never fails `manage.py check`, and each can be suppressed with `DJUST_CONFIG['suppress_checks']`. See [Accessibility](accessibility.md).
+
+<!-- BEGIN GENERATED check-sections:Y: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### Y001: Control with no accessible name
 
@@ -2141,11 +2182,15 @@ These scan LiveView templates. All are Warnings, so a false positive never fails
 
 **Fix**: Put the series name in the `<li>` as text (it may be visually hidden), or add an `aria-label` to the item.
 
+<!-- END GENERATED check-sections:Y -->
+
 ---
 
 ## Audio Checks (djust.audio.*)
 
 These run for routed LiveViews that use `AudioMixin`. See [Audio](audio.md).
+
+<!-- BEGIN GENERATED check-sections:audio: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### djust.audio.E001: audio_banks value is not a SoundBank
 
@@ -2165,11 +2210,15 @@ These run for routed LiveViews that use `AudioMixin`. See [Audio](audio.md).
 
 **Fix**: Add the file to a staticfiles directory before `collectstatic`.
 
+<!-- END GENERATED check-sections:audio -->
+
 ---
 
 ## Theming Checks (djust_theming.*)
 
 These are registered by the `djust.theming` app under Django's `compatibility` tag, so they run with a plain `manage.py check`, not with `--tag djust`.
+
+<!-- BEGIN GENERATED check-sections:djust_theming: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### djust_theming.E001: theme_context processor missing
 
@@ -2242,6 +2291,8 @@ Independently of this check, `get_theme_config()` raises `ImproperlyConfigured` 
 **What causes it**: `LIVEVIEW_CONFIG["theme"]["selectable_presets"]` is not a list of preset names, or names a preset that is not registered. Messages: 'LIVEVIEW_CONFIG["theme"]["selectable_presets"] is invalid: <reason>' and 'LIVEVIEW_CONFIG["theme"]["selectable_presets"] names unknown preset(s) <names>, which are ignored.' At render time such a value is logged and ignored, so this check is where the mistake is reported.
 
 **Fix**: Use a list of registered preset names, such as `["default", "legal"]`. `python manage.py djust_theme list-presets` prints the registered names.
+
+<!-- END GENERATED check-sections:djust_theming -->
 
 ---
 
@@ -3368,3 +3419,5 @@ some_code()  # noqa: Q001,S003
 - [Working with External Services](services.md) -- Avoiding serialization errors
 - [Security Guide](../advanced/security.md) -- Authentication and authorization
 - [Best Practices](BEST_PRACTICES.md) -- State management patterns
+
+<!-- generated-doc prose-sha256: 30d3dc4b5244 -->

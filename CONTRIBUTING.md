@@ -347,6 +347,32 @@ The body is exactly the bullet you would have written under that heading
 canonical section order and deletes it. `make changelog-preview` shows the
 result without writing. Shape and rules: `changelog.d/README.md`.
 
+## System checks and removed names
+
+The check tables and sections in `docs/system-checks.md` and
+`docs/website/guides/error-codes.md`, the removed-name tables in
+`docs/website/guides/migrating-to-2.0.md` and the "Removed in 2.0.0" sections of
+`docs/API_STABILITY.md` are generated. Do not edit between their
+`BEGIN GENERATED` / `END GENERATED` markers; add a file instead, so two PRs never
+edit the same lines (#4080):
+
+- **A new system check:** take its ID from `make new-check-id FAMILY=V`, then add
+  `docs/checks/<ID>.md` (severity, one-line summary, the reference and guide
+  sections). `docs/checks/README.md` has the shape.
+- **A retired check:** keep its file and set `status: retired`. The ID is never
+  reused.
+- **A removed name or setting:** add `docs/removed/2.0/migration/<NNN>-<slug>.md`
+  (one table row), and `docs/removed/2.0/stability/<NNN>-<slug>.md` if it needs a
+  section in `docs/API_STABILITY.md`. A key added to a `REMOVED_*` table in
+  `python/djust/_removed_settings.py` needs a row that lists it under `covers:`.
+  `docs/removed/README.md` has the shape.
+
+Then run `make generated-docs` and commit the regenerated docs with the new
+file. Pre-commit and CI run `make check-generated-docs`. Editing the hand-written
+text of one of these four docs also needs `make generated-docs`: its last line is
+a fingerprint of that text, which catches a union merge that kept two versions
+of an edited paragraph.
+
 ## Documentation
 
 - Code comments for complex logic
