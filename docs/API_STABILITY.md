@@ -315,13 +315,16 @@ special form base class; `LiveViewForm` only added two helpers to Django's
 `form.get_field_value(name)`, read `form.cleaned_data` (or `form.data` before
 validation):
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before
+# Before (removed: raises ImportError)
 from djust.forms import LiveViewForm
 
 class ContactForm(LiveViewForm):
     name = forms.CharField()
+```
 
+```python
 # After
 from django import forms
 
@@ -401,15 +404,19 @@ classes, are gone from `djust.components` and `djust.components.mixins`
 Declare the matching descriptor on the view instead. It holds the state and
 registers its event handler; the template reads the state off the attribute.
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before
+# Before (removed: raises ImportError)
 from djust.components.mixins import TabsMixin
 
 class SettingsView(TabsMixin, LiveView):
     def mount(self, request, **kwargs):
         self.init_tabs("nav", active="general")
+```
 
+```python
 # After
+from djust import LiveView
 from djust.components.descriptors import Tabs
 
 class SettingsView(LiveView):
@@ -520,11 +527,14 @@ class-creation check cannot see (set on the instance, or assigned to the class
 later) raises the same error right after `mount()`, on every transport. Delete
 the attribute:
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before
+# Before (removed: raises ImproperlyConfigured)
 class Dashboard(LiveView):
     use_actors = True
+```
 
+```python
 # After
 class Dashboard(LiveView):
     ...
@@ -605,14 +615,17 @@ the attribute (next section), so a legacy view mounts fresh on Back.
 The HTTP page-POST fallback still restores a legacy view's public and private state from the session between requests; that goes later in 2.0 (rows 5 and 6 of the exposure-flip plan).
 Declare what the browser may hold:
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before (1.3)
+# Before (1.3): refused in 2.0
 class WizardView(LiveView):
     enable_state_snapshot = True
 
     def mount(self, request, **kwargs):
         self.step = 1
+```
 
+```python
 # After
 class WizardView(LiveView):
     step = state(1, persist="client", client=True)

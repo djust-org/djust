@@ -121,6 +121,15 @@ Everything else stays on the view object in server memory. Your handlers can
 read it; nothing exports it. A value you render is in the HTML, as in any
 Django template, and that is the only place it is.
 
+**No generated `_count` names.** Under the 1.3 default a QuerySet or list in
+the context as `items` also gave the template `items_count`. Explicit exposure
+does not generate it, so `{{ items_count }}` renders empty. Write
+`{{ items|length }}` instead (it works on a QuerySet and on a list), or return
+`items_count` from `get_context_data()`. With `DEBUG = True` djust logs a
+warning on the `djust.exposure` logger that names the template's
+`items_count` and points at `{{ items|length }}`, once per view and name, and
+`manage.py check` reports it as `djust.T027` when `items` is supplied.
+
 ### Step 1: run the inventory
 
 ```bash
@@ -450,7 +459,7 @@ checks every event again, including ones a script sends by hand.
 ### Before and after
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
@@ -461,16 +470,8 @@ class SearchView(LiveView):
         <p>{{ query }} / {{ selected }}</p>
     </div>"""
 
-    def mount(self, request, **kwargs):
-        self.query = "none"
-        self.selected = 0
-
-    def get_context_data(self, **kwargs):
-        return {
-            **super().get_context_data(**kwargs),
-            "query": self.query,
-            "selected": self.selected,
-        }
+    query = state("none")
+    selected = state(0)
 
     @event_handler()
     def search(self, value="", **kwargs):
@@ -484,7 +485,7 @@ class SearchView(LiveView):
 becomes:
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
@@ -495,16 +496,8 @@ class SearchView(LiveView):
         <p>{{ query }} / {{ selected }}</p>
     </div>"""
 
-    def mount(self, request, **kwargs):
-        self.query = "none"
-        self.selected = 0
-
-    def get_context_data(self, **kwargs):
-        return {
-            **super().get_context_data(**kwargs),
-            "query": self.query,
-            "selected": self.selected,
-        }
+    query = state("none")
+    selected = state(0)
 
     @event_handler(parameter_policy="strict")
     def search(self, value: str):

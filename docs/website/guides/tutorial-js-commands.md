@@ -114,16 +114,12 @@ class ProfileView(LiveView):
         self.dismiss_toast = JS.hide("#toast")
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(
-            name=self.name,
-            email=self.email,
-            saved_message=self.saved_message,
-            open_modal=self.open_modal,
-            close_modal=self.close_modal,
-            dismiss_toast=self.dismiss_toast,
-        )
-        return context
+        return {
+            **super().get_context_data(**kwargs),
+            "open_modal": self.open_modal,
+            "close_modal": self.close_modal,
+            "dismiss_toast": self.dismiss_toast,
+        }
 
     @action
     def save_profile(self, name: str = "", email: str = "", **kwargs):

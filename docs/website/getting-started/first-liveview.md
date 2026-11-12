@@ -30,20 +30,13 @@ entries. The URL step below connects this app to the site.
 Create `myapp/views.py`:
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
 class CounterView(LiveView):
     template_name = "myapp/counter.html"
-
-    def mount(self, request, **kwargs):
-        """Initialize state here. Runs on the first HTTP render and again when the WebSocket connects."""
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        """Return template context. Called before every render."""
-        return {"count": self.count}
+    count = state(0)
 
     @event_handler()
     def increment(self, **kwargs):

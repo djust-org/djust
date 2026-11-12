@@ -85,18 +85,14 @@ result = extract_template_variables(template)
 Use extracted variables to optimize Django queries:
 
 ```python
-from djust._rust import extract_template_variables
-
 class DashboardView(LiveView):
     template_name = 'dashboard.html'
 
     def mount(self, request):
-        # Extract template variables
-        with open(self.get_template_path()) as f:
-            template_content = f.read()
-
-        vars = extract_template_variables(template_content)
-        # vars['lease'] = ['property.name', 'tenant.user.email', 'end_date']
+        # The dotted paths the template reads, by top-level name (loop
+        # variables are folded onto their iterable)
+        paths = self.template_paths()
+        # paths['expiring_soon'] == ['end_date', 'property.name', 'tenant.user.email']
 
         # Manually optimize query based on extracted paths
         self.expiring_soon = Lease.objects.select_related(

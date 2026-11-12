@@ -67,9 +67,6 @@ class OrderActivityWidget(LiveView):
             Order.objects.get(pk=object_id).activity.order_by("-ts")[:10]
         )
 
-    def get_context_data(self, **kwargs):
-        return {"events": self.events}
-
 
 @site.register(Order)
 class OrderAdmin(DjustModelAdmin):

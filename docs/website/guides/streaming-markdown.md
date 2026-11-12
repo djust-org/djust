@@ -163,7 +163,7 @@ False` mid-stream. A *sync* `@background` loop cannot be interrupted — it hold
 a `sync_to_async` thread-pool slot and the stop handler queues behind it.
 
 ```python
-from djust import LiveView, render_markdown
+from djust import LiveView, render_markdown, state
 from djust.decorators import event_handler
 
 
@@ -174,15 +174,8 @@ _STREAM = "reply"  # matches dj-stream="reply" in the template
 
 class ChatView(LiveView):
     template_name = "chat.html"
-
-    def mount(self, request, **kwargs):
-        self.llm_output = ""
-        self.streaming = False
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(llm_output=self.llm_output, streaming=self.streaming)
-        return context
+    llm_output = state("")
+    streaming = state(False)
 
     @event_handler
     def start(self, **kwargs):

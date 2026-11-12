@@ -9,17 +9,12 @@ The full forms guide is at [guides/forms.md](../guides/forms.md).
 ### Simple Form (no validation)
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class TodoView(LiveView):
     template_name = "todos.html"
-
-    def mount(self, request, **kwargs):
-        self.items = []
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "items": self.items}
+    items = state(default_factory=list)
 
     @event_handler()
     def add_item(self, title="", **kwargs):

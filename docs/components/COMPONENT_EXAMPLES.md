@@ -19,7 +19,7 @@ A complete, working todo application demonstrating the component architecture.
 
 ```python
 # app/components/todo_list.py
-from djust import LiveComponent
+from djust import LiveComponent, event_handler
 from typing import List, Dict
 
 class TodoListComponent(LiveComponent):
@@ -139,6 +139,7 @@ class TodoListComponent(LiveComponent):
             return [item for item in self.items if item['completed']]
         return self.items
 
+    @event_handler()
     def add_todo(self, **kwargs):
         """Add new todo item"""
         text = self.new_todo.strip()
@@ -158,10 +159,12 @@ class TodoListComponent(LiveComponent):
         # Notify parent
         self.send_parent("todo_added", {"item": new_item})
 
+    @event_handler()
     def set_new_todo(self, value: str = "", **kwargs):
         """Keep the input value on the server until the button is clicked."""
         self.new_todo = value
 
+    @event_handler()
     def toggle_todo(self, id: str = None, **kwargs):
         """Toggle todo completion status"""
         if id:
@@ -177,6 +180,7 @@ class TodoListComponent(LiveComponent):
                     })
                     break
 
+    @event_handler()
     def delete_todo(self, id: str = None, **kwargs):
         """Delete todo item"""
         if id:
@@ -186,11 +190,13 @@ class TodoListComponent(LiveComponent):
             # Notify parent
             self.send_parent("todo_deleted", {"id": todo_id})
 
+    @event_handler()
     def set_filter(self, filter: str = None, **kwargs):
         """Change filter"""
         if filter:
             self.filter = filter
 
+    @event_handler()
     def clear_completed(self, **kwargs):
         """Remove all completed items"""
         deleted_ids = [item['id'] for item in self.items if item['completed']]
@@ -204,7 +210,7 @@ class TodoListComponent(LiveComponent):
 
 ```python
 # app/views.py
-from djust import LiveView
+from djust import LiveView, event_handler, state
 from .components.todo_list import TodoListComponent
 
 class TodoAppView(LiveView):
@@ -244,10 +250,11 @@ class TodoAppView(LiveView):
         </body>
         </html>
     """
+    last_action = state(None)
+    todo_list = TodoListComponent()
 
     def mount(self, request):
         """Initialize view"""
-        self.last_action = None
 
         # Sample todos
         initial_todos = [
@@ -256,7 +263,7 @@ class TodoAppView(LiveView):
             {'id': 3, 'text': 'Deploy to production', 'completed': False},
         ]
 
-        self.todo_list = TodoListComponent(items=initial_todos)
+        self.todo_list.update(items=initial_todos)
 
     def handle_component_event(self, component_id, event, data):
         """Handle events from components"""
@@ -273,15 +280,10 @@ class TodoAppView(LiveView):
         elif event == "todos_cleared":
             self.last_action = f"Cleared {data['count']} completed todos"
 
+    @event_handler()
     def dismiss_alert(self):
         """Dismiss success message"""
         self.last_action = None
-
-    def get_context_data(self):
-        return {
-            'todo_list': self.todo_list,
-            'last_action': self.last_action
-        }
 ```
 
 ## User Management Dashboard
@@ -294,7 +296,7 @@ A master-detail interface demonstrating component coordination.
 
 ```python
 # app/components/user_list.py
-from djust import LiveComponent
+from djust import LiveComponent, event_handler
 
 class UserListComponent(LiveComponent):
     """
@@ -371,10 +373,12 @@ class UserListComponent(LiveComponent):
             if term in user['name'].lower() or term in user['email'].lower()
         ]
 
+    @event_handler()
     def search(self, value: str = None, **kwargs):
         """Update search term"""
         self.search_term = value or ""
 
+    @event_handler()
     def select_user(self, user_id: str = None, **kwargs):
         """Select a user"""
         if user_id:
@@ -386,7 +390,7 @@ class UserListComponent(LiveComponent):
 
 ```python
 # app/components/user_detail.py
-from djust import LiveComponent
+from djust import LiveComponent, event_handler
 
 class UserDetailComponent(LiveComponent):
     """
@@ -488,11 +492,13 @@ class UserDetailComponent(LiveComponent):
             'stats': self.stats
         }
 
+    @event_handler()
     def edit_user(self):
         """Request edit"""
         if self.user:
             self.send_parent("edit_requested", {"user_id": self.user['id']})
 
+    @event_handler()
     def delete_user(self):
         """Request delete"""
         if self.user:
@@ -503,7 +509,7 @@ class UserDetailComponent(LiveComponent):
 
 ```python
 # app/views.py
-from djust import LiveView
+from djust import LiveView, state
 from .components.user_list import UserListComponent
 from .components.user_detail import UserDetailComponent
 
@@ -533,20 +539,18 @@ class UserDashboardView(LiveView):
             </div>
         </div>
     """
+    users = state([
+        {'id': 1, 'name': 'Alice Johnson', 'email': 'alice@example.com', 'role': 'Admin'},
+        {'id': 2, 'name': 'Bob Smith', 'email': 'bob@example.com', 'role': 'Editor'},
+        {'id': 3, 'name': 'Carol White', 'email': 'carol@example.com', 'role': 'Viewer'},
+    ])
+    selected_user_id = state(None)
+    user_list = UserListComponent()
+    user_detail = UserDetailComponent()
 
     def mount(self, request):
-        # Sample data
-        self.users = [
-            {'id': 1, 'name': 'Alice Johnson', 'email': 'alice@example.com', 'role': 'Admin'},
-            {'id': 2, 'name': 'Bob Smith', 'email': 'bob@example.com', 'role': 'Editor'},
-            {'id': 3, 'name': 'Carol White', 'email': 'carol@example.com', 'role': 'Viewer'},
-        ]
-
-        self.selected_user_id = None
-
         # Create components
-        self.user_list = UserListComponent(users=self.users)
-        self.user_detail = UserDetailComponent()
+        self.user_list.update(users=self.users)
 
     @property
     def selected_user(self):
@@ -571,13 +575,10 @@ class UserDashboardView(LiveView):
             self.users = [u for u in self.users if u['id'] != user_id]
             self.selected_user_id = None
 
-    def get_context_data(self):
+    def get_context_data(self, **kwargs):
         return {
-            'users': self.users,
-            'selected_user_id': self.selected_user_id,
-            'selected_user': self.selected_user,
-            'user_list': self.user_list,
-            'user_detail': self.user_detail
+            **super().get_context_data(**kwargs),
+            "selected_user": self.selected_user,
         }
 ```
 
@@ -589,7 +590,7 @@ Product catalog with filtering and cart.
 
 ```python
 # app/components/product_grid.py
-from djust import LiveComponent
+from djust import LiveComponent, event_handler
 
 class ProductGridComponent(LiveComponent):
     """
@@ -716,15 +717,19 @@ class ProductGridComponent(LiveComponent):
             'search_term': self.search_term
         }
 
+    @event_handler()
     def filter_category(self, value: str = None, **kwargs):
         self.category_filter = value or ""
 
+    @event_handler()
     def filter_price(self, value: str = None, **kwargs):
         self.price_filter = value or ""
 
+    @event_handler()
     def search(self, value: str = None, **kwargs):
         self.search_term = value or ""
 
+    @event_handler()
     def add_to_cart(self, product_id: str = None, **kwargs):
         if product_id:
             product = next((p for p in self.products if p['id'] == int(product_id)), None)

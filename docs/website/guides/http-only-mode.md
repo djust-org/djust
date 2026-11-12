@@ -198,9 +198,6 @@ class CounterView(LiveView):
     # Each POST builds a new view: a persisted field is what carries the count over.
     count = state(0, persist="server")
 
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count}
-
     @event_handler
     def increment(self, **kwargs):
         self.count += 1

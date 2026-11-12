@@ -238,15 +238,12 @@ Phase 4 (multi-user broadcast, consent envelope) and Phase 5 (LLM-driven `Assist
 ```python
 import asyncio
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, background
 from djust.js import JS
 
 class Onboarding(LiveView):
-    tour_running: bool = False
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "tour_running": self.tour_running}
+    tour_running = state(False)
 
     @event_handler
     @background

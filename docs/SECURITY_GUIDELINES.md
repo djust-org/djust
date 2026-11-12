@@ -125,10 +125,12 @@ is_safe_event_name("_private")     # False
 Only methods explicitly marked as event handlers are callable via WebSocket. This is controlled by the `event_security` setting (default: `"strict"`):
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class MyView(LiveView):
+    count = state(0)
+
     @event_handler
     def increment(self):
         """This IS callable via WebSocket"""

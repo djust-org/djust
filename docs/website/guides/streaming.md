@@ -30,20 +30,18 @@ always available — just subclass `LiveView`. Do **not** also inherit `Streamin
 bases, that raises `TypeError: Cannot create a consistent method resolution`.
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class ChatView(LiveView):
     template_name = 'chat.html'
+    is_streaming = state(False)
 
     def mount(self, request, **kwargs):
         self.messages = []
-        self.is_streaming = False
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(is_streaming=self.is_streaming, messages=self.messages)
-        return context
+        return {**super().get_context_data(**kwargs), "messages": self.messages}
 
     @event_handler()
     async def send_message(self, content="", **kwargs):
@@ -220,20 +218,14 @@ document.querySelector('[dj-stream="output"]')
 ```python
 class AIChat(LiveView):  # streaming is built in — no StreamingMixin needed
     template_name = 'ai_chat.html'
+    is_streaming = state(False)
+    stream_failed = state(False)
 
     def mount(self, request, **kwargs):
         self.messages = []
-        self.is_streaming = False
-        self.stream_failed = False
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(
-            is_streaming=self.is_streaming,
-            stream_failed=self.stream_failed,
-            messages=self.messages,
-        )
-        return context
+        return {**super().get_context_data(**kwargs), "messages": self.messages}
 
     @event_handler()
     async def ask(self, content="", **kwargs):

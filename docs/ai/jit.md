@@ -14,7 +14,7 @@ def get_context_data(self, **kwargs):
 ```
 
 ```python
-# WRONG: an attribute alone, public or not
+# WRONG: an undeclared attribute alone, public or not
 def mount(self, request, **kwargs):
     self.items = Item.objects.all()  # never reaches the template: {{ items }} renders empty
 

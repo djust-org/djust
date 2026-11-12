@@ -672,9 +672,6 @@ class ArticleView(LiveView):
 
     def mount(self, request, slug):
         self.article = Article.objects.get(slug=slug)
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "article": self.article}
 ```
 
 ```django

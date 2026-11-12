@@ -54,6 +54,31 @@ def test_plain_form_scaffold_is_unchanged():
     assert "FormMixin" in code and "ModelFormMixin" not in code
 
 
+def test_scaffold_declares_template_state_instead_of_handing_it_over():
+    # #4050: a declared state() field renders by default, so the scaffold
+    # declares search_query / page / editing and get_context_data() returns
+    # only derived and render-only values.
+    import ast
+
+    from djust.mcp.server import create_server
+
+    server = create_server()
+    (tool,) = [t for t in server._tool_manager._tools.values() if t.name == "scaffold_view"]
+    code = tool.fn(name="ItemListView", features="search,pagination,crud")
+    ast.parse(code)
+    assert "from djust import LiveView, state" in code
+    for declaration in ("search_query = state('')", "page = state(1)", "editing = state(False)"):
+        assert "    " + declaration in code
+    for name in ("search_query", "page", "editing"):
+        assert "ctx['%s']" % name not in code
+        assert "self.%s = " % name not in code.split("def mount")[1].split("def _refresh")[0]
+    assert "ctx['items'] = self._items" in code
+    assert "ctx['selected_item'] = self.selected_item" in code
+    assert "ctx['total_pages']" in code
+    # A scaffold with no template state imports no state().
+    assert "state" not in tool.fn(name="PlainView", features="")
+
+
 def test_form_edit_scaffold_lists_its_fields_explicitly():
     # Review of #3134: `exclude = ["owner"]` made any later field (is_published,
     # approved) owner-editable. An allowlist is what schema.py teaches too.

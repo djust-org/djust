@@ -29,15 +29,11 @@ form ergonomics without writing a single state-management line.
 Decorate a `LiveView` method with `@action`:
 
 ```python
-from djust import LiveView, action
+from djust import LiveView, action, state
 
 
 class TodoView(LiveView):
-    def mount(self, request, **kwargs):
-        self.todos = []
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "todos": self.todos}
+    todos = state(default_factory=list)
 
     @action
     def create_todo(self, title: str = "", **kwargs):
@@ -190,11 +186,7 @@ handler:
 
 ```python
 class TodoView(LiveView):
-    def mount(self, request, **kwargs):
-        self.todos = []
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "todos": self.todos}
+    todos = state(default_factory=list)
 
     @action
     def create_todo(self, title: str = "", **kwargs):

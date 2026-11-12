@@ -93,7 +93,7 @@ When an event handler does slow work (API calls, AI generation, file processing)
 2. **Background work** -- Run the slow operation in a thread; when done, re-render automatically
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
@@ -102,20 +102,9 @@ from djust.decorators import event_handler
 #  TypeError: Cannot create a consistent method resolution.)
 class ReportView(LiveView):
     template_name = "report.html"
-
-    def mount(self, request, **kwargs):
-        self.generating = False
-        self.report_html = ""
-        self.error = ""
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(
-            generating=self.generating,
-            report_html=self.report_html,
-            error=self.error,
-        )
-        return context
+    generating = state(False)
+    report_html = state("")
+    error = state("")
 
     @event_handler()
     def generate_report(self, **kwargs):
@@ -210,22 +199,15 @@ def _do_work(self):
 For simpler syntax, use the `@background` decorator to automatically run the entire handler in the background:
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, background
 
 
 class ContentView(LiveView):
     template_name = "content.html"
-
-    def mount(self, request, **kwargs):
-        self.generating = False
-        self.content = ""
-        self.error = ""
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(generating=self.generating, error=self.error, content=self.content)
-        return context
+    generating = state(False)
+    error = state("")
+    content = state("")
 
     @event_handler
     @background
@@ -317,18 +299,15 @@ view sets `cancel_async_on_disconnect = True`. A task created with plain
 `asyncio.create_task()` is not tracked and keeps running.
 
 ```python
-from djust import LiveView, apush_to_view
+from djust import LiveView, apush_to_view, state
 
 
 class RunView(LiveView):
     cancel_async_on_disconnect = True
+    events = state(default_factory=list)
 
     async def mount(self, request, run_id=None, **kwargs):
-        self.events = []
         self.create_task(self._follow(run_id))
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "events": self.events}
 
     async def _follow(self, run_id):
         async for event in run_events(run_id):

@@ -942,7 +942,7 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
             # self.faq.active → "q1" (typed, IDE autocomplete)
             # accordion_toggle handler auto-registered, routed by component_id
 
-    Legacy Pattern (still supported)::
+    Classic pattern (a ``LiveComponent`` subclass with ``mount()``)::
 
         class AlertComponent(LiveComponent):
             template_name = 'components/alert.html'
@@ -954,8 +954,9 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
                 return {'message': self.message}
 
         class MyView(LiveView):
-            def mount(self, request):
-                self.alert = AlertComponent(message="Success!")
+            # Declared in the class body: each view gets its own copy. An
+            # explicit view refuses one assigned in mount().
+            alert = AlertComponent(message="Success!")
 
     Descriptor Protocol:
         When declared as a class attribute, LiveComponent acts as a Python descriptor:

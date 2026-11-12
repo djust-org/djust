@@ -28,21 +28,14 @@ available — just subclass `LiveView`. Do **not** also inherit `NavigationMixin
 that raises `TypeError: Cannot create a consistent method resolution`.
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class ProductListView(LiveView):
     template_name = 'products/list.html'
-
-    def mount(self, request, **kwargs):
-        self.category = "all"
-        self.page = 1
-        self.products = []
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(category=self.category, page=self.page, products=self.products)
-        return context
+    category = state("all")
+    page = state(1)
+    products = state(default_factory=list)
 
     def handle_params(self, params, uri):
         """Called when URL params change (live_patch or browser back/forward)."""
@@ -120,7 +113,7 @@ field the URL left out or empty (a `BooleanField` too) takes its `initial` value
 ```python
 from django import forms
 
-from djust import LiveView
+from djust import LiveView, state
 
 
 class ListParams(forms.Form):
@@ -133,15 +126,8 @@ class ListParams(forms.Form):
 class ListView(LiveView):
     template_name = "demo/list.html"
     params_form = ListParams
-
-    def mount(self, request, **kwargs):
-        self.category = "all"
-        self.page = 1
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(category=self.category, page=self.page)
-        return context
+    category = state("all")
+    page = state(1)
 
     def handle_params(self, params, uri):
         self.category = params["category"]
@@ -318,7 +304,7 @@ string with `query_params`, and step to another URL with `url_change()`:
 ```python
 from django import forms
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.testing import LiveViewTestClient
 
 
@@ -329,12 +315,7 @@ class PageParams(forms.Form):
 class PagedView(LiveView):
     template = "<div dj-root>{{ page }}</div>"
     params_form = PageParams
-
-    def mount(self, request, **kwargs):
-        self.page = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "page": self.page}
+    page = state(0)
 
     def handle_params(self, params, uri):
         self.page = params["page"]
@@ -686,16 +667,9 @@ explicit, per-link form.
 ```python
 class SearchView(LiveView):  # navigation is built in — no NavigationMixin needed
     template_name = 'search.html'
-
-    def mount(self, request, **kwargs):
-        self.query = ""
-        self.sort = "relevance"
-        self.results = []
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(query=self.query, results=self.results, sort=self.sort)
-        return context
+    query = state("")
+    results = state(default_factory=list)
+    sort = state("relevance")
 
     def handle_params(self, params, uri):
         self.query = params.get("q", "")
@@ -820,12 +794,7 @@ def switch_view(self, view="", **kwargs):
 class DashboardView(LiveView):  # navigation is built in — no NavigationMixin needed
     template_name = 'dashboard.html'
     VALID_TABS = {"overview", "settings", "logs"}
-
-    def mount(self, request, **kwargs):
-        self.active_tab = "overview"
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "active_tab": self.active_tab}
+    active_tab = state("overview")
 
     def handle_params(self, params, uri):
         tab = params.get("tab", "overview")

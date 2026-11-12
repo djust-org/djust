@@ -143,7 +143,7 @@ Here's how to use components in a LiveView:
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from demo_app.components import (
     HeroSection, CodeBlock, Button,
     FeatureCard, FeatureGrid, BackButton
@@ -151,9 +151,7 @@ from demo_app.components import (
 
 class MyDemoView(LiveView):
     template_name = "my_demo.html"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
+    count = state(0)
 
     def increment(self):
         self.count += 1
@@ -185,8 +183,6 @@ class MyDemoView(LiveView):
         ]).render()
 
         context['back'] = BackButton().render()
-
-        context["count"] = self.count
         return context
 ```
 

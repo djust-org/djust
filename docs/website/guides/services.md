@@ -23,13 +23,10 @@ If you try to store a service instance in state:
 # WRONG: boto3 client is not JSON-serializable
 class S3BrowserView(LiveView):
     template_name = "s3_browser.html"
+    buckets = state(default_factory=list)
 
     def mount(self, request, **kwargs):
         self.s3_client = boto3.client("s3")  # Will fail on next render
-        self.buckets = []
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "buckets": self.buckets}
 ```
 
 By default djust logs `LiveView state contains non-serializable value: …` and stores a string in its place, so the next handler that calls a method on `self.s3_client` gets an `AttributeError`. With `strict_serialization: True` it raises `TypeError` instead (see [Runtime Warnings and Errors](#runtime-warnings-and-errors)).
@@ -302,9 +299,6 @@ class S3View(LiveView):
         resp = self._s3().list_objects_v2(Bucket="my-bucket")
         self.files = [obj["Key"] for obj in resp.get("Contents", [])]
 
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "files": self.files}
-
     @event_handler()
     def delete_file(self, key: str = "", **kwargs):
         self._s3().delete_object(Bucket="my-bucket", Key=key)
@@ -333,11 +327,6 @@ class WeatherView(LiveView):
     def mount(self, request, **kwargs):
         self.forecast = self._fetch_weather(self.city)
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(city=self.city, forecast=self.forecast)
-        return context
-
     @event_handler()
     def change_city(self, value: str = "", **kwargs):
         self.city = value
@@ -360,9 +349,6 @@ class LeaderboardView(LiveView):
 
     def mount(self, request, **kwargs):
         self._load_scores()
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "scores": self.scores}
 
     def _load_scores(self):
         r = self._redis()

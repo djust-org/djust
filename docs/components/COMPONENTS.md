@@ -73,10 +73,12 @@ class TodoList(LiveComponent):
         self.items = items or []
 
     @event_handler()
-    def toggle(self, id: str = "", **kwargs):
-        item = next(i for i in self.items if i['id'] == int(id))
+    def toggle(self, id: int = 0, **kwargs):
+        item = next((i for i in self.items if i['id'] == id), None)
+        if item is None:
+            return
         item['completed'] = not item['completed']
-        self.send_parent("todo_toggled", {"id": int(id)})
+        self.send_parent("todo_toggled", {"id": id})
 ```
 
 **Use for**: Forms, data tables, filters, tabs - anything with state and user interaction.
@@ -180,21 +182,15 @@ from djust import LiveView
 from djust.components.layout import NavbarComponent, NavItem
 
 class MyView(LiveView):
-    def mount(self, request):
-        self.navbar = NavbarComponent(
-            brand_name="My App",
-            brand_logo="/static/images/logo.png",
-            items=[
-                NavItem("Home", "/", active=True),
-                NavItem("About", "/about/"),
-                NavItem("Contact", "/contact/"),
-            ],
-        )
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['navbar'] = self.navbar
-        return context
+    navbar = NavbarComponent(
+        brand_name="My App",
+        brand_logo="/static/images/logo.png",
+        items=[
+            NavItem("Home", "/", active=True),
+            NavItem("About", "/about/"),
+            NavItem("Contact", "/contact/"),
+        ],
+    )
 ```
 
 ### 3. Render in Templates
@@ -406,9 +402,11 @@ class FilterWidget(LiveComponent):
 **Usage in Parent View**:
 ```python
 class ProductListView(LiveView):
+    filter_widget = FilterWidget()
+
     def mount(self, request):
-        self.products = self._load_products()
-        self.filter_widget = FilterWidget(
+        self.products = list(Product.objects.all())
+        self.filter_widget.update(
             items=self.products,
             categories=['Electronics', 'Books', 'Clothing']
         )
@@ -467,8 +465,7 @@ from djust import LiveView, event_handler
 from djust.components.layout import NavbarComponent, NavItem
 
 class MyView(LiveView):
-    def mount(self, request):
-        self.navbar = NavbarComponent(...)
+    navbar = NavbarComponent(...)
 
     @event_handler()
     def add_menu_item(self):
@@ -486,18 +483,13 @@ class MyView(LiveView):
 ### 1. Start Simple, Upgrade When Needed
 
 ```python
-from djust import LiveView, LiveComponent, event_handler
+from djust import LiveView, LiveComponent, event_handler, state
 from djust.components.base import Component
 from django.utils.html import format_html
 # ✅ Start with inline template
 class SimpleView(LiveView):
-    template = '<button dj-click="increment">{{ count }}</button>'
-
-    def mount(self, request):
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count}
+    template = '<div dj-root><button dj-click="increment">{{ count }}</button></div>'
+    count = state(0)
 
     @event_handler()
     def increment(self):
@@ -528,13 +520,15 @@ class CounterWidget(LiveComponent):
 ```python
 # Parent view coordinates child components
 class DashboardView(LiveView):
+    user_list = UserListComponent()
+    user_detail = UserDetailComponent(user=None)
+
     def mount(self, request):
         self.users = User.objects.all()
         self.selected_user = None
 
         # Create child components
-        self.user_list = UserListComponent(users=self.users)
-        self.user_detail = UserDetailComponent(user=None)
+        self.user_list.update(users=self.users)
 
     def handle_component_event(self, component_id: str, event: str, data: dict):
         """Handle events from child components"""

@@ -86,11 +86,7 @@ You'll see a landing page with links to three demos:
 **Code highlights:**
 ```python
 class CounterView(LiveView):
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count}
+    count = state(0)
 
     def increment(self):
         self.count += 1  # Auto-updates client!

@@ -43,6 +43,7 @@ attribute (`self._rating = Rating(...)` in `mount()`) and is handed over the sam
 
 ```python
 from djust.components.base import LiveComponent
+from djust.decorators import event_handler
 
 class CounterWidget(LiveComponent):
     template = """
@@ -56,10 +57,12 @@ class CounterWidget(LiveComponent):
     def mount(self, **kwargs):
         self.count = kwargs.get("initial", 0)
 
+    @event_handler()
     def increment(self):
         self.count += 1
         self.trigger_update()
 
+    @event_handler()
     def decrement(self):
         self.count -= 1
         self.trigger_update()
@@ -71,6 +74,7 @@ class CounterWidget(LiveComponent):
 ### Critical Rules
 - `data-component-id="{{ component_id }}"` on EVERY element with `dj-*` events
 - Call `trigger_update()` after state changes
+- Decorate every handler a template binds with `@event_handler()`; strict event security (the default) refuses an undecorated method
 - Use `send_parent(event_name, data_dict)` for parent communication
 - `mount()` is required (abstract). Initialize all state here.
 - `get_context_data()` is required (abstract). Return all template vars.
@@ -120,7 +124,7 @@ imports both.
 
 <!-- djust-example: ai-project-menu scenario=project-menu -->
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.components.interactive import DropdownMenu
 
 
@@ -131,12 +135,7 @@ class ProjectView(LiveView):
         label="Project",
         items=[{"label": "Edit", "value": "edit"}, {"separator": True}],
     )
-
-    def mount(self, request, **kwargs):
-        self.selected_action = ""
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "selected_action": self.selected_action}
+    selected_action = state("")
 
     @project_menu.on.selected
     def on_project_menu_selected(self, component: DropdownMenu, value: str) -> None:
