@@ -647,8 +647,9 @@ class TestTheChokepointIsStructural:
         # `values_equal` (through `encoded_equal`), `try_compare`, and the
         # definition itself.
         assert renderer.count("encoded_partial_cmp(") == 3, renderer.count("encoded_partial_cmp(")
-        # `dictsort`'s ordering.
-        assert filters.count("encoded_partial_cmp(") == 1
+        # `dictsort`'s ordering, and whether `dictsort` may order two carried keys at all
+        # (`keys_are_orderable`, #3919).
+        assert filters.count("encoded_partial_cmp(") == 2
 
     def test_the_counter_goes_red_in_BOTH_directions(self) -> None:
         """The canary: each mutation asserts it APPLIED before its count is

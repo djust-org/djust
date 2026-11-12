@@ -766,8 +766,19 @@ class ContextMixin:
                                 optimize_queryset,
                             )
 
+                            from ..mixins.jit import (
+                                drop_callable_sort_keys,
+                                merge_whole_rows,
+                                split_whole_row,
+                            )
+
                             model_class = value[0].__class__
-                            paths = variable_paths_map.get(key, []) if variable_paths_map else []
+                            paths, whole_rows = split_whole_row(
+                                variable_paths_map.get(key, []) if variable_paths_map else []
+                            )
+                            paths = drop_callable_sort_keys(
+                                model_class, template_content, key, paths
+                            )
                             optimization = (
                                 analyze_queryset_optimization(model_class, paths) if paths else None
                             )
@@ -809,6 +820,8 @@ class ContextMixin:
                                     serializer = compile_serializer(code, func_name)
                                     _jit_serializer_cache[cache_key] = (serializer, None)
                                 context[key] = [serializer(item) for item in value]
+                                if whole_rows:
+                                    context[key] = merge_whole_rows(value, context[key])
                                 if all_methods_need_rows(model_class, paths):
                                     keep_rows_for_all_methods(self, key, value)
                             else:

@@ -165,6 +165,39 @@ def _is_sequence(value: Any) -> bool:
 #: list a node's names skip it, as they skip ``__list_item__``.
 ALL_WHOLE_KEY = "__djust_whole__"
 
+#: The path a template reads a row's TEXT through when it reads the row whole AND
+#: by field (``{{ u }}{{ u.pk }}``, #3911). The extractor files it
+#: (``djust_templates::parser::ROW_TEXT_PATH``) and the row carries ``str(row)``
+#: under it, the key the renderer prints a serialized object by. It is never an
+#: attribute read, so it is never asked of the serialization gate. The Rust twin
+#: is ``ROW_TEXT_KEY`` in ``serialize_object_with_paths``.
+ROW_TEXT_KEY = "__str__"
+
+
+def add_row_text(value: Any, row: Dict[str, Any]) -> None:
+    """Give *row* what a serialized model carries for a whole read (#3911).
+
+    A model gets its identity map (``model_identity``, the one producer: ``id``,
+    ``pk``, ``__str__``, ``__model__``), so the renderer prints ``__str__`` and
+    treats the map as a model rather than a dict. Anything else gets its text.
+    Keys the paths already filled win. A ``__str__`` that raises leaves the
+    text out, as a whole-row serializer does. The Rust twin is
+    ``serialize_object_with_paths``.
+    """
+    try:
+        if hasattr(value, "_meta"):
+            from djust.serialization import model_identity
+
+            extra = model_identity(value)
+        else:
+            extra = {ROW_TEXT_KEY: str(value)}
+    except Exception:  # noqa: BLE001 — a whole-row serializer leaves the text out too
+        logger.debug("__str__() failed during serialization")
+        return
+    for key, item in extra.items():
+        row.setdefault(key, item)
+
+
 #: The QuerySet methods a template can chain after ``.all``.
 ALL_CHAIN_METHODS = ("count", "exists", "first", "last")
 
@@ -232,7 +265,7 @@ def capped_all_rows(rows: Any) -> Any:
 
 def tree_names(tree: Dict[str, Any]) -> List[str]:
     """The attribute names a path tree node asks for (no markers)."""
-    return [name for name in tree if name != "__list_item__" and name != ALL_WHOLE_KEY]
+    return [name for name in tree if name not in ("__list_item__", ALL_WHOLE_KEY, ROW_TEXT_KEY)]
 
 
 def all_methods_value(queryset: Any, subtree: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -399,6 +432,8 @@ def take_by_tree(value: Any, tree: Dict[str, Any]) -> Any:
                     continue
                 found = capped_all_rows(found)
         taken[name] = take_by_tree(found, tree[name])
+    if ROW_TEXT_KEY in tree:
+        add_row_text(value, taken)
     return taken
 
 
@@ -471,12 +506,15 @@ def generate_serializer_code(
     # resolve ONCE here, and every emission below is a set-membership test.
     counter = [0]
     root_gate = "_ok_0"
-    if path_tree:
-        lines.append(_gate_line(1, root_gate, "obj", list(path_tree)))
+    if tree_names(path_tree):
+        lines.append(_gate_line(1, root_gate, "obj", tree_names(path_tree)))
     lines.append("")
 
     # Generate code for each path
     for root_attr, nested_paths in path_tree.items():
+        if root_attr == ROW_TEXT_KEY:
+            _row_text_line(lines, 1, "obj", "result")
+            continue
         _generate_nested_access(
             lines, [], nested_paths, "obj", "result", root_attr, gate_var=root_gate, counter=counter
         )
@@ -710,6 +748,9 @@ def _generate_nested_access(
     for attr_name, subtree in tree.items():
         if attr_name == ALL_WHOLE_KEY:
             continue
+        if attr_name == ROW_TEXT_KEY:
+            _row_text_line(lines, indent, obj_var, _build_dict_path(result_var, current_path))
+            continue
         # Special handling for list iteration marker
         if attr_name == "__list_item__":
             # This is a list - iterate and extract nested fields from each item
@@ -889,6 +930,12 @@ def _generate_nested_access(
                 lines.append(f"{ind}    {dict_path_full}['{attr_name}'] = {obj_access}")
 
 
+def _row_text_line(lines: List[str], indent: int, obj_var: str, dict_path: str) -> None:
+    """``add_row_text(<obj_var>, <dict_path>)`` for a row read whole AND by field (#3911)."""
+    ind = "    " * indent
+    lines.append(f"{ind}_djust_row_text({obj_var}, {dict_path})")
+
+
 def _build_dict_path(result_var: str, path: List[str]) -> str:
     """
     Build dictionary access path string.
@@ -936,6 +983,7 @@ def compile_serializer(code: str, func_name: str) -> Callable:
         "_djust_take": take_by_tree,
         "_djust_all_methods": all_methods_value,
         "_djust_all_rows": capped_all_rows,
+        "_djust_row_text": add_row_text,
     }
 
     try:

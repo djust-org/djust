@@ -7,10 +7,10 @@ import logging
 import os
 import re
 import sys
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Tuple, cast
 
 from .._render_caches import render_caches_enabled
-from .._rust import extract_template_variables
+from .._rust import extract_item_key_only_reads, extract_template_variables
 from ..optimization.codegen import (
     all_methods_need_rows,
     all_row_cap,
@@ -107,6 +107,220 @@ def _paths_for_variable(variable_paths_map: Optional[dict], variable_name: str) 
     ]
 
 
+#: The path that asks for each item's WHOLE row beside the fields the template
+#: names: a sort key only known at render time (``dictsort:key``, #3910). The
+#: extractor files it (``djust_templates::parser::WHOLE_ROW_PATH``) at a root
+#: only. It is never an attribute: :func:`split_whole_row` takes it out before
+#: any serializer or the query optimizer sees the paths.
+WHOLE_ROW_PATH = "*"
+
+
+#: The path a ROOT read whole AND by field files (``{{ user }}{{ user.pk }}``,
+#: ``djust_templates::parser::VALUE_TEXT_PATH``). For one model it is the model's
+#: text, ``__str__``; for a list (``{{ rows|pprint }}``) the root paths describe
+#: the items, and it is dropped (#3911). :func:`value_paths` decides.
+VALUE_TEXT_PATH = "__djust_text__"
+
+
+def split_whole_row(paths: List[str]) -> "tuple[List[str], bool]":
+    """``(paths without the whole-row path, whether it was there)`` (#3910).
+
+    The ROOT text path (:data:`VALUE_TEXT_PATH`) is dropped too: these are the
+    paths of a list's ITEMS, and a list read whole is not each item read whole.
+    """
+    if WHOLE_ROW_PATH not in paths and VALUE_TEXT_PATH not in paths:
+        return paths, False
+    kept = [path for path in paths if path not in (WHOLE_ROW_PATH, VALUE_TEXT_PATH)]
+    return kept, WHOLE_ROW_PATH in paths
+
+
+def value_paths(paths: List[str]) -> List[str]:
+    """The paths of ONE model value: :data:`VALUE_TEXT_PATH` is its ``__str__``."""
+    if VALUE_TEXT_PATH not in paths:
+        return paths
+    return sorted({"__str__" if p == VALUE_TEXT_PATH else p for p in paths})
+
+
+def _sortable_field_names(model_class: Any) -> FrozenSet[str]:
+    """The names a row's whole-row serialization keeps for :func:`merge_whole_rows`."""
+    names = {"pk"}
+    for field in model_class._meta.concrete_fields:
+        if not field.is_relation:
+            names.add(field.name)
+            names.add(field.attname)
+    return frozenset(names)
+
+
+def merge_whole_rows(items: Any, rows: List[Any]) -> List[Any]:
+    """Each row laid over its item's COLUMNS (#3910).
+
+    ``dictsort:key`` names its field at render time, so the row needs every field
+    the key could name. Django's resolver orders a column's value; a method or a
+    related manager is unorderable there (#3919) and a forward relation orders
+    model instances, which raises too. So the row gets the model's own non-relation
+    columns, taken from ``normalize_django_value`` (the eager serializer, with the
+    serialization floor applied) and nothing else it computes: no ``get_*()`` result
+    and no ``@property`` value, which a sort key could name but which would ship
+    values derived from fields the floor or ``djust_exclude_fields`` hides (#3955).
+    A key naming a property therefore renders Django's empty loop, the fail-closed
+    side. The path row wins, so a relation the template walks keeps its rows.
+    """
+    merged = []
+    for item, row in zip(items, rows):
+        whole = normalize_django_value(item)
+        if not (isinstance(whole, dict) and isinstance(row, dict)):
+            merged.append(row)
+            continue
+        if getattr(type(item), "_meta", None) is None:
+            merged.append({**whole, **row})
+            continue
+        keep = _sortable_field_names(type(item))
+        columns = {name: value for name, value in whole.items() if name in keep}
+        merged.append({**columns, **row})
+    return merged
+
+
+_item_key_only_cache: Dict[str, dict] = {}
+
+
+def _item_key_only_reads(template_content: str) -> dict:
+    """``extract_item_key_only_reads`` by content hash, ``{}`` when it refuses."""
+    content_hash = _template_hash(template_content)
+    try:
+        return _item_key_only_cache[content_hash]
+    except KeyError:
+        pass
+    try:
+        result = dict(extract_item_key_only_reads(template_content))
+    except Exception:  # noqa: BLE001 — the paths extraction refuses the same template
+        result = {}
+    if len(_item_key_only_cache) >= _VARIABLE_EXTRACTION_CACHE_MAX:
+        _item_key_only_cache.clear()
+    _item_key_only_cache[content_hash] = result
+    return result
+
+
+def _many_relation_model(model_class: Any, name: str) -> Any:
+    """The model of the rows ``model_class().<name>.all`` yields, or ``None``."""
+    for field in model_class._meta.get_fields():
+        if not (field.many_to_many or field.one_to_many):
+            continue
+        accessor = (
+            field.get_accessor_name()
+            if field.auto_created and not field.concrete
+            else getattr(field, "name", None)
+        )
+        if accessor == name:
+            return field.related_model
+    return None
+
+
+def _names_a_callable(model_class: Any, path: str) -> bool:
+    """Does ``path``'s LAST part name a method or a related manager of its row?
+
+    Read off the CLASS (``inspect.getattr_static``), so nothing is called and no
+    query runs: a plain function is a method, and a many-valued relation's
+    descriptor hands out a manager. A field, a property or a forward relation is
+    a value. The path is followed to the row its last part is read off: a
+    forward relation to its model, a many-valued relation's ``.all`` to the
+    model of its rows (``user_set.all.username`` asks about ``username`` of a
+    ``User``).
+    """
+    import inspect
+
+    from django.core.exceptions import FieldDoesNotExist
+    from django.db.models.fields.related_descriptors import (
+        ManyToManyDescriptor,
+        ReverseManyToOneDescriptor,
+    )
+
+    parts = path.split(".")
+    current = model_class
+    at = 0
+    while at < len(parts):
+        name = parts[at]
+        meta = getattr(current, "_meta", None)
+        if meta is None:
+            return False
+        try:
+            attr = inspect.getattr_static(current, name)
+        except AttributeError:
+            return False
+        many = isinstance(attr, (ManyToManyDescriptor, ReverseManyToOneDescriptor))
+        last = at == len(parts) - 1
+        if last:
+            return many or inspect.isfunction(attr) or isinstance(attr, (staticmethod, classmethod))
+        if many:
+            if parts[at + 1] != "all":
+                return False
+            current = _many_relation_model(current, name)
+            at += 2
+            continue
+        try:
+            field = meta.get_field(name)
+        except FieldDoesNotExist:
+            return False
+        if not (field.is_relation and (field.many_to_one or field.one_to_one)):
+            return False
+        current = field.related_model
+        at += 1
+    return False
+
+
+def callable_sort_keys(
+    model_class: Any, template_content: Optional[str], variable_name: str
+) -> FrozenSet[str]:
+    """The sort keys of *variable_name*'s rows that name a method or a related manager
+    and that nothing else in the template reads (#3919).
+
+    ``{% for u in users|dictsort:'get_full_name' %}``: Django's ``dictsort``
+    resolves the key without calling it, so it orders bound methods, raises, and
+    renders an empty loop. A JIT row CALLS what it is given (a path row) or carries
+    every ``get_*()`` result (a whole row), so the rows sorted by the method's
+    text. Such a key is left out of the row instead and the sort fails as
+    Django's does. A method the template also prints (``{{ u.get_full_name }}``)
+    stays: the row needs it.
+    """
+    if not template_content or model_class is None:
+        return frozenset()
+    keys = _paths_for_variable(_item_key_only_reads(template_content), variable_name)
+    return frozenset(key for key in keys if _names_a_callable(model_class, key))
+
+
+def drop_callable_sort_keys(
+    model_class: Any, template_content: Optional[str], variable_name: str, paths: List[str]
+) -> List[str]:
+    """``paths`` without a :func:`callable_sort_keys` key (#3919)."""
+    if not paths:
+        return paths
+    drop = callable_sort_keys(model_class, template_content, variable_name)
+    if not drop:
+        return paths
+    return [path for path in paths if path not in drop]
+
+
+def whole_rows_without_callable_sort_keys(
+    items: Any, template_content: Optional[str], variable_name: str
+) -> List[Any]:
+    """``normalize_django_value`` per item, without a :func:`callable_sort_keys` key.
+
+    The whole-row twin of :func:`drop_callable_sort_keys`: a row the template reads
+    only whole carries every ``get_*()`` result, so ``dictsort:'get_username'`` over
+    ``{{ u }}`` rows found the called value and sorted (#3919).
+    """
+    rows = [normalize_django_value(item) for item in items]
+    if not rows:
+        return rows
+    model_class = getattr(items, "model", None) or type(next(iter(items)))
+    drop = callable_sort_keys(model_class, template_content, variable_name)
+    if drop:
+        for row in rows:
+            if isinstance(row, dict):
+                for key in drop:
+                    row.pop(key, None)
+    return rows
+
+
 def _serializer_function_name(variable_name: str, template_hash: str) -> str:
     """``serialize_<name>_<hash>`` as a Python identifier (#3788).
 
@@ -146,6 +360,7 @@ def clear_template_source_caches() -> None:
     _template_source_cache.clear()
     _template_hash_cache.clear()
     _variable_extraction_cache.clear()
+    _item_key_only_cache.clear()
 
 
 def _template_source_key(view: Any) -> Optional[Tuple[str, str, Tuple[str, ...]]]:
@@ -817,7 +1032,12 @@ class JITMixin:
                 if recursive_relation:
                     raise ValueError("Cannot extract recursive partial model fields")
                 return [normalize_django_value(obj) for obj in queryset]
-            paths_for_var = _paths_for_variable(variable_paths_map, variable_name)
+            paths_for_var, whole_rows = split_whole_row(
+                _paths_for_variable(variable_paths_map, variable_name)
+            )
+            paths_for_var = drop_callable_sort_keys(
+                queryset.model, template_content, variable_name, paths_for_var
+            )
 
             if not paths_for_var and recursive_relation:
                 raise ValueError("Cannot extract recursive partial model fields")
@@ -826,7 +1046,9 @@ class JITMixin:
                     "[JIT] No paths found for '%s', using DjangoJSONEncoder fallback",
                     variable_name,
                 )
-                return [normalize_django_value(obj) for obj in queryset]
+                return whole_rows_without_callable_sort_keys(
+                    queryset, template_content, variable_name
+                )
 
             model_class = queryset.model
             template_hash = _template_hash(template_content)
@@ -911,9 +1133,13 @@ class JITMixin:
                     items,
                     result,
                     recursive_relation,
-                    lambda obj: self._jit_serialize_model(obj, template_content, variable_name),
+                    lambda obj: self._jit_serialize_model(
+                        obj, template_content, variable_name, _item=True
+                    ),
                     initial_caches,
                 )
+            if whole_rows:
+                result = merge_whole_rows(items, result)
 
             from ..config import config
 
@@ -959,29 +1185,44 @@ class JITMixin:
         """
         recursive_relation = _recursive_queryset_relation(template_content, variable_name)
         variable_paths_map = _cached_extract_template_variables(template_content)
-        paths_for_var = _paths_for_variable(variable_paths_map, variable_name)
+        paths_for_var, whole_rows = split_whole_row(
+            _paths_for_variable(variable_paths_map, variable_name)
+        )
         if not paths_for_var:
             if recursive_relation:
                 raise ValueError("Cannot extract recursive partial model fields")
-            return [normalize_django_value(item) for item in items]
+            return whole_rows_without_callable_sort_keys(items, template_content, variable_name)
         initial_caches = {}
         if recursive_relation:
             initial_caches = {
                 id(item): item._meta.get_field(recursive_relation).is_cached(item) for item in items
             }
-        rows = [self._jit_serialize_model(item, template_content, variable_name) for item in items]
+        rows = [
+            self._jit_serialize_model(item, template_content, variable_name, _item=True)
+            for item in items
+        ]
         if recursive_relation:
-            return _serialize_recursive_models(
+            rows = _serialize_recursive_models(
                 items,
                 rows,
                 recursive_relation,
-                lambda obj: self._jit_serialize_model(obj, template_content, variable_name),
+                lambda obj: self._jit_serialize_model(
+                    obj, template_content, variable_name, _item=True
+                ),
                 initial_caches,
             )
+        if whole_rows:
+            rows = merge_whole_rows(items, rows)
         return rows
 
     def _jit_serialize_model(
-        self, obj: Any, template_content: str, variable_name: str, *, _recursive_child: bool = False
+        self,
+        obj: Any,
+        template_content: str,
+        variable_name: str,
+        *,
+        _recursive_child: bool = False,
+        _item: bool = False,
     ) -> Dict[str, Any]:
         """
         Apply JIT auto-serialization to a single Django Model instance.
@@ -997,7 +1238,14 @@ class JITMixin:
                 if relation:
                     raise ValueError("Cannot extract recursive partial model fields")
                 return cast(Dict[str, Any], normalize_django_value(obj))
-            paths_for_var = _paths_for_variable(variable_paths_map, variable_name)
+            # A row of a list is serialized here one at a time: the whole-row
+            # path is answered by the list's caller (``merge_whole_rows``). A
+            # model VALUE (not a list item) read whole carries its text.
+            raw_paths = _paths_for_variable(variable_paths_map, variable_name)
+            paths_for_var, _ = split_whole_row(raw_paths if _item else value_paths(raw_paths))
+            paths_for_var = drop_callable_sort_keys(
+                obj.__class__, template_content, variable_name, paths_for_var
+            )
 
             if not paths_for_var and relation:
                 raise ValueError("Cannot extract recursive partial model fields")
@@ -1022,7 +1270,7 @@ class JITMixin:
             # Its own slot: ``_jit_serialize_queryset`` keeps (paths,
             # optimization) under the three-part key, and a name served as a
             # QuerySet once and a model later read that tuple as a serializer.
-            cache_key = (template_hash, variable_name, model_hash, "model")
+            cache_key = (template_hash, variable_name, model_hash, "item" if _item else "model")
 
             if cache_key in _jit_serializer_cache:
                 serializer, _ = _jit_serializer_cache[cache_key]

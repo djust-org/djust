@@ -122,7 +122,9 @@ class TestTheConditionRoutesThroughTheExpressionHelper:
 
     def test_the_condition_goes_through_extract_from_expression(self) -> None:
         arm = self._inline_if_arm()
-        assert "extract_from_expression(condition" in arm, (
+        # `extract_from_condition` is `extract_from_expression` with the whole-read marks of a
+        # TEST dropped (#3911): a condition is tokenized exactly as before.
+        assert "extract_from_condition(condition" in arm, (
             "the inline-if condition does not reach extract_from_expression; "
             f"a compound condition will be filed as one bogus key (#2745):\n{arm}"
         )

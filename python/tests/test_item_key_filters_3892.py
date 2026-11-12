@@ -202,19 +202,28 @@ class TestExtraction:
         the ``__str__`` a bare ``{{ u }}`` prints. A one-field list would replace that."""
         assert _paths(source)["users"] == []
 
-    def test_an_inner_list_read_whole_files_no_key(self) -> None:
+    def test_an_inner_list_read_whole_files_the_key_and_the_text(self) -> None:
+        """A NESTED list's rows cross as their text when nothing reads them by field, which
+        carries no key (#3918), so its key is filed; the whole read then files ``__str__``
+        beside it, the text ``{{ g }}`` prints (#3911)."""
         source = (
             "{% for u in users %}{{ u.pk }}"
             "{% for g in u.groups.all|dictsort:'name' %}{{ g }}{% endfor %}{% endfor %}"
         )
-        assert _paths(source)["users"] == ["groups.all", "pk"]
+        assert _paths(source)["users"] == [
+            "groups.all",
+            "groups.all.__str__",
+            "groups.all.name",
+            "pk",
+        ]
 
     # -- a key that is not a literal field name ---------------------------------------------
-    def test_a_variable_key_is_a_variable_read_and_names_no_field(self) -> None:
+    def test_a_variable_key_asks_for_the_whole_row(self) -> None:
         """``dictsort:key`` takes its field from the context at render time. A static pass cannot
-        know it: the variable is filed, no field is invented (#3910)."""
+        know it: the variable is filed, no field is invented, and the list asks for the whole
+        row (``*``) beside the fields it reads (#3910)."""
         paths = _paths("{% for u in users|dictsort:key %}{{ u.pk }}{% endfor %}")
-        assert paths["users"] == ["pk"]
+        assert paths["users"] == ["*", "pk"]
         assert paths["key"] == []
 
     @pytest.mark.parametrize(
@@ -239,11 +248,20 @@ class TestExtraction:
         )
         assert _paths(source)["users"] == ["pk", "username"]
 
-    def test_regroup_alone_leaves_the_rows_whole(self) -> None:
-        """The groups hold the rows; the source has no field singled out, so it stays whole."""
+    def test_regroup_list_reads_are_reads_of_the_source(self) -> None:
+        """The groups hold the source's rows, so a field read through ``grp.list`` is a field
+        of each row, and the ``by`` key is filed beside it (#3920)."""
         source = (
             "{% regroup users by username as g %}"
             "{% for grp in g %}{% for u in grp.list %}{{ u.pk }}{% endfor %}{% endfor %}"
+        )
+        assert _paths(source)["users"] == ["pk", "username"]
+
+    def test_regroup_alone_leaves_the_rows_whole(self) -> None:
+        """No field of the rows singled out anywhere: they stay whole."""
+        source = (
+            "{% regroup users by username as g %}"
+            "{% for grp in g %}{% for u in grp.list %}{{ u }}{% endfor %}{% endfor %}"
         )
         assert _paths(source)["users"] == []
 
@@ -376,15 +394,10 @@ class TestRendersLikeDjango:
         source = "{% for u in users|dictsort:'username' %}{{ u.pk }}{{ u.username }},{% endfor %}"
         assert _got(render, source, shape) == _expected(source, shape) == _pk_list(suffix=True)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="#3912: the Rust dictsort looks 'content_type.model' up as ONE key; the path is "
-        "attributed (TestExtraction), the sort cannot use it",
-    )
     @pytest.mark.parametrize("render", [_backend_render, _liveview_render])
     def test_a_dotted_key_over_a_relation(self, world, render) -> None:
         """``content_type.model`` is two hops from a ``Permission`` row; the second hop is only
-        in the filter argument. Empty here with the key read elsewhere too: the filter, not rows."""
+        in the filter argument. The Rust dictsort resolves the key as a path (#3912)."""
         source = "{% for p in perms|dictsort:'content_type.model' %}{{ p.pk }},{% endfor %}"
         perms = Permission.objects.filter(content_type__app_label="auth").order_by("pk")
         got = html_lib.unescape(render(source, {"perms": perms})).replace("<!--dj-if-->", "")
@@ -427,13 +440,9 @@ class TestRendersLikeDjango:
         source = "{% for u in users|dictsort:'no_such_field' %}{{ u.pk }}{% endfor %}"
         assert _django_render(source, _ctx("QuerySet")) == ""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="#3910: the field is a context VARIABLE; no static pass can attribute it",
-    )
-    # backend-list is left out: a raw list is not JIT-serialized there, so it already agrees.
-    @pytest.mark.parametrize("render,shape", RENDERS[:1] + RENDERS[2:])
-    def test_a_variable_key_is_not_attributed(self, world, render, shape) -> None:
+    # backend-list: a raw list is not JIT-serialized there, so it agreed before #3910 too.
+    @pytest.mark.parametrize("render,shape", RENDERS)
+    def test_a_variable_key_sorts_whole_rows(self, world, render, shape) -> None:
         source = "{% for u in users|dictsort:key %}{{ u.pk }},{% endfor %}"
         ctx = {**_ctx(shape), "key": "username"}
         got = html_lib.unescape(render(source, ctx)).replace("<!--dj-if-->", "")
