@@ -22,6 +22,7 @@ from djust import LiveView
 from djust.decorators import event_handler
 from djust.push import apush_to_view, push_scope_group_name
 from djust.tenants.mixin import TenantMixin
+from djust import state
 
 pytest.importorskip("channels")
 
@@ -41,7 +42,8 @@ BARRIER = "barrier"
 
 
 class TV(TenantMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(0)
     template = '<div dj-root dj-view="' + MOD + '.TV"><b>{{ n }}</b></div>'
 
     def mount(self, request, **kwargs):

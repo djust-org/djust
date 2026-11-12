@@ -19,6 +19,7 @@ from django.contrib.sessions.backends.signed_cookies import SessionStore
 from django.test import RequestFactory, override_settings
 
 from djust.checks.bindings import check_event_bindings
+from djust import state
 
 MODULE = "floor_field_fixture_3282"
 
@@ -170,7 +171,8 @@ def test_a_derived_boolean_renders_where_the_floor_field_does_not(tmp_path):
     from djust import LiveView
 
     class Derived(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        noop = state(1)
         template_name = "derived.html"
         login_required = False
 

@@ -41,11 +41,11 @@ class TestWidgetPermissions(TestCase):
         from djust.admin_ext import DjustModelAdmin
 
         class AllowedWidget(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "x.html"
 
         class RestrictedWidget(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "x.html"
             permission_required = "myapp.view_secret"
 
@@ -81,7 +81,7 @@ class TestWidgetSlotContext(TestCase):
         from djust.admin_ext import DjustAdminSite, DjustModelAdmin
 
         class DemoWidget(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "x.html"
             label = "Stats"
 
@@ -109,7 +109,7 @@ class TestWidgetSlotContext(TestCase):
         from djust.admin_ext import DjustAdminSite, DjustModelAdmin
 
         class DemoListWidget(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "x.html"
             label = "List widget"
 
@@ -136,7 +136,7 @@ class TestWidgetSlotContext(TestCase):
         from djust.admin_ext.options import DjustModelAdmin
 
         class SomeWidget(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "x.html"
             label = "Some"
             size = "lg"
@@ -163,15 +163,15 @@ class TestWidgetSlotContext(TestCase):
         from djust.admin_ext import DjustModelAdmin
 
         class W1(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "x.html"
 
         class W2(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "x.html"
 
         class W3(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "x.html"
 
         class MyAdmin(DjustModelAdmin):
@@ -226,12 +226,12 @@ class TestWidgetPermissionFilterInRenderedHTML(TestCase):
         from djust.admin_ext.views import _serialize_widget_slots
 
         class VisibleWidget(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "x.html"
             label = "Visible"
 
         class SecretWidget(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "x.html"
             permission_required = "app.missing_perm"
             label = "Secret"
@@ -274,7 +274,7 @@ class TestChangeFormWidgetsOnCreateView(TestCase):
         from djust.admin_ext.views import _serialize_widget_slots
 
         class AnyWidget(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "x.html"
             label = "Any"
 
@@ -298,7 +298,7 @@ class TestChangeFormWidgetsOnCreateView(TestCase):
         from djust.admin_ext.views import _serialize_widget_slots
 
         class AnyWidget(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "x.html"
 
         entries = _serialize_widget_slots([AnyWidget], object_id=42)

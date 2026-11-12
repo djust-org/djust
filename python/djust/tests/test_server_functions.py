@@ -70,7 +70,7 @@ def authed_request():
 
 def test_basic_call_returns_result(authed_request):
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.basic"
 
         @server_function
@@ -95,7 +95,7 @@ def test_missing_view_returns_404(authed_request):
 
 def test_missing_function_returns_404(authed_request):
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.mf"
 
         @server_function
@@ -111,7 +111,7 @@ def test_missing_function_returns_404(authed_request):
 
 def test_function_not_decorated_rejected(authed_request):
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.plain"
 
         def bare(self, **kwargs):
@@ -126,7 +126,7 @@ def test_function_not_decorated_rejected(authed_request):
 
 def test_param_coercion_by_type_hint(authed_request):
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.coerce"
 
         @server_function
@@ -143,7 +143,7 @@ def test_param_coercion_by_type_hint(authed_request):
 
 def test_permission_denied_returns_403(authed_request):
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.perm"
 
         @server_function
@@ -162,7 +162,7 @@ def test_csrf_required():
     """Server functions ALWAYS enforce CSRF — no auth-class opt-out."""
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.csrf"
 
         @server_function
@@ -190,7 +190,7 @@ def test_csrf_required():
 
 def test_async_server_function_awaited(authed_request):
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.async"
 
         @server_function
@@ -208,7 +208,7 @@ def test_async_server_function_awaited(authed_request):
 
 def test_return_value_serialized_as_json(authed_request):
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.json"
 
         @server_function
@@ -233,7 +233,7 @@ def test_flat_body_rejected_with_400(authed_request):
     """
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.flatbody"
 
         @server_function
@@ -252,7 +252,7 @@ def test_body_with_params_plus_other_key_rejected(authed_request):
     """``{"params": {...}, "other": ...}`` must be rejected, not silently unwrapped."""
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.mixedbody"
 
         @server_function
@@ -275,7 +275,7 @@ def test_dual_decoration_raises_at_decoration_time():
     with pytest.raises(TypeError, match="cannot be both"):
 
         class _ViewA(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             api_name = "sf.dual_a"
 
             @event_handler
@@ -286,7 +286,7 @@ def test_dual_decoration_raises_at_decoration_time():
     with pytest.raises(TypeError, match="cannot be both"):
 
         class _ViewB(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             api_name = "sf.dual_b"
 
             @server_function
@@ -299,7 +299,7 @@ def test_unauthenticated_returns_401_when_login_required():
     """Anonymous callers are blocked when login_required=True (default-secure)."""
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.auth.lr"
         login_required = True
 
@@ -326,7 +326,7 @@ def test_anonymous_allowed_when_no_login_required():
     can invoke @server_function when the view doesn't set login_required."""
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.anon"
 
         @server_function
@@ -353,7 +353,7 @@ def test_handler_permission_required_still_enforced():
     check_handler_permission (#1316)."""
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.handlerperm"
 
         @server_function
@@ -383,7 +383,7 @@ def test_handler_permission_required_still_enforced():
 
 def test_rate_limit_exceeded_returns_429(authed_request):
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.rl"
 
         @server_function
@@ -430,7 +430,7 @@ def test_non_serializable_return_returns_function_error(authed_request):
     """
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "sf.badret"
 
         @server_function

@@ -23,12 +23,15 @@ from __future__ import annotations
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 ROWS = 60
 
 
 class VirtualKeyedDemoView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    items = state()
+    log = state("mounted")
     template_name = "tests/virtual_keyed_demo.html"
 
     def mount(self, request, **kwargs):

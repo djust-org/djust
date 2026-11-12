@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 from django.conf import settings
 from django.test import RequestFactory, override_settings
+from djust import state
 
 
 def _template_dirs(dirs):
@@ -39,7 +40,7 @@ class TestTemplateInheritanceExtraction:
         from djust.live_view import LiveView
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = """
             <div class="container" dj-root dj-view="test">
                 <!-- This is a comment -->
@@ -235,7 +236,7 @@ class TestTemplateInheritanceIntegration:
         from djust.live_view import LiveView
 
         class ChildView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "child.html"
 
         # Temporarily override template dirs
@@ -256,7 +257,8 @@ class TestTemplateInheritanceIntegration:
         from djust.live_view import LiveView
 
         class ChildView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            name = state("John")
             template_name = "child.html"
 
             def mount(self, request, **kwargs):
@@ -302,7 +304,8 @@ class TestVDOMStructureMatching:
         from djust.live_view import LiveView
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            name = state("World")
 
             # Use simple template without comments to avoid stripping complexity
             template = """<div dj-root><div class="row"><p>Hello {{ name }}</p></div></div>"""
@@ -341,7 +344,8 @@ class TestVDOMStructureMatching:
         from djust.live_view import LiveView
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            text = state("Hello")
             template = "<div dj-root><p>{{ text }}</p></div>"
 
             def mount(self, request, **kwargs):
@@ -366,7 +370,8 @@ class TestVDOMStructureMatching:
         from djust.live_view import LiveView
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            text = state("Hello")
             template = "<div dj-root><p>{{ text }}</p></div>"
 
             def mount(self, request, **kwargs):

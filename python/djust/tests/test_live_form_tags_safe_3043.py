@@ -47,7 +47,7 @@ class _EchoForm(forms.Form):
 
 
 class _View(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = _EchoForm
     template = "<div dj-root></div>"
 

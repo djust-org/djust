@@ -11,12 +11,14 @@ from channels.testing import WebsocketCommunicator
 
 from djust import LiveView
 from djust.websocket import LiveViewConsumer
+from djust import state
 
 
 class ValidView(LiveView):
     """A valid LiveView for testing."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    data = state("safe")
     template_string = (
         '<div dj-view="python.tests.test_security_mount_validation.ValidView">Valid</div>'
     )

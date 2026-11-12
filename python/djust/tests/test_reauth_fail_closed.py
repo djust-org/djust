@@ -41,7 +41,7 @@ class _DoesNotExist(Exception):
 
 def _view_cls(exc):
     class _GuardedView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         login_required = True
         template = "<div dj-root></div>"
 

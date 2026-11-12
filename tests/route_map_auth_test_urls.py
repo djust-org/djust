@@ -20,14 +20,14 @@ from djust import LiveView
 
 
 class PublicView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="tests.route_map_auth_test_urls.PublicView">public</div>'
 
 
 class LoginAttrView(LiveView):
     """Gated via the djust ``login_required`` class attribute."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = True
     template = '<div dj-root dj-view="tests.route_map_auth_test_urls.LoginAttrView">login</div>'
 
@@ -35,7 +35,7 @@ class LoginAttrView(LiveView):
 class PermAttrView(LiveView):
     """Gated via the djust ``permission_required`` class attribute."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     permission_required = "auth.view_user"
     template = '<div dj-root dj-view="tests.route_map_auth_test_urls.PermAttrView">perm</div>'
 
@@ -43,14 +43,14 @@ class PermAttrView(LiveView):
 class DecoratorGatedView(LiveView):
     """Gated by wrapping ``as_view()`` in Django's ``login_required`` decorator."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="tests.route_map_auth_test_urls.DecoratorGatedView">deco</div>'
 
 
 class MixinGatedView(LoginRequiredMixin, LiveView):
     """Gated via Django's stdlib ``LoginRequiredMixin`` (sets no class attr)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="tests.route_map_auth_test_urls.MixinGatedView">mixin</div>'
 
 

@@ -16,6 +16,7 @@ from djust.config import config
 from djust.decorators import event_handler
 from djust.forms import FormMixin
 from djust.validation import validate_handler_params, validated_call_arguments
+from djust import state
 
 
 class TagsForm(forms.Form):
@@ -26,9 +27,9 @@ class TagsForm(forms.Form):
 
 
 class TagsView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = TagsForm
-    saved = None
+    saved = state(None)
 
     def form_valid(self, form):
         self.saved = dict(form.cleaned_data)
@@ -120,7 +121,7 @@ def test_the_pressed_button_is_an_ordinary_field_of_submit_form(policy):
 
 
 class DeclaredView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     @event_handler(parameter_policy="strict")
     def save_list(self, tags: list[str]):

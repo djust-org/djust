@@ -37,7 +37,7 @@ class _NameForm(forms.Form):
 
 def _render_field_value() -> str:
     class V(FormMixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         form_class = _NameForm
         template = (
             "{% load live_tags %}<div dj-root>"

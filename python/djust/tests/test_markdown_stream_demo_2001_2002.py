@@ -38,6 +38,7 @@ from asgiref.sync import sync_to_async
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 _MODULE = __name__
 
@@ -45,7 +46,9 @@ _MODULE = __name__
 class _StreamStreamsView(LiveView):
     """Mirrors the FIXED demo: async handler that pushes each token via stream_to."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    llm_output = state("")
+    streaming = state(False)
     template = (
         f'<div dj-view="{_MODULE}._StreamStreamsView" dj-id="0">'
         '<article dj-stream="md_stream" dj-update="ignore" dj-id="1">{{ llm_output }}</article>'
@@ -99,7 +102,9 @@ class _PlainMutationView(LiveView):
     arrives in the single end-of-callback render.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    llm_output = state("")
+    streaming = state(False)
     template = (
         f'<div dj-view="{_MODULE}._PlainMutationView" dj-id="0">'
         '<article dj-id="1">{{ llm_output }}</article>'

@@ -21,6 +21,7 @@ from djust.state_backends import (
     set_backend,
 )
 from djust._rust import RustLiveView
+from djust import state
 
 
 class TestRustSerialization:
@@ -637,7 +638,8 @@ class TestIntegration:
         set_backend(InMemoryStateBackend())
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            message = state("Hello Backend")
             template = "<div>{{ message }}</div>"
 
             def mount(self, request):

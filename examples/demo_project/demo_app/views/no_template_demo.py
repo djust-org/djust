@@ -16,6 +16,7 @@ from djust.components.ui import (
     DropdownItem,
     ProgressComponent,
 )
+from djust import state
 
 
 class NoTemplateDemo(LiveView):
@@ -31,7 +32,17 @@ class NoTemplateDemo(LiveView):
     The template_string is static for efficient VDOM patching.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    counter = state(0)
+    items = state(default_factory=lambda: ["Buy groceries", "Walk the dog", "Write code"])
+    show_success = state(False)
+    notification_count = state(3)
+    progress = state(45)
+    selected_theme = state("Default")
+    navbar = state()
+    theme_dropdown = state()
+    actions_dropdown = state()
+    docs_tabs = state()
 
     # No template file! Everything is generated from Python
     template_name = None

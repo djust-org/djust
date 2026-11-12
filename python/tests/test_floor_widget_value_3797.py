@@ -39,6 +39,7 @@ from django.template import Context, Engine
 from django.test import override_settings
 
 from djust import serialization
+from djust import state
 
 pytestmark = [pytest.mark.django_db, pytest.mark.pr_tier]
 
@@ -567,7 +568,8 @@ class TestTheRealEntries:
         from djust.live_view import LiveView
 
         class V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            form = state()
             template = self.SRC
 
             def mount(self, request, **kwargs):

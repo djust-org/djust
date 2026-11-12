@@ -10,6 +10,7 @@ This demo shows:
 
 from djust import LiveView, LiveComponent
 from djust.decorators import event_handler
+from djust import state
 
 
 class UserListComponent(LiveComponent):
@@ -214,7 +215,50 @@ class ComponentDemoView(LiveView):
     - State isolation
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    users = state(default_factory=lambda: [
+            {
+                "id": 1,
+                "name": "Alice Johnson",
+                "email": "alice@example.com",
+                "role": "Developer",
+                "department": "Engineering",
+                "tasks": [
+                    {"id": 1, "title": "Implement user auth", "completed": True},
+                    {"id": 2, "title": "Write unit tests", "completed": True},
+                    {"id": 3, "title": "Code review PR #42", "completed": False},
+                ],
+            },
+            {
+                "id": 2,
+                "name": "Bob Smith",
+                "email": "bob@example.com",
+                "role": "Designer",
+                "department": "Product",
+                "tasks": [
+                    {"id": 4, "title": "Design mockups", "completed": True},
+                    {"id": 5, "title": "User research", "completed": False},
+                    {"id": 6, "title": "Update style guide", "completed": False},
+                ],
+            },
+            {
+                "id": 3,
+                "name": "Carol Davis",
+                "email": "carol@example.com",
+                "role": "Manager",
+                "department": "Product",
+                "tasks": [
+                    {"id": 7, "title": "Sprint planning", "completed": True},
+                    {"id": 8, "title": "Review roadmap", "completed": False},
+                ],
+            },
+        ])
+    selected_user_id = state(None)
+    selected_user = state(None)
+    event_log = state(default_factory=list)
+    user_list = state()
+    user_detail = state()
+    todo_list = state()
     template_name = "demos/component_demo.html"
 
     def mount(self, request, **kwargs):

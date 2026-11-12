@@ -37,6 +37,7 @@ from django.test import RequestFactory, override_settings
 from django.utils import timezone as dj_timezone
 
 from djust import LiveView
+from djust import state
 
 # 23:30 UTC — chosen so the New York conversion crosses no date boundary
 # (19:30 same day) while the Tokyo one does (08:30 the NEXT day), so a test that
@@ -47,7 +48,8 @@ NAIVE = dt.datetime(2026, 8, 22, 23, 30, 0)
 
 
 class _StampView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    created = state()
     template = '<div dj-id="0">{{ created|date:"Y-m-d H:i" }}</div>'
     _value = AWARE_SUMMER
 

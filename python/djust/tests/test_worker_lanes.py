@@ -36,6 +36,7 @@ from django.test import override_settings
 from djust import LiveView
 from djust.config import config as djust_config
 from djust.decorators import event_handler
+from djust import state
 
 pytest.importorskip("channels")
 
@@ -49,7 +50,9 @@ def _record(view, what):
 
 
 class _LaneView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    tag = state()
+    count = state(0)
     template = (
         '<div dj-root dj-view="djust.tests.test_worker_lanes._LaneView">{{ tag }}:{{ count }}</div>'
     )

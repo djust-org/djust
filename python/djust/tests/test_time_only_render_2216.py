@@ -16,10 +16,12 @@ import datetime as dt
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView
+from djust import state
 
 
 class _TimeView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    opens = state()
     template = '<div dj-id="0">{{ opens|time:"H:i" }}</div>'
     _value = dt.time(9, 5, 30)
 

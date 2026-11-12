@@ -21,7 +21,7 @@ from djust import LiveView
 
 
 class _V(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "unused.html"
 
     def mount(self, request, **kwargs):

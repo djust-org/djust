@@ -19,12 +19,15 @@ regression red-bars CI before a downstream consumer hits it:
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 
 class NavDemoPageAView(LiveView):
     """Page A of the dj-navigate dogfood flow."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    page = state("A")
+    clicks = state(0)
     template_name = "demos/nav_demo_a.html"
 
     def mount(self, request, **kwargs):
@@ -39,7 +42,9 @@ class NavDemoPageAView(LiveView):
 class NavDemoPageBView(LiveView):
     """Page B of the dj-navigate dogfood flow."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    page = state("B")
+    clicks = state(0)
     template_name = "demos/nav_demo_b.html"
 
     def mount(self, request, **kwargs):

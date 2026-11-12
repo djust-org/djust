@@ -50,7 +50,7 @@ SAVED: list = []
 
 
 class Signup(WizardMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ current_step.name }}</div>"
     wizard_steps = [
         {"name": "contact", "title": "Contact", "form_class": ContactForm},
@@ -156,7 +156,7 @@ def test_submit_wizard_validates_the_last_steps_posted_fields():
     assert client.view_instance.wizard_step_index == 3
 
     class OneStep(WizardMixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root></div>"
         wizard_steps = [{"name": "pin", "form_class": PinForm}]
         completed = None
@@ -171,7 +171,7 @@ def test_submit_wizard_validates_the_last_steps_posted_fields():
 
 def test_submit_wizard_still_refuses_an_invalid_last_step():
     class OneStep(WizardMixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root></div>"
         wizard_steps = [{"name": "pin", "form_class": PinForm}]
         completed = None

@@ -6,6 +6,7 @@ Shows various navbar configurations and use cases.
 
 from djust import LiveView
 from djust.components.ui import NavBar
+from djust import state
 
 
 class NavBarDemoView(LiveView):
@@ -13,7 +14,13 @@ class NavBarDemoView(LiveView):
     Demonstration of NavBar component in various configurations.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    simple_navbar = state()
+    dark_navbar = state()
+    dropdown_navbar = state()
+    sticky_navbar = state()
+    disabled_navbar = state()
+    full_navbar = state()
     template_name = 'demos/navbar_demo.html'
 
     def mount(self, request, **kwargs):

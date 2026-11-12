@@ -13,6 +13,7 @@ Not shipped — lives under ``tests/`` purely to generate committed fixtures.
 """
 
 from djust import LiveView
+from djust import state as djust_state
 
 _TEMPLATE = """
 <div class="ws-root">
@@ -36,7 +37,14 @@ _TEMPLATE = """
 
 
 class InlineWhitespaceView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    label = djust_state("Lead.")
+    code = djust_state("x = 1")
+    tail = djust_state("done")
+    tags = djust_state(default_factory=lambda: ["alpha", "beta", "gamma"])
+    chips = djust_state(default_factory=lambda: ["one", "two", "three", "four"])
+    show = djust_state(True)
+    md = djust_state("<li><strong>Filters.</strong> <code>{% load app_tags %}</code></li>")
     template = _TEMPLATE
 
     def mount(self, request, **kwargs):
@@ -104,7 +112,8 @@ KEYED_LIST_TEMPLATES = {
 
 def keyed_list_view(shape):
     class _KeyedListView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        items = djust_state(default_factory=lambda: ["k0", "k1", "k2", "k3", "k4"])
         template = KEYED_LIST_TEMPLATES[shape]
 
         def mount(self, request, **kwargs):
@@ -190,7 +199,7 @@ def state_view(template, initial):
     from djust.decorators import event_handler
 
     class _StateView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
     _StateView.template = template
 

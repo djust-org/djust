@@ -4,6 +4,7 @@ Throttle Demo - demonstrates @throttle decorator with scroll events
 
 from djust import LiveView
 from djust.decorators import throttle
+from djust import state
 
 
 class ThrottleScrollView(LiveView):
@@ -16,7 +17,9 @@ class ThrottleScrollView(LiveView):
     - Demonstrates leading + trailing execution
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    scroll_y = state(0)
+    update_count = state(0)
     template = """
     <!DOCTYPE html>
     <html>

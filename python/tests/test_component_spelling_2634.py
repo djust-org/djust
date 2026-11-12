@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from djust import state
 
 pytest.importorskip("django")
 
@@ -95,7 +96,8 @@ class TestStrIsRender:
 
 
 class SpellingView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    title = state("x")
     template = '<div dj-root><i id="bare">{{ c }}</i><i id="dotted">{{ c.render }}</i></div>'
 
     def mount(self, request, **kwargs):

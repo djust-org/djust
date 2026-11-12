@@ -59,6 +59,7 @@ from djust.serialization import (
 )
 from djust.utils import clear_template_dirs_cache
 from python.tests._scratch_models_3888 import scratch_models  # noqa: F401
+from djust import state
 
 pytestmark = [pytest.mark.django_db]
 
@@ -547,7 +548,7 @@ class TestRequestUserFromAContextProcessor:
             "WhoLazy",
             (LiveView,),
             {
-                "exposure_policy": "legacy",
+                "exposure_policy": "explicit",
                 "template_name": "who_lazy.html",
                 "mount": lambda self, request, **kw: None,
             },
@@ -592,7 +593,8 @@ class TestLiveViewState:
         lazy = _lazy(world, rule)[0] if held == "lazy" else _instance(world, rule)
 
         class StateView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            member = state()
             template = "<div dj-root>[{{ member.name }}][{{ member.%s }}]</div>" % field
 
             def mount(self, request, **kwargs):

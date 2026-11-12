@@ -4,13 +4,14 @@ from django.test import override_settings, RequestFactory
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.signed_cookies import SessionStore
 from djust import LiveView
+from djust import state
 
 pytestmark = pytest.mark.skipif(django.VERSION < (6, 0), reason="Django partial-root planning")
 MOUNTS = []
 
 
 class Shell(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<span>SHELL</span>"
 
     def mount(self, request, **kwargs):
@@ -18,7 +19,7 @@ class Shell(LiveView):
 
 
 class RootChild(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<span>CHILD</span>"
 
     def mount(self, request, **kwargs):
@@ -38,7 +39,7 @@ def test_only_selected_root_children_mount(tmp_path, partial):
     )
 
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = '{% include "page.html" %}'
 
     req = RequestFactory().get("/")
@@ -60,7 +61,8 @@ def test_only_selected_root_children_mount(tmp_path, partial):
 
 
 class RawOpener(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    payload = state("<textarea>")
     template = "{{ payload|safe }}"
 
     def mount(self, request, **kwargs):
@@ -80,7 +82,7 @@ def test_a_child_cannot_cause_an_inert_sibling_to_mount(tmp_path):
     )
 
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = '{% include "page.html" %}'
 
     req = RequestFactory().get("/")
@@ -116,7 +118,7 @@ def test_inert_children_do_not_mount(tmp_path, container):
     )
 
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = '{% include "page.html" %}'
 
     req = RequestFactory().get("/")
@@ -146,7 +148,7 @@ def test_bindings_after_a_deferred_child_keep_their_source_proof(tmp_path):
     )
 
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = '{% include "page.html" %}'
         name = "before"
 
@@ -229,7 +231,7 @@ def test_namespace_switch_is_rejected_before_mounting_new_children(tmp_path):
     )
 
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "{% include selected %}"
 
     request = RequestFactory().get("/")

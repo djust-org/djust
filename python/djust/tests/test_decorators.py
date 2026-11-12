@@ -327,7 +327,7 @@ class TestMetadataExtraction:
         """Test _extract_handler_metadata() method."""
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Test</div>"
 
             @debounce(wait=0.5)
@@ -351,7 +351,7 @@ class TestMetadataExtraction:
         """Test extraction of handlers with multiple decorators."""
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Test</div>"
 
             @debounce(wait=0.5)
@@ -372,7 +372,7 @@ class TestMetadataExtraction:
         """Test extraction when no decorators present."""
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Test</div>"
 
             def plain_handler(self, **kwargs):
@@ -388,7 +388,7 @@ class TestMetadataExtraction:
         """Test extraction ignores private methods."""
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Test</div>"
 
             @debounce(wait=0.5)
@@ -405,7 +405,7 @@ class TestMetadataExtraction:
         """Test extraction with mix of decorated and undecorated handlers."""
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Test</div>"
 
             @debounce(wait=0.5)
@@ -435,7 +435,7 @@ class TestMetadataExtraction:
         """
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Test</div>"
 
         view = TestView()
@@ -449,7 +449,7 @@ class TestMetadataExtraction:
         """Test that metadata extraction is cached."""
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Test</div>"
 
             @debounce(wait=0.5)
@@ -478,7 +478,7 @@ class TestMetadataInjection:
         """Test _inject_handler_metadata() injects script tag."""
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<html><body><div>Test</div></body></html>"
 
             @debounce(wait=0.5)
@@ -507,7 +507,7 @@ class TestMetadataInjection:
         """
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<html><body><div>Test</div></body></html>"
 
             def plain_handler(self, **kwargs):
@@ -525,7 +525,7 @@ class TestMetadataInjection:
         """Test injection before </body> tag."""
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<html><body>Content</body></html>"
 
             @throttle(interval=0.1)
@@ -544,7 +544,7 @@ class TestMetadataInjection:
         """Test injection before </html> if no </body>."""
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<html><div>Content</div></html>"
 
             @throttle(interval=0.1)
@@ -562,7 +562,7 @@ class TestMetadataInjection:
         """Test injection appends to end if no closing tags."""
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Content</div>"
 
             @throttle(interval=0.1)
@@ -580,7 +580,7 @@ class TestMetadataInjection:
         """Test injected JSON is valid."""
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<html><body>Test</body></html>"
 
             @debounce(wait=0.5, max_wait=2.0)

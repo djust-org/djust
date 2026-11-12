@@ -21,6 +21,7 @@ from djust.components.ui import (
     ProgressComponent,
     SpinnerComponent,
 )
+from djust import state
 
 
 class ComponentsOnlyDemo(LiveView):
@@ -38,7 +39,36 @@ class ComponentsOnlyDemo(LiveView):
     - All without writing HTML!
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    show_alert = state(True)
+    alert_message = state("Welcome to the Components-Only demo! Everything you see is built with Python components.")
+    alert_variant = state("info")
+    task_progress = state(65)
+    tasks_completed = state(13)
+    tasks_total = state(20)
+    user_status = state("active")
+    selected_action = state(None)
+    show_modal = state(False)
+    modal_title = state("Confirm Action")
+    modal_message = state("Are you sure you want to proceed?")
+    navbar = state()
+    header_alert = state()
+    tasks_card = state()
+    status_card = state()
+    primary_button = state()
+    secondary_button = state()
+    actions_dropdown = state()
+    alignment_group = state()
+    formatting_group = state()
+    view_mode_group = state()
+    task_progress_bar = state()
+    loading_spinner = state()
+    nav_list = state()
+    status_list = state()
+    task_list = state()
+    menu_list = state()
+    content_tabs = state()
+    modal = state()
     template_name = 'demos/components_only.html'
 
     def mount(self, request, **kwargs):

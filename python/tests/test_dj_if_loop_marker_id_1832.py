@@ -23,6 +23,7 @@ import re
 from collections import Counter
 
 from djust import LiveView
+from djust import state
 
 # Matches both the bare ``if-<8hex>-N`` form (if outside any loop) and the
 # loop-path-suffixed ``if-<8hex>-N-<path>`` form (#1832).
@@ -36,7 +37,9 @@ class _ToggleView(LiveView):
     triggered the P0 in production (a table whose class toggles).
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    rows = state()
+    tcls = state("collapsed")
     template = (
         '<div dj-root dj-view="tests.ToggleView" dj-id="0">'
         '<table class="{{ tcls }}"><tbody>'

@@ -21,6 +21,7 @@ from django.test import RequestFactory, override_settings
 
 from djust import LiveView
 from djust.utils import clear_template_dirs_cache
+from djust import state
 
 _FACTORY = RequestFactory()
 
@@ -34,7 +35,8 @@ class _Presenter:
 
 
 class ShellView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    x = state(1)
     template_name = "shell_2589/page.html"
 
     def mount(self, request, **kwargs):

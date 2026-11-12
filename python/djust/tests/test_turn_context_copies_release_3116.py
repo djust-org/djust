@@ -31,13 +31,15 @@ from django.test import override_settings
 from djust import LiveView
 from djust import _exposure_diagnostics as ed
 from djust.decorators import event_handler
+from djust import state
 
 HELD: list = []
 TASKS: list = []
 
 
 class PinView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(0)
     template = "<div dj-root><span>{{ n }}</span></div>"
 
     def mount(self, request, **kwargs):

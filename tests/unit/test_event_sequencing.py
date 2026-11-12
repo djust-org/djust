@@ -14,12 +14,14 @@ from unittest.mock import MagicMock
 
 from djust import LiveView
 from djust.websocket import LiveViewConsumer
+from djust import state
 
 
 class TickCounterView(LiveView):
     """Test view with tick_interval that increments a counter."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = "<div dj-root>{{ count }}</div>"
     tick_interval = 100  # 100ms tick
 

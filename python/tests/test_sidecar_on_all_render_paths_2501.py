@@ -61,6 +61,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from djust import state
 
 pytest.importorskip("django")
 
@@ -1170,7 +1171,7 @@ class TestTheLiveViewPathsComponentExclusion:
         from djust.testing import LiveViewTestClient
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def mount(self, request, **kwargs):
                 self._card = Card()
@@ -1197,7 +1198,7 @@ class TestTheLiveViewPathsComponentExclusion:
         from djust.testing import LiveViewTestClient
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def mount(self, request, **kwargs):
                 self._live_card = LiveCard()
@@ -1303,7 +1304,8 @@ class TestMutatorsRefusedOnTheLiveViewPath:
 
         def _make_view(tpl):
             class V(LiveView):
-                exposure_policy = "legacy"
+                exposure_policy = "explicit"
+                c = state()
 
                 def mount(self, request, **kwargs):
                     self.c = _Mutating()
@@ -1796,7 +1798,8 @@ class TestTheShellRenderPathHadTheSameWrapperDictBug:
                 return "<b>shellcard</b>"
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            c = state()
 
             def mount(self, request, **kwargs):
                 self.c = _ShellCard()
