@@ -117,3 +117,31 @@ def test_a_view_that_states_explicit_is_not_an_offender():
 
     assert not guard.relies_on_default(Stated)
     assert guard._offenders(guard._created[before:]) == []
+
+
+def test_a_view_pinned_after_creation_is_judged_by_its_final_policy_even_once_dropped():
+    """A snippet executed as written is pinned after the class exists; the test then drops it.
+
+    The merge-queue failure on #4049: ``test_params_form_3689.py`` executes the
+    ``handle_params`` docstring, pins the resulting view and lets it go. When the
+    class was collected before teardown, the guard fell back to the verdict at
+    creation and failed the test, or not, with the collector's timing.
+    """
+    import gc
+
+    start = len(guard._created)
+    late = type("PinnedAfterCreation", (LiveView,), {})
+    late.exposure_policy = "legacy"
+    del late
+    gc.collect()
+    assert guard._offenders(guard._created[start:]) == []
+
+
+def test_a_view_that_stated_its_policy_at_creation_is_not_kept_alive():
+    """Only classes that relied on the default are held; the rest stay collectable."""
+    held = len(guard._held_until_judged)
+
+    class StatedAtCreation(LiveView):
+        exposure_policy = "legacy"
+
+    assert len(guard._held_until_judged) == held

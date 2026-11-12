@@ -56,6 +56,15 @@ _seen: weakref.WeakSet = weakref.WeakSet()
 #: ``len(_created)`` when collection ended: everything before it was created by
 #: importing test modules, not by a test.
 _import_time_count: list[int] = []
+#: Strong references to the classes that relied on the default when they were
+#: created, held until the test that created them has been judged. A test may
+#: state the policy after the class exists (a view built by executing a
+#: docstring or a guide snippet as written, then pinned). Without this, such a
+#: class could be collected before teardown and be judged by its verdict at
+#: creation, so the test failed or passed with the garbage collector's timing.
+#: Classes that stated a policy at creation are never held: tests assert that
+#: view classes can be collected.
+_held_until_judged: list[type] = []
 
 
 def _module_of(cls: type) -> str:
@@ -128,12 +137,15 @@ def install() -> bool:
         if isinstance(owner, type) and issubclass(owner, LiveView) and owner not in _seen:
             _seen.add(owner)
             name = _module_of(owner)
+            unpinned = relies_on_default(owner)
+            if unpinned:
+                _held_until_judged.append(owner)
             _created.append(
                 (
                     weakref.ref(owner),
                     f"{name}.{owner.__qualname__}",
                     name.rsplit(".", 1)[-1] + ".py",
-                    relies_on_default(owner),
+                    unpinned,
                 )
             )
         return result
@@ -153,15 +165,19 @@ def pytest_collection_finish(session):
     # tryfirst: before the root conftest's gc.freeze(), though nothing here depends on it.
     if not _import_time_count:  # a nested pytester session must not move the mark
         _import_time_count.append(len(_created))
+    _held_until_judged.clear()  # module-level classes are kept alive by their modules
 
 
 @pytest.fixture(autouse=True)
 def _no_liveview_relies_on_the_default_policy(request):
     start = len(_created)
     yield
-    if request.node.path.name in UNPINNED_ON_PURPOSE:
-        return
-    offenders = _offenders(_created[start:])
+    try:
+        if request.node.path.name in UNPINNED_ON_PURPOSE:
+            return
+        offenders = _offenders(_created[start:])
+    finally:
+        _held_until_judged.clear()
     if offenders:
         names = ", ".join(offenders)
         pytest.fail(
