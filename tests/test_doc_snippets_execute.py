@@ -58,6 +58,7 @@ import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 _CHECKER = REPO_ROOT / "scripts" / "check-doc-snippets.py"
+_EXPOSURE_CHECKER = REPO_ROOT / "scripts" / "check-doc-exposure.py"
 
 DOC_FILES: list[pathlib.Path] = sorted(
     [
@@ -113,6 +114,22 @@ def _load_extractor():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module.extract_python_blocks
+
+
+_exposure_scanner_module = None
+
+
+def _exposure_scanner():
+    """``scripts/check-doc-exposure.py``, which reads what a document's templates name."""
+    global _exposure_scanner_module
+    if _exposure_scanner_module is None:
+        spec = importlib.util.spec_from_file_location("check_doc_exposure", _EXPOSURE_CHECKER)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        _exposure_scanner_module = module
+    return _exposure_scanner_module
 
 
 def _defines_live_class(code: str) -> bool:
@@ -427,6 +444,51 @@ def _check_bindings(cls: type, outcome: Outcome) -> None:
             )
 
 
+def _check_exposure(cls: type, client, block: Block) -> None:
+    """A name the view sets and a documented template reads must be supplied.
+
+    Under explicit exposure, the default, ``self.count = 0`` does not put
+    ``count`` in the template: ``get_context_data()`` has to. Nothing raises
+    when it does not, the name renders empty, so a view mounted on the stub
+    template passes every other check here. This one compares three things:
+    the public names the example's own code sets (read from its source), the
+    names its template reads (its inline template, else the nearest template
+    the document shows; see ``scan_markdown`` in the scanner), and the context
+    the mounted view actually builds, which includes what mixins provide
+    (``form_errors``, ``streams``, ``object``). A block that shows only
+    handlers, with no ``mount()`` and no template, is a fragment of a view the
+    reader already has and is not judged.
+    """
+    from djust._exposure import uses_legacy_exposure
+
+    view = client.view_instance
+    if uses_legacy_exposure(view):
+        return  # the "before" half of migration material
+    scanner = _exposure_scanner()
+    examples = {
+        example.cls: example
+        for example in scanner._examples_in_code(block.code, block.path.name, block.lineno)
+    }
+    example = examples.get(cls.__name__)
+    if example is None or not example.set_names or example.is_fragment:
+        return
+    if example.inline_template:
+        reads = scanner._template_reads(example.inline_template)
+    else:
+        reads = scanner.reads_for(block.path, cls.__name__, block.lineno)
+    context = view.get_context_data()
+    missing = sorted(
+        name for name in example.set_names & reads if name in vars(view) and name not in context
+    )
+    if missing:
+        raise _Fail(
+            "template name is not supplied",
+            f"{cls.__name__} sets {', '.join('self.' + n for n in missing)} and a template in "
+            "this document reads the name, but get_context_data() does not supply it, so it "
+            "renders empty (docs/website/state/explicit-exposure.md)",
+        )
+
+
 def _classify_handler_error(error: str) -> str | None:
     """``"skip"`` when the handler's documented signature needs arguments.
 
@@ -438,7 +500,9 @@ def _classify_handler_error(error: str) -> str | None:
     return None
 
 
-def _run_view(cls: type, outcome: Outcome, block_classes: set[str]) -> None:
+def _run_view(
+    cls: type, outcome: Outcome, block_classes: set[str], block: Block | None = None
+) -> None:
     from django.template import TemplateDoesNotExist
 
     from djust.testing import LiveViewTestClient
@@ -533,6 +597,8 @@ def _run_view(cls: type, outcome: Outcome, block_classes: set[str]) -> None:
         )
     if not stub_used:
         _check_bindings(cls, outcome)
+    if block is not None:
+        _check_exposure(cls, client, block)
 
     if not stub_used:
         state = client.get_state()
@@ -648,7 +714,7 @@ def run_block(block: Block) -> Outcome:
         if not views and not components:
             raise _Skip("defines no concrete LiveView/LiveComponent", "")
         for cls in views:
-            _run_view(cls, outcome, block_classes)
+            _run_view(cls, outcome, block_classes, block)
         for cls in components:
             _run_component(cls, outcome, block_classes)
     except _Skip as skip:
@@ -1041,6 +1107,48 @@ def test_a_binding_without_the_decorator_is_reported(code, decorated, settings):
     )
     settings.LIVEVIEW_ALLOWED_MODULES = [fixed.module_name]
     assert run_block(fixed).status == "pass"
+
+
+_UNSUPPLIED_VIEW = (
+    "from djust import LiveView\n\n\n"
+    "class Greeting(LiveView):\n"
+    "    template = '<div dj-root>{{ name }}</div>'\n\n"
+    "    def mount(self, request, **kwargs):\n"
+    "        self.name = 'World'\n"
+)
+_SUPPLY_NAME = (
+    "\n    def get_context_data(self, **kwargs):\n"
+    "        return {**super().get_context_data(**kwargs), 'name': self.name}\n"
+)
+
+
+@pytest.mark.django_db
+def test_a_template_name_the_view_does_not_supply_is_reported(settings):
+    """#4048: under explicit exposure ``self.name`` alone renders ``{{ name }}`` empty.
+
+    Nothing raises, so before this check such a guide block passed. The control
+    differs by ``get_context_data()`` only. A handler-only fragment is not
+    judged: it shows one method of a view the reader already has.
+    """
+    block = _synthetic(_UNSUPPLIED_VIEW)
+    settings.LIVEVIEW_ALLOWED_MODULES = [block.module_name]
+    outcome = run_block(block)
+    assert outcome.status == "fail", outcome
+    assert outcome.category == "template name is not supplied", outcome
+    assert "self.name" in outcome.detail
+
+    fixed = _synthetic(_UNSUPPLIED_VIEW + _SUPPLY_NAME)
+    settings.LIVEVIEW_ALLOWED_MODULES = [fixed.module_name]
+    assert run_block(fixed).status == "pass"
+
+    legacy = _synthetic(
+        _UNSUPPLIED_VIEW.replace(
+            "    template =", "    exposure_policy = 'legacy'\n    template =", 1
+        )
+    )
+    settings.LIVEVIEW_ALLOWED_MODULES = [legacy.module_name]
+    with pytest.warns(DeprecationWarning):
+        assert run_block(legacy).status == "pass"
 
 
 def test_an_anti_pattern_block_is_not_executed(tmp_path, monkeypatch):
