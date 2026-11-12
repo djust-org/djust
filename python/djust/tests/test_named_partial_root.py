@@ -8,7 +8,6 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.signed_cookies import SessionStore
 from djust import LiveView
 from djust.decorators import event_handler
-from djust import state
 
 pytestmark = pytest.mark.skipif(django.VERSION < (6, 0), reason="Django 6 named partials")
 
@@ -54,8 +53,7 @@ def test_named_partial_http_and_diff(debug, backend, tmp_path):
     files(tmp_path)
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
-        value = state("one")
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
         def mount(self, request, **kwargs):
@@ -85,7 +83,7 @@ def test_named_partial_missing_name_raises(debug, tmp_path):
     files(tmp_path)
 
     class MissingView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#missing"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, debug)):
@@ -98,11 +96,11 @@ def test_named_partial_template_hash_tracks_source_change(debug, tmp_path):
     files(tmp_path)
 
     class Before(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
     class After(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, debug)):
@@ -146,8 +144,7 @@ async def test_named_partial_websocket_mount_and_event(debug, tmp_path):
 
 
 class SocketNamedView(LiveView):
-    exposure_policy = "explicit"
-    value = state("one")
+    exposure_policy = "legacy"
     template_name = "sub/page.html#card"
 
     def mount(self, request, **kwargs):
@@ -171,7 +168,7 @@ def test_named_partial_jit_scopes_fields_to_selected_and_called_partials(tmp_pat
     )
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -201,7 +198,7 @@ def test_named_partial_queryset_jit_omits_sibling_fields(tmp_path):
     )
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -217,7 +214,7 @@ def test_named_partial_hash_tracks_base_changes_on_same_view_class(tmp_path):
     files(tmp_path)
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -241,7 +238,7 @@ def test_named_partial_jit_ignores_uninvoked_nested_verbatim_and_comments(tmp_pa
     )
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -266,7 +263,7 @@ def test_named_partial_recursive_calls_render_with_caller_context(tmp_path):
     )
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -290,7 +287,7 @@ def test_named_partial_nested_inline_and_called_definitions(tmp_path):
     )
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -320,7 +317,7 @@ def test_named_partial_queryset_nested_relation_is_scoped(tmp_path):
     )
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -343,7 +340,7 @@ def test_named_partial_jit_cache_tracks_selected_source_changes(tmp_path):
     )
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False), DEBUG=False):
@@ -379,7 +376,7 @@ def test_named_partial_jit_does_not_expand_calls_in_raw_blocks(tmp_path):
     )
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
     register_raw_block_tag_handler("named_partial_raw", "finish_named_raw", Raw())
@@ -417,7 +414,7 @@ def test_named_partial_recursion_with_model_relations(tmp_path):
     )
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
     with connection.schema_editor() as schema:
@@ -476,7 +473,7 @@ def test_named_partial_jit_scopes_named_include_fields(tmp_path):
     User.objects.create(username="selected", first_name="First", email="secret@example.test")
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -506,7 +503,7 @@ def test_named_include_nesting_scope_raw_text_and_cycles(tmp_path):
     )
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -526,7 +523,7 @@ def test_named_partial_jit_cache_tracks_included_partial_source_changes(tmp_path
     piece.write_text("{% partialdef inner %}{{ person.username }}{% endpartialdef %}")
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False), DEBUG=False):
@@ -572,7 +569,7 @@ def test_named_partial_recursive_queryset_preserves_descendant_fields(tmp_path, 
     )
 
     class NamedView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "page.html#card"
 
     with connection.schema_editor() as schema:
@@ -850,10 +847,7 @@ def test_dynamic_recursive_partial_http_fails_but_nonrecursive_succeeds(tmp_path
     dynamic_include_files(tmp_path)
 
     class DynamicHttpView(LiveView):
-        exposure_policy = "explicit"
-        target = state()
-        value = state("OK")
-        nodes = state(default_factory=lambda: [{"label": "one", "child": {"label": "two"}}])
+        exposure_policy = "legacy"
         template_name = "dynamic_outer.html"
         selected = "dynamic_parts.html#safe"
 
@@ -887,7 +881,7 @@ def test_dynamic_template_object_is_checked_and_plain_backend_is_unaffected(tmp_
     dynamic_include_files(tmp_path)
 
     class ObjectView(LiveView):
-        exposure_policy = "explicit"
+        exposure_policy = "legacy"
         template_name = "dynamic_outer.html"
 
         def get_context_data(self, **kwargs):
@@ -933,10 +927,7 @@ def test_dynamic_template_object_is_checked_and_plain_backend_is_unaffected(tmp_
 
 
 class DynamicPartialSocketView(LiveView):
-    exposure_policy = "explicit"
-    target = state("dynamic_parts.html#safe")
-    value = state("OK")
-    nodes = state(default_factory=lambda: [{"label": "one", "child": {"label": "two"}}])
+    exposure_policy = "legacy"
     template_name = "dynamic_outer.html"
 
     def mount(self, request, **kwargs):
