@@ -86,8 +86,8 @@ Place `WizardMixin` **before** `LiveView` in the class definition so its methods
         {% endfor %}
     </div>
 
-    {# Progress bar #}
-    <div class="progress-bar" style="width: {{ progress_percent }}%"></div>
+    {# Progress bar: a native <progress>, so no inline style a strict CSP would refuse #}
+    <progress value="{{ progress_percent }}" max="100">{{ progress_percent }}%</progress>
 
     {# Current step form fields #}
     {% for field in fields %}

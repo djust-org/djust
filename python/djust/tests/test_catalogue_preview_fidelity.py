@@ -64,12 +64,14 @@ class TestTemplatePreviewGoesThroughTheTag:
 
     def test_progress_preview_carries_the_computed_width(self):
         html = _preview("progress")
-        assert "width: %" not in html, (
+        # The width is a class the tag computes (#3979): rendered without the tag,
+        # ``width_class`` is unfilled and no ``dj-progress-w-`` class appears.
+        assert "dj-progress-w-" in html, (
             "the preview is rendering `progress.html` without `{% theme_progress %}`, "
-            "so `percentage` is unfilled"
+            "so `width_class` is unfilled"
         )
         # The first example is value=25/max=100.
-        assert 'style="width: 25.0%"' in html
+        assert "dj-progress-w-25" in html
 
     def test_progress_examples_each_show_their_own_value(self):
         """Four value examples and one indeterminate — five distinct bars.
@@ -79,8 +81,8 @@ class TestTemplatePreviewGoesThroughTheTag:
         kwargs rather than the first example's repeated.
         """
         html = _preview("progress")
-        widths = [float(w) for w in re.findall(r'style="width: ([\d.]+)%"', html)]
-        assert widths == [25.0, 50.0, 75.0, 100.0]
+        widths = [int(w) for w in re.findall(r"dj-progress-w-(\d+)", html)]
+        assert widths == [25, 50, 75, 100]
         assert "progress-indeterminate" in html
 
     def test_a_preview_matches_a_direct_tag_render(self):

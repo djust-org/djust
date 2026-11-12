@@ -13,7 +13,7 @@
          {% if not is_indeterminate %}aria-valuenow="{{ value }}"{% endif %}
          {% if label %}aria-label="{{ label }}"{% endif %}>
         {% if not is_indeterminate %}
-        <div class="{{ css_prefix }}progress-bar" style="width: {{ percentage }}%"></div>
+        <div class="{{ css_prefix }}progress-bar {{ width_class }}"></div>
         {% endif %}
     </div>
 </div>
