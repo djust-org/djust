@@ -485,17 +485,14 @@ class DashboardView(LiveView):
         <!-- Or using Django template tag (future) -->
         {% livecomponent "profile_tabs" %}
     """
-
-    def mount(self, request):
-        # Create LiveComponent once
-        self.profile_tabs = TabsComponent(
-            tabs=[
-                {"id": "overview", "label": "Overview", "content": "..."},
-                {"id": "settings", "label": "Settings", "content": "..."},
-                {"id": "security", "label": "Security", "content": "...", "badge": "2"},
-            ],
-            active_tab="overview"
-        )
+    profile_tabs = TabsComponent(
+        tabs=[
+            {"id": "overview", "label": "Overview", "content": "..."},
+            {"id": "settings", "label": "Settings", "content": "..."},
+            {"id": "security", "label": "Security", "content": "...", "badge": "2"},
+        ],
+        active_tab="overview"
+    )
 
     def handle_component_event(self, component_id: str, event: str, data: Dict):
         """Handle events from LiveComponents"""

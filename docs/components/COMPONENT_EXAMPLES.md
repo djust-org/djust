@@ -251,6 +251,7 @@ class TodoAppView(LiveView):
         </html>
     """
     last_action = state(None)
+    todo_list = TodoListComponent()
 
     def mount(self, request):
         """Initialize view"""
@@ -262,7 +263,7 @@ class TodoAppView(LiveView):
             {'id': 3, 'text': 'Deploy to production', 'completed': False},
         ]
 
-        self.todo_list = TodoListComponent(items=initial_todos)
+        self.todo_list.update(items=initial_todos)
 
     def handle_component_event(self, component_id, event, data):
         """Handle events from components"""
@@ -283,9 +284,6 @@ class TodoAppView(LiveView):
     def dismiss_alert(self):
         """Dismiss success message"""
         self.last_action = None
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "todo_list": self.todo_list}
 ```
 
 ## User Management Dashboard
@@ -547,11 +545,12 @@ class UserDashboardView(LiveView):
         {'id': 3, 'name': 'Carol White', 'email': 'carol@example.com', 'role': 'Viewer'},
     ])
     selected_user_id = state(None)
+    user_list = UserListComponent()
+    user_detail = UserDetailComponent()
 
     def mount(self, request):
         # Create components
-        self.user_list = UserListComponent(users=self.users)
-        self.user_detail = UserDetailComponent()
+        self.user_list.update(users=self.users)
 
     @property
     def selected_user(self):
@@ -580,8 +579,6 @@ class UserDashboardView(LiveView):
         return {
             **super().get_context_data(**kwargs),
             "selected_user": self.selected_user,
-            "user_list": self.user_list,
-            "user_detail": self.user_detail,
         }
 ```
 

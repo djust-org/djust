@@ -249,7 +249,7 @@ repos:
         name: execute documented LiveView snippets (docs/testing/doc-snippet-execution-inventory.md)
         entry: bash -c 'PYTHONPATH=. bash scripts/run-with-venv-python.sh -m pytest tests/test_doc_snippets_execute.py -q -p no:cacheprovider'
         language: system
-        files: ^QUICKSTART\.md$|^docs/[^/]+\.md$|^docs/website/[^/]+/.*\.md$|^docs/website/getting-started.*\.md$|^docs/(ai|state-management|templates)/.*\.md$|^tests/test_doc_snippets_execute\.py$
+        files: ^QUICKSTART\.md$|^docs/[^/]+\.md$|^docs/website/[^/]+/.*\.md$|^docs/website/getting-started.*\.md$|^docs/(ai|components|state-management|templates)/.*\.md$|^tests/test_doc_snippets_execute\.py$
         pass_filenames: false
 
       # Methods named in the mixin guides must exist on the mixins.

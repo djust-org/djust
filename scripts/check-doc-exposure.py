@@ -48,19 +48,11 @@ _DATED_RECORD = re.compile(
     r"(IMPLEMENTATION_PHASE\d|_SUMMARY|_DESIGN|_REPORT|_IMPLEMENTATION|_VISION|_PLAN)\.md$"
     r"|^docs/(superpowers|features|strategy-sessions|audits|internal|example-site)/"
 )
-# Documents whose component examples assign a component in ``mount()`` and are
-# not rewritten yet: ``docs/components`` (the two-tier LiveComponent guides),
-# and the LiveComponent sections that teach the same shape. Their fix is a
-# different component declaration, not a ``get_context_data()`` line (#4048).
-# The examples are still listed and counted; they do not fail the check.
-_COMPONENT_BACKLOG = (
-    "docs/components/",
-    "docs/TESTING.md",
-    "docs/website/guides/components.md",
-    "docs/website/guides/tutorial-live-component.md",
-    "python/djust/components/__init__.py",
-    "python/djust/components/base.py",
-)
+# Documents whose component examples may still assign a component in
+# ``mount()``: listed and counted, not failed. Empty since #4048 rewrote the
+# last of them per #4063 (a LiveComponent in the class body, a plain component
+# as a ``state(default_factory=...)`` field); a new entry needs a reason.
+_COMPONENT_BACKLOG: tuple[str, ...] = ()
 _TOP_LEVEL_DOCS = ("README.md", "QUICKSTART.md", "CONTRIBUTING.md", "CLAUDE.md", "AGENTS.md")
 _SKIP_MARKERS = {
     "<!-- doc-snippet-check: skip -->",

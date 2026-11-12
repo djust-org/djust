@@ -2,8 +2,8 @@
 
 Extends ``tests/test_readme_snippets_execute.py`` from ``README.md`` to every
 fenced ``python`` block in ``QUICKSTART.md``, ``docs/website/*/*.md``,
-``docs/*.md``, ``docs/ai``, ``docs/state-management`` and ``docs/templates``
-(dated records excepted; ``docs/components`` waits on #4063). ``scripts/check-doc-snippets.py``
+``docs/*.md``, ``docs/ai``, ``docs/components``, ``docs/state-management`` and
+``docs/templates`` (dated records excepted). ``scripts/check-doc-snippets.py``
 AST-parses and import-resolves those blocks; it cannot catch a class attribute
 no mixin reads, a handler that touches state ``mount()`` never set, a state
 variable the inline template never renders, or a ``@event_handler`` that
@@ -69,9 +69,9 @@ DOC_FILES: list[pathlib.Path] = sorted(
         REPO_ROOT / "QUICKSTART.md",
         *REPO_ROOT.glob("docs/website/getting-started/*.md"),
         *REPO_ROOT.glob("docs/website/getting-started*.md"),
-        # #4055: the rest of the teaching material. ``docs/components`` is not
-        # here yet: its LiveComponent-in-mount() examples wait on #4063.
+        # #4055: the rest of the teaching material.
         *REPO_ROOT.glob("docs/website/*/*.md"),
+        *REPO_ROOT.glob("docs/components/*.md"),
         *REPO_ROOT.glob("docs/ai/*.md"),
         *REPO_ROOT.glob("docs/state-management/*.md"),
         *REPO_ROOT.glob("docs/templates/*.md"),
@@ -104,6 +104,19 @@ KNOWN_FAILURES: dict[str, str] = {
     "docs/website/guides/error-overlay.md@7a3e8f4c": (
         "deliberate: OrderView.charge raises ValueError('amount must be positive') to show what "
         "the overlay displays; fired with no args, amount=0 takes that branch"
+    ),
+    # --- the test settings, not the doc ---
+    # The demo project the suite runs under has a ``navbar`` context processor
+    # (demo_app.context_processors.navbar). A component declared as ``navbar``
+    # is a reserved provider name, so the two collide (ExposureError) here; a
+    # project without that processor renders the example.
+    # was docs/components/COMPONENTS.md line 180
+    "docs/components/COMPONENTS.md@4db04422": (
+        "test settings: the demo's navbar context processor collides with the declared navbar"
+    ),
+    # was docs/components/COMPONENTS.md line 463
+    "docs/components/COMPONENTS.md@271f636d": (
+        "test settings: the demo's navbar context processor collides with the declared navbar"
     ),
 }
 

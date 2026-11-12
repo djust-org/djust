@@ -193,17 +193,19 @@ self.pagination = PaginationComponent(total=100, per_page=10)
 
 ```python
 class DashboardView(LiveView):
-    def mount(self, request):
-        # Parent owns state
-        self.counter = 0
-        self.items = []
+    # Stateful components - declared in the class body (each view gets its
+    # own copy), each owns its state
+    tabs = TabsComponent(tabs=[...])  # tabs.active_tab is owned by component
+    pagination = PaginationComponent(total=100)  # pagination.current_page owned by component
 
+    # Parent owns state
+    counter = state(0)
+    items = state(default_factory=list)
+
+    def get_context_data(self, **kwargs):
         # Simple component - recreated with new value on each render
         # (no state ownership)
-
-        # Stateful component - owns its state
-        self.tabs = TabsComponent(tabs=[...])  # tabs.active_tab is owned by component
-        self.pagination = PaginationComponent(total=100)  # pagination.current_page owned by component
+        return {**super().get_context_data(**kwargs), "badge": BadgeComponent(text=str(self.counter))}
 ```
 
 ## VDOM Patching with Components
@@ -424,20 +426,27 @@ class DashboardView(LiveView):
             :tabs="tab_data"
             :active="selected_tab" />
     """
+    profile_tabs = TabsComponent()
+    selected_tab = state("profile")
 
     def mount(self, request):
         self.username = request.user.username
-        self.selected_tab = "profile"
         self.tab_data = [
             {"id": "profile", "label": "Profile"},
             {"id": "settings", "label": "Settings"},
         ]
 
-        # Component receives these as mount() parameters
-        self.profile_tabs = TabsComponent(
+        # The component receives these as props
+        self.profile_tabs.update(
             tabs=self.tab_data,
             active=self.selected_tab
         )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["username"] = self.username
+        context["tab_data"] = self.tab_data
+        return context
 ```
 
 ### Sending Events from LiveComponent
@@ -599,13 +608,12 @@ class LiveView:
 ```python
 # Automatic registration on mount
 class DashboardView(LiveView):
-    def mount(self, request):
-        # Creating a LiveComponent automatically registers it
-        self.tabs = TabsComponent(...)
-        # Framework detects "tabs" is a LiveComponent and:
-        # 1. Assigns component_id = "tabs"
-        # 2. Registers in self._components["tabs"]
-        # 3. Sets up event routing
+    # Declaring a LiveComponent in the class body registers it. On mount the
+    # framework gives each view its own copy and:
+    # 1. Assigns component_id = "tabs"
+    # 2. Registers in self._components["tabs"]
+    # 3. Sets up event routing
+    tabs = TabsComponent(...)
 ```
 
 ## Summary

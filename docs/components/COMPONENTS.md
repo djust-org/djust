@@ -182,21 +182,15 @@ from djust import LiveView
 from djust.components.layout import NavbarComponent, NavItem
 
 class MyView(LiveView):
-    def mount(self, request):
-        self.navbar = NavbarComponent(
-            brand_name="My App",
-            brand_logo="/static/images/logo.png",
-            items=[
-                NavItem("Home", "/", active=True),
-                NavItem("About", "/about/"),
-                NavItem("Contact", "/contact/"),
-            ],
-        )
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['navbar'] = self.navbar
-        return context
+    navbar = NavbarComponent(
+        brand_name="My App",
+        brand_logo="/static/images/logo.png",
+        items=[
+            NavItem("Home", "/", active=True),
+            NavItem("About", "/about/"),
+            NavItem("Contact", "/contact/"),
+        ],
+    )
 ```
 
 ### 3. Render in Templates
@@ -408,9 +402,11 @@ class FilterWidget(LiveComponent):
 **Usage in Parent View**:
 ```python
 class ProductListView(LiveView):
+    filter_widget = FilterWidget()
+
     def mount(self, request):
         self.products = list(Product.objects.all())
-        self.filter_widget = FilterWidget(
+        self.filter_widget.update(
             items=self.products,
             categories=['Electronics', 'Books', 'Clothing']
         )
@@ -469,8 +465,7 @@ from djust import LiveView, event_handler
 from djust.components.layout import NavbarComponent, NavItem
 
 class MyView(LiveView):
-    def mount(self, request):
-        self.navbar = NavbarComponent(...)
+    navbar = NavbarComponent(...)
 
     @event_handler()
     def add_menu_item(self):
@@ -525,13 +520,15 @@ class CounterWidget(LiveComponent):
 ```python
 # Parent view coordinates child components
 class DashboardView(LiveView):
+    user_list = UserListComponent()
+    user_detail = UserDetailComponent(user=None)
+
     def mount(self, request):
         self.users = User.objects.all()
         self.selected_user = None
 
         # Create child components
-        self.user_list = UserListComponent(users=self.users)
-        self.user_detail = UserDetailComponent(user=None)
+        self.user_list.update(users=self.users)
 
     def handle_component_event(self, component_id: str, event: str, data: dict):
         """Handle events from child components"""

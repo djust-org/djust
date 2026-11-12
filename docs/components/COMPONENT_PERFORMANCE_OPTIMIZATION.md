@@ -810,17 +810,18 @@ class DashboardView(LiveView):
         </div>
     """
 
-    def mount(self, request):
-        # Critical data loaded immediately
-        self.summary = SummaryComponent(self.get_summary_data())
-
-        # Skeleton placeholder (no data fetched yet)
-        self.orders_skeleton = SkeletonComponent(lines=5)
-
-        # Fast Rust badges
-        self.notification_badges = [
-            BadgeComponentRust(str(n)) for n in range(3)
-        ]
+    def get_context_data(self, **kwargs):
+        # Plain components are built here, one set per render: a component
+        # assigned in mount() is refused under explicit exposure.
+        return {
+            **super().get_context_data(**kwargs),
+            # Critical data loaded immediately
+            "summary": SummaryComponent(self.get_summary_data()),
+            # Skeleton placeholder (no data fetched yet)
+            "orders_skeleton": SkeletonComponent(lines=5),
+            # Fast Rust badges
+            "notification_badges": [BadgeComponentRust(str(n)) for n in range(3)],
+        }
 ```
 
 ## Conclusion

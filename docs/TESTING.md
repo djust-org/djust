@@ -419,13 +419,9 @@ class TestAlertComponent:
         from demo_app.components.alert import AlertComponent
 
         class DashboardView(LiveView):
-            template = "<div>{{ alert_success }}</div>"
-
-            def mount(self, request, **kwargs):
-                self.alert_success = AlertComponent(
-                    message="Operation successful!",
-                    type="success"
-                )
+            template = "<div dj-root>{{ alert_success }}</div>"
+            # A LiveComponent is declared in the class body; each view gets its own copy.
+            alert_success = AlertComponent(message="Operation successful!", type="success")
 
         view = DashboardView()
         view.get(get_request)
@@ -439,13 +435,8 @@ class TestAlertComponent:
         from demo_app.components.alert import AlertComponent
 
         class DashboardView(LiveView):
-            template = "<div>{{ alert_warning }}</div>"
-
-            def mount(self, request, **kwargs):
-                self.alert_warning = AlertComponent(
-                    message="Warning!",
-                    dismissible=True
-                )
+            template = "<div dj-root>{{ alert_warning }}</div>"
+            alert_warning = AlertComponent(message="Warning!", dismissible=True)
 
             @event_handler
             def dismiss(self, component_id: str = None, **kwargs):

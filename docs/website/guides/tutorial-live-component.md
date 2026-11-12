@@ -192,6 +192,9 @@ from .models import Movie
 class MovieDetailView(LiveView):
     template_name = "movie_detail.html"
     login_required = True
+    # Two instances, each with its own component_id.
+    my_rating = StarRating(max=5)
+    average_rating = StarRating(max=5, read_only=True)
 
     def mount(self, request, *, movie_id: int, **kwargs):
         self.movie = Movie.objects.get(pk=movie_id)
@@ -199,11 +202,13 @@ class MovieDetailView(LiveView):
         self.user_rating = self.movie.ratings.filter(
             user=request.user,
         ).values_list("value", flat=True).first() or 0
-        # Two instances, each with its own component_id.
-        self.my_rating = StarRating(value=self.user_rating, max=5)
-        self.average_rating = StarRating(
-            value=self.movie.average_rating_int, max=5, read_only=True,
-        )
+        self.my_rating.update(value=self.user_rating)
+        self.average_rating.update(value=self.movie.average_rating_int)
+
+    def get_context_data(self, **kwargs):
+        # The components are declared, so they render without this; the
+        # movie is render-only data the page template reads.
+        return {**super().get_context_data(**kwargs), "movie": self.movie}
 
     def handle_component_event(self, component_id, event, data):
         """Receives every send_parent() from this view's components."""
@@ -280,8 +285,9 @@ template:
 ```python
 # myapp/views.py
 class RestaurantDetailView(LiveView):
-    # ... mount as for MovieDetailView, with
-    #     self.my_rating = StarRating(value=self.user_rating, max=5)
+    # ... as for MovieDetailView: my_rating = StarRating(max=5) in the
+    # class body, self.my_rating.update(value=self.user_rating) in mount(),
+    # and "restaurant" returned from get_context_data()
 
     def handle_component_event(self, component_id, event, data):
         # Same handler shape; different model + persistence
