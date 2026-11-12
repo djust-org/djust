@@ -661,6 +661,25 @@ def _strict_findings(binding: Any, method: Any) -> list[Finding]:
                     supplied=sorted(supplied),
                 )
             )
+        # A data-* attribute naming a parameter with a default: the strict
+        # collector drops it and the handler runs with the default, so the
+        # click silently does the wrong thing (#4033). A required one is
+        # reported just above.
+        for name in named:
+            attribute = payload.data_keys.get(name)
+            if attribute is None or name in supplied or name in missing:
+                continue
+            findings.append(
+                Finding(
+                    "T020",
+                    "%s is never sent to %s(), which receives only dj-value-* "
+                    "attributes; %r keeps its default." % (attribute, binding.name, name),
+                    "Strict handlers receive dj-value-* attributes, never data-*: rename "
+                    "%s to dj-value-%s." % (attribute, attribute[5:]),
+                    expected=sorted(named),
+                    supplied=sorted(supplied),
+                )
+            )
     return findings
 
 
