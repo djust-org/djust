@@ -1217,6 +1217,54 @@ def _is_bare_super_get_context_data_call(node: ast.expr) -> bool:
     )
 
 
+def _get_context_data_reaches_base(cls: type) -> bool:
+    """Whether the view's ``get_context_data()`` builds on the base context.
+
+    The base context is what supplies declared ``state()`` fields (#4050). It
+    is reached unless the most-derived user override only returns literal
+    dicts that never splat ``super().get_context_data(...)``. Meant for the
+    views ``_get_context_data_is_too_dynamic`` accepts; anything else counts
+    as reaching it, so a check never reports a field it cannot prove missing.
+
+    djust's own classes are read too: a user subclass of a shipped view whose
+    ``get_context_data()`` builds a new dict (the admin views) gets no
+    declared field. The walk stops at the base method itself.
+    """
+    from djust.mixins.context import ContextMixin
+
+    base = ContextMixin.__dict__["get_context_data"]
+    for klass in cls.__mro__:
+        if klass is object:
+            continue
+        mod = getattr(klass, "__module__", "") or ""
+        if mod.startswith("django.") or mod == "builtins":
+            continue
+        method = klass.__dict__.get("get_context_data")
+        if method is None:
+            continue
+        if method is base:
+            return True
+        try:
+            tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
+        except (OSError, TypeError, SyntaxError):
+            return True
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Return) or node.value is None:
+                continue
+            value = node.value
+            if _is_bare_super_get_context_data_call(value):
+                return True
+            if isinstance(value, ast.Dict) and any(
+                key is None and _is_bare_super_get_context_data_call(item)
+                for key, item in zip(value.keys, value.values)
+            ):
+                return True
+            if not isinstance(value, ast.Dict):
+                return True
+        return False
+    return True
+
+
 def _get_context_data_is_too_dynamic(cls: type) -> bool:
     """True if any user-code override of ``get_context_data()`` does more
     than return a literal dict or delegate straight to
@@ -1726,9 +1774,12 @@ def _check_document_element_root(
 # T027 — the explicit-exposure twin of T018. T018 counts a public attribute
 # (``self.count = 0``, a class value, a property) as template context, which
 # is true under the legacy policy only. Under explicit exposure (ADR-038, the
-# default since 2.0) the template gets what ``get_context_data()`` and the
-# framework's providers supply, so a view written for the attribute walk
-# renders those names empty, silently. This check names them.
+# default since 2.0) the template gets the declared ``state()`` fields (#4050),
+# what ``get_context_data()`` returns and what the framework's providers
+# supply, so a view written for the attribute walk renders its undeclared
+# names empty, silently. This check names them. A declared field counts as
+# supplied when ``get_context_data()`` builds on the base context and the
+# field is not ``render=False``.
 #
 # "Holds" comes from the exposure inventory's AST scan (the names the legacy
 # policy would have exported); "reads" and "supplies" come from the same
@@ -1749,6 +1800,7 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
         from djust._exposure_unsupplied import MIGRATION_GUIDE_URL
         from djust.live_view import LiveView
         from djust.management._exposure_inventory import inventory_view
+        from djust.mixins.context import rendered_state_names
         from djust.management.commands.djust_typecheck import (
             _extract_context_keys_from_ast,
             _extract_referenced_names,
@@ -1778,16 +1830,16 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
             continue
         cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
         try:
-            held = {
-                entry["name"]
-                for entry in inventory_view(cls)["names"]
-                if entry.get("kind") in _T027_HELD_KINDS
-            }
+            entries = inventory_view(cls)["names"]
+            held = {entry["name"] for entry in entries if entry.get("kind") in _T027_HELD_KINDS}
+            declared = {entry["name"] for entry in entries if entry.get("kind") == "state"}
             supplied = (
                 _extract_context_keys_from_ast(cls, attributes=False)
                 | set(registered_components(cls))
                 | _extract_template_locals(src)
             )
+            if _get_context_data_reaches_base(cls):
+                supplied |= set(rendered_state_names(cls))
             silenced = _template_noqa_names(src)
             refs = _extract_referenced_names(src)
         except Exception:  # noqa: BLE001 — a view this cannot read is skipped, not guessed at
@@ -1813,9 +1865,12 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                     % (cls_label, name, line, template_name or "<inline>"),
                     hint=(
                         "Explicit exposure is the default since djust 2.0: a template gets "
-                        "what get_context_data() returns, not the view's attributes. Return "
-                        "'%s' from %s.get_context_data(), and declare it with state() if it "
-                        "must be persisted or sent to the browser. To keep the 1.x behaviour "
+                        "the view's declared state() fields and what get_context_data() "
+                        "returns, not its other attributes. Declare '%s' with state() (it "
+                        "then renders; persisting it or sending it to the browser takes "
+                        "persist= or client=True), or return it from %s.get_context_data(); "
+                        "a get_context_data() that does not build on super() supplies no "
+                        "declared field, and state(render=False) keeps one out. To keep the 1.x behaviour "
                         'while you migrate, set exposure_policy = "legacy" on the view. '
                         "See %s. If the name is supplied in a way this check cannot follow, "
                         "silence it with a `{# djust_typecheck: noqa %s #}` template comment "
@@ -1824,8 +1879,18 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                     ),
                     id="djust.T027",
                     fix_hint=(
-                        'Add `"%s": self.%s` to the dict `%s.get_context_data()` returns.'
-                        % (name, name, cls_label)
+                        (
+                            "`%s` is declared but not supplied: build `%s.get_context_data()` "
+                            "on `super().get_context_data(**kwargs)` (or drop render=False), "
+                            'or add `"%s": self.%s` to the dict it returns.'
+                            % (name, cls_label, name, name)
+                        )
+                        if name in declared
+                        else (
+                            'Declare `%s = state(...)` on `%s`, or add `"%s": self.%s` to '
+                            "the dict `%s.get_context_data()` returns."
+                            % (name, cls_label, name, name, cls_label)
+                        )
                     ),
                     file_path=template_path,
                     line_number=line if template_name else None,

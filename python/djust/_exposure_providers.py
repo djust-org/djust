@@ -320,12 +320,12 @@ def _plain_component_remedy(name: str, value: Any) -> str:
     """
     attr = name if name.isidentifier() else "badge"
     kind = type(value).__name__
-    # #4050: once declared state() fields render by default, drop the
-    # "supply it from get_context_data()" half of this sentence.
+    # A declared state() field renders by default (#4050), so the field
+    # form needs no get_context_data() hand-over.
     return (
         "Keep a plain component per view: declare it as a field, "
-        f"`{attr} = state(default_factory=lambda: {kind}(...))`, and supply it from "
-        "get_context_data(), or build it in get_context_data()."
+        f"`{attr} = state(default_factory=lambda: {kind}(...))`, which renders, "
+        "or build it in get_context_data()."
     )
 
 

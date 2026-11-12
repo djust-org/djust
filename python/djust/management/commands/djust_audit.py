@@ -235,9 +235,11 @@ def _audit_class(
     base_classes: Optional[list[type]] = None,
 ) -> dict[str, Any]:
     """Introspect a LiveView or LiveComponent class and return an audit dict."""
-    template = getattr(cls, "template_name", None)
+    raw_template = getattr(cls, "template_name", None)
+    # Only a string is a template; a state() field may shadow the name (#4050).
+    template: Any = raw_template if isinstance(raw_template, str) else None
     if template is None:
-        if getattr(cls, "template", None):
+        if isinstance(getattr(cls, "template", None), str):
             template = "(inline)"
         else:
             template = "(none)"
@@ -335,9 +337,9 @@ def _extract_vars(cls: type) -> Optional[Any]:
     from djust._rust import extract_template_variables
 
     template_name = getattr(cls, "template_name", None)
-    if not template_name:
+    if not isinstance(template_name, str) or not template_name:
         inline = getattr(cls, "template", None)
-        if inline:
+        if isinstance(inline, str) and inline:
             try:
                 return extract_template_variables(inline)
             except Exception:

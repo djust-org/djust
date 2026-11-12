@@ -56,6 +56,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V024 | LiveView | Error | A `query_budget` nothing can enforce: an unknown key, a bool or negative number, a handler named in `events` that the view lacks or that is `async def` / `@background` |
 | V025 | LiveView | Warning | A class defines `get_http_status()` while `LIVEVIEW_CONFIG['http_status_of_state']` is configured: the override replaces the project-wide map |
 | V026 | LiveView | Warning | A legacy view declares a plain component in its class body: one object shared by every session, rendered for every user |
+| V027 | LiveView | Warning | An explicit view declares a `state()` field named `user` or `perms` (without `render=False`): it replaces `request.user` / the permission proxy in every template the view renders |
 | V028 | LiveView | Warning | An application class states `exposure_policy = "legacy"`, which is deprecated and removed before 2.0.0 |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
@@ -490,6 +491,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Fix**: create the component per view: `self._badge = Badge(...)` in `mount()` and return it from `get_context_data()`, or build it in `get_context_data()` from the view's own state. Both also work after the view moves to explicit exposure.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V026"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V026"]`
 - **False positives**: a component no handler ever writes to (a fixed label). Sharing it is harmless; suppress, or move it anyway so that a later write cannot leak.
+
+### V027 — declared `state()` field named `user` or `perms`
+- **Severity**: Warning
+- **Method**: Runtime (class inspection; no view is constructed).
+- **What it detects**: an explicit view that declares `user = state(...)` or `perms = state(...)` without `render=False`. A declared field is template context (#4050), and view context wins over Django's context processors, so the field replaces `request.user` or the permission proxy in every template the view renders, including base templates that test it for authorization (`{% if user.is_staff %}`). Reported once, on the class that declares the field. Other context-processor names (`messages`, `debug`, `LANGUAGE_CODE`) are shadowed the same way and are not reported. Legacy views are not checked: their attribute walk shadowed these names in 1.x too. With `DEBUG = True`, djust also logs one warning per view class (logger `djust.exposure`) when it renders such a shadow.
+- **Fix**: rename the field (`selected_user`), or declare it `state(..., render=False)` if no template reads it.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V027"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V027"]`
 
 ### V028 — a class states `exposure_policy = "legacy"`
 - **Severity**: Warning

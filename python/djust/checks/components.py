@@ -2290,6 +2290,75 @@ def check_shared_class_level_components(app_configs: Any, **kwargs: Any) -> list
 
 
 @register("djust")
+def check_declared_authorization_names(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V027 (Warning): a declared ``state()`` field named ``user`` or ``perms`` (#4050).
+
+    A declared field is template context under explicit exposure, and view
+    context wins over Django's context processors. So ``user = state(None)``
+    replaces ``request.user`` (and ``perms = state(...)`` the permission proxy)
+    in every template the view renders, including base templates that test it
+    for authorization. Legal, but almost never meant. A field declared with
+    ``render=False`` is not reported, and neither is a legacy view: its
+    attribute walk shadowed these names the same way in 1.x, and the legacy
+    policy is deprecated rather than extended. The names are
+    ``djust._exposure_unsupplied.AUTHORIZATION_CONTEXT_NAMES``.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V027"):
+        return messages
+    try:
+        from djust._exposure import uses_legacy_exposure
+        from djust._exposure_unsupplied import AUTHORIZATION_CONTEXT_NAMES
+        from djust.live_view import LiveView
+        from djust.mixins.context import rendered_state_names
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    seen: set[tuple[type, str]] = set()
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if _is_framework_internal_class(cls) or uses_legacy_exposure(cls):
+            continue
+        try:
+            names = AUTHORIZATION_CONTEXT_NAMES.intersection(rendered_state_names(cls))
+        except Exception:  # noqa: BLE001 — a class this cannot read is skipped
+            logger.debug("V027: could not read the declared fields of a view class")
+            continue
+        for name in sorted(names):
+            owner = next((k for k in cls.__mro__ if name in k.__dict__), cls)
+            if (owner, name) in seen:
+                continue
+            seen.add((owner, name))
+            label = "%s.%s" % (owner.__module__, owner.__qualname__)
+            try:
+                path = inspect.getsourcefile(owner) or ""
+            except TypeError:
+                path = ""
+            messages.append(
+                DjustWarning(
+                    "%s declares state() field '%s', which replaces the '%s' Django's "
+                    "context processors supply in every template the view renders, "
+                    "including base templates that test it for authorization."
+                    % (label, name, name),
+                    hint=(
+                        "A declared state() field is template context, and view context "
+                        "wins over context processors. Rename the field (for example "
+                        "selected_%s), or declare it with render=False if no template "
+                        "reads it. Suppress with DJUST_CONFIG = "
+                        "{'suppress_checks': ['V027']}." % name
+                    ),
+                    id="djust.V027",
+                    fix_hint=(
+                        "Rename `%s` on `%s` (for example `selected_%s`), or declare it "
+                        "`state(..., render=False)`." % (name, label, name)
+                    ),
+                    file_path=path,
+                )
+            )
+    return messages
+
+
+@register("djust")
 def check_legacy_exposure_policy(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """V028 (Warning): an application class states ``exposure_policy = "legacy"`` (#4047).
 

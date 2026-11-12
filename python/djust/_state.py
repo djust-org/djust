@@ -19,7 +19,10 @@ _MISSING = _Missing()
 class StateProperty(Generic[T]):
     """A reactive value whose default is initialized once per owning instance.
 
-    This descriptor does not grant persistence or browser-exposure permissions.
+    Under explicit exposure the field is template context by default
+    (``render=True``, #4050). Rendering is not a grant: the descriptor does not
+    grant persistence or browser-exposure permissions (``persist=``,
+    ``client=True``).
     Nested mutations remain visible to the runtime's content fingerprinting;
     assignment also adds the field name to the existing reactive-state registry.
     """
@@ -35,7 +38,10 @@ class StateProperty(Generic[T]):
         default_factory: Callable[[], T] | None = None,
         persist: Persistence = None,
         client: bool = False,
+        render: bool = True,
     ) -> None:
+        if type(render) is not bool:
+            raise TypeError("state render must be a boolean")
         if default is not _MISSING and default_factory is not None:
             raise TypeError("state accepts either default or default_factory, not both")
         if default_factory is not None and not callable(default_factory):
@@ -43,6 +49,9 @@ class StateProperty(Generic[T]):
         self.default = None if default is _MISSING else default
         self.default_factory = default_factory
         self.exposure = FieldExposure(persist=persist, client=client)
+        # Template context only; not part of FieldExposure, so it does not
+        # change the schema digest or count as an inherited grant.
+        self.render = render
         self.attr_name: str | None = None
         self.public_name: str | None = None
 
@@ -82,17 +91,25 @@ class StateProperty(Generic[T]):
 
 
 @overload
-def state(default: T, *, persist: Persistence = None, client: bool = False) -> StateProperty[T]: ...
-
-
-@overload
 def state(
-    *, default_factory: Callable[[], T], persist: Persistence = None, client: bool = False
+    default: T, *, persist: Persistence = None, client: bool = False, render: bool = True
 ) -> StateProperty[T]: ...
 
 
 @overload
-def state(*, persist: Persistence = None, client: bool = False) -> StateProperty[Any]: ...
+def state(
+    *,
+    default_factory: Callable[[], T],
+    persist: Persistence = None,
+    client: bool = False,
+    render: bool = True,
+) -> StateProperty[T]: ...
+
+
+@overload
+def state(
+    *, persist: Persistence = None, client: bool = False, render: bool = True
+) -> StateProperty[Any]: ...
 
 
 def state(
@@ -101,6 +118,7 @@ def state(
     default_factory: Callable[[], T] | None = None,
     persist: Persistence = None,
     client: bool = False,
+    render: bool = True,
 ) -> StateProperty[T]:
     """Declare reactive state with a typed, instance-owned default.
 
@@ -109,16 +127,30 @@ def state(
     its item type when needed). Literal defaults are deep-copied on first read;
     factories run once per instance, unless a value was assigned first.
 
+    Under explicit exposure (the default) a declared field is template
+    context: ``{{ count }}`` renders without a ``get_context_data()``, which
+    stays for derived and render-only values and can still override what the
+    field renders as (#4050). ``render=False`` keeps a field out of the
+    template context (a value only handlers use, or one too large to sync to
+    the renderer for nothing). Rendering is not browser state: the field
+    reaches the client state payload only with ``client=True``.
+
     ``persist`` and ``client`` are ADR-038 exposure grants, honored only by
     views with ``exposure_policy = "explicit"``: ``persist="server"`` saves the
     field in the bound server session envelope, ``client=True`` permits raw
     browser exposure, and ``persist="client"`` (which requires ``client=True``)
     makes it restorable from the signed back-navigation snapshot. A legacy view
-    that declares a grant is refused at construction, so a grant never implies
-    protection it does not get. Calls without these options keep legacy
-    context and persistence.
+    that declares a grant, or ``render=False``, is refused at construction, so
+    a declaration never implies protection it does not get. Calls without
+    these options keep legacy context and persistence.
     """
     return cast(
         StateProperty[T],
-        StateProperty(default, default_factory=default_factory, persist=persist, client=client),
+        StateProperty(
+            default,
+            default_factory=default_factory,
+            persist=persist,
+            client=client,
+            render=render,
+        ),
     )
