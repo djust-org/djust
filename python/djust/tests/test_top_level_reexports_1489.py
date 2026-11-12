@@ -1,12 +1,11 @@
-"""Regression tests for #1489 — top-level re-export of four decorators.
+"""Regression tests for #1489 — top-level re-export of decorators.
 
-`optimistic`, `cache`, `client_state`, and `background` are stable
-(importability only — `optimistic` and `client_state` are INERT: #2699, #2680)
-public-API decorators that live in ``djust.decorators``. Issue #1489
-(API-stability audit finding F3) asked for them to also be reachable from
-the top-level ``djust`` package so the canonical import path is
-``from djust import optimistic`` rather than only
-``from djust.decorators import optimistic``.
+`cache` and `background` are stable public-API decorators that live in
+``djust.decorators``. Issue #1489 (API-stability audit finding F3) asked for
+them to also be reachable from the top-level ``djust`` package so the
+canonical import path is ``from djust import cache`` rather than only
+``from djust.decorators import cache``. (#4006) `optimistic` and `client_state` were
+re-exported too, until djust 2.0 removed them because they did nothing (#4006).
 
 These tests pin that re-export: the names must be importable from
 ``djust``, must be listed in ``djust.__all__``, and must be the *same
@@ -19,15 +18,15 @@ from __future__ import annotations
 import djust
 import djust.decorators as _decorators
 
-_REEXPORTED = ["optimistic", "cache", "client_state", "background"]
+_REEXPORTED = ["cache", "background"]
 
 
 class TestTopLevelReexports1489:
     """The four decorators are reachable from the top-level ``djust`` package."""
 
     def test_importable_from_top_level_djust(self):
-        """``from djust import optimistic, cache, client_state, background``."""
-        from djust import optimistic, cache, client_state, background  # noqa: F401
+        """``from djust import cache, background``."""
+        from djust import cache, background  # noqa: F401
 
         # If the import line above resolved, all four names exist on the
         # package. Assert they are callable decorators, not sentinels.
@@ -56,3 +55,19 @@ class TestTopLevelReexports1489:
             assert name in _decorators.__all__, (
                 f"{name!r} unexpectedly missing from djust.decorators.__all__"
             )
+
+
+def test_the_inert_decorators_are_gone_4006():
+    """#4006: @optimistic and @client_state recorded metadata nothing read, and
+    djust 2.0 removed them rather than keep teaching a capability that did not
+    exist. Neither import path resolves any more."""
+    import pytest
+
+    for name in ("optimistic", "client_state"):
+        assert name not in djust.__all__
+        assert name not in _decorators.__all__
+        assert not hasattr(_decorators, name)
+        with pytest.raises(ImportError):
+            exec(f"from djust import {name}", {})
+        with pytest.raises(ImportError):
+            exec(f"from djust.decorators import {name}", {})

@@ -1,6 +1,6 @@
 # ADR-020: `dj-island` — Opaque-Subtree Attribute for React, Vue, Svelte, and Third-Party-Widget Interop
 
-**Status**: Proposed
+**Status**: Superseded — not implemented; the JavaScript widget hook contract (#3656) replaces it (2026-11-12, #4006)
 **Date**: 2026-05-28
 **Deciders**: Project maintainers
 **Related**:
@@ -14,6 +14,16 @@
 - Phoenix LiveView prior art: `phx-hook` + `phx-update="ignore"` — the Elixir equivalent we mirror in Python shape
 
 ---
+
+> **Superseded (2026-11-12, #4006).** Nothing implements `dj-island`: there is
+> no `dj-island` in `python/` or `crates/`, and no `djust:island-init` /
+> `djust:island-unmount` event in the client. Two premises below also
+> contradict the client as shipped: there is no generic `dj-on-<CustomEvent>`
+> routing, and a custom-element tag name does not make its light-DOM children
+> opaque to the morph. Third-party widgets integrate through `dj-hook`
+> (`mounted` / `updated` / `destroyed`), `dj-update="ignore"` and
+> `dj-ignore-attrs`, which #3656 defines and tests as the supported contract.
+> The text below is kept as the record of what was proposed.
 
 ## Summary
 

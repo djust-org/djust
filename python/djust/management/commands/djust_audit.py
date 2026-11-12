@@ -52,8 +52,6 @@ _DECORATOR_KEYS = {
     "throttle",
     "rate_limit",
     "cache",
-    "optimistic",
-    "client_state",
     "permission_required",
 }
 

@@ -156,10 +156,10 @@ class TestFormatDecoratorTags:
         tags = _format_decorator_tags(meta)
         assert any("@rate_limit" in t for t in tags)
 
-    def test_optimistic_bool(self):
-        meta = {"optimistic": True}
+    def test_a_bool_value_is_a_bare_tag(self):
+        meta = {"cache": True}
         tags = _format_decorator_tags(meta)
-        assert "@optimistic" in tags
+        assert "@cache" in tags
 
     def test_no_decorators(self):
         meta = {}

@@ -266,7 +266,7 @@ def my_handler(self, value: str = ""):
 Stack decorators in order (top to bottom):
 
 ```python
-from djust.decorators import event_handler, debounce, optimistic
+from djust.decorators import event_handler, debounce, throttle
 
 @event_handler()
 @debounce(wait=0.5)
@@ -276,9 +276,9 @@ def search(self, value: str = "", **kwargs):
     self._refresh_results()
 
 @event_handler()
-@optimistic
+@throttle(interval=1.0)
 def delete_item(self, item_id: int):
-    """Optimistic delete - UI updates before server confirms"""
+    """At most one delete per second from a double-clicking user"""
     Item.objects.filter(id=item_id).delete()
 ```
 
@@ -592,7 +592,6 @@ def show_delete_confirmation(self, item_id: int):
     self.show_delete_modal = True
 
 @event_handler()
-@optimistic
 def confirm_delete(self):
     """Actually delete the item after confirmation"""
     if self.delete_item_id:
@@ -817,4 +816,4 @@ See [Security Guidelines](SECURITY_GUIDELINES.md) for full details.
 
 - **[Debug Panel User Guide](DEBUG_PANEL.md)** - Interactive debugging tools
 - **[JIT Serialization Pattern](JIT_SERIALIZATION_PATTERN.md)** - Public/private variable usage
-- **[State Management Decorators](state-management/STATE_MANAGEMENT_API.md)** - @debounce, @optimistic, @cache
+- **[State Management Decorators](state-management/STATE_MANAGEMENT_API.md)** - @debounce, @throttle, @cache

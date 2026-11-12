@@ -132,7 +132,7 @@ Replace JavaScript state patterns with Python decorators.
 
 |                                                                  |                                                                                 |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| **[State Management](state/index.md)**                           | `@debounce`, `@throttle`, `@cache`, `dj-loading` attributes, `DraftModeMixin` (`@optimistic` is inert) |
+| **[State Management](state/index.md)**                           | `@debounce`, `@throttle`, `@cache`, `dj-loading` attributes, `DraftModeMixin` |
 | **[Tutorial](../state-management/STATE_MANAGEMENT_TUTORIAL.md)** | Step-by-step product search example                                             |
 | **[Patterns](../state-management/STATE_MANAGEMENT_PATTERNS.md)** | Best practices and anti-patterns                                                |
 | **[Examples](../state-management/STATE_MANAGEMENT_EXAMPLES.md)** | Copy-paste ready code                                                           |
@@ -170,7 +170,7 @@ Complete API documentation.
 |                                               |                                                                                                         |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | **[LiveView](api-reference/liveview.md)**     | `on_mount`, `mount()`, `get_context_data()`, `handle_params()`, `handle_info()`, `start_async()`, navigation             |
-| **[Decorators](api-reference/decorators.md)** | `@event_handler`, `@debounce`, `@throttle`, `@cache`, `@optimistic` (inert), `@background`, `@permission_required` |
+| **[Decorators](api-reference/decorators.md)** | `@event_handler`, `@debounce`, `@throttle`, `@cache`, `@background`, `@permission_required` |
 | **[Components](api-reference/components.md)** | `Component`, `LiveComponent`, built-in components, registry                                             |
 | **[Testing](api-reference/testing.md)**       | `LiveViewTestClient`, `SnapshotTestMixin`, `LiveViewSmokeTest`, `@performance_test`                     |
 

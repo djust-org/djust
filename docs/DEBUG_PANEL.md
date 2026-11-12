@@ -135,7 +135,7 @@ For each handler:
 - **Handler name**: Method name (e.g., `search`, `filter_by_status`)
 - **Description**: From docstring or `@event_handler(description=...)`
 - **Parameters**: Name, type, required/optional, default values
-- **Decorators**: Applied decorators (e.g., `@debounce`, `@optimistic`)
+- **Decorators**: Applied decorators (e.g., `@debounce`, `@cache`)
 
 #### Example Display
 
@@ -362,7 +362,7 @@ Solution: Use dj-input="search" with parameter name "value"
 - Avoid setting multiple variables (batch updates)
 - Use private variables for intermediate state
 - Only assign to public variables in `get_context_data()`
-- Consider `@optimistic` for instant UI updates
+- Consider `dj-loading.*` attributes or JS Commands for instant UI feedback
 
 **Before optimization**:
 ```python

@@ -170,7 +170,9 @@ STALE_INERT_CLAIMS = (
 )
 
 # Any of these anywhere in the file discharges the requirement.
-INERT_MARKER = re.compile(r"#2656|#2680|#2699|\bINERT\b|\binert\b")
+# `#4006` is the 2.0 removal of `@optimistic` / `@client_state`: a mention that
+# cites it is a migration note ("delete the decorator"), not a prescription.
+INERT_MARKER = re.compile(r"#2656|#2680|#2699|#4006|\bINERT\b|\binert\b|removed in (?:djust )?2\.0")
 
 
 # Generated or vendored trees that contain COPIES of source, not source. A
