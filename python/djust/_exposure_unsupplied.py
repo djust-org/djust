@@ -152,7 +152,7 @@ def warn_unsupplied_template_names(view: Any, context: Any) -> None:
 #: ``get_context_data()`` key does; for most names (``messages``, ``debug``,
 #: ``LANGUAGE_CODE``) that is ordinary and allowed. For these two the shadow
 #: silently changes what every template the view renders, including base
-#: templates, believes about the current user, so djust.V026 and the DEBUG
+#: templates, believes about the current user, so djust.V027 and the DEBUG
 #: warning below flag it. Extend this set to flag another name.
 AUTHORIZATION_CONTEXT_NAMES = frozenset({"user", "perms"})
 
@@ -189,7 +189,7 @@ def warn_shadowed_authorization_names(view: Any, names: Any) -> None:
                 "processor supplies, in every template this view renders, including "
                 "base templates that test it for authorization. Rename the field "
                 "(for example selected_%s) or declare it with render=False. See "
-                "djust.V026.",
+                "djust.V027.",
                 cls.__module__,
                 cls.__qualname__,
                 name,

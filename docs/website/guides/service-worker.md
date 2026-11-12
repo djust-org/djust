@@ -57,7 +57,7 @@ All options are individually toggleable:
 | `instantShell`        | `false`                                     | Enable the cached-shell navigation fast path.   |
 | `reconnectionBridge`  | `false`                                     | Enable outgoing-message buffering during WS disconnect. |
 | `vdomCache`           | `false`                                     | (v0.6.0) Cache VDOM HTML per URL; serve instantly on popstate before reconciling against the live mount reply. |
-| `stateSnapshot`       | `false`                                     | (v0.6.0) Persist a view's public state on `djust:before-navigate`; restore via `_restore_snapshot()` instead of running `mount()` on back-nav. |
+| `stateSnapshot`       | `false`                                     | (v0.6.0) Keep the signed token of a view's `persist="client"` fields on `djust:before-navigate`, and send it back on back-nav so the server can restore them. |
 | `swUrl`               | `/static/djust/service-worker.js`           | Override if you serve the SW from a custom path. |
 | `scope`               | `/`                                         | Override if the SW should only manage a subtree. |
 
@@ -221,58 +221,61 @@ shown until the live mount corrects it.
 
 ### LiveView state snapshots
 
-For a view that opts in, the server signs a snapshot of the view's
-public state when the view mounts, and the client replays it on
-back-navigation: the server then calls `_restore_snapshot(state)`
-instead of `mount()`. State changed by events after mount is **not**
-included, and scroll position is not view state, so neither is
-restored.
+A view can declare fields the browser holds for it. The server signs their
+values into a token on the mount frame and again after each event that
+commits, and the client sends the latest token back on back-navigation (and on
+a reconnect). `mount()` runs first; the declared fields are then put back from
+the token, and `handle_restore()` runs. Nothing else on the view travels, and
+scroll position is not view state, so it is not restored.
 
 ```python
-class CartView(LiveView):
-    enable_state_snapshot = True
+from djust import LiveView
+from djust.decorators import event_handler, state
 
-    def mount(self, request, **kwargs):
-        self.items = list(request.user.cart_items.values('id', 'qty'))
+
+class CheckoutView(LiveView):
+    template = """<div dj-root>
+        <p>Step {{ step }} of 3</p>
+        <button dj-click="next_step">Next</button>
+    </div>"""
+
+    step = state(1, persist="client", client=True)
 
     def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "items": self.items}
+        context = super().get_context_data(**kwargs)
+        context["step"] = self.step
+        return context
 
-    def _restore_snapshot(self, state: dict) -> None:
-        # state is the signed snapshot taken when the view mounted.
-        # Trust nothing — re-validate any IDs against the database.
-        self.items = state.get('items', [])
+    @event_handler()
+    def next_step(self, **kwargs):
+        self.step = min(self.step + 1, 3)
 
     def _should_restore_snapshot(self, request) -> bool:
-        # Override to reject snapshots. The default returns True; snapshot
+        # Override to refuse a token. The default returns True; the token's
         # age is enforced separately by DJUST_STATE_SNAPSHOT_MAX_AGE
-        # (default 3600 s). Return False to fall back to mount().
+        # (default 3600 s). Return False to keep what mount() set.
         return super()._should_restore_snapshot(request)
 ```
 
-Snapshots are JSON only (no `pickle`), capped at 256 KB by the SW and
-64 KB by the client clamp, and `safe_setattr` blocks dunder /
-private attributes during restoration.
+A client field must be JSON (strings, numbers, booleans, `None`, and lists and
+dicts of those), and the service worker caps a stored token at 256 KB.
 
-Snapshots are **HMAC-signed by the server** (Django `TimestampSigner`,
-keyed on `SECRET_KEY`) before they cross the wire. The client stores
-the opaque signed blob and echoes it back verbatim; on restore the
-server verifies the signature, a TTL
-(`DJUST_STATE_SNAPSHOT_MAX_AGE`, default 3600 s), and that the
-snapshot was issued for the same view and session. An unsigned,
-forged, tampered, expired, or cross-view/cross-session snapshot is
-rejected and the view falls back to `mount()`. This means a client
-**cannot** fabricate a snapshot to inject arbitrary public state — but
-you should still re-validate any IDs in `_restore_snapshot` against the
-database, since the signed state is whatever the server itself last
-captured. If you override `_capture_snapshot_state` /
-`_restore_snapshot` or ship a custom client, the signed blob must
-round-trip untouched.
+Tokens are **signed by the server** (Django `TimestampSigner`, keyed on
+`SECRET_KEY`), not encrypted: the browser can read the values, which is why
+only `client=True` fields can be declared `persist="client"`. On restore the
+server verifies the signature, the age (`DJUST_STATE_SNAPSHOT_MAX_AGE`, a
+whole number of seconds from 1 to 86400, default 3600), that the token was
+issued for the same session, user, tenant and route, and that it holds exactly
+the declared fields. An unsigned, forged, tampered, expired or foreign token
+is ignored and the view keeps what `mount()` set. A client **cannot** fabricate
+a token to inject state, but re-validate any id a restored field holds against
+the database: the signed state is whatever the server itself last captured.
+`DJUST_STATE_SNAPSHOT_ENABLED = False` turns the token off for every view.
 
-System check `djust.C304` warns if a snapshot-opt-in view declares
-attributes whose names match PII patterns (`password`, `token`,
-`secret`, `api_key`, `pii`) — a guardrail against accidentally
-shipping sensitive state through the SW.
+djust 1.x could sign every public attribute of a view that set
+`enable_state_snapshot = True` and restore it through `_restore_snapshot()`.
+That snapshot was removed in 2.0; see
+[Migrating to 2.0](migrating-to-2.0.md#3-replace-removed-names-and-settings).
 
 ### Mount batching
 

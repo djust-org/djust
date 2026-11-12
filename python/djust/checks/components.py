@@ -2229,8 +2229,69 @@ def check_get_http_status_overrides(app_configs: Any, **kwargs: Any) -> list[Che
 
 
 @register("djust")
+def check_shared_class_level_components(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V026 (Warning): a plain component in a legacy view's class body (#4045).
+
+    A plain ``Component`` has no descriptor, so ``self.<name>`` is the one class
+    attribute every session of the worker shares, and a legacy view renders it
+    automatically: one user's handler write (``self.badge.label = email``)
+    shows in every other user's next render. An explicit view refuses the same
+    shape when the class is created; a legacy view keeps running, so this
+    reports it. Reported once per class body that declares it.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V026"):
+        return messages
+    try:
+        from djust._exposure import uses_legacy_exposure
+        from djust._exposure_providers import class_level_plain_components
+        from djust.live_view import LiveView
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    owners: dict[tuple[type, str], None] = {}
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in candidates:
+        if cls.__dict__.get("abstract") or not uses_legacy_exposure(cls):
+            continue
+        for name in class_level_plain_components(cls):
+            owner = next(c for c in cls.__mro__ if name in vars(c))
+            if not _is_framework_internal_class(owner):
+                owners[(owner, name)] = None
+
+    for owner, name in sorted(owners, key=lambda o: (o[0].__module__, o[0].__qualname__, o[1])):
+        label = "%s.%s" % (owner.__module__, owner.__qualname__)
+        kind = type(vars(owner)[name]).__name__
+        owner_file = ""
+        try:
+            owner_file = inspect.getfile(owner)
+        except (OSError, TypeError):
+            pass  # Source introspection may fail for built-in or C-extension classes
+        messages.append(
+            DjustWarning(
+                "%s declares the plain component %r in its class body. It is one object "
+                "shared by every session of the worker, and a legacy view renders it: a "
+                "handler's write to it shows in every other user's page." % (label, name),
+                hint=(
+                    "Create it per view: assign self._%s = %s(...) in mount() and return it "
+                    "from get_context_data(), or build it in get_context_data(). A component "
+                    "that is never written can stay. Suppress with "
+                    "DJUST_CONFIG = {'suppress_checks': ['V026']}." % (name, kind)
+                ),
+                id="djust.V026",
+                fix_hint=(
+                    "Move `%s = %s(...)` out of the class body of `%s` and create it per view "
+                    "in `mount()` or `get_context_data()`." % (name, kind, owner.__qualname__)
+                ),
+                file_path=owner_file,
+            )
+        )
+    return messages
+
+
+@register("djust")
 def check_declared_authorization_names(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """V026 (Warning): a declared ``state()`` field named ``user`` or ``perms`` (#4050).
+    """V027 (Warning): a declared ``state()`` field named ``user`` or ``perms`` (#4050).
 
     A declared field is template context under explicit exposure, and view
     context wins over Django's context processors. So ``user = state(None)``
@@ -2243,7 +2304,7 @@ def check_declared_authorization_names(app_configs: Any, **kwargs: Any) -> list[
     ``djust._exposure_unsupplied.AUTHORIZATION_CONTEXT_NAMES``.
     """
     messages: list[CheckMessage] = []
-    if _is_check_suppressed("djust.V026"):
+    if _is_check_suppressed("djust.V027"):
         return messages
     try:
         from djust._exposure import uses_legacy_exposure
@@ -2261,7 +2322,7 @@ def check_declared_authorization_names(app_configs: Any, **kwargs: Any) -> list[
         try:
             names = AUTHORIZATION_CONTEXT_NAMES.intersection(rendered_state_names(cls))
         except Exception:  # noqa: BLE001 — a class this cannot read is skipped
-            logger.debug("V026: could not read the declared fields of a view class")
+            logger.debug("V027: could not read the declared fields of a view class")
             continue
         for name in sorted(names):
             owner = next((k for k in cls.__mro__ if name in k.__dict__), cls)
@@ -2284,9 +2345,9 @@ def check_declared_authorization_names(app_configs: Any, **kwargs: Any) -> list[
                         "wins over context processors. Rename the field (for example "
                         "selected_%s), or declare it with render=False if no template "
                         "reads it. Suppress with DJUST_CONFIG = "
-                        "{'suppress_checks': ['V026']}." % name
+                        "{'suppress_checks': ['V027']}." % name
                     ),
-                    id="djust.V026",
+                    id="djust.V027",
                     fix_hint=(
                         "Rename `%s` on `%s` (for example `selected_%s`), or declare it "
                         "`state(..., render=False)`." % (name, label, name)

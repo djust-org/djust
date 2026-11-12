@@ -1266,7 +1266,7 @@ class ContextMixin:
                             result[key] = value
                             added.add(key)
                     # #4050: a declared field shadowing user/perms is legal
-                    # but flagged (DEBUG only; djust.V026 statically).
+                    # but flagged (DEBUG only; djust.V027 statically).
                     shadowed = AUTHORIZATION_CONTEXT_NAMES.intersection(supplied).intersection(
                         context
                     )

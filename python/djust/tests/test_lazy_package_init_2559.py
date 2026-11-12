@@ -133,11 +133,10 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.security.json_script",
         "djust.security.log_sanitizer",
         "djust.security.mount",
-        "djust.security.state_snapshot",
         "djust.template_filters",
     }
 )
-assert len(ALLOWLIST_SETUP) == 68 + HAS_CSP_NONCE_TAG
+assert len(ALLOWLIST_SETUP) == 67 + HAS_CSP_NONCE_TAG
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).

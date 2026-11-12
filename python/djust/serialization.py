@@ -1078,9 +1078,8 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
 #
 # * **Not the raw ``Decimal``.** Django's session serializer is
 #   ``json.dumps(obj, separators=(",", ":"))`` with NO encoder — see
-#   ``django/core/signing.py``'s ``JSONSerializer`` — and the signed snapshot
-#   is a bare ``json.dumps`` too (``runtime.py``'s ``state_snapshot_signed``
-#   emit). Both raise ``TypeError``.
+#   ``django/core/signing.py``'s ``JSONSerializer``, which raises
+#   ``TypeError``.
 # * **Not the exact string.** A string restored into view state is a string in
 #   the template, where ``{{ p|floatformat }}`` stops rounding and
 #   ``{% if p > 10 %}`` compares lexically — the #2214 regression, one hop

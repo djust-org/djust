@@ -296,12 +296,86 @@ def instance_assigned_component_error(view: Any) -> Optional[ExposureConfigurati
             continue
         if issubclass(type(value), kinds):
             label = repr(name) if name.isidentifier() else "a public attribute"
+            if issubclass(type(value), Component):
+                # A plain component in the class body is one shared object
+                # (#4045), so the class body is not the answer for this kind.
+                return ExposureConfigurationError(
+                    f"Component {label} is assigned on the view instance. Explicit views "
+                    "do not render a component assigned in mount() or a handler. "
+                    + _plain_component_remedy(name, value)
+                )
             return ExposureConfigurationError(
                 f"Component {label} is assigned on the view instance. Explicit views "
                 "render only components declared at class level: declare it in the "
-                "class body instead of assigning it in mount() or a handler."
+                "class body instead of assigning it in mount() or a handler; each view "
+                "gets its own copy."
             )
     return None
+
+
+def _plain_component_remedy(name: str, value: Any) -> str:
+    """The working forms for a plain ``Component`` on an explicit view (#4045).
+
+    Names the attribute and the component's class, never a value.
+    """
+    attr = name if name.isidentifier() else "badge"
+    kind = type(value).__name__
+    # A declared state() field renders by default (#4050), so the field
+    # form needs no get_context_data() hand-over.
+    return (
+        "Keep a plain component per view: declare it as a field, "
+        f"`{attr} = state(default_factory=lambda: {kind}(...))`, which renders, "
+        "or build it in get_context_data()."
+    )
+
+
+def class_level_plain_components(view_class: type) -> list[str]:
+    """Names of plain ``Component`` instances in the class bodies of ``view_class``.
+
+    Walks the MRO's class dictionaries (a mixin's body counts; a name a
+    subclass redefines is the subclass's). Only class dictionaries are read:
+    no descriptor or property is evaluated. ``LiveComponent`` declarations are
+    not reported; their descriptor binds a copy per view.
+    """
+    from .components.base import Component
+
+    seen: set[str] = set()
+    found: list[str] = []
+    for owner in view_class.__mro__:
+        for name, value in namespace(owner).items():
+            if type(name) is not str or name in seen:
+                continue
+            seen.add(name)
+            if issubclass(type(value), Component):
+                found.append(name)
+    return found
+
+
+def class_level_plain_component_error(view: Any) -> Optional[ExposureConfigurationError]:
+    """#4045: refuse a plain ``Component`` instance in an explicit view's class body.
+
+    ``view`` is a view class (at class creation) or a view instance (on the
+    mount path, which also sees a component assigned to the class after it was
+    created and a policy changed since). A plain component has no descriptor,
+    so ``self.<name>`` is the one class attribute shared by every session of
+    the worker: a handler's write to it reaches every user once it is rendered.
+    Legacy views are reported by the ``djust.V026`` system check instead.
+    """
+    if uses_legacy_exposure(view):
+        return None
+    view_class = view if isinstance(view, type) else type(view)
+    names = class_level_plain_components(view_class)
+    if not names:
+        return None
+    name = names[0]
+    value = next(namespace(owner)[name] for owner in view_class.__mro__ if name in owner.__dict__)
+    label = repr(name) if name.isidentifier() else "a class attribute"
+    return ExposureConfigurationError(
+        f"{view_class.__module__}.{view_class.__qualname__} declares the plain component "
+        f"{label} in its class body. A component there is one object shared by every "
+        "session: a handler's write to it reaches every user. "
+        + _plain_component_remedy(name, value)
+    )
 
 
 def _action_name(value: Any) -> Optional[str]:

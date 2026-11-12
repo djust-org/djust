@@ -548,92 +548,37 @@ async def test_a_session_restore_mount_replays_presence_inside_the_wrapper(probe
     assert SEEN["restore_presence"] == ["hook"], SEEN
 
 
-def _restore_harness(monkeypatch):
-    """The 1913 runtime-mount harness with the view's snapshot hooks recording."""
-    from djust.tests import test_runtime_mount_state_restore_1913 as harness
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_the_client_snapshot_restore_gate_runs_inside_the_wrapper(probe, monkeypatch):
+    """``_should_restore_snapshot`` is a documented subclass override that may read
+    rows; the mount asks it before restoring the signed ``persist="client"`` fields."""
+    from djust.tests import test_stale_baseline_restore_1977 as harness
 
-    view_cls = harness._OptInSnapView
-    original_restore = view_cls._restore_snapshot
+    view_cls = harness._ClientFilterView
     original_gate = view_cls._should_restore_snapshot
-    original_capture = view_cls._capture_snapshot_state
-
-    def _restore_snapshot(self, state):
-        note("restore_snapshot")
-        if MODE.get("restore_snapshot-raises"):
-            raise RuntimeError("the application override failed")
-        return original_restore(self, state)
 
     def _should_restore_snapshot(self, request):
         note("should_restore")
         return original_gate(self, request)
 
-    def _capture_snapshot_state(self, *, strict=False):
-        note("capture_snapshot")
-        return original_capture(self, strict=strict)
-
-    monkeypatch.setattr(view_cls, "_restore_snapshot", _restore_snapshot)
     monkeypatch.setattr(view_cls, "_should_restore_snapshot", _should_restore_snapshot)
-    monkeypatch.setattr(view_cls, "_capture_snapshot_state", _capture_snapshot_state)
-    return harness
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_the_snapshot_restore_and_capture_overrides_run_inside_the_wrapper(
-    probe, monkeypatch
-):
-    """``_should_restore_snapshot``, ``_restore_snapshot`` and ``_capture_snapshot_state``
-    are documented subclass overrides that may read rows."""
-    harness = _restore_harness(monkeypatch)
     session = await sync_to_async(harness._make_db_session)()
-    runtime, transport = harness._make_runtime(harness._make_request(session))
-    snap = harness._signed_snapshot(
-        {"role": "admin", "n": 7}, slug=harness.VIEW_PATH, session_key=session.session_key
-    )
+    first, first_transport = harness._make_runtime(harness._make_request(session))
+    mount = {"type": "mount", "view": harness.CLIENT_VIEW_PATH, "url": harness.PAGE_URL}
+    await harness._mount(first, mount)
+    token = first_transport.mount_frame[harness.TOKEN]
+    assert token and "should_restore" not in SEEN, SEEN
 
-    await harness._mount(
-        runtime,
-        {
-            "type": "mount",
-            "view": harness.VIEW_PATH,
-            "url": harness.PAGE_URL,
-            "state_snapshot": snap,
-        },
-    )
-
-    assert runtime.view_instance._mounted_from_restore is True
-    assert set(SEEN["should_restore"]) == {"lifecycle"}, SEEN
-    assert set(SEEN["restore_snapshot"]) == {"lifecycle"}, SEEN
-    assert SEEN["capture_snapshot"] and set(SEEN["capture_snapshot"]) == {"lifecycle"}, SEEN
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_a_wrapper_that_swallows_a_failing_restore_override_falls_back_to_mount(
-    probe, monkeypatch
-):
-    harness = _restore_harness(monkeypatch)
-    MODE["lifecycle"] = "swallow"
-    MODE["restore_snapshot-raises"] = "1"
-    session = await sync_to_async(harness._make_db_session)()
+    monkeypatch.setattr(view_cls, "mount", lambda self, request, **kwargs: None)
     runtime, _transport = harness._make_runtime(harness._make_request(session))
-    snap = harness._signed_snapshot(
-        {"role": "admin", "n": 7}, slug=harness.VIEW_PATH, session_key=session.session_key
-    )
-
     await harness._mount(
         runtime,
-        {
-            "type": "mount",
-            "view": harness.VIEW_PATH,
-            "url": harness.PAGE_URL,
-            "state_snapshot": snap,
-        },
+        {**mount, "state_snapshot": {"view_slug": harness.CLIENT_VIEW_PATH, "state_json": token}},
     )
 
-    view = runtime.view_instance
-    assert view._mounted_from_restore is False, "a swallowed failure is not a restore"
-    assert view.role == "user", "the view mounted fresh instead of keeping half a restore"
+    assert runtime.view_instance.n == 5, "the token restored the declared field"
+    assert set(SEEN["should_restore"]) == {"lifecycle"}, SEEN
 
 
 def test_the_scoped_presence_probe_runs_inside_the_wrapper(probe):

@@ -487,15 +487,13 @@ class TestWebSocketMountSequence:
         )
         await communicator.disconnect()
 
-    async def test_state_snapshot_restore_mount_still_works(self):
-        """A signed state_snapshot restore still mounts (the snapshot-restore
-        mechanic is WS-only and untouched by #1853)."""
+    async def test_a_mount_carrying_a_state_snapshot_still_mounts(self):
+        """A mount that echoes a ``state_snapshot`` the server does not accept
+        (this legacy view holds no declared client state) still passes the
+        pre-mount sequence and mounts fresh."""
         from channels.testing import WebsocketCommunicator
 
-        from djust.security import sign_snapshot
         from djust.websocket import LiveViewConsumer
-
-        import json
 
         app = _authed_middleware(LiveViewConsumer.as_asgi())
         communicator = WebsocketCommunicator(app, "/ws/")
@@ -503,7 +501,7 @@ class TestWebSocketMountSequence:
         assert connected
         await _drain_handshake(communicator)
 
-        signed = sign_snapshot(json.dumps({"count": 99}), _PUBLIC_PATH, None)
+        signed = "not-a-token-this-server-signed"
         await communicator.send_json_to(
             {
                 "type": "mount",

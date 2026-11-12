@@ -60,7 +60,7 @@ the later one winning:
 A declared field shadows a context-processor value of the same name, as a
 `get_context_data()` key does (`messages = state(default_factory=list)` is
 fine). `user` and `perms` are flagged, because templates use them for
-authorization: system check `djust.V026` and, with `DEBUG = True`, a warning
+authorization: system check `djust.V027` and, with `DEBUG = True`, a warning
 on the `djust.exposure` logger.
 
 A name a framework provider owns (`online_count` on a `PresenceMixin` view, a
@@ -115,7 +115,10 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   queued behind other sessions' work. System check `djust.C024` validates it.
 - **`DJUST_STATE_SNAPSHOT_MAX_AGE` / `DJUST_STATE_SNAPSHOT_ENABLED`.** The
   signed back-navigation snapshot's lifetime, and its master switch. The
-  service worker also expires stored snapshots after this age.
+  lifetime is a whole number of seconds from 1 to 86400, 3600 by default; a
+  larger value is capped at 86400 and anything else falls back to 3600, with
+  a warning in the log. The service worker expires stored snapshots after the
+  same age.
 - **Schema changes.** Set `exposure_schema_version = 2` on the view when you
   change its declared fields. Older envelopes are then rejected and the view
   mounts fresh. Define `migrate_state(self, old_version, values)` to translate
@@ -221,9 +224,34 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   name. The raw client file name and the writer's result are not included.
   Uploads in flight are not resumed after a reconnect; the client registers
   them again.
-- **Components.** Declare components at class level (`nav = Tabs(...)`). Each
-  view gets its own instance. Component state is transient: a reconnect
-  mounts it fresh.
+- **Components.** Declare a `LiveComponent` at class level (`nav = Tabs(...)`).
+  Each view gets its own copy, and its events reach it by `component_id`. A
+  State-less `LiveComponent` (no `State` class) that a handler changes in place
+  must call `self.trigger_update()` for the change to render. Do not hold a
+  `LiveComponent` in a `state()` field or in an unregistered private attribute: its events
+  then fail with "Component not found". Component state is transient: a
+  reconnect mounts it fresh.
+- **Plain components** (`Component` subclasses such as `Badge` or `Rating`) are
+  refused in the class body: a plain component has no descriptor, so a class
+  body one is a single object shared by every session, and a handler's write to
+  it would reach every user. Declare it as a field, which renders it, or build
+  it in `get_context_data()`:
+
+  ```python
+  from djust import LiveView
+  from djust.components.components import Badge
+  from djust.decorators import state
+
+
+  class ProfileView(LiveView):
+      template = "<div dj-root>{{ badge }}</div>"
+      badge = state(default_factory=lambda: Badge("new"))  # one per view
+  ```
+
+  Keep such a field transient: `persist=` on a component field fails on the
+  first event, because a component is not session data. To keep what it shows
+  across a reconnect, persist the values instead and build the component from
+  them in `get_context_data()`.
 - **Embedded children.** Sticky explicit children persist their declared
   fields. Non-sticky explicit children are transient and may not declare
   persisted fields.
@@ -242,8 +270,11 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   history.
 
 - **`lazy=True` children.** Refused, with a template error.
-- **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare them
-  at class level.
+- **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare a
+  `LiveComponent` at class level; hold a plain component as shown under
+  Components above.
+- **A plain component in the class body** (`badge = Badge(...)`). Refused when
+  the class is created; see Components above.
 - **`{% dj_activity %}`, `{% colocated_hook %}`, `{% live_form %}`,
   `{% live_field %}` and `{% live_errors %}` in a root template.** The Rust
   renderer has no handler for these tags under either policy; they work only in

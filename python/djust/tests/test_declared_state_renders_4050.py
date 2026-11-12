@@ -615,7 +615,7 @@ def test_an_unprinted_declared_field_is_render_context_but_not_client_state():
 
 
 # ------------------------------------------------------------------ #
-# user / perms: djust.V026 and the DEBUG shadow warning
+# user / perms: djust.V027 and the DEBUG shadow warning
 # ------------------------------------------------------------------ #
 
 
@@ -652,27 +652,27 @@ class DeclaresPerms(DeclaresUser):
     perms = state(None)
 
 
-def _v026(view_class):
+def _v027(view_class):
     from djust.checks.components import check_declared_authorization_names
 
     label = "%s.%s " % (view_class.__module__, view_class.__qualname__)
     return [m for m in check_declared_authorization_names(None) if m.msg.startswith(label)]
 
 
-def test_v026_flags_a_declared_user_or_perms_field():
-    (message,) = _v026(DeclaresUser)
-    assert message.id == "djust.V026" and "'user'" in message.msg
+def test_v027_flags_a_declared_user_or_perms_field():
+    (message,) = _v027(DeclaresUser)
+    assert message.id == "djust.V027" and "'user'" in message.msg
     assert "selected_user" in message.hint and "render=False" in message.fix_hint
     # The inherited user is reported once, on the class that declares it.
-    assert [m.msg.split("'")[1] for m in _v026(DeclaresPerms)] == ["perms"]
+    assert [m.msg.split("'")[1] for m in _v027(DeclaresPerms)] == ["perms"]
 
 
-def test_v026_is_quiet_for_messages_render_false_and_legacy_views(settings):
-    assert _v026(DeclaresMessages) == []
-    assert _v026(DeclaresUserHidden) == []
-    assert _v026(LegacyDeclaresUser) == []
-    settings.DJUST_CONFIG = {"suppress_checks": ["V026"]}
-    assert _v026(DeclaresUser) == []
+def test_v027_is_quiet_for_messages_render_false_and_legacy_views(settings):
+    assert _v027(DeclaresMessages) == []
+    assert _v027(DeclaresUserHidden) == []
+    assert _v027(LegacyDeclaresUser) == []
+    settings.DJUST_CONFIG = {"suppress_checks": ["V027"]}
+    assert _v027(DeclaresUser) == []
 
 
 def _apply_processors(view_class, supplied):
@@ -711,7 +711,7 @@ def test_debug_warns_once_when_a_declared_field_shadows_user(caplog, fresh_shado
         _apply_processors(DeclaresUser, supplied)
         _apply_processors(DeclaresMessages, supplied)
     (message,) = _shadow_records(caplog)
-    assert "DeclaresUser" in message and "user" in message and "V026" in message
+    assert "DeclaresUser" in message and "user" in message and "V027" in message
     assert "SENTINEL" not in message and "SELECTED_USER" not in message
 
 

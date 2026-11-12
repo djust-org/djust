@@ -722,11 +722,6 @@ class TestRestoredEarlierStateIsCleaned:
         assert_not_carried(view, client)
         assert json.dumps(view._capture_snapshot_state(), default=str).count(STORED) == 0
 
-    def test_the_signed_snapshot_restore_goes_through_the_same_place(self):
-        client, view = mount_edit(make_user())
-        view._restore_snapshot(self.prefix_state(view))
-        assert_not_carried(view, client)
-
     def test_the_admin_view_scrubs_it_too(self):
         from djust._state_restore import restore_public_state
 
@@ -806,7 +801,6 @@ class TestRestoredEarlierStateIsCleaned:
         )
         assert found == [
             "_lazy_containers.py",
-            "live_view.py",
             "mixins/request.py",
             "mixins/sticky.py",
             "runtime.py",

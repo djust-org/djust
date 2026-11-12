@@ -25,14 +25,8 @@ from .components.base import LiveComponent
 # islands importing it resolve against this stub.
 _FRAMEWORK_INTERNAL_ATTRS: frozenset[str]
 
-# Raised (DEBUG only) when a Django Model/QuerySet is found on public
-# LiveView state during client-signed persistence capture. Declared here
-# so strict islands importing it (e.g. runtime.py) resolve against this
-# stub instead of getting an attr-defined error.
-class NonPersistableStateError(TypeError): ...
-
-# Shared ``__components__`` snapshot dispatch (#2896), used by
-# ``LiveView._restore_snapshot`` and ``time_travel.restore_snapshot``.
+# ``__components__`` snapshot dispatch (#2896), used by
+# ``time_travel.restore_snapshot``.
 def restore_components_snapshot(view: Any, components_state: Any, *, source: str) -> bool: ...
 
 # ``{public_name: (kind, slot_name)}`` for a view class's descriptor-backed
