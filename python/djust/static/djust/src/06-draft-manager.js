@@ -1,5 +1,30 @@
 
 // DraftManager for localStorage-based draft saving
+
+// Drafts saved before #3978 flattened a radio group to the LAST radio's value
+// (checked or not) and a checkbox group to one box's boolean, so those entries
+// do not say what was chosen. A draft without this format number drops them on
+// load; its other fields still restore.
+const DRAFT_FORMAT = 2;
+
+function _withoutLegacyGroups(data) {
+    if (!data || typeof data !== 'object') return data;
+    const kept = {};
+    const boxes = new Map();
+    const radios = new Set();
+    document.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(f => {
+        if (!f.name) return;
+        if (f.type === 'radio') radios.add(f.name);
+        else boxes.set(f.name, (boxes.get(f.name) || 0) + 1);
+    });
+    Object.keys(data).forEach(name => {
+        if (UNSAFE_KEYS.includes(name) || radios.has(name) || boxes.get(name) > 1) return;
+        // eslint-disable-next-line security/detect-object-injection
+        kept[name] = data[name];
+    });
+    return kept;
+}
+
 class DraftManager {
     constructor() {
         this.saveTimers = new Map();
@@ -21,7 +46,8 @@ class DraftManager {
             try {
                 const draftData = {
                     data,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    format: DRAFT_FORMAT
                 };
                 localStorage.setItem(`djust_draft_${draftKey}`, JSON.stringify(draftData));
 
@@ -51,6 +77,7 @@ class DraftManager {
                 djLog(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
             }
 
+            if (draftData.format !== DRAFT_FORMAT) return _withoutLegacyGroups(draftData.data);
             return draftData.data;
         } catch (error) {
             console.error(`[DraftMode] Failed to load draft ${draftKey}:`, error);

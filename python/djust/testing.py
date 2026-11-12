@@ -147,10 +147,11 @@ def _mount_and_apply_params(
     from .auth.core import enforce_object_permission
     from .mixins.request import _run_http_handle_params
 
-    if route_kwargs is not None:
-        bind_route = getattr(view, "_djust_bind_route_kwargs", None)
-        if callable(bind_route):
-            bind_route(route_kwargs)
+    # Always bound, as the transports bind it: ``None`` (no route given) leaves the view's
+    # route kwargs empty, so a lookup from the route fails closed.
+    bind_route = getattr(view, "_djust_bind_route_kwargs", None)
+    if callable(bind_route):
+        bind_route(route_kwargs)
     call_hook_sync(view.mount, request, **mount_kwargs)
     _run_http_handle_params(view, request)
     enforce_object_permission(view, request)

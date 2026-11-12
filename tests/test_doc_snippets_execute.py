@@ -55,6 +55,7 @@ import types
 from dataclasses import dataclass, field
 
 import pytest
+from django.core.exceptions import PermissionDenied
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 _CHECKER = REPO_ROOT / "scripts" / "check-doc-snippets.py"
@@ -96,7 +97,7 @@ _NO_ATTR_RE = re.compile(r"'(\w+)' object has no attribute '(\w+)'")
 _NETWORK_RE = re.compile(
     r"ConnectError|ConnectionError|nodename nor servname|Name or service not known|Errno 8\b"
 )
-_DENIED_RE = re.compile(r"^(?:PermissionDenied: )?(Permission denied|Access denied)")
+_DENIED_RE = re.compile(r"^(Permission denied|Access denied)")
 _TEMPLATE_MISSING_RE = re.compile(
     r"TemplateDoesNotExist|Template not found|template.*(?:not found|does not exist)",
     re.IGNORECASE,
@@ -573,6 +574,18 @@ def _run_view(
             raise _Skip("mount() requires URL kwargs", f"{name}: {_exc_text(exc)}") from exc
         raise _Fail("mount raised", f"{name}: {_exc_text(exc)}") from exc
     except Exception as exc:  # noqa: BLE001
+        # The object check fails closed: an exception in ``get_object()`` /
+        # ``has_object_permission()`` arrives as ``PermissionDenied`` raised from
+        # it (#3977). Judge the block by that underlying exception, so a real
+        # defect behind the denial still fails; a denial with no cause is the
+        # block's own verdict for the signed-in test user.
+        if isinstance(exc, PermissionDenied):
+            cause = exc.__cause__
+            if cause is None:
+                raise _Skip(
+                    "authorization-gated; the test user is denied", f"{name}: {_exc_text(exc)}"
+                ) from exc
+            exc = cause
         kind = _non_defect(_exc_text(exc), block_classes)
         if kind:
             raise _Skip(kind[0], f"{kind[1]}: {name}.mount: {_exc_text(exc)}") from exc

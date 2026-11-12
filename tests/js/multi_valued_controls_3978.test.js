@@ -28,7 +28,7 @@ const GROUP = `
     <input type="text" name="title" data-draft="true">
 `;
 
-function draftPage(saved) {
+function draftPage(saved, format = 2) {
     const dom = new JSDOM(
         `<!DOCTYPE html><html><body><div dj-view="app.Page">
             <form data-draft-enabled data-draft-key="k">${GROUP}</form>
@@ -36,7 +36,7 @@ function draftPage(saved) {
         { runScripts: 'dangerously', url: 'http://localhost/' });
     const win = dom.window;
     if (saved !== undefined) {
-        win.localStorage.setItem('djust_draft_k', JSON.stringify({ data: saved, timestamp: Date.now() }));
+        win.localStorage.setItem('djust_draft_k', JSON.stringify({ data: saved, timestamp: Date.now(), format }));
     }
     win.eval(`
         window.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} };
@@ -87,9 +87,21 @@ describe('draft manager keeps a group as a list (#3978)', () => {
         expect($('input[name="title"]').value).toBe('T');
     });
 
-    it('a group saved as a boolean before #3978 still restores', () => {
-        const { $$ } = draftPage({ tags: true });
-        expect(checked($$('input[name="tags"]'))).toEqual(['a', 'b', 'c']);
+    it('a draft saved before #3978 drops its group and radio entries, keeps the rest', () => {
+        // The old format stored the LAST radio's value whether checked or not, and one box's
+        // boolean for a whole group: restoring either would pick the wrong choice.
+        const { $, $$ } = draftPage({ tags: true, size: 'm', title: 'Old', agree: true }, null);
+        expect(checked($$('input[name="tags"]'))).toEqual([]);
+        expect(checked($$('input[name="size"]'))).toEqual([]);
+        expect($('input[name="title"]').value).toBe('Old');
+        expect($('input[name="agree"]').checked).toBe(true); // a lone checkbox was never flattened
+    });
+
+    it('a new save writes the current format', async () => {
+        const { win, $$ } = draftPage();
+        toggle(win, $$('input[name="tags"]')[1], true);
+        await flush();
+        expect(JSON.parse(win.localStorage.getItem('djust_draft_k')).format).toBe(2);
     });
 
     it('an empty group is saved as an empty list', async () => {

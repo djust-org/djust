@@ -1,5 +1,16 @@
 
 /**
+ * A password field (or one the page marks as holding a password) is never
+ * read into a draft, an auto-recover envelope or `_collectFormData`, and never
+ * written back from one.
+ */
+function _isSecretControl(field) {
+    if (field.type === 'password') return true;
+    const autocomplete = (field.getAttribute('autocomplete') || '').toLowerCase();
+    return /(^|\s)(new|current)-password(\s|$)/.test(autocomplete);
+}
+
+/**
  * The values of the named form controls in `fields`, keyed by name (#3978).
  *
  * A control that shares its name with others is one value, as the browser
@@ -15,6 +26,7 @@
 function _readControls(fields) {
     const data = {};
     const checkboxCount = new Map();
+    fields = fields.filter(field => !_isSecretControl(field));
     fields.forEach(field => {
         if (field.type === 'checkbox' && field.name) {
             checkboxCount.set(field.name, (checkboxCount.get(field.name) || 0) + 1);
@@ -55,6 +67,7 @@ function _readControls(fields) {
  * radio is checked when its value is the saved one.
  */
 function _writeControl(field, value) {
+    if (_isSecretControl(field)) return;
     if (field.type === 'checkbox') {
         field.checked = Array.isArray(value) ? value.includes(field.value) : !!value;
     } else if (field.type === 'radio') {

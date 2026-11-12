@@ -228,7 +228,7 @@ class WizardMixin:
         self.wizard_step_data: dict[str, dict[str, Any]] = {}
         self.wizard_step_errors: dict[str, dict[str, list]] = {}
         self.wizard_completed_steps: list[int] = []
-        self.resume_wizard()
+        self._resume_wizard()
 
     # ------------------------------------------------------------------
     # Resuming stored progress (#3965)
@@ -274,7 +274,17 @@ class WizardMixin:
         ``mount()``, once the steps are known. Call it from ``mount()`` only: it
         replaces the answers and the current step, so calling it later throws
         away what the person has entered.
+
+        Never a client event, in any ``event_security`` mode: it is public and
+        undecorated, so under ``"warn"`` / ``"open"`` a browser could otherwise
+        call it to reset the wizard (``websocket_utils._check_event_security``).
         """
+        self._resume_wizard()
+
+    resume_wizard._djust_server_only = True  # type: ignore[attr-defined]
+
+    def _resume_wizard(self) -> None:
+        """The implementation of :meth:`resume_wizard` (what ``mount()`` calls)."""
         steps = self._steps
         if not steps:
             return

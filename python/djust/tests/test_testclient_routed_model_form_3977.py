@@ -88,6 +88,7 @@ def test_a_mount_kwarg_is_not_the_route():
     with pytest.raises(PermissionDenied):
         client.mount(pk=mine.pk)
     assert not client._mounted
+    assert client.view_instance.kwargs == {}  # bound empty, as the transports bind it
 
 
 def test_a_record_the_user_may_not_see_is_denied():

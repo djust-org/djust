@@ -4345,6 +4345,31 @@ function flushHandlerRateLimit(debounceOnly = false) {
 window.djust.flushHandlerRateLimit = flushHandlerRateLimit;
 
 // DraftManager for localStorage-based draft saving
+
+// Drafts saved before #3978 flattened a radio group to the LAST radio's value
+// (checked or not) and a checkbox group to one box's boolean, so those entries
+// do not say what was chosen. A draft without this format number drops them on
+// load; its other fields still restore.
+const DRAFT_FORMAT = 2;
+
+function _withoutLegacyGroups(data) {
+    if (!data || typeof data !== 'object') return data;
+    const kept = {};
+    const boxes = new Map();
+    const radios = new Set();
+    document.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(f => {
+        if (!f.name) return;
+        if (f.type === 'radio') radios.add(f.name);
+        else boxes.set(f.name, (boxes.get(f.name) || 0) + 1);
+    });
+    Object.keys(data).forEach(name => {
+        if (UNSAFE_KEYS.includes(name) || radios.has(name) || boxes.get(name) > 1) return;
+        // eslint-disable-next-line security/detect-object-injection
+        kept[name] = data[name];
+    });
+    return kept;
+}
+
 class DraftManager {
     constructor() {
         this.saveTimers = new Map();
@@ -4366,7 +4391,8 @@ class DraftManager {
             try {
                 const draftData = {
                     data,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    format: DRAFT_FORMAT
                 };
                 localStorage.setItem(`djust_draft_${draftKey}`, JSON.stringify(draftData));
 
@@ -4396,6 +4422,7 @@ class DraftManager {
                 djLog(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
             }
 
+            if (draftData.format !== DRAFT_FORMAT) return _withoutLegacyGroups(draftData.data);
             return draftData.data;
         } catch (error) {
             console.error(`[DraftMode] Failed to load draft ${draftKey}:`, error);
@@ -4658,6 +4685,17 @@ if (typeof window !== 'undefined') {
 }
 
 /**
+ * A password field (or one the page marks as holding a password) is never
+ * read into a draft, an auto-recover envelope or `_collectFormData`, and never
+ * written back from one.
+ */
+function _isSecretControl(field) {
+    if (field.type === 'password') return true;
+    const autocomplete = (field.getAttribute('autocomplete') || '').toLowerCase();
+    return /(^|\s)(new|current)-password(\s|$)/.test(autocomplete);
+}
+
+/**
  * The values of the named form controls in `fields`, keyed by name (#3978).
  *
  * A control that shares its name with others is one value, as the browser
@@ -4673,6 +4711,7 @@ if (typeof window !== 'undefined') {
 function _readControls(fields) {
     const data = {};
     const checkboxCount = new Map();
+    fields = fields.filter(field => !_isSecretControl(field));
     fields.forEach(field => {
         if (field.type === 'checkbox' && field.name) {
             checkboxCount.set(field.name, (checkboxCount.get(field.name) || 0) + 1);
@@ -4713,6 +4752,7 @@ function _readControls(fields) {
  * radio is checked when its value is the saved one.
  */
 function _writeControl(field, value) {
+    if (_isSecretControl(field)) return;
     if (field.type === 'checkbox') {
         field.checked = Array.isArray(value) ? value.includes(field.value) : !!value;
     } else if (field.type === 'radio') {
