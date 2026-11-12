@@ -23,6 +23,8 @@ from djust import LiveView
 from djust.decorators import event_handler
 from djust import push as _push
 from djust.push import _server_push_message, apush_to_view, origin_channel
+from djust import state
+from djust.tests._live_session import with_live_session
 
 pytest.importorskip("channels")
 
@@ -87,7 +89,8 @@ async def test_a_task_that_sets_its_own_tag_after_the_turn_keeps_it():
 
 
 class _PumpView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    news = state("none")
     template = (
         '<div dj-root dj-view="djust.tests.test_push_origin_turn_scoped._PumpView">'
         "<i>{{ news }}</i></div>"
@@ -131,7 +134,7 @@ async def test_the_originating_socket_receives_a_later_push_from_work_it_started
     STATE["gate"] = asyncio.Event()
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
         comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-        connected, _ = await comm.connect()
+        connected, _ = await with_live_session(comm).connect()
         assert connected
         try:
             await comm.receive_json_from()

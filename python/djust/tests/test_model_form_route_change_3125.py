@@ -16,6 +16,7 @@ from asgiref.sync import sync_to_async
 from django.contrib.auth.models import Group
 
 from djust.tests import test_model_form_acceptance_adr035 as acc
+from djust.tests._live_session import live_session
 from djust.tests._ws_frames import has_type, receive_until
 
 
@@ -46,7 +47,9 @@ def _two_of_mine():
 @pytest.mark.django_db(transaction=True)
 async def test_url_change_to_another_record_redirects_instead_of_rendering_the_old_one():
     user, mine, other, _ = await sync_to_async(_two_of_mine)()
-    session = await sync_to_async(acc._session)()
+    session = await sync_to_async(live_session)(
+        user
+    )  # logged in: explicit re-reads the user each turn
     with acc._allow():
         socket = await acc._connect(user, session)
         try:
@@ -76,7 +79,9 @@ async def test_url_change_to_another_record_redirects_instead_of_rendering_the_o
 async def test_url_change_to_a_forbidden_record_is_denied_by_the_remount():
     """Authorization follows the URL: the redirect's mount checks the new record."""
     user, mine, _, theirs = await sync_to_async(_two_of_mine)()
-    session = await sync_to_async(acc._session)()
+    session = await sync_to_async(live_session)(
+        user
+    )  # logged in: explicit re-reads the user each turn
     with acc._allow():
         socket = await acc._connect(user, session)
         try:
@@ -97,7 +102,9 @@ async def test_url_change_to_a_forbidden_record_is_denied_by_the_remount():
 @pytest.mark.django_db(transaction=True)
 async def test_url_change_on_the_same_record_still_patches():
     user, mine, _, _ = await sync_to_async(_two_of_mine)()
-    session = await sync_to_async(acc._session)()
+    session = await sync_to_async(live_session)(
+        user
+    )  # logged in: explicit re-reads the user each turn
     with acc._allow():
         socket = await acc._connect(user, session)
         try:
@@ -150,7 +157,9 @@ async def test_the_redirect_never_echoes_a_scheme_or_host(uri):
     from urllib.parse import urlsplit
 
     user, mine, other, _ = await sync_to_async(_two_of_mine)()
-    session = await sync_to_async(acc._session)()
+    session = await sync_to_async(live_session)(
+        user
+    )  # logged in: explicit re-reads the user each turn
     with acc._allow():
         socket = await acc._connect(user, session)
         try:

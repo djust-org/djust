@@ -32,6 +32,7 @@ from djust import LiveView, _form_data_bounds
 from djust.config import config as djust_config
 from djust.forms import FormMixin
 from djust.wizard import WizardMixin
+from djust.tests._live_session import with_live_session
 
 pytestmark = [pytest.mark.django_db, pytest.mark.pr_tier]
 
@@ -59,7 +60,7 @@ class Contact(forms.Form):
 
 
 class WsContact(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = Contact
     last = None
     template = (
@@ -82,7 +83,7 @@ async def _session(events: List[Dict[str, Any]], max_message_size: int = 65536) 
     from djust.websocket import LiveViewConsumer
 
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    connected, _ = await comm.connect()
+    connected, _ = await with_live_session(comm).connect()
     assert connected
     await comm.receive_json_from()
     answers: List[Any] = []
@@ -343,7 +344,7 @@ class TwoStep(forms.Form):
 
 
 class Wizard(WizardMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     wizard_steps = [{"name": "one", "title": "One", "form_class": TwoStep}]
     template = "<div dj-root></div>"
 
@@ -563,7 +564,7 @@ Big = type("Big", (forms.Form,), {"f%d" % i: forms.CharField(required=False) for
 
 
 class BigView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = Big
     template = "<div dj-root></div>"
 
@@ -630,7 +631,7 @@ Wide = type("Wide", (forms.Form,), {"w%d" % i: forms.CharField(required=False) f
 
 
 class WideWizard(WizardMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     wizard_steps = [{"name": "one", "title": "One", "form_class": Wide}]
     template = "<div dj-root></div>"
 

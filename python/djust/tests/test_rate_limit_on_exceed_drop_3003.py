@@ -18,13 +18,16 @@ from djust.config import config
 from djust.decorators import event_handler, rate_limit
 from djust.rate_limit import reset_handler_buckets
 from djust.tests._ws_frames import receive_until
+from djust import state
+from djust.tests._live_session import with_live_session
 
 #: Handler runs, by name: a dropped event must not reach the handler.
 RAN: list = []
 
 
 class _EmoteView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(0)
     template = '<div dj-root dj-view="{}" dj-id="0">n={{{{ n }}}}</div>'.format(
         "djust.tests.test_rate_limit_on_exceed_drop_3003._EmoteView"
     )
@@ -68,7 +71,7 @@ async def _connect():
     from djust.websocket import LiveViewConsumer
 
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    connected, _ = await comm.connect()
+    connected, _ = await with_live_session(comm).connect()
     assert connected
     await comm.receive_json_from()  # connect ack
     await comm.send_json_to({"type": "mount", "view": _VIEW})

@@ -48,6 +48,8 @@ from djust import LiveView
 from djust.runtime import ViewRuntime, WSConsumerTransport
 
 from ._ws_frames import drain_extra, has_type, receive_until
+from djust import state
+from djust.tests._live_session import with_live_session
 
 _ALLOWED = "djust.tests.test_runtime_mount_parity_1917"
 _ALLOWLIST = override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED])
@@ -62,7 +64,7 @@ class BootstrapView(LiveView):
     """Trivial view mounted via the bespoke path solely to obtain a live
     consumer; reset away before the runtime drive."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{_ALLOWED}.BootstrapView" dj-id="0">boot</div>'
 
     def mount(self, request, **kwargs):
@@ -73,7 +75,8 @@ class BootstrapView(LiveView):
 
 
 class PlainView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    c = state(0)
     template = f'<div dj-root dj-view="{_ALLOWED}.PlainView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -86,7 +89,8 @@ class PlainView(LiveView):
 class OptInSnapView(LiveView):
     """Opt-in snapshot view (Phase 3.1 state-restore parity)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(0)
     template = f'<div dj-root dj-view="{_ALLOWED}.OptInSnapView" dj-id="0">n={{{{ n }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -100,7 +104,7 @@ class LoginRequiredView(LiveView):
     """A view whose pre-mount auth returns a redirect URL (login-required shape)
     so the runtime emits a ``navigate`` frame + finalize_mount_auth gated close."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{_ALLOWED}.LoginRequiredView" dj-id="0">secret</div>'
 
     def mount(self, request, **kwargs):
@@ -140,7 +144,7 @@ async def _connect_and_bootstrap_consumer(url: str = "/parity-1917/"):
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     communicator.scope["session"] = _ScopeSession(session_key)
 
-    connected, _ = await communicator.connect()
+    connected, _ = await with_live_session(communicator).connect()
     assert connected, "WebsocketCommunicator must connect"
     await communicator.receive_json_from()  # drain connect frame
 

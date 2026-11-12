@@ -19,6 +19,7 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust._track_static import MAX_TRACKED_URLS, stale_static_urls
+from djust.tests._live_session import with_live_session
 
 _MOD = "djust.tests.test_track_static_stale_2966"
 OLD = "/static/js/app.0123456789ab.js"
@@ -121,7 +122,7 @@ class TestStaleStaticUrls:
 
 
 class Page2966(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{_MOD}.Page2966" dj-id="0">page</div>'
 
     #: The mount kwargs of the last mount (the SSE case checks the tracking
@@ -142,7 +143,7 @@ async def _mount_frame(extra):
     from djust.websocket import LiveViewConsumer
 
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    connected, _ = await communicator.connect()
+    connected, _ = await with_live_session(communicator).connect()
     assert connected
     try:
         await communicator.receive_json_from()

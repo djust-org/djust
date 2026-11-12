@@ -8,6 +8,7 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust.forms import FormMixin
+from djust.tests._live_session import with_live_session
 
 
 class ContactForm(forms.Form):
@@ -15,7 +16,7 @@ class ContactForm(forms.Form):
 
 
 class ContactView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = ContactForm
 
 
@@ -60,7 +61,7 @@ def test_initial_is_copied_and_used_by_form_and_reactive_state():
 
 def test_dynamic_form_class_does_not_require_class_attribute():
     class View(FormMixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def get_form_class(self):
             return ContactForm
@@ -194,7 +195,7 @@ async def test_public_hooks_and_prefix_through_websocket():
 
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=False):
         comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-        connected, _ = await comm.connect()
+        connected, _ = await with_live_session(comm).connect()
         assert connected
         try:
             await comm.receive_json_from()
