@@ -113,20 +113,27 @@ That's per-attribute and doesn't block the rest of the sync.
 
 ### Skip updates for unchanged attributes
 
-By default the chart refreshes after every server update, because a Chart.js
-plugin may depend on state outside its canvas. If all inputs are represented
-by the canvas attributes, you can opt into attribute-only updates:
+The chart redraws after a server update only when one of the canvas's
+attributes changed: the data, the options, the size, or anything else on the
+element. A server turn that leaves them unchanged costs the chart nothing.
+
+A Chart.js plugin may read state from outside the canvas, such as the theme.
+Represent it with `dj-chart-revision` and change the value whenever that state
+changes:
 
 ```html
-<canvas dj-hook="Chart" dj-chart-update="attributes"
+<canvas dj-hook="Chart"
         dj-chart-revision="{{ chart_revision }}"
         dj-hook-value-data='{{ chart_data_json }}'></canvas>
 ```
 
-Change `dj-chart-revision` whenever an external dependency such as the theme
-changes. All canvas attribute changes trigger an update, and
-`JS.ext.chart_update` can still explicitly redraw. Leave the opt-in off if
-plugin dependencies cannot be represented this way.
+If a plugin's inputs cannot be represented as an attribute, set
+`dj-chart-update="always"` to redraw after every server update, as djust 1.x
+did. `JS.ext.chart_update` still redraws explicitly either way.
+
+Until 2.0 the default was to redraw on every update and attribute-only updates
+were opted into with `dj-chart-update="attributes"`, which still works and is
+now the default ([#4004](https://github.com/djust-org/djust/issues/4004)).
 
 ### JS commands
 

@@ -668,6 +668,13 @@ state the old value.
   `djust.components` without stating the setting; set it to `False` once you
   know no page needs the file
   ([#4003](https://github.com/djust-org/djust/issues/4003)).
+- **The Chart.js adapter redraws only when the canvas's attributes change.**
+  `<canvas dj-hook="Chart">` used to call `chart.update()` after every server
+  update; it now does so only when one of the canvas's attributes changed. A
+  chart whose plugins read state from outside the canvas (the theme, a global)
+  either changes `dj-chart-revision` when that state changes, or sets
+  `dj-chart-update="always"` for the old behaviour
+  ([#4004](https://github.com/djust-org/djust/issues/4004)).
 
 ## 4. Still to be removed before the final release
 
