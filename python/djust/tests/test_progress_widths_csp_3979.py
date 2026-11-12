@@ -34,22 +34,30 @@ class TestThemeProgressWidthClass(ComponentTestCase):
     def test_the_fill_width_is_a_class_not_a_style(self):
         html = self.render_component("progress", value=25, max=100)
         assert "style=" not in html
-        assert "dj-progress-w-25" in html
+        assert "progress-w-25" in html
 
     def test_the_width_rounds_to_a_whole_percent_and_caps_at_100(self):
-        assert "dj-progress-w-33" in self.render_component("progress", value=1, max=3)
-        assert "dj-progress-w-100" in self.render_component("progress", value=7, max=5)
-        assert "dj-progress-w-0" in self.render_component("progress", value=0, max=5)
+        assert "progress-w-33" in self.render_component("progress", value=1, max=3)
+        assert "progress-w-100" in self.render_component("progress", value=7, max=5)
+        assert "progress-w-0" in self.render_component("progress", value=0, max=5)
 
     def test_an_indeterminate_bar_has_no_fill(self):
         html = self.render_component("progress", label="Loading")
-        assert "dj-progress-w-" not in html and "style=" not in html
+        assert "progress-w-" not in html and "style=" not in html
+
+
+def test_the_width_classes_take_the_theme_prefix_like_every_component_class():
+    from djust.theming.component_css_generator import generate_component_css
+
+    css = generate_component_css("dj-")
+    assert ".dj-progress-w-25 { width: 25%; }" in css
+    assert ".dj-progress-wrapper" in css and ".dj-dj-progress" not in css
 
 
 @pytest.mark.parametrize("percent", [0, 1, 50, 99, 100])
 def test_every_width_class_the_tag_emits_is_defined(percent):
     css = THEMING_CSS.read_text()
-    assert re.search(r"\.dj-progress-w-%d \{ width: %d%%; \}" % (percent, percent), css)
+    assert re.search(r"\.progress-w-%d \{ width: %d%%; \}" % (percent, percent), css)
 
 
 def test_the_bulk_progress_page_has_no_inline_style():
