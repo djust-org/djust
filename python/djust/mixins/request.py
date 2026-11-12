@@ -1881,6 +1881,8 @@ class RequestMixin:
             # (object permission, handler permission, rate limit, parameter
             # validation), so a refused request starts none of it.
             mount_work_pending = False
+            # Whether an explicit view's declared state was put back (#3989).
+            explicit_restored = False
             # One budget for every wait on background work in this request
             # (#3634); ``None`` unless ``http_fallback_background_timeout`` is set.
             bg_budget = _http_background_budget()
@@ -1895,6 +1897,7 @@ class RequestMixin:
                 if restored is not None:
                     for key, value in restored.items():
                         safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
+                    explicit_restored = True
                 # The socket mount restores, then reads the URL (``dispatch_mount``:
                 # mount, ``load_server_state``, ``handle_params``). Same order
                 # here, so the URL this request carries wins over a persisted
@@ -1979,8 +1982,9 @@ class RequestMixin:
             # The view was rebuilt from the session (all of it, or mount()
             # first and the saved state on top): let it read again what the
             # session does not hold, from the restored state. After the object
-            # check, so it never reads for a denied object.
-            if legacy_exposure and saved_state:
+            # check, so it never reads for a denied object. An explicit view
+            # whose declared state was restored gets it too (#3989).
+            if (legacy_exposure and saved_state) or explicit_restored:
                 handle_restore = getattr(self, "handle_restore", None)
                 if callable(handle_restore):
                     call_hook_sync(handle_restore, request)

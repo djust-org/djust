@@ -340,6 +340,53 @@ def handle_async_result(self, name: str, result=None, error=None):
 
 This method is optional. If it is not implemented, tasks still re-render when they finish. A failed task is logged and re-renders the state as it stands, so state set before the failure stays on screen.
 
+### Background work does not survive a reconnect
+
+A job started with `start_async()` or `@background` belongs to the connection that started it. If the browser reconnects, or the worker restarts, the job's result is not delivered to the new connection.
+
+That matters when the loading flag is persisted. With `state(persist="server")`, the flag comes back with the rest of the declared state, so the page shows a job as running that no longer exists. `mount()` cannot fix it, because restored state is applied after `mount()` returns. Clear the flag in `handle_restore()`, which runs once the restored values are in place:
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler, state
+
+
+class ReportView(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ status }}</div>"
+
+    generating = state(False, persist="server")
+    error = state("", persist="server")
+
+    def mount(self, request, **kwargs):
+        self.generating = False
+        self.error = ""
+
+    def handle_restore(self, request):
+        if self.generating:  # restored, but the job did not survive
+            self.generating = False
+            self.error = "Interrupted. Please try again."
+
+    def get_context_data(self, **kwargs):
+        status = self.error or ("Generating..." if self.generating else "Ready")
+        return super().get_context_data(status=status, **kwargs)
+
+    @event_handler
+    def generate(self, **kwargs):
+        self.generating = True
+        self.start_async(self._do_generate)
+
+    def _do_generate(self):
+        self.generating = False
+```
+
+Two things to keep in mind:
+
+- **Keep `handle_restore()` idempotent.** What it changes is saved by the next event, not by the reconnect, so it runs again on each reconnect until then.
+- **A second tab looks like a reconnect.** Declared state is shared by every tab of one session on the same page, so a second tab restores `generating=True` while the first tab's job is still running. If that matters, keep the flag out of persisted state.
+
+On an explicit view, a flag that is not persisted needs none of this: a reconnect runs `mount()` and starts from its values.
+
 ## Combining Both Systems
 
 `dj-loading.*` directives cover the round-trip of an event: they start when the event is sent and stop when the server responds. When the handler queued background work, the response carries an `async_pending` flag and the directives stay on until the work's result arrives.
