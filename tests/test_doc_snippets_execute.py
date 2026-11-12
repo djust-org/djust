@@ -477,8 +477,11 @@ def _check_exposure(cls: type, client, block: Block) -> None:
     else:
         reads = scanner.reads_for(block.path, cls.__name__, block.lineno)
     context = view.get_context_data()
+    # ``hasattr`` and not ``vars()``: a declared ``state()`` field and a
+    # ``@computed`` value live on the class, and neither is handed to the
+    # template by itself. A name only a later handler sets is not there yet.
     missing = sorted(
-        name for name in example.set_names & reads if name in vars(view) and name not in context
+        name for name in example.set_names & reads if name not in context and hasattr(view, name)
     )
     if missing:
         raise _Fail(
@@ -1140,6 +1143,15 @@ def test_a_template_name_the_view_does_not_supply_is_reported(settings):
     fixed = _synthetic(_UNSUPPLIED_VIEW + _SUPPLY_NAME)
     settings.LIVEVIEW_ALLOWED_MODULES = [fixed.module_name]
     assert run_block(fixed).status == "pass"
+
+    declared = _synthetic(
+        _UNSUPPLIED_VIEW.replace("from djust import LiveView", "from djust import LiveView, state")
+        .replace("    def mount(self, request, **kwargs):\n        self.name = 'World'\n", "")
+        .replace("    template =", "    name = state('World')\n    template =", 1)
+    )
+    settings.LIVEVIEW_ALLOWED_MODULES = [declared.module_name]
+    outcome = run_block(declared)
+    assert outcome.category == "template name is not supplied", outcome
 
     legacy = _synthetic(
         _UNSUPPLIED_VIEW.replace(

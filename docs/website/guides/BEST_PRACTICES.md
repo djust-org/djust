@@ -65,7 +65,13 @@ class DashboardView(LiveView):
         self.services = get_all_statuses()
 
     def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "services": self.services}
+        context = super().get_context_data(**kwargs)
+        context.update(
+            services=self.services,
+            selected_id=self.selected_id,
+            search_query=self.search_query,
+        )
+        return context
 ```
 
 Avoid initializing state only inside `mount()` — declaring it at the class level makes the view's state self-documenting and ensures consistent defaults.
@@ -405,6 +411,7 @@ class MyView(LiveView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+        ctx["search_query"] = self.search_query
         if self.search_query:
             ctx["results"] = search_items(self.search_query)
         return ctx

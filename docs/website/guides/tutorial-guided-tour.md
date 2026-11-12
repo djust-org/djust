@@ -145,6 +145,7 @@ class DashboardView(LiveView):
             tour_active=self.tour_active,
             tour_step=self.tour_step,
             has_projects=self.has_projects,
+            tour_total=self.tour_total,
         )
         return context
 

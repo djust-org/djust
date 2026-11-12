@@ -121,6 +121,7 @@ class AvatarView(UploadMixin, LiveView):
             avatar_url=self.avatar_url,
             avatar_name=self.avatar_name,
             avatar_size=self.avatar_size,
+            error=self.error,
         )
         return context
 ```

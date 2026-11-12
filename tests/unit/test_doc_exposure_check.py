@@ -222,6 +222,61 @@ def test_the_1x_publishing_idiom_is_reported_with_no_template_shown(tmp_path, mo
     assert _classify(tmp_path, monkeypatch, idiom.format(body=new)) == [("ItemsView", "ok", set())]
 
 
+def test_a_declared_state_field_is_not_handed_to_the_template(tmp_path, monkeypatch):
+    """``count = state(0)`` declares what is persisted; the template still needs it supplied."""
+    declared = """
+    ~~~python
+    class CounterView(LiveView):
+        count = state(0, persist="server")
+    {supply}
+        @event_handler
+        def increment(self, **kwargs):
+            self.count += 1
+    ~~~
+
+    ~~~html
+    <div dj-root>{{{{ count }}}}</div>
+    ~~~
+    """
+    assert _classify(tmp_path, monkeypatch, declared.format(supply="")) == [
+        ("CounterView", "blank", {"count"})
+    ]
+    assert _classify(tmp_path, monkeypatch, declared.format(supply=_SUPPLY)) == [
+        ("CounterView", "ok", set())
+    ]
+
+
+def test_a_block_that_only_declares_fields_is_a_step_not_a_view(tmp_path, monkeypatch):
+    markdown = """
+        ~~~python
+        class SearchView(LiveView):
+            template_name = "search.html"
+
+            query = state("")
+        ~~~
+
+        ~~~html
+        <div dj-root>{{ query }}</div>
+        ~~~
+    """
+    assert _classify(tmp_path, monkeypatch, markdown) == [("SearchView", "fragment", set())]
+
+
+def test_an_assign_async_name_is_an_attribute_too(tmp_path, monkeypatch):
+    markdown = """
+        ~~~python
+        class DashboardView(LiveView):
+            def mount(self, request, **kwargs):
+                self.assign_async("metrics", self._load)
+        ~~~
+
+        ~~~html
+        {% if metrics.ok %}{{ metrics.result }}{% endif %}
+        ~~~
+    """
+    assert _classify(tmp_path, monkeypatch, markdown) == [("DashboardView", "blank", {"metrics"})]
+
+
 def test_a_computed_value_is_an_attribute_like_any_other(tmp_path, monkeypatch):
     markdown = """
         ~~~python

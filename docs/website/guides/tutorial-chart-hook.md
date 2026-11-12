@@ -195,7 +195,11 @@ class RevenueDashboardView(LiveView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context.update(points_json=self.points_json, selected_range=self.selected_range)
+        context.update(
+            points_json=self.points_json,
+            selected_range=self.selected_range,
+            ranges=self.ranges,
+        )
         return context
 
     def _refresh(self):

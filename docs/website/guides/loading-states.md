@@ -508,6 +508,11 @@ class DashboardView(LiveView):
         self.assign_async("metrics", self._load_metrics)
         self.assign_async("notifications", self._load_notifications)
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(metrics=self.metrics, notifications=self.notifications)
+        return context
+
     def _load_metrics(self):
         return expensive_query()
 
@@ -530,7 +535,7 @@ Each `AsyncResult` exposes three mutually-exclusive booleans:
 | `.ok` | Completed successfully; `.result` holds the payload |
 | `.failed` | Raised; `.error` holds the exception |
 
-Templates read the flags directly:
+Hand each `AsyncResult` to the template in `get_context_data()`, as above; the template then reads the flags:
 
 ```html
 {% load live_tags %}

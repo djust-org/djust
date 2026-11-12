@@ -146,6 +146,7 @@ class Example:
     has_context_method: bool = False
     components: set[str] = field(default_factory=set)
     has_mount: bool = False
+    has_methods: bool = False
     has_template: bool = False
     class_names: set[str] = field(default_factory=set)
     context_assigned: set[str] = field(default_factory=set)
@@ -158,11 +159,15 @@ class Example:
 
     @property
     def is_fragment(self) -> bool:
-        """Handlers only: no ``mount()``, no template, no class-level state.
+        """Handlers only (no ``mount()``, no template, no class-level state), or
+        declarations only (no method at all, no inline template).
 
-        Such a block shows one method of a view the reader already has; it
-        does not claim to be a view that renders.
+        Such a block shows one part of a view the reader already has, or the
+        first step of one a tutorial builds up; it does not claim to be a view
+        that renders.
         """
+        if not self.has_methods and not self.inline_template:
+            return True
         return not (self.has_mount or self.has_template or self.class_names)
 
 
@@ -303,18 +308,17 @@ def _scan_class(
                     example.has_template = True
                     if name == "template":
                         example.inline_template = _string(value) or ""
-                elif (
-                    name.startswith("_")
-                    or name in _CONFIG_NAMES
-                    or name in _FRAMEWORK_ATTRS
-                    or value is None
-                ):
+                elif name.startswith("_") or value is None:
                     continue
                 elif isinstance(value, ast.Call):
-                    # state(...) gives the attribute a default; a form or a
-                    # component descriptor is not template state at all.
+                    # A declared state() field is not handed to the template
+                    # either (it says what is persisted). Any other call is a
+                    # form or a component descriptor, not template state.
                     if ast.unparse(value.func).split(".")[-1] == "state":
                         example.class_names.add(name)
+                        example.set_names.add(name)
+                    continue
+                elif name in _CONFIG_NAMES or name in _FRAMEWORK_ATTRS:
                     continue
                 elif isinstance(value, ast.Constant) or isinstance(
                     value, (ast.List, ast.Dict, ast.Tuple)
@@ -323,6 +327,7 @@ def _scan_class(
                         example.set_names.add(name)
                         example.class_names.add(name)
         elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            example.has_methods = True
             if item.name in {"mount", "__init__"}:
                 example.has_mount = True
             if any(
@@ -339,6 +344,14 @@ def _scan_class(
                 example.has_context_method = True
                 _context_keys(item, example)
             for sub in ast.walk(item):
+                # self.assign_async("metrics", loader) sets self.metrics.
+                if (
+                    isinstance(sub, ast.Call)
+                    and ast.unparse(sub.func) == "self.assign_async"
+                    and sub.args
+                    and _string(sub.args[0])
+                ):
+                    example.set_names.add(_string(sub.args[0]))
                 targets = []
                 if isinstance(sub, ast.Assign):
                     targets = sub.targets

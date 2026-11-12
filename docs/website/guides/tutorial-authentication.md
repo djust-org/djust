@@ -145,6 +145,7 @@ class TeamAdminView(LoginRequiredMixin, LiveView):
                 {"id": m.id, "username": m.user.username, "role": m.role}
                 for m in team.memberships.select_related("user").order_by("user__username")
             ]
+        context["error"] = self.error
         return context
 ```
 
