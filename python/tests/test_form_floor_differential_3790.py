@@ -93,10 +93,25 @@ def engine():
     return DjustTemplateBackend({"NAME": "diff-3790", "DIRS": [], "APP_DIRS": True, "OPTIONS": {}})
 
 
+@pytest.fixture(scope="module")
+def password_hash() -> str:
+    """Hash the user's password once: PBKDF2 was most of each case's setup."""
+    from django.contrib.auth.hashers import make_password
+
+    return make_password("pw-3790")
+
+
 @pytest.fixture
-def world():
+def world(password_hash):
     """The user, the contexts and the secrets, under a floor that holds both columns."""
-    user = User.objects.create_user("floor-user", EMAIL, "pw-3790", first_name="Ada", is_staff=True)
+    # ``create_user`` minus the per-case hash: the same row, with a module-wide hash.
+    user = User.objects.create(
+        username="floor-user",
+        email=User.objects.normalize_email(EMAIL),
+        password=password_hash,
+        first_name="Ada",
+        is_staff=True,
+    )
     data = {
         "username": user.username,
         "password": user.password,
