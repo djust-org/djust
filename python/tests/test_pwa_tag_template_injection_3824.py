@@ -242,6 +242,9 @@ def _template_source_sites(root: pathlib.Path) -> dict[str, set[str]]:
     return found
 
 
+# A whole-tree pin: runs on PRs and in the merge queue whatever its recorded
+# duration (#4051, tests/slow_tier.py).
+@pytest.mark.pr_tier
 class TestOnlyKnownTemplateSourceBuildersExist:
     """A TRIPWIRE, not a guard: every template-compiling call site in ``djust``.
 

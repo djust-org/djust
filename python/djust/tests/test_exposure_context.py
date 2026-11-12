@@ -33,9 +33,10 @@ def view():
     return view
 
 
-def test_base_context_does_not_discover_attributes_or_state(view):
-    assert view.get_context_data() == {}
-    assert "_state_count" not in view.__dict__
+def test_base_context_renders_declared_state_but_discovers_no_attributes(view):
+    # #4050: a declared state() field is template context by default; plain
+    # attributes, private attributes, class values and properties are not.
+    assert view.get_context_data() == {"count": 2}
 
 
 def test_deliberate_context_retains_native_objects_and_is_not_a_client_projection(view):
@@ -68,6 +69,7 @@ def test_action_and_stream_context_are_explicit_framework_providers(view):
     assert view.get_context_data() == {
         "save_item": {"pending": True, "result": None},
         "streams": {"items": ["one"]},
+        "count": 2,
     }
     with pytest.raises(ExposureError, match="collision"):
         view.get_context_data(save_item="shadow")
@@ -95,7 +97,8 @@ def test_context_processors_are_render_only_and_preserve_view_precedence(view, r
     rendered = view._apply_context_processors(context, rf.get("/"))
     assert rendered == {"count": 2, "processor_only": "PROCESSOR_SENTINEL"}
     assert context == {"count": 2}
-    assert view.get_context_data() == {}
+    # The declared field is view context, so it wins over the processor too.
+    assert view.get_context_data() == {"count": 2}
     assert view._context_processor_keys == {"processor_only"}
 
 

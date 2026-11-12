@@ -16,7 +16,7 @@ import pytest
 
 from djust import LiveView
 from djust.config import config
-from djust.decorators import background, event_handler, optimistic
+from djust.decorators import background, cache, event_handler
 from djust.testing import LiveViewSmokeTest, _UNFUZZED_WARNED, _unfuzzed_reachable_methods
 
 
@@ -110,7 +110,7 @@ class _DecoratedButNotHandlers(LiveView):
     exposure_policy = "legacy"
     template = "<div dj-root></div>"
 
-    @optimistic
+    @cache(ttl=1)
     def opt_only(self, **kwargs):
         pass
 
@@ -123,7 +123,7 @@ class _DecoratedButNotHandlers(LiveView):
         pass
 
     @event_handler
-    @optimistic
+    @cache(ttl=1)
     def handled(self, **kwargs):
         pass
 

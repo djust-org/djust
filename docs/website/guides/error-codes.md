@@ -836,6 +836,22 @@ A view that declares a `params_form` is also held to its `params_form_fallback`:
 
 On an explicit view the same declaration is refused when the class is created, with an `ExposureConfigurationError` that names the attribute and the working forms.
 
+### V027: declared `state()` field named `user` or `perms`
+
+**Severity**: Warning
+
+**What causes it**: An explicit view declares `user = state(...)` or `perms = state(...)`. A declared field is template context, and view context wins over Django's context processors, so the field replaces `request.user` or the permission proxy in every template the view renders, including base templates that test it for authorization. Message: "<class> declares state() field 'user', which replaces the 'user' Django's context processors supply ..."
+
+**Fix**: Rename the field (for example `selected_user`), or declare it `state(..., render=False)` if no template reads it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V027"]}`.
+
+### V028: A class states `exposure_policy = "legacy"`
+
+**Severity**: Warning
+
+**What causes it**: an application class states `exposure_policy = "legacy"` in its own body. Explicit exposure is the default since djust 2.0 and `"legacy"` is removed before 2.0.0 ([#4047](https://github.com/djust-org/djust/issues/4047)). Reported once per stating class; the message names the views that inherit it. Message: '<class> states exposure_policy = "legacy", which is deprecated and is removed before djust 2.0.0: ...'
+
+**Fix**: Move the view to explicit exposure and delete the line; `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](migrating-to-2.0.md#1-move-each-view-to-explicit-exposure). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V028"]}`.
+
 ---
 
 ## Security Errors (S0xx)
@@ -2238,6 +2254,14 @@ Independently of this check, `get_theme_config()` raises `ImproperlyConfigured` 
 **What causes it**: `LIVEVIEW_CONFIG["theme"]["selectable_presets"]` is not a list of preset names, or names a preset that is not registered. Messages: 'LIVEVIEW_CONFIG["theme"]["selectable_presets"] is invalid: <reason>' and 'LIVEVIEW_CONFIG["theme"]["selectable_presets"] names unknown preset(s) <names>, which are ignored.' At render time such a value is logged and ignored, so this check is where the mistake is reported.
 
 **Fix**: Use a list of registered preset names, such as `["default", "legal"]`. `python manage.py djust_theme list-presets` prints the registered names.
+
+### djust_theming.W004: djust.components installed without component_catalog_css
+
+**Severity**: Warning
+
+**What causes it**: `djust.components` is in `INSTALLED_APPS` and `LIVEVIEW_CONFIG["theme"]` does not state `component_catalog_css`. Since djust 2.0, `{% theme_head %}` links the component catalog's stylesheet (`djust_components/components.css`, about 330 KB) only when that setting is `True` or the page passes `component_catalog=True`; before 2.0 it linked it whenever the app was installed ([#4003](https://github.com/djust-org/djust/issues/4003)).
+
+**Fix**: Set `LIVEVIEW_CONFIG["theme"]["component_catalog_css"] = True` if pages render catalog tags such as `{% modal %}`, `{% data_table %}` or `{% app_shell %}`, or `False` if none does (or the pages that do link the file themselves).
 
 ---
 

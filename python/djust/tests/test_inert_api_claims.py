@@ -342,11 +342,11 @@ def test_the_stale_inert_arm_does_not_fire_on_correct_prose(tmp_path: Path) -> N
 # read (the argument #2694 made for `@client_state`, which #2696 found had not
 # been applied to the other three).
 
-#: Decorators that still stamp metadata nothing in the shipped client reads.
-#: `@debounce` / `@throttle` left this set in #2656 — the client gate is
-#: `static/djust/src/05-handler-rate-limit.js` — so they are deliberately
-#: absent, and `test_wired_decorators_are_not_marked_inert` holds that line.
-STILL_INERT = {"@optimistic": "#2699", "@client_state": "#2680"}
+#: The decorators that stamped metadata nothing in the shipped client read, until
+#: djust 2.0 removed them (#4006). `@debounce` / `@throttle` left this set in
+#: #2656 — the client gate is `static/djust/src/05-handler-rate-limit.js` — and
+#: `test_wired_decorators_are_not_marked_inert` holds that line.
+REMOVED = {"@optimistic": "#2699", "@client_state": "#2680"}
 
 #: Decorators whose client half IS implemented, keyed by the module that
 #: implements it. A stale INERT marker on one of these is the mirror-image
@@ -366,18 +366,14 @@ def _entry(name: str) -> Any:
     return matches[0]
 
 
-def test_inert_decorator_usage_snippets_carry_the_marker() -> None:
-    """The marker must travel with the paste (#2694, #2696)."""
-    for name, issue in STILL_INERT.items():
-        entry = _entry(name)
-        for snippet in entry["usage"]:
-            assert "INERT" in snippet, (
-                f"{name}'s schema.py `usage` snippet is what an agent copies, and it "
-                f"says nothing about the decorator doing nothing at runtime "
-                f"({issue}). A marker in a sibling `description` does not travel "
-                f"with the paste. Snippet: {snippet!r}"
-            )
-        assert "INERT" in entry["description"], f"{name}'s description lost its marker"
+def test_the_removed_inert_decorators_are_not_in_the_schema() -> None:
+    """#4006 removed `@optimistic` and `@client_state` in 2.0. The schema an AI
+    agent reads must not offer them any more (it used to carry them, marked INERT,
+    #2694 / #2696)."""
+    from djust.schema import DECORATORS
+
+    names = {d.get("name") for d in DECORATORS}
+    assert not names & set(REMOVED), names & set(REMOVED)
 
 
 def test_wired_decorators_are_not_marked_inert() -> None:

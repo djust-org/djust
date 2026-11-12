@@ -94,6 +94,10 @@ from typing import Dict, List, Optional, Set, Tuple
 import pytest
 from channels.testing import HttpCommunicator, WebsocketCommunicator
 
+# A whole-tree pin: any PR can break it, so it runs on PRs and in the merge
+# queue whatever .test_durations records for it (#4051, tests/slow_tier.py).
+pytestmark = pytest.mark.pr_tier
+
 REPO = Path(__file__).resolve().parents[3]
 ROOTS = ("python", "tests")
 SKIP_PARTS = {"node_modules", "static", ".venv", "target", "__pycache__", "worktrees"}

@@ -59,7 +59,7 @@ class Labeled(LiveComponent):
 
 
 class FieldView(LiveView):
-    """Recommended: a ``state()`` field built per view, supplied from get_context_data()."""
+    """Recommended: a ``state()`` field built per view; it renders with no hand-over (#4050)."""
 
     exposure_policy = "explicit"
     template = TEMPLATE
@@ -73,9 +73,6 @@ class FieldView(LiveView):
     @event_handler()
     def bump(self, **kwargs: Any) -> None:
         self.n += 1
-
-    def get_context_data(self, **kwargs: Any) -> dict:
-        return super().get_context_data(n=self.n, badge=self.badge, **kwargs)
 
 
 class PrivateView(LiveView):
@@ -187,12 +184,12 @@ async def _open(view_name: str):
     assert (await socket.connect())[0]
     await socket.receive_json_from()
     await socket.send_json_to({"type": "mount", "view": f"{MODULE}.{view_name}", "url": "/x/"})
-    return socket, await socket.receive_json_from(timeout=5), request.session.session_key
+    return socket, await socket.receive_json_from(), request.session.session_key
 
 
 async def _event(socket, name: str, ref: int, **params: Any) -> list:
     await socket.send_json_to({"type": "event", "event": name, "params": params, "ref": ref})
-    frames = [await socket.receive_json_from(timeout=5)]
+    frames = [await socket.receive_json_from()]
     while not await socket.receive_nothing(timeout=0.3):
         frames.append(await socket.receive_json_from())
     return frames
@@ -397,6 +394,8 @@ def test_instance_assigned_plain_component_message_names_the_working_forms():
     assert "'badge'" in message
     assert "badge = state(default_factory=lambda: Badge(...))" in message
     assert "get_context_data()" in message
+    # #4050: the declared field renders; no hand-over is asked for.
+    assert "which renders" in message and "supply it from" not in message
     assert "class body" not in message
     assert "INSTANCE_VALUE_SENTINEL" not in message
 

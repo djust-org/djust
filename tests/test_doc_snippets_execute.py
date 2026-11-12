@@ -1150,8 +1150,8 @@ def test_a_template_name_the_view_does_not_supply_is_reported(settings):
         .replace("    template =", "    name = state('World')\n    template =", 1)
     )
     settings.LIVEVIEW_ALLOWED_MODULES = [declared.module_name]
-    outcome = run_block(declared)
-    assert outcome.category == "template name is not supplied", outcome
+    # #4050: a declared state() field renders without get_context_data().
+    assert run_block(declared).status == "pass"
 
     legacy = _synthetic(
         _UNSUPPLIED_VIEW.replace(

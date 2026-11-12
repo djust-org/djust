@@ -12,9 +12,7 @@ from djust.decorators import (
     event_handler,
     debounce,
     throttle,
-    optimistic,
     cache,
-    client_state,
 )
 
 
@@ -255,17 +253,6 @@ class TestDecoratorMetadata:
             "trailing": True,  # Default
         }
 
-    def test_optimistic_metadata(self):
-        """Test @optimistic attaches correct metadata."""
-
-        @optimistic
-        def handler(self, **kwargs):
-            pass
-
-        assert hasattr(handler, "_djust_decorators")
-        assert "optimistic" in handler._djust_decorators
-        assert handler._djust_decorators["optimistic"] is True
-
     def test_cache_metadata(self):
         """Test @cache attaches correct metadata."""
 
@@ -289,63 +276,47 @@ class TestDecoratorMetadata:
             "key_params": [],  # Default empty list
         }
 
-    def test_client_state_metadata(self):
-        """Test @client_state attaches correct metadata.
-
-        Metadata only — @client_state is INERT (#2680): nothing in the shipped
-        client reads this, so a decorated handler behaves exactly like an
-        undecorated one. This pins the stamp, not any behaviour.
-        """
-
-        @client_state(keys=["filter", "sort"])  # INERT (#2680)
-        def handler(self, **kwargs):
-            pass
-
-        assert hasattr(handler, "_djust_decorators")
-        assert "client_state" in handler._djust_decorators
-        assert handler._djust_decorators["client_state"] == {"keys": ["filter", "sort"]}
-
     def test_multiple_decorators(self):
         """Test multiple decorators on same handler."""
 
         @debounce(wait=0.5)
-        @optimistic
+        @throttle(interval=0.1)
         @cache(ttl=60, key_params=["query"])
         def handler(self, **kwargs):
             pass
 
         assert hasattr(handler, "_djust_decorators")
         assert "debounce" in handler._djust_decorators
-        assert "optimistic" in handler._djust_decorators
+        assert "throttle" in handler._djust_decorators
         assert "cache" in handler._djust_decorators
 
         # Verify all metadata is correct
         assert handler._djust_decorators["debounce"]["wait"] == 0.5
-        assert handler._djust_decorators["optimistic"] is True
+        assert handler._djust_decorators["throttle"]["interval"] == 0.1
         assert handler._djust_decorators["cache"]["ttl"] == 60
 
     def test_decorator_composition_order(self):
         """Test decorator composition works regardless of order."""
 
         @cache(ttl=60)
-        @optimistic
+        @throttle(interval=0.1)
         @debounce(wait=0.5)
         def handler1(self, **kwargs):
             pass
 
         @debounce(wait=0.5)
-        @optimistic
+        @throttle(interval=0.1)
         @cache(ttl=60)
         def handler2(self, **kwargs):
             pass
 
         # Both should have all three decorators
         assert "debounce" in handler1._djust_decorators
-        assert "optimistic" in handler1._djust_decorators
+        assert "throttle" in handler1._djust_decorators
         assert "cache" in handler1._djust_decorators
 
         assert "debounce" in handler2._djust_decorators
-        assert "optimistic" in handler2._djust_decorators
+        assert "throttle" in handler2._djust_decorators
         assert "cache" in handler2._djust_decorators
 
 
@@ -363,7 +334,7 @@ class TestMetadataExtraction:
             def search(self, query: str = "", **kwargs):
                 pass
 
-            @optimistic
+            @throttle(interval=0.1)
             def increment(self, **kwargs):
                 pass
 
@@ -374,7 +345,7 @@ class TestMetadataExtraction:
         assert metadata["search"]["debounce"] == {"wait": 0.5, "max_wait": None}
 
         assert "increment" in metadata
-        assert metadata["increment"]["optimistic"] is True
+        assert metadata["increment"]["throttle"]["interval"] == 0.1
 
     def test_extract_multiple_decorators(self):
         """Test extraction of handlers with multiple decorators."""
@@ -384,7 +355,7 @@ class TestMetadataExtraction:
             template = "<div>Test</div>"
 
             @debounce(wait=0.5)
-            @optimistic
+            @throttle(interval=0.1)
             @cache(ttl=60, key_params=["query"])
             def search(self, query: str = "", **kwargs):
                 pass
@@ -394,7 +365,7 @@ class TestMetadataExtraction:
 
         assert "search" in metadata
         assert "debounce" in metadata["search"]
-        assert "optimistic" in metadata["search"]
+        assert "throttle" in metadata["search"]
         assert "cache" in metadata["search"]
 
     def test_extract_no_decorators(self):
@@ -444,7 +415,7 @@ class TestMetadataExtraction:
             def plain_handler(self, **kwargs):
                 pass
 
-            @optimistic
+            @throttle(interval=0.1)
             def increment(self, **kwargs):
                 pass
 
@@ -557,7 +528,7 @@ class TestMetadataInjection:
             exposure_policy = "legacy"
             template = "<html><body>Content</body></html>"
 
-            @optimistic
+            @throttle(interval=0.1)
             def handler(self, **kwargs):
                 pass
 
@@ -576,7 +547,7 @@ class TestMetadataInjection:
             exposure_policy = "legacy"
             template = "<html><div>Content</div></html>"
 
-            @optimistic
+            @throttle(interval=0.1)
             def handler(self, **kwargs):
                 pass
 
@@ -594,7 +565,7 @@ class TestMetadataInjection:
             exposure_policy = "legacy"
             template = "<div>Content</div>"
 
-            @optimistic
+            @throttle(interval=0.1)
             def handler(self, **kwargs):
                 pass
 
@@ -613,7 +584,7 @@ class TestMetadataInjection:
             template = "<html><body>Test</body></html>"
 
             @debounce(wait=0.5, max_wait=2.0)
-            @optimistic
+            @throttle(interval=0.1)
             @cache(ttl=60, key_params=["query", "page"])
             def search(self, **kwargs):
                 pass
@@ -635,7 +606,7 @@ class TestMetadataInjection:
         # Verify structure
         assert "search" in metadata
         assert metadata["search"]["debounce"] == {"wait": 0.5, "max_wait": 2.0}
-        assert metadata["search"]["optimistic"] is True
+        assert metadata["search"]["throttle"]["interval"] == 0.1
         assert metadata["search"]["cache"] == {"ttl": 60, "key_params": ["query", "page"]}
 
 

@@ -74,6 +74,10 @@ import pathlib
 
 import pytest
 
+# A whole-tree pin: any PR can break it, so it runs on PRs and in the merge
+# queue whatever .test_durations records for it (#4051, tests/slow_tier.py).
+pytestmark = pytest.mark.pr_tier
+
 # Scan target: the top-level djust package modules. Subpackages (security/,
 # components/, theming/, …) are intentionally OUT of scope — the chokepoint and
 # its guard live in security/, and the transports + their request-building /

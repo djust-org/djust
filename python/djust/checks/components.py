@@ -2287,3 +2287,152 @@ def check_shared_class_level_components(app_configs: Any, **kwargs: Any) -> list
             )
         )
     return messages
+
+
+@register("djust")
+def check_declared_authorization_names(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V027 (Warning): a declared ``state()`` field named ``user`` or ``perms`` (#4050).
+
+    A declared field is template context under explicit exposure, and view
+    context wins over Django's context processors. So ``user = state(None)``
+    replaces ``request.user`` (and ``perms = state(...)`` the permission proxy)
+    in every template the view renders, including base templates that test it
+    for authorization. Legal, but almost never meant. A field declared with
+    ``render=False`` is not reported, and neither is a legacy view: its
+    attribute walk shadowed these names the same way in 1.x, and the legacy
+    policy is deprecated rather than extended. The names are
+    ``djust._exposure_unsupplied.AUTHORIZATION_CONTEXT_NAMES``.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V027"):
+        return messages
+    try:
+        from djust._exposure import uses_legacy_exposure
+        from djust._exposure_unsupplied import AUTHORIZATION_CONTEXT_NAMES
+        from djust.live_view import LiveView
+        from djust.mixins.context import rendered_state_names
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    seen: set[tuple[type, str]] = set()
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if _is_framework_internal_class(cls) or uses_legacy_exposure(cls):
+            continue
+        try:
+            names = AUTHORIZATION_CONTEXT_NAMES.intersection(rendered_state_names(cls))
+        except Exception:  # noqa: BLE001 — a class this cannot read is skipped
+            logger.debug("V027: could not read the declared fields of a view class")
+            continue
+        for name in sorted(names):
+            owner = next((k for k in cls.__mro__ if name in k.__dict__), cls)
+            if (owner, name) in seen:
+                continue
+            seen.add((owner, name))
+            label = "%s.%s" % (owner.__module__, owner.__qualname__)
+            try:
+                path = inspect.getsourcefile(owner) or ""
+            except TypeError:
+                path = ""
+            messages.append(
+                DjustWarning(
+                    "%s declares state() field '%s', which replaces the '%s' Django's "
+                    "context processors supply in every template the view renders, "
+                    "including base templates that test it for authorization."
+                    % (label, name, name),
+                    hint=(
+                        "A declared state() field is template context, and view context "
+                        "wins over context processors. Rename the field (for example "
+                        "selected_%s), or declare it with render=False if no template "
+                        "reads it. Suppress with DJUST_CONFIG = "
+                        "{'suppress_checks': ['V027']}." % name
+                    ),
+                    id="djust.V027",
+                    fix_hint=(
+                        "Rename `%s` on `%s` (for example `selected_%s`), or declare it "
+                        "`state(..., render=False)`." % (name, label, name)
+                    ),
+                    file_path=path,
+                )
+            )
+    return messages
+
+
+@register("djust")
+def check_legacy_exposure_policy(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V028 (Warning): an application class states ``exposure_policy = "legacy"`` (#4047).
+
+    Explicit exposure is the default since djust 2.0, and ``"legacy"`` is to be
+    removed before 2.0.0. Stating it already raises a ``DeprecationWarning`` when
+    the class is created, but a warning raised at import time is easy to miss
+    (most test runners and servers hide it); a system check is listed on every
+    ``manage.py check`` and ``runserver`` start. This reports the class whose body
+    states the policy, once, wherever the views that use it inherit it from, the
+    same owner the deprecation warning names. djust's own classes (a shipped view
+    pinned to ``"legacy"``, and djust's test modules) are not reported: that
+    statement is not the application's to change.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V028"):
+        return messages
+    try:
+        from djust._exposure_unsupplied import MIGRATION_GUIDE_URL
+        from djust.live_view import LiveView
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    owners: dict[type, list[type]] = {}
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in candidates:
+        # The class whose body states the policy the view runs under: the same
+        # lookup attribute access does, so a policy stated on a mixin is found too.
+        owner = next((c for c in cls.__mro__ if "exposure_policy" in vars(c)), None)
+        if owner is None:
+            continue
+        policy = vars(owner)["exposure_policy"]
+        if type(policy) is not str or policy != "legacy":
+            continue
+        module = getattr(owner, "__module__", "") or ""
+        if module == "djust" or module.startswith("djust."):
+            continue
+        owners.setdefault(owner, []).append(cls)
+
+    for owner in sorted(owners, key=lambda c: (c.__module__, c.__qualname__)):
+        label = "%s.%s" % (owner.__module__, owner.__qualname__)
+        users = sorted(
+            "%s.%s" % (c.__module__, c.__qualname__) for c in owners[owner] if c is not owner
+        )
+        inherited = ""
+        if users:
+            shown = ", ".join(users[:3]) + (", ..." if len(users) > 3 else "")
+            inherited = " %d view(s) inherit it: %s." % (len(users), shown)
+        owner_file = ""
+        owner_line = None
+        try:
+            owner_file = inspect.getfile(owner)
+            owner_line = inspect.getsourcelines(owner)[1]
+        except (OSError, TypeError):
+            pass  # Source introspection may fail for dynamically created classes
+        messages.append(
+            DjustWarning(
+                '%s states exposure_policy = "legacy", which is deprecated and is removed '
+                "before djust 2.0.0: every public attribute of the view reaches the "
+                "template and the browser.%s" % (label, inherited),
+                hint=(
+                    "Move the view to explicit exposure, the default: declare persisted "
+                    "fields with state(), return template names from get_context_data(), "
+                    "then delete the exposure_policy line. `python manage.py "
+                    "djust_exposure_inventory` lists what each view exposes today. See %s. "
+                    "Suppress with DJUST_CONFIG = {'suppress_checks': ['V028']}."
+                    % MIGRATION_GUIDE_URL
+                ),
+                id="djust.V028",
+                fix_hint=(
+                    'Migrate `%s` to explicit exposure and delete `exposure_policy = "legacy"`.'
+                    % owner.__qualname__
+                ),
+                file_path=owner_file,
+                line_number=owner_line,
+            )
+        )
+    return messages

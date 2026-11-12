@@ -64,9 +64,7 @@ if TYPE_CHECKING:
         debounce,
         throttle,
         on_mount,
-        optimistic,
         cache,
-        client_state,
         background,
     )
     from .auth import LoginRequiredMixin, PermissionRequiredMixin
@@ -130,9 +128,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "debounce": ("djust.decorators", "debounce"),
     "throttle": ("djust.decorators", "throttle"),
     "on_mount": ("djust.decorators", "on_mount"),
-    "optimistic": ("djust.decorators", "optimistic"),
     "cache": ("djust.decorators", "cache"),
-    "client_state": ("djust.decorators", "client_state"),
     "background": ("djust.decorators", "background"),
     "LoginRequiredMixin": ("djust.auth", "LoginRequiredMixin"),
     "PermissionRequiredMixin": ("djust.auth", "PermissionRequiredMixin"),
@@ -166,6 +162,9 @@ def __getattr__(name: str):  # PEP 562
     try:
         module_name, attr = _LAZY[name]
     except KeyError:
+        from ._removed_settings import refuse_removed_name
+
+        refuse_removed_name("djust", name)
         raise AttributeError(f"module 'djust' has no attribute {name!r}") from None
     module = importlib.import_module(module_name)
     value = getattr(module, attr)
@@ -471,10 +470,8 @@ __all__ = [
     "PermissionRequiredMixin",
     # on_mount hooks
     "on_mount",
-    # Optimistic UI / caching / client-state / background-work decorators
-    "optimistic",
+    # Caching / background-work decorators
     "cache",
-    "client_state",
     "background",
     # Database change notifications (pg_notify bridge)
     "NotificationMixin",

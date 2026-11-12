@@ -291,6 +291,8 @@ def _scan_class(
     node: ast.ClassDef, path: str, line: int, component_classes: set[str] = frozenset()
 ) -> Example:
     example = Example(path=path, line=line + node.lineno - 1, cls=node.name)
+    declared: set[str] = set()
+    builds_on_base = True
     for item in node.body:
         if isinstance(item, (ast.Assign, ast.AnnAssign)):
             targets = item.targets if isinstance(item, ast.Assign) else [item.target]
@@ -311,12 +313,20 @@ def _scan_class(
                 elif name.startswith("_") or value is None:
                     continue
                 elif isinstance(value, ast.Call):
-                    # A declared state() field is not handed to the template
-                    # either (it says what is persisted). Any other call is a
-                    # form or a component descriptor, not template state.
+                    # A declared state() field renders by default (#4050),
+                    # unless render=False. Any other call is a form or a
+                    # component descriptor, not template state.
                     if ast.unparse(value.func).split(".")[-1] == "state":
                         example.class_names.add(name)
                         example.set_names.add(name)
+                        hidden = any(
+                            kw.arg == "render"
+                            and isinstance(kw.value, ast.Constant)
+                            and kw.value.value is False
+                            for kw in value.keywords
+                        )
+                        if not hidden:
+                            declared.add(name)
                     continue
                 elif name in _CONFIG_NAMES or name in _FRAMEWORK_ATTRS:
                     continue
@@ -338,6 +348,13 @@ def _scan_class(
                 # attribute it reaches the template only when supplied.
                 example.set_names.add(item.name)
                 example.class_names.add(item.name)
+            if item.name == "get_context_data":
+                # Declared fields arrive through the base context, so a
+                # get_context_data() that never calls one supplies none.
+                builds_on_base = any(
+                    isinstance(sub, ast.Attribute) and sub.attr == "get_context_data"
+                    for sub in ast.walk(item)
+                )
             if item.name == "get_context_data" or any(
                 "context" in ast.unparse(dec) for dec in item.decorator_list
             ):
@@ -366,6 +383,8 @@ def _scan_class(
                                 example.context_assigned.add(name)
                             if _is_component_call(getattr(sub, "value", None), component_classes):
                                 example.components.add(name)
+    if builds_on_base:
+        example.supplied |= declared
     return example
 
 

@@ -6924,6 +6924,11 @@ class ViewRuntime(RuntimeTurnPort):
         answered, if authorization is refused, or if its own save or render
         fails, it sends the terminal reload error instead, so the transient
         message's promise is always either kept or withdrawn.
+
+        The deferred turn returned before dispatching any ``start_async`` work
+        its handler queued; the catch-up dispatches it once it has sent its
+        frame (#3945). A later turn that commits first dispatches it instead,
+        since it drains the same queue.
         """
         if self._explicit_catch_up is not None and not self._explicit_catch_up.done():
             return
@@ -6958,9 +6963,22 @@ class ViewRuntime(RuntimeTurnPort):
                         if not await self.commit_explicit_turn(view, source="async"):
                             return  # it sent the terminal error (a catch-up never defers twice)
                         snapshot_fields = await self._explicit_event_snapshot(view)
+                        # Background work the deferred turn queued with
+                        # start_async() (#3945). That turn returned before its
+                        # acknowledgement, and so before dispatching it; the
+                        # work waited on the view, and the page waited for its
+                        # result forever. The catch-up frame announces it
+                        # (async_pending + async_batch) and it starts after the
+                        # frame, as it would have after the turn's own.
+                        from ._async_batch import AsyncBatch
+
+                        batch = AsyncBatch(view)
                         await self._render_async_result(
-                            None, snapshot_fields=snapshot_fields, force_html=True
+                            None,
+                            snapshot_fields={**snapshot_fields, **batch.fields()},
+                            force_html=True,
                         )
+                        self._dispatch_async_work(None, batch)
                     except Exception:  # noqa: BLE001 — render/provider errors may carry values
                         await self._explicit_catch_up_failed(view, "render failed")
                     finally:

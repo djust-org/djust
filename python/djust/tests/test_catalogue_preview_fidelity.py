@@ -519,7 +519,8 @@ class TestComponentsAssetsAreCacheBusted:
         links = re.findall(r"<link[^>]*>", source)
         offenders = [link for link in links if "djust_components/components.css" in link]
         assert offenders == [], f"linked again outside theme_head: {offenders}"
-        assert "{% theme_head %}" in source
+        # #4003: theme_head links it only when asked, and the catalogue asks.
+        assert "{% theme_head component_catalog=True %}" in source
 
     def test_the_version_tag_reports_a_token(self):
         from djust.theming.templatetags.theme_tags import theme_asset_version

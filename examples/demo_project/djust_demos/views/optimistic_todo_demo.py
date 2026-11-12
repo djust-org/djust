@@ -3,7 +3,6 @@ Optimistic Todo Demo - demonstrates @optimistic with todo list
 """
 
 from djust import LiveView
-from djust.decorators import optimistic
 import time
 
 
@@ -145,7 +144,6 @@ class OptimisticTodoView(LiveView):
             {'id': 6, 'text': 'Create PR for Phase 3', 'completed': False},
         ]
 
-    @optimistic
     def toggle_todo(self, id: int = None, checked: bool = None, **kwargs):
         """
         Toggle todo completion (with optimistic update).

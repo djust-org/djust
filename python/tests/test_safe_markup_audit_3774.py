@@ -57,6 +57,9 @@ def _entry(sites: int = 1, reason: str = "why", evidence=(("f.py", "needle"),)) 
     return audit.Audit(sites, reason, tuple(evidence))
 
 
+# A whole-tree pin: runs on PRs and in the merge queue whatever its recorded
+# duration (#4051, tests/slow_tier.py).
+@pytest.mark.pr_tier
 class TestEverySiteIsAudited:
     def test_the_tree_has_files_to_scan(self):
         names = {p.name for p in audit.package_files()}
@@ -559,6 +562,9 @@ def _without_lines(text: str) -> str:
     return _LINE.sub("", text)
 
 
+# A whole-tree pin: runs on PRs and in the merge queue whatever its recorded
+# duration (#4051, tests/slow_tier.py).
+@pytest.mark.pr_tier
 class TestTheDocMatchesTheAudit:
     BEGIN = "<!-- audit-table:begin -->"
     END = "<!-- audit-table:end -->"

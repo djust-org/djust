@@ -222,8 +222,8 @@ def test_the_1x_publishing_idiom_is_reported_with_no_template_shown(tmp_path, mo
     assert _classify(tmp_path, monkeypatch, idiom.format(body=new)) == [("ItemsView", "ok", set())]
 
 
-def test_a_declared_state_field_is_not_handed_to_the_template(tmp_path, monkeypatch):
-    """``count = state(0)`` declares what is persisted; the template still needs it supplied."""
+def test_a_declared_state_field_renders_without_a_hand_over(tmp_path, monkeypatch):
+    """``count = state(0)`` renders by default (#4050); ``render=False`` does not."""
     declared = """
     ~~~python
     class CounterView(LiveView):
@@ -239,10 +239,21 @@ def test_a_declared_state_field_is_not_handed_to_the_template(tmp_path, monkeypa
     ~~~
     """
     assert _classify(tmp_path, monkeypatch, declared.format(supply="")) == [
-        ("CounterView", "blank", {"count"})
+        ("CounterView", "ok", set())
     ]
     assert _classify(tmp_path, monkeypatch, declared.format(supply=_SUPPLY)) == [
         ("CounterView", "ok", set())
+    ]
+    hidden = declared.replace('persist="server")', 'persist="server", render=False)')
+    assert _classify(tmp_path, monkeypatch, hidden.format(supply="")) == [
+        ("CounterView", "blank", {"count"})
+    ]
+    no_super = """
+        def get_context_data(self, **kwargs):
+            return {"other": 1}
+"""
+    assert _classify(tmp_path, monkeypatch, declared.format(supply=no_super)) == [
+        ("CounterView", "blank", {"count"})
     ]
 
 

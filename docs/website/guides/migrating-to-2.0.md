@@ -53,7 +53,8 @@ Two things tell you which names a view still has to supply. With
 `DEBUG = True` djust logs a warning on the `djust.exposure` logger the first
 time a view renders a name that its template reads and the view sets but does
 not supply. `python manage.py check` reports the same statically as
-`djust.T027`.
+`djust.T027`. A field declared with `state()` is supplied: it renders without
+a `get_context_data()` ([#4050](https://github.com/djust-org/djust/issues/4050)).
 
 > **Where 2.0 is today.** There is no 2.0 release yet. On the development line
 > (`2.0.0.dev0`) the removals listed under [Removed names](#3-replace-removed-names-and-settings)
@@ -94,8 +95,9 @@ not supply. `python manage.py check` reports the same statically as
 Do this for one view at a time:
 
 1. Run the inventory command on the view.
-2. Put everything the template reads into `get_context_data()`.
-3. Declare the state you want kept or sent to the browser with `state()`.
+2. Declare the view's state with `state()`. A declared field renders; choose
+   `persist` and `client` only for what must be kept or sent to the browser.
+3. Return everything else the template reads from `get_context_data()`.
 4. Set `exposure_policy = "explicit"` on the class. On 1.3 this is what turns
    the new behaviour on. On 2.0 it is the default, so the line changes nothing
    and you can remove it after you upgrade.
@@ -109,7 +111,7 @@ session and the client state. Under `"explicit"`:
 
 | Destination | What goes there |
 | --- | --- |
-| The template | What `get_context_data()` returns, what Django context processors add (`user`, `perms`, `messages`, `request`), and what framework features provide (forms, uploads, streams, components declared on the class) |
+| The template | Fields declared with `state()` (unless `render=False`), what `get_context_data()` returns, what Django context processors add (`user`, `perms`, `messages`, `request`), and what framework features provide (forms, uploads, streams, components declared on the class) |
 | The browser, as raw data (`get_state()`, HTTP API `assigns`) | `state(..., client=True)` fields only |
 | The session, restored on a reconnect | `state(..., persist="server")` fields only |
 | The signed back-navigation snapshot | `state(..., persist="client", client=True)` fields only |
@@ -163,11 +165,11 @@ ADR-038 exposure inventory (legacy destinations; values redacted)
 
 shop.views.CartView  [policy: legacy; reconnect: fresh mount]
   coupon  str  instance  -> template_context, render_cache, session_state, client_state, snapshot
-      suggest: coupon: str = state(...)  # not restored on a reconnect today, so no persistence grant is needed; supply coupon=self.coupon from get_context_data() if the template uses it
+      suggest: coupon: str = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
   items  list  instance  -> template_context, render_cache, session_state, client_state, snapshot
-      suggest: items: list = state(...)  # not restored on a reconnect today, so no persistence grant is needed; supply items=self.items from get_context_data() if the template uses it
+      suggest: items: list = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
   page  int  instance  -> template_context, render_cache, session_state, client_state, snapshot
-      suggest: page: int = state(...)  # not restored on a reconnect today, so no persistence grant is needed; supply page=self.page from get_context_data() if the template uses it
+      suggest: page: int = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
   _audit_note  str  private  -> private_session
       suggest: explicit mode never persists underscore attributes, and this view does not restore them on a reconnect today; leave it instance-only
 ```
@@ -198,8 +200,9 @@ persistence the view does not have today.
 
 ### Step 2: supply the template
 
-List the names your template reads, and return each one from
-`get_context_data()`. **A name the template reads that nothing supplies
+List the names your template reads. Each one is either declared with `state()`
+(step 3), which renders it, or returned from `get_context_data()`. **A name
+the template reads that nothing supplies
 renders as an empty string, with no error and no warning.** This is the
 mistake to look for: after the switch, open every state of the page and look
 for blanks. Remember names used only inside `{% if %}`, in `{% include %}`d
@@ -231,7 +234,7 @@ processors; you do not add those.
 values that are the view's state. It takes two independent grants:
 
 - no grant (`state(0)`): the field lives for the life of the connection. It
-  is not saved and not sent as data.
+  renders in the template, and is not saved and not sent as data.
 - `persist="server"`: saved in the session after each event and restored when
   the same user reconnects or the request lands on another worker.
 - `client=True`: the raw value may reach the browser, through `get_state()`
@@ -239,6 +242,9 @@ values that are the view's state. It takes two independent grants:
 - `persist="client", client=True`: restored from the signed snapshot on
   back-navigation. `persist="client"` without `client=True` is refused when
   the class is defined.
+- `render=False`: kept out of the template. Rendering is the default for a
+  declared field; it is not a grant, and it never puts the value in
+  `get_state()` or the session.
 
 Anything you do not want saved or sent (a service object, a model instance, a
 cache) stays a plain attribute set in `mount()`. Assigning a plain attribute
@@ -270,11 +276,6 @@ class CartView(LiveView):
     def mount(self, request, **kwargs):
         self._audit_note = "internal"
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(items=self.items, coupon=self.coupon, page=self.page)
-        return context
-
     @event_handler(parameter_policy="strict")
     def add(self, sku: str):
         self.items.append(sku)
@@ -283,6 +284,13 @@ class CartView(LiveView):
     def apply_coupon(self, value: str):
         self.coupon = value
 ```
+
+`items`, `coupon` and `page` render because they are declared; the view needs
+no `get_context_data()`. Releases without
+[#4050](https://github.com/djust-org/djust/issues/4050), including 1.3.x, do
+not render a declared field by itself: there, also return the three from
+`get_context_data()`. That hand-over keeps working after the upgrade, where a
+`get_context_data()` value of the same name wins.
 
 The handlers are also moved to strict parameters here; [section 2](#2-make-event-handlers-strict)
 covers that change, and you can do it separately.
@@ -333,9 +341,8 @@ class ReportView(LiveView):
         return [{"n": n} for n in range(report_id)]
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(report_id=self.report_id, status=self.status, rows=self.rows)
-        return context
+        # report_id and status are declared, so they render already.
+        return super().get_context_data(rows=self.rows, **kwargs)
 
     @event_handler(parameter_policy="strict")
     def load(self, report_id: int):
@@ -384,8 +391,8 @@ view must work without a socket, give every field its handlers change
   view gets its own copy. A plain component (`Rating`, `Badge` and the other
   `djust.components.components` classes) cannot go there: a class-body one is
   a single object shared by every session, so it is refused. Declare it as a
-  field, `rating = state(default_factory=lambda: Rating(value=4))`, and hand it
-  to the template in `get_context_data()`, or build it in `get_context_data()`.
+  field, `rating = state(default_factory=lambda: Rating(value=4))`, which
+  renders it, or build it in `get_context_data()`.
   Do not give a component field `persist=`.
 - **A plain component in the class body** (`rating = Rating(...)`), for the
   reason above. On a legacy view it is not refused, but `manage.py check`
@@ -585,6 +592,7 @@ Every replacement works on 1.3.x, so make the change there.
 | `djust.sse.DjustSSEEventView` and the `sse/<session_id>/event/` route | `DjustSSEMessageView` at `sse/<session_id>/message/`, which the bundled client already uses |
 | `self._async_pending = (fn, args, kwargs)` in a handler | `self.start_async(fn, *args, **kwargs)`, or `@background` on the handler. Assigning the tuple raises `ImproperlyConfigured` when the handler runs, on every transport ([#4031](https://github.com/djust-org/djust/issues/4031)); search your code for `_async_pending` to find them before then. |
 | `use_actors = True` | Remove the attribute. See [What does not survive](#5-what-does-not-survive). |
+| `@optimistic` and `@client_state(keys=...)` (`djust.optimistic`, `djust.client_state`, `djust.decorators`) | Delete the decorator; the handler behaves as before, because nothing read either one. Importing either raises `ImportError` naming this advice ([#4006](https://github.com/djust-org/djust/issues/4006)). For feedback before the server answers, use `dj-loading.*` attributes or JS Commands. |
 | `sign_snapshot`, `unsign_snapshot` and `SNAPSHOT_SALT` from `djust.security`, the `djust.security.state_snapshot` module, and the `LiveView._restore_snapshot()` override | `state(..., persist="client", client=True)` fields. djust signs and verifies their token itself (example below). Importing one of the three names raises `ImportError` with this advice, and so does reading it as an attribute: `hasattr(djust.security, "sign_snapshot")` raises instead of returning `False`, so a compatibility shim must catch `ImportError`. A class that defines `_restore_snapshot()` is refused with `ImproperlyConfigured`; move what it did after restoring into `handle_restore()`. |
 | `NonPersistableStateError`, and the `strict=` argument of `LiveView._capture_snapshot_state()` | Nothing. A client field has to be JSON, and a model or `Decimal` is refused when the token is built. |
 
@@ -696,6 +704,31 @@ To open or close from your own handler, set the state:
 - **A model or QuerySet that cannot be serialized for the template is an
   error.** It used to be serialized again a slower way.
 
+### Defaults that changed
+
+Nothing raises for these; the page looks or behaves differently until you
+state the old value.
+
+- **`{% theme_head %}` no longer links the component catalog's stylesheet.**
+  With `djust.components` installed it used to link
+  `djust_components/components.css` (about 330 KB) on every page. Pages that
+  render catalog tags (`{% modal %}`, `{% data_table %}`, `{% app_shell %}`,
+  ...) now render them unstyled unless the project sets
+  `LIVEVIEW_CONFIG["theme"]["component_catalog_css"] = True`, or the page
+  passes `{% theme_head component_catalog=True %}`. The theme pack's own
+  component CSS (`.card`, `.btn`, `.input`, ...) is linked as before. System
+  check `djust_theming.W004` reports a project that installs
+  `djust.components` without stating the setting; set it to `False` once you
+  know no page needs the file
+  ([#4003](https://github.com/djust-org/djust/issues/4003)).
+- **The Chart.js adapter redraws only when the canvas's attributes change.**
+  `<canvas dj-hook="Chart">` used to call `chart.update()` after every server
+  update; it now does so only when one of the canvas's attributes changed. A
+  chart whose plugins read state from outside the canvas (the theme, a global)
+  either changes `dj-chart-revision` when that state changes, or sets
+  `dj-chart-update="always"` for the old behaviour
+  ([#4004](https://github.com/djust-org/djust/issues/4004)).
+
 ## 4. Still to be removed before the final release
 
 These still work on the 2.0 development line. Each is to be removed, or made
@@ -703,7 +736,7 @@ the only behaviour, before 2.0.0 is released, so finish with them on 1.3.x:
 
 | Still present | Do this now |
 | --- | --- |
-| `exposure_policy = "legacy"`. It is no longer the default: a view has to state it, and stating it warns | Migrate every view that states it, or that you have not checked yet ([section 1](#1-move-each-view-to-explicit-exposure)) |
+| `exposure_policy = "legacy"`. It is no longer the default: a view has to state it, stating it warns, and system check `djust.V028` lists each class that does | Migrate every view that states it, or that you have not checked yet ([section 1](#1-move-each-view-to-explicit-exposure)) |
 | `event_parameter_policy = "legacy"`, the default, and `parameter_policy="legacy"` | Make every handler strict ([section 2](#2-make-event-handlers-strict)) |
 | `event_security` set to `"open"` or `"warn"` | Remove the setting (the default is `"strict"`) and put `@event_handler` on every method a template calls |
 | `enable_state_snapshot = True` and `PersistentLiveView`. They still save a legacy view's public state in the session and restore it on a reconnect; the signed copy they sent to the browser is [already removed](#python-names) | `state(..., persist="server")` fields, and `persist="client", client=True` for back-navigation |
