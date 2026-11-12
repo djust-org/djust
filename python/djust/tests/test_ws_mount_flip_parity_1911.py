@@ -21,10 +21,9 @@ Every test here:
 * asserts intermediate state and carries a gate-off / contrast sibling (#1468)
   proving the assertion distinguishes the real behavior from a vacuous one.
 
-The six behaviors (ADR-022 Iter 3 Phase 3.0):
+The behaviors (ADR-022 Iter 3 Phase 3.0). Number 1 was the actor mount
+(Finding D), removed with the actor system in 2.0:
 
-1. **actor MOUNT** (``use_actors=True`` view → an actor-backed render frame, NOT
-   a ``send_error`` refusal) — Finding D (actor mount is WS-verbatim; SSE refuses).
 2. **sticky_hold-before-mount-frame ORDERING** via ``live_redirect_mount`` —
    Finding B (the sticky_hold frame MUST precede the mount frame).
 3. **Channels group_add server-push reachability** (mount joins the view group →
@@ -179,24 +178,8 @@ async def _connect_and_mount(view_path: str, url: str = "/parity/"):
 _ALLOWED = "djust.tests.test_ws_mount_flip_parity_1911"
 
 
-class ActorMountView(LiveView):
-    """``use_actors=True`` view — mount must go through the actor path and return
-    a normal mount frame (Finding D: actor mount is WS-verbatim)."""
-
-    exposure_policy = "legacy"
-    use_actors = True
-    template = f'<div dj-root dj-view="{_ALLOWED}.ActorMountView" dj-id="0">c={{{{ c }}}}</div>'
-
-    def mount(self, request, **kwargs):
-        self.c = 0
-
-    def get_context_data(self, **kwargs):
-        return {"c": self.c}
-
-
 class PlainMountView(LiveView):
-    """Non-actor control for the actor-mount gate-off (proves the actor frame is
-    not just "any mount frame")."""
+    """A plain view: the "other group" in the broadcast gate-off."""
 
     exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.PlainMountView" dj-id="0">c={{{{ c }}}}</div>'
@@ -414,66 +397,6 @@ try:
     ]
 except Exception:  # pragma: no cover - channels/Django optional at import time
     urlpatterns = []
-
-
-# ===========================================================================
-# 1. actor MOUNT
-# ===========================================================================
-
-
-@pytest.mark.django_db
-@pytest.mark.asyncio
-class TestActorMount:
-    async def test_actor_view_mounts_with_render_frame_not_refusal(self):
-        """A ``use_actors=True`` view mounts over real WS via the actor path
-        (creates a ``SessionActor``, sets ``actor_handle``) and returns a normal
-        ``mount`` frame carrying HTML — NOT the SSE-style ``send_error`` refusal
-        the runtime emits for actors (Finding D: actor mount is WS-verbatim).
-
-        The flip (3.3b) must route the WS actor mount through the
-        ``transport.dispatch_actor_mount`` hook so this stays a mount frame, never
-        a refusal. Reproduce-first: assert the frame is a mount (not an error) AND
-        carries the rendered ``c=0`` state.
-        """
-        pytest.importorskip("channels")
-        from djust._rust import create_session_actor  # noqa: F401
-
-        from django.test import override_settings
-
-        with override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED]):
-            communicator, mount_frame = await _connect_and_mount(f"{_ALLOWED}.ActorMountView")
-
-            assert mount_frame.get("type") == "mount", (
-                "an actor view must mount with a mount frame (Finding D: WS actor "
-                f"mount is verbatim, not the SSE 'use_actors not supported' refusal); "
-                f"got {mount_frame!r}"
-            )
-            # #2599: the actor mount renders the view's OWN template and its
-            # html is normalized + dj-root-extracted exactly like the non-actor
-            # frame (the PlainMountView sibling below), so the two frames agree
-            # byte-for-byte on `c=0`; `has_ids` reflects the extracted content.
-            assert "c=0" in mount_frame.get("html", ""), (
-                f"the actor mount frame must carry the rendered template; got {mount_frame!r}"
-            )
-            assert mount_frame.get("has_ids") == ("dj-id=" in mount_frame["html"]), mount_frame
-            assert "error" not in mount_frame.get("type", ""), (
-                f"the actor mount must NOT be a refusal/error frame; got {mount_frame!r}"
-            )
-
-            await communicator.disconnect()
-
-    async def test_gate_off_plain_view_mounts_without_actor_path(self):
-        """GATE-OFF / contrast: a NON-actor view mounts with the same mount-frame
-        shape, proving the actor test's frame is a real mount (both views mount;
-        the actor one additionally exercises the actor branch). Distinguishes
-        "actor mount works" from "any mount produces a mount frame"."""
-        from django.test import override_settings
-
-        with override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED]):
-            communicator, mount_frame = await _connect_and_mount(f"{_ALLOWED}.PlainMountView")
-            assert mount_frame.get("type") == "mount"
-            assert "c=0" in mount_frame.get("html", "")
-            await communicator.disconnect()
 
 
 # ===========================================================================

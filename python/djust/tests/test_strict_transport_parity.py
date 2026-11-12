@@ -3,7 +3,7 @@
 Each case is (handler, payload, expected). ``expected`` is the repr the handler
 records, or REJECT: the event must be refused before application code runs.
 The same matrix is sent through the shared runtime (WebSocket/SSE dispatch),
-real WebSocket sessions in normal and actor mode, a real SSE session, both
+a real WebSocket session, a real SSE session, both
 HTTP-fallback body shapes, the exposed event API and the test client.
 """
 
@@ -96,11 +96,6 @@ class ParityView(LiveView):
     @strict()
     def t_form(self, **fields: str):
         self._done("t_form", dict(fields))
-
-
-class ActorParityView(ParityView):
-    use_actors = True
-    api_name = "strict.parity.actor"
 
 
 MATRIX = [
@@ -257,8 +252,7 @@ def test_test_client():
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("view", ["ParityView", "ActorParityView"])
-async def test_real_websocket(view):
+async def test_real_websocket(view="ParityView"):
     from channels.testing import WebsocketCommunicator
     from django.test import override_settings
     from djust.tests.test_exposure_runtime import make_request
@@ -332,35 +326,3 @@ async def test_real_sse():
             _sse_sessions.pop(sid, None)
             config.set("rate_limit", limits)
     _check(outcomes)
-
-
-@pytest.mark.asyncio
-async def test_actor_bridge_keeps_open_payload_key_order():
-    """The actor path once carried event params in a Rust HashMap, reordering a
-    ``**`` payload. 64 keys in a shuffled order, repeated: a hash map passes
-    this by chance with negligible probability."""
-    import random
-
-    from djust._rust import create_session_actor
-
-    received = []
-
-    class View:
-        def get_context_data(self):
-            return {}
-
-        @event_handler(parameter_policy="strict")
-        def collect(self, **fields: str):
-            received.append(list(fields))
-
-    keys = ["k%02d" % i for i in range(64)]
-    view = View()
-    actor = await create_session_actor("strict-order-actor")
-    try:
-        await actor.mount("tests.StrictOrderView", {}, view)
-        for seed in range(10):
-            random.Random(seed).shuffle(keys)
-            await actor.event("collect", {key: "v" for key in keys})
-            assert received[-1] == keys
-    finally:
-        await actor.shutdown()

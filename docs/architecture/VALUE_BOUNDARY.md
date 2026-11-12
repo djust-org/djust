@@ -607,6 +607,11 @@ There are ~50 `sync_to_async` call sites in that file.
 
 ### 5.2 The actor path renders from a tokio task
 
+> **Removed in 2.0.** The actor system this section describes
+> (`crates/djust_live/src/actors/`, `use_actors`) no longer exists; the
+> section is kept as the record of why ADR-029 made the render environment
+> per-view config.
+
 `crates/djust_live/src/actors/view.rs:560` does `tokio::spawn(actor.run())`, and
 the actor reaches Python by acquiring the GIL from inside that task —
 `Python::attach` at `crates/djust_live/src/actors/view.rs:413` (the event

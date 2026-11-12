@@ -130,9 +130,6 @@ class MockTransport:
     async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
         return None
 
-    def uses_actors(self, view: Any) -> bool:
-        return False
-
     @contextlib.asynccontextmanager
     async def event_context(self, view: Any):
         if self._in_event_context:

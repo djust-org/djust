@@ -88,7 +88,7 @@ class Valid(LiveView):
         return view_id
 
     @event_handler(parameter_policy="strict")
-    async def async_ok_without_actors(self, count: int):
+    async def async_ok(self, count: int):
         return count
 
     @event_handler
@@ -191,10 +191,9 @@ class InheritsInvalid(Invalid):
     pass
 
 
-class ActorView(LiveView):
+class AsyncView(LiveView):
     exposure_policy = "legacy"
     template = "<div dj-root></div>"
-    use_actors = True
 
     @event_handler(parameter_policy="strict")
     async def async_strict(self, count: int):
@@ -340,13 +339,6 @@ def test_invalid_matrix_reports_exactly_one_expected_message_each(fixture_module
     found = _messages(fixture_module)
     for handler, expected in EXPECTED_INVALID.items():
         assert found.pop(_label("Invalid", handler)) == [expected], handler
-    assert found.pop(_label("ActorView", "async_strict")) == [
-        (
-            "djust.V017",
-            "async strict event handler on an actor view (use_actors=True); actor "
-            "dispatch rejects it before the handler runs.",
-        )
-    ]
     assert found.pop(_label("Widget", "pick")) == [("djust.V016", EXPECTED_INVALID["mapping"][1])]
     assert found.pop(_label("Subscribed", "loose")) == [
         (
@@ -360,8 +352,8 @@ def test_invalid_matrix_reports_exactly_one_expected_message_each(fixture_module
         "%s (declared as %s.StrictMixin.mixin_invalid)"
         % (_label("UsesMixin", "mixin_invalid"), MODULE)
     )
-    # Valid declarations, legacy handlers (unannotated, reserved names, async
-    # actors) and the inherited copies of Invalid's handlers report nothing.
+    # Valid declarations, legacy handlers (unannotated, reserved names), async
+    # strict handlers and the inherited copies of Invalid's handlers report nothing.
     assert found == {}
 
 
@@ -396,7 +388,7 @@ def test_project_strict_policy_reports_inheriting_handlers_but_not_legacy_overri
     assert found[_label("Invalid", "inherits_project_policy")] == [EXPECTED_INVALID["unannotated"]]
     assert found[_label("Valid", "legacy_unannotated")] == [EXPECTED_INVALID["unannotated"]]
     assert _label("Valid", "explicit_legacy") not in found
-    assert _label("ActorView", "async_legacy") in found  # unannotated under strict
+    assert _label("AsyncView", "async_legacy") in found  # unannotated under strict
 
 
 def test_invalid_project_policy_is_one_configuration_error(fixture_module):
@@ -436,7 +428,7 @@ def test_invalid_handler_policy_metadata_is_reported(fixture_module):
 
 
 def test_suppression(fixture_module, settings):
-    settings.DJUST_CONFIG = {"suppress_checks": ["V016", "V017", "V018"]}
+    settings.DJUST_CONFIG = {"suppress_checks": ["V016", "V018"]}
     assert _messages(fixture_module) == {}
 
 
@@ -500,15 +492,6 @@ def test_function_local_classes_resolve_against_module_globals_only():
 
     with pytest.raises(ContractError, match="'value' annotation cannot be resolved"):
         get_strict_handler_contract(Local().handler)
-
-
-def test_actor_bridge_rejects_what_v017_reports(fixture_module):
-    from djust.validation import actor_handler_arguments
-
-    view = fixture_module.ActorView()
-    with pytest.raises(ContractError):
-        actor_handler_arguments(view.async_strict, {"count": 1})
-    assert actor_handler_arguments(view.sync_strict, {"count": "2"}) == ((2,), {})
 
 
 def test_no_handler_is_told_to_add_kwargs(fixture_module):

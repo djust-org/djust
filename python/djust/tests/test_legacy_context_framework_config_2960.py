@@ -3,7 +3,7 @@
 ``ContextMixin.get_context_data`` walks class attributes for legacy views. The
 walk stopped at ``ContextMixin``, and ``LiveView`` sits BEFORE it in every
 view's MRO, so ``LiveView``'s own configuration defaults (``template``,
-``login_required``, ``use_actors``, ``sticky``, ...) entered every legacy
+``login_required``, ``sticky``, ...) entered every legacy
 view's template context -- and from there its session state. The walk now skips
 every class in ``LiveView``'s MRO, the same boundary the ADR-038
 ``djust_exposure_inventory`` command draws (``_user_bases``). Attributes the
@@ -59,7 +59,7 @@ def test_framework_config_defaults_are_not_template_context():
     }
     assert not leaked, leaked
     # The names the issue lists, spelled out.
-    for name in ("login_required", "use_actors", "sticky", "tick_interval", "abstract"):
+    for name in ("login_required", "sticky", "tick_interval", "abstract"):
         assert name not in context
 
 
@@ -93,7 +93,7 @@ def test_a_user_subclass_chain_is_walked_to_the_framework_boundary():
     assert "login_required" not in context
 
 
-@pytest.mark.parametrize("name", ["sticky", "use_actors", "login_required"])
+@pytest.mark.parametrize("name", ["sticky", "login_required"])
 def test_the_derived_config_set_covers_the_issue_names(name):
     # Guards the helper above: the set is derived from LiveView, so it must
     # contain the names the issue reports (and the framework already lists).

@@ -454,39 +454,6 @@ def test_widthratio_treats_a_decimal_as_a_number() -> None:
     assert expected == "50"
 
 
-@pytest.mark.asyncio
-async def test_the_actor_path_carries_a_decimal_exactly() -> None:
-    """`python_to_value` — the third converter, and the one that renders props.
-
-    The actor path has its own Python->Value converter, distinct from
-    `FromPyObject` and from `serialize_python_value`. It takes component props
-    and, on mount, the whole `get_context_data()`. It carried the comment
-    *"both must agree, or the same object renders differently depending on which
-    path it took (#1646)"* while still extracting Decimal as f64 — so once the
-    other two were fixed, the same value rendered two ways depending on route.
-    Found by the #2240 review. Before this PR all three were consistently wrong,
-    which is a different kind of correct.
-
-    Driven through a real component render, so the assertion is on what a user
-    would see rather than on an internal shape. `create_component` needs a
-    mounted view, hence the mount first; the `view_id` comes back from it.
-    """
-    from djust._rust import create_session_actor
-
-    handle = await create_session_actor("s-2214")
-    mounted = await handle.mount("demo_app.views.CounterView", {}, None)
-    html = await handle.create_component(
-        mounted["view_id"],
-        "c-2214",
-        "{{ price }}",
-        {"price": Decimal("12345678901234567890.123456789")},
-        None,
-    )
-
-    assert "12345678901234567890.123456789" in html, html
-    assert "e+" not in html.lower(), f"the actor path collapsed it to a float: {html}"
-
-
 def test_a_decimal_subclass_is_claimed_but_a_namesake_class_is_not() -> None:
     """`isinstance`, not a type-name match.
 

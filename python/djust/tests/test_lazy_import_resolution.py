@@ -20,7 +20,6 @@ AUTH_NAMES = [
     "SignupForm",
     "LoginRequiredLiveViewMixin",
     "PermissionRequiredLiveViewMixin",
-    "social_auth_providers",
 ]
 
 

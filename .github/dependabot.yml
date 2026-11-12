@@ -21,11 +21,6 @@ updates:
     labels:
       - "dependencies"
       - "rust"
-    ignore:
-      # bincode 3.0.0 is intentionally broken (compile_error!)
-      # See: https://xkcd.com/2347/
-      - dependency-name: "bincode"
-        versions: ["3.*"]
 
   # JavaScript dependencies
   - package-ecosystem: "npm"

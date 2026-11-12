@@ -2,8 +2,8 @@
 
 Owner decisions (2026-09-25): Q1 publishes ``DropdownMenu``, ``ActionItem`` and
 ``SeparatorItem`` from ``djust.components.interactive`` and adds a check for a
-module importing both DropdownMenus (``djust.Q004``). Q5 keeps actor views
-unsupported, reported at ``manage.py check`` (``djust.V020``). The debug panel's
+module importing both DropdownMenus (``djust.Q004``). Q5 (actor views, ``djust.V020``) left with the actor system
+in 2.0. The debug panel's
 time-travel jump restores interactive state over a real WebSocket without
 emitting outputs or changing identities.
 """
@@ -78,46 +78,6 @@ def test_item_values_must_be_nonempty_and_unique():
         )
     with pytest.raises(ValueError):
         DropdownMenu(label="x", items=[], visibility="browser")
-
-
-# --------------------------------------------------------------------------
-# V020: interactive components on actor views (Q5).
-# --------------------------------------------------------------------------
-
-
-def test_v020_reports_an_actor_view_that_declares_an_interactive_component():
-    import gc
-
-    from djust.checks.components import check_interactive_actor_views
-
-    class ActorMenuPage(LiveView):
-        exposure_policy = "legacy"
-        use_actors = True
-        menu = DropdownMenu(label="Project", items=[])
-
-    class PlainMenuPage(LiveView):
-        exposure_policy = "legacy"
-        menu = DropdownMenu(label="Project", items=[])
-
-    class ActorWithoutMenus(LiveView):
-        exposure_policy = "legacy"
-        use_actors = True
-
-    try:
-        found = [m for m in check_interactive_actor_views(None) if m.id == "djust.V020"]
-        labels = [m.msg.split(" ")[0].rsplit(".", 1)[-1] for m in found]
-        assert "ActorMenuPage" in labels
-        assert "PlainMenuPage" not in labels and "ActorWithoutMenus" not in labels
-        message = next(m for m in found if "ActorMenuPage" in m.msg)
-        assert "menu" in message.msg and message.level >= 40  # Error
-        with override_settings(DJUST_CONFIG={"suppress_checks": ["V020"]}):
-            assert check_interactive_actor_views(None) == []
-        # The runtime refusal the check front-runs is unchanged.
-        with pytest.raises(NotImplementedError):
-            ActorMenuPage().menu  # noqa: B018
-    finally:
-        del ActorMenuPage, PlainMenuPage, ActorWithoutMenus
-        gc.collect()
 
 
 # --------------------------------------------------------------------------

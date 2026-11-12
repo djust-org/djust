@@ -72,11 +72,9 @@ def _handler_messages(
     member: Any,
     function: types.FunctionType,
     project_policy_valid: bool,
-    actor_owner: bool,
     first_report: bool,
 ) -> list[CheckMessage]:
     from djust._parameter_contract import ContractError
-    from djust.decorators import is_event_handler
     from djust.validation import get_handler_parameter_policy, get_strict_handler_contract
 
     messages: list[CheckMessage] = []
@@ -128,27 +126,6 @@ def _handler_messages(
                 )
             )
         return messages
-
-    if (
-        actor_owner
-        and is_event_handler(function)  # server functions never reach actors
-        and inspect.iscoroutinefunction(handler)
-        and not _is_check_suppressed("djust.V017")
-    ):
-        messages.append(
-            DjustError(
-                "%s: async strict event handler on an actor view (use_actors=True); "
-                "actor dispatch rejects it before the handler runs." % label,
-                hint=(
-                    "Strict async handlers need a non-actor transport. Make the handler "
-                    "synchronous, set use_actors = False, or use parameter_policy='legacy'."
-                ),
-                id="djust.V017",
-                fix_hint="Make `%s` synchronous or disable actors on the view." % label,
-                file_path=file_path,
-                line_number=line_number,
-            )
-        )
 
     explicit = _explicit_param_names(function)
     declared = [
@@ -210,11 +187,11 @@ def _owner_classes() -> Iterator[tuple[type, Callable[[type], bool], bool]]:
 
     for cls in sorted(views, key=by_name):
         if not _is_framework_internal_class(cls) and cls.__dict__.get("abstract") is not True:
-            yield cls, view_stop, getattr(cls, "use_actors", False) is True
+            yield cls, view_stop
 
     for cls in sorted(components, key=by_name):
         if not _is_framework_internal_class(cls) and cls.__dict__.get("abstract") is not True:
-            yield cls, component_stop, False
+            yield cls, component_stop
 
 
 @register("djust")
@@ -231,21 +208,21 @@ def check_event_parameter_contracts(app_configs: Any, **kwargs: Any) -> list[Che
         project_policy_valid = False
 
     entries = [
-        (cls, name, member, function, actor_owner)
-        for cls, stop, actor_owner in _owner_classes()
+        (cls, name, member, function)
+        for cls, stop in _owner_classes()
         for name, member, function, _owner in declared_handlers(cls, stop, server_functions=True)
     ]
     # A declaration problem is reported once, under the class that declares the
     # handler when that class is itself checked, else under its first user.
     primary: dict[Any, type] = {}
-    for cls, name, member, function, _actor in entries:
+    for cls, name, member, function in entries:
         current = primary.get(function)
         if current is None or (
             vars(cls).get(name) is member and vars(current).get(name) is not member
         ):
             primary[function] = cls
     messages: list[CheckMessage] = []
-    for cls, name, member, function, actor_owner in entries:
+    for cls, name, member, function in entries:
         messages.extend(
             _handler_messages(
                 cls,
@@ -253,12 +230,11 @@ def check_event_parameter_contracts(app_configs: Any, **kwargs: Any) -> list[Che
                 member,
                 function,
                 project_policy_valid,
-                actor_owner,
                 primary[function] is cls,
             )
         )
     checked: set[Any] = set()
-    for cls, _stop, _actor in _owner_classes():
+    for cls, _stop in _owner_classes():
         messages.extend(_subscription_messages(cls, checked))
     return messages
 

@@ -3,18 +3,15 @@
 Every per-render Django setting Rust needs is a ``thread_local!`` cell that
 ``djust.render_env.apply_render_env`` pushes on the thread about to render.
 That is correct for a render on the pushing thread and silently wrong for a
-render on any other thread: the ``ViewActor`` under ``use_actors=True``
-renders on a tokio worker that never pushed, so ``TIME_ZONE`` and the
-locale's number format were ignored there (the #2751 probe observed it
-through ADR-027's kill-switch, which ADR-027 Step 5 (#2628) has since
-deleted — the cases below observe the NUMBER FORMAT instead).
+render on any other thread. The case that found it was the actor system
+(removed in 2.0), whose ``ViewActor`` rendered on a tokio worker that never
+pushed, so ``TIME_ZONE`` and the locale's number format were ignored there.
+The cases below observe the NUMBER FORMAT on a fresh thread.
 
 The fix carries the environment the way ``template_auto_call`` is carried —
 a FIELD on the backend (``capture_render_env`` / ``set_render_env``), applied
 by every render entry on whatever thread it runs, under a guard that restores
-the cells afterwards. These cases are the Python half of ADR-029 §5; the Rust
-half (the flipped #2751 probe, the session-mount test, the ``ComponentActor``
-parity test) lives beside the actors.
+the cells afterwards. These cases are the Python half of ADR-029 §5.
 
 Gate-off per mechanism (#2135), measured with the Rust extension rebuilt:
 
@@ -26,7 +23,7 @@ Gate-off per mechanism (#2135), measured with the Rust extension rebuilt:
 * ``render_template`` ignoring ``render_env=`` —
   ``TestThePlainEntryTakesAnExplicitEnv`` goes red;
 * the mixin not capturing — ``test_the_mixin_captures_the_env_it_pushed`` goes
-  red, and so does the WS actor mount case below.
+  red.
 """
 
 from __future__ import annotations
@@ -43,8 +40,7 @@ from djust import _rust
 from djust.render_env import apply_render_env
 
 # `1234,5` under a `,`-decimal (French) number format, `1234.5` under the
-# thread default — the same probe the Rust side uses
-# (`actors/view.rs::a_child_component_inherits_the_views_render_env_2741`).
+# thread default.
 PROBE = "{{ v }}"
 PROBE_STATE = {"v": 1234.5}
 FR = "1234,5"
@@ -323,70 +319,3 @@ def test_every_backend_render_entry_applies_the_env():
         "render_binary_diff",
         "prepare_partial_page",
     }, f"env entries {sorted(env)}"
-
-
-# ---------------------------------------------------------------------------
-# The production actor path, end to end: a `use_actors=True` WS mount under a
-# `fr` number format renders the configured answer.
-# ---------------------------------------------------------------------------
-
-_ALLOWED = "djust.tests.test_render_env_per_view_2741"
-
-
-def _actor_view(name: str):
-    from djust import LiveView
-
-    def mount(self, request, **kwargs):
-        self.v = PROBE_STATE["v"]
-
-    return type(
-        name,
-        (LiveView,),
-        {
-            "exposure_policy": "legacy",
-            "use_actors": True,
-            "template": f'<div dj-root dj-view="{_ALLOWED}.{name}" dj-id="0">{PROBE}</div>',
-            "mount": mount,
-            "__module__": __name__,
-        },
-    )
-
-
-ActorProbeView = _actor_view("ActorProbeView")
-
-
-@pytest.mark.django_db
-@pytest.mark.asyncio
-class TestTheActorMountAppliesTheConfiguredEnv:
-    """The production actor path end to end (`runtime.py`'s
-    `dispatch_actor_mount` -> `SessionActorHandle.mount` -> the tokio worker):
-    the configured number format decides the actor's render, not the
-    worker's default. Before ADR-029 the first case rendered the default
-    (#2751's finding, over the wire).
-
-    Configured through `LANGUAGE_CODE` rather than `translation.override`:
-    the mount path re-activates the settings language before
-    `dispatch_actor_mount` pushes with `apply_render_env()` (measured: a
-    thread-local `override("fr")` was read back as `en-us` at the push), so
-    only the setting reaches the push."""
-
-    async def _mount_html(self, lang: str) -> str:
-        pytest.importorskip("channels")
-        from djust._rust import create_session_actor  # noqa: F401
-
-        from .test_ws_mount_flip_parity_1911 import _connect_and_mount
-
-        with override_settings(LANGUAGE_CODE=lang, LIVEVIEW_ALLOWED_MODULES=[_ALLOWED]):
-            comm, frame = await _connect_and_mount(f"{_ALLOWED}.ActorProbeView")
-            try:
-                return frame["html"]
-            finally:
-                await comm.disconnect()
-
-    async def test_a_configured_number_format_reaches_the_actor_render(self):
-        html = await self._mount_html("fr")
-        assert FR in html and DEFAULT not in html, html
-
-    async def test_gate_off_the_default_config_renders_the_unlocalized_answer(self):
-        html = await self._mount_html("en-us")
-        assert DEFAULT in html and FR not in html, html

@@ -243,8 +243,6 @@ def _make_fake_consumer():
             self.session_id = "test-session"
             self.scope = {"path": "/", "query_string": b"", "session": None}
             self.channel_name = "test-channel"
-            self.use_actors = False
-            self.actor_handle = None
             # Wire-version counter attrs the runtime mount path reads via the
             # next_mount_version hook (#1919 THE MOUNT FLIP: handle_mount is now a
             # thin shim over ViewRuntime.dispatch_mount, so these fakes drive the

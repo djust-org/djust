@@ -862,9 +862,8 @@ class RustBridgeMixin:
 
         ADR-029 (#2741): the push above sets THIS thread's cells; the capture
         below snapshots them onto the view as per-view config, so a render
-        entry running on a thread that never pushed — the ``ViewActor``'s
-        tokio worker — installs the configured values rather than reading the
-        worker's compiled defaults.
+        entry running on a thread that never pushed installs the configured
+        values rather than reading that thread's compiled defaults.
         """
         apply_render_env()
         rust_view = self._rust_view

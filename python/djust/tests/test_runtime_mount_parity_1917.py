@@ -28,15 +28,13 @@ assertions are against the SAME wire bytes a 3.3b-flipped WS mount would produce
 
 Parity behaviors proven (the issue's gate list):
   * basic mount (mount frame + HTML + has_ids + consumer-owned version)
-  * ACTOR mount — now RENDERS via ``dispatch_actor_mount`` (NOT the SSE refusal):
-    the key 3.3a behavior change (Finding D)
   * ``sticky_hold`` ordering via ``on_mount_render_ready`` (Finding B)
   * NO-ARM version stamping via ``next_mount_version`` (Finding C)
   * auth-block #291-not-in-batch via ``finalize_mount_auth`` (Finding E)
   * state restore (Phase 3.1) still works through the wired path
 
-Plus gate-off siblings (#1468): the actor branch (force ``uses_actors_for_mount``
-False → actor view refused again) + the ``next_mount_version`` wiring.
+Plus a gate-off sibling (#1468): the ``next_mount_version`` wiring. The actor
+mount cases (Finding D) left with the actor system in 2.0.
 """
 
 from __future__ import annotations
@@ -77,21 +75,6 @@ class BootstrapView(LiveView):
 class PlainView(LiveView):
     exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.PlainView" dj-id="0">c={{{{ c }}}}</div>'
-
-    def mount(self, request, **kwargs):
-        self.c = 0
-
-    def get_context_data(self, **kwargs):
-        return {"c": self.c}
-
-
-class ActorView(LiveView):
-    """``use_actors=True`` view — the runtime must mount it through
-    ``dispatch_actor_mount`` (render frame), NOT the SSE-style refusal."""
-
-    exposure_policy = "legacy"
-    use_actors = True
-    template = f'<div dj-root dj-view="{_ALLOWED}.ActorView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):
         self.c = 0
@@ -240,74 +223,6 @@ class TestRuntimeBasicMountParity:
             # NO-ARM: recovery stays unset after a mount.
             assert getattr(consumer, "_recovery_html", None) is None, (
                 "Finding C: mount must NOT arm request_html recovery"
-            )
-        finally:
-            await communicator.disconnect()
-
-
-# ===========================================================================
-# 2. ACTOR mount RENDERS (not refusal) — the key 3.3a behavior change
-# ===========================================================================
-
-
-@pytest.mark.django_db
-@pytest.mark.asyncio
-class TestRuntimeActorMountParity:
-    async def test_runtime_actor_mount_renders_not_refusal(self):
-        pytest.importorskip("channels")
-        from djust._rust import create_session_actor
-
-        if create_session_actor is None:
-            pytest.skip("actor factory not built in this binary")
-
-        communicator, consumer = await _connect_and_bootstrap_consumer()
-        try:
-            await _runtime_mount(consumer, f"{_ALLOWED}.ActorView")
-            frames = await _drain(communicator, "mount")
-            mounts = [f for f in frames if f.get("type") == "mount"]
-            errors = [f for f in frames if f.get("type") == "error"]
-            assert mounts, (
-                "Finding D: a use_actors view over the RUNTIME path must now mount "
-                f"with a mount frame (via dispatch_actor_mount), NOT refuse; got {frames!r}"
-            )
-            assert not errors, (
-                f"the actor mount must NOT emit the SSE-style refusal error; got {errors!r}"
-            )
-            mf = mounts[0]
-            assert mf.get("html"), f"the actor mount frame must carry rendered HTML; {mf!r}"
-            # #2599: the actor html is now the SAME extracted dj-root content as
-            # the non-actor frame, so `c=0` carries no nested dj-id and has_ids
-            # reflects that, exactly as the basic-mount case above pins.
-            assert "c=0" in mf["html"], mf
-            assert mf.get("has_ids") == ("dj-id=" in mf["html"]), mf
-        finally:
-            await communicator.disconnect()
-
-    async def test_gate_off_actor_refused_when_transport_says_no(self, monkeypatch):
-        """GATE-OFF (#1468): force ``uses_actors_for_mount`` → False on the WS
-        transport (the SSE shape) and the actor view is REFUSED again — proving
-        the positive test's render depends on the actor-mount branch, not on
-        every mount succeeding."""
-        communicator, consumer = await _connect_and_bootstrap_consumer()
-        try:
-            transport = WSConsumerTransport(consumer)
-            monkeypatch.setattr(transport, "uses_actors_for_mount", lambda view: False)
-            runtime = ViewRuntime(transport, scope=consumer.scope)
-            with _ALLOWLIST:
-                await runtime.dispatch_mount(
-                    {"type": "mount", "view": f"{_ALLOWED}.ActorView", "url": "/parity-1917/"}
-                )
-            frames = await _drain(communicator, "error")
-            mounts = [f for f in frames if f.get("type") == "mount"]
-            errors = [f for f in frames if f.get("type") == "error"]
-            assert not mounts, (
-                "gate-off: with uses_actors_for_mount False, the actor view must NOT "
-                f"mount; got {frames!r}"
-            )
-            assert errors, "gate-off: the actor view must be refused (error frame)"
-            blob = "".join(str(e) for e in errors)
-            assert "not supported over SSE" in blob, (
-                f"gate-off: the refusal must be the SSE-style actor envelope; got {errors!r}"
             )
         finally:
             await communicator.disconnect()

@@ -311,4 +311,4 @@ Without `form=`, they render the old themed mock-up, whose `email` input doesn't
 
 Set either setting yourself to keep today's behaviour.
 
-**From `djust.auth.social.social_auth_providers`.** This context processor still works but is deprecated. Use `{% auth_providers auth %}`, whose `auth.providers` holds the same information.
+**From the `social_auth_providers` context processor.** djust 2.0 removed it; a `TEMPLATES` entry that still lists `"djust.auth.social.social_auth_providers"` fails startup. Delete the entry and use `{% auth_providers auth %}`. `auth.providers` holds the same providers: each item's `name` key is now `id`, and the icon comes from the `auth_provider_icon` filter (`{{ provider.id|auth_provider_icon }}`) instead of the `icon` key.

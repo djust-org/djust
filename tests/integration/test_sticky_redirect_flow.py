@@ -118,8 +118,6 @@ class _FakeConsumer(LiveViewConsumer):
         self.session_id = "test-session"
         self.scope = {"path": "/", "query_string": b"", "session": None}
         self.channel_name = "test-channel"
-        self.use_actors = False
-        self.actor_handle = None
 
     class _NullChannelLayer:
         async def group_add(self, *args, **kwargs):

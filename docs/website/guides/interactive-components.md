@@ -357,5 +357,3 @@ still need pagination or virtualization.
   - A failing callback reports the error like any event. It doesn't undo the
     component's own change on a WebSocket or SSE connection. Over the HTTP
     fallback, a failed request saves nothing.
-- **Limits in djust 1.3.** Interactive components don't work on
-  `use_actors = True` views; system check `djust.V020` reports that.

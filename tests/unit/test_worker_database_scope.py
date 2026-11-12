@@ -70,12 +70,29 @@ def _open_worker_connections():
     return SyncToAsync.single_thread_executor.submit(count).result()
 
 
+def _close_worker_connections():
+    """Start from a known state: an earlier test may have left the worker thread's connection open.
+
+    The scope under test closes only what was opened inside it, so a connection that is already
+    open would be reused and the count would not move (the merge-queue failures on #4015).
+
+    This goes through the helper's own closer on purpose. The test database is in-memory SQLite,
+    where Django's ``close()`` keeps the handle, so ``connections.close_all()`` leaves it open.
+    """
+    from asgiref.sync import SyncToAsync
+    from djust.tests._worker_database import _close_new
+
+    SyncToAsync.single_thread_executor.submit(_close_new, {}).result()
+
+
 @pytest.mark.django_db(transaction=True)
 def test_the_sync_scope_closes_what_a_sync_test_opened_on_the_worker_thread():
     """The mechanism of #4020, in one test: the helper closes exactly what its scope opened."""
     from djust.tests._worker_database import owned_worker_database_connections_sync
 
+    _close_worker_connections()
     before = _open_worker_connections()
+    assert before == 0
     with owned_worker_database_connections_sync():
         _open_on_the_worker_thread()
         assert _open_worker_connections() == before + 1, "the premise: the call leaves one open"
@@ -86,9 +103,11 @@ def test_the_sync_scope_closes_what_a_sync_test_opened_on_the_worker_thread():
 def test_a_connection_that_was_already_open_is_left_alone():
     from djust.tests._worker_database import owned_worker_database_connections_sync
 
+    _close_worker_connections()
     with owned_worker_database_connections_sync():
         _open_on_the_worker_thread()  # opened by the OUTER scope
         opened = _open_worker_connections()
+        assert opened == 1
         with owned_worker_database_connections_sync():
             _open_on_the_worker_thread()  # reuses the open connection
         assert _open_worker_connections() == opened, "the inner scope must not close it"

@@ -68,13 +68,33 @@ the inventory against the real APIs:
 
 ## Suggestions
 
-Each name gets a suggested explicit declaration. For example, an `instance`
-name gets `count: int = state(persist="server")` and a reminder to supply it
-from `get_context_data()`. Render-only kinds get "supply it from
-`get_context_data()`". `_x` names are told that explicit mode never persists
-underscore attributes. The suggestions are a starting point. Declare
-`persist="server"` only for fields that must survive reconnect, and
-`client=True` only for fields the browser must read.
+Each name gets a suggested explicit declaration that grants no more than the
+view has today. An `instance` name gets `count: int = state(...)` and a
+reminder to supply it from `get_context_data()`. Render-only kinds get "supply
+it from `get_context_data()`". `_x` names are told that explicit mode never
+persists underscore attributes.
+
+A persistence grant is suggested only for a legacy view that restores its
+state on a reconnect today: one that sets `enable_state_snapshot`, which
+`PersistentLiveView` does for its subclasses. For those views an `instance`
+name gets `count: int = state(persist="server")`. Every other legacy view
+runs `mount()` again on a reconnect, so `persist="server"` would make its
+attributes survive one and put them in the session, which it does not do
+today. Each view's report line says which case applies (`reconnect: fresh
+mount` or `reconnect: restored (enable_state_snapshot)`; `persists_today` in
+JSON). The flag is read statically from the class, and the
+`state_snapshot_enabled` setting is not consulted.
+
+Nothing is inferred from what a template reads: the command never suggests a
+client grant or persistence because a name is rendered. One thing the default
+does not cover: a view served without a WebSocket restores its public state
+from the session on the HTTP POST fallback, and under explicit exposure only
+`persist="server"` fields are restored there. If a view relies on that, add
+the grant by hand.
+
+The suggestions are a starting point. Declare `persist="server"` only for
+fields that must survive reconnect, and `client=True` only for fields the
+browser must read.
 
 ## Known limits
 

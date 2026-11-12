@@ -94,7 +94,7 @@ def recovery_handler_names(view_class: type) -> frozenset[str]:
     every target (a computed value, markup it cannot follow), dispatch also
     uses the targets of each render (``note_rendered_recovery_targets``). This
     scan serves the V019 startup check and renders Python does not see
-    (actors, an HTTP instance before it renders).
+    (an HTTP instance before it renders).
     """
     return _recovery_scan(view_class)[0]
 
@@ -196,8 +196,8 @@ def is_recovery_target(view: Any, name: str) -> bool:
     """R1: a handler a ``dj-auto-recover`` binding targets in this view.
 
     The union of the last server render of this instance and the class-level
-    template scan (which also covers renders Python did not see, such as actor
-    renders, and a reconstructed HTTP instance before it renders).
+    template scan (which also covers renders Python did not see, such as a
+    reconstructed HTTP instance before it renders).
     """
     try:
         rendered = _RENDERED_RECOVERY.get(view, frozenset())
@@ -389,26 +389,6 @@ def _validate_strict_handler_params(
     }
 
 
-def actor_handler_arguments(
-    handler: Callable, params: Dict[str, Any]
-) -> tuple[tuple[Any, ...], Dict[str, Any]]:
-    """Python boundary shared by Rust view/component actors.
-
-    Strict typed values never round-trip back through Rust's generic Value map.
-    Legacy actor calls retain their existing raw-keyword behavior.
-    """
-    if get_handler_parameter_policy(handler) == "legacy":
-        return (), params
-    from ._parameter_contract import ContractError, ParameterError
-
-    if inspect.iscoroutinefunction(handler):
-        raise ContractError("Async strict handlers require a non-actor transport.")
-    validation = validate_handler_params(handler, params, "actor")
-    if not validation["valid"]:
-        raise ParameterError(validation["error"])
-    return validated_call_arguments(validation)
-
-
 def coerce_parameter_types(handler: Callable, params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Coerce parameter values to match handler type hints.
@@ -565,16 +545,11 @@ def _coerce_single_value(value: str, expected_type: type) -> Any:
 # private-name convention and excluded wholesale; these are the routing keys
 # that carry no underscore.
 #
-# `view_id` was found by instrumenting the suppression point and running the
-# full suite: it survives the actor path, where runtime.py:2734 reads it with
-# `.get` rather than the `.pop` at :3457.
-#
-# `component_id` was NOT observed in that sweep — the component path pops it at
-# runtime.py:3644. It is listed because a `component_id` event on a
-# `use_actors` view takes the actor branch instead (runtime.py:2657-2661), and
-# the actor drain at :3169 passes `params` through having popped only `_args`.
-# Reachable by inspection, not by measurement; recorded as such so the
-# distinction is not lost.
+# Both were recorded against the actor dispatch path, which read `view_id`
+# with `.get` and never popped `component_id`. That path was removed in 2.0;
+# the normal paths pop both keys before the handler call. The set is kept as a
+# floor: whether either key can still reach `**kwargs` has not been re-measured
+# since the removal.
 _FRAMEWORK_KWARGS_KEYS = frozenset({"view_id", "component_id"})
 
 # Warn once per (module, handler, key). This fires on @input/@change paths — a

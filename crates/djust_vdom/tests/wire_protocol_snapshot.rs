@@ -371,8 +371,9 @@ fn msgpack_round_trip_nested_tree_mixed_djust_id() {
 // the sequence-visitor deserializer rejects the short array with
 // `invalid length N, expected struct X with M elements`.
 //
-// `PatchResponse` lives in `djust_live`, which depends on `djust_vdom`, so
-// importing it here would invert the dep graph. Instead these witnesses pin
+// `PatchResponse` lived in `djust_live`'s actor system (removed in 2.0), which
+// depended on `djust_vdom`, so importing it here would have inverted the dep
+// graph. Instead these witnesses pin
 // the rule STRUCTURALLY in `djust_vdom`'s testable surface — any future plain
 // wire struct hitting the same pattern will fail the same way these
 // witnesses do, and the fix shape mirrors PR #1542 (#1538) byte-for-byte:
@@ -440,8 +441,8 @@ fn msgpack_skip_with_default_works_for_trailing_optional_only() {
     // empirical finding of #1541: blindly mirroring the #1538 fix onto a
     // struct with leading optionals (PatchResponse's original shape) does
     // NOT work. The correct fix for leading-optional structs is to remove
-    // `skip_serializing_if` entirely — see PatchResponse in
-    // `crates/djust_live/src/actors/messages.rs`.
+    // `skip_serializing_if` entirely. (PatchResponse lived in the actor
+    // system's `messages.rs`, removed in 2.0; the shapes below stand in.)
 
     // Shape A — trailing optional (VNode's shape — the #1538 fix works).
     #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]

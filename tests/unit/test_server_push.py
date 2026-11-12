@@ -269,8 +269,6 @@ class TestGroupJoinLeave:
         consumer._tick_task = None
         consumer._client_ip = None
         consumer.view_instance = None
-        consumer.actor_handle = None
-        consumer.use_actors = False
         consumer.channel_name = "test-channel"
         consumer.channel_layer = MagicMock()
         consumer.channel_layer.group_discard = AsyncMock()
@@ -289,8 +287,6 @@ class TestGroupJoinLeave:
         consumer._view_group = None
         consumer._client_ip = None
         consumer.view_instance = None
-        consumer.actor_handle = None
-        consumer.use_actors = False
         consumer.channel_name = "test-channel"
         consumer.channel_layer = MagicMock()
         consumer.channel_layer.group_discard = AsyncMock()

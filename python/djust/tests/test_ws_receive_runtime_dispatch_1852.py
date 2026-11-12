@@ -13,10 +13,10 @@ SCOPE (see the routing comment in ``websocket.receive``): ONLY ``url_change`` is
 routed through the chokepoint today.
 
 * ``mount`` stays on the WS ``handle_mount`` (sticky-child preservation, signed
-  ``state_snapshot`` restore, actor channel-layer) — folded into runtime hooks
-  by T1-A (#1853). The runtime ``dispatch_mount`` even refuses ``use_actors``.
+  ``state_snapshot`` restore) — folded into runtime hooks
+  by T1-A (#1853).
 * ``event`` stays on the WS ``handle_event`` (~16 WS-only behaviors the runtime
-  ``dispatch_event`` lacks: event-``ref`` echo, actors, ``view_id``/
+  ``dispatch_event`` lacks: event-``ref`` echo, ``view_id``/
   ``component_id`` routing, ``dj_activity`` gating, time-travel, render-lock,
   push origin-channel tagging, SQL observability, waiter notification,
   session/sticky-child state-save, identity-snapshot push-only auto-skip,
