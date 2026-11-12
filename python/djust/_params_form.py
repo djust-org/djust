@@ -456,7 +456,10 @@ def _refuse_removed_configuration(view: Any) -> None:
     The class-creation check cannot see a value ``__init__`` or ``mount()`` set
     on the instance, one assigned to the class afterwards, or a class whose
     mixin's ``__init_subclass__`` skipped ``super()``. Every transport calls the
-    params hook right after ``mount()``, so this is where they are refused.
+    params hook right after a root view's ``mount()``, so this is where they
+    are refused. An embedded child (``{% live_render %}``, eager or lazy, and a
+    view mounted into a slot) runs no params hook, so its mount sites call this
+    same function right after ``mount()``.
     """
     from .live_view import LiveView
 

@@ -2388,6 +2388,9 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     # the parent's render hop, so the child's hooks enter their own
                     # ``sync_turn_wrapper`` steps (#3646).
                     run_sync_step(child, "mount", mount_fn, request, **captured_kwargs)
+                from .._params_form import _refuse_removed_configuration
+
+                _refuse_removed_configuration(child)
                 # Object-permission check (ADR-017) for the lazy embedded child
                 # — same as the eager path (finding #12). No-op unless the child
                 # overrides get_object; fail-closed otherwise.
@@ -2732,6 +2735,10 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         from .._view_hooks import call_hook_sync
 
         call_hook_sync(mount, request, **kwargs)
+    from .._params_form import _refuse_removed_configuration
+
+    # A child runs no params hook, where a root's removed attributes are refused.
+    _refuse_removed_configuration(child)
     if sticky_kwarg:
         _record_sticky_mount_kwargs(child, kwargs)
 

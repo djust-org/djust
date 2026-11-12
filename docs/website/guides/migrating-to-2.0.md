@@ -639,6 +639,7 @@ class WizardView(LiveView):
 A legacy view no longer sends a token at all, and a token a 1.x server signed
 is refused. The session copy that `enable_state_snapshot` also restored from
 is gone too (below), so a legacy view mounts fresh on Back.
+The HTTP page-POST fallback still restores a legacy view's public and private state from the session between requests; that goes later in 2.0 (rows 5 and 6 of the exposure-flip plan).
 
 `enable_state_snapshot = True` (and `PersistentLiveView`, which set it) also
 saved every public attribute in the session after each socket event and put
@@ -671,7 +672,7 @@ class CartView(LiveView):
         self.items = [*self.items, sku]
 ```
 
-Session state that 1.x saved for a page is not read on a reconnect.
+Session state that 1.x saved for a page is not read on a reconnect. The HTTP page-POST fallback still restores a legacy view's public and private state from the session between requests; that goes later in 2.0 (rows 5 and 6 of the exposure-flip plan).
 
 The component registers its own event on the view, and `self.nav.active` is
 the current tab in your handlers. Each component has one event, so a template

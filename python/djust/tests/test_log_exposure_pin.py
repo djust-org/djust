@@ -288,9 +288,6 @@ MIXIN_TABLES = {
             ("_refresh_online_count", "PresenceMixin._refresh_online_count: %s"): (
                 "presence count refresh"
             ),
-            ("_restore_presence", "PresenceMixin._restore_presence: failed to re-re"): (
-                "presence backend restore"
-            ),
             ("get_presence_key", "Presence key format error: %s. Using unformatted"): (
                 "format error names the missing key, not values"
             ),
@@ -300,18 +297,6 @@ MIXIN_TABLES = {
     "mixins/notifications.py": (
         {},
         {
-            ("_restore_listen_channels", "NotificationMixin._restore_listen_channels: cros"): (
-                "PostgreSQL listener and channel names"
-            ),
-            ("_restore_listen_channels", "NotificationMixin._restore_listen_channels: fail"): (
-                "PostgreSQL listener and channel names"
-            ),
-            ("_restore_listen_channels", "NotificationMixin._restore_listen_channels: fail", 1): (
-                "PostgreSQL listener and channel names"
-            ),
-            ("_restore_listen_channels", "NotificationMixin._restore_listen_channels: retr"): (
-                "PostgreSQL listener and channel names"
-            ),
             ("listen", "listen(%s): failed to start pg listener — %s"): (
                 "PostgreSQL listener and channel names"
             ),
@@ -359,12 +344,6 @@ MIXIN_TABLES = {
             ),
             ("_finalize_writer", "UploadWriter.close() return not JSON-serializabl"): (
                 "application UploadWriter code, but it receives upload bytes and metadata, never view state"
-            ),
-            ("_restore_upload_configs", "UploadMixin._restore_upload_configs: fallback al"): (
-                "restores saved upload slot configuration"
-            ),
-            ("_restore_upload_configs", "UploadMixin._restore_upload_configs: saved confi"): (
-                "restores saved upload slot configuration"
             ),
             ("_safe_abort_writer", "UploadWriter.abort() raised for upload %s"): (
                 "application UploadWriter code, but it receives upload bytes and metadata, never view state"

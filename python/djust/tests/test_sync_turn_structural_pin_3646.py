@@ -902,10 +902,6 @@ HOOKS: Dict[str, str] = {
     "PresenceMixin.update_presence_heartbeat": "stepped:hook",
     "PresenceMixin.get_presence_key": "stepped:hook",
     "TenantMixin.get_presence_key": "stepped:hook",
-    "PresenceMixin._restore_presence": (
-        "unwrapped:not-threaded:djust 2.0 removed the socket's session restore, its only "
-        "framework caller; it runs where an application calls it"
-    ),
     "PresenceMixin.get_presence_user_id": "inside:mount@presence.py::PresenceMixin.track_presence",
     "PresenceMixin.handle_presence_join": "inside:mount@presence.py::PresenceMixin.track_presence",
     "PresenceMixin.handle_presence_leave": "inside:hook@presence.py::PresenceMixin.untrack_presence",

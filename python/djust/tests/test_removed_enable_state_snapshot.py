@@ -352,3 +352,89 @@ def test_c304_is_silent_for_server_side_and_clean_client_fields():
     text = _c304_text()
     assert "ServerSideSecrets" not in text
     assert "LegacyWithPiiNames" not in text
+
+
+# --------------------------------------------------------------------------
+# An embedded child ({% live_render %}) runs no params hook; the same check
+# runs right after its mount(). Eager and lazy, over the page's HTTP GET.
+# --------------------------------------------------------------------------
+
+
+class InstanceAttributeSnapshotChild(LiveView):
+    exposure_policy = "legacy"
+    template = "<div>child</div>"
+
+    def mount(self, request, **kwargs):
+        self.enable_state_snapshot = True
+
+
+class LateClassAttributeSnapshotChild(LiveView):
+    exposure_policy = "legacy"
+    template = "<div>late child</div>"
+
+
+class PlainChild(LiveView):
+    exposure_policy = "legacy"
+    template = "<div>plain child</div>"
+
+
+def _page_for(child_name, lazy):
+    flag = " lazy=True" if lazy else ""
+    return type(
+        "PageWith" + child_name + ("Lazy" if lazy else ""),
+        (LiveView,),
+        {
+            "__module__": __name__,
+            "exposure_policy": "legacy",
+            "template": (
+                "{% load live_tags %}<div dj-root>"
+                '{% live_render "' + __name__ + "." + child_name + '"' + flag + " %}</div>"
+            ),
+        },
+    )
+
+
+CHILD_SHAPES = ["InstanceAttributeSnapshotChild", "LateClassAttributeSnapshotChild"]
+
+
+@pytest.fixture
+def child_shape(request, monkeypatch):
+    if request.param == "LateClassAttributeSnapshotChild":
+        monkeypatch.setattr(
+            LateClassAttributeSnapshotChild, "enable_state_snapshot", True, raising=False
+        )
+    return request.param
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("child_shape", CHILD_SHAPES, indirect=True)
+def test_an_embedded_child_is_refused_like_a_root(child_shape, lazy, rf, caplog):
+    from django.test import override_settings
+
+    page = _page_for(child_shape, lazy)
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        try:
+            response = page.as_view()(_http_request(rf))
+        except ImproperlyConfigured as refused:
+            message = str(refused)
+        else:
+            # A lazy child renders after the page; its failure must not be silent.
+            body = response.content.decode()
+            assert "late child" not in body and ">child<" not in body, body
+            message = caplog.text
+    assert child_shape in message
+    assert "enable_state_snapshot" in message and "removed in djust 2.0" in message
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("lazy", [False, True])
+def test_a_plain_embedded_child_still_renders(lazy, rf):
+    from django.test import override_settings
+
+    page = _page_for("PlainChild", lazy)
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        response = page.as_view()(_http_request(rf))
+    assert response.status_code == 200
+    if not lazy:
+        assert "plain child" in response.content.decode()
