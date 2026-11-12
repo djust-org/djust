@@ -26,6 +26,7 @@ from djust.api.dispatch import (
 )
 from djust.api.registry import register_api_view, reset_registry
 from djust.decorators import event_handler
+from djust import state
 from djust.live_view import LiveView
 
 pytestmark = pytest.mark.django_db
@@ -265,8 +266,10 @@ def test_decoration_time_typeerror_when_serialize_without_expose_api():
 
 def test_dispatch_convention_end_to_end(http_request):
     class ConventionView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "conv.v"
+        # The API response's assigns are the client projection.
+        search_query = state(None, client=True)
 
         def api_response(self):
             # Reads state the handler just set — order-of-operations regression.
@@ -289,7 +292,7 @@ def test_dispatch_convention_shared_across_handlers(http_request):
     """DRY lock-in: two handlers fall through to the same api_response()."""
 
     class MultiView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "multi.v"
 
         def api_response(self):
@@ -311,7 +314,7 @@ def test_dispatch_convention_shared_across_handlers(http_request):
 
 def test_dispatch_per_handler_serialize_str_override(http_request):
     class MixedView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "mixed.v"
 
         def api_response(self):
@@ -333,7 +336,7 @@ def test_dispatch_per_handler_serialize_str_override(http_request):
 
 def test_dispatch_serialize_str_missing_method_returns_500(http_request):
     class BadView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "bad.v"
 
         @event_handler(expose_api=True, serialize="missing_method")
@@ -353,7 +356,7 @@ def test_dispatch_serialize_str_missing_method_returns_500(http_request):
 
 def test_dispatch_serializer_exception_returns_500(http_request):
     class ExplodingView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "explode.v"
 
         @event_handler(expose_api=True, serialize=lambda self: 1 / 0)
@@ -371,7 +374,7 @@ def test_dispatch_passthrough_when_nothing_overrides(http_request):
     """Handler return value is used as-is when no api_response and no serialize=."""
 
     class PassthroughView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "pass.v"
 
         @event_handler(expose_api=True)
@@ -388,7 +391,7 @@ def test_dispatch_permission_denied_in_api_response_surfaces_403(http_request):
     from django.core.exceptions import PermissionDenied
 
     class GuardedView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "guarded.v"
 
         def api_response(self):
@@ -413,7 +416,7 @@ def test_dispatch_permission_denied_in_serialize_surfaces_403(http_request):
         raise PermissionDenied("blocked by serializer")
 
     class GuardedView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "guarded_ser.v"
 
         @event_handler(expose_api=True, serialize=serializer)
@@ -433,7 +436,7 @@ def test_api_request_flag_set_before_mount_runs(http_request):
     captured = {}
 
     class MountReadsFlagView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "mount_flag.v"
 
         def mount(self, request=None, **kwargs):

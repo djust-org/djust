@@ -24,6 +24,7 @@ from django.utils.functional import SimpleLazyObject
 
 from djust import LiveView, event_handler, sse
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust import state
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -32,7 +33,8 @@ RECEIVED: list = []
 
 
 class Kid(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    got = state("")
     template = '<div><p>kid <span id="r">{{ got }}</span></p></div>'
 
     def mount(self, request, **kwargs):
@@ -45,7 +47,8 @@ class Kid(LiveView):
 
 
 class Page(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    got = state("")
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + MOD + '.Page"><p>page</p>'
@@ -57,7 +60,6 @@ class Page(LiveView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["view"] = self
         return context
 
     @event_handler()

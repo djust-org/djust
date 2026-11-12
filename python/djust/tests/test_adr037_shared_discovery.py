@@ -150,7 +150,7 @@ def test_class_discovery_equals_dispatch_on_an_instance(collect):
             pass
 
     class SharedDiscoveryView(Mixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root></div>"
         overridden = None
 
@@ -259,6 +259,7 @@ def test_published_metadata_equals_the_dir_walk_on_framework_and_demo_views():
     assert compared > 50
 
 
+# Stays legacy (split from the explicit migration): the debug panel's handler list is a legacy debug exporter (deletion step 7).
 def test_debug_panel_lists_exactly_the_handlers_dispatch_resolves(collect):
     class DebugPanelView(LiveView):
         exposure_policy = "legacy"

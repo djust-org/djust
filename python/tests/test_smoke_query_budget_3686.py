@@ -23,7 +23,7 @@ def _queries(n):
 class FewMountQueries(LiveView):
     """Mount runs 3 queries, render runs none."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>few</div>"
 
     def mount(self, request, **kwargs):
@@ -33,7 +33,7 @@ class FewMountQueries(LiveView):
 class ManyMountQueries(LiveView):
     """Mount runs 35 queries (the issue's SalesReportView)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>many</div>"
 
     def mount(self, request, **kwargs):
@@ -43,7 +43,7 @@ class ManyMountQueries(LiveView):
 class RenderQueries(LiveView):
     """Mount runs 1 query; rendering runs 4 more."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ n }}</div>"
 
     def mount(self, request, **kwargs):
@@ -213,6 +213,7 @@ class TestAttribute:
         assert LiveView.query_budget is None
         assert FewMountQueries.query_budget is None
 
+    # Stays legacy (split from the explicit migration): it asserts on the legacy get_state() projection (deletion step 7).
     def test_a_query_budget_assigned_in_mount_is_not_reactive_state(self):
         """``self.query_budget = n`` in mount() is config, like ``self.tick_interval``."""
 

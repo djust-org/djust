@@ -226,7 +226,7 @@ SEEN_TENANT: list = []
 class Tenanted(LiveView):
     """Each view resolves its own tenant, as a ``TenantMixin`` view does."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-view="' + MOD + '.Tenanted" dj-id="0"><b>x</b></div>'
 
     def mount(self, request, **kwargs):

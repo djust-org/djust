@@ -29,6 +29,7 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust.runtime import ViewRuntime
+from djust import state
 
 pytestmark = pytest.mark.django_db
 
@@ -104,7 +105,9 @@ class MockTransport:
 class _DefaultSnapView(LiveView):
     """A legacy view: it never restores from the session and signs nothing (#1552)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    role = state("user")
+    n = state(0)
     template = '<div dj-root dj-id="0">role={{ role }} n={{ n }}</div>'
 
     def mount(self, request, **kwargs):
@@ -118,7 +121,8 @@ class _DefaultSnapView(LiveView):
 class _RedirectHookView(LiveView):
     """A view whose registered on_mount hook redirects (login-required shape)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    mounted_ran = state(True)
     template = '<div dj-root dj-id="0">never rendered</div>'
 
     def mount(self, request, **kwargs):

@@ -43,7 +43,7 @@ class StatusForm(forms.Form):
 
 
 class ThreeStepView(WizardMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     wizard_steps = [
         {"name": "personal", "title": "Personal Info", "form_class": StepOneForm},
         {"name": "contact", "title": "Contact", "form_class": StepTwoForm},
@@ -58,7 +58,7 @@ class ThreeStepView(WizardMixin, LiveView):
 
 
 class SingleStepView(WizardMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     wizard_steps = [
         {"name": "only", "title": "Only Step", "form_class": StepOneForm},
     ]
@@ -428,6 +428,7 @@ class TestWizardContext:
         assert ctx["total_steps"] == 3
         assert ctx["current_step"]["index"] == 0
 
+    # Stays legacy (split from the explicit migration): the walk-published *_choices names are the legacy wizard context (deletion step 7).
     @pytest.mark.django_db
     def test_context_flat_choices_exposed(self, get_request):
         """ChoiceField choices exposed as <field>_choices top-level var."""
@@ -477,7 +478,7 @@ class MixedWidgetForm(forms.Form):
 
 
 class MixedWidgetWizard(WizardMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     wizard_steps = [
         {"name": "mixed", "title": "Mixed", "form_class": MixedWidgetForm},
     ]
@@ -601,7 +602,7 @@ class TestAsLiveFieldWidgetAwareDomEvent:
             committed = forms.CharField(widget=_MyCommitWidget())
 
         class _WizardWithCustom(WizardMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             wizard_input_event = "dj-input"
             # Extend rather than replace so built-in click widgets still win
             _CLICK_FIRED_WIDGET_CLASSES = frozenset(
@@ -635,7 +636,7 @@ class TestAsLiveFieldWidgetAwareDomEvent:
             )
 
         class _Wizard(WizardMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             wizard_input_event = "dj-input"
             wizard_steps = [{"name": "x", "title": "X", "form_class": _Form}]
             template = "<div dj-root></div>"
@@ -655,7 +656,7 @@ class TestAsLiveFieldWidgetAwareDomEvent:
             agreed = forms.NullBooleanField(required=False)
 
         class _Wizard(WizardMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             wizard_input_event = "dj-input"
             wizard_steps = [{"name": "x", "title": "X", "form_class": _Form}]
             template = "<div dj-root></div>"
@@ -681,7 +682,7 @@ class TestAsLiveFieldWidgetAwareDomEvent:
             )
 
         class _Wizard(WizardMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             wizard_input_event = "dj-input"
             wizard_steps = [{"name": "x", "title": "X", "form_class": _Form}]
             template = "<div dj-root></div>"
