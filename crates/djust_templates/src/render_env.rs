@@ -10,8 +10,7 @@
 //!   pushed — so the snapshot is exactly what that push would have made a
 //!   render on this thread read.
 //! * [`RenderEnvGuard::install`] writes a snapshot INTO the cells of whatever
-//!   thread the render is actually happening on — a tokio worker for the
-//!   actor path — and its `Drop` puts the previous values back. That is the
+//!   thread the render is actually happening on, and its `Drop` puts the previous values back. That is the
 //!   "SET, not scoped" fix `python/djust/render_env.py` documents as the
 //!   contract: a render entry now leaves the cells as it found them.
 //!

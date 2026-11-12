@@ -467,7 +467,9 @@ class PostProcessingMixin:
         except (ValueError, AttributeError):
             client_js_url = f"/static/{client_js_name}"
 
-        script = f'<script src="{client_js_url}" defer data-turbo-track="reload"></script>'
+        script = (
+            f'<script src="{client_js_url}" defer data-turbo-track="reload"{nonce_attr}></script>'
+        )
 
         # Official adapters (ADR-025 milestone C). Opt-in via
         # DJUST_CONFIG['extensions']; nothing is emitted when unused.
@@ -482,7 +484,7 @@ class PostProcessingMixin:
                 ext_url = static(ext_path)
             except (ValueError, AttributeError):
                 ext_url = f"/static/{ext_path}"
-            script += f'\n        <script src="{ext_url}" defer data-turbo-track="reload"></script>'
+            script += f'\n        <script src="{ext_url}" defer data-turbo-track="reload"{nonce_attr}></script>'
 
         if settings.DEBUG:
             # debug-panel.js MUST load before client-dev.js so that
@@ -495,13 +497,13 @@ class PostProcessingMixin:
                     debug_panel_js_url = static("djust/debug-panel.js")
                 except (ValueError, AttributeError):
                     debug_panel_js_url = "/static/djust/debug-panel.js"
-                script += f'\n        <script src="{debug_panel_js_url}" defer data-turbo-track="reload"></script>'
+                script += f'\n        <script src="{debug_panel_js_url}" defer data-turbo-track="reload"{nonce_attr}></script>'
 
             try:
                 client_dev_js_url = static("djust/client-dev.js")
             except (ValueError, AttributeError):
                 client_dev_js_url = "/static/djust/client-dev.js"
-            script += f'\n        <script src="{client_dev_js_url}" defer data-turbo-track="reload"></script>'
+            script += f'\n        <script src="{client_dev_js_url}" defer data-turbo-track="reload"{nonce_attr}></script>'
 
         full_script = config_script + script
         # ADR-036: public owner contracts of the initial page (set by get();

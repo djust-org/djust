@@ -125,43 +125,6 @@ def test_redacted_error_never_inspects_payload_or_records_traceback(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("debug", [False, True])
-@pytest.mark.parametrize("final_policy", ["explicit", "legacy"])
-async def test_actor_mount_failure_rechecks_owner_policy(monkeypatch, caplog, debug, final_policy):
-    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(FailureView, "exposure_policy", "legacy")
-    monkeypatch.setattr(FailureView, "failure_policy", final_policy)
-    monkeypatch.setattr(FailureView, "failure_stage", "actor")
-    monkeypatch.setattr(FailureView, "use_actors", True, raising=False)
-    monkeypatch.setattr(tracebacks, "_buffer", deque(maxlen=50))
-    request = await sync_to_async(make_request)()
-    transport = MockTransport()
-    transport.build_request = lambda: request
-    transport.uses_actors_for_mount = lambda view: True
-    entered = []
-
-    async def actor_mount(view, data):
-        entered.append(view)
-        view.fail_at("actor")
-
-    transport.dispatch_actor_mount = actor_mount
-    runtime = ViewRuntime(transport)
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug):
-        await runtime.dispatch_mount(
-            {"type": "mount", "view": __name__ + ".FailureView", "url": request.path}
-        )
-    assert len(entered) == 1
-    assert transport.sent[-1]["type"] == "error"
-    allowed = final_policy == "legacy" or debug
-    assert ("MOUNT_DIAGNOSTIC_SENTINEL" in json.dumps(transport.sent)) == (allowed and debug)
-    assert ("MOUNT_DIAGNOSTIC_SENTINEL" in caplog.text) == allowed
-    assert (
-        "MOUNT_DIAGNOSTIC_SENTINEL" in json.dumps(tracebacks.get_recent_tracebacks(50))
-    ) == allowed
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-@pytest.mark.parametrize("debug", [False, True])
 async def test_successful_policy_change_cannot_enable_nested_diagnostics(
     monkeypatch, caplog, debug
 ):

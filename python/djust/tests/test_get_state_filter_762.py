@@ -95,7 +95,6 @@ class TestGetStateFiltersFrameworkAttrs:
         view.template_name = "test.html"
         view.sync_safe = True
         view.login_required = False
-        view.use_actors = False
         view.view_is_async = False
         view.tick_interval = 0
         view.on_mount_count = 0
@@ -109,7 +108,6 @@ class TestGetStateFiltersFrameworkAttrs:
             "template_name",
             "sync_safe",
             "login_required",
-            "use_actors",
             "view_is_async",
             "tick_interval",
             "on_mount_count",

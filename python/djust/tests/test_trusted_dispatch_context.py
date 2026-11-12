@@ -56,11 +56,6 @@ class DispatchView(LiveView):
         CALLS.append(("legacy", value, dict(kwargs)))
 
 
-class ActorDispatchView(DispatchView):
-    use_actors = True
-    api_name = "trusted.dispatch.actor"
-
-
 @pytest.fixture(autouse=True)
 def _clear_calls():
     CALLS.clear()
@@ -256,33 +251,18 @@ async def test_time_travel_replay(case, monkeypatch):
     assert CALLS == _expect(case)
 
 
-def test_actor_bridge():
-    from djust.validation import actor_handler_arguments
-
-    view = ActorDispatchView()
-    for case, payload in {**METADATA, **FORGED}.items():
-        if case in METADATA:
-            assert actor_handler_arguments(view.choose, dict(payload)) == ((1,), {}), case
-        else:
-            with pytest.raises(ParameterError) as error:
-                actor_handler_arguments(view.choose, dict(payload))
-            assert "forged" not in str(error.value)
-
-
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("actor_mode", [False, True])
-async def test_real_websocket(actor_mode):
+async def test_real_websocket():
     from channels.testing import WebsocketCommunicator
     from django.test import override_settings
     from djust.tests.test_exposure_runtime import make_request
     from djust.websocket import LiveViewConsumer
 
     request = await sync_to_async(make_request)()
-    view = "ActorDispatchView" if actor_mode else "DispatchView"
+    view = "DispatchView"
     cases = {**METADATA, **FORGED}
-    if not actor_mode:
-        cases.pop("activity")  # the non-actor runtime's deferral gate
+    cases.pop("activity")  # the runtime's deferral gate
     with override_settings(LIVEVIEW_ALLOWED_MODULES=["djust.tests"], DJUST_TENANTS=None):
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)

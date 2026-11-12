@@ -249,7 +249,8 @@ None. The one access pattern deprecated during the `1.x` series (dict-style
 The three symbols that carried the 0.x carve-out floor were removed in
 djust `2.0.0`. Importing them now raises `ImportError` (or `AttributeError` for
 `djust.event` / `djust.LiveViewForm`). The dict-style `block.super` reads,
-deprecated in 1.3, were removed too.
+deprecated in 1.3, were removed too, as were the eight component mixins and the
+`social_auth_providers` context processor, which had also warned since 1.3.
 
 ### `@event` → `@event_handler`
 
@@ -356,6 +357,77 @@ parent_html = context["block"]["super"]
 parent_html = context["block"].super()
 ```
 
+### The eight component mixins → `djust.components.descriptors`
+
+`AccordionMixin`, `TabsMixin`, `ModalMixin`, `CollapsibleMixin`, `SheetMixin`,
+`DropdownMixin`, `TooltipMixin` and `CarouselMixin`, with their `*State`
+classes, are gone from `djust.components` and `djust.components.mixins`
+(deprecated since 1.3). Importing one raises `ImportError`. `ComponentMixin`,
+`TypedState` and `DataTableMixin` stay.
+
+Declare the matching descriptor on the view instead. It holds the state and
+registers its event handler; the template reads the state off the attribute.
+
+```python
+# Before
+from djust.components.mixins import TabsMixin
+
+class SettingsView(TabsMixin, LiveView):
+    def mount(self, request, **kwargs):
+        self.init_tabs("nav", active="general")
+
+# After
+from djust.components.descriptors import Tabs
+
+class SettingsView(LiveView):
+    nav = Tabs(active="general")  # template: {{ nav.active }}
+```
+
+A descriptor handles one event, so it does not replace every handler a mixin
+defined. The handlers with no descriptor equivalent are now the application's
+to define, or to route to the descriptor's event through the tag's `*_event`
+argument:
+
+| Mixin handlers | Descriptor event | Not handled by the descriptor |
+| --- | --- | --- |
+| `accordion_toggle` | `accordion_toggle` | none |
+| `set_tab` | `set_tab` | none |
+| `toggle_collapsible` | `toggle_collapsible` | none |
+| `open_modal`, `close_modal`, `toggle_modal` | `toggle_modal` | `open_modal`, `close_modal` (the `{% modal %}` default `close_event`) |
+| `open_sheet`, `close_sheet` | `toggle_sheet` | `open_sheet`, `close_sheet` (the `{% sheet %}` default `close_event`) |
+| `toggle_dropdown`, `close_dropdown` | `toggle_dropdown` | `close_dropdown` |
+| `show_tooltip`, `hide_tooltip` | `toggle_tooltip` | `show_tooltip`, `hide_tooltip` |
+| `carousel_prev`, `carousel_next`, `carousel_go` | `carousel_go` | `carousel_prev`, `carousel_next` (the `{% carousel %}` default `prev_event` / `next_event`) |
+
+The `init_*()` and `get_*_ctx()` helpers have no equivalent: the descriptor's
+constructor arguments and attribute replace them.
+
+### `djust.auth.social.social_auth_providers` → `{% auth_providers auth %}`
+
+The context processor and the `djust.auth.social` module are gone (deprecated
+since 1.3). A `TEMPLATES` entry that still lists the processor fails startup
+with `ImproperlyConfigured` naming the replacement. Delete the entry and render
+the buttons with the account kit's tag:
+
+```html
+<!-- Before: settings listed "djust.auth.social.social_auth_providers" -->
+{% for provider in oauth_providers %}
+  <a href="{{ provider.login_url }}">{{ provider.icon }} {{ provider.label }}</a>
+{% endfor %}
+
+<!-- After -->
+{% load djust_auth %}
+{% auth_context as auth %}
+{% auth_providers auth %}
+```
+
+`auth.providers` is the same list for a template that renders its own buttons.
+Each item has `id` (was `name`), `label` and `login_url`. The built-in backends
+leave its `icon` empty, so take the icon from the `auth_provider_icon` filter
+(`{{ provider.id|auth_provider_icon }}`).
+Python code that called the function can read
+`get_account_backend().providers(request)` from `djust.auth.accounts.registry`.
+
 ### `_drain_announcements` / `_drain_focus` → a live region and `JS.focus()`
 
 The WebSocket consumer and the SSE runtime drain two duck-typed methods on the
@@ -399,6 +471,37 @@ class OrderView(LiveView):
 ```
 
 ---
+
+### `use_actors` and the actor system → the standard runtime
+
+`use_actors = True` moved a view's state and rendering into a per-session Tokio
+actor in the Rust extension. It was experimental, WebSocket-only, and could not
+run under explicit exposure. djust `2.0.0` removed it, together with
+`djust._rust.create_session_actor`, `get_actor_stats`, `SessionActorHandle` and
+`SupervisorStatsPy`. The system checks `djust.V017` and `djust.V020`, which
+only reported on actor views, are retired; their IDs are not reused.
+
+A `LiveView` subclass that sets a truthy `use_actors` raises
+`ImproperlyConfigured` when the class is created, naming the class. A value the
+class-creation check cannot see (set on the instance, or assigned to the class
+later) raises the same error right after `mount()`, on every transport. Delete
+the attribute:
+
+```python
+# Before
+class Dashboard(LiveView):
+    use_actors = True
+
+# After
+class Dashboard(LiveView):
+    ...
+```
+
+The view then runs on the standard runtime, which already runs one turn at a
+time per connection. For work that should not block a turn, use
+`start_async()` or `@background`. `use_actors = False` is accepted and has no
+effect; delete it too. Importing one of the removed `djust._rust` names raises
+`ImportError`.
 
 ## Template-Syntax Deprecations
 

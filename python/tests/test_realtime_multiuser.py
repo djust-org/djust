@@ -10,7 +10,6 @@ Covers:
 - Performance baseline (broadcast latency with N subscribers)
 """
 
-import asyncio
 import time
 from unittest.mock import Mock, patch
 
@@ -18,7 +17,6 @@ import pytest
 
 from djust.backends.memory import InMemoryPresenceBackend
 from djust.backends.registry import reset_presence_backend, set_presence_backend
-from djust.tests._growth import assert_scales_linearly_async
 from djust.presence import (
     PRESENCE_TIMEOUT,
     PresenceManager,
@@ -461,7 +459,7 @@ class TestLiveIndicators:
 
 class TestRaceConditions:
     """
-    Verify that simultaneous joins/leaves and concurrent actor operations
+    Verify that simultaneous joins/leaves
     are handled correctly without data corruption.
     """
 
@@ -520,69 +518,6 @@ class TestRaceConditions:
         PresenceManager.join_presence("room:double_join", "1", {"name": "alice"})
 
         assert v.presence_count() == 1
-
-    @pytest.mark.asyncio
-    async def test_concurrent_session_actors_no_state_leak(self):
-        """Concurrent actor sessions do not share or corrupt each other's state."""
-        from djust._rust import create_session_actor
-
-        class Counter:
-            def __init__(self, start: int):
-                self.value = start
-
-            def increment(self):
-                self.value += 1
-
-            def get_context_data(self):
-                return {"value": self.value}
-
-        async def session_workflow(session_id: str, start: int, increments: int):
-            handle = await create_session_actor(session_id)
-            counter = Counter(start)
-            await handle.mount("counter", {}, counter)
-            for _ in range(increments):
-                await handle.event("increment", {})
-            await handle.shutdown()
-            return counter.value
-
-        results = await asyncio.gather(
-            *[session_workflow(f"race-{i}", start=i * 10, increments=5) for i in range(8)]
-        )
-
-        for i, result in enumerate(results):
-            assert result == i * 10 + 5, f"Session {i}: expected {i * 10 + 5}, got {result}"
-
-    @pytest.mark.asyncio
-    async def test_message_ordering_preserved_per_session(self):
-        """Events dispatched to a single actor arrive and execute in order."""
-        from djust._rust import create_session_actor
-
-        class OrderTracker:
-            def __init__(self):
-                self.seq: list = []
-
-            def step_a(self):
-                self.seq.append("a")
-
-            def step_b(self):
-                self.seq.append("b")
-
-            def step_c(self):
-                self.seq.append("c")
-
-            def get_context_data(self):
-                return {"seq": self.seq}
-
-        handle = await create_session_actor("order-test")
-        tracker = OrderTracker()
-        await handle.mount("tracker", {}, tracker)
-
-        await handle.event("step_a", {})
-        await handle.event("step_b", {})
-        await handle.event("step_c", {})
-
-        assert tracker.seq == ["a", "b", "c"]
-        await handle.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -728,38 +663,3 @@ class TestPerformanceBaseline:
             f"broadcast_to_presence made {sends} channel-layer sends for {broadcasts} "
             "broadcasts at 25 and 100 subscribers; expected one per broadcast at both sizes"
         )
-
-    @pytest.mark.asyncio
-    async def test_concurrent_actor_throughput(self):
-        """Four times the concurrent session actors, each completing 10 events, costs
-        under ten times as much."""
-        from djust._rust import create_session_actor
-
-        class FastView:
-            def __init__(self):
-                self.count = 0
-
-            def inc(self):
-                self.count += 1
-
-            def get_context_data(self):
-                return {"count": self.count}
-
-        runs = iter(range(1_000_000))
-
-        async def run_sessions(scale):
-            run = next(runs)
-
-            async def run_session(i):
-                h = await create_session_actor(f"throughput-{run}-{i}")
-                v = FastView()
-                await h.mount("v", {}, v)
-                for _ in range(10):
-                    await h.event("inc", {})
-                assert v.count == 10
-                await h.shutdown()
-
-            await asyncio.gather(*[run_session(i) for i in range(5 * scale)])
-
-        # Wall clock: the actors run on the Rust runtime's threads, not this one.
-        await assert_scales_linearly_async(run_sessions, what="concurrent session actors")

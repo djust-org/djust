@@ -19,8 +19,7 @@ outputs that the view subscribes to with ``@<component>.on.<output>``::
 
 This ``DropdownMenu`` is not the legacy plain renderer of the same name in
 ``djust.components.components``; system check ``djust.Q004`` flags a module
-that imports both. Interactive components are not supported on
-``use_actors = True`` views (``djust.V020``).
+that imports both.
 """
 
 from ._interactive import ActionItem, DropdownMenu, SeparatorItem

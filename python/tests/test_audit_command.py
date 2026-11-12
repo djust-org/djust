@@ -191,11 +191,6 @@ class TestAuditClass:
         result = _audit_class(cls, "LiveView")
         assert result["config"]["tick_interval"] == 1000
 
-    def test_config_use_actors(self, make_view_class):
-        cls = make_view_class(use_actors=True)
-        result = _audit_class(cls, "LiveView")
-        assert result["config"]["use_actors"] is True
-
     def test_handlers_included(self, make_view_class):
         from djust.decorators import event_handler
 

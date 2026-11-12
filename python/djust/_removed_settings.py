@@ -32,12 +32,50 @@ REMOVED_TEMPLATE_BACKENDS: dict[str, str] = {
     "djust.template_backend.DjustTemplateBackend": "djust.template.backend.DjustTemplateBackend",
 }
 
+#: ``TEMPLATES[...]['OPTIONS']['context_processors']`` paths 2.0 removed
+#: (#4025). Without this, the first render raises a bare ``ImportError``.
+REMOVED_CONTEXT_PROCESSORS: dict[str, str] = {
+    "djust.auth.social.social_auth_providers": (
+        "{% auth_providers auth %} from {% load djust_auth %}"
+    ),
+}
+
 #: ``LIVEVIEW_CONFIG`` / ``DJUST_CONFIG`` keys for kill switches 2.0 hard-wired on.
 REMOVED_CONFIG_KEYS: dict[str, str] = {
     "template_auto_call": "Django's nullary auto-call in templates is always on",
     "virtual_keyed_ops": "keyed [dj-virtual] VDOM ops are always on",
     "django_value_repr": "{{ value }} always renders as Django's str() does",
 }
+
+#: View attributes 2.0 removed. A truthy value is refused when the class is
+#: created, so the module fails to import instead of the view quietly running
+#: without the behaviour it asked for. The mount path checks the instance again
+#: (``_params_form.run_handle_params``), which also sees a value set on the
+#: instance, assigned to the class later, or hidden from ``__init_subclass__``.
+REMOVED_VIEW_ATTRIBUTES: dict[str, str] = {
+    "use_actors": (
+        "the Tokio actor system was removed; delete the attribute. The view runs on "
+        "the standard runtime, which already runs one turn at a time per connection. "
+        "For work that should not block a turn, use start_async() or @background"
+    ),
+}
+
+
+def reject_removed_view_attributes(view: Any) -> None:
+    """Raise ``ImproperlyConfigured`` if a view turns on a removed attribute.
+
+    ``view`` is a view class (at class creation) or a view instance (on the
+    mount path, after ``mount()``).
+    """
+    cls = view if isinstance(view, type) else type(view)
+    for name, replacement in REMOVED_VIEW_ATTRIBUTES.items():
+        if getattr(view, name, False):
+            from django.core.exceptions import ImproperlyConfigured
+
+            raise ImproperlyConfigured(
+                "%s.%s sets %s, which was removed in djust 2.0: %s."
+                % (cls.__module__, cls.__qualname__, name, replacement)
+            )
 
 
 def removed_settings_in_use(settings: Any) -> list[str]:
@@ -55,6 +93,16 @@ def removed_settings_in_use(settings: Any) -> list[str]:
                 problems.append(
                     "TEMPLATES[%d]['BACKEND'] is %r, a module path removed in djust 2.0; "
                     "use %r." % (i, backend, REMOVED_TEMPLATE_BACKENDS[backend])
+                )
+            options = entry.get("OPTIONS") if isinstance(entry, dict) else None
+            processors = options.get("context_processors") if isinstance(options, dict) else None
+            if isinstance(processors, (list, tuple)):
+                problems.extend(
+                    "TEMPLATES[%d]['OPTIONS']['context_processors'] lists %r, a context "
+                    "processor removed in djust 2.0; delete the entry and use %s."
+                    % (i, path, REMOVED_CONTEXT_PROCESSORS[path])
+                    for path in processors
+                    if isinstance(path, str) and path in REMOVED_CONTEXT_PROCESSORS
                 )
     for setting in ("LIVEVIEW_CONFIG", "DJUST_CONFIG"):
         cfg = getattr(settings, setting, None)

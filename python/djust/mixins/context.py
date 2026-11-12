@@ -529,7 +529,7 @@ class ContextMixin:
         # #2960: ``LiveView`` and the mixins listed before ``ContextMixin`` in
         # its bases come EARLIER in the MRO, so they are skipped too — their
         # attributes are configuration defaults (``template``,
-        # ``login_required``, ``use_actors``, ``sticky``...), not view data.
+        # ``login_required``, ``sticky``...), not view data.
         # This is the boundary the ADR-038 inventory draws (``_user_bases``);
         # classes the application declares are still walked.
         _seen = set()

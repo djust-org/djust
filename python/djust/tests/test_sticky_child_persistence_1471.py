@@ -321,8 +321,6 @@ class _FakeConsumer(LiveViewConsumer):
         self.session_id = "test-session"
         self.scope = {"path": "/", "query_string": b"", "session": None}
         self.channel_name = "test-channel"
-        self.use_actors = False
-        self.actor_handle = None
         from djust.websocket import ConnectionRateLimiter
 
         self._rate_limiter = ConnectionRateLimiter(rate=10000, burst=10000, max_warnings=3)

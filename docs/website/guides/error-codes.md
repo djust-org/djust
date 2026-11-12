@@ -738,13 +738,11 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 ---
 
-### V017: Async strict handler on an actor view
+### V017: Retired
 
-**Severity**: Error
-
-**What causes it**: A view with `use_actors = True` declares a strict-policy `async def` event handler. Actor dispatch rejects strict async handlers before they run.
-
-**Fix**: Make the handler synchronous, set `use_actors = False`, or use `parameter_policy="legacy"`.
+**Retired in 2.0** with the actor system. V017 reported a strict-policy `async def`
+event handler on a `use_actors = True` view. djust no longer emits V017, and the ID
+is never reused. Existing suppressions of V017 have no effect and can be removed.
 
 ---
 
@@ -768,13 +766,11 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 ---
 
-### V020: Interactive component on an actor view
+### V020: Retired
 
-**Severity**: Error
-
-**What causes it**: A view with `use_actors = True` declares an interactive component (from `djust.components.interactive`). Actor views do not support them: the actor path has its own dispatch and render baseline, which the component registry does not use. Message: "<view> sets use_actors = True and declares interactive component(s) <names>, which actor views do not support."
-
-**Fix**: Remove `use_actors = True` from the view, or move the interactive component to a view that does not use actors.
+**Retired in 2.0** with the actor system. V020 reported a `use_actors = True` view
+that declared an interactive component. djust no longer emits V020, and the ID is
+never reused. Existing suppressions of V020 have no effect and can be removed.
 
 ---
 

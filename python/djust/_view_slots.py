@@ -72,8 +72,6 @@ def _empty_dict() -> dict:
 #: every view on the socket.
 PER_VIEW_ATTRS: Dict[str, Callable[[], Any]] = {
     "view_instance": lambda: None,
-    "actor_handle": lambda: None,
-    "use_actors": lambda: False,
     "_view_group": lambda: None,
     "_view_path": lambda: "",
     "_presence_group": lambda: None,
@@ -282,8 +280,8 @@ class SlotConsumer:
 
     @property
     def session_id(self) -> Optional[str]:
-        """A distinct id per view: the Rust state cache, the observability
-        registry and the actor registry key on it, so two views must not share
+        """A distinct id per view: the Rust state cache and the observability
+        registry key on it, so two views must not share
         one."""
         consumer = object.__getattribute__(self, "_slot_consumer")
         base = getattr(consumer, "session_id", None)

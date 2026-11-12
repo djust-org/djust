@@ -32,7 +32,7 @@ def test_policy_change_falls_back_to_full_reload(old_policy, new_policy):
 def test_swap_to_an_invalid_configuration_falls_back():
     old, new = _pair(
         {"exposure_policy": "explicit"},
-        {"exposure_policy": "explicit", "use_actors": True},
+        {"exposure_policy": "nonsense"},
     )
     view = old()
     ok, reason = apply_class_swap(view, [(old, new)])

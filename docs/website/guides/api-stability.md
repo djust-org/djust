@@ -99,8 +99,12 @@ version; it does not use `PendingDeprecationWarning`.
 | `@event` | `@event_handler` |
 | `LiveViewForm` | `django.forms.Form` |
 | `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | `djust.theming.theme_packs` (`get_design_system`, etc.) |
+| The eight component mixins (`AccordionMixin`, `TabsMixin`, `ModalMixin`, `CollapsibleMixin`, `SheetMixin`, `DropdownMixin`, `TooltipMixin`, `CarouselMixin`) | The matching component in `djust.components.descriptors` |
+| `djust.auth.social.social_auth_providers` | `{% auth_providers auth %}` from `{% load djust_auth %}` |
 
-Migrating is mechanical in every case — see the
+The first three are mechanical. A descriptor handles one event, so a few mixin
+handlers (`close_modal`, `close_sheet`, `carousel_prev`, `carousel_next` and
+others) become the application's. See the
 [full reference](https://github.com/djust-org/djust/blob/main/docs/API_STABILITY.md#removed-in-200)
 for before/after snippets.
 

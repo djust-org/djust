@@ -70,8 +70,6 @@ __all__ = [
     # Dispatch-level mixins (lazy)
     "LoginRequiredLiveViewMixin",
     "PermissionRequiredLiveViewMixin",
-    # Social/OAuth (lazy)
-    "social_auth_providers",
 ]
 
 # Lazy imports for modules that require Django app registry to be ready
@@ -82,7 +80,6 @@ _LAZY_IMPORTS = {
     "SignupForm": ".forms",
     "LoginRequiredLiveViewMixin": ".mixins",
     "PermissionRequiredLiveViewMixin": ".mixins",
-    "social_auth_providers": ".social",
 }
 
 
@@ -106,4 +103,3 @@ if TYPE_CHECKING:
         LoginRequiredLiveViewMixin,
         PermissionRequiredLiveViewMixin,
     )
-    from .social import social_auth_providers  # noqa: F401

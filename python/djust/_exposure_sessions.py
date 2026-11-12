@@ -411,7 +411,7 @@ class ServerStateSession:
         save_merged(self.session, self.binding.session)
 
     async def asave(self, values: dict[str, Any]) -> None:
-        """Async equivalent for WebSocket/actor dispatch adapters."""
+        """Async equivalent for WebSocket dispatch adapters."""
         envelope = self._capture(values)
         await self.session.aget(self.key)
         self._check_session()

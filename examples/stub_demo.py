@@ -16,7 +16,6 @@ from djust._rust import (
     diff_html,
     extract_template_variables,
     RustButton,
-    create_session_actor,
 )
 
 
@@ -97,27 +96,6 @@ def demo_rust_button():
     # button.nonexistent_method()  # Error: method doesn't exist
 
     return button
-
-
-async def demo_session_actor():
-    """Demo: create_session_actor with async/await."""
-    # ✅ Correct usage - type checker knows this returns Awaitable
-    handle = await create_session_actor("session-123")
-
-    # Type checker knows handle is SessionActorHandle
-    # and has these async methods:
-    view_id, html = await handle.mount(
-        view_path="app.views.Counter",
-        params={},
-        request_meta={},
-    )
-
-    # ❌ These would be caught by type checker:
-    # handle = create_session_actor()  # Error: missing required argument
-    # handle = create_session_actor(123)  # Error: int is not str
-    # await handle.nonexistent_method()  # Error: method doesn't exist
-
-    return handle
 
 
 def demo_wrong_method_name():

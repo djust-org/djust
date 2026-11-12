@@ -132,24 +132,6 @@ html = render_template("<h1>{{ title }}</h1>", {"title": "Hello"})
         assert "class RustAlert:" in content
         assert "class RustCard:" in content
 
-    def test_stub_documents_actor_system(self):
-        """Test that actor system classes and functions are documented."""
-        from pathlib import Path
-
-        stub_file = Path(__file__).parent.parent / "djust" / "_rust.pyi"
-        content = stub_file.read_text()
-
-        # Actor system classes
-        assert "class SessionActorHandle:" in content
-        assert "class SupervisorStatsPy:" in content
-
-        # Actor system functions
-        assert "def create_session_actor" in content
-        assert "def get_actor_stats" in content
-
-        # Awaitable return types for async methods
-        assert "Awaitable" in content
-
 
 class TestStubFileQuality:
     """Test the quality and completeness of the stub file."""

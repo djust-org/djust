@@ -38,8 +38,14 @@ class ShellWidget(LiveView):
     secret = state("SHELL_SECRET_SENTINEL", persist="server")
     template = '<div>Shell={{ count }}<button dj-click="increment">+</button></div>'
 
+    restored_counts: list = []
+
     def mount(self, request, **kwargs):
         self.count = 1
+
+    def handle_restore(self, request):
+        # #3989: runs after mount(), with the child's restored state in place.
+        type(self).restored_counts.append(self.count)
 
     @event_handler()
     def increment(self):
@@ -167,6 +173,7 @@ async def stored_shell(session_key):
 
 async def test_shell_child_is_reconstructed_with_state_and_routes_after_reconnect():
     session_key = await sync_to_async(new_session)()
+    ShellWidget.restored_counts = []
     with override_settings(**WS_SETTINGS):
         comm = await connect(session_key, "ShellPage")
         try:
@@ -179,9 +186,13 @@ async def test_shell_child_is_reconstructed_with_state_and_routes_after_reconnec
         finally:
             await comm.disconnect()
         assert (await stored_shell(session_key))["count"] == 2
+        # A first mount restores nothing, so the hook has not run yet.
+        assert ShellWidget.restored_counts == []
 
         comm = await connect(session_key, "ShellPage")
         try:
+            # The reconnect put count=2 back on top of mount()'s count=1 and told the child.
+            assert ShellWidget.restored_counts and set(ShellWidget.restored_counts) == {2}
             reply = await event_reply(comm, "increment", view_id="shell")
             assert reply["type"] == "embedded_update", reply
             assert reply["view_id"] == "shell" and "Shell=3" in reply["html"]
