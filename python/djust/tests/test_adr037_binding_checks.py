@@ -619,7 +619,12 @@ def test_managed_objects_and_authorized_querysets_are_not_flagged(discovery):
         ]
         # Only the fixture module's placement is reported: it is not in
         # LIVEVIEW_ALLOWED_MODULES (V005), and EditUser declares no login (S005).
-        assert set(flagged) <= {"djust.V005", "djust.S005", "djust.V002"}, (owner, flagged)
+        # EditUser states exposure_policy = "legacy" (#4038's pin), which V028
+        # (#4066) reports; that is placement too, not a persistence finding.
+        assert set(flagged) <= {"djust.V005", "djust.S005", "djust.V002", "djust.V028"}, (
+            owner,
+            flagged,
+        )
 
 
 def test_checking_runs_no_mount_handler_property_or_queryset(fixture):
