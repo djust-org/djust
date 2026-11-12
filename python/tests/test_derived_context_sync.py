@@ -8,6 +8,7 @@ dict/list changes as a result.
 """
 
 import pytest
+from djust import state
 
 try:
     from djust import LiveView, RustLiveView
@@ -49,7 +50,8 @@ LIST_CONTEXT_TEMPLATE = """
 class WizardView(LiveView):
     """View that computes current_step from step_index."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    step_index = state(0)
     template_name = None
 
     def get_template(self):
@@ -105,7 +107,9 @@ class TestDerivedContextAutoDetection:
         re-sent to Rust even if only a source attribute changed."""
 
         class DictView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            title = state("Hello")
+            count = state(0)
             template_name = None
 
             def get_template(self):
@@ -142,7 +146,8 @@ class TestDerivedContextAutoDetection:
         re-sent to Rust automatically."""
 
         class ListView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            filter_len = state(3)
             template_name = None
 
             def get_template(self):

@@ -32,7 +32,7 @@ class ProductForm(forms.ModelForm):
 
 
 class ModelFormDemoView(ModelFormMixin[Product], LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "demos/model_form.html"
     model = Product
     form_class = ProductForm

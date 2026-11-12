@@ -23,9 +23,14 @@ djust uses `dj-*` HTML attributes to bind server-side Python handlers to client-
 All event handlers **must** use the `@event_handler()` decorator. djust blocks any method not decorated with it (security):
 
 ```python
+from djust import state
 from djust.decorators import event_handler
 
 class MyView(LiveView):
+    count = state(0)
+    query = state("")
+    items = state(default_factory=list)
+
     @event_handler()
     def increment(self, **kwargs):
         self.count += 1
@@ -658,21 +663,14 @@ LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}
 
 <!-- djust-example: item-selection scenario=strict-policy -->
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
 class ItemSelectionView(LiveView):
     template_name = "items/select.html"
-
-    def mount(self, request, **kwargs):
-        self.selected_id = 0
-        self.active = False
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(selected_id=self.selected_id, active=self.active)
-        return context
+    selected_id = state(0)
+    active = state(False)
 
     @event_handler(parameter_policy="strict")
     def select_item(self, item_id: int, active: bool = False) -> None:
@@ -697,19 +695,14 @@ authorized object: look the record up and check permissions as usual.
 
 <!-- djust-example: note-view scenario=strict-policy -->
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
 class NoteView(LiveView):
     template_name = "notes/edit.html"
-
-    def mount(self, request, **kwargs):
-        self.query = ""
-        self.saved = {}
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "query": self.query, "saved": self.saved}
+    query = state("")
+    saved = state(default_factory=dict)
 
     @event_handler(parameter_policy="strict")
     def search(self, value: str) -> None:

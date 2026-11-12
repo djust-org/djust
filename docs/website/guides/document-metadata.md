@@ -21,19 +21,16 @@ djust lets you update `document.title` and `<meta>` tags from any LiveView event
 ## Quick Start
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
 class ChatView(LiveView):
     template_name = "chat.html"
+    unread = state(0)
 
     def mount(self, request, **kwargs):
-        self.unread = 0
         self.page_title = "Chat"
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "unread": self.unread}
 
     @event_handler()
     def new_message(self, **kwargs):

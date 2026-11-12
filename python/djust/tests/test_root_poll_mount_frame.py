@@ -15,12 +15,14 @@ from asgiref.sync import sync_to_async
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.mixins.template import _root_poll_attrs
+from djust import state
 
 _MODULE = __name__
 
 
 class _PollingRootView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(0)
     template = (
         '<div dj-root dj-poll="tick" dj-poll-interval="2000" title="a > b">'
         '<p dj-poll="inner">{{ n }}</p></div>'
@@ -35,7 +37,8 @@ class _PollingRootView(LiveView):
 
 
 class _PlainRootView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(0)
     template = '<div dj-root><p dj-poll="inner">{{ n }}</p></div>'
 
     def mount(self, request, **kwargs):

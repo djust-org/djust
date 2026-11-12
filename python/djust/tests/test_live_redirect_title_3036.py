@@ -19,6 +19,7 @@ from djust.runtime import document_title, navigation_title
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import drain_extra, receive_until, types_of
+from djust import state
 
 SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 
@@ -32,12 +33,13 @@ def _page(title: str, body: str) -> str:
 
 
 class SourcePage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = _page("Home", "<p>home</p>")
 
 
 class DocsPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    section = state("Guides")
     template = _page("Docs &amp; {{ section }}", "<p>docs</p>")
 
     def mount(self, request, **kwargs):
@@ -45,7 +47,7 @@ class DocsPage(LiveView):
 
 
 class OwnTitlePage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = _page("Template title", "<p>own</p>")
 
     def mount(self, request, **kwargs):
@@ -53,7 +55,7 @@ class OwnTitlePage(LiveView):
 
 
 class NoHeadPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><svg><title>icon</title></svg></div>"
 
 

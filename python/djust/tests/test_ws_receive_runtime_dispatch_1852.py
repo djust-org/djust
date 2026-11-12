@@ -49,6 +49,7 @@ from asgiref.sync import sync_to_async
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 
 # ------------------------------------------------------------------ #
@@ -58,7 +59,9 @@ from djust.decorators import event_handler
 
 
 class _ReceiveView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
+    page = state("1")
     template = (
         '<div dj-view="djust.tests.test_ws_receive_runtime_dispatch_1852._ReceiveView" '
         'dj-id="0">Count: {{ count }} Page: {{ page }}</div>'

@@ -36,15 +36,7 @@ from djust.decorators import computed, state
 
 class CartView(LiveView):
     tax_rate = state(default=0.0825)
-
-    def mount(self, request, **kwargs):
-        # A fresh list per view instance. state() takes only `default=`
-        # (there is no `default_factory`), and a mutable default would be
-        # shared by every instance.
-        self.items = []
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "items": self.items}
+    items = state(default_factory=list)
 
     @computed("items", "tax_rate")
     def total(self):

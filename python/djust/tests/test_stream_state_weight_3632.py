@@ -31,6 +31,7 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 pytestmark = [pytest.mark.django_db]
 
@@ -49,7 +50,8 @@ ROWS = [Row(i, f"BODY{i}") for i in range(5)]
 
 
 class Feed(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(0)
     template = (
         f'<div dj-view="{MODULE}.Feed" dj-id="0"><div id="list" dj-stream="rows">'
         '{% for r in streams.rows %}<div id="rows-{{ r.id }}">{{ r.body }}</div>{% endfor %}'

@@ -5,6 +5,7 @@ DraftModeMixin Test - automated testing for localStorage auto-save
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.drafts import DraftModeMixin
+from djust import state
 
 
 class DraftModeTestView(DraftModeMixin, LiveView):
@@ -20,7 +21,17 @@ class DraftModeTestView(DraftModeMixin, LiveView):
     - Persistence across page refreshes
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    title = state("")
+    content = state("")
+    author = state("")
+    save_count = state(0)
+    last_saved = state(None)
+    test_results = state(default_factory=list)
+    tests_run = state(0)
+    tests_passed = state(0)
+    tests_failed = state(0)
+    all_tests_passed = state(False)
     template_name = 'tests/draft_mode_test.html'
     draft_enabled = True
     draft_key = 'test_article_editor'

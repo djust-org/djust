@@ -27,10 +27,9 @@ djust does this with a [JS Command](js-commands.md) chain on
   the guess, nothing visibly changes; when it rejects the change, the
   handler sends a JS Command back that undoes the guess.
 
-> **Not `@optimistic`.** `djust.decorators.optimistic` exists, but
-> it is a marker only: no client code reads it, so decorating a
-> handler with it changes nothing at runtime. Use a JS Command chain
-> as shown here.
+> **Not `@optimistic`.** djust 1.x had a `djust.decorators.optimistic`
+> marker that no client code read; djust 2.0 removed it (#4006). Use a
+> JS Command chain as shown here.
 
 By the end of this tutorial you'll have a todo list where:
 
@@ -134,9 +133,6 @@ class TodoListView(LiveView):
 
     def mount(self, request, **kwargs):
         self._refresh()
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "todos": self.todos}
 
     def _refresh(self):
         self.todos = [

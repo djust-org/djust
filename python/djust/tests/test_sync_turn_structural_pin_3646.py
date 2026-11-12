@@ -55,6 +55,10 @@ import pytest
 
 from djust.sync_turn import SYNC_STEPS
 
+# A whole-tree pin: any PR can break it, so it runs on PRs and in the merge
+# queue whatever .test_durations records for it (#4051, tests/slow_tier.py).
+pytestmark = pytest.mark.pr_tier
+
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 
 # ---------------------------------------------------------------------------
@@ -965,6 +969,16 @@ HOOKS: Dict[str, str] = {
     "WizardMixin.get_wizard_step": (
         "unwrapped:not-threaded:called by WizardMixin._resume_wizard from WizardMixin.mount, in "
         "the thread and the mount step of the mount that called it; no thread hand-off names it"
+    ),
+    "WizardMixin.get_wizard_steps": (
+        "unwrapped:not-threaded:read through WizardMixin._steps by the wizard's own mount, "
+        "handlers and get_context_data(), in the thread and step of whichever called; it builds "
+        "a list from view state and no thread hand-off names it (#4011)"
+    ),
+    "WizardMixin.resume_wizard": (
+        "unwrapped:not-threaded:called by the view's own mount() (WizardMixin.mount calls "
+        "_resume_wizard), in the thread and the mount step of that mount; no thread hand-off "
+        "names it (#4011)"
     ),
     "WizardMixin.on_step_saved": (
         "unwrapped:not-threaded:called by WizardMixin.next_step, an event handler, in the thread "

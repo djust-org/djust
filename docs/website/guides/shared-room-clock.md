@@ -25,7 +25,7 @@ Distributed ownership, fencing and Redis leases are deferred (ADR-042 Phase 4).
 ```python
 import threading
 
-from djust import LiveView, PresenceMixin
+from djust import LiveView, PresenceMixin, state
 from djust.clocks import ClockTick, RoomClock, Publish
 
 _snapshots = {}
@@ -51,14 +51,11 @@ class LobbyView(PresenceMixin, LiveView):
     template = "<div dj-root>{{ version }}</div>"
     presence_key = "lobby"
     room_clock = room_clock
+    version = state(0)
 
     def mount(self, request, **kwargs):
-        self.version = 0
         self.track_presence({})
         self.handle_refresh()
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "version": self.version}
 
     def handle_refresh(self, key="", **kwargs):
         scope = room_clock.scope(self, "lobby")

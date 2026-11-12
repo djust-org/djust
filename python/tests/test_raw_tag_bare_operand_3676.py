@@ -9,13 +9,13 @@ which the handler's ``key=value`` parser reads as a keyword. So a context value
 could set any parameter of a tag it was merely passed to (``title``, ``class``,
 ``id``, event names), in a template Django itself refuses.
 
-The fix is one mechanism and no per-tag list: at registration each native handler
-of a raw tag is wrapped so that, at template COMPILATION, the engine hands the
-tokens to Django's own compile function for that tag (the same technique the
-``{% load %}`` bridge uses, ``LibraryBlockTagHandler.validate_at_parse``). Django
-says what it accepts and what it refuses, with its own message, so the Rust
-engine refuses exactly the templates Django refuses, whatever the tag's argument
-grammar is.
+The fix was one mechanism and no per-tag list: at template COMPILATION the engine
+hands the tokens to Django's own compile function for that tag
+(``DjangoCheckedTagHandler``). Since 2.0 (one render path per component tag) every
+tag except the core layout ones renders through the ``{% load %}`` bridge, which
+compiles the tag with Django's own function anyway; the core layout handlers keep
+the wrapper. Either way Django says what it accepts and what it refuses, with its
+own message, so the Rust engine refuses exactly the templates Django refuses.
 
 Everything here is derived from the registries and from Django's behaviour, not
 from a table: the tag set is enumerated from the library, the expected outcome of
@@ -25,7 +25,8 @@ enumeration finds.
 What each class proves:
 
 * ``TestEnumeration``: the sweep derived the tags it claims to, and every one is
-  registered natively (so the sweep is about the Rust handlers, not about Django).
+  registered with the Rust engine (so the sweep is about the Rust engine, not about
+  Django alone).
 * ``TestBareOperandRefusedLikeDjango``: for EVERY raw tag, every shape of bare
   operand (variable, literal, number, attribute path, filtered variable) is refused
   at compile time with Django's message when Django refuses it, and accepted when
@@ -63,7 +64,7 @@ SENTINEL = "PWNED"
 
 
 # --------------------------------------------------------------------------- #
-# The tags: enumerated from the library and the handler lists, never typed in
+# The tags: enumerated from the library, never typed in
 
 
 _MECHANISMS = frozenset({"with_positional_args", "DjangoCheckedTagHandler"})
@@ -93,40 +94,36 @@ def _mechanism_names(source: str) -> set[str]:
 
 
 def _handlers() -> dict[str, Any]:
-    from djust.components import rust_handlers as component_handlers
-
-    handlers = {name: handler for name, handler in component_handlers.INLINE_HANDLERS}
-    handlers.update({name: handler for name, _end, handler in component_handlers.BLOCK_HANDLERS})
-    return handlers
+    """Every tag the Rust engine serves for the library (all of them since S3: the bridge
+    renders each one's own node), by name -> its compile function."""
+    library = import_library(DOTTED)
+    return dict(library.tags)
 
 
 def _raw_tags() -> list[dict[str, Any]]:
-    """Every native handler of a raw ``@register.tag`` of the components library."""
-    from djust.template_libraries import _classify
+    """Every raw ``@register.tag`` of the components library."""
+    from djust.template_libraries import _classify, _consumes_body
 
     library = import_library(DOTTED)
-    handlers = _handlers()
     out = []
-    for name in sorted(handlers):
-        func = library.tags.get(name)
-        if func is None or _classify(func) != RAW:
+    for name in sorted(_handlers()):
+        func = library.tags[name]
+        if _classify(func) != RAW:
             continue
-        keys, params = harness.discover(type(handlers[name]))
+        if name == "split_pane":
+            # Its body must hold a ``{% pane %}``: the sweep's ``x`` body is refused for that,
+            # whatever the arguments, so the sweep would measure the body and not the operand.
+            continue
+        keys, params = harness.discover(func)
         out.append(
             {
                 "name": name,
                 "func": func,
                 "keys": sorted(keys | params),
-                "block": any(n == name for n, _e, _h in _block_handlers()),
+                "block": _consumes_body(func),
             }
         )
     return out
-
-
-def _block_handlers():
-    from djust.components import rust_handlers as component_handlers
-
-    return component_handlers.BLOCK_HANDLERS
 
 
 TAGS = _raw_tags()
@@ -160,7 +157,21 @@ def _call(tag: dict[str, Any], args: str) -> str:
 _ID = re.compile(r"(?<=[-_])[0-9a-f]{6,12}\b")
 
 
+#: The kept native twins (``rust_handlers.NATIVE_INLINE_HANDLERS`` / ``NATIVE_BLOCK_HANDLERS``).
+def _native_names() -> frozenset[str]:
+    from djust.components import rust_handlers as rh
+
+    return frozenset(
+        [n for n, _h in rh.NATIVE_INLINE_HANDLERS] + [n for n, _e, _h in rh.NATIVE_BLOCK_HANDLERS]
+    )
+
+
+_NATIVE_LAYOUT = _native_names()
+
+
 def _norm(html: str) -> str:
+    # ``tooltip`` numbers its tip from a process-wide counter: one per render, either engine.
+    html = re.sub(r"(?<=-tip-)\d+", "N", html)
     return re.sub(r"\s+", " ", _ID.sub("ID", html)).strip()
 
 
@@ -247,15 +258,17 @@ class TestEnumeration:
         assert any(t["block"] for t in TAGS)
         assert any(not t["block"] for t in TAGS)
 
-    def test_every_derived_tag_is_registered_natively(self, engines):
-        """Otherwise the sweep would be a statement about Django, not about the Rust handler."""
+    def test_every_derived_tag_is_registered_with_the_rust_engine(self, engines):
+        """Otherwise the sweep would be a statement about Django alone, not about the Rust
+        engine (which renders each tag through the ``{% load %}`` bridge, or natively for the
+        core layout tags)."""
         from djust import _rust
 
         missing = [
             t["name"]
             for t in TAGS
             if not (
-                _rust.has_block_tag_handler(t["name"])
+                _rust.has_block_tag_handler(t["name"]) or _rust.has_raw_block_tag_handler(t["name"])
                 if t["block"]
                 else _rust.has_tag_handler(t["name"])
             )
@@ -275,7 +288,8 @@ class TestEnumeration:
                 kinds.get(_classify(func) if func else "not-in-library", 0) + 1
             )
         assert kinds.get("not-in-library", 0) == 0, kinds
-        assert kinds[RAW] == len(TAGS), (kinds, len(TAGS))
+        # ``split_pane`` is the one raw tag the sweep leaves out (see ``_raw_tags``).
+        assert kinds[RAW] == len(TAGS) + 1, (kinds, len(TAGS))
 
 
 class TestBareOperandRefusedLikeDjango:
@@ -322,11 +336,17 @@ class TestBareOperandRefusedLikeDjango:
     @pytest.mark.parametrize("tag", TAGS, ids=IDS)
     def test_a_keyword_call_still_renders(self, engines, tag):
         """The refusal is of the bare operand, not of the tag: a keyword call (one per
-        key the handler reads) compiles and renders in the Rust engine."""
+        key the tag reads) compiles in the Rust engine and renders, or raises, exactly as
+        under Django (a tag that iterates ``messages=1`` raises in both)."""
         for key in tag["keys"][:3] or ["title"]:
             src = _call(tag, f"{key}=1")
             out = _render(engines, "rust", src, {})
-            assert out[0] == "ok", (tag["name"], key, out)
+            if tag["name"] in _NATIVE_LAYOUT:
+                # A kept native twin renders its own markup (its divergence from the Python tag is
+                # listed in test_component_single_render_path.py). The call compiles and renders.
+                assert out[0] == "ok", (tag["name"], key, out)
+                continue
+            assert out == _render(engines, "django", src, {}), (tag["name"], key, out)
 
 
 class TestInjection:
@@ -361,47 +381,6 @@ class TestInjection:
             baseline = _render(engines, "rust", _call(tag, ""), {})
             for value in (*_payloads(tag), "plain", ""):
                 assert _render(engines, "rust", src, {"val": value}) == baseline
-
-    def test_the_payload_injects_without_the_guard(self, engines):
-        """Non-vacuity, the reproduction of the issue: register each UNWRAPPED handler under
-        a throwaway name and the same payload does set a parameter. Without this, every
-        check above would pass on a handler that never read a parameter at all.
-
-        And the converse, the claim of the fix: every tag that injects when unwrapped is
-        refused when wrapped.
-        """
-        from djust import _rust
-
-        rust, _ = engines
-        handlers = _handlers()
-        injectable = []
-        for tag in TAGS:
-            alias = "zz_" + tag["name"] + "_3676"
-            if tag["block"]:
-                src = "{% " + alias + " val %}x{% end" + alias + " %}"
-                _rust.register_block_tag_handler(alias, "end" + alias, handlers[tag["name"]])
-            else:
-                src = "{% " + alias + " val %}"
-                _rust.register_tag_handler(alias, handlers[tag["name"]])
-            try:
-                for payload in _payloads(tag):
-                    try:
-                        out = str(rust.from_string(src).render({"val": payload}))
-                    except Exception:  # noqa: BLE001 - a handler that cannot render this
-                        continue
-                    if SENTINEL in out:
-                        injectable.append(tag)
-                        break
-            finally:
-                if tag["block"]:
-                    _rust.unregister_block_tag_handler(alias)
-                else:
-                    _rust.unregister_tag_handler(alias)
-        assert injectable, "no unwrapped handler took the payload: the sweep proves nothing"
-        for tag in injectable:
-            django = _compile(engines, "django", _call(tag, "val"))
-            assert django[0] == "err", f"{tag['name']}: injectable, yet Django accepts it"
-            assert _compile(engines, "rust", _call(tag, "val")) == django, tag["name"]
 
     def test_the_issue_example(self, engines):
         src = "{% load djust_components %}{% alert val %}body{% endalert %}"

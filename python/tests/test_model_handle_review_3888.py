@@ -237,7 +237,7 @@ class TestATagArgumentIsStillTheFlooredDict:
     ) -> None:
         """The differential over EVERY registered inline native tag: for each list-like argument
         name, a list of models and the list of their floored dicts render the same bytes (or raise
-        the same error). Derived from ``rust_handlers.INLINE_HANDLERS``, not listed by hand."""
+        the same error). Derived from ``rust_handlers.NATIVE_INLINE_HANDLERS``, not listed by hand."""
         from djust.components import rust_handlers
         from djust.serialization import normalize_django_value
 
@@ -246,7 +246,7 @@ class TestATagArgumentIsStillTheFlooredDict:
         keys = ["rows", "items", "options", "cards", "data", "entries", "steps", "tabs", "list"]
         checked = 0
         differing: dict[str, str] = {}
-        for name, _handler in rust_handlers.INLINE_HANDLERS:
+        for name, _handler in rust_handlers.NATIVE_INLINE_HANDLERS:
             for key in keys:
                 src = "{% " + name + " " + key + "=rows columns=cols %}"
                 outcomes = []
@@ -260,7 +260,13 @@ class TestATagArgumentIsStillTheFlooredDict:
                 checked += 1
                 if outcomes[0] != outcomes[1]:
                     differing[name] = key
-        assert checked > 200, checked
+        # Derived, not restated: one check per (inline native tag, key). Since #4071 bridged the
+        # component tags only the kept twins are native (10 inline ones), so the old `> 200`
+        # floor counted handlers that no longer exist.
+        assert rust_handlers.NATIVE_INLINE_HANDLERS, (
+            "no inline native tags: the loop checked nothing"
+        )
+        assert checked == len(rust_handlers.NATIVE_INLINE_HANDLERS) * len(keys), checked
         # The only tags that differ SPELL their argument rather than read rows from it: a data dump
         # (the same family as `|json_script` / `|pprint`, which print each model as its `str()`).
         assert set(differing) <= DUMP_TAGS, differing

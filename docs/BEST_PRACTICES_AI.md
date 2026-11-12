@@ -54,7 +54,7 @@ djust ships template-tag components (`djust.components`) and a theming system (`
 ### Complete Pattern (Use This Template)
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, debounce
 
 class ProductListView(LiveView):
@@ -68,6 +68,9 @@ class ProductListView(LiveView):
     4. Event handlers → update state + refresh
     """
     template_name = 'products/list.html'
+    search_query = state("")
+    filter_category = state("all")
+    sort_by = state("name")
 
     def mount(self, request, **kwargs):
         """
@@ -76,13 +79,9 @@ class ProductListView(LiveView):
         Rules:
         - Initialize filters, search queries, sort options
         - Call _refresh() to load initial data
-        - Nothing set here reaches the template by itself:
-          get_context_data() supplies it (explicit exposure)
+        - Declared state() fields render in the template; other
+          attributes set here do not (explicit exposure)
         """
-        self.search_query = ""
-        self.filter_category = "all"
-        self.sort_by = "name"
-
         # Load initial data
         self._refresh_products()
 
@@ -157,13 +156,9 @@ class ProductListView(LiveView):
         # The QuerySet itself: serialized for the fields the template reads
         context['products'] = self._products
 
-        # Plain state the template reads
-        context.update({
-            'search_query': self.search_query,
-            'filter_category': self.filter_category,
-            'sort_by': self.sort_by,
-            'categories': Category.objects.all(),  # OK: small queryset
-        })
+        # Derived values (search_query, filter_category and sort_by are
+        # declared state() fields, which render without being listed here)
+        context['categories'] = Category.objects.all()  # OK: small queryset
 
         return context
 ```
@@ -345,8 +340,7 @@ def delete_item(self, item_id: int, **kwargs):
 ### Decorator Usage
 
 > `@debounce`, `@throttle` and `@cache` are wired end-to-end. `@optimistic`
-> and `@client_state` are markers with no client implementation — the
-> handler still fires exactly as an undecorated one would (#2699, #2680).
+> and `@client_state` did nothing and were removed in djust 2.0 (#4006).
 
 ```python
 # Debouncing — the client waits 0.5s after the last keystroke, then sends once
@@ -362,9 +356,8 @@ def search(self, value: str = "", **kwargs):
 def track_scroll(self, position: int = 0, **kwargs):
     self.scroll_position = position
 
-# Optimistic updates (INERT — no client impl, #2699; UI does not update early)
+# A server action; add a JS Command chain for feedback before the server answers
 @event_handler()
-@optimistic
 def like_post(self, post_id: int, **kwargs):
     post = Post.objects.get(id=post_id)
     post.likes += 1
@@ -375,13 +368,6 @@ def like_post(self, post_id: int, **kwargs):
 @cache(ttl=300, key_params=["query"])  # 5 min cache
 def autocomplete(self, query: str = "", **kwargs):
     return City.objects.filter(name__istartswith=query)[:10]
-
-# Client state sync (INERT — no client impl, #2680; coordinates nothing.
-# The tab switch works because the server re-renders.)
-@event_handler()
-@client_state(keys=["active_tab"])
-def switch_tab(self, tab: str = "overview", **kwargs):
-    self.active_tab = tab
 ```
 
 ---
@@ -726,13 +712,11 @@ def autocomplete(self, query: str = "", **kwargs):
         name__istartswith=query
     )[:10]
 
-# Cached filter. NOTE: @client_state is INERT (#2680) and the StateBus it
-# named was deleted (#2680) — only @cache does anything here.
+# Cached filter.
 @event_handler()
-@client_state(keys=["filter"])
 @cache(ttl=60)
 def apply_filter(self, filter: str = "all", **kwargs):
-    """Caches the response. The @client_state publish does NOT happen."""
+    """Caches the response."""
     self.filter = filter
     self._refresh_results()
 ```
@@ -914,7 +898,7 @@ Like button?           → @event_handler (server round-trip);
                          JS Command chain for immediate feedback
 Autocomplete?          → @cache(ttl=300)
 Multi-component sync?  → one handler updating both; the single server
-                         re-render carries both. (@client_state is INERT, #2680.)
+                         re-render carries both.
 Draft saving?          → DraftModeMixin
 ```
 
@@ -963,7 +947,7 @@ Draft saving?          → DraftModeMixin
 **From**: `examples/demo_project/djust_rentals/views/properties.py`
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, debounce
 from djust_rentals.models import Property
 from django.db.models import Q
@@ -980,13 +964,11 @@ class PropertyListView(LiveView):
     - Proper lifecycle
     """
     template_name = 'rentals/property_list.html'
+    search_query = state("")
+    filter_status = state("all")
+    sort_by = state("address")
 
     def mount(self, request, **kwargs):
-        # Initialize state
-        self.search_query = ""
-        self.filter_status = "all"
-        self.sort_by = "address"
-
         # Load data
         self._refresh_properties()
 
@@ -1018,7 +1000,7 @@ class PropertyListView(LiveView):
         self._refresh_properties()
 
     @event_handler()
-    def filter_status(self, value: str = "all", **kwargs):
+    def set_filter_status(self, value: str = "all", **kwargs):
         self.filter_status = value
         self._refresh_properties()
 
@@ -1031,14 +1013,6 @@ class PropertyListView(LiveView):
         # JIT serialization
         context = super().get_context_data(**kwargs)
         context["properties"] = self._properties
-
-        # Non-model context
-        context.update({
-            'search_query': self.search_query,
-            'filter_status': self.filter_status,
-            'sort_by': self.sort_by,
-        })
-
         return context
 ```
 
@@ -1111,5 +1085,5 @@ DATABASES = {"default": dj_database_url.config(default=os.environ["DATABASE_URL"
 - Forms → FormMixin + validation
 - Server-authoritative real-time → @event_handler (server round-trip)
 - Immediate visual feedback for a server action → JS Commands +
-  `@event_handler`; `@optimistic` is inert
+  `@event_handler`
 - Autocomplete → @cache + @debounce

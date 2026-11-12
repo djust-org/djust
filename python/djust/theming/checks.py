@@ -283,3 +283,36 @@ def check_selectable_presets(app_configs: Any, **kwargs: Any) -> list[CheckMessa
             id="djust_theming.W003",
         )
     ]
+
+
+@register(Tags.compatibility)
+def check_component_catalog_css(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """Report a project that installs djust.components without stating ``component_catalog_css``.
+
+    Until 2.0 ``{% theme_head %}`` linked the catalog's ``djust_components/components.css``
+    (about 330 KB) whenever ``djust.components`` was installed. In 2.0 it links it only when
+    ``LIVEVIEW_CONFIG["theme"]["component_catalog_css"]`` is ``True`` (#4003), so a project
+    that renders catalog tags and relied on the automatic link loses their styles. Stating
+    either value silences this.
+    """
+    from django.apps import apps as django_apps
+
+    if not django_apps.is_installed("djust.components"):
+        return []
+    theme = getattr(settings, "LIVEVIEW_CONFIG", {}).get("theme", {})
+    if "component_catalog_css" in theme:
+        return []
+    return [
+        Warning(
+            "djust.components is installed, and {% theme_head %} no longer links its "
+            "stylesheet (djust_components/components.css) by default in djust 2.0. Pages that "
+            "render catalog tags such as {% modal %}, {% data_table %} or {% app_shell %} "
+            "lose their styles.",
+            hint=(
+                'Set LIVEVIEW_CONFIG["theme"]["component_catalog_css"] = True to keep linking '
+                "it on every page, or False if no page needs it (or the pages that do link it "
+                "themselves). See the 2.0 migration guide."
+            ),
+            id="djust_theming.W004",
+        )
+    ]

@@ -39,7 +39,7 @@ CONFIGURED = "ws://localhost:7681"
 
 
 class AllowlistedView(TtydTerminalView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     ttyd_url = "ws://localhost:7681"
     ttyd_allowed_origins = ("wss://shell.example.com", "ws://10.0.0.5:7000", "ws://[::1]:7000")
 
@@ -138,7 +138,7 @@ class TestRefused:
 
     def test_a_malformed_allowlist_entry_allows_nothing(self):
         class Bad(TtydTerminalView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             ttyd_allowed_origins = ("evil.example.com", "javascript:alert(1)", "", None, 7)
 
         for target in ("ws://evil.example.com", "javascript:alert(1)", "ws://"):
@@ -231,7 +231,7 @@ class TestAccepted:
 
     def test_a_bare_string_allowlist_is_one_entry_not_a_set_of_characters(self):
         class OneString(TtydTerminalView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             ttyd_allowed_origins = "wss://shell.example.com"  # type: ignore[assignment]
 
         query = "?url=" + quote("wss://shell.example.com/ws", safe="")
@@ -248,7 +248,7 @@ class TestAccepted:
         """Author code is not an attacker: a subclass may name any endpoint."""
 
         class Deploy(TtydTerminalView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             ttyd_url = "wss://logs.internal.example:7682/ws"
 
         assert _mount(Deploy, "").ttyd_url == "wss://logs.internal.example:7682/ws"
@@ -266,7 +266,7 @@ class TestAttributeSink:
 class TestSubclassOwnUrl:
     def test_a_subclass_ttyd_url_may_carry_a_query_and_a_request_cannot(self):
         class WithToken(TtydTerminalView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             ttyd_url = "wss://logs.internal.example/ws?token=abc"
 
         assert _mount(WithToken, "").ttyd_url == "wss://logs.internal.example/ws?token=abc"

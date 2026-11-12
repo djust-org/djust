@@ -37,7 +37,7 @@ from djust.uploads import (  # noqa: E402
 
 
 class _UploadView(UploadMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>up</div>"
 
     def mount(self, request, **kwargs):

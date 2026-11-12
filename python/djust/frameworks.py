@@ -416,6 +416,9 @@ class BaseAdapter(FrameworkAdapter):
             self._merge_widget_attrs(field, attrs)
             return self._build_tag("textarea", attrs, escape(str(value)))
         elif field_type == "select":
+            if getattr(field.widget, "allow_multiple_selected", False):
+                # ``SelectMultiple``: a list value shows every item selected (#3978).
+                attrs["multiple"] = "multiple"
             self._merge_widget_attrs(field, attrs)
             return self._render_select(field, field_name, value, has_errors, attrs)
         else:
@@ -468,7 +471,8 @@ class BaseAdapter(FrameworkAdapter):
         # have one (a ModelChoiceField's empty_label, a ("", "Pick one")
         # entry): a second blank would be a duplicate.
         has_blank = any(v is None or str(v) == "" for v, _ in self._flat_choices(choices))
-        if not field.required and not has_blank:
+        # (Not on a multiple select: selecting nothing already says "none".)
+        if not field.required and not has_blank and "multiple" not in attrs:
             options_html += '<option value="">---------</option>'
         for choice_value, choice_label in choices:
             if isinstance(choice_label, (list, tuple)):

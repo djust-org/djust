@@ -3,8 +3,8 @@ Optimistic Todo Demo - demonstrates @optimistic with todo list
 """
 
 from djust import LiveView
-from djust.decorators import optimistic
 import time
+from djust import state
 
 
 class OptimisticTodoView(LiveView):
@@ -18,7 +18,15 @@ class OptimisticTodoView(LiveView):
     - Simulated network delay to show optimistic behavior
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    todos = state(default_factory=lambda: [
+            {'id': 1, 'text': 'Write Phase 3 implementation', 'completed': False},
+            {'id': 2, 'text': 'Add client.js optimistic update logic', 'completed': True},
+            {'id': 3, 'text': 'Create demo views', 'completed': False},
+            {'id': 4, 'text': 'Manual testing', 'completed': False},
+            {'id': 5, 'text': 'Update documentation', 'completed': False},
+            {'id': 6, 'text': 'Create PR for Phase 3', 'completed': False},
+        ])
     template = """
     <!DOCTYPE html>
     <html>
@@ -145,7 +153,6 @@ class OptimisticTodoView(LiveView):
             {'id': 6, 'text': 'Create PR for Phase 3', 'completed': False},
         ]
 
-    @optimistic
     def toggle_todo(self, id: int = None, checked: bool = None, **kwargs):
         """
         Toggle todo completion (with optimistic update).

@@ -18,6 +18,7 @@ from django.test import RequestFactory
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +29,8 @@ from djust.decorators import event_handler
 class AuthAwareView(LiveView):
     """View whose template depends on user.is_authenticated."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    status = state("mounted")
     template = """<div dj-root>
     {% if user.is_authenticated %}
         <span class="auth">Welcome, {{ user.username }}</span>

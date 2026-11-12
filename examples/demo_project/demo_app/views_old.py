@@ -10,6 +10,7 @@ from .forms import RegistrationForm, ContactForm, ProfileForm, SearchForm
 from .views.base import BaseTemplateView
 from .views.navbar_example import BaseViewWithNavbar
 from djust.components.layout import NavbarComponent, NavItem
+from djust import state
 
 
 class IndexView(LiveView):
@@ -18,7 +19,15 @@ class IndexView(LiveView):
 
     A LiveView to demonstrate reactive navbar badges AND inline demos on the main page!
     """
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    notification_count = state(0)
+    demo_counter = state(0)
+    all_languages = state(default_factory=lambda: [
+            "Python", "JavaScript", "TypeScript", "Java", "Go",
+            "Rust", "Ruby", "PHP", "C++", "C#", "Swift", "Kotlin"
+        ])
+    filtered_languages = state()
+    demo_todos = state(default_factory=list)
     template_name = 'index.html'
 
     def mount(self, request, **kwargs):
@@ -125,7 +134,8 @@ class NavbarBadgeDemo(LiveView):
     This is embedded in the homepage to demonstrate how navbar badges
     update in real-time when state changes.
     """
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    notification_count = state(0)
     template = """
     <div class="p-4 bg-white rounded-lg border border-gray-200">
         <!-- Navbar with badge -->
@@ -1134,7 +1144,7 @@ class RegistrationFormView(FormMixin, LiveView):
     - Success/error messaging
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = RegistrationForm
 
     template = """
@@ -1333,7 +1343,7 @@ class ContactFormView(FormMixin, LiveView):
     - Custom validation
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = ContactForm
 
     template = """
@@ -1552,7 +1562,7 @@ class ProfileFormView(FormMixin, LiveView):
     - Field help text
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = ProfileForm
 
     template = """

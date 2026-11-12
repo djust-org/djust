@@ -11,12 +11,16 @@ Run with mypy to see type checking in action:
 """
 
 from djust import LiveView
+from djust import state
 
 
 class ProductListView(LiveView):
     """Demo view showing type-checked LiveView methods."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    category = state("all")
+    page = state(1)
+    products = state(default_factory=list)
     template_name = "products.html"
 
     def mount(self, request, **kwargs):

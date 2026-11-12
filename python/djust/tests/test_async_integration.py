@@ -14,6 +14,7 @@ import pytest
 
 from djust.live_view import LiveView
 from djust.decorators import event_handler, background
+from djust import state
 
 
 def _close_swallowed_coroutines(mock_ensure_future):
@@ -50,7 +51,11 @@ def _close_swallowed_coroutines(mock_ensure_future):
 class AsyncTestView(LiveView):
     """Test view with async operations."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    loading = state(False)
+    result = state(None)
+    error = state(None)
+    completed = state()
     template_name = "async_test.html"
 
     def mount(self, request, **kwargs):
@@ -102,7 +107,10 @@ class AsyncTestView(LiveView):
 class CancellableView(LiveView):
     """Test view with cancellable operations."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    working = state(False)
+    cancelled = state(False)
+    result = state(None)
     template_name = "cancel_test.html"
 
     def mount(self, request, **kwargs):

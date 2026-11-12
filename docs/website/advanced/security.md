@@ -34,10 +34,12 @@ Only lowercase letters, digits, and underscores are allowed, and the name must s
 Only methods explicitly decorated with `@event_handler` are callable via WebSocket:
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class MyView(LiveView):
+    count = state(0)
+
     @event_handler
     def increment(self):
         """Callable via WebSocket."""
@@ -360,7 +362,7 @@ Then only `name` and `email` are serialized for the VDOM. Fields like `ssn`, `sa
 
 ## Private State
 
-A view publishes nothing by itself ([explicit exposure](../state/explicit-exposure.md), the default since 2.0). An attribute reaches the template only when `get_context_data()` supplies it:
+A view publishes only what it declares or returns ([explicit exposure](../state/explicit-exposure.md), the default since 2.0). A `state()` field renders in the template; any other attribute reaches it only when `get_context_data()` supplies it:
 
 ```python
 class DashboardView(LiveView):
@@ -375,7 +377,7 @@ class DashboardView(LiveView):
         return {**super().get_context_data(**kwargs), "metrics": self.metrics}
 ```
 
-What `get_context_data()` does not return is not rendered, whatever its name. `_api_key` would stay on the server without the underscore too; the prefix marks it as internal for the reader. Such values are not saved to the session or sent to the browser either: that takes a `state(..., persist=...)` or `state(..., client=True)` declaration. A view that states `exposure_policy = "legacy"` (deprecated) is different: it publishes every public attribute to the template and to saved state, and there the underscore is what keeps a value out.
+An undeclared attribute that `get_context_data()` does not return is not rendered, whatever its name. `_api_key` would stay on the server without the underscore too; the prefix marks it as internal for the reader. Such values are not saved to the session or sent to the browser either: that takes a `state(..., persist=...)` or `state(..., client=True)` declaration. A view that states `exposure_policy = "legacy"` (deprecated) is different: it publishes every public attribute to the template and to saved state, and there the underscore is what keeps a value out.
 
 ## Content Security Policy (CSP) with nonces
 

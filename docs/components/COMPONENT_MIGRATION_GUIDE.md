@@ -275,9 +275,10 @@ class TabsComponent(LiveComponent):
     def mount(self, tabs, active=None):
         """Called once - initialize state"""
         self.tabs = tabs
-        self.active = active or tabs[0].id
+        self.active = active or tabs[0]["id"]
 
-    def switch_tab(self, tab):
+    @event_handler()
+    def switch_tab(self, tab: str = "", **kwargs):
         """Event handler - updates state"""
         self.active = tab
         self.send_parent("tab_changed", {"tab": tab})
@@ -288,9 +289,10 @@ class TabsComponent(LiveComponent):
             'active': self.active
         }
 
-# Parent creates component once in mount()
-def mount(self, request):
-    self.tabs_component = TabsComponent(
+# Parent declares the component in its class body (each view gets its own
+# copy; an explicit view refuses one assigned in mount())
+class PageView(LiveView):
+    tabs_component = TabsComponent(
         tabs=[{"id": "home", "label": "Home"}]
     )
 ```
@@ -368,10 +370,12 @@ def handle_user_selected(self, user_id):
 **Before (manual coordination):**
 ```python
 class DashboardView(LiveView):
+    user_list = UserListComponent()
+    user_detail = UserDetailComponent()
+
     def mount(self, request):
         self.selected_user = None
-        self.user_list = UserListComponent(users=User.objects.all())
-        self.user_detail = UserDetailComponent()
+        self.user_list.update(users=User.objects.all())
 
     def select_user(self, user_id):
         """Called directly by template button"""
@@ -386,11 +390,13 @@ class DashboardView(LiveView):
 **After (event-based):**
 ```python
 class DashboardView(LiveView):
+    user_list = UserListComponent()
+    user_detail = UserDetailComponent()
+    activity_log = ActivityLogComponent()
+
     def mount(self, request):
         self.selected_user_id = None
-        self.user_list = UserListComponent(users=User.objects.all())
-        self.user_detail = UserDetailComponent()
-        self.activity_log = ActivityLogComponent()
+        self.user_list.update(users=User.objects.all())
 
     def handle_component_event(self, component_id, event, data):
         """Single coordination point"""
@@ -781,7 +787,7 @@ Use this checklist for each component:
 - [ ] Added event handlers if needed
 - [ ] Added `send_parent()` calls
 - [ ] Added `update()` method if reactive
-- [ ] Updated parent to create component in `mount()`
+- [ ] Updated parent to declare the component in its class body (props from `mount()` data via `self.<name>.update(...)`)
 - [ ] Updated parent to handle events
 - [ ] Added tests
 - [ ] Verified VDOM patching works

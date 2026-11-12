@@ -966,22 +966,6 @@ DECORATORS: List[Dict[str, Any]] = [
         "usage": ["@throttle(interval=0.1)\ndef on_scroll(self, scroll_y: int = 0, **kwargs):"],
     },
     {
-        "name": "@optimistic",
-        "import": "from djust.decorators import optimistic",
-        "description": "INERT — stamps metadata nothing in the shipped client "
-        "reads, and a bare @optimistic declares no DOM change for a client to "
-        "apply, so the UI does not update before the server responds. Whether to "
-        "implement it (or fold it into the wired DEP-002 optimistic_rules) is "
-        "#2699. Do not recommend it as a working mechanism.",
-        "params": {},
-        "usage": [
-            # INERT (#2699) — the marker has to travel with the PASTE (#2696);
-            # the entry's `description` is a separate block an agent may not copy.
-            "@optimistic  # INERT (#2699): the UI does not update early\n"
-            "def toggle_todo(self, todo_id: int = 0, **kwargs):",
-        ],
-    },
-    {
         "name": "@cache",
         "import": "from djust.decorators import cache",
         "description": "Client-side response caching with TTL.",
@@ -991,24 +975,6 @@ DECORATORS: List[Dict[str, Any]] = [
         },
         "usage": [
             "@cache(ttl=60, key_params=['query'])\ndef search(self, query: str = '', **kwargs):"
-        ],
-    },
-    {
-        "name": "@client_state",
-        "import": "from djust.decorators import client_state",
-        "description": "INERT / MARKER ONLY — stamps metadata that nothing in the shipped "
-        "client reads, so a decorated handler behaves exactly like an undecorated "
-        "one. The StateBus class that was to consume it was deleted in #2680 as "
-        "dead code; whether to implement the client half is #2680. Do not "
-        "recommend it as a working coordination mechanism.",
-        "params": {
-            "keys": "List[str] — state keys to publish/subscribe",
-        },
-        "usage": [
-            # INERT (#2680) — repeated here because this snippet is what an
-            # agent copies; the entry's `description` is a separate block.
-            "@client_state(keys=['filter'])  # INERT (#2680): publishes nothing\n"
-            "def update_filter(self, filter: str = '', **kwargs):",
         ],
     },
     {
@@ -1232,10 +1198,10 @@ BEST_PRACTICES = {
         "example": (
             "class ItemListView(LiveView):\n"
             "    template_name = 'items/list.html'\n"
+            "    search = state('')  # declared state renders in the template\n"
+            "    filter = state('all')\n"
             "\n"
             "    def mount(self, request, **kwargs):\n"
-            "        self.search = ''\n"
-            "        self.filter = 'all'\n"
             "        self._refresh()\n"
             "\n"
             "    def _refresh(self):\n"
@@ -1245,9 +1211,8 @@ BEST_PRACTICES = {
             "        self._items = qs\n"
             "\n"
             "    def get_context_data(self, **kwargs):\n"
-            "        # The template gets what is added here, and nothing else.\n"
+            "        # Derived and render-only values; declared fields are already in it.\n"
             "        context = super().get_context_data(**kwargs)\n"
-            "        context.update(search=self.search, filter=self.filter)\n"
             "        context['items'] = self._items  # QuerySet: Rust JIT serializes it\n"
             "        return context\n"
             "\n"
@@ -1808,8 +1773,6 @@ def _extract_view_schema(cls: type, base_classes: list) -> Dict[str, Any]:
             "throttle",
             "rate_limit",
             "cache",
-            "optimistic",
-            "client_state",
             "permission_required",
         ):
             if key in meta:

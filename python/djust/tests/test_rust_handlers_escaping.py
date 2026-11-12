@@ -1,4 +1,4 @@
-"""Rust-engine component handlers HTML-escape context values.
+"""Rust-engine component handlers HTML-escape context values (the kept native twins, since 2.0).
 
 Each case calls a handler from ``djust.components.rust_handlers`` directly, the
 way the Rust template engine does (``render(args, context)`` for inline tags,
@@ -31,67 +31,74 @@ def _call(handler: Any, block: bool, args: list[str], context: dict[str, object]
     return str(handler.render(args, context))
 
 
+def _kept(name: str) -> Any:
+    """The native handler ``name``, or ``None`` when it is gone: since 2.0 only the kept native
+    twins remain (one render path per component tag); the others render the Python tag."""
+    cls = getattr(rh, name, None)
+    return cls() if cls is not None else None
+
+
 # (id, handler, is_block, args, context_builder(value) -> context)
 HREF_CASES: list[tuple[str, Any, bool, list[str], Callable[[object], dict[str, object]]]] = [
     (
         "breadcrumb",
-        rh.BreadcrumbHandler(),
+        _kept("BreadcrumbHandler"),
         False,
         ["items=items"],
         lambda v: {"items": [{"label": "Home", "url": v}, {"label": "Here"}]},
     ),
     (
         "sidebar_item",
-        rh.SidebarItemHandler(),
+        _kept("SidebarItemHandler"),
         True,
         ["label='Docs'", "href=u"],
         lambda v: {"u": v},
     ),
     (
         "nav_menu_brand",
-        rh.NavMenuHandler(),
+        _kept("NavMenuHandler"),
         True,
         ["brand='Site'", "brand_href=u"],
         lambda v: {"u": v},
     ),
     (
         "nav_item",
-        rh.NavItemHandler(),
+        _kept("NavItemHandler"),
         True,
         ["label='Docs'", "href=u"],
         lambda v: {"u": v},
     ),
     (
         "source_citation",
-        rh.SourceCitationHandler(),
+        _kept("SourceCitationHandler"),
         False,
         ["index=1", "title='Doc'", "url=u"],
         lambda v: {"u": v},
     ),
     (
         "cookie_consent",
-        rh.CookieConsentHandler(),
+        _kept("CookieConsentHandler"),
         True,
         ["privacy_url=u"],
         lambda v: {"u": v},
     ),
     (
         "error_page",
-        rh.ErrorPageHandler(),
+        _kept("ErrorPageHandler"),
         False,
         ["code=404", "action_url=u"],
         lambda v: {"u": v},
     ),
     (
         "breadcrumb_dropdown",
-        rh.BreadcrumbDropdownHandler(),
+        _kept("BreadcrumbDropdownHandler"),
         False,
         ["items=items"],
         lambda v: {"items": [{"label": "Home", "url": v}, {"label": "Here"}]},
     ),
     (
         "breadcrumb_dropdown_collapsed",
-        rh.BreadcrumbDropdownHandler(),
+        _kept("BreadcrumbDropdownHandler"),
         False,
         ["items=items", "max_visible=2"],
         lambda v: {
@@ -106,88 +113,90 @@ HREF_CASES: list[tuple[str, Any, bool, list[str], Callable[[object], dict[str, o
 ]
 
 IMG_CASES: list[tuple[str, Any, bool, list[str], Callable[[object], dict[str, object]]]] = [
-    ("avatar", rh.AvatarHandler(), False, ["src=u", "alt='A'"], lambda v: {"u": v}),
-    ("responsive_image_src", rh.ResponsiveImageHandler(), False, ["src=u"], lambda v: {"u": v}),
+    ("avatar", _kept("AvatarHandler"), False, ["src=u", "alt='A'"], lambda v: {"u": v}),
+    ("responsive_image_src", _kept("ResponsiveImageHandler"), False, ["src=u"], lambda v: {"u": v}),
     (
         "responsive_image_placeholder",
-        rh.ResponsiveImageHandler(),
+        _kept("ResponsiveImageHandler"),
         False,
         ["src='/a.png'", "placeholder=u"],
         lambda v: {"u": v},
     ),
     (
         "chat_bubble",
-        rh.ChatBubbleHandler(),
+        _kept("ChatBubbleHandler"),
         False,
         ["message=m"],
         lambda v: {"m": {"name": "Ann", "text": "hi", "avatar": v}},
     ),
     (
         "presence_avatars",
-        rh.PresenceAvatarsHandler(),
+        _kept("PresenceAvatarsHandler"),
         False,
         ["users=users"],
         lambda v: {"users": [{"name": "Ann", "avatar": v}]},
     ),
     (
         "mentions_input",
-        rh.MentionsInputHandler(),
+        _kept("MentionsInputHandler"),
         False,
         ["users=users"],
         lambda v: {"users": [{"id": 1, "name": "Ann", "avatar": v}]},
     ),
     (
         "sortable_grid",
-        rh.SortableGridHandler(),
+        _kept("SortableGridHandler"),
         False,
         ["items=items"],
         lambda v: {"items": [{"id": 1, "label": "A", "thumbnail": v}]},
     ),
-    ("image_cropper", rh.ImageCropperHandler(), False, ["src=u"], lambda v: {"u": v}),
+    ("image_cropper", _kept("ImageCropperHandler"), False, ["src=u"], lambda v: {"u": v}),
     (
         "lightbox",
-        rh.LightboxHandler(),
+        _kept("LightboxHandler"),
         False,
         ["images=imgs", "open=True"],
         lambda v: {"imgs": [{"src": v, "alt": "A"}]},
     ),
     (
         "org_chart",
-        rh.OrgChartHandler(),
+        _kept("OrgChartHandler"),
         False,
         ["nodes=nodes"],
         lambda v: {"nodes": [{"id": "1", "name": "Ann", "avatar": v}]},
     ),
     (
         "live_indicator",
-        rh.LiveIndicatorHandler(),
+        _kept("LiveIndicatorHandler"),
         False,
         ["user=u"],
         lambda v: {"u": {"name": "Ann", "avatar": v}},
     ),
     (
         "activity_feed",
-        rh.ActivityFeedHandler(),
+        _kept("ActivityFeedHandler"),
         False,
         ["events=ev"],
         lambda v: {"ev": [{"user": "Ann", "action": "did", "avatar": v}]},
     ),
     (
         "image_upload_preview",
-        rh.ImageUploadPreviewHandler(),
+        _kept("ImageUploadPreviewHandler"),
         False,
         ["previews=p"],
         lambda v: {"p": [v]},
     ),
     (
         "data_card_grid",
-        rh.DataCardGridHandler(),
+        _kept("DataCardGridHandler"),
         False,
         ["items=items"],
         lambda v: {"items": [{"title": "T", "image": v}]},
     ),
 ]
 
+HREF_CASES = [c for c in HREF_CASES if c[1] is not None]
+IMG_CASES = [c for c in IMG_CASES if c[1] is not None]
 URL_CASES = HREF_CASES + IMG_CASES
 URL_IDS = [c[0] for c in URL_CASES]
 
@@ -269,19 +278,20 @@ def _data_table_stats_ctx(v: object) -> dict[str, object]:
 TEXT_CASES: list[tuple[str, Any, bool, list[str], Callable[[object], dict[str, object]]]] = [
     (
         "data_table_stats",
-        rh.DataTableHandler(),
+        _kept("DataTableHandler"),
         False,
         ["rows=r", "columns=c", "column_stats=s"],
         _data_table_stats_ctx,
     ),
     (
         "meter_legend_value",
-        rh.MeterHandler(),
+        _kept("MeterHandler"),
         False,
         ["segments=segs"],
         lambda v: {"segs": [{"label": "Used", "value": v}]},
     ),
 ]
+TEXT_CASES = [c for c in TEXT_CASES if c[1] is not None]
 TEXT_IDS = [c[0] for c in TEXT_CASES]
 
 

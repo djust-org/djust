@@ -20,6 +20,7 @@ from django.test import RequestFactory, override_settings
 
 from djust import LiveView
 from djust.utils import clear_template_dirs_cache
+from djust import state
 
 _BASE = """{% load live_tags %}<!doctype html>
 <html lang="en">
@@ -70,7 +71,8 @@ def _child(explicit_view: bool) -> str:
 
 
 class SearchView3187(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    query = state("hello")
     template_name = "docs_3187/search.html"
 
     def mount(self, request, **kwargs):

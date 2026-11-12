@@ -22,12 +22,14 @@ from django.test import RequestFactory
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 PATH = "/nav-probe/"
 
 
 class NavPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    title = state("X")
     template = '<div dj-root dj-id="0"><h1>{{ title }}</h1><p>{{ whoami }}</p></div>'
 
     rendered_for: list = []

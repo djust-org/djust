@@ -29,6 +29,7 @@ from unittest.mock import patch
 import pytest
 
 from django.test import RequestFactory, override_settings
+from djust import state
 
 pytestmark = pytest.mark.tenants
 
@@ -56,7 +57,8 @@ class _TenantDocView(TenantMixin, LiveView):
     not a crash.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    doc = state("x")
     tenant_required = False
     template = (
         '<div dj-view="djust.tests.test_ws_host_tenant_f26._TenantDocView" dj-id="0">doc</div>'

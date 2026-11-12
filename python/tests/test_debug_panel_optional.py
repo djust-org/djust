@@ -15,14 +15,15 @@ from django.test import override_settings
 from djust import LiveView
 from djust.config import debug_panel_enabled
 from djust.decorators import event_handler
+from djust import state
 
 PAGE = "<html><head><title>T</title></head><body><h1>T</h1></body></html>"
 
 
 class _View(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_string = PAGE
-    count = 0
+    count = state(0)
 
     @event_handler
     def increment(self):

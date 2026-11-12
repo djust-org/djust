@@ -1,7 +1,5 @@
 # API Stability & Deprecation Policy
 
-> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2680), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
-
 This document is the canonical, authoritative statement of djust's API-stability
 commitment and its deprecation process. It defines exactly what the djust 1.0
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) promise covers, what
@@ -58,14 +56,14 @@ document takes effect at **1.0.0**.
 The **public API** — the surface SemVer covers — is exactly the following:
 
 1. **Top-level package exports.** Every name in `djust.__init__.py`'s `__all__`
-   (61 symbols as of 2.0). `from djust import X` for any such `X` is a
+   (59 symbols as of 2.0). `from djust import X` for any such `X` is a
    supported, stable import.
 
 2. **The documented decorators.** Every name in `djust.decorators.__all__`
-   (21 names as of 2.0). These include the core decorators (`event_handler`,
+   (19 names as of 2.0). These include the core decorators (`event_handler`,
    `action`, `server_function`, `push_handler`, `permission_required`, `rate_limit`,
-   `state`, `computed`, `debounce`, `throttle`, `optimistic`, `cache`,
-   `client_state`, `background`, `on_mount`) and the
+   `state`, `computed`, `debounce`, `throttle`, `cache`, `background`,
+   `on_mount`) and the
    introspection predicates `is_event_handler`, `is_action`,
    `is_server_function` and `is_push_handler`. Two names are deliberately in
    `djust.decorators.__all__` only, not at the top level: `StateProperty` (the
@@ -267,8 +265,13 @@ djust that states `"legacy"` does not warn. The value is accepted through the
 2.0 pre-releases and removed in `2.0.0`: 2.x has no legacy runtime (see
 [the 2.x direction](#the-14-bridge-and-2x-direction-2026-10-19)).
 
-This warning is first raised on the 2.0 line. The 1.3.x releases do not raise
-it: there `"legacy"` is the default and stating it is not deprecated.
+System check `djust.V028` (Warning) also lists each application class that
+states `"legacy"`, on every `manage.py check` and server start, with the views
+that inherit it and a pointer to `djust_exposure_inventory`; a warning raised
+at import time is easy to miss. djust's own classes are not reported.
+
+This warning and the check are first raised on the 2.0 line. The 1.3.x releases
+raise neither: there `"legacy"` is the default and stating it is not deprecated.
 
 ---
 
@@ -279,6 +282,8 @@ djust `2.0.0`. Importing them now raises `ImportError` (or `AttributeError` for
 `djust.event` / `djust.LiveViewForm`). The dict-style `block.super` reads,
 deprecated in 1.3, were removed too, as were the eight component mixins and the
 `social_auth_providers` context processor, which had also warned since 1.3.
+The inert `@optimistic` and `@client_state` decorators were removed without a
+1.3 warning; see their section.
 
 ### `@event` → `@event_handler`
 
@@ -310,13 +315,16 @@ special form base class; `LiveViewForm` only added two helpers to Django's
 `form.get_field_value(name)`, read `form.cleaned_data` (or `form.data` before
 validation):
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before
+# Before (removed: raises ImportError)
 from djust.forms import LiveViewForm
 
 class ContactForm(LiveViewForm):
     name = forms.CharField()
+```
 
+```python
 # After
 from django import forms
 
@@ -396,15 +404,19 @@ classes, are gone from `djust.components` and `djust.components.mixins`
 Declare the matching descriptor on the view instead. It holds the state and
 registers its event handler; the template reads the state off the attribute.
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before
+# Before (removed: raises ImportError)
 from djust.components.mixins import TabsMixin
 
 class SettingsView(TabsMixin, LiveView):
     def mount(self, request, **kwargs):
         self.init_tabs("nav", active="general")
+```
 
+```python
 # After
+from djust import LiveView
 from djust.components.descriptors import Tabs
 
 class SettingsView(LiveView):
@@ -515,11 +527,14 @@ class-creation check cannot see (set on the instance, or assigned to the class
 later) raises the same error right after `mount()`, on every transport. Delete
 the attribute:
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before
+# Before (removed: raises ImproperlyConfigured)
 class Dashboard(LiveView):
     use_actors = True
+```
 
+```python
 # After
 class Dashboard(LiveView):
     ...
@@ -530,6 +545,52 @@ time per connection. For work that should not block a turn, use
 `start_async()` or `@background`. `use_actors = False` is accepted and has no
 effect; delete it too. Importing one of the removed `djust._rust` names raises
 `ImportError`.
+
+### `@optimistic` and `@client_state` → nothing (they did nothing)
+
+Both decorators only recorded metadata that nothing read: no client code
+applied an optimistic update for `@optimistic`, and the client bus that was
+to consume `@client_state` was deleted as dead code in #2680. A decorated
+handler behaved exactly like an undecorated one. djust `2.0.0` removed both
+(#4006). `from djust import optimistic`, `from djust.decorators import
+client_state` and the attribute reads raise `ImportError` with a message that
+names the replacement and this guide (so `hasattr()` raises rather than
+returning `False`, as for the signed snapshot below). Delete the decorator; the
+handler keeps working as before:
+
+```python
+# Before (removed in 2.0, #4006)
+from djust.decorators import client_state, event_handler, optimistic
+
+@optimistic
+@event_handler
+def increment(self, **kwargs):
+    self.count += 1
+
+@client_state(keys=["filter"])  # removed in 2.0, #4006
+@event_handler
+def update_filter(self, filter: str = "", **kwargs):
+    self.filter = filter
+
+# After
+from djust.decorators import event_handler
+
+@event_handler
+def increment(self, **kwargs):
+    self.count += 1
+
+@event_handler
+def update_filter(self, filter: str = "", **kwargs):
+    self.filter = filter
+```
+
+For an update that shows in the browser before the server answers, use the
+client-side `JS` commands (`dj-click` with a `JS` chain, or `optimistic_rules`
+on a descriptor component). To keep two values in step, update both in one
+handler; the one render sends both.
+
+These were not deprecated in 1.3.x: no warning preceded the removal, because
+the decorators had no behaviour a project could depend on.
 
 ### The legacy signed snapshot → `state(..., persist="client", client=True)`
 
@@ -554,14 +615,17 @@ the attribute (next section), so a legacy view mounts fresh on Back.
 The HTTP page-POST fallback still restores a legacy view's public and private state from the session between requests; that goes later in 2.0 (rows 5 and 6 of the exposure-flip plan).
 Declare what the browser may hold:
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before (1.3)
+# Before (1.3): refused in 2.0
 class WizardView(LiveView):
     enable_state_snapshot = True
 
     def mount(self, request, **kwargs):
         self.step = 1
+```
 
+```python
 # After
 class WizardView(LiveView):
     step = state(1, persist="client", client=True)
@@ -641,15 +705,16 @@ has since shipped (see below).
 
 ### F3 — four decorators re-exported from the top-level `djust` package ✅ resolved
 
-The decorators `optimistic`, `cache`, `client_state`, and `background` are
-**stable** and part of the public API. They were originally reachable only via
+The decorators `cache` and `background` are **stable** and part of the public
+API. (`optimistic` and `client_state` were in this group until djust 2.0
+removed them; see [Removed in 2.0.0](#removed-in-200).) They were originally reachable only via
 `from djust.decorators import ...`; as of
 [#1489](https://github.com/djust-org/djust/issues/1489) they are also
 re-exported from the top-level `djust` package's `__all__`, so the canonical,
 supported import path is now simply:
 
 ```python
-from djust import optimistic, cache, client_state, background
+from djust import cache, background
 ```
 
 The `from djust.decorators import ...` path continues to work unchanged. The

@@ -6,6 +6,7 @@ Shows various offcanvas configurations and use cases.
 
 from djust import LiveView
 from djust.components.ui import Offcanvas
+from djust import state
 
 
 class OffcanvasDemoView(LiveView):
@@ -13,7 +14,13 @@ class OffcanvasDemoView(LiveView):
     Demonstration of Offcanvas component in various configurations.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    left_offcanvas = state()
+    right_offcanvas = state()
+    top_offcanvas = state()
+    bottom_offcanvas = state()
+    no_backdrop_offcanvas = state()
+    no_dismiss_offcanvas = state()
     template_name = 'demos/offcanvas_demo.html'
 
     def mount(self, request, **kwargs):

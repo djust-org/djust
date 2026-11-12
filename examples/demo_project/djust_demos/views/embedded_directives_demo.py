@@ -37,7 +37,7 @@ class _Receiver:
 
 
 class EmbeddedDirectivesChild(_Receiver, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div>
 <p>Child received: <span id="child-received">{{ received }}</span></p>
 <div id="away-box" dj-click-away="got_away" style="padding:1rem;border:1px solid #999">inside</div>
@@ -51,7 +51,7 @@ class EmbeddedDirectivesChild(_Receiver, LiveView):
 
 
 class EmbeddedDirectivesView(_Receiver, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "demos/embedded_directives.html"
 
     def mount(self, request, **kwargs):

@@ -53,7 +53,6 @@ def _paths(**kw) -> dict[str, str]:
             **{("custom_class" if k == "class" else k): v for k, v in kw.items()}
         ).render(),
         "tag": _tag("{% signature_pad " + tag_args + " %}", **kw),
-        "handler": str(rh.SignaturePadHandler().render([f"{k}={k}" for k in kw], dict(kw))),
     }
 
 
@@ -95,7 +94,7 @@ class TestMarkup:
             {"disabled": True, "width": 600, "height": 120, "pen_width": 3},
         ):
             paths = _paths(**kw)
-            assert paths["class"] == paths["tag"] == paths["handler"], kw
+            assert paths["class"] == paths["tag"], kw
 
     def test_the_hook_finds_every_control(self):
         for path, markup in _paths().items():

@@ -46,7 +46,6 @@ from contextlib import contextmanager
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PKG = ROOT / "scripts/lib/template_library_parity"
 HANDLERS = ROOT / "python/djust/components/rust_handlers.py"
-TAGS = ROOT / "python/djust/components/templatetags/djust_components.py"
 TEST = "python/tests/test_template_library_parity_3663.py"
 
 MUTATIONS: list[tuple[str, pathlib.Path, str, str]] = [
@@ -138,51 +137,21 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str]] = [
         '    parent_args = "open=True" if parent_info and "open" in parent_info.readable() else ""',
         '    parent_args = ""',
     ),
-    # --- the code under measurement: each must move the table
+    # --- the code under measurement: each must move the table. Since 2.0 every tag but the four
+    # core layout tags renders its own Python node under BOTH engines (one render path per tag),
+    # so a change to a Python tag moves both sides alike and is the plant mode's job (`--plant`);
+    # a native handler that drifts is what the ratchet still has to catch.
     (
-        "native KbdHandler renders an extra span",
+        "native AppShellHandler gains a role attribute",
         HANDLERS,
-        "        return str(_k(*keys))",
-        "        return str(_k(*keys)) + '<span>extra</span>'",
+        '        parts: _RootLayoutParts = [(None, f\'<div class="{cls}" id="{shell_id}">\')]',
+        '        parts: _RootLayoutParts = [(None, f\'<div role="region" class="{cls}" id="{shell_id}">\')]',
     ),
     (
-        "Python audit_log renders an extra span",
-        TAGS,
-        "            f'<table class=\"dj-audit-log__table\">{thead}{tbody}</table></div>'",
-        "            f'<table class=\"dj-audit-log__table\">{thead}{tbody}</table><span>x</span></div>'",
-    ),
-    (
-        "native ConfirmDialogHandler drops message, title and confirm_label",
+        "native AppHeaderHandler renders the header as a div",
         HANDLERS,
-        "        return str(render_confirm_dialog(kw, body))",
-        "        drop = ('message', 'title', 'confirm_label')\n"
-        "        return str(render_confirm_dialog({k: v for k, v in kw.items() if k not in drop}, body))",
-    ),
-    (
-        "native DropdownMenuHandler drops label and align",
-        HANDLERS,
-        "        return str(render_dropdown_menu(_parse_args(args, context), content))",
-        "        kw = {k: v for k, v in _parse_args(args, context).items() if k not in ('label', 'align')}\n"
-        "        return str(render_dropdown_menu(kw, content))",
-    ),
-    (
-        "native MenuItemHandler loses its safe wrapper (markup is escaped a second time)",
-        HANDLERS,
-        "        return _safe(render_menu_item(_parse_args(args, context)))",
-        "        return render_menu_item(_parse_args(args, context))",
-    ),
-    (
-        "Python kbd escapes a mark_safe key",
-        TAGS,
-        "    parts = [f'<kbd class=\"kbd\">{conditional_escape(k)}</kbd>' for k in keys]",
-        "    from django.utils.html import escape\n"
-        "    parts = [f'<kbd class=\"kbd\">{escape(k)}</kbd>' for k in keys]",
-    ),
-    (
-        "native CardHandler gains a role attribute (a new aspect inside an already DIFFERENT tag)",
-        HANDLERS,
-        "            f'<div class=\"card card-{variant} {extra_class}\">'",
-        '            f\'<div role="region" class="card card-{variant} {extra_class}">\'',
+        "            (None, '<header class=\"dj-app-shell__header\">'),",
+        "            (None, '<div class=\"dj-app-shell__header\">'),",
     ),
 ]
 

@@ -5,20 +5,14 @@ The `LiveView` class is the core building block of djust. It combines a Django c
 ## Basic Structure
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
 class MyView(LiveView):
     template_name = "myapp/my_view.html"
-
-    def mount(self, request, **kwargs):
-        """Initialize state. get_context_data() below hands it to the template."""
-        self.count = 0
-        self.items = []
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count, "items": self.items}
+    count = state(0)
+    items = state(default_factory=list)
 
     @event_handler()
     def increment(self, **kwargs):
@@ -85,7 +79,7 @@ def handle_info(self, message):
 
 State lives on `self`. An attribute (`self.count`) stays on the view for as long as the connection does, so the next event handler finds it. By itself it goes nowhere else ([explicit exposure](../state/explicit-exposure.md)):
 
-- The template gets a value when `get_context_data()` supplies it. A name nothing supplies renders empty, with no error.
+- The template gets a field declared with `state()`, and a value `get_context_data()` supplies. A name nothing supplies renders empty, with no error.
 - A value survives a reconnect when it is declared with `state(..., persist="server")`. Anything else is set again by `mount()`.
 - The browser gets a raw value only for `state(..., client=True)` fields.
 
@@ -98,7 +92,7 @@ def get_context_data(self, **kwargs):
     return {**super().get_context_data(**kwargs), "count": self.count}
 ```
 
-A leading underscore is a naming convention for internal values. It does not change what the template sees: no attribute reaches it unless `get_context_data()` hands it over.
+A leading underscore is a naming convention for internal values. It does not change what the template sees: an attribute reaches it only when it is a declared `state()` field or `get_context_data()` returns it.
 
 ## Inline Templates
 
@@ -106,13 +100,8 @@ For simple views, use `template` instead of `template_name`:
 
 ```python
 class HelloView(LiveView):
-    template = "<h1>Hello {{ name }}!</h1>"
-
-    def mount(self, request, **kwargs):
-        self.name = "World"
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "name": self.name}
+    template = "<div dj-root><h1>Hello {{ name }}!</h1></div>"
+    name = state("World")
 ```
 
 ## URL Configuration

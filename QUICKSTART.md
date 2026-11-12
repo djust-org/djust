@@ -75,17 +75,12 @@ application = ProtocolTypeRouter({
 
 ```python
 # myapp/views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class CounterView(LiveView):
     template_name = "myapp/counter.html"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {"count": self.count}
+    count = state(0)
 
     @event_handler()
     def increment(self, **kwargs):

@@ -74,7 +74,7 @@ Lists all event handlers registered in the current LiveView, including:
 - **Handler name** (e.g., `search`, `filter_by_status`)
 - **Description** from docstrings or `@event_handler(description=...)`
 - **Parameters** with name, type, required/optional, and defaults
-- **Decorators** applied (e.g., `@debounce`, `@optimistic`)
+- **Decorators** applied (e.g., `@debounce`, `@cache`)
 
 ```
 search

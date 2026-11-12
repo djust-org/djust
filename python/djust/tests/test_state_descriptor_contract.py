@@ -98,7 +98,7 @@ def test_liveview_context_observes_nested_mutation_without_shared_defaults():
     from djust.change_detection import deep_fingerprint
 
     class View(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         payload = state({"items": []})
 
     view = View()

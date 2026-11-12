@@ -18,13 +18,15 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust.websocket import LiveViewConsumer
+from djust import state
 
 SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 TICKS = []
 
 
 class MountRaisesTickView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state()
     template = "<div dj-root>{{ n }}</div>"
     tick_interval = 20
 

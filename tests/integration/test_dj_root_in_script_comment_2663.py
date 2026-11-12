@@ -39,6 +39,7 @@ from django.test import override_settings
 
 from djust.live_view import LiveView
 from djust.utils import clear_template_dirs_cache
+from djust import state
 
 _BASE_HTML = """\
 <!DOCTYPE html>
@@ -99,7 +100,8 @@ _INDEX_BEFORE = """\
 
 
 class ScriptCommentAfterRootView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    total_count = state(2)
     template_name = "demo2663/index_after.html"
 
     def mount(self, request, **kwargs):
@@ -107,7 +109,8 @@ class ScriptCommentAfterRootView(LiveView):
 
 
 class ScriptCommentBeforeRootView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    total_count = state(2)
     template_name = "demo2663/index_before.html"
 
     def mount(self, request, **kwargs):

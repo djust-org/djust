@@ -7,7 +7,7 @@ from prototype import DropdownMenu, PrototypeOwner
 
 
 class Page(PrototypeOwner):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     menu = DropdownMenu(label="Project", items=[{"label": "Edit", "value": "edit"}])
     other = DropdownMenu(label="Account", items=[{"separator": True}])
 
@@ -28,7 +28,7 @@ class Child(Page):
 
 
 class AsyncPage(PrototypeOwner):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     menu = DropdownMenu(label="Project", items=[])
 
     @menu.on.selected
@@ -43,7 +43,7 @@ class AsyncPage(PrototypeOwner):
 class RowsPage(PrototypeOwner):
     """ADR-034 C3: a keyed collection, typed like the fixed menu."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     rows = DropdownMenu.collection()
 
     @rows.on.selected

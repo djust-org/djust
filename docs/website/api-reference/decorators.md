@@ -1,10 +1,9 @@
 # Decorators API Reference
 
-> **`@optimistic` is INERT.** It records handler metadata that nothing in the
-> shipped client reads, so applying it changes nothing at runtime — a bare
-> `@optimistic` declares no DOM change for a client to apply. Examples below
-> that use it still work, but without the optimistic-update behaviour they
-> describe. Tracked in issue #2699.
+> **`@optimistic` and `@client_state` were removed in djust 2.0 (#4006).**
+> They recorded handler metadata that nothing in the shipped client read, so a
+> decorated handler behaved exactly like an undecorated one. Delete them; see
+> the [2.0 migration guide](../guides/migrating-to-2.0.md#python-names).
 >
 > `@debounce` and `@throttle` ARE implemented (#2656) — the client gate is
 > `static/djust/src/05-handler-rate-limit.js`, configured from the mount
@@ -16,9 +15,7 @@ from djust.decorators import (
     event_handler,
     debounce,
     throttle,
-    optimistic,
     cache,
-    client_state,
     permission_required,
     rate_limit,
     background,
@@ -154,31 +151,6 @@ def on_scroll(self, position: int = 0, **kwargs):
 
 ---
 
-## `@optimistic`
-
-**INERT (#2699):** records metadata only. No optimistic UI update and no rollback occur; the handler behaves exactly like an undecorated one.
-
-```python
-@optimistic
-def toggle_like(self, item_id: int = 0, **kwargs):
-    ...
-```
-
-No arguments — apply directly.
-
-**Usage:**
-
-```python
-@event_handler()
-@optimistic
-def toggle_like(self, item_id: int = 0, **kwargs):
-    """Behaves like an undecorated handler today."""
-    item = next(i for i in self.items if i["id"] == item_id)
-    item["liked"] = not item["liked"]
-```
-
----
-
 ## `@cache`
 
 Cache handler responses client-side. The response is stored in the browser indexed by the specified key parameters.
@@ -203,40 +175,6 @@ def search(self, value: str = "", **kwargs):
 def search(self, value: str = "", **kwargs):
     """Results for "laptop" are cached for 5 minutes."""
     self.results = Product.objects.filter(name__icontains=value)[:20]
-```
-
----
-
-## `@client_state`
-
-> **INERT (#2680)** — stamps metadata nothing in the shipped client reads, so a
-> decorated handler behaves exactly like an undecorated one. The `StateBus` it
-> named was deleted in #2680.
-
-`@client_state` is inert in current releases: it records metadata, but no
-client-side pub/sub bus reads it. It does not synchronize state between
-components; use an explicit JS Command or event for that behavior.
-
-```python
-@event_handler()
-@client_state(keys=["filter"])
-def update_filter(self, filter: str = "all", **kwargs):
-    ...
-```
-
-**Parameters:**
-
-- `keys` (`list[str]`) — Attribute names to publish after this handler runs.
-
-**Usage:**
-
-```python
-@event_handler()
-@client_state(keys=["filter", "sort"])
-def update_filter(self, filter: str = "all", **kwargs):
-    self.filter = filter
-    # This decorator is inert; it does not notify other components.
-    # Use a JS Command or another explicit event for cross-component updates.
 ```
 
 ---
@@ -444,7 +382,7 @@ def refresh_room(self, room: str = "", **kwargs):
     self.rooms = load_rooms(room)
 ```
 
-It is not an event handler. It cannot be combined with `@event_handler` or `@server_function`, nor with `@permission_required`, `@rate_limit`, `@debounce`, `@throttle`, `@cache`, `@optimistic` or `@client_state` (`TypeError` at decoration time): server push enforces none of those, so on a push handler they would do nothing and look like protection. Check authorization inside the handler. `@background` is allowed.
+It is not an event handler. It cannot be combined with `@event_handler` or `@server_function`, nor with `@permission_required`, `@rate_limit`, `@debounce`, `@throttle` or `@cache` (`TypeError` at decoration time): server push enforces none of those, so on a push handler they would do nothing and look like protection. Check authorization inside the handler. `@background` is allowed.
 
 **The marker is inherited by overrides.** If any class in the MRO defines the name with `@push_handler`, an override or a shadowing method without the marker is still push-only, so forgetting it fails closed. `djust.V021` reports the override; re-apply `@push_handler` to silence it. Adding `@event_handler` to such an override does not make it browser-callable (V021 warns).
 
@@ -464,7 +402,7 @@ def search(self, value: str = "", **kwargs):
     self.results = Product.objects.filter(name__icontains=value)
 ```
 
-`@debounce`, `@throttle` and `@cache` only record metadata that the client reads, so their order is not significant. `@optimistic` is inert. `@background` is the only one that wraps the handler at runtime.
+`@debounce`, `@throttle` and `@cache` only record metadata that the client reads, so their order is not significant. `@background` is the only one that wraps the handler at runtime.
 
 ---
 

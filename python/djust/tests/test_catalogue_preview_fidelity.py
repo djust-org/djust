@@ -64,12 +64,14 @@ class TestTemplatePreviewGoesThroughTheTag:
 
     def test_progress_preview_carries_the_computed_width(self):
         html = _preview("progress")
-        assert "width: %" not in html, (
+        # The width is a class the tag computes (#3979): rendered without the tag,
+        # ``width_percent`` is unfilled and no ``progress-w-<N>`` class appears.
+        assert re.search(r"progress-w-\d", html), (
             "the preview is rendering `progress.html` without `{% theme_progress %}`, "
-            "so `percentage` is unfilled"
+            "so `width_percent` is unfilled"
         )
         # The first example is value=25/max=100.
-        assert 'style="width: 25.0%"' in html
+        assert "progress-w-25" in html
 
     def test_progress_examples_each_show_their_own_value(self):
         """Four value examples and one indeterminate — five distinct bars.
@@ -79,8 +81,8 @@ class TestTemplatePreviewGoesThroughTheTag:
         kwargs rather than the first example's repeated.
         """
         html = _preview("progress")
-        widths = [float(w) for w in re.findall(r'style="width: ([\d.]+)%"', html)]
-        assert widths == [25.0, 50.0, 75.0, 100.0]
+        widths = [int(w) for w in re.findall(r"progress-w-(\d+)", html)]
+        assert widths == [25, 50, 75, 100]
         assert "progress-indeterminate" in html
 
     def test_a_preview_matches_a_direct_tag_render(self):
@@ -519,7 +521,8 @@ class TestComponentsAssetsAreCacheBusted:
         links = re.findall(r"<link[^>]*>", source)
         offenders = [link for link in links if "djust_components/components.css" in link]
         assert offenders == [], f"linked again outside theme_head: {offenders}"
-        assert "{% theme_head %}" in source
+        # #4003: theme_head links it only when asked, and the catalogue asks.
+        assert "{% theme_head component_catalog=True %}" in source
 
     def test_the_version_tag_reports_a_token(self):
         from djust.theming.templatetags.theme_tags import theme_asset_version

@@ -17,6 +17,7 @@ from djust.theming.gallery.catalogue import (
     component_preview_note,
     playground_options,
 )
+from djust import state
 
 pytestmark = pytest.mark.django_db
 
@@ -542,7 +543,8 @@ class TestUsageWithEvents:
         from djust.components import Rating
 
         class V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            component = state()
             template = "<div dj-root>{{ component }}</div>"
 
             def mount(self, request: object, **kwargs: object) -> None:

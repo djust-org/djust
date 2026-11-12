@@ -287,11 +287,16 @@ For small views, define the template directly on the class:
 ```python
 class HelloView(LiveView):
     template = """
-        <div>
+        <div dj-root>
             <h1>Hello {{ name }}!</h1>
             <input dj-input="update_name" value="{{ name }}" />
         </div>
     """
+    name = state("World")
+
+    @event_handler()
+    def update_name(self, value: str = "", **kwargs):
+        self.name = value
 ```
 
 ## Conditional Class Attributes

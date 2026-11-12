@@ -15,6 +15,7 @@ import pytest
 from django.template import TemplateSyntaxError, engines
 from django.test import RequestFactory
 from django.utils.safestring import mark_safe
+from djust import state
 
 pytestmark = pytest.mark.theming
 
@@ -298,7 +299,8 @@ def test_a_liveview_re_render_patches_the_block_body():
     from djust import LiveView
 
     class CardView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        count = state(1)
         template = (
             LOAD + "<div dj-root>{% theme_card_block title='T' %}"
             "<p>{{ count }}</p>{% theme_button 'Go' dj_click='go' %}"

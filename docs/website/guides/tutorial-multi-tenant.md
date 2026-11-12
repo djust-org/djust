@@ -196,11 +196,6 @@ class DashboardView(TenantScopedMixin, LiveView):
         # self.tenant was set by TenantScopedMixin before mount().
         self._refresh()
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(accounts=self.accounts, selected_id=self.selected_id)
-        return context
-
     def _refresh(self):
         # Filters by the current tenant:
         # Account.objects.filter(tenant__slug=self.tenant.id)

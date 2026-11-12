@@ -11,7 +11,7 @@ reads, so those handlers behave exactly as they would undecorated.
 """
 
 from djust_shared.views import BaseViewWithNavbar
-from djust.decorators import debounce, client_state, optimistic
+from djust.decorators import debounce
 from djust_shared.components.ui import HeroSection
 from django.db.models import Q
 from django.utils import timezone
@@ -95,7 +95,6 @@ class MaintenanceListView(BaseViewWithNavbar):
         self.search_query = query
         self._refresh_requests()
 
-    @client_state(keys=["requests"])
     def filter_by_status(self, status: str = "all", **kwargs):
         """Filter requests by status (with client state sync)"""
         self.filter_status = status
@@ -304,8 +303,6 @@ class MaintenanceUpdateView(BaseViewWithNavbar):
         self.success_message = ""
         self.error_message = ""
 
-    @client_state(keys=["maintenance_request"])
-    @optimistic
     def update_status(self, status: str = "", **kwargs):
         """Update request status"""
         if status and status in dict(MaintenanceRequest.STATUS_CHOICES):
@@ -318,7 +315,6 @@ class MaintenanceUpdateView(BaseViewWithNavbar):
             self.maintenance_request.save()
             self.success_message = f"Status updated to {self.maintenance_request.get_status_display()}"
 
-    @optimistic
     def update_priority(self, priority: str = "", **kwargs):
         """Update request priority"""
         if priority and priority in dict(MaintenanceRequest.PRIORITY_CHOICES):
@@ -554,7 +550,6 @@ class MaintenanceDeleteView(BaseViewWithNavbar):
             icon="🔧"
         )
 
-    @optimistic
     def confirm_delete(self):
         """Delete the maintenance request"""
         try:

@@ -12,6 +12,7 @@ import pytest
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 BLOCK = re.compile(
     r'<script type="application/json" data-djust-parameter-contracts>(.*?)</script>', re.S
@@ -19,7 +20,8 @@ BLOCK = re.compile(
 
 
 class StrictPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(0)
     template = "<div dj-root><span>{{ n }}</span></div>"
 
     def mount(self, request, **kwargs):

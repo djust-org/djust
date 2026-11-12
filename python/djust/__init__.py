@@ -64,9 +64,7 @@ if TYPE_CHECKING:
         debounce,
         throttle,
         on_mount,
-        optimistic,
         cache,
-        client_state,
         background,
     )
     from .auth import LoginRequiredMixin, PermissionRequiredMixin
@@ -129,9 +127,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "debounce": ("djust.decorators", "debounce"),
     "throttle": ("djust.decorators", "throttle"),
     "on_mount": ("djust.decorators", "on_mount"),
-    "optimistic": ("djust.decorators", "optimistic"),
     "cache": ("djust.decorators", "cache"),
-    "client_state": ("djust.decorators", "client_state"),
     "background": ("djust.decorators", "background"),
     "LoginRequiredMixin": ("djust.auth", "LoginRequiredMixin"),
     "PermissionRequiredMixin": ("djust.auth", "PermissionRequiredMixin"),
@@ -472,10 +468,8 @@ __all__ = [
     "PermissionRequiredMixin",
     # on_mount hooks
     "on_mount",
-    # Optimistic UI / caching / client-state / background-work decorators
-    "optimistic",
+    # Caching / background-work decorators
     "cache",
-    "client_state",
     "background",
     # Database change notifications (pg_notify bridge)
     "NotificationMixin",

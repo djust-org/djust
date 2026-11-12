@@ -1,7 +1,7 @@
 {
  "context|dj-": {
-  "len": 88080,
-  "sha256": "c0e4f4b4679d38da450bb11fdaf128723c0be443933224b5f8d889cbf231e81d"
+  "len": 91837,
+  "sha256": "7553dcc58b28fa89d0da176b2676a61eb2cf1a14a40479e094e01c5f6e7f0b8e"
  },
  "django|dj-|get_css_prefix": {
   "len": 5,
@@ -20,12 +20,12 @@
   "sha256": "e68b522c7d0ef01680825fd2de0e2a334b80d6ebd9f170eff347f6b67799dc0d"
  },
  "django|dj-|theme_head": {
-  "len": 88080,
-  "sha256": "c0e4f4b4679d38da450bb11fdaf128723c0be443933224b5f8d889cbf231e81d"
+  "len": 91837,
+  "sha256": "7553dcc58b28fa89d0da176b2676a61eb2cf1a14a40479e094e01c5f6e7f0b8e"
  },
  "django|dj-|theme_head-link": {
-  "len": 88080,
-  "sha256": "c0e4f4b4679d38da450bb11fdaf128723c0be443933224b5f8d889cbf231e81d"
+  "len": 91837,
+  "sha256": "7553dcc58b28fa89d0da176b2676a61eb2cf1a14a40479e094e01c5f6e7f0b8e"
  },
  "django|dj-|theme_login_page": {
   "len": 1407,
@@ -48,12 +48,12 @@
   "sha256": "f662940de76800a0dd9c27fdc79913016877ef0f15ce66c3c45092fbcbd0dd1f"
  },
  "django|dj|theme_head": {
-  "len": 87634,
-  "sha256": "7b2ea4d98a0d5be32c2125cd2f0115f3c335692b4d1e91ed0d96ec4cd38b229f"
+  "len": 91290,
+  "sha256": "b56b86b85183bd527b9ea430fcd745fb079a23ba550e9247a6a345460e3a2175"
  },
  "django|dj|theme_head-link": {
-  "len": 87634,
-  "sha256": "7b2ea4d98a0d5be32c2125cd2f0115f3c335692b4d1e91ed0d96ec4cd38b229f"
+  "len": 91290,
+  "sha256": "b56b86b85183bd527b9ea430fcd745fb079a23ba550e9247a6a345460e3a2175"
  },
  "django|dj|theme_login_page": {
   "len": 1385,
@@ -104,12 +104,12 @@
   "sha256": "e68b522c7d0ef01680825fd2de0e2a334b80d6ebd9f170eff347f6b67799dc0d"
  },
  "djust|dj-|theme_head": {
-  "len": 88080,
-  "sha256": "c0e4f4b4679d38da450bb11fdaf128723c0be443933224b5f8d889cbf231e81d"
+  "len": 91837,
+  "sha256": "7553dcc58b28fa89d0da176b2676a61eb2cf1a14a40479e094e01c5f6e7f0b8e"
  },
  "djust|dj-|theme_head-link": {
-  "len": 88080,
-  "sha256": "c0e4f4b4679d38da450bb11fdaf128723c0be443933224b5f8d889cbf231e81d"
+  "len": 91837,
+  "sha256": "7553dcc58b28fa89d0da176b2676a61eb2cf1a14a40479e094e01c5f6e7f0b8e"
  },
  "djust|dj-|theme_login_page": {
   "len": 1407,
@@ -132,12 +132,12 @@
   "sha256": "f662940de76800a0dd9c27fdc79913016877ef0f15ce66c3c45092fbcbd0dd1f"
  },
  "djust|dj|theme_head": {
-  "len": 87634,
-  "sha256": "7b2ea4d98a0d5be32c2125cd2f0115f3c335692b4d1e91ed0d96ec4cd38b229f"
+  "len": 91290,
+  "sha256": "b56b86b85183bd527b9ea430fcd745fb079a23ba550e9247a6a345460e3a2175"
  },
  "djust|dj|theme_head-link": {
-  "len": 87634,
-  "sha256": "7b2ea4d98a0d5be32c2125cd2f0115f3c335692b4d1e91ed0d96ec4cd38b229f"
+  "len": 91290,
+  "sha256": "b56b86b85183bd527b9ea430fcd745fb079a23ba550e9247a6a345460e3a2175"
  },
  "djust|dj|theme_login_page": {
   "len": 1385,

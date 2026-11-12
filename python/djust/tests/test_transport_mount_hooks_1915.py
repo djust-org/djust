@@ -46,6 +46,7 @@ from djust.runtime import (
     Transport,
     WSConsumerTransport,
 )
+from djust import state
 
 
 # --------------------------------------------------------------------------- #
@@ -471,7 +472,8 @@ _ALLOWED = "djust.tests.test_transport_mount_hooks_1915"
 
 
 class CommPlainView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    c = state(0)
     template = f'<div dj-root dj-view="{_ALLOWED}.CommPlainView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):

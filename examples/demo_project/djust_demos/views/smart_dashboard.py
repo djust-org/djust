@@ -20,7 +20,7 @@ a mechanism that does not run.
 
 import random
 from djust import LiveView
-from djust.decorators import event_handler, client_state, optimistic, debounce, throttle, cache
+from djust.decorators import event_handler, debounce, throttle, cache
 from djust_shared.views import BaseViewWithNavbar
 
 
@@ -82,9 +82,7 @@ class SmartDashboardView(BaseViewWithNavbar):
     # ========================================================================
 
     @event_handler
-    @client_state(keys=["temperature"])  # Outermost: publish to state bus
     @throttle(interval=0.1)              # Middle: limit to 10 updates/sec
-    @optimistic                           # Innermost: immediate UI update
     def set_temperature(self, temperature: float = 72.0, **kwargs):
         """
         User drags temperature slider.
@@ -125,9 +123,7 @@ class SmartDashboardView(BaseViewWithNavbar):
         self.heat_index_celsius = self._fahrenheit_to_celsius(self.heat_index)
 
     @event_handler
-    @client_state(keys=["humidity"])  # Outermost: publish to state bus
     @throttle(interval=0.1)           # Middle: limit to 10 updates/sec
-    @optimistic                        # Innermost: immediate UI update
     def set_humidity(self, humidity: float = 45.0, **kwargs):
         """
         User drags humidity slider.
@@ -159,7 +155,6 @@ class SmartDashboardView(BaseViewWithNavbar):
     # ========================================================================
 
     @event_handler
-    @client_state(keys=["temperature", "humidity"])
     @throttle(interval=2.0)
     def simulate_sensor(self, **kwargs):
         """
@@ -190,8 +185,6 @@ class SmartDashboardView(BaseViewWithNavbar):
     # ========================================================================
 
     @event_handler
-    @client_state(keys=["devices"])
-    @optimistic
     def toggle_device(self, device_id: int = None, **kwargs):
         """
         Toggle device on/off with optimistic update.
@@ -217,7 +210,6 @@ class SmartDashboardView(BaseViewWithNavbar):
     # ========================================================================
 
     @event_handler
-    @client_state(keys=["filter"])
     def update_filter(self, filter: str = "all", **kwargs):
         """
         Update device filter (all/active/offline).

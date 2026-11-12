@@ -21,6 +21,7 @@ from asgiref.sync import sync_to_async
 
 from djust import LiveView
 from djust.decorators import event_handler, permission_required
+from djust import state
 
 
 def _mock_ws():
@@ -55,7 +56,8 @@ async def test_permission_required_handler_does_not_raise_sync_only(rf):
     user = await sync_to_async(User.objects.get)(pk=user.pk)
 
     class _PermView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        x = state(1)
         template = "<div dj-root>{{ x }}</div>"
 
         def mount(self, request, **kwargs):
@@ -101,7 +103,8 @@ async def test_permission_required_handler_denies_without_perm(rf):
     user = await sync_to_async(User.objects.create_user)(username="noperm-1648")
 
     class _PermView2(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        x = state(1)
         template = "<div dj-root>{{ x }}</div>"
 
         def mount(self, request, **kwargs):

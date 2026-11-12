@@ -3,9 +3,6 @@ End-to-End tests for Phase 5 State Management decorators.
 
 Tests the complete integration of:
 - @cache decorator (client-side response caching)
-- @client_state decorator (INERT, #2680: it stamps metadata nothing in the
-  shipped client reads, and the `StateBus` it coordinated was deleted in
-  #2680 — these tests pin the metadata stamp, not any client behaviour)
 - dj-loading HTML attributes (loading indicators)
 
 These tests verify the full Python → Rust → WebSocket → JavaScript flow.
@@ -18,7 +15,8 @@ import pytest
 from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
 from djust import LiveView
-from djust.decorators import cache, client_state, debounce
+from djust.decorators import cache, debounce
+from djust import state
 
 # Use pytest.mark.django_db for all tests that need Django
 pytestmark = pytest.mark.django_db
@@ -31,7 +29,8 @@ class TestCacheDecoratorE2E:
         """Test @cache decorator metadata appears in rendered HTML."""
 
         class SearchView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            results = state()
             template = """
             <html>
             <body>
@@ -70,7 +69,7 @@ class TestCacheDecoratorE2E:
         """Test @cache with multiple key parameters."""
 
         class SearchView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Search</div>"
 
             @cache(ttl=60, key_params=["query", "page", "filter"])
@@ -88,7 +87,7 @@ class TestCacheDecoratorE2E:
         """Test @cache combined with @debounce."""
 
         class SearchView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Search</div>"
 
             @debounce(wait=0.5)
@@ -106,74 +105,6 @@ class TestCacheDecoratorE2E:
         assert metadata["search"]["cache"]["ttl"] == 300
 
 
-class TestClientStateDecoratorE2E:
-    """End-to-end tests for @client_state decorator."""
-
-    def test_client_state_metadata_in_rendered_html(self):
-        """Test @client_state decorator metadata appears in rendered HTML."""
-
-        class DashboardView(LiveView):
-            exposure_policy = "legacy"
-            template = """
-            <html>
-            <body>
-                <input dj-input="set_filter" />
-            </body>
-            </html>
-            """
-
-            @client_state(keys=["filter", "sort"])
-            def set_filter(self, filter: str = "", **kwargs):
-                self.filter = filter
-
-        view = DashboardView()
-        request_factory = RequestFactory()
-        request = request_factory.get("/")
-
-        # Add session
-        middleware = SessionMiddleware(lambda x: None)
-        middleware.process_request(request)
-        request.session.save()
-
-        # Mount view
-        view.mount(request)
-
-        # Get rendered HTML
-        html = view.render()
-
-        # Verify client_state metadata is injected
-        assert "window.handlerMetadata" in html
-        assert '"set_filter"' in html
-        assert '"client_state"' in html
-        assert '"keys": ["filter", "sort"]' in html
-
-    def test_client_state_single_key(self):
-        """Test @client_state with single key."""
-
-        class SimpleView(LiveView):
-            exposure_policy = "legacy"
-            template = "<div>Simple</div>"
-
-            @client_state(keys=["temp"])
-            def update_temp(self, temp=0, **kwargs):
-                pass
-
-        view = SimpleView()
-        metadata = view._extract_handler_metadata()
-
-        assert "update_temp" in metadata
-        assert metadata["update_temp"]["client_state"]["keys"] == ["temp"]
-
-    def test_client_state_empty_keys_not_allowed(self):
-        """Test @client_state requires at least one key."""
-
-        with pytest.raises(ValueError, match="At least one key must be specified"):
-
-            @client_state(keys=[])
-            def handler(**kwargs):
-                pass
-
-
 class TestLoadingAttributeE2E:
     """End-to-end tests for dj-loading HTML attributes."""
 
@@ -181,7 +112,8 @@ class TestLoadingAttributeE2E:
         """Test dj-loading.disable attribute renders correctly."""
 
         class SaveFormView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            saved = state()
             template = """
             <html>
             <body>
@@ -211,7 +143,7 @@ class TestLoadingAttributeE2E:
         """Test dj-loading.class attribute renders correctly."""
 
         class SaveFormView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = """
             <html>
             <body>
@@ -241,7 +173,7 @@ class TestLoadingAttributeE2E:
         """Test dj-loading.show and dj-loading.hide attributes render correctly."""
 
         class SaveFormView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = """
             <html>
             <body>
@@ -274,7 +206,7 @@ class TestLoadingAttributeE2E:
         """Test multiple dj-loading modifiers on same element."""
 
         class SaveFormView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = """
             <button dj-click="save" dj-loading.disable dj-loading.class="loading">
                 Save
@@ -307,7 +239,8 @@ class TestIntegrationScenarios:
         """Test realistic search view with caching and debouncing."""
 
         class ProductSearchView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            results = state(default_factory=list)
             template = """
             <html>
             <body>
@@ -344,56 +277,6 @@ class TestIntegrationScenarios:
         assert "dj-loading.show" in html
         assert 'dj-input="search"' in html
 
-    def test_dashboard_with_client_state(self):
-        """Test dashboard with client state coordination."""
-
-        class DashboardView(LiveView):
-            exposure_policy = "legacy"
-            template = """
-            <html>
-            <body>
-                <select dj-change="set_filter">
-                    <option value="all">All</option>
-                    <option value="active">Active</option>
-                </select>
-                <select dj-change="set_sort">
-                    <option value="name">Name</option>
-                    <option value="date">Date</option>
-                </select>
-                <button dj-click="refresh" dj-loading.disable>Refresh</button>
-            </body>
-            </html>
-            """
-
-            @client_state(keys=["filter", "sort"])
-            def set_filter(self, filter: str = "all", **kwargs):
-                self.filter = filter
-
-            @client_state(keys=["filter", "sort"])
-            def set_sort(self, sort: str = "name", **kwargs):
-                self.sort = sort
-
-            def refresh(self, **kwargs):
-                pass
-
-        view = DashboardView()
-        request_factory = RequestFactory()
-        request = request_factory.get("/")
-
-        middleware = SessionMiddleware(lambda x: None)
-        middleware.process_request(request)
-        request.session.save()
-
-        view.mount(request)
-        html = view.render()
-
-        # Verify client state coordination
-        assert '"set_filter"' in html
-        assert '"set_sort"' in html
-        assert '"client_state"' in html
-        assert '"keys": ["filter", "sort"]' in html
-        assert "dj-loading.disable" in html
-
 
 class TestMetadataJSONFormat:
     """Test that all decorator metadata is properly serialized to JSON."""
@@ -402,7 +285,7 @@ class TestMetadataJSONFormat:
         """Test that all Phase 5 decorators produce valid JSON."""
 
         class ComplexView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Test</div>"
 
             @cache(ttl=60, key_params=["query"])
@@ -410,7 +293,7 @@ class TestMetadataJSONFormat:
             def cached_search(self, query="", **kwargs):
                 pass
 
-            @client_state(keys=["filter", "sort"])
+            @debounce(wait=0.2)
             def set_state(self, filter="", sort="", **kwargs):
                 pass
 
@@ -442,7 +325,7 @@ class TestMetadataJSONFormat:
             assert metadata["cached_search"]["debounce"]["wait"] == 0.5
 
             assert "set_state" in metadata
-            assert metadata["set_state"]["client_state"]["keys"] == ["filter", "sort"]
+            assert metadata["set_state"]["debounce"]["wait"] == 0.2
 
 
 # Run tests if executed directly

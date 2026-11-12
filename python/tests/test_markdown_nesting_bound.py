@@ -18,6 +18,7 @@ import pytest
 from djust import LiveView, _rust, render_markdown
 from djust.testing import LiveViewTestClient
 from djust.tests._growth import assert_scales_linearly
+from djust import state
 
 # Read through getattr so a build without the constant fails the assertions
 # below rather than the import of this module.
@@ -111,7 +112,8 @@ def test_template_tag_bounds_nested_quotes_through_a_live_view_render():
     page = {}
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        body = state()
         template = '<div dj-root class="prose">{% djust_markdown body %}</div>'
 
         def mount(self, request, **kwargs):

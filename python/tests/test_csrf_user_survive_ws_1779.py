@@ -15,6 +15,7 @@ from unittest.mock import Mock
 
 import pytest
 from django.test import RequestFactory, override_settings
+from djust import state
 
 try:
     from djust import LiveView, RustLiveView
@@ -32,7 +33,8 @@ pytestmark = pytest.mark.skipif(
 
 
 class _AuthUIView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template_name = "_1779_page.html"
 
     def mount(self, request, **kwargs):

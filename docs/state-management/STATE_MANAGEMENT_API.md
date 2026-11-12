@@ -242,28 +242,24 @@ def debounce(wait: float) -> Callable:
 #### Example
 
 ```python
-from djust import LiveView
-from djust.decorators import debounce
+from djust import LiveView, state
+from djust.decorators import debounce, event_handler
 
 class SearchView(LiveView):
     template = """
-    <input type="text"
-           dj-input="on_search"
-           placeholder="Search products..." />
+    <div dj-root>
+        <input type="text"
+               dj-input="on_search"
+               placeholder="Search products..." />
 
-    <div>Found {{ result_count }} products</div>
+        <div>Found {{ result_count }} products</div>
+    </div>
     """
+    result_count = state(0)
+    query = state("")
+    results = state(default_factory=list)
 
-    def mount(self, request):
-        self.query = ""
-        self.results = []
-        self.result_count = 0
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(result_count=self.result_count, query=self.query, results=self.results)
-        return context
-
+    @event_handler
     @debounce(wait=0.5)  # Wait 500ms after user stops typing
     def on_search(self, value: str = "", **kwargs):
         """
@@ -331,24 +327,19 @@ def throttle(interval: float) -> Callable:
 #### Example
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import throttle
 
 class ScrollTrackerView(LiveView):
     template = """
-    <div @scroll="on_scroll" style="height: 500px; overflow-y: scroll;">
+    <div dj-root @scroll="on_scroll" style="height: 500px; overflow-y: scroll;">
         <!-- Scrollable content -->
         <div style="height: 2000px;">
             Scroll position: {{ scroll_y }}px
         </div>
     </div>
     """
-
-    def mount(self, request):
-        self.scroll_y = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "scroll_y": self.scroll_y}
+    scroll_y = state(0)
 
     @throttle(interval=0.1)  # Max 10 updates per second
     def on_scroll(self, scroll_y: int = 0, **kwargs):
@@ -458,12 +449,12 @@ def client_state(keys: list[str]) -> Callable:
 #### Example
 
 ```python
-from djust import LiveView
-from djust.decorators import client_state, debounce
+from djust import LiveView, state
+from djust.decorators import client_state, debounce, event_handler
 
 class DashboardView(LiveView):
     template = """
-    <div>
+    <div dj-root>
         <!-- Slider controls temperature -->
         <input type="range"
                min="0" max="120"
@@ -480,13 +471,9 @@ class DashboardView(LiveView):
         <canvas id="chart" data-subscribe="temperature"></canvas>
     </div>
     """
+    temperature = state(72)
 
-    def mount(self, request):
-        self.temperature = 72
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "temperature": self.temperature}
-
+    @event_handler
     @client_state(keys=["temperature"])  # Publish to state bus
     @debounce(wait=0.5)
     def update_temperature(self, temperature: int = 0, **kwargs):
@@ -613,31 +600,27 @@ def cache(ttl: int = 300, key_params: list[str] | None = None) -> Callable:
 #### Example
 
 ```python
-from djust import LiveView
-from djust.decorators import cache, debounce
+from djust import LiveView, state
+from djust.decorators import cache, debounce, event_handler
 
 class AutocompleteView(LiveView):
     template = """
-    <input type="text"
-           dj-input="search"
-           placeholder="Search languages..." />
+    <div dj-root>
+        <input type="text"
+               dj-input="search"
+               placeholder="Search languages..." />
 
-    <ul>
-        {% for result in results %}
-        <li>{{ result }}</li>
-        {% endfor %}
-    </ul>
+        <ul>
+            {% for result in results %}
+            <li>{{ result }}</li>
+            {% endfor %}
+        </ul>
+    </div>
     """
+    results = state(default_factory=list)
+    query = state("")
 
-    def mount(self, request):
-        self.query = ""
-        self.results = []
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(results=self.results, query=self.query)
-        return context
-
+    @event_handler
     @cache(ttl=300)           # Cache for 5 minutes
     @debounce(wait=0.3)       # Debounce requests
     def search(self, query: str = "", **kwargs):
@@ -799,22 +782,15 @@ class DraftModeMixin:
 #### Example
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.drafts import DraftModeMixin
 
 class CommentFormView(DraftModeMixin, LiveView):
     template_name = 'comment_form.html'
     draft_enabled = True
     draft_key = 'comment_form'  # Optional: defaults to 'commentformview_draft'
-
-    def mount(self, request):
-        self.comment_text = ""
-        self.author_name = ""
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(comment_text=self.comment_text, author_name=self.author_name)
-        return context
+    comment_text = state("")
+    author_name = state("")
 
     def save_comment(self, comment_text: str = "", author_name: str = "", **kwargs):
         """Save comment and clear draft"""
@@ -894,16 +870,11 @@ Override `get_draft_key()` to customize based on view state:
 ```python
 class ArticleEditorView(DraftModeMixin, LiveView):
     template_name = 'article_editor.html'
+    content = state("")
+    title = state("")
 
     def mount(self, request, article_id=None):
         self.article_id = article_id
-        self.title = ""
-        self.content = ""
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(content=self.content, title=self.title)
-        return context
 
     def get_draft_key(self) -> str:
         """Include article ID in draft key"""
@@ -1097,29 +1068,32 @@ Multiple modifiers can be combined on the same element.
 ```python
 class SaveFormView(LiveView):
     template = """
-    <form dj-submit="save_data">
-        <input type="text" name="title" />
+    <div dj-root>
+        <form dj-submit="save_data">
+            <input type="text" name="title" />
 
-        <!-- Disable and add class during save -->
-        <button type="submit" dj-loading.disable dj-loading.class="opacity-50">
-            Save Article
-        </button>
+            <!-- Disable and add class during save -->
+            <button type="submit" dj-loading.disable dj-loading.class="opacity-50">
+                Save Article
+            </button>
 
-        <!-- Show spinner during save -->
-        <div dj-loading.show style="display: none;">
-            <i class="fas fa-spinner fa-spin"></i> Saving...
-        </div>
+            <!-- Show spinner during save -->
+            <div dj-loading.show style="display: none;">
+                <i class="fas fa-spinner fa-spin"></i> Saving...
+            </div>
 
-        <!-- Hide form content during save -->
-        <div dj-loading.hide>
-            <textarea name="content"></textarea>
-        </div>
+            <!-- Hide form content during save -->
+            <div dj-loading.hide>
+                <textarea name="content"></textarea>
+            </div>
 
-        <!-- Hide cancel button during save -->
-        <button type="button" dj-loading.hide>Cancel</button>
-    </form>
+            <!-- Hide cancel button during save -->
+            <button type="button" dj-loading.hide>Cancel</button>
+        </form>
+    </div>
     """
 
+    @event_handler
     def save_data(self, title: str = "", content: str = "", **kwargs):
         """
         While this handler runs:
@@ -1320,15 +1294,18 @@ Temporarily replaces button text during event processing. Simpler alternative to
 ```python
 class UploadView(LiveView):
     template = """
-    <form dj-submit="upload_file">
-        <input type="file" name="file" />
+    <div dj-root>
+        <form dj-submit="upload_file">
+            <input type="file" name="file" />
 
-        <button type="submit" @loading-text="Uploading...">
-            Upload File
-        </button>
-    </form>
+            <button type="submit" @loading-text="Uploading...">
+                Upload File
+            </button>
+        </form>
+    </div>
     """
 
+    @event_handler
     def upload_file(self, file=None, **kwargs):
         """
         Button text changes:

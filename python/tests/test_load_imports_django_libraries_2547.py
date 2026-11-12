@@ -130,7 +130,7 @@ def liveview_render(source: str, context: dict) -> str:
     → ``_sync_state_to_rust`` → ``RustLiveView.render`` (#1650)."""
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request, **kwargs):
             pass

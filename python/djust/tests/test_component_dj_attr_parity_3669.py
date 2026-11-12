@@ -362,7 +362,10 @@ def test_a_hostile_event_name_is_escaped_in_the_attribute_on_both_engines(src: s
         assert_strict_csp_safe(html)
 
 
-def test_a_marked_safe_operand_is_never_emitted_raw_by_the_native_handler() -> None:
+def test_a_marked_safe_operand_is_the_python_tags_on_both_engines() -> None:
+    """These tags render their Python node under the Rust engine (one render path per tag), so a
+    marked-safe operand is treated as the Python tag treats it, on both engines (the attribute
+    defect that leaves is #4009, pinned in ``python/tests/test_marked_safe_attribute_sweep_4009.py``)."""
     from django.utils.safestring import mark_safe
 
     ctx = dict(CTX, ev=mark_safe("<b>safe</b>"))
@@ -371,7 +374,7 @@ def test_a_marked_safe_operand_is_never_emitted_raw_by_the_native_handler() -> N
         "{% kanban_board columns=cols add_card_event=ev %}",
         '{% dj_button label="L" event=ev %}',
     ):
-        assert "<b>safe</b>" not in _rust(src, ctx), src
+        assert dj_attrs(_rust(src, ctx)) == dj_attrs(_django(src, ctx)), src
 
 
 # --- the two declined parts, pinned so they cannot silently widen -------------------------------
@@ -520,22 +523,18 @@ def test_a_falsy_optional_event_wires_nothing(src: str) -> None:
             ], (shape, html)
 
 
-def test_the_text_channel_cannot_tell_the_string_zero_from_zero() -> None:
-    """Declined (#3872, engine level): the native engine hands a handler TEXT, and the string "0"
-    arrives as ``0`` (falsy; the number 0 must wire nothing, which ``FALSY`` pins). The Python tag
-    keeps the string. Pinned so the choice (the number wins) is visible.
-
-    A lone space USED to be here too (it was stripped); it is kept now, and both engines wire it."""
+def test_the_string_zero_is_a_string_on_both_engines() -> None:
+    """#3872 / #3883: the native engine handed a handler TEXT, and the string "0" arrived as the
+    number 0 (falsy). ``dj_button`` now renders its Python node under the Rust engine (one render
+    path per tag), which keeps the string, on both engines."""
     for src, name in (
         ('{% dj_button label="L" confirm=v %}', "dj-confirm"),
         ('{% dj_button label="L" event=v %}', "dj-click"),
     ):
-        ctx = dict(CTX, v="0")
-        assert [x for x in dj_attrs(_django(src, ctx)) if x[1] == name], ("0", name)
-        assert not [x for x in dj_attrs(_rust(src, ctx)) if x[1] == name], ("0", name)
-        ctx = dict(CTX, v=" ")
-        assert dj_attrs(_django(src, ctx)) == dj_attrs(_rust(src, ctx)), (" ", name)
-        assert [x for x in dj_attrs(_rust(src, ctx)) if x[1] == name], (" ", name)
+        for value in ("0", " "):
+            ctx = dict(CTX, v=value)
+            assert dj_attrs(_django(src, ctx)) == dj_attrs(_rust(src, ctx)), (value, name)
+            assert [x for x in dj_attrs(_rust(src, ctx)) if x[1] == name], (value, name)
 
 
 # --- the filter bar: what a template nests inside it ---------------------------------------------

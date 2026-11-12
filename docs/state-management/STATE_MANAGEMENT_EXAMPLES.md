@@ -192,7 +192,7 @@ def my_handler(self, value: str = "", **kwargs):
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import debounce, event_handler
 from shop.models import Product
 
@@ -206,12 +206,12 @@ class ProductSearchView(LiveView):
         ('books', 'Books'),
     ]
     SEARCH_FIELDS = {"query", "category", "min_price"}
+    query = state("")
+    category = state("")
+    min_price = state(0)
+    max_price = state(10000)
 
     def mount(self, request, **kwargs):
-        self.query = ""
-        self.category = ""
-        self.min_price = 0
-        self.max_price = 10000
         self.results = Product.objects.filter(in_stock=True)[:20]
 
     @event_handler
@@ -238,13 +238,10 @@ class ProductSearchView(LiveView):
 
     def get_context_data(self, **kwargs):
         return {
-            'query': self.query,
-            'category': self.category,
-            'min_price': self.min_price,
-            'max_price': self.max_price,
-            'categories': self.CATEGORIES,
-            'results': self.results,
-            'count': self.results.count()
+            **super().get_context_data(**kwargs),
+            "categories": self.CATEGORIES,
+            "results": self.results,
+            "count": self.results.count(),
         }
 ```
 
@@ -435,7 +432,7 @@ class ShoppingCartView(LiveView):
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import debounce, event_handler
 from shop.models import Product
 
@@ -445,13 +442,13 @@ class ProductFilterView(LiveView):
     INT_FIELDS = {"min_price", "max_price", "min_rating"}
     TEXT_FIELDS = {"category"}
     SORT_OPTIONS = {"name", "price", "-price", "-rating"}
+    category = state("")
+    min_price = state(0)
+    max_price = state(10000)
+    min_rating = state(0)
+    sort = state("name")
 
     def mount(self, request, **kwargs):
-        self.category = ""
-        self.min_price = 0
-        self.max_price = 10000
-        self.min_rating = 0
-        self.sort = "name"
         self.results = Product.objects.filter(in_stock=True).order_by(self.sort)
 
     @event_handler
@@ -489,13 +486,9 @@ class ProductFilterView(LiveView):
 
     def get_context_data(self, **kwargs):
         return {
-            'category': self.category,
-            'min_price': self.min_price,
-            'max_price': self.max_price,
-            'min_rating': self.min_rating,
-            'sort': self.sort,
-            'results': self.results,
-            'count': self.results.count()
+            **super().get_context_data(**kwargs),
+            "results": self.results,
+            "count": self.results.count(),
         }
 ```
 
@@ -509,7 +502,7 @@ class ProductFilterView(LiveView):
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, throttle
 from djust.drafts import DraftModeMixin
 from chat.models import Message, ChatRoom
@@ -517,12 +510,12 @@ from chat.models import Message, ChatRoom
 class LiveChatView(DraftModeMixin, LiveView):
     template_name = 'chat/live_chat.html'
     draft_key = "chat_message"
+    message = state("")
+    typing_users = state(default_factory=list)
 
     def mount(self, request, room_id, **kwargs):
         self.room = ChatRoom.objects.get(id=room_id)
         self.messages = Message.objects.filter(room=self.room).order_by('-created_at')[:50]
-        self.message = ""
-        self.typing_users = []
 
     def get_draft_key(self) -> str:
         """Include room ID in draft key for per-room drafts"""
@@ -568,14 +561,11 @@ class LiveChatView(DraftModeMixin, LiveView):
 
     def get_context_data(self, **kwargs):
         # Call super() so DraftModeMixin adds draft_enabled / draft_key
-        context = super().get_context_data(**kwargs)
-        context.update({
-            'room': self.room,
-            'messages': self.messages,
-            'message': self.message,
-            'typing_users': self.typing_users
-        })
-        return context
+        return {
+            **super().get_context_data(**kwargs),
+            "room": self.room,
+            "messages": self.messages,
+        }
 ```
 
 ```html
@@ -637,7 +627,7 @@ class LiveChatView(DraftModeMixin, LiveView):
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from djust.forms import FormMixin
 from djust.drafts import DraftModeMixin
@@ -647,13 +637,13 @@ class MessageComposerView(DraftModeMixin, FormMixin, LiveView):
     template_name = 'messaging/composer.html'
     form_class = MessageForm
     draft_key = "message_composer"
+    to = state("")
+    subject = state("")
+    body = state("")
+    attachments = state(default_factory=list)
 
     def mount(self, request, **kwargs):
         super().mount(request, **kwargs)  # FormMixin sets up form state here
-        self.to = ""
-        self.subject = ""
-        self.body = ""
-        self.attachments = []
         self.success_message = ""
 
     def form_valid(self, form):
@@ -683,15 +673,10 @@ class MessageComposerView(DraftModeMixin, FormMixin, LiveView):
 
     def get_context_data(self, **kwargs):
         # Call super() so DraftModeMixin adds draft_enabled / draft_key
-        context = super().get_context_data(**kwargs)
-        context.update({
-            'to': self.to,
-            'subject': self.subject,
-            'body': self.body,
-            'attachments': self.attachments,
-            'success_message': self.success_message,
-        })
-        return context
+        return {
+            **super().get_context_data(**kwargs),
+            "success_message": self.success_message,
+        }
 ```
 
 ---
@@ -704,7 +689,7 @@ class MessageComposerView(DraftModeMixin, FormMixin, LiveView):
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, throttle
 from analytics.models import Metric
 from django.utils import timezone
@@ -714,9 +699,9 @@ class DashboardView(LiveView):
     template_name = 'analytics/dashboard.html'
 
     PERIODS = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
+    period = state("24h")
 
     def mount(self, request, **kwargs):
-        self.period = "24h"
         self.metrics = self.fetch_metrics(self.period)
         self.last_updated = timezone.now()
 
@@ -751,11 +736,11 @@ class DashboardView(LiveView):
 
     def get_context_data(self, **kwargs):
         return {
-            'period': self.period,
-            'metrics': self.metrics,
-            'last_updated': self.last_updated,
-            'total_users': self.metrics.filter(metric='users').count(),
-            'total_revenue': sum(m.value for m in self.metrics.filter(metric='revenue'))
+            **super().get_context_data(**kwargs),
+            "metrics": self.metrics,
+            "last_updated": self.last_updated,
+            "total_users": self.metrics.filter(metric='users').count(),
+            "total_revenue": sum(m.value for m in self.metrics.filter(metric='revenue')),
         }
 ```
 
@@ -814,7 +799,7 @@ class DashboardView(LiveView):
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import debounce, event_handler
 from analytics.models import SalesData
 from django.db.models import Sum, Count
@@ -822,12 +807,12 @@ from datetime import datetime, timedelta
 
 class SalesChartView(LiveView):
     template_name = 'analytics/sales_chart.html'
+    group_by = state("day")
+    region = state("")
 
     def mount(self, request, **kwargs):
         self.start_date = (datetime.now() - timedelta(days=30)).date()
         self.end_date = datetime.now().date()
-        self.group_by = "day"
-        self.region = ""
         self.chart_data = self.calculate_chart_data()
 
     @event_handler
@@ -867,11 +852,10 @@ class SalesChartView(LiveView):
 
     def get_context_data(self, **kwargs):
         return {
-            'start_date': self.start_date,
-            'end_date': self.end_date,
-            'group_by': self.group_by,
-            'region': self.region,
-            'chart_data': list(self.chart_data)
+            **super().get_context_data(**kwargs),
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "chart_data": list(self.chart_data),
         }
 ```
 
@@ -1016,16 +1000,16 @@ The template receives `current_step`, `total_steps`, `progress_percent`, `field_
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from products.models import Product
 
 class ProductBulkActionsView(LiveView):
     template_name = 'admin/product_bulk.html'
+    selected_ids = state(default_factory=list)
 
     def mount(self, request, **kwargs):
         self.products = Product.objects.all()
-        self.selected_ids = []
 
     @event_handler
     def toggle_select(self, product_id: int = 0, **kwargs):
@@ -1066,9 +1050,9 @@ class ProductBulkActionsView(LiveView):
 
     def get_context_data(self, **kwargs):
         return {
-            'products': self.products,
-            'selected_ids': self.selected_ids,
-            'selected_count': len(self.selected_ids)
+            **super().get_context_data(**kwargs),
+            "products": self.products,
+            "selected_count": len(self.selected_ids),
         }
 ```
 
@@ -1080,7 +1064,7 @@ class ProductBulkActionsView(LiveView):
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import debounce, event_handler
 from products.models import Product
 
@@ -1091,10 +1075,10 @@ class ProductInlineEditView(LiveView):
     # (dj-change fills it from the input's name), so never setattr an
     # arbitrary name onto the model.
     EDITABLE_FIELDS = {"name", "sku"}
+    editing_cell = state(None)
 
     def mount(self, request, **kwargs):
         self.products = Product.objects.all()
-        self.editing_cell = None
 
     @event_handler
     @debounce(wait=0.5)
@@ -1137,10 +1121,7 @@ class ProductInlineEditView(LiveView):
         self.editing_cell = None
 
     def get_context_data(self, **kwargs):
-        return {
-            'products': self.products,
-            'editing_cell': self.editing_cell
-        }
+        return {**super().get_context_data(**kwargs), "products": self.products}
 ```
 
 For richer validation, run the edit through a `ModelForm` restricted to the editable fields.

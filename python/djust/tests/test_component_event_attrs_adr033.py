@@ -13,6 +13,7 @@ from typing import Any
 import django
 import pytest
 from django.conf import settings
+from djust import state
 
 if not settings.configured:
     settings.configure(
@@ -148,7 +149,8 @@ class TestEventAttrs:
 
 
 class RowsView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    ratings = state()
     template = (
         '<div dj-root dj-id="0">{% for r in ratings %}<section>{{ r }}</section>{% endfor %}</div>'
     )

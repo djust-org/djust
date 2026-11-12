@@ -41,6 +41,7 @@ from django.contrib.auth.models import User
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory, override_settings
+from djust import state
 
 try:
     from djust import LiveView, RustLiveView
@@ -70,7 +71,9 @@ _LEAK_TYPE_NAMES = (
 class _AnalyticsInsightsView(LiveView):
     """Mirrors the production view: assigns ONLY JSON-serializable scalars."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    days = state(30)
+    show_raw = state(False)
     template_name = "_1786_insights.html"
 
     def mount(self, request, **kwargs):

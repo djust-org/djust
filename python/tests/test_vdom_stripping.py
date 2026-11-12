@@ -12,7 +12,7 @@ from djust import LiveView
 class TestLiveView(LiveView):
     """Test LiveView class"""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>Test</div>"
 
     def mount(self, request):

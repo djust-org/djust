@@ -38,6 +38,7 @@ from asgiref.sync import sync_to_async
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 
 class _UrlChangeView(LiveView):
@@ -48,7 +49,9 @@ class _UrlChangeView(LiveView):
     test.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
+    tab = state("home")
     template = (
         '<div dj-view="djust.tests.test_url_change_wire_version_1858._UrlChangeView" '
         'dj-id="0">Count: {{ count }} / Tab: {{ tab }}</div>'

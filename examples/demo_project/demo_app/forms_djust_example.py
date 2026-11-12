@@ -14,6 +14,7 @@ from django.contrib.auth.models import User
 from djust import LiveView
 from djust.forms import FormMixin
 from djust.decorators import event_handler
+from djust import state
 
 
 # ============================================================================
@@ -218,7 +219,21 @@ class StatusChangeFormView(FormMixin, LiveView):
     - Simpler mental model
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    employee_id = state(None)
+    business_line_id = state(None)
+    show_expected_end_date = state(False)
+    show_company_fields = state(False)
+    show_supervisor_fields = state(False)
+    show_project_fields = state(False)
+    show_meals_fields = state(False)
+    sections_expanded = state(default_factory=lambda: {
+            'employee_info': True,
+            'company_changes': True,
+            'supervisor_changes': True,
+            'project_info': True,
+            'meals_per_diem': True,
+        })
     form_class = StatusChangeForm
     template_name = 'forms/status_change_djust.html'
 

@@ -1364,6 +1364,9 @@ def _package_modules():
         yield rel, path
 
 
+# A whole-tree pin: runs on PRs and in the merge queue whatever its recorded
+# duration (#4051, tests/slow_tier.py).
+@pytest.mark.pr_tier
 def test_package_wide_ratchet_every_site_is_pinned_or_baselined():
     import json
 

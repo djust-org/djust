@@ -1,21 +1,86 @@
 
-function _collectFormData(container) {
-    const data = {};
+/**
+ * A password field (or one the page marks as holding a password) is never
+ * read into a draft, an auto-recover envelope or `_collectFormData`, and never
+ * written back from one.
+ */
+function _isSecretControl(field) {
+    if (field.type === 'password') return true;
+    const autocomplete = (field.getAttribute('autocomplete') || '').toLowerCase();
+    return /(^|\s)(new|current)-password(\s|$)/.test(autocomplete);
+}
 
-    const fields = container.querySelectorAll('input, textarea, select');
+/**
+ * The values of the named form controls in `fields`, keyed by name (#3978).
+ *
+ * A control that shares its name with others is one value, as the browser
+ * submits it: a group of same-named checkboxes is the list of the checked
+ * boxes' values (`[]` when none is), a radio group is the checked radio's
+ * value (no entry when none is), and a `<select multiple>` is the list of its
+ * selected options. A lone checkbox stays a boolean. Reading one control at a
+ * time flattened a group to its last box.
+ *
+ * Shared by the draft manager, `_collectFormData` and the `dj-auto-recover`
+ * envelope, so they read a group the same way.
+ */
+function _readControls(fields) {
+    const data = {};
+    const checkboxCount = new Map();
+    fields = fields.filter(field => !_isSecretControl(field));
     fields.forEach(field => {
-        if (field.name && !UNSAFE_KEYS.includes(field.name)) {
-            if (field.type === 'checkbox') {
-                data[field.name] = field.checked;
-            } else if (field.type === 'radio') {
-                if (field.checked) {
-                    data[field.name] = field.value;
-                }
-            } else {
-                data[field.name] = field.value;
-            }
+        if (field.type === 'checkbox' && field.name) {
+            checkboxCount.set(field.name, (checkboxCount.get(field.name) || 0) + 1);
         }
     });
+    fields.forEach(field => {
+        const name = field.name;
+        if (!name || UNSAFE_KEYS.includes(name)) return;
+        if (field.type === 'checkbox') {
+            if (checkboxCount.get(name) > 1) {
+                // eslint-disable-next-line security/detect-object-injection
+                if (!Array.isArray(data[name])) data[name] = [];
+                // eslint-disable-next-line security/detect-object-injection
+                if (field.checked) data[name].push(field.value);
+            } else {
+                // eslint-disable-next-line security/detect-object-injection
+                data[name] = field.checked;
+            }
+        } else if (field.type === 'radio') {
+            // eslint-disable-next-line security/detect-object-injection
+            if (field.checked) data[name] = field.value;
+        } else if (field.tagName === 'SELECT' && field.multiple) {
+            // eslint-disable-next-line security/detect-object-injection
+            data[name] = Array.from(field.selectedOptions, option => option.value);
+        } else {
+            // eslint-disable-next-line security/detect-object-injection
+            data[name] = field.value;
+        }
+    });
+    return data;
+}
+
+/**
+ * Put a value `_readControls` produced back into one control of its group.
+ *
+ * A list ticks the checkboxes / selects the options whose value is in it; a
+ * boolean (a lone checkbox, or a group saved before #3978) sets `checked`; a
+ * radio is checked when its value is the saved one.
+ */
+function _writeControl(field, value) {
+    if (_isSecretControl(field)) return;
+    if (field.type === 'checkbox') {
+        field.checked = Array.isArray(value) ? value.includes(field.value) : !!value;
+    } else if (field.type === 'radio') {
+        if (value !== null && value !== undefined) field.checked = String(value) === field.value;
+    } else if (field.tagName === 'SELECT' && field.multiple && Array.isArray(value)) {
+        for (const option of field.options) option.selected = value.includes(option.value);
+    } else {
+        field.value = value;
+    }
+}
+
+function _collectFormData(container) {
+    const data = _readControls(Array.from(container.querySelectorAll('input, textarea, select')));
 
     const editables = container.querySelectorAll('[contenteditable="true"]');
     editables.forEach(editable => {
@@ -32,33 +97,17 @@ function _collectFormData(container) {
 
 function _restoreFormData(container, data) {
     if (!data) return;
+    const has = name => Object.prototype.hasOwnProperty.call(data, name) && !UNSAFE_KEYS.includes(name);
 
-    Object.entries(data).forEach(([name, value]) => {
-        let field = container.querySelector(`[name="${name}"]`);
+    // Every control of a group, not only the first one with the name.
+    container.querySelectorAll('input, textarea, select').forEach(field => {
+        if (field.name && has(field.name)) _writeControl(field, data[field.name]);
+    });
 
-        if (!field) {
-            field = container.querySelector(`#${name}`);
-        }
-
-        if (!field) return;
-
-        if (field.tagName === 'INPUT') {
-            if (field.type === 'checkbox') {
-                field.checked = value;
-            } else if (field.type === 'radio') {
-                if (field.value === value) {
-                    field.checked = true;
-                }
-            } else {
-                field.value = value;
-            }
-        } else if (field.tagName === 'TEXTAREA') {
-            field.value = value;
-        } else if (field.tagName === 'SELECT') {
-            field.value = value;
-        } else if (field.getAttribute('contenteditable') === 'true') {
-            field.innerHTML = value;
-        }
+    container.querySelectorAll('[contenteditable="true"]').forEach(editable => {
+        const name = editable.getAttribute('name') || editable.id;
+        // eslint-disable-next-line security/detect-object-injection
+        if (name && has(name)) editable.innerHTML = data[name];
     });
 
     if (globalThis.djustDebug) {
