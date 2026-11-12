@@ -118,14 +118,14 @@ Sources: **X** = Codex, **C1** / **C2** = Claude round 1 / 2.
 
 ### E. Owner decisions
 
-1. Does the 1.4 migration program stay at its settled size (phases I, B, M, gate G1, the codemod), or shrink?
+1. ~~Does the 1.4 migration program stay at its settled size (phases I, B, M, gate G1, the codemod), or shrink?~~ **Decided 2026-11-11: folded into 2.0.** No 1.4 release; what remains is the guide (#4022), the inventory fix (#4023) and the project's own apps (#4024).
 2. Is HTTP plus SSE the zero-config default in 2.0, with WebSocket as the upgrade?
 3. Which of the roughly 25 chrome and behaviour tags stay in core, and which move to an extra package?
 4. Positioning before 2.0.0: drop "no JavaScript", "tiny client" and Rust-speed as headlines?
 5. Release cadence and a stability statement.
 6. Which three outside Django teams to recruit, and who asks them.
 7. Do the test tiering and the canon move run alongside 2.0, or wait?
-8. S4: does `2.0` become the trunk now, with 1.3.x limited to security and serious fixes?
+8. ~~S4: does `2.0` become the trunk now, with 1.3.x limited to security and serious fixes?~~ **Decided 2026-11-11: yes** (#4013). The `2.0` branch is deleted.
 9. S2: does declared state persist by default, with in-memory-only as the opt-in?
 10. S3: do component tags render through one path, with native versions only where a benchmark earns one?
 11. Is further partial-root work paused until its threat model is written down?
@@ -197,7 +197,7 @@ Two weeks of divergence cost 70 conflicted files and three breaks that merged wi
 
 ## Suggested next steps
 
-1. Decide E8 (one trunk). It changes the size of everything else, and it settles E1.
+1. Done 2026-11-11: E8 (one trunk, #4013) and E1 (the 1.4 work folded into 2.0).
 2. Done 2026-11-11: `main` merged into `2.0` (#4010).
 3. Done 2026-11-11: issues filed for sections A, C and D (#3987–#4007). Section B, the deferred list in F and the four simplifications have none.
 4. Spike S1 (assignment-based change tracking) on the 1,000-row table case, before any work on C1–C3. One to two days should show whether the in-place-mutation problem is tractable.
