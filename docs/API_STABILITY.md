@@ -239,8 +239,36 @@ SemVer rules above are unchanged by it.
 
 ## Currently Deprecated Symbols
 
-None. The one access pattern deprecated during the `1.x` series (dict-style
-`block.super` reads in a bridged tag) was removed in `2.0.0`; see below.
+The one access pattern deprecated during the `1.x` series (dict-style
+`block.super` reads in a bridged tag) was removed in `2.0.0`; see below. One
+value is deprecated on the 2.0 line:
+
+### `exposure_policy = "legacy"` → the default, `"explicit"`
+
+`LiveView.exposure_policy` defaults to `"explicit"` since djust 2.0 (it was
+`"legacy"` in 1.x). This is a changed default, made in a MAJOR release: a view
+that states no policy now gets a template context, session state and browser
+data made only of what it declares. See
+[explicit exposure](website/state/explicit-exposure.md).
+
+`"legacy"` is still accepted when a class states it, so a 1.x view keeps its
+behaviour by adding one line:
+
+```python
+class OldView(LiveView):
+    exposure_policy = "legacy"
+```
+
+Stating it raises a `DeprecationWarning` through `warn_deprecated`, once for
+each class that states it, when the class is defined (or, for a policy assigned
+to the class afterwards, the first time a view of that class is constructed).
+The message names the class, the replacement and the guide. A class shipped in
+djust that states `"legacy"` does not warn. The value is accepted through the
+2.0 pre-releases and removed in `2.0.0`: 2.x has no legacy runtime (see
+[the 2.x direction](#the-14-bridge-and-2x-direction-2026-10-19)).
+
+This warning is first raised on the 2.0 line. The 1.3.x releases do not raise
+it: there `"legacy"` is the default and stating it is not deprecated.
 
 ---
 

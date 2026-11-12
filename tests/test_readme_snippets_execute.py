@@ -134,3 +134,28 @@ def test_readme_liveview_snippets_mount_and_render(lineno: int, code: str, setti
             result = client.send_event(handler)
             assert result["success"], f"{view_cls.__name__}.{handler} failed: {result.get('error')}"
             client.render()
+
+
+@pytest.mark.parametrize(
+    "lineno,code",
+    [pytest.param(lineno, code, id=f"README.md:L{lineno}") for lineno, code in _liveview_blocks()],
+)
+def test_readme_liveview_snippets_are_explicit_views(lineno: int, code: str):
+    """A README view states no policy, so a reader's copy runs under the default.
+
+    The default is explicit exposure, which is why each snippet supplies its
+    template's names in ``get_context_data()`` (the test above fails when one
+    does not). A snippet that stated ``"legacy"`` to get around that would
+    teach a deprecated policy on the project's front page.
+    """
+    try:
+        namespace = _exec_block(lineno, code)
+    except ModuleNotFoundError as exc:
+        pytest.skip(f"README.md:L{lineno} imports the reader's app ({exc.name})")
+    views = _liveview_classes(namespace)
+    assert views, f"README.md:L{lineno} defines no LiveView subclass"
+    for view_cls in views:
+        assert "exposure_policy" not in vars(view_cls), (
+            f"{view_cls.__name__} (README.md:L{lineno}) states an exposure_policy"
+        )
+        assert view_cls.exposure_policy == "explicit"

@@ -404,15 +404,56 @@ class TestUsageWithEvents:
             assert 'aria-selected="true"' in before
             assert 'aria-selected="true"' in after
 
+    @pytest.mark.django_db(transaction=True)
+    @pytest.mark.parametrize(
+        ("name", "event", "params"),
+        [
+            ("rating", "set_rating", {"value": 2}),
+            ("accordion", "accordion_toggle", {"value": "2"}),
+            ("sheet", "close_sheet", {}),
+        ],
+    )
+    def test_python_usage_runs_on_a_connection_under_the_default_policy(self, name, event, params):
+        """The served ``views.py``, pasted as it is, mounts and answers its
+        event. It states no policy, so it runs under explicit exposure: the
+        component is held privately and handed over in ``get_context_data()``
+        (a public ``self.component`` is refused there, and its handler's write
+        would otherwise change nothing the page shows)."""
+        import sys
+        import types
+
+        from djust.tests import _doc_examples as H
+
+        parts = _detail(name)._base_ctx["usage_parts"]
+        module = types.ModuleType(f"djust_catalogue_usage_{name}")
+        sys.modules[module.__name__] = module
+        try:
+            exec(compile(parts["view"], f"{name}.views.py", "exec"), module.__dict__)
+            view_class = module.MyView
+            assert "exposure_policy" not in vars(view_class)
+            assert view_class.exposure_policy == "explicit"
+            view_class.template_name = None
+            view_class.template = "<div dj-root>%s</div>" % parts["template"]
+            page = H.LivePage(view_class)
+            before = page.view.render()
+            assert "dj-click" in before or "dj-" in before, before
+            assert page.event(event, **params) == 200
+            assert page.transport.sent[-1]["type"] != "noop", page.transport.sent[-1]
+            assert page.html != before
+        finally:
+            sys.modules.pop(module.__name__, None)
+
     def test_a_descriptor_backed_component_shows_the_plain_form(self):
         """#2926 review 🔴1: the preview renders the plain ``Accordion``; the
         class-level descriptor of the same name is state-only and rendered
         its state dict as text. The snippet is the plain form with the
         handler the descriptor would have run."""
         snippet = _detail("accordion")._base_ctx["usage_snippet"]
-        assert "self.component = Accordion(items=" in snippet
+        assert "self._component = Accordion(items=" in snippet
         assert "def accordion_toggle(self, value, **kwargs):" in snippet
-        assert 'self.component.active = "" if self.component.active == value else value' in snippet
+        assert (
+            'self._component.active = "" if self._component.active == value else value' in snippet
+        )
         assert "component = Accordion()" not in snippet
         assert "{{ component }}" in snippet and "|safe" not in snippet
 
@@ -434,7 +475,7 @@ class TestUsageWithEvents:
             assert "...  # write to self.component" not in src, name
             if name == "sheet":
                 # Its close event is a real handler, not a host-side no-op.
-                assert "self.component.is_open = False" in src
+                assert "self._component.is_open = False" in src
             namespace = {"__name__": __name__}
             exec(compile(src, f"{name}.views.py", "exec"), namespace)
             if "MyView" not in namespace:
@@ -481,10 +522,13 @@ class TestUsageWithEvents:
         assert "@event_handler()" in snippet
         assert "def set_rating(self, value, **kwargs):" in snippet
         # ADR-033: the component is held in mount() and the handler writes
-        # to it; the value arrives typed, so no int(), no rebuild.
-        assert "        self.component = Rating(value=4, max_stars=5)" in snippet
-        assert "        self.component.value = value" in snippet
-        assert "int(value)" not in snippet and "get_context_data" not in snippet
+        # to it; the value arrives typed, so no int(), no rebuild. It is held
+        # privately and get_context_data() hands that same object to the
+        # template (explicit exposure), which is not a rebuild either.
+        assert "        self._component = Rating(value=4, max_stars=5)" in snippet
+        assert "        self._component.value = value" in snippet
+        assert "int(value)" not in snippet and snippet.count("Rating(") == 1
+        assert '            "component": self._component,' in snippet
 
     def test_a_component_without_events_is_unchanged(self):
         view = _detail("button")

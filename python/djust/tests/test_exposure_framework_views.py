@@ -232,8 +232,12 @@ def test_the_pinned_policies_are_what_the_classes_resolve_to():
         assert view_class.exposure_policy == expected, key
 
 
-def test_the_default_is_not_flipped_here():
-    assert LiveView.exposure_policy == "legacy"
+def test_the_default_is_explicit_and_no_shipped_view_relies_on_it():
+    """The default is explicit (exposure-flip PR 1). Every shipped view above
+    still states its own policy in its class body, so the views pinned
+    ``"legacy"`` were not converted by the flip and the explicit ones would not
+    be converted back by a revert."""
+    assert LiveView.__dict__["exposure_policy"] == "explicit"
 
 
 # --------------------------------------------------------------------------

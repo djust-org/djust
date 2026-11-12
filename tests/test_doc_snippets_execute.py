@@ -996,6 +996,8 @@ _UNDECORATED_VIEW = (
     "    template = '<div dj-root><button dj-click=\"bump\">+</button>{{ n }}</div>'\n\n"
     "    def mount(self, request, **kwargs):\n"
     "        self.n = 1\n\n"
+    "    def get_context_data(self, **kwargs):\n"
+    "        return {**super().get_context_data(**kwargs), 'n': self.n}\n\n"
     "    def bump(self, **kwargs):\n"
     "        self.n += 1\n"
 )

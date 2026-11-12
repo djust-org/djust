@@ -312,7 +312,7 @@ class LiveViewConfig:
         # after a streak of low-hit renders (#3071; see
         # RustBridgeMixin._LOOP_CACHE_BYPASS_AFTER).
         "loop_render_cache_enabled": True,
-        # Whether a view on the default (legacy) state policy keeps its state
+        # Whether a view on the legacy state policy keeps its state
         # in the Django session between requests: the ``liveview_<path>`` key
         # and its ``__private`` / ``__private_unsaved`` / ``_components``
         # siblings. ``True`` (default) is the long-standing behaviour. ``False``

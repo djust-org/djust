@@ -1,11 +1,15 @@
-"""Fail a test that defines a LiveView relying on the default ``exposure_policy``.
+"""Fail a test that defines a LiveView without stating its ``exposure_policy``.
 
-``LiveView.exposure_policy`` defaults to ``"legacy"`` today and to ``"explicit"``
-in 2.0 (``docs/plans/2.0-exposure-flip.md``, PR 0d and PR 1). Every test and
-example view was pinned to ``"legacy"`` so that changing the default changes no
-test outcome. A view added afterwards without a policy would undo that for
-itself, and nobody would see it until the default moved. This plugin makes it
-visible at once.
+``LiveView.exposure_policy`` defaults to ``"explicit"`` since 2.0
+(``docs/plans/2.0-exposure-flip.md``, PR 1). ``"legacy"`` is still accepted when
+a class states it, and about 1,850 test and example views do (PR 0d), so that
+the flip changed no test outcome. Until the ``"legacy"`` arm is deleted (PR 11)
+both policies run in this suite, and which one a test view runs under is part
+of what the test means: a test written against the attribute walk that states
+nothing would silently run as explicit, and its assertions about context,
+persistence or diagnostics would be about a different policy than its author
+had in mind. So every test view states one, and this plugin makes a missing
+statement visible at once.
 
 It records every ``LiveView`` subclass as Python creates it (class statements,
 ``type(...)`` and source run with ``exec`` alike) and judges each one when the
@@ -40,6 +44,7 @@ UNPINNED_ON_PURPOSE: dict[str, str] = {
     "test_readme_snippets_execute.py": "executes the README's code blocks as written",
     "test_doc_examples.py": "executes the documented examples as written",
     "test_catalogue_ux.py": "executes the shipped catalogue's usage snippets as written",
+    "test_exposure_default_policy.py": "its subject is the default policy itself",
 }
 
 #: One record per LiveView subclass created in this process, in creation order:
@@ -51,6 +56,15 @@ _seen: weakref.WeakSet = weakref.WeakSet()
 #: ``len(_created)`` when collection ended: everything before it was created by
 #: importing test modules, not by a test.
 _import_time_count: list[int] = []
+#: Strong references to the classes that relied on the default when they were
+#: created, held until the test that created them has been judged. A test may
+#: state the policy after the class exists (a view built by executing a
+#: docstring or a guide snippet as written, then pinned). Without this, such a
+#: class could be collected before teardown and be judged by its verdict at
+#: creation, so the test failed or passed with the garbage collector's timing.
+#: Classes that stated a policy at creation are never held: tests assert that
+#: view classes can be collected.
+_held_until_judged: list[type] = []
 
 
 def _module_of(cls: type) -> str:
@@ -123,12 +137,15 @@ def install() -> bool:
         if isinstance(owner, type) and issubclass(owner, LiveView) and owner not in _seen:
             _seen.add(owner)
             name = _module_of(owner)
+            unpinned = relies_on_default(owner)
+            if unpinned:
+                _held_until_judged.append(owner)
             _created.append(
                 (
                     weakref.ref(owner),
                     f"{name}.{owner.__qualname__}",
                     name.rsplit(".", 1)[-1] + ".py",
-                    relies_on_default(owner),
+                    unpinned,
                 )
             )
         return result
@@ -148,21 +165,26 @@ def pytest_collection_finish(session):
     # tryfirst: before the root conftest's gc.freeze(), though nothing here depends on it.
     if not _import_time_count:  # a nested pytester session must not move the mark
         _import_time_count.append(len(_created))
+    _held_until_judged.clear()  # module-level classes are kept alive by their modules
 
 
 @pytest.fixture(autouse=True)
 def _no_liveview_relies_on_the_default_policy(request):
     start = len(_created)
     yield
-    if request.node.path.name in UNPINNED_ON_PURPOSE:
-        return
-    offenders = _offenders(_created[start:])
+    try:
+        if request.node.path.name in UNPINNED_ON_PURPOSE:
+            return
+        offenders = _offenders(_created[start:])
+    finally:
+        _held_until_judged.clear()
     if offenders:
         names = ", ".join(offenders)
         pytest.fail(
             "LiveView defined without an exposure_policy: "
-            f'{names}. Set exposure_policy = "legacy" (or "explicit") on the class, '
-            "or on the dict passed to type(...). The default changes in 2.0 "
+            f'{names}. Set exposure_policy = "explicit" (or "legacy", for a test of the '
+            "legacy policy) on the class, or on the dict passed to type(...). The default is "
+            '"explicit"; a test view states its policy while both exist '
             "(docs/plans/2.0-exposure-flip.md). A file that must leave it unset is listed in "
             "UNPINNED_ON_PURPOSE in tests/exposure_policy_pin_guard.py.",
             pytrace=False,

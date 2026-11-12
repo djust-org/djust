@@ -1,5 +1,6 @@
 - **The views and mixins djust ships work under `exposure_policy = "explicit"` (ADR-038
-  Step R).** The default is unchanged (`"legacy"`); this is the groundwork for changing it.
+  Step R).** This is the groundwork for making explicit exposure the default, which this
+  release also does (see the entry on the default).
 
   Mixins. Under explicit exposure a template gets only what it is given, so a mixin's public
   attributes rendered empty. Each of these now supplies its own names, render-only (nothing is

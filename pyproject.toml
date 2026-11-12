@@ -215,6 +215,14 @@ markers = [
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    # About 1,850 test and example views state exposure_policy = "legacy" on
+    # purpose (docs/plans/2.0-exposure-flip.md, PR 0d), and each statement
+    # raises this one deprecation when its class is created. Only that message
+    # is ignored; the tests of the warning itself use pytest.warns, which
+    # overrides this. Remove the entry with the "legacy" arm (PR 11).
+    'ignore:exposure_policy = "legacy" \(stated on:DeprecationWarning',
+]
 
 [tool.ruff]
 line-length = 100

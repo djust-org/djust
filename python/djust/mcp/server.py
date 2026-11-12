@@ -1630,7 +1630,14 @@ def create_server() -> "FastMCP":
         lines.append("    def get_context_data(self, **kwargs):")
         lines.append("        ctx = super().get_context_data(**kwargs)")
         lines.append("        ctx['items'] = self._items")
+        # The template gets only what is supplied here (explicit exposure).
+        if "search" in feature_set:
+            lines.append("        ctx['search_query'] = self.search_query")
+        if "crud" in feature_set:
+            lines.append("        ctx['selected_item'] = self.selected_item")
+            lines.append("        ctx['editing'] = self.editing")
         if "pagination" in feature_set:
+            lines.append("        ctx['page'] = self.page")
             lines.append(
                 "        ctx['total_pages'] = (self._total_count + self.per_page - 1) // self.per_page"
             )

@@ -36,7 +36,10 @@ def test_flag_is_true_and_liveview_default_unchanged():
     assert Counter.enable_state_snapshot is True
     assert LiveView.enable_state_snapshot is False
     assert issubclass(PersistentLiveView, LiveView)
-    assert PersistentLiveView.exposure_policy == "legacy"
+    # LiveView's default is explicit; this class states legacy itself, because
+    # the snapshot it turns on exists only under that policy.
+    assert LiveView.__dict__["exposure_policy"] == "explicit"
+    assert PersistentLiveView.__dict__["exposure_policy"] == "legacy"
 
 
 def test_subclass_can_opt_back_out():

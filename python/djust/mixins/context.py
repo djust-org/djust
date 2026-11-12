@@ -445,6 +445,17 @@ class ContextMixin:
            must be computed again. The GET clears the cache when it finishes
            for that reason.
         """
+        context = self._settled_render_context(preloaded_context)
+        # DEBUG only: say which names the template reads that the view holds
+        # but an explicit context lacks (they render empty, silently).
+        from .._exposure_unsupplied import warn_unsupplied_template_names
+
+        warn_unsupplied_template_names(self, context)
+        return context
+
+    def _settled_render_context(
+        self, preloaded_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         if preloaded_context is not None:
             return preloaded_context
         cached = getattr(self, "_cached_context", None)

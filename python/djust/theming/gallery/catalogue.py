@@ -625,8 +625,9 @@ def usage_with_events(
     A component that renders ``dj-click="set_rating"`` needs a host that
     answers it — that is the contract, and the part a reader copying the
     assignment alone would miss. Python-component handlers write to the
-    component held in ``mount()`` (ADR-033). Template-tag handlers write to
-    view assigns passed to the tag. Known demo transforms supply the actual
+    component held in ``mount()`` (ADR-033), in a private attribute that
+    ``get_context_data()`` hands to the template. Template-tag handlers write
+    to view attributes that ``get_context_data()`` passes on to the tag. Known demo transforms supply the actual
     state transition, not a placeholder.
     """
     if not events and not descriptor_class:
@@ -654,18 +655,25 @@ def usage_with_events(
 
         if keys:
             # Use the same state owner that the generated template reads.
-            owner = "self.component" if class_name else "self"
+            owner = "self._component" if class_name else "self"
             if not class_name:
                 # Template tags read view assigns, not a Python component.
                 # Their default state may be absent from the example kwargs.
                 template_lines = template_part.splitlines()
+                added = []
                 for key, value in initial.items():
                     assignment = f"        self.{key} = "
                     if not any(line.startswith(assignment) for line in lines):
-                        lines.append(f"{assignment}{value!r}")
+                        added.append((key, f"{assignment}{value!r}"))
                     for index, line in enumerate(template_lines):
                         if line.startswith("{% theme_") and f"{key}=" not in line:
                             template_lines[index] = line.replace(" %}", f" {key}={key} %}}")
+                if added:
+                    # Into mount(), above get_context_data(), which must hand
+                    # the new names to the template as well.
+                    at = lines.index(_CONTEXT_DEF) - 1 if _CONTEXT_DEF in lines else len(lines)
+                    lines[at:at] = [line for _key, line in added]
+                    lines = _with_context_names(lines, [key for key, _line in added])
                 template_part = "\n".join(template_lines)
             for event in others:
                 uses_value = any("value" in expr for _k, expr, _s in stubs[event])
@@ -712,6 +720,41 @@ def _py_literal(value: Any) -> str:
     if isinstance(value, dict):
         return "{" + ", ".join(f"{k!r}: {_py_literal(v)}" for k, v in value.items()) + "}"
     return repr(value)
+
+
+#: The line a generated view's ``get_context_data`` opens with.
+_CONTEXT_DEF = "    def get_context_data(self, **kwargs):"
+_CONTEXT_CLOSE = "        }"
+
+
+def _context_lines(names: dict) -> list[str]:
+    """``get_context_data()`` for a generated view: the template gets these names.
+
+    A view runs under explicit exposure unless it says otherwise, so a name the
+    template reads has to be handed over here; an attribute alone renders empty.
+    """
+    if not names:
+        return []
+    return [
+        "",
+        _CONTEXT_DEF,
+        "        return {",
+        "            **super().get_context_data(**kwargs),",
+        *[f'            "{name}": {source},' for name, source in names.items()],
+        _CONTEXT_CLOSE,
+    ]
+
+
+def _with_context_names(lines: list[str], keys: list[str]) -> list[str]:
+    """``lines`` with ``keys`` (view attributes) added to its ``get_context_data``."""
+    entries = [f'            "{key}": self.{key},' for key in keys]
+    entries = [entry for entry in entries if entry not in lines]
+    if not entries:
+        return lines
+    if _CONTEXT_DEF not in lines:
+        return lines + _context_lines({key: f"self.{key}" for key in keys})
+    close = lines.index(_CONTEXT_CLOSE, lines.index(_CONTEXT_DEF))
+    return lines[:close] + entries + lines[close:]
 
 
 def _usage_snippet(
@@ -761,6 +804,7 @@ def _usage_snippet(
             lines.append(f"        self.{key} = {_py_literal(value)}")
         if not on_view:
             lines.append("        pass")
+        lines += _context_lines({key: f"self.{key}" for key in on_view})
         if any("mark_safe(" in line for line in lines):
             lines.insert(2, "from django.utils.safestring import mark_safe")
         lines += [
@@ -782,8 +826,12 @@ def _usage_snippet(
             "# from."
         )
 
+    # A private attribute: the view holds the component, and get_context_data()
+    # hands it to the template. A public attribute holding a component is an
+    # error under explicit exposure (ADR-038 D-h), and a class-level plain
+    # component is one object shared by every view of the class.
     assignment = (
-        f"self.component = {class_name}({args})" if args else f"self.component = {class_name}()"
+        f"self._component = {class_name}({args})" if args else f"self._component = {class_name}()"
     )
     lines = [
         "# views.py",
@@ -805,6 +853,7 @@ def _usage_snippet(
         lines.append("")
         lines.append("        # `" + "` / `".join(slot_args) + "` carry markup, so they are")
         lines.append("        # passed the rendered HTML rather than a value.")
+    lines += _context_lines({"component": "self._component"})
     lines += [
         "",
         "",

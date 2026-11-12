@@ -298,7 +298,7 @@ def inventory_view(view_class: type) -> dict[str, Any]:
             _scan_class_source(cls, scan)
     attrs = _class_attrs(view_class)
 
-    policy_obj = inspect.getattr_static(view_class, "exposure_policy", "legacy")
+    policy_obj = inspect.getattr_static(view_class, "exposure_policy", "explicit")
     policy = policy_obj if isinstance(policy_obj, str) else "unreadable"
     persists = _persists_today(view_class, policy)
 

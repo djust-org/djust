@@ -192,7 +192,10 @@ def test_broken_policy_descriptor_cannot_enable_legacy_debug_fallback():
     assert not uses_legacy_exposure(view)
     assert explicit_debug_projection(view) == {"_djust_projection_error": "State unavailable"}
     assert "SENTINEL" not in json.dumps(_lenient_assigns(view))
-    assert uses_legacy_exposure(object())  # genuinely undeclared, legacy-compatible
+    # Genuinely undeclared: reads as the default policy, which is explicit, so
+    # an object that never asked for the legacy export is not given it.
+    assert not uses_legacy_exposure(object())
+    assert not uses_legacy_exposure(None)
 
 
 @pytest.mark.parametrize(

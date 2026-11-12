@@ -1,4 +1,8 @@
-"""ADR-034 D7 scenarios: interactive components behave as documented."""
+"""ADR-034 D7 scenarios: interactive components behave as documented.
+
+They run on one connection (``H.LivePage``): a component's state lives with its
+view, and without a connection each request builds a new view.
+"""
 
 import re
 
@@ -9,7 +13,7 @@ from . import scenario
 
 @scenario("project-menu")
 def project_menu(example):
-    page = H.Page(H.load(example))
+    page = H.LivePage(H.load(example))
     (menu,) = page.ids()
     assert page.event("toggle", component_id=menu) == 200
     # The disabled item and an unknown value never reach the callback.
@@ -22,7 +26,7 @@ def project_menu(example):
 
 @scenario("toolbar")
 def toolbar(example):
-    page = H.Page(H.load(example))
+    page = H.LivePage(H.load(example))
     project, account = page.ids()
     assert page.event("select", component_id=account, value="settings") == 200
     assert page.view.show_account_settings and page.view.selected_action == ""
@@ -33,7 +37,7 @@ def toolbar(example):
 
 @scenario("help-observe")
 def help_observe(example):
-    page = H.Page(H.load(example))
+    page = H.LivePage(H.load(example))
     (menu,) = page.ids()
     lifetime = re.search(r'data-dj-observe-lifetime="([^"]+)"', page.html).group(1)
     report = {"component_id": menu, "lifetime": lifetime}
@@ -46,7 +50,7 @@ def help_observe(example):
 
 @scenario("row-actions")
 def row_actions(example):
-    page = H.Page(H.load(example))
+    page = H.LivePage(H.load(example))
     assert page.ids() == []
     assert page.html.count('dj-value-project-id:int="42"') == 1
     assert page.event("project_action", project_id="87", action="details") == 200
@@ -56,7 +60,7 @@ def row_actions(example):
 
 @scenario("project-list")
 def project_list(example):
-    page = H.Page(H.load(example))
+    page = H.LivePage(H.load(example))
     alpha, beta = page.ids()
     assert page.event("select", component_id=beta, value="details") == 200
     assert page.view.selected == "87:details"

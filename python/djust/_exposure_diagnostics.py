@@ -11,7 +11,7 @@ from contextvars import ContextVar
 from functools import wraps
 from typing import Any, Awaitable, Callable, Iterator, TypeVar
 
-from ._exposure import ExposureError, uses_legacy_exposure
+from ._exposure import ExposureError, states_exposure_policy, uses_legacy_exposure
 
 PROTECTED_FAILURE = "Protected view operation failed"
 
@@ -58,13 +58,23 @@ def diagnostic_scope() -> Iterator[None]:
 def diagnostics_policy_allows(owner: Any) -> bool:
     """Whether this owner's failures may carry exception details.
 
-    A legacy owner always may. Under ``DEBUG`` every owner may, explicit ones
+    A legacy owner always may, and so may an owner that states no policy at
+    all (see below). Under ``DEBUG`` every owner may, explicit ones
     included: errors then read like Django's own DEBUG output, with the
     exception, traceback and technical error page (decision D-a, revised
     2026-09-22). In production a nonlegacy owner's failures are value-free.
     Debug tooling projections (debug panel, time travel, bug capture) and SQL
     parameter capture are not error destinations and stay redacted.
     """
+    if not states_exposure_policy(owner):
+        # Not an exposure owner: an empty ``view_instance`` slot (before a
+        # mount, after a failed one), a component, a formset class. It states
+        # no policy, so it restricts nothing. It grants nothing either: every
+        # caller pairs it with the owners that do exist (the view, its class,
+        # an enclosing restricted scope), and any one of those still makes the
+        # failure value-free. Reading it as the default policy would instead
+        # hide a legacy view's failures whenever one of these stood beside it.
+        return True
     if uses_legacy_exposure(owner):
         return True
     try:

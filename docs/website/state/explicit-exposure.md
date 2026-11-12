@@ -1,11 +1,15 @@
 # Explicit exposure
 
-By default a LiveView runs under the `legacy` exposure policy. In that mode every
-public attribute you set on `self` becomes template context, and much of it
-also ends up in session state and the client state mirror. Explicit exposure
-([ADR-038](https://github.com/djust-org/djust/blob/main/docs/adr/038-explicit-context-and-state-exposure.md))
-changes that default for the views that opt in. An attribute reaches a
-template, the session or the browser only when you say so.
+A LiveView runs under explicit exposure
+([ADR-038](https://github.com/djust-org/djust/blob/main/docs/adr/038-explicit-context-and-state-exposure.md)):
+an attribute reaches a template, the session or the browser only when you say
+so. This is the default since djust 2.0; a view does not have to ask for it.
+
+Before 2.0 the default was the `legacy` policy, in which every public attribute
+you set on `self` became template context, and much of it also ended up in
+session state and the client state mirror. A view can still state
+`exposure_policy = "legacy"` to keep that behaviour while it is migrated. See
+[Keeping the legacy policy](#keeping-the-legacy-policy).
 
 ```python
 from djust import LiveView, event_handler
@@ -13,7 +17,6 @@ from djust.decorators import state
 
 
 class CounterView(LiveView):
-    exposure_policy = "explicit"
     template_name = "counter.html"
 
     count = state(0, persist="server")
@@ -200,6 +203,12 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
 
 ## Not supported under explicit exposure
 
+- **Interactive components without a connection.** A component's state lives
+  with its view, so on the HTTP fallback, where each request builds a new view,
+  a component event is refused. They work over WebSocket and SSE.
+- **Time-travel restore and replay.** The timeline is a redacted, read-only
+  history.
+
 - **`lazy=True` children.** Refused, with a template error.
 - **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare them
   at class level.
@@ -208,16 +217,43 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
   renderer has no handler for these tags under either policy; they work only in
   templates rendered with Django's engine.
 
+## Keeping the legacy policy
+
+A view written for djust 1.x relies on the attribute walk: its template reads
+attributes that nothing supplies, and under the default they render empty,
+without an error. Until such a view is migrated, state the old policy on it:
+
+```python
+class OldView(LiveView):
+    exposure_policy = "legacy"
+```
+
+To keep a whole project on it for now, state it once on a base class your views
+inherit from. There is no setting that changes the default.
+
+Stating `"legacy"` raises a `DeprecationWarning` when the class is defined, once
+for each class that states it. The policy is removed in djust 2.0: the 2.0
+pre-releases still accept it, and 2.0.0 does not. The views djust itself ships
+that still state it (`PersistentLiveView`, the admin change list and form,
+`TtydTerminalView`, the `@live_view` decorator) do not warn, since that line is
+not yours to change.
+
 ## Migrating a view
 
-1. Run `python manage.py djust_exposure_inventory --view myapp.views.MyView`.
+1. State `exposure_policy = "legacy"` on the view (above), so it keeps working
+   while you change it.
+2. Run `python manage.py djust_exposure_inventory --view myapp.views.MyView`.
    It lists the names legacy mode exports and where each one goes, and suggests
    declarations. It never prints values and never instantiates the view.
-2. Declare the fields you meant to keep with `state()`, choosing `persist` and
+3. Declare the fields you meant to keep with `state()`, choosing `persist` and
    `client` for each one deliberately.
-3. Move everything the template reads into `get_context_data()`.
-4. Set `exposure_policy = "explicit"`, then test your reconnect and
-   back-navigation flows.
+4. Move everything the template reads into `get_context_data()`.
+5. Remove the `exposure_policy` line, then test your reconnect and
+   back-navigation flows. A template name that nothing supplies renders empty,
+   so look at every page the view renders. Two things point at such a name:
+   with `DEBUG = True` djust logs a warning (logger `djust.exposure`) the first
+   time a view renders a name its template reads and the view sets but does not
+   supply, and `python manage.py check` reports it as `djust.T027`.
 
 **Cost.** An explicit WebSocket event costs roughly twice a legacy one, because
 of the per-turn authorization and the state save. The measured numbers and

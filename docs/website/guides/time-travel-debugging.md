@@ -36,6 +36,9 @@ class CounterView(LiveView):
     def mount(self, request, **kwargs):
         self.count = 0
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count}
+
     @event_handler
     def increment(self, **kwargs):
         self.count += 1
@@ -49,9 +52,22 @@ class CounterView(LiveView):
 2. Click a few times to fire the `increment` handler.
 3. Press `Ctrl+Shift+D` (`Cmd+Shift+D` on macOS) to open the debug
    panel, then switch to the **Time Travel** tab.
-4. Click any past event in the timeline — the server restores the
-   captured `state_before` (or `state_after`), and the page re-renders
-   instantly.
+4. The timeline lists each event. What a click on one does depends on the
+   view's exposure policy, described next.
+
+### What the default policy records
+
+A view runs under [explicit exposure](../state/explicit-exposure.md) unless it
+says otherwise, as `CounterView` above does. For such a view the timeline is a
+read-only history: each entry shows the names and types of the view's declared
+state, not its values, and jumping to an entry or replaying from it is refused.
+Recorded debug values are not authority to put state back on the server.
+
+Jumping, forward replay and branches, as the rest of this guide describes them,
+work only on a view that states `exposure_policy = "legacy"`. That policy is
+deprecated and is removed in 2.0, and executable restore and replay go with it.
+On a legacy view a click on a past event restores the captured `state_before`
+(or `state_after`) and the page re-renders.
 
 ## How it works
 
