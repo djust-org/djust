@@ -975,9 +975,10 @@ def test_the_embedded_child_reproducer_from_the_issue():
     assert P.calls == 0
 
 
-def test_install_patches_once_and_leaves_a_later_patch_alone(caplog):
-    """A ``functools.wraps`` wrapper put on top of the guard survives later scope entries, is not
-    warned about, and the guard under it still refuses."""
+def test_install_patches_once_and_holds_a_later_wrapper_to_the_guard(caplog):
+    """A ``functools.wraps`` wrapper put on top of the guard keeps running, and the next scope entry
+    puts a guard over it (only the OUTERMOST render is trusted, review of #4068); nothing is
+    logged at WARNING."""
     import functools
 
     from django.template.loader_tags import IncludeNode
@@ -997,20 +998,63 @@ def test_install_patches_once_and_leaves_a_later_patch_alone(caplog):
 
     IncludeNode.render = wrapper  # type: ignore[method-assign]
     obj = _payload("alters_data")()
+    plain = _payload("plain")()
     with caplog.at_level(logging.WARNING, logger="djust._include_guard"):
         with include_guard_scope():
             out = Engine().from_string("[{% include obj %}]").render(DjangoContext({"obj": obj}))
+            assert _include(plain) == "[RENDERED]"
     assert not [r for r in caplog.records if r.name == "djust._include_guard"]
-    assert IncludeNode.render is wrapper, (
-        "a scope entry replaced a later patch of IncludeNode.render"
-    )
-    assert seen == [1]
+    assert IncludeNode.render.__wrapped__ is wrapper  # type: ignore[attr-defined]
+    assert seen == [1], "the wrapper still renders what the guard lets through"
     assert out == "[]"
     assert type(obj).calls == 0
 
 
-def test_install_recognises_the_guard_under_a_functools_wrapper(caplog):
-    """After a reload the class may already carry the guard under a wrapper: no second guard."""
+def test_a_wraps_wrapper_naming_the_guard_but_calling_djangos_render_is_held_to_it():
+    """Review of #4068: ``functools.wraps(guard)`` gives a ``__wrapped__`` link to the guard, but the
+    wrapper may call Django's own ``render``; a chain walk trusted it and the guard was off."""
+    import functools
+
+    from django.template.loader_tags import IncludeNode
+
+    from djust._include_guard import _ORIGINAL, guarded_include_render, include_guard_scope
+
+    @functools.wraps(guarded_include_render)
+    def impostor(self: Any, context: Any) -> Any:
+        return _ORIGINAL(self, context)
+
+    IncludeNode.render = impostor  # type: ignore[method-assign]
+    obj = _payload("alters_data")()
+    with include_guard_scope():
+        assert _include(obj) == "[]"
+    assert type(obj).calls == 0
+
+
+def test_a_patch_swapped_in_during_an_active_scope_is_unguarded_until_the_next_entry():
+    """A KNOWN GAP, pinned as current behaviour: the guard is (re)installed on scope ENTRY, so a
+    patch of ``IncludeNode.render`` made while a scope is active renders unguarded until the next
+    entry. If this starts failing because the include is refused, the gap closed: update the
+    docstring of ``install`` and ``docs/SECURE_DEFAULTS.md``."""
+    from django.template.loader_tags import IncludeNode
+
+    from djust._include_guard import _ORIGINAL, include_guard_scope
+
+    def replacement(self: Any, context: Any) -> Any:
+        return _ORIGINAL(self, context)
+
+    obj = _payload("alters_data")()
+    with include_guard_scope():
+        IncludeNode.render = replacement  # type: ignore[method-assign]
+        assert _include(obj) == "[RENDERED]"  # the gap
+    assert type(obj).calls == 1
+    with include_guard_scope():  # the next entry holds it to the guard again
+        assert _include(obj) == "[]"
+    assert type(obj).calls == 1
+
+
+def test_a_reloaded_style_wrapper_over_the_guard_gets_one_guard_on_top(caplog):
+    """A ``functools.wraps`` wrapper over the guard (what a reload or instrumentation leaves) gets
+    ONE guard on top, not one per scope entry, and nothing is logged at WARNING."""
     import functools
 
     from django.template.loader_tags import IncludeNode
@@ -1024,7 +1068,11 @@ def test_install_recognises_the_guard_under_a_functools_wrapper(caplog):
     IncludeNode.render = wrapped  # type: ignore[method-assign]
     with caplog.at_level(logging.WARNING, logger="djust._include_guard"):
         guard.install()
-    assert IncludeNode.render is wrapped, "install() put a second guard under a wrapped one"
+        top = IncludeNode.render
+        guard.install()
+        guard.install()
+    assert IncludeNode.render is top
+    assert top.__wrapped__ is wrapped  # type: ignore[attr-defined]
     assert not [r for r in caplog.records if r.name == "djust._include_guard"]
 
 
@@ -1156,14 +1204,14 @@ def test_a_replacement_whose_wrapped_link_raises_does_not_break_scope_entry():
     assert type(obj).calls == 0
 
 
-def test_a_deep_wraps_chain_over_the_guard_is_recognised_and_not_wrapped_again(caplog):
-    """#3931: the chain walk stopped at 16 links, so a deeper chain was warned about (and is now
-    wrapped a second time); the guard is found under any reasonable depth."""
+def test_a_deep_wraps_chain_over_the_guard_still_refuses(caplog):
+    """#3931: a chain deeper than 16 links was warned about; now the outermost is held to the guard
+    whatever is below it, without a WARNING."""
     import functools
 
     from django.template.loader_tags import IncludeNode
 
-    from djust._include_guard import _carries_the_guard, include_guard_scope, install
+    from djust._include_guard import include_guard_scope, install
 
     install()
     top = IncludeNode.render
@@ -1176,12 +1224,10 @@ def test_a_deep_wraps_chain_over_the_guard_is_recognised_and_not_wrapped_again(c
 
         top = layer
     IncludeNode.render = top  # type: ignore[method-assign]
-    assert _carries_the_guard(top)
     obj = _payload("alters_data")()
-    with caplog.at_level(logging.DEBUG, logger="djust._include_guard"):
+    with caplog.at_level(logging.WARNING, logger="djust._include_guard"):
         with include_guard_scope():
             assert _include(obj) == "[]"
-    assert IncludeNode.render is top
     assert not [r for r in caplog.records if r.name == "djust._include_guard"]
     assert type(obj).calls == 0
 

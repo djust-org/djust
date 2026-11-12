@@ -185,3 +185,48 @@ def test_a_backend_template_wrapper_is_refused_on_its_inner_render_by_the_rust_e
     # an unflagged inner template behind the same wrapper still renders
     plain = BackendTemplate(engine.from_string("OK"), backend=None)  # type: ignore[arg-type]
     assert _rust.render_template("[{% include t %}]", {"t": plain}) == "[OK]"
+
+
+class _RaisingFormatStr(str):
+    def __format__(self, spec: str) -> str:
+        raise RuntimeError("a hostile __format__")
+
+    def __str__(self) -> str:
+        raise RuntimeError("a hostile __str__")
+
+
+class _LyingStr(str):
+    def isprintable(self) -> bool:
+        return True
+
+
+@pytest.mark.parametrize(
+    "hostile, label",
+    [
+        pytest.param(_RaisingFormatStr("Real"), "raising-format", id="str-subclass-raising-format"),
+        pytest.param(
+            _LyingStr("Real\nWARNING forged"), "lying-isprintable", id="str-subclass-lying"
+        ),
+    ],
+)
+def test_a_str_subclass_as_a_type_name_is_not_trusted(caplog, hostile, label):
+    """Review of #4068: only an exact ``str`` is used; a subclass can raise or lie about itself."""
+    kind = _kind("Plain")
+    kind.__qualname__ = hostile  # type: ignore[assignment]
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        guards.warn_refused_once("{% include %}", kind(), label, "alters_data")
+    message = _records(caplog)[0].getMessage()
+    assert "\n" not in message
+    assert f"?.{label}()" in message
+
+
+def test_a_metaclass_whose_module_read_raises_does_not_make_the_refusal_raise(caplog):
+    class _Meta(type):
+        @property
+        def __module__(cls):  # type: ignore[override]
+            raise RuntimeError("no")
+
+    kind = _Meta("Odd", (), {})
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        guards.warn_refused_once("{% include %}", kind(), "render", "alters_data")
+    assert "Odd.render()" in _records(caplog)[0].getMessage()

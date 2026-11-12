@@ -883,6 +883,56 @@ NARROWING = {
         """,
         True,
     ),
+    "str(x) in TABLE, then x changed in place (review of #4068)": (
+        """
+        T = {"[]": 1}
+        def f(items, raw):
+            if str(items) in T:
+                items.append(raw)
+                return mark_safe(f"<b>{str(items)}</b>")
+            return ""
+        """,
+        True,
+    ),
+    "str(x) in TABLE, then an attribute of x set (review of #4068)": (
+        """
+        T = {"ok": 1}
+        class Obj:
+            name = "ok"
+            def __str__(self):
+                return self.name
+        def f(obj, raw):
+            if str(obj) in T:
+                obj.name = raw
+                return mark_safe(f"<b>{str(obj)}</b>")
+            return ""
+        """,
+        True,
+    ),
+    "str(x) in TABLE, then x handed to a call": (
+        """
+        T = {"ok": 1}
+        def f(obj):
+            if str(obj) in T:
+                mutate(obj)
+                return mark_safe(f"<b>{str(obj)}</b>")
+            return ""
+        """,
+        True,
+    ),
+    "str(x) in TABLE, x read by a closure": (
+        """
+        T = {"ok": 1}
+        def f(obj, raw):
+            def g():
+                obj.name = raw
+            if str(obj) in T:
+                g()
+                return mark_safe(f"<b>{str(obj)}</b>")
+            return ""
+        """,
+        True,
+    ),
     "str(x) in TABLE says nothing about str(y)": (
         """
         TABLE = {"a": "1"}
@@ -2255,6 +2305,22 @@ STRUCTURE = {
             )
         """,
         False,
+    ),
+    "isoformat with a separator from the caller": (
+        """
+        from datetime import datetime
+        def f(sep):
+            return mark_safe(f"<i title={datetime(2020, 1, 1).isoformat(sep=sep)}>")
+        """,
+        True,
+    ),
+    "isoformat with a positional separator from the caller": (
+        """
+        from datetime import datetime
+        def f(sep):
+            return mark_safe(f"<i title={datetime(2020, 1, 1).isoformat(sep)}>")
+        """,
+        True,
     ),
     "strftime of a date takes its format from the caller": (
         """

@@ -2317,6 +2317,7 @@ class _Module:
             isinstance(e.func, ast.Attribute)
             and e.func.attr in DATE_DIGIT_METHODS
             and not e.args
+            and not e.keywords  # ``d.isoformat(sep=raw)``: the separator is the caller's (#4068)
             and self._is_date(e.func.value, sc)
         ):
             return True  # ``current.isoformat()`` / ``start.weekday()`` of a date value
@@ -2956,6 +2957,20 @@ class _Flow:
         self.narrowed_calls: dict[int, set[str]] = {}
         #: whether a ``str(x)`` call was evaluated, somewhere, where the fact did NOT hold
         self.unnarrowed_calls: set[int] = set()
+        #: id(``str(x)`` call) -> the narrowing tests (their marker defs) it relied on
+        self.call_markers: dict[int, set[_Def]] = {}
+        #: marker defs of narrowing tests whose ``x`` was USED, while the fact held, other than as
+        #: ``str(x)`` (``x.append(raw)``, ``x.name = raw``, ``f(x)``): ``str(x)`` may differ now
+        self.spoiled: set[_Def] = set()
+        #: names a nested function or lambda reads: it may change ``x`` behind the flow's back
+        self.closure_names: set[str] = {
+            n.id
+            for sub in ast.walk(self.fn)
+            if sub is not self.fn
+            and isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef))
+            for n in ast.walk(sub)
+            if isinstance(n, ast.Name)
+        }
 
     # -- driver ---------------------------------------------------------------------------
     def run(self) -> None:
@@ -2969,7 +2984,11 @@ class _Flow:
             if name not in bad:
                 self.mod.reach[key] = (self.scope, tuple(defs))
         for call_id, names in self.narrowed_calls.items():
-            if call_id not in self.unnarrowed_calls and not names & bad:
+            if (
+                call_id not in self.unnarrowed_calls
+                and not names & bad
+                and not self.call_markers.get(call_id, set()) & self.spoiled
+            ):
                 self.mod.narrowed_exprs.add(call_id)
 
     def _analyse(self) -> None:
@@ -3080,13 +3099,21 @@ class _Flow:
         arg = self._str_of_name(e)
         if arg is not None:
             fact = state.get(("str", arg.id))
-            if fact is not None and fact == state.get(arg.id):
+            markers = {d for d in fact or () if d.name is None}
+            if fact is not None and (fact - markers) == state.get(arg.id):
                 self.narrowed_calls.setdefault(id(e), set()).add(arg.id)
+                self.call_markers.setdefault(id(e), set()).update(markers)
             else:
                 self.unnarrowed_calls.add(id(e))
+            self._load(arg, state)  # ``str(x)`` reads ``x`` without spoiling the fact
+            self.loads(e.func, state)  # type: ignore[attr-defined]
+            return
         if isinstance(e, ast.Name):
             if isinstance(e.ctx, ast.Load):
                 self._load(e, state)
+                fact = state.get(("str", e.id))
+                if fact:  # any other use of ``x`` while the fact holds may change ``str(x)``
+                    self.spoiled.update(d for d in fact if d.name is None)
         elif isinstance(e, ast.Lambda):
             # the body runs later, with whatever the names hold then: the old, whole answer
             for default in [*e.args.defaults, *(d for d in e.args.kw_defaults if d)]:
@@ -3167,13 +3194,17 @@ class _Flow:
                 and arg is not None
                 and arg.id in state
                 and arg.id not in self.disabled
+                and arg.id not in self.closure_names
                 and self.mod.constant_set(right, self.scope)
             ):
                 # ``str(x) in TABLE``: the EXPRESSION ``str(x)`` is a value the developer wrote on
                 # this branch, as long as ``x`` keeps the bindings it has now (#3846). ``x`` itself
                 # is not narrowed: it may be an object whose ``str()`` is in the table.
                 held = dict(state)
-                held[("str", arg.id)] = state[arg.id]
+                # the fact is x's bindings now plus a marker naming THIS test (``name=None``), so a
+                # later use of ``x`` that may change ``str(x)`` can withdraw it (review of #4068)
+                marker = self._def(("str-fact", id(test)), None, None, counted=False)  # type: ignore[arg-type]
+                held[("str", arg.id)] = state[arg.id] | {marker}
                 return (held, state) if isinstance(op, ast.In) else (state, held)
             if isinstance(op, (ast.Eq, ast.NotEq)):
                 for name, other in ((left, right), (right, left)):

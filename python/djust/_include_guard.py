@@ -26,8 +26,9 @@ The shape (the one ``template_bridge_floor`` uses for ``Variable._resolve_lookup
   Django's code, not a copy of it: the original ``render`` runs on a stand-in for the
   node whose operand is the value already resolved.
 
-A patch of ``IncludeNode.render`` made by someone else does not switch the guard off: the
-guard is put over it and delegates to it (#3931).
+A patch of ``IncludeNode.render`` made by someone else does not switch the guard off once a
+scope is entered after it: the guard is put over it and delegates to it (#3931). One swapped in
+while a scope is active is unguarded until the next scope entry.
 
 A refusal renders ``""`` with one WARNING per (type, method) per process, the same as the
 five entries #3879 guards (``warn_refused_once``); a marker read that raises refuses.
@@ -177,10 +178,6 @@ def _make_guard(delegate: Any) -> Callable[..., Any]:
 #: The guard over Django's own ``render``: what :func:`install` puts on a stock class.
 guarded_include_render = _make_guard(_ORIGINAL)
 
-#: How far down a ``__wrapped__`` chain to look for the guard. Past it the chain is treated as
-#: not carrying one and gets its own (a second check of the same operand is harmless).
-_CHAIN_LIMIT = 256
-
 
 def _is_guard(render: Any) -> bool:
     try:
@@ -190,26 +187,6 @@ def _is_guard(render: Any) -> bool:
         )
     except Exception:  # noqa: BLE001 -- an attribute that raises: not ours
         return False
-
-
-def _carries_the_guard(render: Callable[..., Any]) -> bool:
-    """Is a guard in ``render``'s ``functools.wraps`` chain (itself included)?
-
-    Never raises: a ``__wrapped__`` that raises, or a cycle, ends the walk (#3931).
-    """
-    seen: set[int] = set()
-    current: Any = render
-    for _ in range(_CHAIN_LIMIT):
-        if current is None or id(current) in seen:
-            return False
-        if _is_guard(current):
-            return True
-        seen.add(id(current))
-        try:
-            current = getattr(current, "__wrapped__", None)
-        except Exception:  # noqa: BLE001 -- a hostile property: the chain ends here
-            return False
-    return False
 
 
 @functools.lru_cache(maxsize=None)
@@ -229,21 +206,23 @@ def install() -> None:
     ``mock.patch.object`` restoring Django's ``render`` after a scope wrote the guard is
     simply installed again on the next entry). Three cases:
 
-    * the guard is already there, directly or under a ``functools.wraps`` wrapper put on top
-      of it (instrumentation, ``mock.patch.object(..., wraps=...)``): nothing to do, and the
-      wrapper is left alone;
+    * this module's guard is the OUTERMOST ``render``: nothing to do;
     * ``render`` is Django's own: the guard is installed (two threads doing so write the same
       constant);
-    * someone replaced ``render`` with something that does not carry the guard (a patch of
-      Django's ``render``, with or without ``functools.wraps``): a guard that DELEGATES to that
-      patch is put on top of it (#3931). Outside a scope the patch runs exactly as before; inside
-      one the operand is checked and the patch is handed the resolved, pinned operand. Before
-      #3931 such a patch switched the guard off for the process. A patch that calls the guard
-      itself without a ``functools.wraps`` link is wrapped too; the operand is then checked
-      twice, which changes nothing.
+    * anything else is on top (a patch of Django's ``render``, with or without
+      ``functools.wraps``, or a wrapper put over the guard): a guard that DELEGATES to it is put
+      on top (#3931). Outside a scope the patch runs exactly as before; inside one the operand is
+      checked and the patch is handed the resolved, pinned operand. Only the outermost function
+      is trusted: a ``functools.wraps(guard)`` wrapper may call Django's ``render`` instead of the
+      guard it names (review of #4068). A wrapper that does call the guard is wrapped too; the
+      operand is then checked twice, which changes nothing.
+
+    Not covered: a patch swapped in WHILE a scope is active. The guard is (re)installed when a
+    scope is entered, so until the next entry such a patch renders unguarded (pinned by
+    ``test_a_patch_swapped_in_during_an_active_scope_is_unguarded_until_the_next_entry``).
     """
     current = IncludeNode.render
-    if _carries_the_guard(current):
+    if _is_guard(current):
         return
     if current is _ORIGINAL:
         IncludeNode.render = guarded_include_render  # type: ignore[method-assign]

@@ -145,11 +145,12 @@ _WARNED_LOCK = threading.Lock()
 def _log_label(text: Any) -> str:
     """``text`` as one printable log token: never raises, never a second line (#3928).
 
-    A type's ``__module__`` / ``__qualname__`` are whatever its class body set; a non-``str``
-    (whose ``__str__`` may raise) becomes ``"?"`` and a control character (a newline that would
-    forge a second log line) is written as its escape.
+    A type's ``__module__`` / ``__qualname__`` are whatever its class body set; anything but an
+    exact ``str`` becomes ``"?"`` (a ``str`` subclass can override ``__format__`` / ``__str__`` /
+    ``isprintable`` to raise or to lie, review of #4068) and a control character (a newline that
+    would forge a second log line) is written as its escape.
     """
-    if not isinstance(text, str):
+    if type(text) is not str:
         return "?"
     if text.isprintable():
         return text
@@ -178,6 +179,14 @@ def _logged_type(owner: Any) -> type:
     return kind
 
 
+def _type_attr(kind: type, name: str) -> Any:
+    """``kind.<name>``, or ``None`` when reading it raises (a metaclass property can)."""
+    try:
+        return getattr(kind, name, None)
+    except Exception:  # noqa: BLE001 -- a hostile metaclass: the label becomes "?"
+        return None
+
+
 def warn_refused_once(where: str, owner: Any, name: str, marker: str) -> None:
     """Log, once per (type, method) per process, that a template-reachable call was refused.
 
@@ -187,8 +196,8 @@ def warn_refused_once(where: str, owner: Any, name: str, marker: str) -> None:
     cannot make the refusal raise or forge a log line.
     """
     kind = _logged_type(owner)
-    module = _log_label(getattr(kind, "__module__", None))
-    qualname = _log_label(getattr(kind, "__qualname__", None))
+    module = _log_label(_type_attr(kind, "__module__"))
+    qualname = _log_label(_type_attr(kind, "__qualname__"))
     key = f"{module}.{qualname}.{name}"
     with _WARNED_LOCK:
         if key in _WARNED:
