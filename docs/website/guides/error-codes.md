@@ -738,16 +738,6 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 ---
 
-### V017: Async strict handler on an actor view
-
-**Severity**: Error
-
-**What causes it**: A view with `use_actors = True` declares a strict-policy `async def` event handler. Actor dispatch rejects strict async handlers before they run.
-
-**Fix**: Make the handler synchronous, set `use_actors = False`, or use `parameter_policy="legacy"`.
-
----
-
 ### V019: Strict declaration on a dj-auto-recover handler
 
 **Severity**: Warning
@@ -765,16 +755,6 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 **What causes it**: `@event_handler(params=[...])` lists different parameters from a strict handler's signature. Under the strict policy the signature is the contract, so the list is ignored by validation and only misleads tooling.
 
 **Fix**: Remove `params=` or make it match the signature.
-
----
-
-### V020: Interactive component on an actor view
-
-**Severity**: Error
-
-**What causes it**: A view with `use_actors = True` declares an interactive component (from `djust.components.interactive`). Actor views do not support them: the actor path has its own dispatch and render baseline, which the component registry does not use. Message: "<view> sets use_actors = True and declares interactive component(s) <names>, which actor views do not support."
-
-**Fix**: Remove `use_actors = True` from the view, or move the interactive component to a view that does not use actors.
 
 ---
 

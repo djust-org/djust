@@ -833,12 +833,6 @@ CLASS_ATTRIBUTES: List[Dict[str, Any]] = [
         "example": 'template = "<div>{{ count }}</div>"',
     },
     {
-        "name": "use_actors",
-        "type": "bool",
-        "default": "False",
-        "description": "Enable Tokio actor-based state management for high-concurrency views",
-    },
-    {
         "name": "tick_interval",
         "type": "Optional[int]",
         "description": "Periodic tick interval in milliseconds (e.g., 2000 for 2s polling)",
@@ -1821,8 +1815,6 @@ def _extract_view_schema(cls: type, base_classes: list) -> Dict[str, Any]:
     temp = getattr(cls, "temporary_assigns", None)
     if temp:
         config["temporary_assigns"] = list(temp.keys()) if isinstance(temp, dict) else temp
-    if getattr(cls, "use_actors", False):
-        config["use_actors"] = True
 
     return {
         "class": full_path,

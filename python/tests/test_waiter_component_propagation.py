@@ -103,8 +103,6 @@ def _make_consumer(view: _WaitingView) -> LiveViewConsumer:
     consumer._current_event_name = None
     consumer._current_event_ref = None
     consumer._rate_limiter = ConnectionRateLimiter(rate=10000, burst=10000)
-    consumer.use_actors = False
-    consumer.actor_handle = None
     # #1907: minimal state the runtime path reads.
     consumer.scope = {"session": None, "headers": [], "client": ("127.0.0.1", 0)}
     consumer._client_ip = "127.0.0.1"

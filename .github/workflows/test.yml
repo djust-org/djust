@@ -201,7 +201,7 @@ jobs:
           # Phase 1: workspace except djust_live (cdylib link constraint).
           cargo test --workspace --exclude djust_live --release
           # Phase 2: djust_live with extension-module gated off (#1543) so
-          # the actor / msgpack / wire-protocol tests in djust_live get
+          # the msgpack / wire-protocol tests in djust_live get
           # genuine Rust-test coverage (not just compile-checks).
           cargo test -p djust_live --no-default-features --release
 

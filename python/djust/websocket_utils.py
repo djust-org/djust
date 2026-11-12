@@ -259,7 +259,7 @@ async def _validate_event_security(
 ) -> Optional[Callable[..., Any]]:
     """Validate event name, handler existence, decorator allowlist, and per-handler rate limit.
 
-    Shared by actor, component, and view paths. Returns the handler if all
+    Shared by component and view paths. Returns the handler if all
     checks pass, or None after sending the appropriate error/close.
     ``root_view`` is the page view of the transport when ``owner_instance``
     is a component or an embedded child: what only its ``post()`` runs

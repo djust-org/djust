@@ -153,9 +153,8 @@ def test_underscore_prefixed_framework_keys_are_never_reported(caplog, key):
 
 @pytest.mark.parametrize("key", ["view_id", "component_id"])
 def test_the_two_non_underscore_framework_keys_are_never_reported(caplog, key):
-    # Found by instrumenting the real dispatch rather than reading call sites:
-    # `view_id` survives the actor path (runtime.py:2734 reads it with .get
-    # rather than the .pop at :3457).
+    # Recorded against the actor dispatch path, which 2.0 removed; the set is
+    # kept as a floor (see `_FRAMEWORK_KWARGS_KEYS`).
     def handler(view: str = "", component: str = "", **kwargs):
         pass
 

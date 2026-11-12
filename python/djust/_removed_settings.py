@@ -39,6 +39,29 @@ REMOVED_CONFIG_KEYS: dict[str, str] = {
     "django_value_repr": "{{ value }} always renders as Django's str() does",
 }
 
+#: View class attributes 2.0 removed. A truthy value is refused when the class
+#: is created, so the module fails to import instead of the view quietly
+#: running without the behaviour it asked for.
+REMOVED_VIEW_ATTRIBUTES: dict[str, str] = {
+    "use_actors": (
+        "the Tokio actor system was removed; delete the attribute. The view runs on "
+        "the standard runtime, which already runs one turn at a time per connection. "
+        "For work that should not block a turn, use start_async() or @background"
+    ),
+}
+
+
+def reject_removed_view_attributes(cls: type) -> None:
+    """Raise ``ImproperlyConfigured`` if ``cls`` turns on a removed view attribute."""
+    for name, replacement in REMOVED_VIEW_ATTRIBUTES.items():
+        if getattr(cls, name, False):
+            from django.core.exceptions import ImproperlyConfigured
+
+            raise ImproperlyConfigured(
+                "%s.%s sets %s, which was removed in djust 2.0: %s."
+                % (cls.__module__, cls.__qualname__, name, replacement)
+            )
+
 
 def removed_settings_in_use(settings: Any) -> list[str]:
     """One line per removed setting or key that ``settings`` still sets."""

@@ -5,7 +5,7 @@ Every test records the lifecycle order in ``EVENTS`` so a form built before
 authorization, a second lookup inside one dispatch, or a hook that runs for a
 denied object is visible. The route supplies the ``pk``; the transports are
 the HTTP GET/POST paths, the shared runtime (WebSocket and SSE), a real
-WebSocket session in normal and actor mode, and a real SSE session.
+WebSocket session, and a real SSE session.
 """
 
 import json
@@ -61,10 +61,6 @@ class EditGroupView(ModelFormMixin[Group], LiveView):
         self.success_message = "Saved " + self.object.name
 
 
-class ActorEditGroupView(EditGroupView):
-    use_actors = True
-
-
 class AliasEditGroupView(EditGroupView):
     context_object_name = "group"
     template = "<div dj-root><h1>{{ group.name }}</h1><h2>{{ object.name }}</h2></div>"
@@ -84,7 +80,6 @@ class OtherView(LiveView):
 
 urlpatterns = [
     path("groups/<int:pk>/edit/", EditGroupView.as_view()),
-    path("actor-groups/<int:pk>/edit/", ActorEditGroupView.as_view()),
     path("alias-groups/<int:pk>/edit/", AliasEditGroupView.as_view()),
     path("explicit-groups/<int:pk>/edit/", ExplicitEditGroupView.as_view()),
     path("snapshot-groups/<int:pk>/edit/", SnapshotEditGroupView.as_view()),
@@ -94,7 +89,6 @@ urlpatterns = [
 
 ROUTES = {
     EditGroupView: "/groups/%s/edit/",
-    ActorEditGroupView: "/actor-groups/%s/edit/",
     AliasEditGroupView: "/alias-groups/%s/edit/",
     ExplicitEditGroupView: "/explicit-groups/%s/edit/",
     SnapshotEditGroupView: "/snapshot-groups/%s/edit/",
@@ -368,7 +362,7 @@ def test_generic_subscription_is_optional_at_runtime():
 
 
 # --------------------------------------------------------------------------
-# Socket transports: WS (normal + actor), SSE, via the real entry points.
+# Socket transports: WS, SSE, via the real entry points.
 # --------------------------------------------------------------------------
 
 
@@ -412,18 +406,8 @@ def _allow():
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("view_class", [EditGroupView, ActorEditGroupView])
-async def test_websocket_lifecycle(view_class, sql, monkeypatch):
-    from djust.runtime import WSConsumerTransport
-
-    actor_turns = []
-    original = WSConsumerTransport._dispatch_actor_event_locked
-
-    async def through_actor(self, *args, **kwargs):
-        actor_turns.append(args)
-        return await original(self, *args, **kwargs)
-
-    monkeypatch.setattr(WSConsumerTransport, "_dispatch_actor_event_locked", through_actor)
+async def test_websocket_lifecycle(sql):
+    view_class = EditGroupView
     alice, mine, theirs = await sync_to_async(_world)()
     with _allow():
         socket, mounted = await _ws_session(view_class, alice, ROUTES[view_class] % mine.pk)
@@ -443,7 +427,6 @@ async def test_websocket_lifecycle(view_class, sql, monkeypatch):
             assert _order({"lookup"}) == ["lookup"], EVENTS
             assert len(_lookups({"sql": q} for q in sql)) == 1, sql
             assert _order({"form_valid"}) == ["form_valid"]
-            assert bool(actor_turns) is (view_class is ActorEditGroupView)
 
             # Access revoked between events: denied before any form or hook.
             REVOKED.add(mine.pk)

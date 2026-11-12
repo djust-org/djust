@@ -2,8 +2,7 @@
 
 ``exposure_policy="explicit"`` is an enabled policy. The guard still refuses
 every configuration that would silently widen exposure or fall back to legacy
-exports: an unknown policy, exposure grants on a legacy view, and (decision
-D-o) actors combined with the explicit policy. None of these checks may
+exports: an unknown policy and exposure grants on a legacy view. None of these checks may
 evaluate a property or a state factory. Configuration errors are
 ``ExposureConfigurationError`` (an ``ImproperlyConfigured``), whose messages
 are framework-authored and carry no view values.
@@ -76,16 +75,6 @@ def test_explicit_views_honor_exposure_grants(options):
         value = state(0, **options)
 
     View()
-
-
-def test_explicit_policy_refuses_actors():
-    # Decision D-o: actors are excluded from explicit exposure in v1.
-    class ActorView(LiveView):
-        exposure_policy = "explicit"
-        use_actors = True
-
-    with pytest.raises(ExposureConfigurationError, match="actors"):
-        ActorView()
 
 
 def test_guard_does_not_evaluate_properties_or_factories():

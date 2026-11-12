@@ -3008,7 +3008,6 @@ window.addEventListener('pageshow', (event) => {
 // Feature limitations vs WebSocket transport (documented in docs/sse-transport.md):
 //   - No binary file uploads
 //   - No presence tracking
-//   - No actor-based state management
 //   - No MessagePack binary encoding
 //
 // Views mounted beside the page view (dj-lazy containers, #3252) are independent

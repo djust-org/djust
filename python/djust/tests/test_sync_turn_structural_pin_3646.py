@@ -914,7 +914,7 @@ HOOKS: Dict[str, str] = {
     "ContextMixin.get_context_data": "stepped:render",
     "DraftModeMixin.get_context_data": "stepped:render",
     "Component.render": "stepped:render",
-    "TemplateMixin.get_template": "unwrapped:template-time:read by the template build at template/render-plumbing time with no step open (an HTTP GET shows none); only the actor mount and hot reload call it inside a render step, and the hand-off pin covers those two sites",
+    "TemplateMixin.get_template": "unwrapped:template-time:read by the template build at template/render-plumbing time with no step open (an HTTP GET shows none); only hot reload calls it inside a render step, and the hand-off pin covers that site",
     # ---- cursor / presence ----
     "LiveCursorMixin.handle_cursor_move": (
         "unwrapped:not-threaded:djust 2.0 removed the socket's cursor_move frame (#3515), so the "

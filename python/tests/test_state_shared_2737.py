@@ -177,21 +177,14 @@ class TestTheRenderEntriesShareTheStateMap:
             "share too; if one was removed, update this count deliberately."
         )
 
-    def test_the_only_from_dict_over_own_state_left_in_the_crate_is_the_component_actor(
-        self,
-    ) -> None:
-        """`ComponentActor::render` (`actors/component.rs`) is a fourth sibling of
-        the same shape — `Context::from_dict(self.state.clone())` — and the
-        count-pin above does not reach it, because it is over a DIFFERENT
-        field: `ComponentActor::state` is its own `HashMap<String, Value>`
-        (component props), not `RustLiveViewBackend::state`, and is not a
-        `SharedValues`. It is out of #2737's scope (that issue is the LiveView
-        render path; component props are small), so this pins the remaining
-        set as exactly that one file: converting it later, or adding another
-        `from_dict` over an own-state field anywhere in the crate, must update
-        this deliberately rather than pass silently.
+    def test_no_from_dict_over_own_state_is_left_in_the_crate(self) -> None:
+        """The count-pin above reads one field of one file. This sweeps the
+        crate for the same shape — `Context::from_dict(self.state.clone())` —
+        over any own-state field. The one remaining instance was the actor
+        system's `ComponentActor::render`, removed in 2.0; adding another
+        anywhere in the crate must update this deliberately.
         """
-        assert remaining_from_dict_over_own_state(LIVE_CRATE_SRC) == {"actors/component.rs"}
+        assert remaining_from_dict_over_own_state(LIVE_CRATE_SRC) == set()
 
 
 class TestFromDictHasOneStatementOfWhatFrameZeroIs:
@@ -321,17 +314,3 @@ class TestThePinsCanActuallyGoRed:
         )
         assert copy_on_write_doors(regressed) == copy_on_write_doors(live) | {"nudge"}
         assert isolation_table_labels(regressed) != copy_on_write_doors(regressed)
-
-    def test_the_crate_sweep_sees_a_converted_component_actor(self, tmp_path: pathlib.Path) -> None:
-        for path in LIVE_CRATE_SRC.rglob("*.rs"):
-            target = tmp_path / path.relative_to(LIVE_CRATE_SRC)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            text = path.read_text(encoding="utf-8")
-            if path.name == "component.rs":
-                assert "Context::from_dict(self.state.clone())" in text, "MUTATION TEXT NOT FOUND"
-                text = text.replace(
-                    "Context::from_dict(self.state.clone())",
-                    "Context::from_shared(self.state.clone())",
-                )
-            target.write_text(text, encoding="utf-8")
-        assert remaining_from_dict_over_own_state(tmp_path) == set()

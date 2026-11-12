@@ -13,7 +13,7 @@ under ten times as much (linear is ~4x, quadratic ~16x). Each size is measured
 several times, interleaved, and the cheapest run counts, so a stall that lands
 on one run inflates neither size's best. The default clock is the CPU time of
 this thread: a descheduled process is not charged for the time it sat idle.
-Pass ``clock=time.perf_counter`` for work that leaves the thread (a Rust actor,
+Pass ``clock=time.perf_counter`` for work that leaves the thread (a Rust worker,
 a subprocess).
 
 COUNT FIRST (#3835). A growth ratio is still a ratio of two measured durations.
@@ -34,7 +34,7 @@ with no hook goes to ``tests/benchmarks/`` as a median against a target
 This helper is for what is left: work whose steps happen inside an engine that
 offers nothing to count from Python, namely the CPython ``re`` matcher and
 ``html.parser`` (a quadratic rescan is one call that runs long, not more calls) and
-the Rust engine (markdown, template variable extraction, session actors). Use it
+the Rust engine (markdown, template variable extraction). Use it
 there.
 """
 

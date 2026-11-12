@@ -302,8 +302,8 @@ declare class LiveViewWebSocket {
  * proxies). Provides the same high-level API as `LiveViewWebSocket` but uses
  * HTTP POST for outgoing events and SSE for incoming server pushes.
  *
- * Note: SSE does not support binary file uploads, presence tracking, or
- * multi-actor sessions. Use WebSocket for full feature support.
+ * Note: SSE does not support binary file uploads or presence tracking.
+ * Use WebSocket for full feature support.
  */
 declare class LiveViewSSE {
   /** The underlying EventSource connection, or null when disconnected. */

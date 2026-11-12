@@ -64,7 +64,6 @@ from .mixins.request import UNDECLARED_STATUS_MAP
 
 from ._rust import (
     RustLiveView,
-    SessionActorHandle,
     extract_template_variables,  # noqa: F401 — re-exported, used by JIT and template tests
 )
 
@@ -113,7 +112,6 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "request",
         # djust LiveView base config
         "sync_safe",
-        "use_actors",
         "exposure_policy",
         "_explicit_child_mount_inputs",
         "_explicit_child_mount_binding",
@@ -567,7 +565,6 @@ class LiveView(
     Usage:
         class CounterView(LiveView):
             template_name = 'counter.html'
-            use_actors = True  # Enable actor-based state management (optional)
 
             def mount(self, request, **kwargs):
                 self.count = 0
@@ -684,7 +681,6 @@ class LiveView(
 
     template_name: Optional[str] = None
     template: Optional[str] = None
-    use_actors: bool = False  # Enable Tokio actor-based state management (Phase 5+)
     tick_interval: Optional[int] = None  # Periodic tick in ms (e.g. 2000 for 2s)
     # Scoped server push (#3004): the scope(s) this session receives
     # ``push_to_view(..., scope=...)`` for — a str or int (a room, a document
@@ -944,8 +940,7 @@ class LiveView(
 
         ``"legacy"`` and ``"explicit"`` are the supported policies (ADR-038).
         Anything else is refused rather than treated as legacy. A legacy view
-        cannot declare exposure grants it would not honor, and actors are
-        excluded from the explicit policy (decision D-o). Only class
+        cannot declare exposure grants it would not honor. Only class
         dictionaries are inspected: no property, factory, ORM query or
         component descriptor is evaluated.
         """
@@ -958,11 +953,6 @@ class LiveView(
                 "unknown policies cannot fall back to legacy exposure."
             )
         if policy == "explicit":
-            if getattr(type(self), "use_actors", False) is True:
-                raise ExposureConfigurationError(
-                    "exposure_policy='explicit' does not support actors (use_actors=True). "
-                    "Actor views keep the legacy policy."
-                )
             return
         from ._state import StateProperty
 
@@ -985,6 +975,9 @@ class LiveView(
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         from ._component_subscriptions import compile_subscriptions
+        from ._removed_settings import reject_removed_view_attributes
+
+        reject_removed_view_attributes(cls)
 
         cls._component_subscriptions = compile_subscriptions(cls)
 
@@ -993,7 +986,6 @@ class LiveView(
         self._validate_exposure_configuration()
         self._rust_view: Optional[RustLiveView] = None
         self._rust_view_explicit: bool = False
-        self._actor_handle: Optional[SessionActorHandle] = None
         self._session_id: Optional[str] = None
         self._cache_key: Optional[str] = None
         self._handler_metadata: Optional[Dict[str, Dict[str, Any]]] = (

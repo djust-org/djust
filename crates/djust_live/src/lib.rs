@@ -11,16 +11,12 @@
 // See: https://pyo3.rs/v0.23.0/migration
 // TEMP REMOVED: #![allow(deprecated)]
 
-// Actor system module
-pub mod actors;
-
 // Fast model serialization for N+1 query prevention
 pub mod model_serializer;
 
 mod child_bindings;
 mod deferred_children;
 mod provenance_edits;
-use actors::{ActorSupervisor, SessionActorHandle};
 use dashmap::DashMap;
 use djust_core::html_whitespace::is_html_whitespace_only;
 use djust_core::{Context, RenderEnv, Value};
@@ -41,7 +37,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 /// Run a `_rust` entry point so that a Rust PANIC reaches Python as an
 /// ordinary `Exception` instead of PyO3's `PanicException` (#2343).
@@ -175,31 +170,6 @@ const DJ_MODEL_FIELDS_CACHE_MAX: usize = 512;
 #[pyfunction]
 fn clear_dj_model_fields_cache() {
     DJ_MODEL_FIELDS_CACHE.clear();
-}
-/// Global supervisor for managing actor lifecycle
-/// Created once with 1-hour TTL
-static SUPERVISOR: Lazy<Arc<ActorSupervisor>> =
-    Lazy::new(|| Arc::new(ActorSupervisor::new(Duration::from_secs(3600))));
-
-/// Flag to track if supervisor background tasks have been started
-static SUPERVISOR_STARTED: Lazy<std::sync::atomic::AtomicBool> =
-    Lazy::new(|| std::sync::atomic::AtomicBool::new(false));
-
-/// Ensure supervisor background tasks are started (idempotent)
-fn ensure_supervisor_started() {
-    use tracing::info;
-
-    if !SUPERVISOR_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        // First time - start background tasks
-        let ttl_secs = SUPERVISOR.stats().ttl_secs;
-        info!(
-            ttl_secs = ttl_secs,
-            cleanup_interval_secs = 60,
-            health_check_interval_secs = 30,
-            "Starting ActorSupervisor background tasks"
-        );
-        SUPERVISOR.clone().start();
-    }
 }
 
 /// Serializable representation of RustLiveViewBackend for Redis storage
@@ -497,8 +467,7 @@ pub struct RustLiveViewBackend {
     /// timezone, number formats and ADR-027 flag Python pushed for this
     /// view, captured on the pushing thread (`capture_render_env`) and
     /// installed into the thread-local cells by EVERY render entry under a
-    /// `RenderEnvGuard` — so a render on a thread that never pushed (the
-    /// `ViewActor`'s tokio worker) reads the configured values, not the
+    /// `RenderEnvGuard` — so a render on a thread that never pushed reads the configured values, not the
     /// compiled defaults. `None` (never captured) leaves the cells alone,
     /// which is the pre-ADR-029 behaviour. Transient, like
     /// `loop_render_cache`.
@@ -779,8 +748,8 @@ impl RustLiveViewBackend {
     /// Drop every state key absent from `keys`, returning the removed keys
     /// (#2564).
     ///
-    /// `update_state` MERGES — it is the delta entry for change-detection and
-    /// for the actor crate's partial updates, and must stay that way. But a
+    /// `update_state` MERGES — it is the delta entry for change-detection,
+    /// and must stay that way. But a
     /// merge has no removal path: a key the Python context stopped carrying
     /// kept its last `Value`, so `{{ secret }}` kept answering after
     /// `del self.secret` — the `if self.show: ctx["secret"] = …` content gate
@@ -1420,8 +1389,8 @@ impl RustLiveViewBackend {
     /// only while attached (see `registry.rs` "Lock order"), so a detached
     /// render never waits for the GIL while holding a registry lock.
     ///
-    /// The body carries its own `guard_panic` (it is also the actor path's
-    /// entry); this one is the Python entry point's boundary, so a panic in
+    /// The body carries its own `guard_panic` (the Rust tests call it
+    /// directly); this one is the Python entry point's boundary, so a panic in
     /// the detach itself still surfaces as a containable exception.
     fn render_with_diff(&mut self, py: Python<'_>) -> PyResult<(String, Option<String>, u64)> {
         guard_panic("render_with_diff", move || {
@@ -2076,7 +2045,7 @@ impl RustLiveViewBackend {
     }
 }
 
-// Public Rust API (for use by other Rust crates like djust_actors)
+// Rust API (non-Python entry points, used by this crate's Rust tests)
 impl RustLiveViewBackend {
     /// Render once and classify only the output and templates actually loaded.
     /// In particular, do not evaluate dynamic include expressions in a planner.
@@ -2348,8 +2317,8 @@ impl RustLiveViewBackend {
     }
 
     /// Body of [`render_with_diff`](Self::render_with_diff), callable with
-    /// or without the interpreter attached (the actor path and the Rust
-    /// tests call it directly). Returns (html, patches_json, version).
+    /// or without the interpreter attached (the Rust tests call it
+    /// directly). Returns (html, patches_json, version).
     fn render_with_diff_detached(&mut self) -> PyResult<(String, Option<String>, u64)> {
         self.pending_partial_page = None;
         let authenticate = self.potential_authenticated_partial_root;
@@ -2891,31 +2860,12 @@ impl RustLiveViewBackend {
         Self::new(template_source, None)
     }
 
-    /// Create new LiveView with template directories (Rust API)
-    pub fn new_rust_with_dirs(template_source: String, template_dirs: Vec<String>) -> Self {
-        Self::new(template_source, Some(template_dirs))
-    }
-
     /// Update state (Rust API)
     pub fn update_state_rust(&mut self, updates: HashMap<String, Value>) {
         self.apply_state_update(updates)
     }
 
-    /// Set this view's render environment (Rust API, ADR-029). The actor
-    /// path calls this with the environment captured on the Python thread
-    /// that mounted the view, so the worker's renders install it.
-    pub fn set_render_env_rust(&mut self, env: Option<RenderEnv>) {
-        self.pending_partial_page = None;
-        self.render_env = env;
-    }
-
-    /// This view's render environment (Rust API), handed down to child
-    /// `ComponentActor`s so a component render applies the same config.
-    pub fn render_env_rust(&self) -> Option<&RenderEnv> {
-        self.render_env.as_ref()
-    }
-
-    /// Full-context truth for pure-Rust callers (#2592, the actor twin of
+    /// Full-context truth for pure-Rust callers (#2592, the twin of
     /// #2564): drop every state key absent from `keys`, returning the removed
     /// keys.
     ///
@@ -2923,8 +2873,10 @@ impl RustLiveViewBackend {
     /// revocation), plus the second half the Python bridge does for itself in
     /// `rust_bridge.py` — joining the removed keys to the changed set so a
     /// partial `render_with_diff` re-renders their regions instead of serving
-    /// the OLD text from the node cache. A Rust caller (the `ViewActor`) has
-    /// no Python step after this call, so the join lives here.
+    /// the OLD text from the node cache. A Rust caller has no Python step
+    /// after this call, so the join lives here. Its production caller was
+    /// the actor system (removed in 2.0); it remains as the Rust tests' door
+    /// into `retain_state_keys`.
     ///
     /// The join is into a PENDING changed set only. Creating one from nothing
     /// would flip the next `render_with_diff` onto the partial path with the
@@ -2950,10 +2902,9 @@ impl RustLiveViewBackend {
     }
 
     /// Shared core of `update_state` (the Python entry point) and
-    /// `update_state_rust` (the pure-Rust entry point, used by other Rust
-    /// crates like djust_actors, which have no Python object at all — the
-    /// `HashMap<String, Value>` they build has no live Python container
-    /// backing it, so it carries no #2510-class reentrancy risk).
+    /// `update_state_rust` (the pure-Rust entry point: the
+    /// `HashMap<String, Value>` a Rust caller builds has no live Python
+    /// container backing it, so it carries no #2510-class reentrancy risk).
     /// `update_state` does the safe, snapshot-based Python-dict-to-HashMap
     /// conversion FIRST (#2510, round 4) and then delegates here.
     fn apply_state_update(&mut self, updates: HashMap<String, Value>) {
@@ -2985,32 +2936,6 @@ impl RustLiveViewBackend {
     pub fn render_rust(&mut self) -> Result<String, djust_core::DjangoRustError> {
         self.render()
             .map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))
-    }
-
-    /// Render with diff (Rust API)
-    /// Returns (html, patches_json, version)
-    pub fn render_with_diff_rust(
-        &mut self,
-    ) -> Result<(String, Option<Vec<djust_vdom::Patch>>, u64), djust_core::DjangoRustError> {
-        let (html, patches_json, version) = self
-            .render_with_diff_detached()
-            .map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))?;
-
-        let patches = if let Some(json) = patches_json {
-            Some(
-                serde_json::from_str(&json)
-                    .map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))?,
-            )
-        } else {
-            None
-        };
-
-        Ok((html, patches, version))
-    }
-
-    /// Reset the view state (Rust API)
-    pub fn reset_rust(&mut self) {
-        self.reset()
     }
 
     // ---------------------------------------------------------------------
@@ -4709,10 +4634,8 @@ fn resolve_template_inheritance(
 }
 
 // ============================================================================
-// Actor System Python Bindings
+// Render environment Python binding
 // ============================================================================
-
-use pyo3_async_runtimes::tokio::future_into_py;
 
 /// The render environment as a Python-visible value (ADR-029, #2741).
 ///
@@ -4773,554 +4696,6 @@ impl RenderEnvPy {
     fn __repr__(&self) -> String {
         format!("{:?}", self.inner)
     }
-}
-
-/// Python wrapper for SessionActorHandle
-///
-/// This class provides async methods that can be called from Python's asyncio.
-#[pyclass(frozen, name = "SessionActorHandle")]
-pub struct SessionActorHandlePy {
-    handle: SessionActorHandle,
-}
-
-#[pymethods]
-impl SessionActorHandlePy {
-    /// Mount a view (Phase 6: Now returns view_id for routing)
-    ///
-    /// Creates a ViewActor, initializes its state, and renders the initial HTML.
-    ///
-    /// Args:
-    ///     view_path (str): Python path to the LiveView class (e.g. "app.views.Counter")
-    ///     params (dict): Initial state parameters
-    ///     python_view (Optional[Any]): Python LiveView instance for event handler callbacks
-    ///     template (Optional[str]): The view's template source (#2599). Without
-    ///         it the actor renders an EMPTY document.
-    ///     template_dirs (Optional[list[str]]): Directories for `{% include %}`.
-    ///
-    /// Returns:
-    ///     dict: {"html": str, "session_id": str, "view_id": str}
-    #[pyo3(signature = (view_path, params, python_view=None, template=None, template_dirs=None))]
-    fn mount<'py>(
-        &self,
-        py: Python<'py>,
-        view_path: String,
-        params: &Bound<'py, PyDict>,
-        python_view: Option<Py<PyAny>>,
-        template: Option<String>,
-        template_dirs: Option<Vec<String>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let handle = self.handle.clone();
-
-        // Convert Python dict to Rust HashMap<String, Value>
-        let params_rust = python_dict_to_hashmap(params)?;
-        // ADR-029 (#2741): snapshot the render environment HERE, on the
-        // Python thread that pushed it, before the mount crosses to the
-        // tokio worker that will do every render for this view.
-        let render_env = djust_templates::render_env::capture();
-
-        future_into_py(py, async move {
-            let result = handle
-                .mount_with_template(
-                    view_path,
-                    params_rust,
-                    python_view,
-                    template,
-                    template_dirs.unwrap_or_default(),
-                    Some(render_env),
-                )
-                .await
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-
-            Python::attach(|py| -> PyResult<Py<PyAny>> {
-                let dict = PyDict::new(py);
-                dict.set_item("html", result.html)?;
-                dict.set_item("session_id", result.session_id)?;
-                dict.set_item("view_id", result.view_id)?; // Phase 6: Return view_id
-                Ok(dict.unbind().into())
-            })
-        })
-    }
-
-    /// Handle an event (Phase 6: Now supports view_id routing)
-    ///
-    /// Routes the event to the appropriate ViewActor and returns the resulting
-    /// VDOM patches or full HTML.
-    ///
-    /// Args:
-    ///     event_name (str): Name of the event (e.g. "increment", "submit_form")
-    ///     params (dict): Event parameters
-    ///     view_id (Optional[str]): View ID for routing. If None, routes to first view (backward compat)
-    ///
-    /// Returns:
-    ///     dict: {"patches": Optional[str], "html": Optional[str], "version": int}
-    #[pyo3(signature = (event_name, params, view_id=None))]
-    fn event<'py>(
-        &self,
-        py: Python<'py>,
-        event_name: String,
-        params: &Bound<'py, PyDict>,
-        view_id: Option<String>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let handle = self.handle.clone();
-
-        // Convert Python dict to Rust HashMap<String, Value>
-        let params_rust = python_dict_to_params(params)?;
-
-        future_into_py(py, async move {
-            let result = handle
-                .event(event_name, params_rust, view_id)
-                .await
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-
-            Python::attach(|py| -> PyResult<Py<PyAny>> {
-                let dict = PyDict::new(py);
-
-                // Add patches if available
-                if let Some(patches) = result.patches {
-                    let patches_json = serde_json::to_string(&patches).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-                    })?;
-                    dict.set_item("patches", patches_json)?;
-                } else {
-                    dict.set_item("patches", py.None())?;
-                }
-
-                // Add html if available
-                if let Some(html) = result.html {
-                    dict.set_item("html", html)?;
-                } else {
-                    dict.set_item("html", py.None())?;
-                }
-
-                dict.set_item("version", result.version)?;
-                dict.set_item("recovery_html", result.recovery_html)?;
-                let contracts = match result.parameter_contracts {
-                    Some(snapshot) => py.import("json")?.call_method1("loads", (snapshot,))?,
-                    None => py.None().into_bound(py),
-                };
-                dict.set_item("parameter_contracts", contracts)?;
-                Ok(dict.unbind().into())
-            })
-        })
-    }
-
-    /// Unmount a specific view (Phase 6)
-    ///
-    /// Shuts down a specific ViewActor and removes it from the session.
-    ///
-    /// Args:
-    ///     view_id (str): The UUID of the view to unmount
-    ///
-    /// Returns:
-    ///     None
-    fn unmount<'py>(&self, py: Python<'py>, view_id: String) -> PyResult<Bound<'py, PyAny>> {
-        let handle = self.handle.clone();
-
-        future_into_py(py, async move {
-            handle
-                .unmount(view_id)
-                .await
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-            Ok(())
-        })
-    }
-
-    /// Health check ping
-    ///
-    /// Verifies that the session actor is still responsive.
-    ///
-    /// Returns:
-    ///     None
-    fn ping<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let handle = self.handle.clone();
-
-        future_into_py(py, async move {
-            handle
-                .ping()
-                .await
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-            Ok(())
-        })
-    }
-
-    /// Shut the session down and wait until it has stopped (#3228).
-    ///
-    /// Shuts down all child ViewActors and then the SessionActor itself; the
-    /// returned awaitable resolves only after every view has dropped its
-    /// Python objects, including any `__del__` that runs as a result.
-    fn shutdown<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let handle = self.handle.clone();
-
-        future_into_py(py, async move {
-            handle.shutdown().await;
-            Ok(())
-        })
-    }
-
-    // ========================================================================
-    // Phase 8: Component Management Python API
-    // ========================================================================
-
-    /// Create a component in a specific view (Phase 8)
-    ///
-    /// Args:
-    ///     view_id (str): ID of the view to create the component in
-    ///     component_id (str): Unique identifier for the component
-    ///     template_string (str): Template for rendering the component
-    ///     initial_props (dict): Initial component state/props
-    ///     python_component (Optional[Any]): Python component instance for event handlers (Phase 8.2)
-    ///
-    /// Returns:
-    ///     str: Initial rendered HTML of the component
-    #[pyo3(signature = (view_id, component_id, template_string, initial_props, python_component=None))]
-    fn create_component<'py>(
-        &self,
-        py: Python<'py>,
-        view_id: String,
-        component_id: String,
-        template_string: String,
-        initial_props: &Bound<'py, PyDict>,
-        python_component: Option<Py<PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let handle = self.handle.clone();
-        let props_rust = python_dict_to_hashmap(initial_props)?;
-
-        future_into_py(py, async move {
-            let html = handle
-                .create_component(
-                    view_id,
-                    component_id,
-                    template_string,
-                    props_rust,
-                    python_component,
-                )
-                .await
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-
-            Ok(html)
-        })
-    }
-
-    /// Route event to a specific component (Phase 8)
-    ///
-    /// Args:
-    ///     view_id (str): ID of the view containing the component
-    ///     component_id (str): ID of the component to send event to
-    ///     event_name (str): Name of the event handler to call
-    ///     params (dict): Event parameters
-    ///
-    /// Returns:
-    ///     str: Rendered HTML after the component handles the event
-    fn component_event<'py>(
-        &self,
-        py: Python<'py>,
-        view_id: String,
-        component_id: String,
-        event_name: String,
-        params: &Bound<'py, PyDict>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let handle = self.handle.clone();
-        let params_rust = python_dict_to_params(params)?;
-
-        future_into_py(py, async move {
-            let html = handle
-                .component_event(view_id, component_id, event_name, params_rust)
-                .await
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-
-            Ok(html)
-        })
-    }
-
-    /// Update props for a specific component (Phase 8)
-    ///
-    /// Args:
-    ///     view_id (str): ID of the view containing the component
-    ///     component_id (str): ID of the component to update
-    ///     props (dict): New props to merge into component state
-    ///
-    /// Returns:
-    ///     str: Rendered HTML after updating props
-    fn update_component_props<'py>(
-        &self,
-        py: Python<'py>,
-        view_id: String,
-        component_id: String,
-        props: &Bound<'py, PyDict>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let handle = self.handle.clone();
-        let props_rust = python_dict_to_hashmap(props)?;
-
-        future_into_py(py, async move {
-            let html = handle
-                .update_component_props(view_id, component_id, props_rust)
-                .await
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-
-            Ok(html)
-        })
-    }
-
-    /// Remove a component (Phase 8)
-    ///
-    /// Args:
-    ///     view_id (str): ID of the view containing the component
-    ///     component_id (str): ID of the component to remove
-    ///
-    /// Returns:
-    ///     None
-    fn remove_component<'py>(
-        &self,
-        py: Python<'py>,
-        view_id: String,
-        component_id: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let handle = self.handle.clone();
-
-        future_into_py(py, async move {
-            handle
-                .remove_component(view_id, component_id)
-                .await
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-
-            Ok(())
-        })
-    }
-
-    /// Get the session ID
-    #[getter]
-    fn session_id(&self) -> String {
-        self.handle.session_id().to_string()
-    }
-}
-
-/// Create a new session actor
-///
-/// This function creates a SessionActor, spawns it on the Tokio runtime,
-/// and returns a handle wrapped for Python.
-///
-/// Args:
-///     session_id (str): Unique identifier for this session
-///
-/// Returns:
-///     SessionActorHandle: Handle to send messages to the actor
-#[pyfunction]
-pub fn create_session_actor(py: Python<'_>, session_id: String) -> PyResult<Bound<'_, PyAny>> {
-    future_into_py(py, async move {
-        // Ensure supervisor background tasks are started (idempotent)
-        ensure_supervisor_started();
-
-        // Use global supervisor to get or create session
-        let handle = SUPERVISOR.get_or_create_session(session_id).await;
-
-        Python::attach(|py| -> PyResult<Py<PyAny>> {
-            Ok(Py::new(py, SessionActorHandlePy { handle })?.into_any())
-        })
-    })
-}
-
-/// Supervisor statistics exposed to Python
-#[pyclass(frozen, skip_from_py_object)] // return-only; never extracted from Python (pyo3 0.29 made the Clone auto-FromPyObject opt-in)
-#[derive(Debug, Clone)]
-pub struct SupervisorStatsPy {
-    /// Number of active sessions
-    #[pyo3(get)]
-    pub active_sessions: usize,
-    /// Time-to-live for idle sessions in seconds
-    #[pyo3(get)]
-    pub ttl_secs: u64,
-}
-
-/// Get actor system statistics
-///
-/// Returns statistics about the actor supervisor including active sessions
-/// and configured TTL.
-///
-/// Returns:
-///     SupervisorStats: Object with active_sessions and ttl_secs attributes
-#[pyfunction]
-pub fn get_actor_stats() -> SupervisorStatsPy {
-    let stats = SUPERVISOR.stats();
-    SupervisorStatsPy {
-        active_sessions: stats.active_sessions,
-        ttl_secs: stats.ttl_secs,
-    }
-}
-
-// Helper functions for Python ↔ Rust conversion
-
-/// Convert Python dict to Rust HashMap<String, Value> (component props).
-fn python_dict_to_hashmap(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, Value>> {
-    Ok(python_dict_to_params(dict)?.into_iter().collect())
-}
-
-/// Convert Python event arguments to ordered Rust params: the key order the
-/// client sent is the order a `**kwargs` handler sees (ADR-036 parity).
-fn python_dict_to_params(dict: &Bound<'_, PyDict>) -> PyResult<actors::EventParams> {
-    // Snapshotted BEFORE any recursive conversion (#2510 sibling — the
-    // actor-dispatch path's own copy of the live-iterator-plus-reentrant-
-    // extraction bug fixed in djust_core's `impl FromPyObject for Value`;
-    // this is the SECOND Python->Value converter #1646 already calls out
-    // above, and it had the identical shape).
-    let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
-    let mut map = actors::EventParams::with_capacity(pairs.len());
-
-    for (key, value) in pairs {
-        let key_str = key.extract::<String>()?;
-        let rust_value = python_to_value(&value)?;
-        map.insert(key_str, rust_value);
-    }
-
-    Ok(map)
-}
-
-/// Convert Python object to Rust Value
-fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
-    // String
-    if obj.extract::<String>().is_ok() {
-        return obj.extract::<Value>();
-    }
-
-    // Boolean BEFORE Integer (#2203 review). PyO3 0.29 extracts a Python
-    // `True` as i64 `1`, so with the integer arm first the bool arm was DEAD
-    // CODE and a bool arriving through this converter rendered as `1` —
-    // neither `True` nor the legacy `true`. That reaches actor mount/event
-    // params and component props. Mirrors djust_core's `FromPyObject`, which
-    // has always checked bool first; the two converters must agree or the same
-    // object renders differently by path (#1646).
-    if let Ok(b) = obj.extract::<bool>() {
-        return Ok(Value::Bool(b));
-    }
-
-    // Integer
-    if let Ok(i) = obj.extract::<i64>() {
-        return Ok(Value::Integer(i));
-    }
-
-    // BIG INT BEFORE FLOAT, for the same reason as the Decimal arm below
-    // (#2260): `extract::<f64>()` succeeds on any Python `int`, so a value past
-    // `i64` placed after it silently becomes a lossy double. This converter and
-    // `FromPyObject for Value` must agree or the same int renders differently by
-    // path (#1646) — the actor path reaches here.
-    if let Some(digits) = djust_core::big_int_digits(obj) {
-        return Ok(Value::BigInt(digits));
-    }
-
-    // DECIMAL BEFORE FLOAT (#2214). This is the actor path — `dispatch_mount`
-    // passes the whole `get_context_data()` through here, and component props
-    // come this way too — so leaving it on f64 while the other converters were
-    // fixed would make the same Decimal render differently by path, which is
-    // exactly what the comment below warns about.
-    if djust_core::is_decimal(obj) {
-        return Ok(Value::Decimal(obj.str()?.extract::<String>()?));
-    }
-
-    // Float
-    if let Ok(f) = obj.extract::<f64>() {
-        return Ok(Value::Float(f));
-    }
-
-    // None — `Value::None`, NOT `Missing` (#2203). This is a SECOND
-    // Python->Value converter alongside `FromPyObject for Value` in
-    // djust_core; both must agree, or the same Python object renders
-    // differently depending on which path it took (#1646).
-    if obj.is_none() {
-        return Ok(Value::None);
-    }
-
-    // Tuple — before List, since a tuple is also a sequence (#2203).
-    if let Ok(tuple) = obj.cast::<PyTuple>() {
-        // Snapshotted before recursion for uniformity with the dict arm
-        // below (#2510 sibling) — same shape, NOT the same hazard: a tuple
-        // cannot change size, and PyO3's list/tuple iterators clamp rather
-        // than panic (see the list arm of `python_to_json_value`).
-        let items: Vec<Bound<'_, PyAny>> = tuple.iter().collect();
-        let mut vec = Vec::with_capacity(items.len());
-        for item in items {
-            vec.push(python_to_value(&item)?);
-        }
-        if let Ok(fields) = obj
-            .getattr("_fields")
-            .and_then(|f| f.extract::<Vec<String>>())
-        {
-            if fields.len() == vec.len() {
-                return Ok(Value::NamedTuple {
-                    name: obj.get_type().getattr("__name__")?.extract()?,
-                    fields,
-                    items: vec,
-                });
-            }
-        }
-        return Ok(Value::Tuple(vec));
-    }
-
-    // List
-    if let Ok(list) = obj.cast::<PyList>() {
-        let items: Vec<Bound<'_, PyAny>> = list.iter().collect();
-        let mut vec = Vec::with_capacity(items.len());
-        for item in items {
-            vec.push(python_to_value(&item)?);
-        }
-        return Ok(Value::List(vec));
-    }
-
-    // A Django `QueryDict` / `MultiValueDict` BEFORE the dict arm: last value
-    // per key, through the ONE helper `FromPyObject for Value` uses (#2556,
-    // #1646).
-    // #2899: a dict SUBCLASS with its own spelling crosses as the carrier on
-    // THIS converter too, through the one `FromPyObject` arm that builds it —
-    // otherwise `{% if qd == other %}` compared a last-value map while
-    // `{{ qd }}` spelled the object (#1646, two converters, one object).
-    if djust_core::dict_subclass_spells_itself(obj) {
-        return obj.extract::<Value>();
-    }
-
-    if let Some(pairs) = djust_core::multi_value_dict_pairs(obj) {
-        let mut map: indexmap::IndexMap<djust_core::ObjectKey, Value> =
-            indexmap::IndexMap::with_capacity(pairs.len());
-        for (key, value) in pairs {
-            map.insert(djust_core::py_object_key(&key), python_to_value(&value)?);
-        }
-        return Ok(Value::Object(map));
-    }
-
-    // Dict - recursively convert nested values
-    if let Ok(dict) = obj.cast::<PyDict>() {
-        // IndexMap: PyDict iterates in Python's insertion order, and that
-        // order is now observable in rendered output (#2203).
-        // Through djust_core's ONE key extractor, not a second copy of it
-        // (#1646): this converter is the parallel path to
-        // `impl FromPyObject for Value`, and it used to `?` on a non-string
-        // key — so a dict like `{0: 1}` failed the WHOLE conversion here
-        // while the other path dropped it to a repr. Both now keep the key's
-        // type (#2339), and `test_both_python_to_value_paths_share_one_key_extractor`
-        // pins that they share the extractor rather than agreeing by luck.
-        //
-        // Snapshotted into an owned `Vec` BEFORE recursing into
-        // `python_to_value` (#2510 sibling): `dict.iter()` is a LIVE PyO3
-        // iterator, converting one value can run arbitrary Python, and if
-        // that mutates THIS SAME dict the live iterator panics
-        // ("dictionary changed size during iteration") — confirmed via
-        // `handle.mount(..., params)` with a value whose `__index__` adds a
-        // key to its own parent dict.
-        let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = dict.iter().collect();
-        let mut map: indexmap::IndexMap<djust_core::ObjectKey, Value> =
-            indexmap::IndexMap::with_capacity(pairs.len());
-        for (key, value) in pairs {
-            map.insert(djust_core::py_object_key(&key), python_to_value(&value)?);
-        }
-        return Ok(Value::Object(map));
-    }
-
-    // Fallback: try to convert to string
-    if let Ok(s) = obj.str() {
-        let s_str: String = s.extract()?;
-        return Ok(Value::String(s_str));
-    }
-
-    Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-        "Cannot convert Python type to Value".to_string(),
-    ))
 }
 
 /// Extract template variables for JIT auto-serialization.
@@ -8194,7 +7569,7 @@ fn raw_block_end_tag(name: &str) -> Option<String> {
 
 // Declared free-threaded-safe (#1432). A full thread-safety audit of every
 // global (`static`/`Lazy`/`OnceLock`), `#[pyclass]`, cross-thread
-// `Py<T>`/`Py<PyAny>`, the Tokio actor system, the template registries, and
+// `Py<T>`/`Py<PyAny>`, the template registries, and
 // the recursive Python<->Rust converters found no shared mutable state
 // reachable through `_rust` that lacks correct synchronization. With
 // `gil_used = false`, CPython will NOT auto-re-enable the GIL on import
@@ -8300,12 +7675,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
     m.add_function(wrap_pyfunction!(clear_dj_model_fields_cache, m)?)?;
 
-    // Actor system exports
-    m.add_class::<SessionActorHandlePy>()?;
+    // Render environment (ADR-029)
     m.add_class::<RenderEnvPy>()?;
-    m.add_class::<SupervisorStatsPy>()?;
-    m.add_function(wrap_pyfunction!(create_session_actor, m)?)?;
-    m.add_function(wrap_pyfunction!(get_actor_stats, m)?)?;
 
     // Add pure Rust components (stateless, high-performance ~1μs rendering)
     m.add_class::<djust_components::RustAlert>()?;
@@ -9834,8 +9205,8 @@ mod fast_path_flag_tests {
 
 #[cfg(test)]
 mod retain_state_keys_rust_2592 {
-    //! The pure-Rust truth entry (#2592, the actor twin of #2564). The
-    //! `ViewActor` calls this before every merge in `sync_state_from_python`;
+    //! The pure-Rust truth entry (#2592, the twin of #2564). Its production
+    //! caller was the actor system, removed in 2.0;
     //! these pin the half the Python bridge does for itself — the removed
     //! keys joining the changed set — and the landmine the join must not
     //! step on (creating a changed set from nothing).

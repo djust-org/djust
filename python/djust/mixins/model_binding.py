@@ -33,7 +33,6 @@ FORBIDDEN_MODEL_FIELDS = frozenset(
         "kwargs",
         "args",
         "session",
-        "use_actors",
         "temporary_assigns",
         "_handler_metadata",
         "_rust_view",

@@ -165,7 +165,6 @@ advanced features are **not available** over SSE:
 | `@cache` decorator            | ✅        | ✅         |
 | Binary file uploads           | ✅        | ❌ (text-only transport) |
 | Presence tracking / cursors   | ✅        | ❌ (requires bidirectional channel) |
-| Actor-based state management  | ✅        | ❌         |
 | MessagePack binary encoding   | ✅        | ❌         |
 | Embedded child view scoping   | ✅        | ❌ (sends full-page updates) |
 | Hot-reload                    | ✅        | ❌         |
