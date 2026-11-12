@@ -6963,16 +6963,22 @@ class ViewRuntime(RuntimeTurnPort):
                         if not await self.commit_explicit_turn(view, source="async"):
                             return  # it sent the terminal error (a catch-up never defers twice)
                         snapshot_fields = await self._explicit_event_snapshot(view)
-                        await self._render_async_result(
-                            None, snapshot_fields=snapshot_fields, force_html=True
-                        )
                         # Background work the deferred turn queued with
                         # start_async() (#3945). That turn returned before its
                         # acknowledgement, and so before dispatching it; the
                         # work waited on the view, and the page waited for its
-                        # result forever. It starts now, after the catch-up's
-                        # commit and frame, as it would have after the turn's.
-                        self._dispatch_async_work(None)
+                        # result forever. The catch-up frame announces it
+                        # (async_pending + async_batch) and it starts after the
+                        # frame, as it would have after the turn's own.
+                        from ._async_batch import AsyncBatch
+
+                        batch = AsyncBatch(view)
+                        await self._render_async_result(
+                            None,
+                            snapshot_fields={**snapshot_fields, **batch.fields()},
+                            force_html=True,
+                        )
+                        self._dispatch_async_work(None, batch)
                     except Exception:  # noqa: BLE001 — render/provider errors may carry values
                         await self._explicit_catch_up_failed(view, "render failed")
                     finally:

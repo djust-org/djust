@@ -12,6 +12,15 @@ whose file or name looks like a pin is neither marked ``pr_tier`` nor listed in
 ``ALLOWED`` with the reason it may stay in the full tier. The name patterns are
 a net, not a classification: a match that is not a whole-tree pin goes in
 ``ALLOWED``.
+
+Limits: it sees only tests ``.test_durations`` records over 1 s, so a new pin
+is checked after the next durations refresh, not on the PR that adds it. A
+whole-tree pin whose file and test names match none of the patterns is not
+seen. "Marked" is read from the source: ``@pytest.mark.pr_tier`` on the test or
+an enclosing class, or ``pytestmark`` assigned it (alone or in a list) at module
+level; a marker applied any other way (an alias, a conftest hook,
+``pytest.param(..., marks=...)``) is not recognised and must be written in one
+of those forms.
 """
 
 from __future__ import annotations
@@ -60,8 +69,20 @@ def _slow_pins() -> list[str]:
     return sorted(out)
 
 
+def _is_pr_tier_marker(node: ast.expr) -> bool:
+    """``pytest.mark.pr_tier`` itself (an attribute chain, not a call or a string)."""
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "pr_tier"
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "mark"
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id == "pytest"
+    )
+
+
 def _is_pr_tier(decorators: list[ast.expr]) -> bool:
-    return any("pr_tier" in ast.unparse(d) for d in decorators)
+    return any(_is_pr_tier_marker(d) for d in decorators)
 
 
 @lru_cache(maxsize=None)
@@ -82,7 +103,9 @@ def _marked(nodeid: str) -> bool | None:
         if isinstance(node, ast.Assign) and any(
             isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets
         ):
-            if "pr_tier" in ast.unparse(node.value):
+            value = node.value
+            items = value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
+            if any(_is_pr_tier_marker(item) for item in items):
                 return True
     parts = rest.split("[", 1)[0].split("::")
     scope: list[ast.stmt] = tree.body
@@ -148,7 +171,8 @@ def test_the_guard_catches_an_unmarked_pin(tmp_path, monkeypatch):
     """Non-vacuous: a slow ratchet with no marker is reported, a marked one is not."""
     (tmp_path / "t").mkdir()
     (tmp_path / "t" / "test_x_ratchet.py").write_text(
-        "import pytest\n\ndef test_a():\n    pass\n\n@pytest.mark.pr_tier\ndef test_b():\n    pass\n"
+        "import pytest\n\n@pytest.mark.slow  # says pr_tier in a comment only\ndef test_a():\n"
+        "    pass\n\n@pytest.mark.pr_tier\ndef test_b():\n    pass\n"
     )
     (tmp_path / ".test_durations").write_text(
         json.dumps({"t/test_x_ratchet.py::test_a": 5.0, "t/test_x_ratchet.py::test_b": 5.0})

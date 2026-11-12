@@ -265,7 +265,7 @@ djust that states `"legacy"` does not warn. The value is accepted through the
 2.0 pre-releases and removed in `2.0.0`: 2.x has no legacy runtime (see
 [the 2.x direction](#the-14-bridge-and-2x-direction-2026-10-19)).
 
-System check `djust.V027` (Warning) also lists each application class that
+System check `djust.V028` (Warning) also lists each application class that
 states `"legacy"`, on every `manage.py check` and server start, with the views
 that inherit it and a pointer to `djust_exposure_inventory`; a warning raised
 at import time is easy to miss. djust's own classes are not reported.
@@ -542,9 +542,11 @@ Both decorators only recorded metadata that nothing read: no client code
 applied an optimistic update for `@optimistic`, and the client bus that was
 to consume `@client_state` was deleted as dead code in #2680. A decorated
 handler behaved exactly like an undecorated one. djust `2.0.0` removed both
-(#4006), so `from djust import optimistic` and
-`from djust.decorators import client_state` raise `ImportError`. Delete the
-decorator; the handler keeps working as before:
+(#4006). `from djust import optimistic`, `from djust.decorators import
+client_state` and the attribute reads raise `ImportError` with a message that
+names the replacement and this guide (so `hasattr()` raises rather than
+returning `False`, as for the signed snapshot below). Delete the decorator; the
+handler keeps working as before:
 
 ```python
 # Before (removed in 2.0, #4006)

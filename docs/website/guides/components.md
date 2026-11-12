@@ -830,7 +830,10 @@ INSTALLED_APPS = [
 With `{% theme_head %}` in the base template, set
 `LIVEVIEW_CONFIG = {"theme": {"component_catalog_css": True}}` instead of
 writing the `<link>` yourself: `theme_head` then links the same file with a
-cache-busting version.
+cache-busting version. Only the value `True` opts in. One page can decide for itself with
+`{% theme_head component_catalog=True %}` (or `=False`); the `{{ theme_head }}`
+context variable from `djust.theming.context_processors.theme_context` takes no
+arguments and always follows the project setting.
 
 ### Usage
 

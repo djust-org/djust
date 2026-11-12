@@ -192,3 +192,73 @@ class TestW004:
     @override_settings(LIVEVIEW_CONFIG={})
     def test_silent_when_the_app_is_not_installed(self):
         assert self._run(installed=False) == []
+
+
+def _djust_engine():
+    from djust.template import DjustTemplateBackend
+
+    return DjustTemplateBackend({"NAME": "djust", "DIRS": [], "APP_DIRS": True, "OPTIONS": {}})
+
+
+def _django_engine():
+    from django.template import engines
+
+    return engines["django"]
+
+
+@pytest.mark.parametrize("engine", [_django_engine, _djust_engine], ids=["django", "rust"])
+@pytest.mark.parametrize(
+    "config, arg, linked",
+    [
+        ({}, "", False),
+        ({"theme": {"component_catalog_css": True}}, "", True),
+        ({"theme": {"component_catalog_css": False}}, "", False),
+        # Only True opts in: a truthy string is not an opt-in.
+        ({"theme": {"component_catalog_css": "yes"}}, "", False),
+        ({}, " component_catalog=True", True),
+        ({"theme": {"component_catalog_css": True}}, " component_catalog=False", False),
+    ],
+)
+def test_both_engines_agree_4003(engine, config, arg, linked):
+    """The Rust engine reaches theme_head through theming/rust_handlers.py; the
+    opt-in, the page override and the True-only rule hold there too."""
+    from django.apps import apps
+    from django.test import RequestFactory
+
+    from djust.theming.context_processors import clear_theme_context_cache
+
+    if not apps.is_installed("djust.components"):
+        pytest.skip("djust.components is not installed in the test settings")
+    clear_theme_context_cache()
+    with override_settings(LIVEVIEW_CONFIG=config):
+        html = (
+            engine()
+            .from_string("{% load theme_tags %}{% theme_head" + arg + " %}")
+            .render({}, request=RequestFactory().get("/"))
+        )
+    assert ("djust_components/components.css" in html) is linked
+
+
+@pytest.mark.parametrize(
+    "config, linked",
+    [
+        ({}, False),
+        ({"theme": {"component_catalog_css": True}}, True),
+        ({"theme": {"component_catalog_css": False}}, False),
+    ],
+)
+def test_the_context_variable_follows_the_project_setting_4003(config, linked):
+    """``{{ theme_head }}`` from the context processor takes no arguments, so it
+    follows LIVEVIEW_CONFIG["theme"]["component_catalog_css"]."""
+    from django.apps import apps
+    from django.test import RequestFactory
+
+    from djust.theming.context_processors import clear_theme_context_cache, theme_context
+
+    if not apps.is_installed("djust.components"):
+        pytest.skip("djust.components is not installed in the test settings")
+    clear_theme_context_cache()
+    with override_settings(LIVEVIEW_CONFIG=config):
+        html = str(theme_context(RequestFactory().get("/"))["theme_head"])
+    clear_theme_context_cache()
+    assert ("djust_components/components.css" in html) is linked

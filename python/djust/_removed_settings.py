@@ -83,10 +83,25 @@ _SIGNED_SNAPSHOT = (
 #: ``__getattr__`` passes its misses to :func:`refuse_removed_name`, so
 #: ``from djust.security import sign_snapshot`` names the replacement instead of
 #: failing with a bare "cannot import name".
+_INERT_OPTIMISTIC = (
+    "it recorded metadata that nothing read, so a decorated handler behaved like an "
+    "undecorated one (#4006). Delete the decorator; for feedback before the server "
+    "answers, use dj-loading.* attributes or JS Commands"
+)
+_INERT_CLIENT_STATE = (
+    "it recorded metadata that nothing read, so a decorated handler behaved like an "
+    "undecorated one (#4006). Delete the decorator; to keep two values in step, set "
+    "both in one handler"
+)
+
 REMOVED_NAMES: dict[tuple[str, str], str] = {
     ("djust.security", "sign_snapshot"): _SIGNED_SNAPSHOT,
     ("djust.security", "unsign_snapshot"): _SIGNED_SNAPSHOT,
     ("djust.security", "SNAPSHOT_SALT"): _SIGNED_SNAPSHOT,
+    ("djust", "optimistic"): _INERT_OPTIMISTIC,
+    ("djust.decorators", "optimistic"): _INERT_OPTIMISTIC,
+    ("djust", "client_state"): _INERT_CLIENT_STATE,
+    ("djust.decorators", "client_state"): _INERT_CLIENT_STATE,
 }
 
 

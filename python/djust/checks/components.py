@@ -2291,7 +2291,7 @@ def check_shared_class_level_components(app_configs: Any, **kwargs: Any) -> list
 
 @register("djust")
 def check_legacy_exposure_policy(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """V027 (Warning): an application class states ``exposure_policy = "legacy"`` (#4047).
+    """V028 (Warning): an application class states ``exposure_policy = "legacy"`` (#4047).
 
     Explicit exposure is the default since djust 2.0, and ``"legacy"`` is to be
     removed before 2.0.0. Stating it already raises a ``DeprecationWarning`` when
@@ -2304,7 +2304,7 @@ def check_legacy_exposure_policy(app_configs: Any, **kwargs: Any) -> list[CheckM
     statement is not the application's to change.
     """
     messages: list[CheckMessage] = []
-    if _is_check_suppressed("djust.V027"):
+    if _is_check_suppressed("djust.V028"):
         return messages
     try:
         from djust._exposure_unsupplied import MIGRATION_GUIDE_URL
@@ -2354,10 +2354,10 @@ def check_legacy_exposure_policy(app_configs: Any, **kwargs: Any) -> list[CheckM
                     "fields with state(), return template names from get_context_data(), "
                     "then delete the exposure_policy line. `python manage.py "
                     "djust_exposure_inventory` lists what each view exposes today. See %s. "
-                    "Suppress with DJUST_CONFIG = {'suppress_checks': ['V027']}."
+                    "Suppress with DJUST_CONFIG = {'suppress_checks': ['V028']}."
                     % MIGRATION_GUIDE_URL
                 ),
-                id="djust.V027",
+                id="djust.V028",
                 fix_hint=(
                     'Migrate `%s` to explicit exposure and delete `exposure_policy = "legacy"`.'
                     % owner.__qualname__

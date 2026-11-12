@@ -1,4 +1,4 @@
-"""djust.V027: a system check that names each class stating ``exposure_policy = "legacy"`` (#4047).
+"""djust.V028: a system check that names each class stating ``exposure_policy = "legacy"`` (#4047).
 
 The 2.0 plans described a check listing the views that still run under the
 legacy exposure policy, with a pointer to ``djust_exposure_inventory``. It was
@@ -70,10 +70,10 @@ def _v026(*classes):
     ]
 
 
-class TestV027:
+class TestV028:
     def test_a_class_stating_legacy_is_reported_once_with_its_users(self):
         (message,) = _v026(LegacyView)
-        assert message.id == "djust.V027"
+        assert message.id == "djust.V028"
         assert message.level == 30  # WARNING
         assert 'exposure_policy = "legacy"' in message.msg
         assert "%s.InheritsLegacy" % __name__ in message.msg
@@ -97,7 +97,7 @@ class TestV027:
         assert "djust.admin_ext" not in text
 
     def test_it_can_be_suppressed(self, settings):
-        settings.DJUST_CONFIG = {"suppress_checks": ["V027"]}
+        settings.DJUST_CONFIG = {"suppress_checks": ["V028"]}
         assert _v026(LegacyView, LegacyMixin) == []
 
     def test_it_is_registered_with_the_djust_checks(self):

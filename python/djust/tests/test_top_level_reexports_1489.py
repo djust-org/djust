@@ -57,17 +57,27 @@ class TestTopLevelReexports1489:
             )
 
 
-def test_the_inert_decorators_are_gone_4006():
+def test_the_inert_decorators_are_refused_with_the_replacement_4006():
     """#4006: @optimistic and @client_state recorded metadata nothing read, and
-    djust 2.0 removed them rather than keep teaching a capability that did not
-    exist. Neither import path resolves any more."""
+    djust 2.0 removed them. Both import paths, and attribute access, raise an
+    ImportError that says why and what to do instead (the 2.0 removed-names
+    convention, ``_removed_settings.REMOVED_NAMES``)."""
     import pytest
 
-    for name in ("optimistic", "client_state"):
+    advice = {"optimistic": "dj-loading", "client_state": "set both in one handler"}
+    for name, hint in advice.items():
         assert name not in djust.__all__
         assert name not in _decorators.__all__
-        assert not hasattr(_decorators, name)
+        for module in ("djust", "djust.decorators"):
+            with pytest.raises(ImportError) as exc:
+                exec(f"from {module} import {name}", {})
+            message = str(exc.value)
+            assert message.startswith(f"{module}.{name} was removed in djust 2.0"), message
+            assert hint in message and "migrating-to-2.0" in message, message
         with pytest.raises(ImportError):
-            exec(f"from djust import {name}", {})
-        with pytest.raises(ImportError):
-            exec(f"from djust.decorators import {name}", {})
+            getattr(_decorators, name)
+    # An unknown name is still an AttributeError.
+    with pytest.raises(AttributeError):
+        _decorators.no_such_decorator  # noqa: B018
+    with pytest.raises(AttributeError):
+        djust.no_such_name  # noqa: B018

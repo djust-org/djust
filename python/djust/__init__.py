@@ -162,6 +162,9 @@ def __getattr__(name: str):  # PEP 562
     try:
         module_name, attr = _LAZY[name]
     except KeyError:
+        from ._removed_settings import refuse_removed_name
+
+        refuse_removed_name("djust", name)
         raise AttributeError(f"module 'djust' has no attribute {name!r}") from None
     module = importlib.import_module(module_name)
     value = getattr(module, attr)

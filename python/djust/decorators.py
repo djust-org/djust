@@ -1051,6 +1051,14 @@ def cache(ttl: int = 60, key_params: Optional[List[str]] = None) -> Callable[[F]
     return _make_metadata_decorator("cache", {"ttl": ttl, "key_params": key_params or []})
 
 
+def __getattr__(name: str) -> Any:  # PEP 562
+    """Name the replacement for a decorator djust 2.0 removed (#4006)."""
+    from ._removed_settings import refuse_removed_name
+
+    refuse_removed_name(__name__, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 RATE_LIMIT_ON_EXCEED = ("disconnect", "drop")
 
 

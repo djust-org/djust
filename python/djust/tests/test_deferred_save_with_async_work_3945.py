@@ -150,6 +150,16 @@ async def test_the_background_result_reaches_the_client_after_a_deferred_save(st
 
     # The catch-up frame (the committed value) comes first, then the result.
     assert _rendered(transport) == [("async", 2), ("async", 12)], transport.sent
+    # The catch-up frame announces the work, as a turn's own frame would, and
+    # the same batch is completed once the work has run.
+    catch_up = next(f for f in transport.sent if f.get("type") == "html_update")
+    assert catch_up.get("async_pending") is True and catch_up.get("async_batch")
+    await _until(
+        lambda: (
+            {"type": "async_complete", "async_batch": catch_up["async_batch"]} in transport.sent
+        ),
+        "the batch's completion frame",
+    )
     assert view.count == 12
     reloads = [e for e in transport.errors if not e.get("transient")]
     assert not reloads, reloads
