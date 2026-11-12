@@ -17,7 +17,6 @@ from django.template import Context, Template, Variable
 
 from djust import _rust
 from djust.components.components.markdown_editor import MarkdownEditor, menu_attrs, menu_flag
-from djust.components.rust_handlers import MarkdownEditorHandler
 from djust.components.templatetags._dev_tools import MarkdownEditorNode
 
 CONTROLS = (
@@ -50,9 +49,13 @@ def _django_tag(**kw: object) -> str:
 
 
 def _rust_tag(**kw: object) -> str:
+    """The tag through the Rust engine (which renders the tag's own node)."""
+    from djust.components.rust_handlers import register_with_rust_engine
+
+    register_with_rust_engine()
     context = {f"v_{k}": v for k, v in kw.items()}
     args = ['name="body"', 'mode="visual"', *(f"{k}=v_{k}" for k in kw)]
-    return str(MarkdownEditorHandler().render(args, context))
+    return str(_rust.render_template("{% markdown_editor " + " ".join(args) + " %}", context))
 
 
 def _controls_django(**kw: object) -> str:

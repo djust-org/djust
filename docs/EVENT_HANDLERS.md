@@ -266,7 +266,7 @@ def my_handler(self, value: str = ""):
 Stack decorators in order (top to bottom):
 
 ```python
-from djust.decorators import event_handler, debounce, optimistic
+from djust.decorators import event_handler, debounce, throttle
 
 @event_handler()
 @debounce(wait=0.5)
@@ -276,9 +276,9 @@ def search(self, value: str = "", **kwargs):
     self._refresh_results()
 
 @event_handler()
-@optimistic
+@throttle(interval=1.0)
 def delete_item(self, item_id: int):
-    """Optimistic delete - UI updates before server confirms"""
+    """At most one delete per second from a double-clicking user"""
     Item.objects.filter(id=item_id).delete()
 ```
 
@@ -322,6 +322,9 @@ You can have both sync and async handlers in the same LiveView:
 
 ```python
 class MyView(LiveView):
+    count = state(0)
+    weather = state(None)
+
     @event_handler()
     def increment(self):
         """Sync handler for simple state update"""
@@ -435,22 +438,24 @@ def create_item(self, name: str, price: float):
 
 ### Convention
 
-No attribute a view sets on `self` reaches the template by itself
-([explicit exposure](website/state/explicit-exposure.md), the default since
-djust 2.0). `get_context_data()` supplies each name the template reads:
+The template gets the view's declared `state()` fields and what
+`get_context_data()` returns ([explicit exposure](website/state/explicit-exposure.md),
+the default since djust 2.0). Any other attribute a view sets on `self` stays on
+the server:
 
-- **`self.search_query = ""`** stays on the view, for your handlers
-- **`context["search_query"] = self.search_query`** in `get_context_data()` puts it in the template
-- **`_private`** is a naming convention for internal values such as QuerySets; it is not what keeps them out of the template
+- **`search_query = state("")`** on the class puts `{{ search_query }}` in the template
+- **`self._properties = items`** stays on the view, for your handlers; `get_context_data()` hands the template a derived or render-only value such as this QuerySet
+- **`_private`** is a naming convention for internal values such as QuerySets; it is not what keeps them out of the template (an undeclared public attribute stays out too)
 
 ### Why This Matters
 
-The JIT Serialization Pattern (see `docs/JIT_SERIALIZATION_PATTERN.md`) hands the QuerySet to the template the same way:
+The JIT Serialization Pattern (see `docs/JIT_SERIALIZATION_PATTERN.md`) hands the QuerySet to the template from `get_context_data()`:
 
 ```python
+search_query = state("")
+filter_status = state("all")
+
 def mount(self, request):
-    self.search_query = ""
-    self.filter_status = "all"
     self._refresh_properties()
 
 def _refresh_properties(self):
@@ -466,18 +471,16 @@ def _refresh_properties(self):
     self._properties = items
 
 def get_context_data(self, **kwargs):
-    """The template gets what this returns, and nothing else."""
+    """Derived and render-only values; the declared fields are already in it."""
     context = super().get_context_data(**kwargs)
     context["properties"] = self._properties  # serialized by the Rust JIT
-    context["search_query"] = self.search_query
-    context["filter_status"] = self.filter_status
     return context
 ```
 
 ### Benefits
 
-1. **Clarity**: `get_context_data()` is the one place that says what the template sees
-2. **Safety**: a value you did not hand over cannot be rendered by accident
+1. **Clarity**: the class body and `get_context_data()` are the two places that say what the template sees
+2. **Safety**: an attribute you did not declare or return cannot be rendered by accident
 
 ## Error Handling
 
@@ -592,7 +595,6 @@ def show_delete_confirmation(self, item_id: int):
     self.show_delete_modal = True
 
 @event_handler()
-@optimistic
 def confirm_delete(self):
     """Actually delete the item after confirmation"""
     if self.delete_item_id:
@@ -817,4 +819,4 @@ See [Security Guidelines](SECURITY_GUIDELINES.md) for full details.
 
 - **[Debug Panel User Guide](DEBUG_PANEL.md)** - Interactive debugging tools
 - **[JIT Serialization Pattern](JIT_SERIALIZATION_PATTERN.md)** - Public/private variable usage
-- **[State Management Decorators](state-management/STATE_MANAGEMENT_API.md)** - @debounce, @optimistic, @cache
+- **[State Management Decorators](state-management/STATE_MANAGEMENT_API.md)** - @debounce, @throttle, @cache

@@ -21,12 +21,14 @@ from djust import LiveView, event_handler
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import drain_extra, has_type, receive_until
+from djust import state
 
 RAN = []
 
 
 class NotifyAsyncView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = "<div dj-root>{{ count }}</div>"
     # Class-level so the consumer joins the NOTIFY group at wiring time.
     _listen_channels = frozenset({"notify_async_2946"})

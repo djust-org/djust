@@ -1,8 +1,7 @@
 """Metadata decorators keep an ``async def`` handler a coroutine function.
 
 ``_make_metadata_decorator`` (``@debounce``, ``@throttle``, ``@cache``,
-``@client_state``, ``@rate_limit``, ``@permission_required``) and ``@optimistic``
-wrapped the handler in a plain ``def``. On an ``async def`` handler djust then
+``@rate_limit``, ``@permission_required``) wrapped the handler in a plain ``def``. On an ``async def`` handler djust then
 saw a sync handler, ran it as sync code, got an un-awaited coroutine back, and
 the body never ran: no error, no log. Found by a port of a production app whose
 ``@permission_required`` async handlers silently did nothing.
@@ -19,10 +18,8 @@ import pytest
 from djust import LiveView
 from djust.decorators import (
     cache,
-    client_state,
     debounce,
     event_handler,
-    optimistic,
     permission_required,
     rate_limit,
     throttle,
@@ -32,10 +29,8 @@ DECORATORS = {
     "debounce": debounce(wait=0.1),
     "throttle": throttle(interval=0.1),
     "cache": cache(ttl=10),
-    "client_state": client_state(keys=["x"]),
     "rate_limit": rate_limit(rate=100, burst=100),
     "permission_required": permission_required("auth.view_user"),
-    "optimistic": optimistic,
 }
 
 

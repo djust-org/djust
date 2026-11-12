@@ -22,10 +22,12 @@ import pytest
 from django.test import RequestFactory
 
 from djust import LiveView
+from djust import state
 
 
 class _BareRootView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(1)
     template = "<div dj-root>n={{ n }}</div>"
 
     def mount(self, request, **kwargs):
@@ -33,7 +35,8 @@ class _BareRootView(LiveView):
 
 
 class _PhantomView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(1)
     template = '<div dj-root dj-view="{{ dj_view_id }}">n={{ n }}</div>'
 
     def mount(self, request, **kwargs):

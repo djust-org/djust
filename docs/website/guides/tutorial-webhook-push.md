@@ -104,10 +104,10 @@ class AccountView(LiveView):
         self.push_scope = f"account-{account.id}"
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["balance"] = f"{self.balance_cents / 100:.2f}"
-        context["last_event"] = self.last_event
-        return context
+        return {
+            **super().get_context_data(**kwargs),
+            "balance": f"{self.balance_cents / 100:.2f}",
+        }
 
     def handle_balance_changed(self, new_balance_cents: int = 0, description: str = "", **kwargs):
         """Called when push_to_view targets this view with

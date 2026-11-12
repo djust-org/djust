@@ -21,12 +21,12 @@ Every request goes through the same cycle:
 
 ### `mount()`
 
-Called when the view is first rendered over HTTP, and **again** when the WebSocket connects (unless state is restored from a snapshot). Initialize all state here, and keep it idempotent — don't perform one-time side effects such as DB writes or notifications:
+Called when the view is first rendered over HTTP, and **again** when the WebSocket connects (unless state is restored from a snapshot). Initialize state here (or declare it on the class with `state()`), and keep it idempotent — don't perform one-time side effects such as DB writes or notifications:
 
 ```python
+query = state("")  # a declared field: renders in the template as {{ query }}
+
 def mount(self, request, **kwargs):
-    self.items = []
-    self.query = ""
     self._refresh()  # build expensive querysets
 ```
 
@@ -34,11 +34,11 @@ def mount(self, request, **kwargs):
 
 ### `get_context_data()`
 
-Called **before every render** — both the first HTTP render and every WebSocket update. Return the template context. The template gets what this returns and nothing else:
+Called **before every render** — both the first HTTP render and every WebSocket update. Return the template context. The base context already holds the declared `state()` fields; add derived and render-only values. The template gets what this returns and nothing else:
 
 ```python
 def get_context_data(self, **kwargs):
-    return {**super().get_context_data(**kwargs), "items": self._items, "query": self.query}
+    return {**super().get_context_data(**kwargs), "items": self._items}
 ```
 
 ### Event handlers
@@ -55,13 +55,15 @@ def do_search(self, value: str = "", **kwargs):
 
 ## State: What Reaches the Template
 
-An attribute you set on `self` stays on the server. It is there for your handlers on the next event, and it does not reach the template, the session or the browser unless you say so ([explicit exposure](../state/explicit-exposure.md), the default since djust 2.0):
+A field declared with `state()` renders in the template. Any other attribute you set on `self` stays on the server: it is there for your handlers on the next event, and it does not reach the template, the session or the browser unless you say so ([explicit exposure](../state/explicit-exposure.md), the default since djust 2.0):
 
 | You write | What it does |
 | --- | --- |
-| `self.count = 0` | Keeps a value on the view. `{{ count }}` renders empty until `get_context_data()` supplies it |
-| `get_context_data()` returns `"count": self.count` | Puts `count` in the template |
+| `count = state(0)` | Declares a field. `{{ count }}` renders it |
+| `self.total = 0` (not declared) | Keeps a value on the view. `{{ total }}` renders empty until `get_context_data()` supplies it |
+| `get_context_data()` returns `"total": self.total` | Puts `total` in the template |
 | `count = state(0, persist="server")` | Also restores the value after a reconnect |
+| `count = state(0, render=False)` | Keeps a declared field out of the template |
 
 A leading underscore (`self._items`) is a naming convention for internal values; it is not what keeps them out of the template. Hand a QuerySet to the template as it is, and djust serializes the fields the template reads:
 

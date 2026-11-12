@@ -7,10 +7,13 @@ without the gate, which must run the handler: that pair is what shows the test
 can fail.
 """
 
+import pytest
+
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.decorators import permission_required as require_permission
 from djust.testing import LiveViewTestClient
+from djust import state
 
 
 class _User:
@@ -28,7 +31,8 @@ class _User:
 
 
 class GatedView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = "<div dj-root>{{ count }}</div>"
 
     def mount(self, request, **kwargs):
@@ -45,7 +49,9 @@ class GatedView(LiveView):
 
 
 class ObjectGatedView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
+    allowed = state(True)
     template = "<div dj-root>{{ count }}</div>"
 
     def mount(self, request, **kwargs):
@@ -116,11 +122,39 @@ def test_object_permission_is_rechecked_per_event():
 
 def test_object_permission_check_that_raises_fails_closed():
     class Broken(ObjectGatedView):
+        broken = False
+
         def has_object_permission(self, request, obj):
-            raise AttributeError("bug in the app's predicate")
+            if self.broken:
+                raise AttributeError("bug in the app's predicate")
+            return super().has_object_permission(request, obj)
 
     client = LiveViewTestClient(Broken, user=_User())
     client.mount()
+    client.view_instance.broken = True
 
     assert client.send_event("bump")["code"] == "permission_denied"
     assert client.view_instance.count == 0
+
+
+def test_object_permission_check_that_raises_at_mount_fails_closed():
+    """The post-mount object check runs on ``mount()`` as on every transport (#3977)."""
+    from django.core.exceptions import PermissionDenied
+
+    class Broken(ObjectGatedView):
+        def has_object_permission(self, request, obj):
+            raise AttributeError("bug in the app's predicate")
+
+    with pytest.raises(PermissionDenied):
+        LiveViewTestClient(Broken, user=_User()).mount()
+
+
+def test_an_object_denied_at_mount_raises():
+    class Denied(ObjectGatedView):
+        def has_object_permission(self, request, obj):
+            return False
+
+    from django.core.exceptions import PermissionDenied
+
+    with pytest.raises(PermissionDenied):
+        LiveViewTestClient(Denied, user=_User()).mount()

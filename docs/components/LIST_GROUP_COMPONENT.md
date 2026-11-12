@@ -165,32 +165,21 @@ complex_list = ListGroup(items=[
 ## In LiveView
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.components.ui import ListGroup
 
 class DashboardView(LiveView):
     template_name = 'dashboard.html'
-
-    def mount(self, request, **kwargs):
-        # Create navigation list
-        self.nav_list = ListGroup(items=[
-            {'label': 'Dashboard', 'url': '/', 'active': True},
-            {'label': 'Users', 'url': '/users', 'badge': {'text': '12', 'variant': 'primary'}},
-            {'label': 'Products', 'url': '/products'},
-        ])
-
-        # Create status list
-        self.status_list = ListGroup(items=[
-            {'label': 'System Online', 'variant': 'success'},
-            {'label': 'Database Connected', 'variant': 'success'},
-            {'label': 'Cache Warming Up', 'variant': 'warning'},
-        ])
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['nav_list'] = self.nav_list
-        context['status_list'] = self.status_list
-        return context
+    nav_list = state(default_factory=lambda: ListGroup(items=[
+        {'label': 'Dashboard', 'url': '/', 'active': True},
+        {'label': 'Users', 'url': '/users', 'badge': {'text': '12', 'variant': 'primary'}},
+        {'label': 'Products', 'url': '/products'},
+    ]))
+    status_list = state(default_factory=lambda: ListGroup(items=[
+        {'label': 'System Online', 'variant': 'success'},
+        {'label': 'Database Connected', 'variant': 'success'},
+        {'label': 'Cache Warming Up', 'variant': 'warning'},
+    ]))
 ```
 
 Template:

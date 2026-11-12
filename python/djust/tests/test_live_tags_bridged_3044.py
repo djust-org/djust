@@ -19,6 +19,7 @@ import pytest
 from django.template import engines
 
 from djust import LiveView
+from djust import state
 
 SRC_PREFIX = "{% load live_tags %}<div dj-root>"
 
@@ -91,7 +92,8 @@ def test_every_ws_render_emits_the_style_block():
     """``render_with_diff`` (the WS path) opens a fresh scope per render."""
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        n = state(0)
         template = (
             "{% load live_tags %}<div dj-root>{% djust_skeleton %}{{ n }}{% djust_skeleton %}</div>"
         )
@@ -120,7 +122,8 @@ def test_root_liveview_template_renders_them():
     the WS ``render_with_diff`` path)."""
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        q = state("hello")
         template = (
             "{% load live_tags %}<div dj-root>"
             '{% live_input "text" handler="search" value=q %}'

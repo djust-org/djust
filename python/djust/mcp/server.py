@@ -290,9 +290,8 @@ def create_server() -> "FastMCP":
         """Get all available djust decorators with usage examples.
 
         Returns @event_handler, @debounce, @throttle, @cache, @rate_limit,
-        @permission_required, state() and @computed — and, marked
-        inert, @optimistic (#2699) and @client_state (#2680), which stamp
-        metadata nothing in the shipped client reads.
+        @permission_required, state() and @computed. (@optimistic and
+        @client_state, which did nothing, were removed in 2.0, #4006.)
         Each entry carries its parameters and import path.
         """
         from djust.schema import DECORATORS
@@ -1524,7 +1523,11 @@ def create_server() -> "FastMCP":
             return "\n".join(edit_lines)
 
         # Build imports
-        imports = ["from djust import LiveView"]
+        # Declared state() fields render in the template by default (#4050).
+        declares_state = bool(feature_set & {"search", "pagination", "crud"})
+        imports = [
+            "from djust import LiveView, state" if declares_state else "from djust import LiveView"
+        ]
         decorator_imports = ["event_handler"]
         if "auth" in feature_set:
             decorator_imports.append("permission_required")
@@ -1565,18 +1568,22 @@ def create_server() -> "FastMCP":
         if "auth" in feature_set:
             lines.append("    login_required = True")
 
+        # Template state: a declared field renders without get_context_data().
+        if "search" in feature_set:
+            lines.append("    search_query = state('')")
+        if "pagination" in feature_set:
+            lines.append("    page = state(1)")
+        if "crud" in feature_set:
+            lines.append("    editing = state(False)")
+
         lines.append("")
         lines.append("    def mount(self, request, **kwargs):")
 
         # Mount body
-        if "search" in feature_set:
-            lines.append("        self.search_query = ''")
         if "pagination" in feature_set:
-            lines.append("        self.page = 1")
             lines.append("        self.per_page = 20")
         if "crud" in feature_set:
             lines.append("        self.selected_item = None")
-            lines.append("        self.editing = False")
 
         lines.append("        self._refresh()")
 
@@ -1632,14 +1639,10 @@ def create_server() -> "FastMCP":
         lines.append("    def get_context_data(self, **kwargs):")
         lines.append("        ctx = super().get_context_data(**kwargs)")
         lines.append("        ctx['items'] = self._items")
-        # The template gets only what is supplied here (explicit exposure).
-        if "search" in feature_set:
-            lines.append("        ctx['search_query'] = self.search_query")
+        # Derived and render-only values; the declared fields are already in ctx.
         if "crud" in feature_set:
             lines.append("        ctx['selected_item'] = self.selected_item")
-            lines.append("        ctx['editing'] = self.editing")
         if "pagination" in feature_set:
-            lines.append("        ctx['page'] = self.page")
             lines.append(
                 "        ctx['total_pages'] = (self._total_count + self.per_page - 1) // self.per_page"
             )

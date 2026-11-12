@@ -204,7 +204,17 @@ ADMIN_APP_ENTRY = '    "django.contrib.admin",\n'
 # (djust_theming.E001 warns when it is missing; the tags work without it).
 # (#2874) No SILENCED_SYSTEM_CHECKS here: the shipped presets are
 # warning-clean under djust_theming.W001 as of the #2874 reconciliation.
-THEMING_SETTINGS = ""
+# djust.components stays installed (the theme gallery at /theme/gallery/
+# renders its tags), but the starter pages use only the theme pack's own
+# component CSS, so {% theme_head %} does not link the catalog's 330 KB
+# stylesheet (#4003). Stating the value keeps djust_theming.W004 quiet.
+THEMING_SETTINGS = """
+# {% theme_head %} links the component catalog's stylesheet only when asked.
+# Set True once a page renders catalog tags ({% modal %}, {% data_table %}, ...).
+LIVEVIEW_CONFIG = {
+    "theme": {"component_catalog_css": False},
+}
+"""
 # theme.css plus the theme gallery (/theme/gallery/, DEBUG or staff only).
 THEMING_URLS = '    path("theme/", include("djust.theming.urls")),\n'
 COMPONENTS_APP_ENTRY = '    "djust.components",\n'
@@ -625,7 +635,7 @@ BARE_INDEX_HTML = """\
 # ---------------------------------------------------------------------------
 
 BASE_HTML = """\
-{%% load live_tags theme_tags djust_components %%}
+{%% load live_tags theme_tags %%}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -645,6 +655,7 @@ BASE_HTML = """\
         /* Layout only. Colors, type, radii and shadows all come from the
            theme pack, so every pack restyles this page completely. */
         .wrap { max-width: 64rem; margin: 0 auto; padding: 0 1.25rem; }
+        .site-header { border-bottom: 1px solid hsl(var(--border)); padding: .75rem 0; margin-bottom: 2rem; }
         .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
         .brand { font-weight: var(--font-bold, 700); font-size: 1.1rem; }
         .topbar-links { display: flex; align-items: center; gap: 1rem; }
@@ -669,10 +680,11 @@ BASE_HTML = """\
     {%% load static %%}
 </head>
 <body>
-    {# app_shell comes from djust.components; add {%% app_sidebar %%} for a sidebar. #}
-    {%% app_shell %%}
-    {%% app_header %%}
-        <div class="topbar">
+    {# Plain markup on the theme pack's tokens. For an app layout with a      #}
+    {# sidebar, use the app_shell tag from djust.components and set          #}
+    {# LIVEVIEW_CONFIG["theme"]["component_catalog_css"] = True in settings.  #}
+    <header class="site-header">
+        <div class="wrap topbar">
             <span class="brand">%(display_name)s</span>
             <div class="topbar-links">
                 <a href="/theme/gallery/">Component gallery</a>
@@ -680,18 +692,15 @@ BASE_HTML = """\
                 {%% theme_panel %%}
             </div>
         </div>
-    {%% endapp_header %%}
-    {%% app_content %%}
-        <div class="wrap stack">
-            {%% block content %%}{%% endblock %%}
-        </div>
+    </header>
+    <main class="wrap stack">
+        {%% block content %%}{%% endblock %%}
+    </main>
     <footer class="wrap site-footer muted">
         djust {{ djust_version }} &middot;
         <a href="https://docs.djust.org/">Documentation</a> &middot;
         <a href="https://github.com/djust-org/djust">GitHub</a>
     </footer>
-    {%% endapp_content %%}
-    {%% endapp_shell %%}
     {# djust injects the client.js <script> automatically (see <head> note). #}
 </body>
 </html>

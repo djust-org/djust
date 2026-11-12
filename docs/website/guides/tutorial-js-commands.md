@@ -44,7 +44,7 @@ By the end of this tutorial you'll have:
 > **Prerequisites:** [Quickstart](../getting-started/installation.md), the [optimistic
 > updates tutorial](tutorial-optimistic-updates.md) (recommended
 > — it shows how a JS Command can give immediate feedback while the
-> server handles the action. The `@optimistic` decorator is inert.
+> server handles the action.
 > The only JavaScript is a three-line hook for the toast timer.
 
 ---
@@ -56,7 +56,7 @@ JS Commands cover **client-only state**. The decision rule:
 | The state… | Use |
 |---|---|
 | Lives on the server (DB row, current count, etc.) | `@event_handler` (round-trip) |
-| Will be confirmed by the server, with immediate visual feedback | JS Commands + `@event_handler` (`@optimistic` is inert) |
+| Will be confirmed by the server, with immediate visual feedback | JS Commands + `@event_handler` |
 | Affects only the immediate visual presentation, server doesn't care | **`JS Commands`** |
 
 Examples of "server doesn't care": modal open/closed, dropdown
@@ -114,16 +114,12 @@ class ProfileView(LiveView):
         self.dismiss_toast = JS.hide("#toast")
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(
-            name=self.name,
-            email=self.email,
-            saved_message=self.saved_message,
-            open_modal=self.open_modal,
-            close_modal=self.close_modal,
-            dismiss_toast=self.dismiss_toast,
-        )
-        return context
+        return {
+            **super().get_context_data(**kwargs),
+            "open_modal": self.open_modal,
+            "close_modal": self.close_modal,
+            "dismiss_toast": self.dismiss_toast,
+        }
 
     @action
     def save_profile(self, name: str = "", email: str = "", **kwargs):
@@ -360,5 +356,5 @@ spot.
 The decision tree (`server-state → @event_handler`,
 `server-confirms with immediate feedback → JS Commands + @event_handler`,
 `client-only → JS Commands`) is the entire shape of UI-state ownership
-in djust. The `@optimistic` decorator is inert; once this distinction
+in djust. Once this distinction
 clicks, "where does this state live?" stops being a hard question.

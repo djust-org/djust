@@ -13,11 +13,14 @@ class-creation check cannot see (set on the instance, or assigned to the class
 later) raises the same error right after `mount()`, on every transport. Delete
 the attribute:
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before
+# Before (removed: raises ImproperlyConfigured)
 class Dashboard(LiveView):
     use_actors = True
+```
 
+```python
 # After
 class Dashboard(LiveView):
     ...

@@ -117,6 +117,11 @@ def get_handler_coerce_setting(handler: Callable[..., Any]) -> bool:
     return get_handler_coercion(handler)
 
 
+#: Public, undecorated framework methods a client event must never reach, whatever the
+#: ``event_security`` mode (see :func:`_check_event_security`).
+_SERVER_ONLY_METHOD_NAMES = frozenset({"resume_wizard"})
+
+
 def _check_event_security(
     handler: Callable[..., Any], owner_instance: object, event_name: str
 ) -> Optional[str]:
@@ -147,6 +152,13 @@ def _check_event_security(
         getattr(handler, "__func__", handler) is ServerPushMixin.server_push
     ):
         return "Server push methods cannot be invoked as client events"
+    # Public framework methods that only server code may call (``WizardMixin.resume_wizard``,
+    # #4011), refused in every mode by NAME (an override keeps the name) and by marker
+    # (whatever name the event carries, it is the same method).
+    if event_name in _SERVER_ONLY_METHOD_NAMES or getattr(
+        getattr(handler, "__func__", handler), "_djust_server_only", False
+    ):
+        return "Server-only methods cannot be invoked as client events"
     if isinstance(owner_instance, ComponentDeclaration) and not is_event_handler(handler):
         return "Interactive components accept only declared event actions"
 

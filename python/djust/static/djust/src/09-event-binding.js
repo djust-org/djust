@@ -2507,22 +2507,10 @@ function _processAutoRecover() {
         const handlerName = container.getAttribute('dj-auto-recover');
         if (!handlerName) return;
 
-        // Serialize form field values within the container
-        const formValues = {};
-        container.querySelectorAll('input, textarea, select').forEach(function(field) {
-            const name = field.name;
-            if (!name) return;
-            if (field.type === 'checkbox') {
-                // eslint-disable-next-line security/detect-object-injection
-                formValues[name] = field.checked;
-            } else if (field.type === 'radio') {
-                // eslint-disable-next-line security/detect-object-injection
-                if (field.checked) formValues[name] = field.value;
-            } else {
-                // eslint-disable-next-line security/detect-object-injection
-                formValues[name] = field.value;
-            }
-        });
+        // Serialize form field values within the container: a checkbox group
+        // or <select multiple> is a list, as the reconnect recovery reads it
+        // (#3978); a lone checkbox stays a boolean.
+        const formValues = _readControls(Array.from(container.querySelectorAll('input, textarea, select')));
 
         // Collect data-* attributes from the container element
         const dataAttrs = {};

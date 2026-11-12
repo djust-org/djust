@@ -169,19 +169,6 @@ def test_toggle_group_attribute_arguments_are_escaped_whatever_they_are_marked_a
     assert "<script>" not in html, (argument, html)
 
 
-@pytest.mark.parametrize("argument", ATTRIBUTE_ARGUMENTS)
-def test_the_native_handler_escapes_a_marked_safe_argument_handed_to_it(argument):
-    """The engine hands the handler text, but a typed argument and a direct call hand it the real
-    value: a marked-safe ``name`` / ``event`` / ``size`` / ``mode`` / option value reached the
-    attribute unescaped (``conditional_escape`` keeps it)."""
-    from djust.components.rust_handlers import ToggleGroupHandler
-
-    body, context = _toggle_group_source(argument, "single")
-    args = ["name=n", "options=o", "value=v", "event=e", "mode=m", "size=s", "form_field=True"]
-    html = str(ToggleGroupHandler().render(args, context))
-    assert "<script>" not in html, (argument, html)
-
-
 def test_component_classes_render_type_button():
     rating = Rating(value=2).render()
     toggle = ToggleGroup(name="p", options=OPTIONS, value="day").render()

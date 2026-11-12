@@ -681,11 +681,13 @@ class TestGateOffs:
         spec = importlib.util.spec_from_file_location("parity_gateoff_kill", script)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        label, target, old, _new = next(m for m in module.MUTATIONS if "kbd escapes" in m[0])
+        label, target, old, _new = next(
+            m for m in module.MUTATIONS if "AppShellHandler gains a role" in m[0]
+        )
         touched = sorted({m[1] for m in module.MUTATIONS})
         before = {p: p.read_bytes() for p in touched}
         proc = subprocess.Popen(
-            [sys.executable, str(script), "--only", "kbd escapes", "--no-control"],
+            [sys.executable, str(script), "--only", "AppShellHandler gains a role", "--no-control"],
             cwd=ROOT,
             env=_env(),
             stdout=subprocess.PIPE,
@@ -743,33 +745,34 @@ class TestWhatTheHarnessSends:
     """The review's finding: a tag whose handler delegates to a ``render_*`` helper was
     exercised on one key of eleven, so IDENTICAL meant nothing. These pin the cure."""
 
-    def _handlers(self):
-        from djust.components import rust_handlers as rh
+    # Since 2.0 the Python tags' nodes are what both engines render (one render path per tag),
+    # so discovery is pinned on them: a node that hands its arguments to a ``render_*`` helper.
 
-        return rh
+    def test_discovery_follows_a_node_into_its_render_helper(self):
+        from djust.components.templatetags.djust_components import ModalNode
 
-    def test_discovery_follows_a_native_handler_into_its_render_helper(self):
-        rh = self._handlers()
-        keys, params = harness.discover(rh.ModalHandler)
+        keys, params = harness.discover(ModalNode)
         assert {"title", "size", "open", "close_event", "description"} <= keys
         # the entry point itself reads exactly one key; everything else comes from render_modal
-        assert harness._keys_in(harness._node_of(rh.ModalHandler)[1]) == {"open"}
+        assert harness._keys_in(harness._node_of(ModalNode)[1]) == {"open"}
 
-    def test_discovery_follows_each_of_the_delegating_handlers(self):
-        rh = self._handlers()
+    def test_discovery_follows_each_of_the_delegating_nodes(self):
+        from djust.components.templatetags import _forms
+        from djust.components.templatetags import djust_components as lib
+
         expect = {
-            rh.ConfirmDialogHandler: {"message", "title", "confirm_label", "cancel_label"},
-            rh.DropdownMenuHandler: {"label", "align", "open", "toggle_event"},
-            rh.MenuItemHandler: {"label", "icon", "event", "href", "disabled", "danger"},
+            _forms.ConfirmDialogNode: {"message", "title", "confirm_label", "cancel_label"},
+            lib.DropdownMenuNode: {"label", "align", "open", "toggle_event"},
         }
-        for handler, wanted in expect.items():
-            keys, _ = harness.discover(handler)
-            assert wanted <= keys, (handler.__name__, wanted - keys)
+        for node, wanted in expect.items():
+            keys, _ = harness.discover(node)
+            assert wanted <= keys, (node.__name__, wanted - keys)
 
     def test_discovery_stops_at_the_libraries_under_test(self):
         """A key read by Django or the engine is not a tag argument."""
-        rh = self._handlers()
-        keys, params = harness.discover(rh.ModalHandler)
+        from djust.components.templatetags.djust_components import ModalNode
+
+        keys, params = harness.discover(ModalNode)
         assert "request" not in keys and "autoescape" not in keys
 
     def test_discovered_keys_are_identifiers(self):
@@ -847,9 +850,11 @@ class TestWhatTheHarnessSends:
         assert "set=" in generated["rust_only_keys"]
         assert variants.passed_count(info) == 2
 
-    def test_the_real_tags_the_review_named_are_no_longer_identical(self, baseline):
-        """kbd, modal, confirm_dialog, dropdown_menu and menu_item differ under input the first
-        harness never sent; if one becomes IDENTICAL it must be because it was fixed."""
+    def test_the_real_tags_the_review_named_are_identical_by_construction(self, baseline):
+        """kbd, modal, confirm_dialog, dropdown_menu and menu_item differed under input the first
+        harness never sent. Since 2.0 the Rust engine renders each one's own Python node (one
+        render path per tag), so each is IDENTICAL, and each still shows its own output (the
+        harness reaches it)."""
         for name in (
             "kbd",
             "modal",
@@ -859,7 +864,7 @@ class TestWhatTheHarnessSends:
             "menu_item",
         ):
             row_ = baseline["djust_components:" + name]
-            assert row_.tag_class in (classify.DIFFERENT, "DIFFERENT-escape-policy-only"), name
+            assert row_.tag_class == classify.IDENTICAL, name
             assert row_.own_output > 0, name
 
 

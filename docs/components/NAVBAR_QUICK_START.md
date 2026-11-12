@@ -101,25 +101,18 @@ navbar = NavBar(
 ## In LiveView
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.components.ui import NavBar
 
 class MyView(LiveView):
     template_name = 'my_template.html'
-
-    def mount(self, request):
-        self.navbar = NavBar(
-            brand={'text': 'MyApp', 'url': '/'},
-            items=[
-                {'label': 'Home', 'url': '/', 'active': True},
-                {'label': 'Profile', 'url': '/profile'},
-            ]
-        )
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['navbar'] = self.navbar
-        return context
+    navbar = state(default_factory=lambda: NavBar(
+        brand={'text': 'MyApp', 'url': '/'},
+        items=[
+            {'label': 'Home', 'url': '/', 'active': True},
+            {'label': 'Profile', 'url': '/profile'},
+        ]
+    ))
 ```
 
 **Template (my_template.html):**
@@ -210,11 +203,12 @@ from djust.components.ui import NavBar
 class AppView(LiveView):
     template_name = 'app.html'
 
-    def mount(self, request):
-        # Get current path for active state
-        current_path = request.path
+    def get_context_data(self, **kwargs):
+        # A plain component built from request data is built here, per render
+        # (one assigned in mount() is refused under explicit exposure).
+        current_path = self.request.path
 
-        self.navbar = NavBar(
+        navbar = NavBar(
             brand={
                 'text': 'Enterprise App',
                 'url': '/',
@@ -253,11 +247,10 @@ class AppView(LiveView):
             container='fluid',
             expand='lg'
         )
-
-    def get_context_data(self):
         return {
-            'navbar': self.navbar,
-            'page_title': 'Dashboard'
+            **super().get_context_data(**kwargs),
+            'navbar': navbar,
+            'page_title': 'Dashboard',
         }
 ```
 

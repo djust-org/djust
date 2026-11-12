@@ -171,19 +171,18 @@ component should call instead of hand-writing `dj-click="…"`.
 
 ### Component IDs
 
-Components get a stable ID automatically:
+Pass `id=` when the page needs a stable one:
 
 ```python
 class MyView(LiveView):
-    def mount(self, request, **kwargs):
-        self.user_badge = Badge("Admin")
-        # user_badge.id => "badge-user_badge"
-
-        Badge("Admin", id="custom-id")
-        # .id => "custom-id"
+    # A plain component is a declared field: one per view, rendered as {{ user_badge }}
+    user_badge = state(default_factory=lambda: Badge("Admin", id="user-badge"))
+    # self.user_badge.id => "user-badge"
 ```
 
-The waterfall: explicit `id=` parameter > auto-generated from attribute name > class name.
+The waterfall: explicit `id=` parameter > auto-generated from the attribute
+name (only for a component held directly as a view attribute, which a legacy
+view allows) > class name.
 
 ### Styling Components
 
@@ -269,12 +268,8 @@ Key differences from `Component`:
 ```python
 class DashboardView(LiveView):
     template_name = "dashboard.html"
-
-    def mount(self, request, **kwargs):
-        self.counter = CounterWidget(initial=10)
-
-    def get_context_data(self, **kwargs):
-        return {"counter": self.counter}
+    # A LiveComponent is declared in the class body; each view gets its own copy
+    counter = CounterWidget(initial=10)
 ```
 
 ```html
@@ -441,14 +436,10 @@ The parent LiveView handles it:
 
 ```python
 class TodoView(LiveView):
-    def mount(self, request, **kwargs):
-        self.todos = [
-            {"id": 1, "text": "Buy milk", "completed": False},
-            {"id": 2, "text": "Write docs", "completed": True},
-        ]
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "todos": self.todos}
+    todos = state([
+        {"id": 1, "text": "Buy milk", "completed": False},
+        {"id": 2, "text": "Write docs", "completed": True},
+    ])
 
     def handle_component_event(self, component_id, event, data):
         if event == "todo_toggled":
@@ -827,6 +818,14 @@ INSTALLED_APPS = [
 <link rel="stylesheet" href="{% static 'djust_components/components.css' %}">
 ```
 
+With `{% theme_head %}` in the base template, set
+`LIVEVIEW_CONFIG = {"theme": {"component_catalog_css": True}}` instead of
+writing the `<link>` yourself: `theme_head` then links the same file with a
+cache-busting version. Only the value `True` opts in. One page can decide for itself with
+`{% theme_head component_catalog=True %}` (or `=False`); the `{{ theme_head }}`
+context variable from `djust.theming.context_processors.theme_context` takes no
+arguments and always follows the project setting.
+
 ### Usage
 
 ```html
@@ -888,7 +887,8 @@ INSTALLED_APPS = [
 
 These tags render BEM class names, styled in
 `djust_components/components.css` (the file the `<link>` above loads, and the
-one `{% theme_head %}` links whenever `djust.components` is installed). The
+one `{% theme_head %}` links when `LIVEVIEW_CONFIG["theme"]["component_catalog_css"]`
+is `True`; off by default since 2.0, #4003). The
 rules are on the active theme's tokens, so the components follow light and
 dark mode. The status colour goes on the fill, border, dot or bar, and every
 label stays on `--foreground`, so no label's contrast depends on a status hue.
@@ -964,24 +964,22 @@ connection (the target must be a LiveView; for any other page, render a
 normal link instead), or do anything else:
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from django.urls import reverse
 
 class ClaimsListView(LiveView):
     template_name = "claims/list.html"
+    columns = state([
+        {"key": "claim_number", "label": "Claim #"},
+        {"key": "status", "label": "Status"},
+    ])
 
     def mount(self, request, **kwargs):
         self.rows = list(Claim.objects.values("id", "claim_number", "status"))
-        self.columns = [
-            {"key": "claim_number", "label": "Claim #"},
-            {"key": "status", "label": "Status"},
-        ]
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(rows=self.rows, columns=self.columns)
-        return context
+        return {**super().get_context_data(**kwargs), "rows": self.rows}
 
     @event_handler()
     def open_claim(self, value: str = "", **kwargs):

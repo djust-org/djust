@@ -224,19 +224,14 @@ state, and `submit_form` instead of writing a manual handler. Neither approach
 requires a second application POST view.
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from .forms import ContactForm
 
 class ContactView(LiveView):
     template_name = "contact.html"
-
-    def mount(self, request, **kwargs):
-        self.message = ""
-        self.errors = {}
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "message": self.message, "errors": self.errors}
+    message = state("")
+    errors = state(default_factory=dict)
 
     @event_handler()
     def save(self, **form_data):

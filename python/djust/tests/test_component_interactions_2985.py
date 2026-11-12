@@ -15,8 +15,6 @@ import re
 import pytest
 from django.template import Context, Template
 
-from djust import _rust
-from djust.components import rust_handlers as rh
 from djust.components.components.json_viewer import JsonViewer
 from djust.components.components.log_viewer import LogViewer
 from djust.components.components.sortable_grid import SortableGrid
@@ -46,11 +44,6 @@ def _sortable_list_paths(ITEMS=ITEMS) -> dict[str, str]:
         "tag": _tag(
             '{% sortable_list items=items move_event="reorder" class="mine" %}', items=ITEMS
         ),
-        "handler": str(
-            rh.SortableListHandler().render(
-                ["items=items", "move_event='reorder'", "class='mine'"], {"items": ITEMS}
-            )
-        ),
     }
 
 
@@ -58,11 +51,6 @@ def _sortable_grid_paths(ITEMS=ITEMS) -> dict[str, str]:
     return {
         "class": SortableGrid(items=ITEMS, columns=4, custom_class="mine").render(),
         "tag": _tag('{% sortable_grid items=items columns=4 class="mine" %}', items=ITEMS),
-        "handler": str(
-            rh.SortableGridHandler().render(
-                ["items=items", "columns=4", "class='mine'"], {"items": ITEMS}
-            )
-        ),
     }
 
 
@@ -93,7 +81,7 @@ class TestSortableMarkup:
 
     def test_the_three_render_paths_agree(self, make):
         paths = make()
-        assert paths["class"] == paths["tag"] == paths["handler"]
+        assert paths["class"] == paths["tag"]
 
 
 def test_a_disabled_list_keeps_its_markers():
@@ -110,13 +98,9 @@ class TestLogViewerHookAttributes:
         tag_args = " ".join(
             f"{k}={json.dumps(v) if isinstance(v, str) else v}" for k, v in kw.items()
         )
-        handler_args = [f"{k}={v!r}" for k, v in kw.items()]
         return {
             "class": LogViewer(lines=self.LINES, **cls_kw).render(),
             "tag": _tag("{% log_viewer lines=lines " + tag_args + " %}", lines=self.LINES),
-            "handler": str(
-                rh.LogViewerHandler().render(["lines=lines", *handler_args], {"lines": self.LINES})
-            ),
         }
 
     def test_the_hook_is_told_how_to_render_a_streamed_line(self):
@@ -141,7 +125,7 @@ class TestLogViewerHookAttributes:
 
     def test_the_three_render_paths_agree(self):
         paths = self._paths(stream_event="new_logs", max_lines=50, filter_level="error")
-        assert paths["class"] == paths["tag"] == paths["handler"]
+        assert paths["class"] == paths["tag"]
 
 
 class TestJsonViewerMarkupTheHookReads:
@@ -154,11 +138,6 @@ class TestJsonViewerMarkupTheHookReads:
             # ``json_viewer`` has no native handler class since #3756 (it dispatches on a
             # value's type, so the Python node renders it through the bridge); the third
             # path is the Rust engine's render of the tag.
-            "handler": str(
-                _rust.render_template(
-                    "{% json_viewer data=data collapsed_depth=1 %}", {"data": self.DATA}
-                )
-            ),
         }
 
     def test_the_toggle_copy_and_raw_hooks_are_there(self):
@@ -177,7 +156,7 @@ class TestJsonViewerMarkupTheHookReads:
 
     def test_the_three_render_paths_agree(self):
         paths = self._paths()
-        assert paths["class"] == paths["tag"] == paths["handler"]
+        assert paths["class"] == paths["tag"]
 
 
 @pytest.mark.parametrize(

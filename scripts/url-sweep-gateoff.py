@@ -39,7 +39,6 @@ sys.modules["parity_gateoff"] = base
 _spec.loader.exec_module(base)
 
 TAGS = ROOT / "python/djust/components/templatetags/djust_components.py"
-HANDLERS = ROOT / "python/djust/components/rust_handlers.py"
 UTILS = ROOT / "python/djust/components/utils.py"
 COMP = ROOT / "python/djust/components/components"
 SWEEP = ROOT / "scripts/lib/template_library_parity/url_sweep.py"
@@ -73,14 +72,6 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
         TAGS,
         "    e_srcset = srcset_attr(srcset, honor_safe=False)\n",
         "    e_srcset = str(conditional_escape(srcset))\n",
-        SINKS,
-        "",
-    ),
-    (
-        "responsive_image handler: srcset only escaped",
-        HANDLERS,
-        '        srcset = srcset_attr(kw.get("srcset", ""), honor_safe=False)',
-        '        srcset = conditional_escape(str(kw.get("srcset", "")))',
         SINKS,
         "",
     ),

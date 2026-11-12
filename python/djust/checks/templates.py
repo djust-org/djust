@@ -1852,6 +1852,41 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                 template_path = ""
         reported: set[str] = set()
         for name, line in refs:
+            if name in supplied or name in reported or name in held:
+                continue
+            if "*" in silenced or name in silenced:
+                continue
+            stem = name[: -len("_count")] if name.endswith("_count") else ""
+            if not stem or stem not in supplied:
+                continue
+            # #4054: the legacy policy generated ``items_count`` from a supplied
+            # ``items``; explicit exposure does not, so the name renders empty.
+            reported.add(name)
+            errors.append(
+                DjustWarning(
+                    "%s -- the template reads '%s' at line %d (%s) and nothing supplies it: "
+                    "djust 1.x generated it from '%s', explicit exposure does not, so it "
+                    "renders as empty string, with no error."
+                    % (cls_label, name, line, template_name or "<inline>", stem),
+                    hint=(
+                        "Use {{ %s|length }} in the template, or return '%s' from "
+                        "%s.get_context_data(). See %s. If the name is supplied in a way "
+                        "this check cannot follow, silence it with a "
+                        "`{# djust_typecheck: noqa %s #}` template comment or "
+                        "DJUST_CONFIG = {'suppress_checks': ['T027']}."
+                        % (stem, name, cls_label, MIGRATION_GUIDE_URL, name)
+                    ),
+                    id="djust.T027",
+                    fix_hint=(
+                        "Replace `{{ %s }}` with `{{ %s|length }}` in the template "
+                        "(or supply `%s` from `%s.get_context_data()`)."
+                        % (name, stem, name, cls_label)
+                    ),
+                    file_path=template_path,
+                    line_number=line if template_name else None,
+                )
+            )
+        for name, line in refs:
             if name not in held or name in supplied or name in reported:
                 continue
             if "*" in silenced or name in silenced:

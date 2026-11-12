@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from django.template import Context, Template
 
-from djust.components import rust_handlers as rh
 from djust.components.components.file_tree import FileTree
 from djust.components.components.resizable_panel import ResizablePanel
 
@@ -33,14 +32,6 @@ def _panel_paths(event: str | None = None) -> dict[str, str]:
             + kw_tag
             + " %}hello{% endresizable_panel %}"
         ),
-        "handler": str(
-            rh.ResizablePanelHandler().render(
-                ["direction='horizontal'"]
-                + ([f"resize_event={event!r}"] if event is not None else []),
-                "hello",
-                {},
-            )
-        ),
     }
 
 
@@ -50,12 +41,6 @@ def _tree_paths(event: str | None = None) -> dict[str, str]:
     return {
         "class": FileTree(nodes=NODES, **kw_class).render(),
         "tag": _tag("{% file_tree nodes=nodes" + kw_tag + " %}", nodes=NODES),
-        "handler": str(
-            rh.FileTreeHandler().render(
-                ["nodes=nodes"] + ([f"toggle_event={event!r}"] if event is not None else []),
-                {"nodes": NODES},
-            )
-        ),
     }
 
 
@@ -81,7 +66,7 @@ class TestResizePanelResizeEvent:
     def test_the_three_render_paths_agree(self):
         for event in (None, "panel_resized"):
             paths = _panel_paths(event)
-            assert paths["class"] == paths["tag"] == paths["handler"], event
+            assert paths["class"] == paths["tag"], event
 
     def test_the_event_name_is_escaped(self):
         for path, html in _panel_paths('"><script>alert(1)</script>').items():
@@ -111,7 +96,7 @@ class TestFileTreeToggleEvent:
     def test_the_three_render_paths_agree_on_the_root(self):
         for event in (None, "folder_toggled"):
             roots = {path: html[: html.index(">")] for path, html in _tree_paths(event).items()}
-            assert roots["class"] == roots["tag"] == roots["handler"], event
+            assert roots["class"] == roots["tag"], event
 
     def test_the_event_name_is_escaped(self):
         for path, html in _tree_paths('"><script>alert(1)</script>').items():

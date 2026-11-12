@@ -238,7 +238,8 @@ def import_checks(root: Path, report: list[str]) -> None:
             report.append("docs/checks/%s.md: %s" % (sid, "created" if old is None else "updated"))
     gone = sorted(set(entries) - set(ids), key=checks.sort_key)
     for sid in gone:
-        if entries[sid].parts or (checks.family(sid) in checks.TABLE_FAMILIES and entries[sid].meta.get("status") != "reserved"):
+        # Retired and reserved IDs with no doc text of their own are registry-only.
+        if entries[sid].parts or entries[sid].meta.get("status", "live") == "live":
             report.append("docs/checks/%s.md: not found in either doc; left in place (delete or retire it by hand)" % sid)
 
 

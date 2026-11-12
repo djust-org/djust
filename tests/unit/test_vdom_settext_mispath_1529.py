@@ -39,6 +39,7 @@ import pytest
 
 from djust.live_view import LiveView
 from djust.testing import LiveViewTestClient
+from djust import state
 
 
 def _set_text_patches(patches):
@@ -88,7 +89,9 @@ class TestVdomSetTextMispath1529:
         both change must produce two ``SetText`` patches at DISTINCT paths."""
 
         class TwoValueView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            a = state(0)
+            b = state(0)
             template = '<div dj-root><div class="a">{{ a }}</div><div class="b">{{ b }}</div></div>'
 
             def mount(self, request, **kwargs):
@@ -128,7 +131,10 @@ class TestVdomSetTextMispath1529:
         ``1/2/3`` — assert 3 SetText patches at 3 distinct paths."""
 
         class ThreeValueView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            a = state(0)
+            b = state(0)
+            c = state(0)
             template = (
                 "<div dj-root>"
                 '<div class="a">{{ a }}</div>'
@@ -170,7 +176,9 @@ class TestVdomSetTextMispath1529:
         distinct (deeper) paths."""
 
         class NestedView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            a = state(0)
+            b = state(0)
             template = (
                 "<div dj-root>"
                 "<section>"
@@ -214,7 +222,9 @@ class TestVdomSetTextMispath1529:
         baseline text so the #1529 collapse would otherwise be a risk."""
 
         class TextAndAttrView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            a = state(0)
+            b = state("old")
             template = (
                 "<div dj-root>"
                 '<div class="txt">{{ a }}</div>'
@@ -255,7 +265,9 @@ class TestVdomSetTextMispath1529:
         sharpest assertion that the mapping points at the right node."""
 
         class SecondOnlyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            a = state(0)
+            b = state(0)
             template = '<div dj-root><div class="a">{{ a }}</div><div class="b">{{ b }}</div></div>'
 
             def mount(self, request, **kwargs):
@@ -291,7 +303,9 @@ class TestVdomSetTextMispath1529:
         the pre-fix trigger boundary."""
 
         class DistinctView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            a = state(1)
+            b = state(2)
             template = '<div dj-root><div class="a">{{ a }}</div><div class="b">{{ b }}</div></div>'
 
             def mount(self, request, **kwargs):

@@ -25,6 +25,7 @@ from djust.wizard import WizardMixin
 
 from test_form_data_bounds_3834 import limits as livecfg, mounted
 from test_form_data_members_3844 import mutated_bounds, reference_members, reference_size
+from djust import state
 
 pytestmark = [pytest.mark.django_db, pytest.mark.pr_tier]
 
@@ -37,7 +38,7 @@ class OneField(forms.Form):
 
 
 class FourStepWizard(WizardMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     wizard_steps = [{"name": n, "title": n, "form_class": OneField} for n in "abcd"]
     template = "<div dj-root></div>"
 
@@ -186,7 +187,8 @@ RowFormSet = formset_factory(RowForm, extra=0)
 
 
 class RowsView(FormSetHelpersMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    rows = state()
     formset_classes = {"rows": RowFormSet}
 
     def mount(self, request=None, **kwargs):

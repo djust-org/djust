@@ -600,18 +600,13 @@ features, and both work on every transport, including the
   [`push_commands()`](server-driven-ui.md).
 
 ```python
-from djust import LiveView, event_handler
+from djust import LiveView, event_handler, state
 from djust.js import JS
 
 
 class OrderView(LiveView):
     template_name = "order.html"
-
-    def mount(self, request, **kwargs):
-        self.status = ""
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "status": self.status}
+    status = state("")
 
     @event_handler()
     def save(self, **kwargs):

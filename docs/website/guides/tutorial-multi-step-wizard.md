@@ -124,18 +124,6 @@ class SignupWizardView(LiveView):
     cycle = state("monthly")
     errors = state(default_factory=dict)
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(
-            step=self.step,
-            errors=self.errors,
-            name=self.name,
-            email=self.email,
-            plan=self.plan,
-            cycle=self.cycle,
-        )
-        return context
-
     def _values(self) -> dict:
         return {f: getattr(self, f) for fields in STEP_FIELDS.values() for f in fields}
 

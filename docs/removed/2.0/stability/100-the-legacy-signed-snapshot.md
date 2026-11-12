@@ -21,14 +21,17 @@ the attribute (next section), so a legacy view mounts fresh on Back.
 The HTTP page-POST fallback still restores a legacy view's public and private state from the session between requests; that goes later in 2.0 (rows 5 and 6 of the exposure-flip plan).
 Declare what the browser may hold:
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before (1.3)
+# Before (1.3): refused in 2.0
 class WizardView(LiveView):
     enable_state_snapshot = True
 
     def mount(self, request, **kwargs):
         self.step = 1
+```
 
+```python
 # After
 class WizardView(LiveView):
     step = state(1, persist="client", client=True)

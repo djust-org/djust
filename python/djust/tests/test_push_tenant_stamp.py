@@ -143,7 +143,7 @@ def test_a_tenant_view_applies_its_own_tenants_and_unstamped_pushes_only():
 
 def test_a_view_that_is_not_tenant_scoped_applies_any_push():
     class _Plain(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
     assert push_tenant_matches(_Plain(), _stamped("tenant:acme"))
 

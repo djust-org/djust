@@ -248,10 +248,12 @@ class TestScaffoldNoLongerSilencesW001:
     """`djust new` (#2875) shipped SILENCED_SYSTEM_CHECKS = ["djust_theming.W001"]
     "until the presets are fixed". They are fixed now — the silencing must go."""
 
-    def test_scaffold_theming_settings_is_empty(self):
+    def test_scaffold_theming_settings_does_not_silence_checks(self):
         import djust.scaffolding.templates as scaffold_templates
 
-        assert scaffold_templates.THEMING_SETTINGS == "", (
+        # #4003 put a LIVEVIEW_CONFIG theme setting here; what must not come
+        # back is the silencing.
+        assert "SILENCED_SYSTEM_CHECKS" not in scaffold_templates.THEMING_SETTINGS, (
             "the djust new scaffold still injects SILENCED_SYSTEM_CHECKS for "
             "djust_theming.W001 — the shipped presets are warning-clean since "
             "#2874; remove the silencing"

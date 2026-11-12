@@ -10,6 +10,7 @@ import threading
 
 from djust import LiveView
 from djust.decorators import computed
+from djust import state
 
 
 class TestComputedThreadSafety:
@@ -21,7 +22,15 @@ class TestComputedThreadSafety:
         errors = []
 
         class DashView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            items = state(
+                default_factory=lambda: [
+                    {"category": "A", "price": 10, "qty": 2},
+                    {"category": "A", "price": 5, "qty": 1},
+                    {"category": "B", "price": 20, "qty": 3},
+                ]
+            )
+            filter = state("A")
 
             def update(self):
                 pass
@@ -73,7 +82,7 @@ class TestComputedThreadSafety:
         side_effect_count = 0
 
         class DashView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def update(self):
                 pass
@@ -120,7 +129,7 @@ class TestComputedThreadSafety:
         """The per-instance lock is created lazily on __dict__."""
 
         class DashView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def update(self):
                 pass

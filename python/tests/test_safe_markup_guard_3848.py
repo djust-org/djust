@@ -1,6 +1,7 @@
 """What the independent review of #3848 found, pinned (#3820, #3848).
 
-* ``TestTheReviewCorpus``: 57 unsafe functions from the review's corpus, RUN with the payload ``<x>``
+* ``TestTheReviewCorpus``: the unsafe functions of the review's corpus (57, plus the misses it pinned
+  that the guard catches since the follow-up of #3850, and their data twins), RUN with the payload ``<x>``
   (the execution is the oracle: it must come out raw) and checked against the guard. 27 of them are
   regressions: the first guard flagged them and the head of #3848 did not (a class attribute that
   ``setattr`` replaces, a table changed through ``self.X`` / an alias / ``setdefault`` / ``update``, a
@@ -124,7 +125,27 @@ class TestDynamicAttributes:
                 "class D:\n    X = 1\n",
             ]
         )
-        assert found == {"A", "B", "C"}
+        assert found - taint.EXTERNAL_DYNAMIC_BASES == {"A", "B", "C"}
+
+    def test_djangos_class_based_views_and_forms_are_dynamic_bases(self):
+        """``View.__init__`` ``setattr``s every ``as_view()`` keyword (#3864)."""
+        found = taint.dynamic_class_names(["class Page(TemplateView):\n    X = 1\n"])
+        assert {"View", "TemplateView", "Form", "Page"} <= found
+
+    def test_the_command_line_passes_the_dynamic_classes_it_finds(self, tmp_path, capsys):
+        """#3864: the CLI did not pass ``dynamic_class_names``, so a class attribute of a subclass of
+        a keyword-writing base in another file was trusted as a constant on the command line."""
+        (tmp_path / "base.py").write_text(
+            "class Base:\n    def __init__(self, **kw):\n        for k, v in kw.items():\n"
+            "            setattr(self, k, v)\n"
+        )
+        (tmp_path / "badge.py").write_text(
+            "from django.utils.safestring import mark_safe\nfrom base import Base\n"
+            "class Badge(Base):\n    color = 'blue'\n    def r(self):\n"
+            "        return mark_safe(f'<b class={self.color}>x</b>')\n"
+        )
+        assert taint._main([str(tmp_path)]) == 1
+        assert "Badge.r" in capsys.readouterr().out
 
     @pytest.mark.parametrize(
         "hazard",
@@ -228,3 +249,16 @@ class TestKnownMisses:
 
     def test_the_two_lists_do_not_overlap(self):
         assert not set(misses.CASES) & set(corpus.CASES)
+
+    def test_every_known_miss_says_why(self):
+        assert set(misses.REASONS) == set(misses.CASES)
+        assert all(len(reason) > 40 for reason in misses.REASONS.values())
+
+    def test_a_literal_payload_miss_has_a_data_twin_the_guard_flags(self):
+        """A miss kept because its payload is a literal names a twin with data from elsewhere; the twin
+        is in the corpus (so it is RUN and must be flagged)."""
+        import re
+
+        for case, reason in misses.REASONS.items():
+            for twin in re.findall(r"see (\w+) in safe_markup_corpus_3848", reason):
+                assert twin in corpus.CASES, (case, twin)

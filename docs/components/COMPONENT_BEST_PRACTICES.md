@@ -24,22 +24,16 @@ class MyView(LiveView):
         <h1>{{ title }}</h1>
         <button dj-click="increment">{{ count }}</button>
     """
-
-    def mount(self, request):
-        self.title = "Counter"
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "title": self.title, "count": self.count}
+    title = state("Counter")
+    count = state(0)
 
     def increment(self):
         self.count += 1
 
 # ❌ Don't: Over-engineer from the start
 class MyView(LiveView):
-    def mount(self, request):
-        self.counter_component = CounterComponent()  # Unnecessary!
-        self.title_component = TitleComponent()      # Unnecessary!
+    counter_component = CounterComponent()  # Unnecessary!
+    title_component = TitleComponent()      # Unnecessary!
 ```
 
 **Question to ask:** "Can I write this as plain HTML in my template?"
@@ -119,7 +113,7 @@ template = """
     {% endif %}
 """
 
-def mount(self):
+def mount(self, request, **kwargs):
     self.show_alert = False
     self.message = ""
 
@@ -305,13 +299,14 @@ class DashboardView(LiveView):
         <FilterComponent id="filter" :active="current_filter" />
         <DataListComponent id="list" :items="filtered_items" />
     """
+    filter_comp = FilterComponent(options=["all", "active", "done"])
+    list = DataListComponent()
 
-    def mount(self):
+    def mount(self, request, **kwargs):
         self.items = load_items()
         self.current_filter = "all"
 
-        self.filter_comp = FilterComponent(options=["all", "active", "done"])
-        self.list = DataListComponent(items=self.items)
+        self.list.update(items=self.items)
 
     @property
     def filtered_items(self):
@@ -339,7 +334,7 @@ Use computed properties for derived state that multiple components need:
 
 ```python
 class DashboardView(LiveView):
-    def mount(self):
+    def mount(self, request, **kwargs):
         self.users = User.objects.all()
         self.selected_id = None
 
@@ -522,7 +517,7 @@ class ParentView(LiveView):
 ```python
 # ❌ Bad: Parent doing everything
 class DashboardView(LiveView):
-    def mount(self):
+    def mount(self, request, **kwargs):
         self.users = User.objects.all()
         self.filtered_users = []
         self.sort_order = "name"
@@ -657,12 +652,19 @@ class DashboardView(LiveView):
             {% endfor %}
         </ul>
     """
+    chart = ChartComponent()
 
     def mount(self, request):
-        self.user_count = User.objects.count()
-        self.active_count = User.objects.filter(is_active=True).count()
-        self.recent_activity = Activity.objects.all()[:10]
-        self.chart = ChartComponent(data=self.get_chart_data())
+        self.chart.update(data=self.get_chart_data())
+
+    def get_context_data(self, **kwargs):
+        # Stats are render-only values, computed for each render
+        return {
+            **super().get_context_data(**kwargs),
+            "user_count": User.objects.count(),
+            "active_count": User.objects.filter(is_active=True).count(),
+            "recent_activity": Activity.objects.all()[:10],
+        }
 
     def get_chart_data(self):
         return {
@@ -693,15 +695,17 @@ class UserManagementView(LiveView):
             </div>
         </div>
     """
+    filter_panel = FilterPanelComponent()
+    user_list = UserListComponent()
+    user_detail = UserDetailComponent()
 
     def mount(self, request):
         self.users = User.objects.all()
         self.filters = {}
         self.selected_id = None
 
-        self.filter_panel = FilterPanelComponent(options=self.get_filter_options())
-        self.user_list = UserListComponent(users=self.users)
-        self.user_detail = UserDetailComponent()
+        self.filter_panel.update(options=self.get_filter_options())
+        self.user_list.update(users=self.users)
 
     @property
     def filtered_users(self):

@@ -53,7 +53,7 @@ AddsFormSet = formset_factory(AddsInInit, extra=0)
 
 
 class View(FormSetHelpersMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     formset_classes: Dict[str, Any] = {}
 
     def mount(self, request=None, **kwargs):

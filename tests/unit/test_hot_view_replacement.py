@@ -34,6 +34,7 @@ from djust.hot_view_replacement import (
     broadcast_hvr_event,
     reload_module_if_liveview,
 )
+from djust import state
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +82,8 @@ def _cleanup_temp_module(path: str, tmpdir: str, module_name: str) -> None:
 class _BaseHandlerView(LiveView):
     """Shared fixture class for compat-heuristic tests."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    value = state()
     template = "<div>{{ value }}</div>"
 
     @event_handler
@@ -105,7 +107,8 @@ class TestStateCompatHeuristic:
         """
 
         class WithExtraHandler(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            value = state()
             template = "<div>{{ value }}</div>"
 
             @event_handler
@@ -123,7 +126,7 @@ class TestStateCompatHeuristic:
         """Case 3: removing an old handler breaks compat with named reason."""
 
         class NoHandlers(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>{{ value }}</div>"
 
         ok, reason = _is_state_compatible(_BaseHandlerView, NoHandlers)
@@ -134,7 +137,8 @@ class TestStateCompatHeuristic:
         """Case 4: renamed positional param ⇒ incompatible."""
 
         class RenamedParam(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            value = state()
             template = "<div>{{ value }}</div>"
 
             @event_handler
@@ -149,12 +153,12 @@ class TestStateCompatHeuristic:
         """Case 5: ``__slots__`` layout drift ⇒ incompatible."""
 
         class OldSlots(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             __slots__ = ("count",)
             template = "<div></div>"
 
         class NewSlots(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             __slots__ = ("count", "total")
             template = "<div></div>"
 
@@ -174,7 +178,8 @@ class TestStateCompatHeuristic:
         """
 
         class OldAcceptsKwargs(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            count = state()
             template = "<div></div>"
 
             @event_handler
@@ -182,7 +187,8 @@ class TestStateCompatHeuristic:
                 self.count = getattr(self, "count", 0) + 1
 
         class NewRejectsKwargs(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            count = state()
             template = "<div></div>"
 
             @event_handler
@@ -208,11 +214,11 @@ class TestStateCompatHeuristic:
                 self.touched = True
 
         class OldWithMixin(MixinA, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div></div>"
 
         class NewNoMixin(LiveView):  # MixinA dropped
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div></div>"
 
         ok, reason = _is_state_compatible(OldWithMixin, NewNoMixin)
@@ -309,7 +315,8 @@ class TestClassSwap:
         """Case 7: ``__class__`` reassignment keeps instance state."""
 
         class OldCounter(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            count = state()
             template = "<div>{{ count }}</div>"
 
             @event_handler
@@ -317,7 +324,8 @@ class TestClassSwap:
                 self.count += 1
 
         class NewCounter(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            count = state()
             template = "<div>{{ count }}</div>"
 
             @event_handler
@@ -339,7 +347,8 @@ class TestClassSwap:
         """Case 8: post-swap calls dispatch to the new class body."""
 
         class OldView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            count = state()
             template = "<div>{{ count }}</div>"
 
             @event_handler
@@ -347,7 +356,8 @@ class TestClassSwap:
                 self.count += 1
 
         class NewView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            count = state()
             template = "<div>{{ count }}</div>"
 
             @event_handler
@@ -376,7 +386,8 @@ class TestClassSwap:
         """
 
         class OldCyclic(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            touched = state()
             template = "<div></div>"
 
             @event_handler
@@ -384,7 +395,8 @@ class TestClassSwap:
                 self.touched = True
 
         class NewCyclic(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            touched = state()
             template = "<div></div>"
 
             @event_handler
@@ -415,7 +427,8 @@ class TestClassSwap:
 
 
 class _HvrRoundtripView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state()
     template = "<div>{{ count }}</div>"
 
     @event_handler
@@ -424,7 +437,8 @@ class _HvrRoundtripView(LiveView):
 
 
 class _HvrRoundtripViewV2(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state()
     template = "<div>{{ count }}</div>"
 
     @event_handler
@@ -516,7 +530,7 @@ class TestHvrBroadcast:
 
         # A V2 with the handler REMOVED — guaranteed incompat.
         class _IncompV1(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div></div>"
 
             @event_handler
@@ -524,7 +538,7 @@ class TestHvrBroadcast:
                 pass
 
         class _IncompV2(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div></div>"
 
         _IncompV2.__name__ = _IncompV1.__name__

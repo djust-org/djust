@@ -7,13 +7,16 @@ special form base class; `LiveViewForm` only added two helpers to Django's
 `form.get_field_value(name)`, read `form.cleaned_data` (or `form.data` before
 validation):
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before
+# Before (removed: raises ImportError)
 from djust.forms import LiveViewForm
 
 class ContactForm(LiveViewForm):
     name = forms.CharField()
+```
 
+```python
 # After
 from django import forms
 

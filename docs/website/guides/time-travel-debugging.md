@@ -23,7 +23,7 @@ instrumentation. Recording itself is **not** gated on `DEBUG` (see
 ## Quick start
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
@@ -32,12 +32,7 @@ class CounterView(LiveView):
 
     # Opt into time-travel debugging for this view.
     time_travel_enabled = True
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count}
+    count = state(0)
 
     @event_handler
     def increment(self, **kwargs):

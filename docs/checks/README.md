@@ -53,6 +53,16 @@ reports an add/add conflict on it. Two branches that add different checks add
 different files; the regenerated docs are `merge=union` in `.gitattributes`, so
 they merge without a conflict and `make generated-docs` then re-sorts them.
 
+## A doc someone edited by hand
+
+A branch cut before this directory existed, or an edit made between the markers,
+puts entries straight into the docs, and `make check-generated-docs` then fails.
+`python scripts/import-generated-docs.py` reads the four generated docs (with or
+without markers) and writes what it finds into `docs/checks/` and
+`docs/removed/2.0/`; then run `make generated-docs` and review the diff. In a
+merge, take the other branch's copy of the doc, import, and regenerate. The
+script never deletes a source file.
+
 ## Retiring a check
 
 Keep the file and set `status: retired`, with a summary that says when and why

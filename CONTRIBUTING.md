@@ -368,7 +368,9 @@ edit the same lines (#4080):
   `docs/removed/README.md` has the shape.
 
 Then run `make generated-docs` and commit the regenerated docs with the new
-file. Pre-commit and CI run `make check-generated-docs`. Editing the hand-written
+file. If a merge or a hand edit put entries straight into one of
+these docs, `python scripts/import-generated-docs.py` moves them into the source
+files first. Pre-commit and CI run `make check-generated-docs`. Editing the hand-written
 text of one of these four docs also needs `make generated-docs`: its last line is
 a fingerprint of that text, which catches a union merge that kept two versions
 of an edited paragraph.

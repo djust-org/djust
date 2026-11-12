@@ -2,6 +2,7 @@
 
 import pytest
 from django.test import RequestFactory
+from djust import state
 
 
 def test_signup_view_rejects_off_site_next_redirect(db, settings):
@@ -149,7 +150,8 @@ def test_request_mixin_rejects_unsafe_hook_redirect(db, settings):
         return "https://evil.com/steal"
 
     class EvilHookView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        count = state(0)
         template_name = "djust_theming/components/button.html"
         on_mount = [redirect_to_evil]
 
@@ -182,7 +184,7 @@ def test_request_mixin_accepts_safe_hook_redirect(db, settings):
         return "/accounts/login/"
 
     class SafeHookView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = "djust_theming/components/button.html"
         on_mount = [redirect_to_login]
 

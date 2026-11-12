@@ -256,14 +256,22 @@ class TestARefusedShapeAgainstDjango3849:
         render = {"backend": render_backend, "live": render_live}[route]
         assert render(engines, GATE, {"v": value}) == render_django(engines, GATE, {"v": value})
 
-    @pytest.mark.parametrize("route", ["backend", "live"])
-    def test_a_real_rename_true_namedtuple_loses_its_class_and_keeps_its_items(
-        self, engines, route
+    def test_a_real_rename_true_namedtuple_reaches_the_tag_as_itself_through_the_backend(
+        self, engines
     ):
-        """Recorded, not fixed: Django prints ``Renamed(a=1, _1=2, b=3)``; the engine cannot rebuild
-        that class (``namedtuple()`` refuses ``_1``), so the plain tuple is printed."""
+        """Through ``DjustTemplateBackend`` the tag's own node is handed the operand from the raw
+        context (one render path per tag), so it prints as Django does."""
         value = Renamed(1, 2, 3)
-        render = {"backend": render_backend, "live": render_live}[route]
         assert "Renamed(a=1, _1=2, b=3)" in render_django(engines, GATE, {"v": value})
-        out = render(engines, GATE, {"v": value})
+        assert render_backend(engines, GATE, {"v": value}) == render_django(
+            engines, GATE, {"v": value}
+        )
+
+    def test_a_real_rename_true_namedtuple_as_state_loses_its_class_and_keeps_its_items(
+        self, engines
+    ):
+        """Recorded, not fixed: as LiveView state the engine cannot rebuild that class
+        (``namedtuple()`` refuses ``_1``), so the plain tuple is printed."""
+        value = Renamed(1, 2, 3)
+        out = render_live(engines, GATE, {"v": value})
         assert "Renamed" not in out and "(1, 2, 3)" in out, out

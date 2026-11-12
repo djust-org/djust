@@ -975,9 +975,10 @@ def test_the_embedded_child_reproducer_from_the_issue():
     assert P.calls == 0
 
 
-def test_install_patches_once_and_leaves_a_later_patch_alone(caplog):
-    """A ``functools.wraps`` wrapper put on top of the guard survives later scope entries, is not
-    warned about, and the guard under it still refuses."""
+def test_install_patches_once_and_holds_a_later_wrapper_to_the_guard(caplog):
+    """A ``functools.wraps`` wrapper put on top of the guard keeps running, and the next scope entry
+    puts a guard over it (only the OUTERMOST render is trusted, review of #4068); nothing is
+    logged at WARNING."""
     import functools
 
     from django.template.loader_tags import IncludeNode
@@ -997,20 +998,63 @@ def test_install_patches_once_and_leaves_a_later_patch_alone(caplog):
 
     IncludeNode.render = wrapper  # type: ignore[method-assign]
     obj = _payload("alters_data")()
+    plain = _payload("plain")()
     with caplog.at_level(logging.WARNING, logger="djust._include_guard"):
         with include_guard_scope():
             out = Engine().from_string("[{% include obj %}]").render(DjangoContext({"obj": obj}))
+            assert _include(plain) == "[RENDERED]"
     assert not [r for r in caplog.records if r.name == "djust._include_guard"]
-    assert IncludeNode.render is wrapper, (
-        "a scope entry replaced a later patch of IncludeNode.render"
-    )
-    assert seen == [1]
+    assert IncludeNode.render.__wrapped__ is wrapper  # type: ignore[attr-defined]
+    assert seen == [1], "the wrapper still renders what the guard lets through"
     assert out == "[]"
     assert type(obj).calls == 0
 
 
-def test_install_recognises_the_guard_under_a_functools_wrapper(caplog):
-    """After a reload the class may already carry the guard under a wrapper: no second guard."""
+def test_a_wraps_wrapper_naming_the_guard_but_calling_djangos_render_is_held_to_it():
+    """Review of #4068: ``functools.wraps(guard)`` gives a ``__wrapped__`` link to the guard, but the
+    wrapper may call Django's own ``render``; a chain walk trusted it and the guard was off."""
+    import functools
+
+    from django.template.loader_tags import IncludeNode
+
+    from djust._include_guard import _ORIGINAL, guarded_include_render, include_guard_scope
+
+    @functools.wraps(guarded_include_render)
+    def impostor(self: Any, context: Any) -> Any:
+        return _ORIGINAL(self, context)
+
+    IncludeNode.render = impostor  # type: ignore[method-assign]
+    obj = _payload("alters_data")()
+    with include_guard_scope():
+        assert _include(obj) == "[]"
+    assert type(obj).calls == 0
+
+
+def test_a_patch_swapped_in_during_an_active_scope_is_unguarded_until_the_next_entry():
+    """A KNOWN GAP, pinned as current behaviour: the guard is (re)installed on scope ENTRY, so a
+    patch of ``IncludeNode.render`` made while a scope is active renders unguarded until the next
+    entry. If this starts failing because the include is refused, the gap closed: update the
+    docstring of ``install`` and ``docs/SECURE_DEFAULTS.md``."""
+    from django.template.loader_tags import IncludeNode
+
+    from djust._include_guard import _ORIGINAL, include_guard_scope
+
+    def replacement(self: Any, context: Any) -> Any:
+        return _ORIGINAL(self, context)
+
+    obj = _payload("alters_data")()
+    with include_guard_scope():
+        IncludeNode.render = replacement  # type: ignore[method-assign]
+        assert _include(obj) == "[RENDERED]"  # the gap
+    assert type(obj).calls == 1
+    with include_guard_scope():  # the next entry holds it to the guard again
+        assert _include(obj) == "[]"
+    assert type(obj).calls == 1
+
+
+def test_a_reloaded_style_wrapper_over_the_guard_gets_one_guard_on_top(caplog):
+    """A ``functools.wraps`` wrapper over the guard (what a reload or instrumentation leaves) gets
+    ONE guard on top, not one per scope entry, and nothing is logged at WARNING."""
     import functools
 
     from django.template.loader_tags import IncludeNode
@@ -1024,7 +1068,11 @@ def test_install_recognises_the_guard_under_a_functools_wrapper(caplog):
     IncludeNode.render = wrapped  # type: ignore[method-assign]
     with caplog.at_level(logging.WARNING, logger="djust._include_guard"):
         guard.install()
-    assert IncludeNode.render is wrapped, "install() put a second guard under a wrapped one"
+        top = IncludeNode.render
+        guard.install()
+        guard.install()
+    assert IncludeNode.render is top
+    assert top.__wrapped__ is wrapped  # type: ignore[attr-defined]
     assert not [r for r in caplog.records if r.name == "djust._include_guard"]
 
 
@@ -1070,31 +1118,169 @@ def test_the_guard_is_back_after_something_else_restores_djangos_render():
     assert type(obj).calls == 0
 
 
-def test_a_replacement_that_does_not_wrap_the_guard_is_left_alone_and_warned_about_once(caplog):
-    """The documented trade-off: someone else's patch wins, the guard is off, and the log says so."""
+def _include(obj: Any) -> str:
+    return Engine().from_string("[{% include obj %}]").render(DjangoContext({"obj": obj}))
+
+
+def test_a_replacement_that_does_not_wrap_the_guard_is_held_to_it(caplog):
+    """#3931: a patch of ``render`` that calls Django's own (not the guard) no longer switches the
+    guard off. The guard goes on top of it and delegates to it: the patch still runs, a flagged
+    operand is refused inside a scope, and nothing is logged at WARNING."""
     from django.template.loader_tags import IncludeNode
 
-    from djust._include_guard import _ORIGINAL, _warn_guard_inactive, include_guard_scope
+    from djust._include_guard import _ORIGINAL, _note_wrapped, include_guard_scope
 
-    _warn_guard_inactive.cache_clear()
+    _note_wrapped.cache_clear()
+    ran: list[int] = []
 
     def replacement(self: Any, context: Any) -> Any:
+        ran.append(1)
         return _ORIGINAL(self, context)  # Django's render, not the guard
 
     IncludeNode.render = replacement  # type: ignore[method-assign]
-    obj = _payload("alters_data")()
-    with caplog.at_level(logging.WARNING, logger="djust._include_guard"):
+    flagged = _payload("alters_data")()
+    plain = _payload("plain")()
+    with caplog.at_level(logging.DEBUG, logger="djust._include_guard"):
         for _ in range(3):
             with include_guard_scope():
-                out = (
-                    Engine().from_string("[{% include obj %}]").render(DjangoContext({"obj": obj}))
-                )
-    assert IncludeNode.render is replacement
-    assert out == "[RENDERED]" and type(obj).calls == 3  # the guard is not active: documented
+                assert _include(flagged) == "[]"
+                assert _include(plain) == "[RENDERED]"
+    assert type(flagged).calls == 0
+    assert type(plain).calls == 3
+    # the replacement renders every include the guard lets through (a refused one renders "")
+    assert len(ran) == 3, "the replacement is still what renders the include"
+    assert IncludeNode.render is not replacement
+    assert IncludeNode.render.__wrapped__ is replacement  # type: ignore[attr-defined]
+    # outside a scope the replacement runs exactly as before, flagged operand and all
+    assert _include(flagged) == "[RENDERED]" and len(ran) == 4
     records = [r for r in caplog.records if r.name == "djust._include_guard"]
-    assert len(records) == 1
-    assert "function" in records[0].getMessage()  # the replacement's type name, nothing else
-    assert "RENDERED" not in records[0].getMessage()
+    assert not [r for r in records if r.levelno >= logging.WARNING], "no warning on any entry"
+    assert len(records) == 1, "one note for one replacement, not one per scope entry"
+    message = records[0].getMessage()
+    assert "function" in message and "RENDERED" not in message  # the type name, nothing else
+
+
+def test_a_wraps_wrapper_over_djangos_render_installed_before_the_first_scope_is_guarded():
+    """#3931: instrumentation that ``functools.wraps`` Django's own ``render`` before any scope ran
+    used to leave the guard off; its ``__wrapped__`` is Django's, not the guard."""
+    import functools
+
+    from django.template.loader_tags import IncludeNode
+
+    from djust._include_guard import _ORIGINAL, include_guard_scope
+
+    seen: list[int] = []
+
+    @functools.wraps(_ORIGINAL)
+    def instrumented(self: Any, context: Any) -> Any:
+        seen.append(1)
+        return _ORIGINAL(self, context)
+
+    IncludeNode.render = instrumented  # type: ignore[method-assign]
+    obj = _payload("alters_data")()
+    with include_guard_scope():
+        assert _include(obj) == "[]"
+    assert type(obj).calls == 0
+
+
+def test_a_replacement_whose_wrapped_link_raises_does_not_break_scope_entry():
+    """#3931: reading ``__wrapped__`` off the current render must not make every scope raise."""
+    from django.template.loader_tags import IncludeNode
+
+    from djust._include_guard import _ORIGINAL, include_guard_scope
+
+    class _Hostile:
+        @property
+        def __wrapped__(self) -> Any:
+            raise RuntimeError("no")
+
+        def __get__(self, node: Any, owner: Any = None) -> Any:
+            return lambda context: _ORIGINAL(node, context)
+
+    IncludeNode.render = _Hostile()  # type: ignore[method-assign,assignment]
+    obj = _payload("alters_data")()
+    with include_guard_scope():
+        assert _include(obj) == "[]"
+    assert type(obj).calls == 0
+
+
+def test_a_deep_wraps_chain_over_the_guard_still_refuses(caplog):
+    """#3931: a chain deeper than 16 links was warned about; now the outermost is held to the guard
+    whatever is below it, without a WARNING."""
+    import functools
+
+    from django.template.loader_tags import IncludeNode
+
+    from djust._include_guard import include_guard_scope, install
+
+    install()
+    top = IncludeNode.render
+    for _ in range(40):
+        below = top
+
+        @functools.wraps(below)
+        def layer(self: Any, context: Any, _below: Any = below) -> Any:
+            return _below(self, context)
+
+        top = layer
+    IncludeNode.render = top  # type: ignore[method-assign]
+    obj = _payload("alters_data")()
+    with caplog.at_level(logging.WARNING, logger="djust._include_guard"):
+        with include_guard_scope():
+            assert _include(obj) == "[]"
+    assert not [r for r in caplog.records if r.name == "djust._include_guard"]
+    assert type(obj).calls == 0
+
+
+def test_repeated_scope_entries_over_the_guard_log_nothing(caplog):
+    from djust._include_guard import include_guard_scope
+
+    with caplog.at_level(logging.DEBUG, logger="djust._include_guard"):
+        for _ in range(5):
+            with include_guard_scope():
+                pass
+    assert not [r for r in caplog.records if r.name == "djust._include_guard"]
+
+
+def test_a_guard_left_by_a_reloaded_copy_of_the_module_is_not_taken_for_this_ones():
+    """A guard function from another copy of the module reads that copy's scope flag, which this
+    copy's scopes do not set: it is wrapped, not trusted (#3931)."""
+    import contextvars
+
+    from django.template.loader_tags import IncludeNode
+
+    from djust._include_guard import _ORIGINAL, include_guard_scope
+
+    other_flag: contextvars.ContextVar[bool] = contextvars.ContextVar("other", default=False)
+
+    def stale_guard(self: Any, context: Any) -> Any:
+        return _ORIGINAL(self, context)  # inactive: its own flag is never set
+
+    stale_guard._djust_include_guard = stale_guard  # type: ignore[attr-defined]
+    stale_guard._djust_active = other_flag  # type: ignore[attr-defined]
+    IncludeNode.render = stale_guard  # type: ignore[method-assign]
+    obj = _payload("alters_data")()
+    with include_guard_scope():
+        assert _include(obj) == "[]"
+    assert type(obj).calls == 0
+
+
+def test_a_staticmethod_replacement_is_called_as_one():
+    from django.template.loader_tags import IncludeNode
+
+    from djust._include_guard import include_guard_scope
+
+    calls: list[Any] = []
+
+    def render(context: Any) -> str:
+        calls.append(context)
+        return "STATIC"
+
+    IncludeNode.render = staticmethod(render)  # type: ignore[method-assign,assignment]
+    with include_guard_scope():
+        assert _include(_payload("plain")()) == "[STATIC]"
+        assert _include(_payload("alters_data")()) == "[]"
+    assert len(calls) == 1
 
 
 def test_a_render_outside_the_scope_is_stock_django():
@@ -1499,14 +1685,56 @@ def _unguarded_engine_renders(source: str) -> list[tuple[str, int]]:
                 names.append(node.name)
         return ".".join(reversed(names)) or "<module>"
 
-    # names a function (or the module) bound to a loaded template
+    def dotted(node: ast.AST) -> str | None:
+        """``self.tpl`` -> ``"self.tpl"``; ``None`` for anything that is not a name chain."""
+        parts = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if not isinstance(node, ast.Name):
+            return None
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+
+    def bound_targets(node: ast.AST) -> list[tuple[ast.AST, ast.expr]]:
+        """``(target, value)`` pairs a statement or expression binds, every syntax (#3931): ``=``,
+        an annotated or a walrus binding, a tuple unpack (each element, conservatively), a loop
+        variable and a ``with ... as`` target."""
+        if isinstance(node, ast.Assign):
+            return [(t, node.value) for t in node.targets]
+        if isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
+            return [(node.target, node.value)]
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            return [(node.target, node.iter)]
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            return [
+                (item.optional_vars, item.context_expr)
+                for item in node.items
+                if item.optional_vars is not None
+            ]
+        return []
+
+    def flatten(target: ast.AST) -> list[ast.AST]:
+        if isinstance(target, (ast.Tuple, ast.List)):
+            return [n for elt in target.elts for n in flatten(elt)]
+        if isinstance(target, ast.Starred):
+            return flatten(target.value)
+        return [target]
+
+    # names a function (or the module) bound to a loaded template; attribute chains
+    # (``self.tpl = get_template(..)``) for the whole file, since any method may read them
     template_names: dict[ast.AST | None, set[str]] = {}
+    template_attributes: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and any(is_loader_call(n) for n in ast.walk(node.value)):
+        for target, value in bound_targets(node):
+            if not any(is_loader_call(n) for n in ast.walk(value)):
+                continue
             owner = function_of(node)
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    template_names.setdefault(owner, set()).add(target.id)
+            for leaf in flatten(target):
+                if isinstance(leaf, ast.Name):
+                    template_names.setdefault(owner, set()).add(leaf.id)
+                elif isinstance(leaf, ast.Attribute) and dotted(leaf):
+                    template_attributes.add(dotted(leaf))  # type: ignore[arg-type]
 
     def bound_to_a_template(name: str, node: ast.AST) -> bool:
         owner = function_of(node)
@@ -1533,6 +1761,20 @@ def _unguarded_engine_renders(source: str) -> list[tuple[str, int]]:
             child = parent
         return False
 
+    def is_template_receiver(receiver: ast.AST, node: ast.AST) -> bool:
+        if is_loader_call(receiver):
+            return True
+        if isinstance(receiver, ast.Name):
+            # ``Template.render(t, c)``: the method taken off the class and CALLED unbound (a bare
+            # ``Template.render`` compared by identity, as ``template/operands.py`` does, is not)
+            if aliases.get(receiver.id, receiver.id) in _ENGINE_CTORS:
+                parent = parents.get(node)
+                return isinstance(parent, ast.Call) and parent.func is node
+            return bound_to_a_template(receiver.id, node)
+        if isinstance(receiver, ast.Attribute):
+            return dotted(receiver) in template_attributes
+        return False
+
     found: list[tuple[str, int]] = []
     for node in ast.walk(tree):
         site = False
@@ -1541,11 +1783,16 @@ def _unguarded_engine_renders(source: str) -> list[tuple[str, int]]:
         elif isinstance(node, ast.Attribute) and node.attr == "render_to_string":
             site = isinstance(node.ctx, ast.Load)
         elif isinstance(node, ast.Attribute) and node.attr == "render":
-            receiver = node.value
-            if is_loader_call(receiver):
-                site = True
-            elif isinstance(receiver, ast.Name):
-                site = bound_to_a_template(receiver.id, node)
+            site = is_template_receiver(node.value, node)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == "render"
+        ):
+            site = is_template_receiver(node.args[0], node)  # getattr(t, "render")(c)
         if site and not in_scope(node):
             found.append((qualname(node), node.lineno))
     return found
@@ -1689,6 +1936,52 @@ def test_every_django_engine_render_is_inside_the_scope_or_says_why_not():
             "def a(node, c):\n    return node.render(c)\n",
             [],
             id="a-node-render-is-not-an-engine-render",
+        ),
+        pytest.param(
+            "def a(c):\n    t = get_template('x')\n    return getattr(t, 'render')(c)\n",
+            [("a", 3)],
+            id="render-taken-with-getattr",
+        ),
+        pytest.param(
+            "from django.template import Template\ndef a(t, c):\n    return Template.render(t, c)\n",
+            [("a", 3)],
+            id="an-unbound-template-render",
+        ),
+        pytest.param(
+            "class V:\n    def setup(self):\n        self.tpl = get_template('x')\n"
+            "    def show(self, c):\n        return self.tpl.render(c)\n",
+            [("V.show", 5)],
+            id="a-template-held-on-self",
+        ),
+        pytest.param(
+            "def a(c):\n    if (t := get_template('x')):\n        return t.render(c)\n",
+            [("a", 3)],
+            id="a-walrus-binding",
+        ),
+        pytest.param(
+            "def a(c):\n    t, n = get_template('x'), 1\n    return t.render(c)\n",
+            [("a", 3)],
+            id="a-tuple-unpack-binding",
+        ),
+        pytest.param(
+            "def a(c):\n    for t in (get_template('x'), get_template('y')):\n        t.render(c)\n",
+            [("a", 3)],
+            id="a-loop-variable-binding",
+        ),
+        pytest.param(
+            "def a(c):\n    t: Any = get_template('x')\n    return t.render(c)\n",
+            [("a", 3)],
+            id="an-annotated-binding",
+        ),
+        pytest.param(
+            "class V:\n    def show(self, c):\n        return self.other.render(c)\n",
+            [],
+            id="an-attribute-never-bound-to-a-template-is-not-a-site",
+        ),
+        pytest.param(
+            "from django.template import Template\ndef a(f):\n    return f is Template.render\n",
+            [],
+            id="an-unbound-render-compared-not-called",
         ),
     ],
 )

@@ -9,12 +9,6 @@ description: "The conventions that keep a djust project maintainable."
 
 # djust Best Practices
 
-> **`@optimistic` is INERT.** It records handler metadata that nothing in the
-> shipped client reads, so applying it changes nothing at runtime — a bare
-> `@optimistic` declares no DOM change for a client to apply. Examples below
-> that use it still work, but without the optimistic-update behaviour they
-> describe. Tracked in issue #2699.
->
 > `@debounce` and `@throttle` ARE implemented (#2656) — the client gate is
 > `static/djust/src/05-handler-rate-limit.js`, configured from the mount
 > frame's `handler_config`.
@@ -63,22 +57,13 @@ class DashboardView(LiveView):
 
     def mount(self, request, **kwargs):
         self.services = get_all_statuses()
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(
-            services=self.services,
-            selected_id=self.selected_id,
-            search_query=self.search_query,
-        )
-        return context
 ```
 
 Avoid initializing state only inside `mount()` — declaring it at the class level makes the view's state self-documenting and ensures consistent defaults.
 
 ### What the template sees
 
-A view publishes nothing by itself. `self.items` and `self._items` both stay on the server; the template gets what `get_context_data()` returns:
+The template gets the declared `state()` fields above and what `get_context_data()` returns. An undeclared attribute, `self.items` or `self._items`, stays on the server until `get_context_data()` returns it:
 
 ```python
 def get_context_data(self, **kwargs):
@@ -232,7 +217,6 @@ class ProductListView(LiveView):
         """Phase 4: Hand the template what it reads (the QuerySet is JIT-serialized)."""
         context = super().get_context_data(**kwargs)
         context["products"] = self._products
-        context["search_query"] = self.search_query
         return context
 ```
 
@@ -354,10 +338,8 @@ def search(self, value: str = "", **kwargs):
 def on_scroll(self, scroll_y: int = 0, **kwargs):
     self.scroll_position = scroll_y
 
-# Like button marked @optimistic (INERT at 1.2.0rc10, #2699: no client-side
-# optimistic update happens; the server round-trip updates the UI)
+# Like button: the server round-trip updates the UI
 @event_handler
-@optimistic
 def like_post(self, post_id: int = 0, **kwargs):
     Post.objects.filter(id=post_id).update(likes=F("likes") + 1)
 
@@ -386,9 +368,9 @@ def expensive_operation(self, **kwargs):
 | ----------------------------- | --------------------------- | -------------- |
 | Search/filter input           | `@debounce(wait=0.5)`       | 300-500ms      |
 | Scroll/resize/mousemove       | `@throttle(interval=0.1)`   | 100-200ms      |
-| Like/toggle/vote              | `@optimistic` (INERT, #2699) | —              |
+| Like/toggle/vote              | `@event_handler` (+ `dj-loading.*`) | —              |
 | Autocomplete/repeated lookups | `@cache(ttl=300)`           | 60-300s TTL    |
-| Multi-component coordination  | one handler + the server re-render (`@client_state` is INERT, #2680) | —              |
+| Multi-component coordination  | one handler + the server re-render | —              |
 | Destructive/admin actions     | `@permission_required(...)` | Django perms   |
 | Abuse prevention              | `@rate_limit(rate=N)`       | 5-10 req/s     |
 | Long-form editing             | `DraftModeMixin`            | auto-save      |
@@ -411,7 +393,6 @@ class MyView(LiveView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["search_query"] = self.search_query
         if self.search_query:
             ctx["results"] = search_items(self.search_query)
         return ctx
@@ -461,11 +442,11 @@ class DashboardView(LiveView):
         return (self.active_count / total * 100) if total else 0
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["services"] = self.services
-        context["active_count"] = self.active_count
-        context["percentage_active"] = self.percentage_active
-        return context
+        return {
+            **super().get_context_data(**kwargs),
+            "active_count": self.active_count,
+            "percentage_active": self.percentage_active,
+        }
 ```
 
 ```html
@@ -953,11 +934,6 @@ class MyView(LiveView):
     show_modal = state(default=False)
     modal_data = state(default={})
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(show_modal=self.show_modal, modal_data=self.modal_data)
-        return context
-
     @event_handler
     def open_modal(self, item_id="", **kwargs):
         self.modal_data = get_item_data(item_id)
@@ -985,9 +961,6 @@ class MyView(LiveView):
 ```python
 class MyView(LiveView):
     active_tab = state(default="overview")
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "active_tab": self.active_tab}
 
     @event_handler
     def switch_tab(self, tab_name="", **kwargs):
@@ -1046,9 +1019,6 @@ System check `djust.T010` will warn if you use `dj-click` with `data-tab` attrib
 ```python
 class MyView(LiveView):
     toast_message = state(default="")
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "toast_message": self.toast_message}
 
     @event_handler
     def save_item(self, **kwargs):

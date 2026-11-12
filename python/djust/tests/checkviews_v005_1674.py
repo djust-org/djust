@@ -16,7 +16,7 @@ from djust import LiveView
 class RoutedAllowlistView(LiveView):
     """A trivial URL-routed LiveView used to exercise V005 discovery."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "checkviews_v005_routed.html"
 
 

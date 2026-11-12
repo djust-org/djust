@@ -83,6 +83,7 @@ from djust.serialization import (
     django_json_datetime,
     normalize_django_value,
 )
+from djust import state
 
 UTC = dt.timezone.utc
 
@@ -136,7 +137,8 @@ class _BaseView(LiveView):
     suite over a real divergence.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    p = state()
     _value: object = None
 
     def mount(self, request, **kwargs):  # noqa: ANN001, ANN003, ANN201

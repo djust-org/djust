@@ -14,6 +14,7 @@ from djust.components.ui import (
     Alert,
     Card,
 )
+from djust import state
 
 
 class DropdownDemo(LiveView):
@@ -21,7 +22,22 @@ class DropdownDemo(LiveView):
     Demo page showcasing both stateless and stateful dropdown components.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    last_action = state("No action yet")
+    action_count = state(0)
+    basic_dropdown = state()
+    split_dropdown = state()
+    dropdown_variants = state()
+    size_small = state()
+    size_medium = state()
+    size_large = state()
+    direction_down = state()
+    direction_up = state()
+    direction_start = state()
+    direction_end = state()
+    disabled_dropdown = state()
+    actions_dropdown = state()
+    status_alert = state()
     template_name = 'demos/dropdown_demo.html'
 
     def mount(self, request, **kwargs):

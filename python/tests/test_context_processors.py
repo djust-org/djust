@@ -10,12 +10,14 @@ from unittest.mock import patch, Mock
 from djust import LiveView
 from djust.mixins.context import _resolved_processors_cache
 from django.test import RequestFactory, override_settings
+from djust import state
 
 
 class AnalyticsView(LiveView):
     """Test view that uses context processor variables."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = """<div dj-root>
     {% if GOOGLE_ANALYTICS_ID %}
     <script>gtag('config', '{{ GOOGLE_ANALYTICS_ID }}')</script>

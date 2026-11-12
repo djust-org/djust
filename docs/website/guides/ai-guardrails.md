@@ -31,15 +31,15 @@ The examples below run against one small view. It has four mistakes of the kind 
 
 ```python
 import requests
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
 class ShopView(LiveView):
     template_name = "shop/index.html"
+    pings = state(0)
 
     def mount(self, request, **kwargs):
-        self.pings = 0
         self.client = requests.Session()
 
     @event_handler()
@@ -48,9 +48,6 @@ class ShopView(LiveView):
 
     def toggle_cart(self, **kwargs):
         self.pings += 1
-
-    def get_context_data(self, **kwargs):
-        return {"pings": self.pings}
 ```
 
 ```html

@@ -14,6 +14,7 @@ from djust import LiveView
 from djust.decorators import event_handler
 from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
+from djust import state
 
 
 # Marker to check if panel is in HTML
@@ -23,7 +24,8 @@ PANEL_MARKER = 'class="panel"'
 class ConditionalContentView(LiveView):
     """Test view with conditional content that can be shown/hidden."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    show_panel = state(False)
     template = """<div dj-root>
     <div class="container">
         <button dj-click="toggle_panel">Toggle</button>
@@ -184,7 +186,8 @@ def test_conditional_content_with_whitespace():
     class WhitespaceView(LiveView):
         """Test view with whitespace around conditional content."""
 
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        show_panel = state(False)
 
         # Note the blank line between </button> and {% if %}
         template = """<div dj-root>
@@ -254,7 +257,9 @@ def test_conditional_content_with_conditional_class():
     class ConditionalClassView(LiveView):
         """Test view with conditional class on button + conditional sibling."""
 
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        show_panel = state(False)
+        temperature = state(0.7)
 
         # Matches djust_chat's model-config structure more closely
         template = """<div dj-root>
@@ -345,7 +350,9 @@ def test_conditional_content_with_svg_icon():
     class SvgIconView(LiveView):
         """Test view with SVG icon inside toggle button."""
 
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        show_panel = state(False)
+        temperature = state(0.7)
         template = """<div dj-root>
     <div class="model-config">
         <button
@@ -433,7 +440,11 @@ def test_multiple_sibling_conditionals():
     class MultipleSiblingConditionalsView(LiveView):
         """Test view with multiple sibling conditional blocks."""
 
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        show_prompt = state(False)
+        show_model_config = state(False)
+        show_export = state(False)
+        temperature = state(0.7)
         template = """<div dj-root>
     <main class="chat-main">
         <header class="chat-header">
@@ -550,7 +561,9 @@ def test_deeply_nested_conditional():
     class DeeplyNestedView(LiveView):
         """Test view with deeply nested conditional."""
 
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        show_panel = state(False)
+        temperature = state(0.7)
         template = """<div dj-root>
     <main class="chat-main">
         <header class="chat-header">

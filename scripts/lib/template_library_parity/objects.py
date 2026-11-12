@@ -13,9 +13,10 @@ parameter that iterates its value is then rendered a second time with a LIST of
 recorders, to see whether the ELEMENTS are objects (``avatar_group users=...`` calls
 ``user.get_full_name()``).
 
-Pure measurement: nothing here changes a handler. ``python/tests/
-test_native_handler_fidelity_3666_3667.py`` compares the result with
-``rust_handlers.OBJECT_ARGUMENT_TAGS``.
+Pure measurement: nothing here changes a handler. Since 2.0 every tag without a kept native twin
+renders its own Python node under the Rust engine (``djust.components.rust_handlers``), so objects
+reach it as themselves; this measurement is what ``scripts/template-library-parity.py --fidelity``
+reports.
 """
 
 from __future__ import annotations

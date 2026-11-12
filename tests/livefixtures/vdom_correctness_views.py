@@ -12,6 +12,7 @@ replayed in jsdom by ``tests/js/vdom_correctness_v1_2_1_8.test.js``.
 """
 
 from djust import LiveView
+from djust import state
 
 # --- #2997 keyed filter / restore ------------------------------------------
 
@@ -35,7 +36,8 @@ RESORTED = sorted(ALL_ITEMS, key=lambda s: ((int(s[4:]) * 37) % 69, s))
 
 def keyed_filter_view(shape):
     class _KeyedFilterView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        items = state()
         template = KEYED_FILTER_TEMPLATES[shape]
 
         def mount(self, request, **kwargs):

@@ -8,13 +8,15 @@ djust's reactive capabilities in action.
 from djust import LiveView
 import time
 import random
+from djust import state
 
 
 class HomeCounterDemo(LiveView):
     """
     Simple counter demo for homepage - showcases instant reactivity
     """
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = """
     <div class="text-center">
         <div class="display-1 fw-bold mb-3" style="color: #667eea;">{{ count }}</div>
@@ -52,7 +54,16 @@ class HomeSearchDemo(LiveView):
     """
     Live search/filter demo - showcases real-time filtering
     """
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    items = state(default_factory=lambda: [
+            {"name": "djust", "description": "Reactive Django with Rust", "speed": "⚡ 100x"},
+            {"name": "Phoenix LiveView", "description": "Elixir real-time framework", "speed": "🚀 Fast"},
+            {"name": "Laravel Livewire", "description": "PHP reactive components", "speed": "🐌 Slow"},
+            {"name": "Hotwire Turbo", "description": "Rails HTML-over-wire", "speed": "🏃 Medium"},
+            {"name": "HTMX", "description": "HTML attributes framework", "speed": "💨 Quick"},
+            {"name": "React", "description": "JavaScript UI library", "speed": "🔧 Complex"},
+        ])
+    filtered_items = state()
     template = """
     <div>
         <input
@@ -108,7 +119,9 @@ class HomeLiveDataDemo(LiveView):
     """
     Live updating data table - showcases real-time data updates
     """
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    metrics = state()
+    last_update = state()
     template = """
     <div>
         <div class="d-flex justify-content-between align-items-center mb-3">
@@ -196,7 +209,12 @@ class HomeTodoDemo(LiveView):
     """
     Simple todo list demo - showcases list manipulation
     """
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    todos = state(default_factory=lambda: [
+            {'id': 1, 'text': 'Try djust for your next project', 'done': False},
+            {'id': 2, 'text': 'Read the documentation', 'done': False},
+        ])
+    next_id = state(3)
     template = """
     <div>
         <form dj-submit="add_todo" class="mb-3">

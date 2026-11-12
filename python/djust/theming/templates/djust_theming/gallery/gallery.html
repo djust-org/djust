@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Theme Gallery</title>
-  {% theme_head include_js=True %}
+  {% theme_head include_js=True component_catalog=True %}
   {% comment %}
   `|safe` is load-bearing, not a shortcut. Autoescaping rewrites the quotes in
   the generated CSS to `&quot;`, so `html[data-theme="dark"]` is emitted as

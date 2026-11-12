@@ -121,6 +121,15 @@ Everything else stays on the view object in server memory. Your handlers can
 read it; nothing exports it. A value you render is in the HTML, as in any
 Django template, and that is the only place it is.
 
+**No generated `_count` names.** Under the 1.3 default a QuerySet or list in
+the context as `items` also gave the template `items_count`. Explicit exposure
+does not generate it, so `{{ items_count }}` renders empty. Write
+`{{ items|length }}` instead (it works on a QuerySet and on a list), or return
+`items_count` from `get_context_data()`. With `DEBUG = True` djust logs a
+warning on the `djust.exposure` logger that names the template's
+`items_count` and points at `{{ items|length }}`, once per view and name, and
+`manage.py check` reports it as `djust.T027` when `items` is supplied.
+
 ### Step 1: run the inventory
 
 ```bash
@@ -450,7 +459,7 @@ checks every event again, including ones a script sends by hand.
 ### Before and after
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
@@ -461,16 +470,8 @@ class SearchView(LiveView):
         <p>{{ query }} / {{ selected }}</p>
     </div>"""
 
-    def mount(self, request, **kwargs):
-        self.query = "none"
-        self.selected = 0
-
-    def get_context_data(self, **kwargs):
-        return {
-            **super().get_context_data(**kwargs),
-            "query": self.query,
-            "selected": self.selected,
-        }
+    query = state("none")
+    selected = state(0)
 
     @event_handler()
     def search(self, value="", **kwargs):
@@ -484,7 +485,7 @@ class SearchView(LiveView):
 becomes:
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
@@ -495,16 +496,8 @@ class SearchView(LiveView):
         <p>{{ query }} / {{ selected }}</p>
     </div>"""
 
-    def mount(self, request, **kwargs):
-        self.query = "none"
-        self.selected = 0
-
-    def get_context_data(self, **kwargs):
-        return {
-            **super().get_context_data(**kwargs),
-            "query": self.query,
-            "selected": self.selected,
-        }
+    query = state("none")
+    selected = state(0)
 
     @event_handler(parameter_policy="strict")
     def search(self, value: str):
@@ -597,6 +590,7 @@ Every replacement works on 1.3.x, so make the change there.
 | `djust.sse.DjustSSEEventView` and the `sse/<session_id>/event/` route | `DjustSSEMessageView` at `sse/<session_id>/message/`, which the bundled client already uses |
 | `self._async_pending = (fn, args, kwargs)` in a handler | `self.start_async(fn, *args, **kwargs)`, or `@background` on the handler. Assigning the tuple raises `ImproperlyConfigured` when the handler runs, on every transport ([#4031](https://github.com/djust-org/djust/issues/4031)); search your code for `_async_pending` to find them before then. |
 | `use_actors = True` | Remove the attribute. See [What does not survive](#5-what-does-not-survive). |
+| `@optimistic` and `@client_state(keys=...)` (`djust.optimistic`, `djust.client_state`, `djust.decorators`) | Delete the decorator; the handler behaves as before, because nothing read either one. Importing either raises `ImportError` naming this advice ([#4006](https://github.com/djust-org/djust/issues/4006)). For feedback before the server answers, use `dj-loading.*` attributes or JS Commands. |
 | `sign_snapshot`, `unsign_snapshot` and `SNAPSHOT_SALT` from `djust.security`, the `djust.security.state_snapshot` module, and the `LiveView._restore_snapshot()` override | `state(..., persist="client", client=True)` fields. djust signs and verifies their token itself (example below). Importing one of the three names raises `ImportError` with this advice, and so does reading it as an attribute: `hasattr(djust.security, "sign_snapshot")` raises instead of returning `False`, so a compatibility shim must catch `ImportError`. A class that defines `_restore_snapshot()` is refused with `ImproperlyConfigured`; move what it did after restoring into `handle_restore()`. |
 | `enable_state_snapshot = True`, on a view or a mixin | `state(..., persist="server")` on each field that must survive a reconnect, and `persist="client", client=True` for one the browser may hold across Back (example below). A view that still sets it is refused with `ImproperlyConfigured` when the class is created, or when it mounts if the value is set on the instance or later. `False` is accepted. |
 | `PersistentLiveView` (`djust.PersistentLiveView`, `djust.live_view.PersistentLiveView`) | `LiveView`, with the fields to keep declared as above. Importing it raises `ImportError` with this advice. |
@@ -752,6 +746,31 @@ To open or close from your own handler, set the state:
 - **A model or QuerySet that cannot be serialized for the template is an
   error.** It used to be serialized again a slower way.
 
+### Defaults that changed
+
+Nothing raises for these; the page looks or behaves differently until you
+state the old value.
+
+- **`{% theme_head %}` no longer links the component catalog's stylesheet.**
+  With `djust.components` installed it used to link
+  `djust_components/components.css` (about 330 KB) on every page. Pages that
+  render catalog tags (`{% modal %}`, `{% data_table %}`, `{% app_shell %}`,
+  ...) now render them unstyled unless the project sets
+  `LIVEVIEW_CONFIG["theme"]["component_catalog_css"] = True`, or the page
+  passes `{% theme_head component_catalog=True %}`. The theme pack's own
+  component CSS (`.card`, `.btn`, `.input`, ...) is linked as before. System
+  check `djust_theming.W004` reports a project that installs
+  `djust.components` without stating the setting; set it to `False` once you
+  know no page needs the file
+  ([#4003](https://github.com/djust-org/djust/issues/4003)).
+- **The Chart.js adapter redraws only when the canvas's attributes change.**
+  `<canvas dj-hook="Chart">` used to call `chart.update()` after every server
+  update; it now does so only when one of the canvas's attributes changed. A
+  chart whose plugins read state from outside the canvas (the theme, a global)
+  either changes `dj-chart-revision` when that state changes, or sets
+  `dj-chart-update="always"` for the old behaviour
+  ([#4004](https://github.com/djust-org/djust/issues/4004)).
+
 ## 4. Still to be removed before the final release
 
 These still work on the 2.0 development line. Each is to be removed, or made
@@ -759,7 +778,7 @@ the only behaviour, before 2.0.0 is released, so finish with them on 1.3.x:
 
 | Still present | Do this now |
 | --- | --- |
-| `exposure_policy = "legacy"`. It is no longer the default: a view has to state it, and stating it warns | Migrate every view that states it, or that you have not checked yet ([section 1](#1-move-each-view-to-explicit-exposure)) |
+| `exposure_policy = "legacy"`. It is no longer the default: a view has to state it, stating it warns, and system check `djust.V028` lists each class that does | Migrate every view that states it, or that you have not checked yet ([section 1](#1-move-each-view-to-explicit-exposure)) |
 | `event_parameter_policy = "legacy"`, the default, and `parameter_policy="legacy"` | Make every handler strict ([section 2](#2-make-event-handlers-strict)) |
 | `event_security` set to `"open"` or `"warn"` | Remove the setting (the default is `"strict"`) and put `@event_handler` on every method a template calls |
 | Time travel that restores a past state | Nothing to change in code; see below |
@@ -799,4 +818,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 614e79af2d5c -->
+<!-- generated-doc prose-sha256: 9fd14cfc7058 -->

@@ -38,6 +38,7 @@ from django.utils import translation
 
 from djust import _rust
 from djust.render_env import apply_render_env
+from djust import state
 
 # `1234,5` under a `,`-decimal (French) number format, `1234.5` under the
 # thread default.
@@ -262,7 +263,8 @@ def test_the_mixin_captures_the_env_it_pushed():
     from djust.testing import LiveViewTestClient
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        v = state(1)
         template = "<div>{{ v }}</div>"
 
         def mount(self, request, **kwargs):

@@ -536,6 +536,19 @@ function formToReset(triggerElement, root) {
 
 window.djust.formToReset = formToReset;
 
+/** dj-lock: release every locked element (see `_lockElement`, 09-event-binding.js). */
+function _unlockLockedElements() {
+    document.querySelectorAll('[data-djust-locked]').forEach(el => {
+        el.removeAttribute('data-djust-locked');
+        if (el.tagName === 'BUTTON' || el.tagName === 'INPUT' ||
+            el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') {
+            el.disabled = false;
+        } else {
+            el.classList.remove('djust-locked');
+        }
+    });
+}
+
 async function handleServerResponse(data, eventName, triggerElement, transport = null) {
     try {
         // Handle cache storage (from @cache decorator)
@@ -613,6 +626,10 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 if (!el.hasAttribute('data-djust-was-disabled')) el.disabled = false;
                 el.removeAttribute('data-djust-was-disabled');
             });
+            // dj-lock: unlock BEFORE the patches too, so a control the response
+            // renders `disabled` (or a class it renders) stays as rendered;
+            // unlocking after them re-enabled it (#3975).
+            _unlockLockedElements();
         }
 
         // Clear optimistic state BEFORE applying changes
@@ -775,16 +792,7 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 globalLoadingManager.stopLoading(loadingEventName, triggerElement);
             }
 
-            // dj-lock: unlock all locked elements after server response
-            document.querySelectorAll('[data-djust-locked]').forEach(el => {
-                el.removeAttribute('data-djust-locked');
-                if (el.tagName === 'BUTTON' || el.tagName === 'INPUT' ||
-                    el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') {
-                    el.disabled = false;
-                } else {
-                    el.classList.remove('djust-locked');
-                }
-            });
+            // dj-lock: the unlock runs before the patches (above), not here (#3975).
         } else if (globalThis.djustDebug) {
             djLog('[LiveView] Keeping loading state — async work pending');
         }
@@ -4337,6 +4345,31 @@ function flushHandlerRateLimit(debounceOnly = false) {
 window.djust.flushHandlerRateLimit = flushHandlerRateLimit;
 
 // DraftManager for localStorage-based draft saving
+
+// Drafts saved before #3978 flattened a radio group to the LAST radio's value
+// (checked or not) and a checkbox group to one box's boolean, so those entries
+// do not say what was chosen. A draft without this format number drops them on
+// load; its other fields still restore.
+const DRAFT_FORMAT = 2;
+
+function _withoutLegacyGroups(data) {
+    if (!data || typeof data !== 'object') return data;
+    const kept = {};
+    const boxes = new Map();
+    const radios = new Set();
+    document.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(f => {
+        if (!f.name) return;
+        if (f.type === 'radio') radios.add(f.name);
+        else boxes.set(f.name, (boxes.get(f.name) || 0) + 1);
+    });
+    Object.keys(data).forEach(name => {
+        if (UNSAFE_KEYS.includes(name) || radios.has(name) || boxes.get(name) > 1) return;
+        // eslint-disable-next-line security/detect-object-injection
+        kept[name] = data[name];
+    });
+    return kept;
+}
+
 class DraftManager {
     constructor() {
         this.saveTimers = new Map();
@@ -4358,7 +4391,8 @@ class DraftManager {
             try {
                 const draftData = {
                     data,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    format: DRAFT_FORMAT
                 };
                 localStorage.setItem(`djust_draft_${draftKey}`, JSON.stringify(draftData));
 
@@ -4388,6 +4422,7 @@ class DraftManager {
                 djLog(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
             }
 
+            if (draftData.format !== DRAFT_FORMAT) return _withoutLegacyGroups(draftData.data);
             return draftData.data;
         } catch (error) {
             console.error(`[DraftMode] Failed to load draft ${draftKey}:`, error);
@@ -4475,19 +4510,13 @@ function _draftTargetFor(field) {
 }
 
 function _collectDraftData(scope) {
-    const draftData = {};
-    scope.querySelectorAll('[data-draft="true"]').forEach(f => {
-        // Prevent prototype pollution attacks. A file input has no value a
-        // draft could put back (setting one throws).
-        if (f.name && !UNSAFE_KEYS.includes(f.name) && f.type !== 'file') {
-            if (f.type === 'checkbox') {
-                draftData[f.name] = f.checked;
-            } else {
-                draftData[f.name] = f.value;
-            }
-        }
-    });
-    return draftData;
+    // A file input has no value a draft could put back (setting one throws).
+    // A checkbox group / <select multiple> is saved as a list and a radio group
+    // as the checked value, not flattened to one box (#3978); `_readControls`
+    // also refuses the prototype-polluting names.
+    return _readControls(
+        Array.from(scope.querySelectorAll('[data-draft="true"]')).filter(f => f.type !== 'file')
+    );
 }
 
 /**
@@ -4566,11 +4595,7 @@ function syncDraftFields(atInit) {
         const saved = savedByKey.get(draftKey);
         if (!saved || !Object.prototype.hasOwnProperty.call(saved, field.name)) return;
         if (!atInit && (_draftEdited.get(field) === field.name || field === document.activeElement)) return;
-        if (field.type === 'checkbox') {
-            field.checked = saved[field.name];
-        } else {
-            field.value = saved[field.name];
-        }
+        _writeControl(field, saved[field.name]);
     });
 }
 
@@ -4659,23 +4684,88 @@ if (typeof window !== 'undefined') {
     });
 }
 
-function _collectFormData(container) {
-    const data = {};
+/**
+ * A password field (or one the page marks as holding a password) is never
+ * read into a draft, an auto-recover envelope or `_collectFormData`, and never
+ * written back from one.
+ */
+function _isSecretControl(field) {
+    if (field.type === 'password') return true;
+    const autocomplete = (field.getAttribute('autocomplete') || '').toLowerCase();
+    return /(^|\s)(new|current)-password(\s|$)/.test(autocomplete);
+}
 
-    const fields = container.querySelectorAll('input, textarea, select');
+/**
+ * The values of the named form controls in `fields`, keyed by name (#3978).
+ *
+ * A control that shares its name with others is one value, as the browser
+ * submits it: a group of same-named checkboxes is the list of the checked
+ * boxes' values (`[]` when none is), a radio group is the checked radio's
+ * value (no entry when none is), and a `<select multiple>` is the list of its
+ * selected options. A lone checkbox stays a boolean. Reading one control at a
+ * time flattened a group to its last box.
+ *
+ * Shared by the draft manager, `_collectFormData` and the `dj-auto-recover`
+ * envelope, so they read a group the same way.
+ */
+function _readControls(fields) {
+    const data = {};
+    const checkboxCount = new Map();
+    fields = fields.filter(field => !_isSecretControl(field));
     fields.forEach(field => {
-        if (field.name && !UNSAFE_KEYS.includes(field.name)) {
-            if (field.type === 'checkbox') {
-                data[field.name] = field.checked;
-            } else if (field.type === 'radio') {
-                if (field.checked) {
-                    data[field.name] = field.value;
-                }
-            } else {
-                data[field.name] = field.value;
-            }
+        if (field.type === 'checkbox' && field.name) {
+            checkboxCount.set(field.name, (checkboxCount.get(field.name) || 0) + 1);
         }
     });
+    fields.forEach(field => {
+        const name = field.name;
+        if (!name || UNSAFE_KEYS.includes(name)) return;
+        if (field.type === 'checkbox') {
+            if (checkboxCount.get(name) > 1) {
+                // eslint-disable-next-line security/detect-object-injection
+                if (!Array.isArray(data[name])) data[name] = [];
+                // eslint-disable-next-line security/detect-object-injection
+                if (field.checked) data[name].push(field.value);
+            } else {
+                // eslint-disable-next-line security/detect-object-injection
+                data[name] = field.checked;
+            }
+        } else if (field.type === 'radio') {
+            // eslint-disable-next-line security/detect-object-injection
+            if (field.checked) data[name] = field.value;
+        } else if (field.tagName === 'SELECT' && field.multiple) {
+            // eslint-disable-next-line security/detect-object-injection
+            data[name] = Array.from(field.selectedOptions, option => option.value);
+        } else {
+            // eslint-disable-next-line security/detect-object-injection
+            data[name] = field.value;
+        }
+    });
+    return data;
+}
+
+/**
+ * Put a value `_readControls` produced back into one control of its group.
+ *
+ * A list ticks the checkboxes / selects the options whose value is in it; a
+ * boolean (a lone checkbox, or a group saved before #3978) sets `checked`; a
+ * radio is checked when its value is the saved one.
+ */
+function _writeControl(field, value) {
+    if (_isSecretControl(field)) return;
+    if (field.type === 'checkbox') {
+        field.checked = Array.isArray(value) ? value.includes(field.value) : !!value;
+    } else if (field.type === 'radio') {
+        if (value !== null && value !== undefined) field.checked = String(value) === field.value;
+    } else if (field.tagName === 'SELECT' && field.multiple && Array.isArray(value)) {
+        for (const option of field.options) option.selected = value.includes(option.value);
+    } else {
+        field.value = value;
+    }
+}
+
+function _collectFormData(container) {
+    const data = _readControls(Array.from(container.querySelectorAll('input, textarea, select')));
 
     const editables = container.querySelectorAll('[contenteditable="true"]');
     editables.forEach(editable => {
@@ -4692,33 +4782,17 @@ function _collectFormData(container) {
 
 function _restoreFormData(container, data) {
     if (!data) return;
+    const has = name => Object.prototype.hasOwnProperty.call(data, name) && !UNSAFE_KEYS.includes(name);
 
-    Object.entries(data).forEach(([name, value]) => {
-        let field = container.querySelector(`[name="${name}"]`);
+    // Every control of a group, not only the first one with the name.
+    container.querySelectorAll('input, textarea, select').forEach(field => {
+        if (field.name && has(field.name)) _writeControl(field, data[field.name]);
+    });
 
-        if (!field) {
-            field = container.querySelector(`#${name}`);
-        }
-
-        if (!field) return;
-
-        if (field.tagName === 'INPUT') {
-            if (field.type === 'checkbox') {
-                field.checked = value;
-            } else if (field.type === 'radio') {
-                if (field.value === value) {
-                    field.checked = true;
-                }
-            } else {
-                field.value = value;
-            }
-        } else if (field.tagName === 'TEXTAREA') {
-            field.value = value;
-        } else if (field.tagName === 'SELECT') {
-            field.value = value;
-        } else if (field.getAttribute('contenteditable') === 'true') {
-            field.innerHTML = value;
-        }
+    container.querySelectorAll('[contenteditable="true"]').forEach(editable => {
+        const name = editable.getAttribute('name') || editable.id;
+        // eslint-disable-next-line security/detect-object-injection
+        if (name && has(name)) editable.innerHTML = data[name];
     });
 
     if (globalThis.djustDebug) {
@@ -7935,22 +8009,10 @@ function _processAutoRecover() {
         const handlerName = container.getAttribute('dj-auto-recover');
         if (!handlerName) return;
 
-        // Serialize form field values within the container
-        const formValues = {};
-        container.querySelectorAll('input, textarea, select').forEach(function(field) {
-            const name = field.name;
-            if (!name) return;
-            if (field.type === 'checkbox') {
-                // eslint-disable-next-line security/detect-object-injection
-                formValues[name] = field.checked;
-            } else if (field.type === 'radio') {
-                // eslint-disable-next-line security/detect-object-injection
-                if (field.checked) formValues[name] = field.value;
-            } else {
-                // eslint-disable-next-line security/detect-object-injection
-                formValues[name] = field.value;
-            }
-        });
+        // Serialize form field values within the container: a checkbox group
+        // or <select multiple> is a list, as the reconnect recovery reads it
+        // (#3978); a lone checkbox stays a boolean.
+        const formValues = _readControls(Array.from(container.querySelectorAll('input, textarea, select')));
 
         // Collect data-* attributes from the container element
         const dataAttrs = {};
@@ -16170,12 +16232,21 @@ function _isContentEditable(el) {
     return attr !== null && attr.toLowerCase() !== 'false';
 }
 
-function _getElementValue(el) {
+function _getElementValue(el, field) {
     if (_isContentEditable(el)) {
         // innerText keeps the line breaks the user typed; jsdom has none.
         return typeof el.innerText === 'string' ? el.innerText : el.textContent;
     }
     if (el.type === 'checkbox') {
+        // A group of same-named checkboxes bound to the same field is one list
+        // value, the checked boxes' values, as a <select multiple> is (#3978).
+        // Each box writing its own boolean made the last one clicked win.
+        if (el.name && field) {
+            const scope = el.closest('form') || document;
+            const group = Array.from(scope.querySelectorAll('input[type="checkbox"]')).filter(
+                box => box.name === el.name && _parseModelAttr(box).field === field);
+            if (group.length > 1) return group.filter(box => box.checked).map(box => box.value);
+        }
         return el.checked;
     }
     if (el.type === 'radio') {
@@ -16261,7 +16332,7 @@ function _bindModel(el) {
     const eventType = lazy ? (_isContentEditable(el) ? 'focusout' : 'change') : 'input';
 
     const handler = () => {
-        const value = _getElementValue(el);
+        const value = _getElementValue(el, field);
 
         if (debounce > 0) {
             // Keyed by the view the element lives in as well as the field: two

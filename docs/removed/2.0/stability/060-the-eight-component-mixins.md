@@ -9,15 +9,19 @@ classes, are gone from `djust.components` and `djust.components.mixins`
 Declare the matching descriptor on the view instead. It holds the state and
 registers its event handler; the template reads the state off the attribute.
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before
+# Before (removed: raises ImportError)
 from djust.components.mixins import TabsMixin
 
 class SettingsView(TabsMixin, LiveView):
     def mount(self, request, **kwargs):
         self.init_tabs("nav", active="general")
+```
 
+```python
 # After
+from djust import LiveView
 from djust.components.descriptors import Tabs
 
 class SettingsView(LiveView):

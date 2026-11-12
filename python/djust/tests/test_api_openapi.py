@@ -49,7 +49,7 @@ def test_type_mapping_unknown_falls_back_to_string():
 
 def test_build_schema_is_openapi_3_1():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "openapi.simple"
 
         @event_handler(expose_api=True)
@@ -66,7 +66,7 @@ def test_build_schema_is_openapi_3_1():
 
 def test_schema_excludes_non_exposed_handlers():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "openapi.mixed"
 
         @event_handler(expose_api=True)
@@ -86,7 +86,7 @@ def test_schema_excludes_non_exposed_handlers():
 
 def test_schema_request_body_has_types_and_required():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "openapi.params"
 
         @event_handler(expose_api=True)
@@ -107,7 +107,7 @@ def test_schema_request_body_has_types_and_required():
 
 def test_schema_responses_include_error_envelope():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "openapi.errors"
 
         @event_handler(expose_api=True)
@@ -123,7 +123,7 @@ def test_schema_responses_include_error_envelope():
 
 def test_schema_summary_from_docstring():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "openapi.doc"
 
         @event_handler(expose_api=True)
@@ -139,7 +139,7 @@ def test_schema_summary_from_docstring():
 
 def test_schema_is_json_serializable():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "openapi.json"
 
         @event_handler(expose_api=True)
@@ -154,7 +154,7 @@ def test_schema_is_json_serializable():
 
 def test_schema_accepts_kwargs_sets_additional_properties():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "openapi.kwargs"
 
         @event_handler(expose_api=True)

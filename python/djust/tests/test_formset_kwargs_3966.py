@@ -16,6 +16,7 @@ from django.forms import formset_factory, inlineformset_factory, modelformset_fa
 from djust.formsets import FormSetHelpersMixin, add_row, remove_row
 from djust.live_view import LiveView
 from djust.testing import LiveViewTestClient
+from djust import state
 
 ItemFormSet = inlineformset_factory(
     ContentType, Permission, fields=["name", "codename"], extra=1, can_delete=True
@@ -172,7 +173,9 @@ def _names_of(formset, field):
 
 
 class OrderView(FormSetHelpersMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    order = state()
+    items = state()
     template = "<div dj-root></div>"
     formset_classes = {"items": ItemFormSet}
     parent_pk = None  # the test's lever: the order the view opens

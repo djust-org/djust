@@ -72,7 +72,7 @@ def test_dispatch_serialize_error_does_not_leak_exception_message():
         raise RuntimeError(sentinel)
 
     class ExplodingView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "test.serialize_leak.v"
 
         @event_handler(expose_api=True, serialize=_exploder)

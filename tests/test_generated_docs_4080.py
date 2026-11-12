@@ -10,6 +10,7 @@ the same check ID do.
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,7 @@ FILES = (
     "python/djust/_removed_settings.py",
     "scripts/system-check-docs.py",
     "scripts/removed-names-docs.py",
+    "scripts/import-generated-docs.py",
     "scripts/lib/__init__.py",
     "scripts/lib/generated_docs.py",
     ".gitattributes",
@@ -70,19 +72,21 @@ def _write(root: Path) -> None:
     assert removed_docs.run("write", root) == 0
 
 
-V028 = """---
-id: V028
+#: V090 / V091 stand for "a check no one has taken yet": far enough above the
+#: real V IDs that the copy of the repo never has them already.
+V090 = """---
+id: V090
 severity: Warning
 summary: A brand-new check for the test
 ---
 
 <!-- doc: reference -->
-### V028 — a brand-new check
+### V090 — a brand-new check
 
 - **Severity**: Warning
 
 <!-- doc: guide -->
-### V028: a brand-new check
+### V090: a brand-new check
 
 **Fix**: none needed.
 """
@@ -114,22 +118,22 @@ def test_a_new_entry_appears_only_after_write_and_a_removed_one_disappears(
     tmp_path: Path, capsys
 ) -> None:
     root = _copy_repo(tmp_path)
-    (root / "docs/checks/V028.md").write_text(V028)
+    (root / "docs/checks/V090.md").write_text(V090)
     assert _check(root) == 1, "a source added without regenerating must fail check"
     assert "generated region differs" in capsys.readouterr().err
     _write(root)
     sc = (root / "docs/system-checks.md").read_text()
     ec = (root / "docs/website/guides/error-codes.md").read_text()
-    assert "| V028 | LiveView | Warning | A brand-new check for the test |" in sc
-    assert "### V028 — a brand-new check" in sc and "### V028: a brand-new check" in ec
+    assert "| V090 | LiveView | Warning | A brand-new check for the test |" in sc
+    assert "### V090 — a brand-new check" in sc and "### V090: a brand-new check" in ec
     # Sorted after V027, before the S family.
-    assert sc.index("### V027 —") < sc.index("### V028 —") < sc.index("### S001 —")
+    assert sc.index("### V027 —") < sc.index("### V090 —") < sc.index("### S001 —")
     assert _check(root) == 0
 
-    (root / "docs/checks/V028.md").unlink()
+    (root / "docs/checks/V090.md").unlink()
     _write(root)
-    assert "V028" not in (root / "docs/system-checks.md").read_text()
-    assert "V028" not in (root / "docs/website/guides/error-codes.md").read_text()
+    assert "V090" not in (root / "docs/system-checks.md").read_text()
+    assert "V090" not in (root / "docs/website/guides/error-codes.md").read_text()
 
 
 def test_a_prose_edit_needs_a_refreshed_fingerprint(tmp_path: Path, capsys) -> None:
@@ -155,18 +159,18 @@ def test_two_fingerprint_lines_mean_a_union_merge_of_two_prose_edits(
 
 def test_a_file_whose_id_disagrees_with_its_name_is_refused(tmp_path: Path, capsys) -> None:
     root = _copy_repo(tmp_path)
-    (root / "docs/checks/V028.md").write_text(V028.replace("id: V028", "id: V027"))
+    (root / "docs/checks/V090.md").write_text(V090.replace("id: V090", "id: V027"))
     assert _check(root) == 1
     assert "front matter 'id: V027' does not match the file name" in capsys.readouterr().err
 
 
 def test_a_table_family_entry_needs_severity_and_summary(tmp_path: Path, capsys) -> None:
     root = _copy_repo(tmp_path)
-    (root / "docs/checks/V028.md").write_text(
-        V028.replace("summary: A brand-new check for the test\n", "")
+    (root / "docs/checks/V090.md").write_text(
+        V090.replace("summary: A brand-new check for the test\n", "")
     )
     assert _check(root) == 1
-    assert "V028.md: needs a 'summary' line" in capsys.readouterr().err
+    assert "V090.md: needs a 'summary' line" in capsys.readouterr().err
 
 
 def test_registry_flags_an_id_in_code_with_no_file_and_says_where_to_add_it() -> None:
@@ -282,7 +286,7 @@ def test_two_branches_adding_different_entries_merge_without_a_conflict(repo: Pa
         repo,
         "a",
         {
-            "docs/checks/V028.md": V028,
+            "docs/checks/V090.md": V090,
             "docs/removed/2.0/migration/320-old-a.md": REMOVED_ROW % ("old_a", "old_a"),
         },
     )
@@ -290,7 +294,7 @@ def test_two_branches_adding_different_entries_merge_without_a_conflict(repo: Pa
         repo,
         "b",
         {
-            "docs/checks/V029.md": V028.replace("V028", "V029").replace("brand-new", "second"),
+            "docs/checks/V091.md": V090.replace("V090", "V091").replace("brand-new", "second"),
             "docs/removed/2.0/migration/320-old-b.md": REMOVED_ROW % ("old_b", "old_b"),
         },
     )
@@ -305,16 +309,85 @@ def test_two_branches_adding_different_entries_merge_without_a_conflict(repo: Pa
     assert _run_script(repo, "system-check-docs.py", "check").returncode == 0
     assert _run_script(repo, "removed-names-docs.py", "check").returncode == 0
     sc = (repo / "docs/system-checks.md").read_text()
-    assert sc.index("| V027 |") < sc.index("| V028 |") < sc.index("| V029 |") < sc.index("| S001 |")
+    assert sc.index("| V027 |") < sc.index("| V090 |") < sc.index("| V091 |") < sc.index("| S001 |")
     mg = (repo / "docs/website/guides/migrating-to-2.0.md").read_text()
     assert mg.index("`djust.old_a`") < mg.index("`djust.old_b`")
     assert mg.count("`djust.old_a`") == 1 and mg.count("`djust.old_b`") == 1
 
 
 def test_two_branches_taking_the_same_check_id_conflict(repo: Path) -> None:
-    _branch(repo, "a", {"docs/checks/V028.md": V028})
-    _branch(repo, "b", {"docs/checks/V028.md": V028.replace("brand-new", "different")})
+    _branch(repo, "a", {"docs/checks/V090.md": V090})
+    _branch(repo, "b", {"docs/checks/V090.md": V090.replace("brand-new", "different")})
     _git(repo, "checkout", "-q", "a")
     merge = _git(repo, "merge", "--no-edit", "b", check=False)
     assert merge.returncode != 0
-    assert "CONFLICT (add/add): Merge conflict in docs/checks/V028.md" in merge.stdout
+    assert "CONFLICT (add/add): Merge conflict in docs/checks/V090.md" in merge.stdout
+
+
+# --- import-generated-docs.py: hand edits back into sources ----------------------
+
+
+def _import(root: Path) -> str:
+    out = subprocess.run(
+        [sys.executable, str(root / "scripts" / "import-generated-docs.py")],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert out.returncode == 0, out.stderr
+    return out.stdout
+
+
+def test_import_turns_a_hand_added_section_into_a_source_file(tmp_path: Path) -> None:
+    root = _copy_repo(tmp_path)
+    doc = root / "docs/website/guides/error-codes.md"
+    text = doc.read_text()
+    marker = "<!-- END GENERATED check-sections:V -->"
+    doc.write_text(
+        text.replace(marker, "### V090: a hand-added check\n\n**Fix**: none.\n\n" + marker)
+    )
+    assert _check(root) == 1
+    assert "docs/checks/V090.md: created" in _import(root)
+    entry = (root / "docs/checks/V090.md").read_text()
+    assert "<!-- doc: guide -->\n### V090: a hand-added check" in entry
+    _write(root)
+    assert _check(root) == 0
+
+
+def test_import_converts_hand_written_docs_without_markers_losslessly(tmp_path: Path) -> None:
+    """A doc as it was before #4080 (no markers) imports into the same sources."""
+    root = _copy_repo(tmp_path)
+    docs = [
+        "docs/system-checks.md",
+        "docs/website/guides/error-codes.md",
+        "docs/website/guides/migrating-to-2.0.md",
+        "docs/API_STABILITY.md",
+    ]
+    generated = {d: (root / d).read_text() for d in docs}
+    sources = {
+        p.relative_to(root): p.read_text()
+        for d in DIRS
+        for p in (root / d).rglob("*.md")
+        if p.name != "README.md"
+    }
+    for d in docs:  # strip markers and fingerprint: the hand-written form
+        text = re.sub(r"<!-- BEGIN GENERATED [^\n]*-->\n\n", "", generated[d])
+        text = re.sub(r"\n\n<!-- END GENERATED [^\n]*-->", "", text)
+        text = re.sub(r"\n\n<!-- generated-doc [^\n]*-->\n$", "\n", text)
+        (root / d).write_text(text)
+    keep = {"C018", "T015", "S010"}  # registry-only entries no doc lists
+    for rel in sources:
+        if Path(rel).stem not in keep:
+            (root / rel).unlink()
+    _import(root)
+    _write(root)
+    assert {d: (root / d).read_text() for d in docs} == generated
+    # The same entries; removed-name files may be renumbered (NNN only orders them).
+    after = {
+        p.relative_to(root): p.read_text()
+        for d in DIRS
+        for p in (root / d).rglob("*.md")
+        if p.name != "README.md"
+    }
+    assert sorted(after.values()) == sorted(sources.values())
+    assert {p for p in after if "checks" in p.parts} == {p for p in sources if "checks" in p.parts}

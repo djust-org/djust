@@ -34,6 +34,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 import pytest
+from djust import state
 
 pytest.importorskip("django")
 
@@ -66,7 +67,7 @@ def raw_render(source: str, context: dict) -> str:
 
 def liveview_render(source: str, context: dict) -> str:
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request, **kwargs):
             pass
@@ -494,7 +495,8 @@ class TestTheHandleIsReleasedAtTeardown2539:
             cls_attr = "class-level"
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            obj = state()
 
             def mount(self, request, **kwargs):
                 self.obj = _Held()

@@ -47,7 +47,7 @@ MOUNT_GATE = {"gate": None, "reached": threading.Event()}
 
 
 class PresentPage(PresenceMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     presence_key = ROOM
     template = "<div dj-root><span>{{ online_count }}</span></div>"
 
@@ -77,7 +77,7 @@ class PresentPageTwo(PresentPage):
 class PlainPage(LiveView):
     """No presence mixin: shutdown must not schedule anything for it."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>plain</div>"
 
 

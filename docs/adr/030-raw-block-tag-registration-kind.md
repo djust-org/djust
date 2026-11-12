@@ -159,6 +159,8 @@ No Rust step.
 - **Not a widening of the raw-body kind**, and not an opt-in mechanism for it. Data bodies keep it; content bodies never take it.
 - **Not a `simple_block_tag` deprecation.** It remains the right shape for new libraries on Django 5.2+.
 - **Not a replacement of the 52 native handlers.** They keep precedence. Whether wrapper-shaped ones could later be retired in favour of the bridge is a separate question with its own measurement.
+
+  *Update (2.0, decided 2026-11-12, S3 of `docs/reviews/2026-11-11-djust-2-consolidated.md`):* that separate question was answered for most of the library: a `djust_components` tag now renders through this bridge unless a benchmark or a missing bridge capability keeps its native twin (the core layout tags, five inclusion tags, and the parents that read their children, which the raw-body route would hand to Django's engine). The raw body now ends at the end tag that closes the tag rather than the first one, so a raw-body tag can be nested in itself. See `docs/TEMPLATE_BACKEND.md`, *One render path per component tag*.
 - **Not a gallery change.** The gallery's theming defects were fixed independently.
 
 ## 7. Record of what the earlier drafts got wrong

@@ -47,7 +47,6 @@ def _paths(**kw) -> dict[str, str]:
             **{("custom_class" if k == "class" else k): v for k, v in kw.items()}
         ).render(),
         "tag": _tag("{% image_upload_preview " + tag_args + " %}", **kw),
-        "handler": str(rh.ImageUploadPreviewHandler().render([f"{k}={k}" for k in kw], dict(kw))),
     }
 
 
@@ -92,7 +91,7 @@ class TestMarkup:
             {"previews": ["/a.png", "https://x.example/b.png"]},
         ):
             paths = _paths(**kw)
-            assert paths["class"] == paths["tag"] == paths["handler"], kw
+            assert paths["class"] == paths["tag"], kw
 
     def test_an_upload_slot_wires_djusts_own_directives(self):
         for path, markup in _paths(upload="photos", max_size=2048).items():

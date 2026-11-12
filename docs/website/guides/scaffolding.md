@@ -200,17 +200,29 @@ djust:
 | Stream-friendly base templates | off | `--with-streaming` |
 | Models generated from a JSON schema | off | `--from-schema schema.json` |
 | Demo page: live list, theme switcher, docs links | on | Replace with a placeholder via `--bare` |
-| Component library (`djust.components`) and an `{% app_shell %}` base template | on | `--bare` omits both |
+| Component library (`djust.components`), with its stylesheet left unlinked | on | `--bare` omits it |
 | Create `.venv`, install dependencies, migrate, and check | on | Skip with `--no-setup` |
 
 The themed scaffold enables `djust.theming` and `djust.components`, and its
-`requirements.txt` requests `djust[components]`. Its base template uses
-`{% app_shell %}` with `{% app_header %}` and `{% app_content %}` slots;
-add an `{% app_sidebar %}` slot when you need a sidebar. This also applies to
-non-bare projects generated with `--with-db` or `--from-schema`.
+`requirements.txt` requests `djust[components]`. Its base template is plain
+markup (`<header>`, `<main>`, `<footer>`) on the theme pack's tokens and
+component classes (`.card`, `.btn`, `.input`, ...). The settings state
 
-`--bare` keeps the core `djust` requirement, omits both bundled apps and the
-app-shell layout, and writes this explicit opt-out from the theming hint:
+```python
+LIVEVIEW_CONFIG = {
+    "theme": {"component_catalog_css": False},
+}
+```
+
+so `{% theme_head %}` does not link the component catalog's stylesheet
+(`djust_components/components.css`, about 330 KB) on every page. Set it to
+`True` once a page renders catalog tags such as `{% modal %}`, `{% data_table %}`
+or `{% app_shell %}`. Until 2.0 the scaffold used `{% app_shell %}` and every
+page loaded that stylesheet (#4003). This also applies to non-bare projects
+generated with `--with-db` or `--from-schema`.
+
+`--bare` keeps the core `djust` requirement, omits both bundled apps, and
+writes this explicit opt-out from the theming hint:
 
 ```python
 DJUST_CONFIG = {"suppress_checks": ["I002"]}

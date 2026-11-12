@@ -193,10 +193,28 @@ describe('dj-chart adapter — lifecycle', () => {
         expect(updates[updates.length - 1].data.datasets[0].data).toEqual([1, 2]);
     });
 
-    it('refreshes by default when a plugin depends on external state', () => {
+    it('does not redraw by default when no attribute changed (#4004)', () => {
+        const made = createDom(`dj-hook-value-type='"bar"'`);
+        const own = [];
+        made.dom.window.Chart = makeFakeChartLib(own);
+        loadAdapter(made.dom);
+        made.dom.window.djust.destroyAllHooks();
+        own.length = 0;
+        made.dom.window.djust.mountHooks(made.dom.window.document);
+        made.dom.window.djust.updateHooks(made.dom.window.document);
+        made.dom.window.djust.updateHooks(made.dom.window.document);
+        expect(own.filter((c) => c.op === 'update')).toHaveLength(0);
+        made.dom.window.document.getElementById('c1').setAttribute(
+            'dj-hook-value-data', '{"labels":["b"],"datasets":[{"data":[2]}]}'
+        );
+        made.dom.window.djust.updateHooks(made.dom.window.document);
+        expect(own.filter((c) => c.op === 'update')).toHaveLength(1);
+    });
+
+    it('dj-chart-update="always" refreshes when a plugin depends on external state', () => {
         let external = 'light';
         const seen = [];
-        const made = createDom();
+        const made = createDom(`dj-chart-update="always"`);
         made.dom.window.Chart = function () {
             this.update = () => seen.push(external);
             this.destroy = () => {};

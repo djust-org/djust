@@ -181,8 +181,11 @@ def _scalar_text(item: Any) -> Optional[str]:
 
 
 def initial_values(form: forms.BaseForm) -> Dict[str, Any]:
-    """The initial value of every declared field, callables evaluated."""
-    return {name: form.get_initial_for_field(field, name) for name, field in form.fields.items()}
+    """The initial value of every declared field, callables evaluated, each a copy (#3926)."""
+    return {
+        name: _copied(form.get_initial_for_field(field, name))
+        for name, field in form.fields.items()
+    }
 
 
 def _url_supplied(form: forms.BaseForm, name: str, field: forms.Field) -> bool:
@@ -192,10 +195,15 @@ def _url_supplied(form: forms.BaseForm, name: str, field: forms.Field) -> bool:
     widget with several (``SplitDateTimeField``'s ``when_0`` / ``when_1``, a
     ``SelectDateWidget``'s year, month and day) is judged by all of them. A
     checkbox says it is never omitted, because an unchecked HTML checkbox sends
-    nothing; a URL has no such convention, so there the key itself decides.
+    nothing, and a multi-select widget (``SelectMultiple``,
+    ``CheckboxSelectMultiple``) says the same because a selection of none sends
+    nothing; a URL has no such convention, so for both the key itself decides
+    (#3922). An empty list binds as absent (:func:`_bindable`), so a URL cannot
+    ask for "none selected" over a non-empty ``initial``.
     """
     key = form.add_prefix(name)
-    if isinstance(field.widget, forms.CheckboxInput):
+    widget = field.widget
+    if isinstance(widget, forms.CheckboxInput) or getattr(widget, "allow_multiple_selected", False):
         omitted = key not in form.data
     else:
         omitted = field.widget.value_omitted_from_data(form.data, form.files, key)
@@ -231,10 +239,11 @@ def _fill_unsupplied(
 def _copied(value: Any) -> Any:
     """A deep copy of ``value``, or ``value`` itself when it cannot be copied.
 
-    The ``"fields"`` fallback hands over a COPY of an ``initial`` it fills in, so a
-    ``handle_params()`` that mutates a mutable one (a list, a dict) does not change
-    the form class's default for later requests. The valid path and ``"initial"``
-    mode hand the object itself over (#3926).
+    Every ``initial`` handed to ``handle_params()`` is a COPY (#3926): Django's
+    ``Field.__deepcopy__`` does not copy ``initial``, so the object a bound form
+    returns is the one stored on the form class, and a ``handle_params()`` that
+    mutated a mutable one (a list, a dict) changed the default for every later
+    request. An ``initial`` that cannot be deep-copied is handed over as it is.
     """
     try:
         return copy.deepcopy(value)
@@ -249,7 +258,7 @@ def _cleaned_values(form: forms.BaseForm) -> Dict[str, Any]:
         form,
         values,
         list(form.fields),
-        lambda name: form.get_initial_for_field(form.fields[name], name),
+        lambda name: _copied(form.get_initial_for_field(form.fields[name], name)),
     )
     return values
 
@@ -338,8 +347,8 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     copies it into a kept field the URL left out does not, if that field has an
     ``initial``: a field with no ``initial`` (``None``) is not filled, on either
     path; a ``clean()`` that also writes the field into ``self.data`` makes it
-    count as supplied; and a multi-select widget the URL left out counts as
-    supplied (#3922, shared with the valid path).
+    count as supplied. (A multi-select widget the URL left out is not
+    supplied, as a checkbox is not: #3922.)
 
     The result is always a combination the form's ``clean()`` accepts, or the
     plain initial values. A kept field is now paired with the initial value of a
@@ -352,11 +361,10 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     first pass's cleaned values of the kept fields (a ``clean()`` that wrote one
     on the first pass is re-run on its output) with the ``initial`` fill applied
     to the unsupplied ones, and the replaced fields' initial values. The check
-    runs on a deep copy, and the fill applied to its output hands over a copy of
-    the ``initial`` too, so a ``handle_params()`` that mutates a mutable one does
-    not change the form class's default. (A replaced field's ``initial`` and the
-    plain initial values are the objects themselves, as on the valid path and in
-    ``"initial"`` mode: #3926.) **Only ``clean()`` runs
+    runs on a deep copy, and every ``initial`` handed over is a copy, so a
+    ``handle_params()`` that mutates a mutable one does not change the form
+    class's default (#3926, as on the valid path and in ``"initial"`` mode).
+    **Only ``clean()`` runs
     again, not the fields' own ``clean_<field>()``:** a ``clean_end()`` that
     checks ``end >= start`` was skipped when ``start`` failed and is not run on
     the merged values, so ``?start=zz&end=1`` hands over ``start`` at its initial
@@ -383,7 +391,7 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
         return evaluated[name]
 
     def all_initial() -> Dict[str, Any]:
-        return {name: initial_of(name) for name in form.fields}
+        return {name: _copied(initial_of(name)) for name in form.fields}
 
     cleaned = getattr(form, "cleaned_data", None)
     if cleaned is None or form.non_field_errors():
@@ -411,7 +419,10 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     # wrote into it, so a clean() that copies a failed field's raw value into an unsupplied field
     # that has an initial cannot hand it over through that field (#3891).
     _fill_unsupplied(form, adopted, list(adopted), lambda name: _copied(initial_of(name)))
-    return {name: adopted[name] if name in adopted else initial_of(name) for name in form.fields}
+    return {
+        name: adopted[name] if name in adopted else _copied(initial_of(name))
+        for name in form.fields
+    }
 
 
 def _error_messages(form: forms.BaseForm) -> Dict[str, List[str]]:

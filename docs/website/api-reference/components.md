@@ -119,6 +119,9 @@ Put `data-component-id="{{ component_id }}"` on the component's root element. Th
 ```python
 # Component sends event up:
 class CounterWidget(LiveComponent):
+    def mount(self, count=0, **kwargs):
+        self.count = count
+
     @event_handler()
     def increment(self, **kwargs):
         self.count += 1

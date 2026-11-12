@@ -122,9 +122,6 @@ class CommentThreadView(LiveView):
         self.post_id = post_id
         self.comments = self._fetch_comments()
 
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "comments": self.comments}
-
     def _fetch_comments(self):
         qs = (
             Comment.objects

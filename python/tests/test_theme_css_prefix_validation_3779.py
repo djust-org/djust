@@ -131,8 +131,15 @@ def engine(request):
     return DjustTemplateBackend({"NAME": "djust", "DIRS": [], "APP_DIRS": True, "OPTIONS": {}})
 
 
-def _config(prefix):
-    return override_settings(LIVEVIEW_CONFIG={"theme": {"css_prefix": prefix}})
+def _config(prefix, catalog=True):
+    # The golden was captured while theme_head linked the component catalog's
+    # stylesheet whenever djust.components was installed. Since #4003 that link
+    # is opt-in, so the golden cases opt in (`catalog=True`) and keep pinning the
+    # prefix; `CATALOG_OFF_GOLDEN` pins the new default output separately.
+    theme = {"css_prefix": prefix}
+    if catalog:
+        theme["component_catalog_css"] = True
+    return override_settings(LIVEVIEW_CONFIG={"theme": theme})
 
 
 class _F(forms.Form):
@@ -381,14 +388,14 @@ def _normalise(html: str) -> str:
     return re.sub(r"\?v=[0-9a-f]+", "?v=VERSION", html)
 
 
-def render_golden_case(engine, prefix: str, key: str) -> str:
+def render_golden_case(engine, prefix: str, key: str, catalog: bool = True) -> str:
     """One rendering of the golden. Shared with the script that captured it BEFORE the change."""
     from djust.theming.context_processors import clear_theme_context_cache
     from djust.theming.cache import clear_css_cache
 
     clear_theme_context_cache()
     clear_css_cache()
-    with _config(prefix):
+    with _config(prefix, catalog):
         html = engine.from_string(GOLDEN_SOURCES[key]).render({"form": _bound_form()})
     return _normalise(html)
 
@@ -408,3 +415,41 @@ class TestBenignPrefixesAreUnchanged:
         want = self.GOLDEN["context|dj-"]
         got = _normalise(TestContextProcessor._chunks("dj-")["theme_head"])
         assert (len(got), _digest(got)) == (want["len"], want["sha256"])
+
+
+#: The 2.0 default (#4003): theme_head without the component catalog's stylesheet.
+#: Re-derived from this branch's output; the opted-in output stays in GOLDEN.
+CATALOG_OFF_GOLDEN = json.loads(
+    (FIXTURES / "theme_css_prefix_golden_3779_catalog_off.json").read_text()
+)
+_CATALOG_LINK = re.compile(
+    r'<link rel="stylesheet" href="[^"]*djust_components/components\.css[^"]*">'
+)
+
+
+class TestTheCatalogOffDefault4003:
+    @pytest.mark.parametrize("key", ["theme_head", "theme_head-link"])
+    @pytest.mark.parametrize("prefix", ["", "dj-", "dj"])
+    def test_byte_for_byte_the_default_output(self, engine, prefix, key):
+        engine_name = "django" if engine is engines["django"] else "djust"
+        html = render_golden_case(engine, prefix, key, catalog=False)
+        want = CATALOG_OFF_GOLDEN[f"{engine_name}|{prefix}|{key}"]
+        assert (len(html), _digest(html)) == (want["len"], want["sha256"])
+
+    @pytest.mark.parametrize("key", ["theme_head", "theme_head-link"])
+    @pytest.mark.parametrize("prefix", ["", "dj-", "dj"])
+    def test_the_only_difference_is_the_catalog_link(self, engine, prefix, key):
+        on = render_golden_case(engine, prefix, key, catalog=True)
+        off = render_golden_case(engine, prefix, key, catalog=False)
+        assert len(_CATALOG_LINK.findall(on)) == 1
+        assert _CATALOG_LINK.findall(off) == []
+        assert _CATALOG_LINK.sub("", on) == off
+
+    def test_the_context_processor_chunk(self):
+        from djust.theming.context_processors import theme_context
+
+        with _config("dj-", catalog=False):
+            got = _normalise(str(theme_context(RequestFactory().get("/"))["theme_head"]))
+        want = CATALOG_OFF_GOLDEN["context|dj-"]
+        assert (len(got), _digest(got)) == (want["len"], want["sha256"])
+        assert not _CATALOG_LINK.search(got)

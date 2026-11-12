@@ -12,13 +12,16 @@ Usage:
 
 import calendar as _calendar
 import datetime
+import contextlib
+import contextvars
+import hashlib
 import itertools
 import json as _json
 import re as _re
 import uuid
 from urllib.parse import urlencode
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Iterator
 
 from django import template
 from django.utils.html import conditional_escape, format_html, format_html_join
@@ -591,10 +594,50 @@ def toast_container(toasts: Any, dismiss_event: Any = "dismiss_toast") -> "dict[
 # ---------------------------------------------------------------------------
 
 
-# Process-wide monotonic counter so each rendered tooltip without an
-# explicit component_id still gets a unique tip id (the WAI-ARIA tooltip
-# pattern requires a stable id to anchor aria-describedby).
+# No longer read: a tooltip's default tip id is derived from its arguments (``_stable_id``), so
+# a LiveView re-render does not change it. Kept because the test-isolation reset and the parity
+# harness still reset it.
 _tooltip_id_counter = itertools.count(1)
+
+
+def _stable_id(prefix: str, *parts: Any) -> str:
+    """An element id derived from a tag's arguments, the same on every render of the same call."""
+    digest = hashlib.sha1(repr(parts).encode("utf-8"), usedforsecurity=False).hexdigest()
+    return f"{prefix}-{digest[:6]}"
+
+
+#: The current render's ``RenderContext`` for a tag function that has no ``context`` of its own
+#: (``otp_input``, ``tag_input``): set by their template-tag wrappers around the call.
+_ID_SCOPE: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
+    "djust_components_id_scope", default=None
+)
+_IDS_KEY = "djust_components.render_ids"
+
+
+def _render_id(prefix: str, *parts: Any, context: Any = None) -> str:
+    """A default element id that is stable across renders AND unique within one render.
+
+    A LiveView re-renders every tag on every turn, so an id drawn at random (``uuid4``) or from a
+    process-wide counter is a patch on every turn; an id derived from the arguments alone repeats
+    when a page has two identical calls (two identical tooltips: duplicate ids, and
+    ``aria-describedby`` / a label pointing at the wrong element). So: the arguments' digest,
+    plus the call's occurrence among IDENTICAL calls in this render (the second gets ``-2``, the
+    third ``-3``). The count lives in the render's own ``RenderContext`` (its base layer, which an
+    ``{% include %}`` shares), so it restarts with every render and is never process-global; it is
+    keyed on the arguments, so adding or removing a call changes only the ids of calls identical
+    to it that come after it. Without a render context (the function called directly) the digest
+    alone is returned.
+    """
+    base = _stable_id(prefix, *parts)
+    render_context = getattr(context, "render_context", None) if context is not None else None
+    if render_context is None:
+        render_context = _ID_SCOPE.get()
+    if render_context is None:
+        return base
+    seen = render_context.dicts[0].setdefault(_IDS_KEY, {})
+    n = seen.get(base, 0) + 1
+    seen[base] = n
+    return base if n == 1 else f"{base}-{n}"
 
 
 class TooltipNode(template.Node):
@@ -613,13 +656,13 @@ class TooltipNode(template.Node):
         )
 
         # Derive a stable, escaped tip id. When the caller supplies a
-        # component_id, anchor on it (deterministic); otherwise fall back to
-        # a process-wide counter so concurrently-rendered tooltips on one
-        # page never collide.
+        # component_id, anchor on it; otherwise derive it from the tooltip's
+        # text, position and content, so a re-render keeps it (identical
+        # tooltips in one render get -2, -3, ...: ``_render_id``).
         if component_id:
             tip_id = f"{conditional_escape(component_id)}-tip"
         else:
-            tip_id = f"dj-tooltip-tip-{next(_tooltip_id_counter)}"
+            tip_id = _render_id("dj-tooltip-tip", text, position, str(content), context=context)
 
         return mark_safe(
             f'<span class="dj-tooltip dj-tooltip--{conditional_escape(position)}"{cid_attr}'
@@ -4069,7 +4112,6 @@ def multi_select(
 # ---------------------------------------------------------------------------
 
 
-@register.simple_tag
 def otp_input(
     name: Any = "", digits: Any = 6, event: Any = "", label: Any = "", disabled: Any = False
 ) -> SafeString:
@@ -4095,7 +4137,7 @@ def otp_input(
     dj_event = conditional_escape(event or name)
     disabled_attr = " disabled" if disabled else ""
 
-    uid = f"otp-{uuid.uuid4().hex[:6]}"
+    uid = _render_id("otp", name, digits, event, label, disabled)
 
     box_parts = []
     for i in range(digits):
@@ -4187,7 +4229,6 @@ def number_stepper(
 # ---------------------------------------------------------------------------
 
 
-@register.simple_tag
 def tag_input(
     name: Any = "",
     tags: Any = None,
@@ -4221,7 +4262,7 @@ def tag_input(
     dj_event = conditional_escape(event or name)
     disabled_attr = " disabled" if disabled else ""
 
-    uid = f"ti-{uuid.uuid4().hex[:6]}"
+    uid = _render_id("ti", name, event, placeholder, label, disabled)
 
     # Build existing tag chips
     tag_parts = []
@@ -4256,6 +4297,45 @@ def tag_input(
         f'<datalist id="{uid}-suggestions">{"".join(suggestion_parts)}</datalist>'
         f"</div>"
     )
+
+
+@contextlib.contextmanager
+def _id_scope(context: Any) -> Iterator[None]:
+    token = _ID_SCOPE.set(getattr(context, "render_context", None))
+    try:
+        yield
+    finally:
+        _ID_SCOPE.reset(token)
+
+
+# The template tags: the functions above with the render's context, so a default id is unique
+# within the render (``_render_id``). Same parameters, so the tags accept what they accepted.
+@register.simple_tag(takes_context=True, name="otp_input")
+def _otp_input_tag(
+    context: Any,
+    name: Any = "",
+    digits: Any = 6,
+    event: Any = "",
+    label: Any = "",
+    disabled: Any = False,
+) -> SafeString:
+    with _id_scope(context):
+        return otp_input(name, digits, event, label, disabled)
+
+
+@register.simple_tag(takes_context=True, name="tag_input")
+def _tag_input_tag(
+    context: Any,
+    name: Any = "",
+    tags: Any = None,
+    suggestions: Any = None,
+    event: Any = "",
+    placeholder: Any = "Add tag...",
+    disabled: Any = False,
+    label: Any = "",
+) -> SafeString:
+    with _id_scope(context):
+        return tag_input(name, tags, suggestions, event, placeholder, disabled, label)
 
 
 # ---------------------------------------------------------------------------
@@ -6664,7 +6744,8 @@ class AppShellNode(template.Node):
         if sidebar_collapsed:
             cls += " dj-app-shell--sidebar-collapsed"
         if custom_class:
-            cls += f" {conditional_escape(custom_class)}"
+            # An attribute value is escaped whatever it is marked as (#4009, #3898).
+            cls += f" {attr_text(custom_class)}"
 
         # Find sub-nodes
         sidebar_nodes = [n for n in self.nodelist if isinstance(n, AppSidebarNode)]
@@ -6687,7 +6768,7 @@ class AppShellNode(template.Node):
             content_html = f'<main class="dj-app-shell__content">{main_content}</main>'
 
         return mark_safe(
-            f'<div class="{cls}" id="{conditional_escape(shell_id)}">'
+            f'<div class="{cls}" id="{attr_text(shell_id)}">'
             f"{sidebar_html}"
             f'<div class="dj-app-shell__main">'
             f"{header_html}{content_html}"

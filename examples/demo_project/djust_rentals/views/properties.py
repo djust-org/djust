@@ -5,7 +5,7 @@ CRUD operations for rental properties with search, filter, and real-time updates
 """
 
 from djust_shared.views import BaseViewWithNavbar
-from djust.decorators import debounce, optimistic, event_handler
+from djust.decorators import debounce, event_handler
 from djust_shared.components.ui import HeroSection
 from django.db.models import Q
 from ..models import Property, Lease, MaintenanceRequest
@@ -391,7 +391,6 @@ class PropertyDeleteView(BaseViewWithNavbar):
         self.error_message = ""
 
     @event_handler()
-    @optimistic
     def confirm_delete(self):
         """Delete the property"""
         if self.has_active_lease:

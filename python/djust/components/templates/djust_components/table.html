@@ -3,8 +3,8 @@
   <div class="data-table-search">
     <input type="text" role="searchbox" aria-label="Search table"
            class="table-search" placeholder="Search..."
-           value="{{ search_query }}"
-           dj-input="{{ search_event }}" dj-debounce="{{ search_debounce }}">
+           value="{{ search_query|force_escape }}"
+           dj-input="{{ search_event|force_escape }}" dj-debounce="{{ search_debounce|force_escape }}">
   </div>
   {% endif %}
 
@@ -24,11 +24,11 @@
         <th>
           <input type="checkbox" class="data-table-select-all"
                  aria-label="Select all rows"
-                 dj-click="{{ select_event }}" data-value="__all__">
+                 dj-click="{{ select_event|force_escape }}" data-value="__all__">
         </th>
         {% endif %}
         {% for col in columns %}
-        <th{% if col.sortable|default_if_none:True %} class="sortable{% if sort_by == col.key %} active{% endif %}" role="columnheader" tabindex="0" aria-sort="{% if sort_by == col.key %}{% if sort_desc %}descending{% else %}ascending{% endif %}{% else %}none{% endif %}" dj-click="{{ sort_event }}" data-value="{{ col.key|force_escape }}"{% else %} role="columnheader"{% endif %}{% if col.width|table_width %} style="width:{{ col.width|table_width }}"{% endif %}>
+        <th{% if col.sortable|default_if_none:True %} class="sortable{% if sort_by == col.key %} active{% endif %}" role="columnheader" tabindex="0" aria-sort="{% if sort_by == col.key %}{% if sort_desc %}descending{% else %}ascending{% endif %}{% else %}none{% endif %}" dj-click="{{ sort_event|force_escape }}" data-value="{{ col.key|force_escape }}"{% else %} role="columnheader"{% endif %}{% if col.width|table_width %} style="width:{{ col.width|table_width }}"{% endif %}>
           {{ col.label }}
           {% if sort_by == col.key %}
             <span class="data-table-sort-glyph" aria-hidden="true">{% if sort_desc %}&#8595;{% else %}&#8593;{% endif %}</span>
@@ -49,13 +49,13 @@
         navigation) via the data-table-row-click.js component module —
         CSP-clean, no inline event handlers.
       {% endcomment %}
-      <tr{% if selectable %} aria-selected="{% if row.id|stringformat:'s' in selected_rows %}true{% else %}false{% endif %}"{% endif %}{% if row_click_event %} class="data-table-row-clickable" dj-click="{{ row_click_event }}" data-value="{{ row|table_cell:row_click_value_key|force_escape }}" role="button" tabindex="0" style="cursor:pointer"{% elif row_url %} class="data-table-row-clickable" data-href="{{ row|table_href:row_url }}" role="button" tabindex="0" style="cursor:pointer"{% endif %}>
+      <tr{% if selectable %} aria-selected="{% if row.id|stringformat:'s' in selected_rows %}true{% else %}false{% endif %}"{% endif %}{% if row_click_event %} class="data-table-row-clickable" dj-click="{{ row_click_event|force_escape }}" data-value="{{ row|table_cell:row_click_value_key|force_escape }}" role="button" tabindex="0" style="cursor:pointer"{% elif row_url %} class="data-table-row-clickable" data-href="{{ row|table_href:row_url }}" role="button" tabindex="0" style="cursor:pointer"{% endif %}>
         {% if selectable %}
         <td>
           <input type="checkbox" class="data-table-checkbox"
                  aria-label="Select row"
                  {% if row.id|stringformat:'s' in selected_rows %}checked{% endif %}
-                 dj-click="{{ select_event }}" data-value="{{ row.id|force_escape }}">
+                 dj-click="{{ select_event|force_escape }}" data-value="{{ row.id|force_escape }}">
         </td>
         {% endif %}
         {% for col in columns %}
@@ -84,16 +84,16 @@
 
   {% if paginate and total_pages > 1 %}
   <div class="data-table-pagination" role="navigation" aria-label="Table pagination">
-    <button class="pagination-btn" dj-click="{{ page_event }}" data-value="{% if page > 1 %}{{ page|add:"-1" }}{% else %}1{% endif %}" {% if page <= 1 %}disabled{% endif %}>&#8592;</button>
+    <button class="pagination-btn" dj-click="{{ page_event|force_escape }}" data-value="{% if page > 1 %}{{ page|add:"-1" }}{% else %}1{% endif %}" {% if page <= 1 %}disabled{% endif %}>&#8592;</button>
     <span class="pagination-info">Page {{ page }} of {{ total_pages }}</span>
-    <button class="pagination-btn" dj-click="{{ page_event }}" data-value="{% if page < total_pages %}{{ page|add:"1" }}{% else %}{{ total_pages }}{% endif %}" {% if page >= total_pages %}disabled{% endif %}>&#8594;</button>
+    <button class="pagination-btn" dj-click="{{ page_event|force_escape }}" data-value="{% if page < total_pages %}{{ page|add:"1" }}{% else %}{{ total_pages }}{% endif %}" {% if page >= total_pages %}disabled{% endif %}>&#8594;</button>
   </div>
   {% elif total_pages > 1 %}
   {# Backward-compatible pagination using prev_event/next_event #}
   <div class="dj-table__pagination">
-    <button class="dj-table__page-btn" dj-click="{{ prev_event }}" {% if page <= 1 %}disabled{% endif %}>&larr; Prev</button>
+    <button class="dj-table__page-btn" dj-click="{{ prev_event|force_escape }}" {% if page <= 1 %}disabled{% endif %}>&larr; Prev</button>
     <span class="dj-table__page-info">{{ page }} / {{ total_pages }}</span>
-    <button class="dj-table__page-btn" dj-click="{{ next_event }}" {% if page >= total_pages %}disabled{% endif %}>Next &rarr;</button>
+    <button class="dj-table__page-btn" dj-click="{{ next_event|force_escape }}" {% if page >= total_pages %}disabled{% endif %}>Next &rarr;</button>
   </div>
   {% endif %}
   {% endif %}

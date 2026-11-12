@@ -20,12 +20,13 @@ Let's build a debounced search in **8 lines of Python** (no JavaScript needed).
 ### Step 1: Create a LiveView with debounced search
 
 ```python
-from djust import LiveView
-from djust.decorators import debounce
+from djust import LiveView, state
+from djust.decorators import debounce, event_handler
+from myapp.models import Product
 
 class ProductSearchView(LiveView):
     template = """
-    <div>
+    <div dj-root>
         <input dj-input="search" placeholder="Search products..." />
         <div>
             {% for product in results %}
@@ -34,17 +35,13 @@ class ProductSearchView(LiveView):
         </div>
     </div>
     """
+    results = state(default_factory=list)
 
-    def mount(self, request):
-        self.results = []
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "results": self.results}
-
+    @event_handler
     @debounce(wait=0.5)  # Wait 500ms after typing stops
-    def search(self, query: str = "", **kwargs):
-        from myapp.models import Product
-        self.results = Product.objects.filter(name__icontains=query)[:10]
+    def search(self, value: str = "", **kwargs):
+        # dj-input sends the field's current text as `value`
+        self.results = Product.objects.filter(name__icontains=value)[:10]
 ```
 
 ### Step 2: Add URL routing
@@ -75,16 +72,16 @@ urlpatterns = [
 Make the UI update **instantly** while the server validates:
 
 ```python
-from djust.decorators import debounce, optimistic
+from djust.decorators import debounce, event_handler, optimistic
 
 class ProductSearchView(LiveView):
-    # ... same template ...
+    # ... same template, imports and results field ...
 
+    @event_handler
     @debounce(wait=0.5)
     @optimistic  # ← Add this line
-    def search(self, query: str = "", **kwargs):
-        from myapp.models import Product
-        self.results = Product.objects.filter(name__icontains=query)[:10]
+    def search(self, value: str = "", **kwargs):
+        self.results = Product.objects.filter(name__icontains=value)[:10]
 ```
 
 **What changed?**
@@ -102,17 +99,17 @@ class ProductSearchView(LiveView):
 Avoid redundant server queries by caching responses:
 
 ```python
-from djust.decorators import debounce, optimistic, cache
+from djust.decorators import debounce, event_handler, optimistic, cache
 
 class ProductSearchView(LiveView):
-    # ... same template ...
+    # ... same template, imports and results field ...
 
+    @event_handler
     @debounce(wait=0.5)
     @optimistic
-    @cache(ttl=300, key_params=["query"])  # ← Add this line (5 min cache)
-    def search(self, query: str = "", **kwargs):
-        from myapp.models import Product
-        self.results = Product.objects.filter(name__icontains=query)[:10]
+    @cache(ttl=300, key_params=["value"])  # ← Add this line (5 min cache)
+    def search(self, value: str = "", **kwargs):
+        self.results = Product.objects.filter(name__icontains=value)[:10]
 ```
 
 **What changed?**
@@ -197,7 +194,7 @@ def update_filter(self, filter: str = "", **kwargs):
 
 **Draft Mode (auto-save forms)**:
 ```python
-from djust.mixins import DraftModeMixin
+from djust.drafts import DraftModeMixin
 
 class ContactFormView(DraftModeMixin, LiveView):
     draft_fields = ["name", "email", "message"]  # Auto-saved to localStorage
@@ -249,11 +246,12 @@ JavaScript is only needed for:
 **Yes!** Decorators compose cleanly:
 
 ```python
+@event_handler           # Callable from the browser
 @debounce(wait=0.5)      # Wait for typing to stop
 @optimistic               # Update UI instantly
 @cache(ttl=60)           # Cache for 1 minute
-def search(self, query: str = "", **kwargs):
-    self.results = expensive_query(query)
+def search(self, value: str = "", **kwargs):
+    self.results = expensive_query(value)
 ```
 
 **Execution order**: Top to bottom (debounce → optimistic → cache → handler)

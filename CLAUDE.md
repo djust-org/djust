@@ -106,7 +106,7 @@ djust/
   line names — run `make sizes` to print the current values (#2138).
   - **Shipped**: `client.min.js.gz` is **~83 KB** gz — what a user downloads,
     and the only figure that constrains anything.
-  - **Build input**: unminified `client.js` is ~270 KB gz <!-- size-claim: unminified -->
+  - **Build input**: unminified `client.js` is ~273 KB gz <!-- size-claim: unminified -->
     across 59 modules in `static/djust/src/`. Not a deliverable; do not quote
     it as "the client size".
   - Until #2138 these read ~87 KB gz / 388 KB raw / 35 modules <!-- size-claim: historical -->
@@ -152,27 +152,21 @@ These are **hard requirements** — violations are auto-rejected in PR review:
 - Tests must be deterministic — no flaky tests
 - Test imports must match actual module paths (a common rejection reason)
 - `feat:` and `fix:` PRs must add a changelog fragment: `changelog.d/<issue-or-slug>.<section>.md` (section ∈ added/changed/fixed/security/documentation/removed/deprecated; body = the bullet). Do NOT edit `CHANGELOG.md`'s `[Unreleased]` directly — pre-commit refuses it; the release cut compiles the fragments (`changelog.d/README.md`)
-- System-check docs, check IDs and removed-name tables are generated (#4080). A new check: `make new-check-id FAMILY=V` for the ID, then `docs/checks/<ID>.md` (`docs/checks/README.md`). A removed name: `docs/removed/2.0/migration/<NNN>-<slug>.md` (`docs/removed/README.md`). Then `make generated-docs`. Never edit between `BEGIN GENERATED` / `END GENERATED` markers in `docs/system-checks.md`, `error-codes.md`, `migrating-to-2.0.md` or `API_STABILITY.md`; a prose edit there also needs `make generated-docs` (it refreshes the fingerprint on the last line). A retired ID keeps its file with `status: retired` and is never reused
+- System-check docs, check IDs and removed-name tables are generated (#4080). A new check: `make new-check-id FAMILY=V` for the ID, then `docs/checks/<ID>.md` (`docs/checks/README.md`). A removed name: `docs/removed/2.0/migration/<NNN>-<slug>.md` (`docs/removed/README.md`). Then `make generated-docs`. Never edit between `BEGIN GENERATED` / `END GENERATED` markers in `docs/system-checks.md`, `error-codes.md`, `migrating-to-2.0.md` or `API_STABILITY.md`; a prose edit there also needs `make generated-docs` (it refreshes the fingerprint on the last line). A retired ID keeps its file with `status: retired` and is never reused. A hand-edited copy of one of those docs (an older branch in a merge): `python scripts/import-generated-docs.py`, then `make generated-docs`
 
 ## Key Patterns
 
 ### LiveView
 ```python
-from djust import LiveView, event_handler
+from djust import LiveView, event_handler, state
 
 class MyView(LiveView):
     template_name = 'my_template.html'
-
-    def mount(self, request, **kwargs):
-        self.count = 0
+    count = state(0)
 
     @event_handler
     def increment(self, **kwargs):
         self.count += 1
-
-    def get_context_data(self, **kwargs):
-        # The template gets what you hand it here, and nothing else.
-        return {**super().get_context_data(**kwargs), 'count': self.count}
 ```
 
 ### Event Handlers — always use `@event_handler`
@@ -186,9 +180,9 @@ def search(self, value: str = "", **kwargs):
 ```
 
 ### What reaches the template (explicit exposure, the default since 2.0)
-- An attribute set on `self` stays on the server, with or without an underscore. `self.count = 0` alone renders `{{ count }}` empty, with no error.
-- `get_context_data()` supplies each name the template reads (as above). Framework mixins supply their own (`form_errors`, `streams`, `uploads`).
-- `state(...)` (`from djust.decorators import state`) declares what is persisted (`persist="server"`) or sent raw to the browser (`client=True`); it does not put the name in the template either.
+- A field declared with `state(...)` (`from djust import state`) renders in the template (as above); `state(..., render=False)` keeps one out. Persisting it (`persist="server"`) or sending it raw to the browser (`client=True`) are separate grants.
+- Any other attribute set on `self` stays on the server, with or without an underscore: `self.total = 0` alone renders `{{ total }}` empty, with no error.
+- `get_context_data()` supplies derived and render-only values, including `@computed` values and `assign_async()` results; build on `super().get_context_data(**kwargs)`, which carries the declared fields. Framework mixins supply their own (`form_errors`, `streams`, `uploads`).
 - `_private` is a naming convention for internal state. `exposure_policy = "legacy"` restores the 1.x attribute walk and is deprecated. See `docs/website/state/explicit-exposure.md`.
 
 ### Background Work — `start_async()` and `@background`

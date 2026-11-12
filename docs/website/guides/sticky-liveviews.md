@@ -32,22 +32,15 @@ Persistent audio player across Dashboard and Settings.
 
 ```python
 # myapp/views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class AudioPlayerView(LiveView):
     sticky = True
     sticky_id = "audio-player"  # required for sticky=True embeds (no default)
     template_name = "myapp/audio_player.html"
-
-    def mount(self, request, **kwargs):
-        self.track_title = "Nothing playing"
-        self.is_playing = False
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(track_title=self.track_title, is_playing=self.is_playing)
-        return context
+    track_title = state("Nothing playing")
+    is_playing = state(False)
 
     @event_handler
     def toggle_play(self, **kwargs):
@@ -192,15 +185,13 @@ section=section %}` after `section` changed), a child that defines
 class Sidebar(LiveView):
     sticky = True
     sticky_id = "sidebar"
+    collapsed = state(False)
 
     def mount(self, request, section="home", **kwargs):
         self.section = section
-        self.collapsed = False
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(section=self.section, collapsed=self.collapsed)
-        return context
+        return {**super().get_context_data(**kwargs), "section": self.section}
 
     def _on_sticky_update(self, changed):
         if "section" in changed:
