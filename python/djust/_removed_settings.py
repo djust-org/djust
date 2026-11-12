@@ -32,6 +32,14 @@ REMOVED_TEMPLATE_BACKENDS: dict[str, str] = {
     "djust.template_backend.DjustTemplateBackend": "djust.template.backend.DjustTemplateBackend",
 }
 
+#: ``TEMPLATES[...]['OPTIONS']['context_processors']`` paths 2.0 removed
+#: (#4025). Without this, the first render raises a bare ``ImportError``.
+REMOVED_CONTEXT_PROCESSORS: dict[str, str] = {
+    "djust.auth.social.social_auth_providers": (
+        "{% auth_providers auth %} from {% load djust_auth %}"
+    ),
+}
+
 #: ``LIVEVIEW_CONFIG`` / ``DJUST_CONFIG`` keys for kill switches 2.0 hard-wired on.
 REMOVED_CONFIG_KEYS: dict[str, str] = {
     "template_auto_call": "Django's nullary auto-call in templates is always on",
@@ -85,6 +93,16 @@ def removed_settings_in_use(settings: Any) -> list[str]:
                 problems.append(
                     "TEMPLATES[%d]['BACKEND'] is %r, a module path removed in djust 2.0; "
                     "use %r." % (i, backend, REMOVED_TEMPLATE_BACKENDS[backend])
+                )
+            options = entry.get("OPTIONS") if isinstance(entry, dict) else None
+            processors = options.get("context_processors") if isinstance(options, dict) else None
+            if isinstance(processors, (list, tuple)):
+                problems.extend(
+                    "TEMPLATES[%d]['OPTIONS']['context_processors'] lists %r, a context "
+                    "processor removed in djust 2.0; delete the entry and use %s."
+                    % (i, path, REMOVED_CONTEXT_PROCESSORS[path])
+                    for path in processors
+                    if isinstance(path, str) and path in REMOVED_CONTEXT_PROCESSORS
                 )
     for setting in ("LIVEVIEW_CONFIG", "DJUST_CONFIG"):
         cfg = getattr(settings, setting, None)
