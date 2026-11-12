@@ -152,6 +152,7 @@ These are **hard requirements** — violations are auto-rejected in PR review:
 - Tests must be deterministic — no flaky tests
 - Test imports must match actual module paths (a common rejection reason)
 - `feat:` and `fix:` PRs must add a changelog fragment: `changelog.d/<issue-or-slug>.<section>.md` (section ∈ added/changed/fixed/security/documentation/removed/deprecated; body = the bullet). Do NOT edit `CHANGELOG.md`'s `[Unreleased]` directly — pre-commit refuses it; the release cut compiles the fragments (`changelog.d/README.md`)
+- System-check docs, check IDs and removed-name tables are generated (#4080). A new check: `make new-check-id FAMILY=V` for the ID, then `docs/checks/<ID>.md` (`docs/checks/README.md`). A removed name: `docs/removed/2.0/migration/<NNN>-<slug>.md` (`docs/removed/README.md`). Then `make generated-docs`. Never edit between `BEGIN GENERATED` / `END GENERATED` markers in `docs/system-checks.md`, `error-codes.md`, `migrating-to-2.0.md` or `API_STABILITY.md`; a prose edit there also needs `make generated-docs` (it refreshes the fingerprint on the last line). A retired ID keeps its file with `status: retired` and is never reused. A hand-edited copy of one of those docs (an older branch in a merge): `python scripts/import-generated-docs.py`, then `make generated-docs`
 
 ## Key Patterns
 

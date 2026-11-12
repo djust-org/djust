@@ -187,6 +187,18 @@ repos:
         files: ^(changelog\.d/|CHANGELOG\.md$)
         pass_filenames: false
 
+      # The system-check docs and the removed-name tables are generated from one
+      # file per entry (docs/checks/<ID>.md, docs/removed/2.0/), so two changes
+      # that each add an entry never edit the same lines (#4080). This refuses a
+      # hand edit inside a generated region and a source added without
+      # regenerating. Regenerate with `make generated-docs`. ~0.2 s, stdlib only.
+      - id: check-generated-docs
+        name: check generated doc regions (docs/checks/, docs/removed/) (#4080)
+        entry: bash -c 'python3 scripts/system-check-docs.py check && python3 scripts/removed-names-docs.py check'
+        language: system
+        files: ^(docs/checks/|docs/removed/|docs/system-checks\.md$|docs/website/guides/(error-codes|migrating-to-2\.0)\.md$|docs/API_STABILITY\.md$|python/djust/_removed_settings\.py$|scripts/(system-check-docs|removed-names-docs)\.py$|scripts/lib/generated_docs\.py$)
+        pass_filenames: false
+
       # Pin already-shipped CHANGELOG sections against the newest release tag —
       # a stray branch merge must never silently rewrite shipped history (the
       # v1.1.0rc5 consolidation incident). See

@@ -603,6 +603,15 @@ jobs:
         # symbols. Guides are scanned by default; --no-guides disables.
         run: .venv/bin/python scripts/check-doc-snippets.py
 
+      - name: Generated system-check and removed-name docs are current (#4080)
+        if: matrix.group == 1
+        # docs/system-checks.md, error-codes.md, migrating-to-2.0.md and
+        # API_STABILITY.md have regions generated from docs/checks/<ID>.md and
+        # docs/removed/2.0/. Regenerate with `make generated-docs`.
+        run: |
+          .venv/bin/python scripts/system-check-docs.py check
+          .venv/bin/python scripts/removed-names-docs.py check
+
       - name: Generated template-backend support lists are current (#2533)
         if: matrix.group == 1 && matrix.django-version == '5.2'
         # docs/TEMPLATE_BACKEND.md's generated block records its Django version

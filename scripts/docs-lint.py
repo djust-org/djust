@@ -29,8 +29,10 @@ from pathlib import Path
 
 DOCS_ROOT = Path("docs")
 
-# Skip the rendered site dir — it has its own link checker.
-SKIP_DIRS = {"website"}
+# Skip the rendered site dir — it has its own link checker. docs/checks/ and
+# docs/removed/ hold entries that are copied into other docs (#4080): their
+# relative links resolve from the doc they render into, and are checked there.
+SKIP_DIRS = {"website", "checks", "removed"}
 
 # Standard markdown link with .md target. We deliberately ignore # fragment
 # correctness because GitHub auto-generates anchor IDs from headings and
