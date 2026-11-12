@@ -32,6 +32,7 @@ from djust.decorators import event_handler
 from djust.tests._growth import assert_scales_linearly
 
 from .test_stream_only_handlers_3639 import drive as _drive_over_a_real_socket
+from djust import state as djust_state
 
 
 @contextmanager
@@ -138,7 +139,7 @@ class TestIncludedTemplatesAreScanned:
         }
 
         class Named(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             temporary_assigns = {"rows": []}
             template_name = "pages/p.html"
 
@@ -563,7 +564,7 @@ class TestTheScanIsBounded:
 
 
 class _Page(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     temporary_assigns = {"rows": []}
     template = container("{% for r in rows %}x{% endfor %}")
 
@@ -610,6 +611,8 @@ class TestATemplateEditIsSeen:
 
 
 class TestTheScanNeverRaises:
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_a_template_that_cannot_be_read_accumulates_nothing_and_says_so(self, caplog):
         import logging
 
@@ -661,7 +664,7 @@ class TestTheScanNeverRaises:
 
 
 class _Renamed(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     temporary_assigns = {"rows": []}
     template = container("{% for r in items %}x{% endfor %}")
 
@@ -729,7 +732,10 @@ def _wrap(view: str, inner: str, before: str = "", after: str = "") -> str:
 
 
 class _Base(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    rows = djust_state()
+    items = djust_state()
+    k = djust_state(0)
     temporary_assigns = {"rows": []}
 
     def mount(self, request, **kwargs):
@@ -1023,7 +1029,7 @@ def _fresh_view(template=None):
     """A view class of its own (the cache lives on the class)."""
 
     class Fresh(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         temporary_assigns = {"rows": []}
 
     Fresh.template = template or container("{% for r in rows %}x{% endfor %}")
@@ -1081,13 +1087,15 @@ class TestATransientFailureIsNotKept:
         state["fail"] = False
         assert view_accumulating_container_ids(view) == ("list",)
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_a_get_template_exception_is_retried_on_the_next_render(self, caplog):
         import logging
 
         state = {"fail": True}
 
         class Flaky(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             temporary_assigns = {"rows": []}
 
             def get_template(self):

@@ -40,6 +40,7 @@ from djust.decorators import event_handler
 from djust.testing import LiveViewSmokeTest, LiveViewTestClient
 
 from djust.tests._ws_frames import drain_extra, receive_until
+from djust import state
 
 LOGGER = "djust._query_budget"
 
@@ -52,7 +53,8 @@ def _queries(n):
 class Base(LiveView):
     """Each phase spends the number of queries its ``spend_*`` attribute says."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(0)
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
     spend_mount = 0
@@ -435,6 +437,8 @@ class TestRunTimeMeasurement:
 class TestAnInvalidBudgetAtRunTime:
     """Run time never raises over a typo (the smoke test does); it says so once and measures nothing."""
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_it_is_logged_once_per_class_and_not_measured(self, warned):
         broken = view({"mout": 0}, spend_mount=9)
         LiveViewTestClient(broken).mount()
@@ -731,7 +735,8 @@ class TestNestedSteps:
 class SpendView(LiveView):
     """The transports' view: 3 queries in mount, 1 in handle_params, 2 in render, 5 in an event."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(0)
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
     query_budget = {"mount": 1, "render": 1, "event": 1}
@@ -791,6 +796,8 @@ class TestHttpGet:
         assert self._get("/frugal/").status_code == 200
         assert warned() == []
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_error_mode_turns_the_get_into_an_error(self):
         from django.test import Client
 
@@ -802,7 +809,8 @@ class TestHttpGet:
 class FormMountView(LiveView):
     """Mount and handle_params are free; only the form's ``ModelChoiceField`` queries."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    n = state(0)
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
     query_budget = {"mount": 0}
@@ -956,20 +964,20 @@ class TestWebSocket:
 
 
 class AuditedPlain(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = "<div dj-root></div>"
 
 
 class AuditedInt(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = "<div dj-root></div>"
     query_budget = 5
 
 
 class AuditedDict(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = "<div dj-root></div>"
     query_budget = {"mount": 2, "render": 1, "events": {"go": 3}}
@@ -1032,7 +1040,7 @@ class TestAuditListing:
 
     def test_an_invalid_budget_is_listed_as_invalid_with_its_reason(self):
         class Typo(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             login_required = False
             template = "<div dj-root></div>"
             query_budget = {"mout": 1}

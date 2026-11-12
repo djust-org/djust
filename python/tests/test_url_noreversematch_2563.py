@@ -228,13 +228,15 @@ class TestNeverSwallowed:
         monkeypatch.setattr(django.urls, "reverse", failing_reverse)
         assert render("[{% url named as v %}{{ v }}]", {"named": "anything"}) == "[]"
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_liveview_http_get_does_not_serve_a_blank_href(self):
         """The migration-risk path (§3.4 of the plan): a LiveView whose
         template reverses a missing name must NOT answer 200 with `href=""`."""
         from djust import LiveView
 
         class BrokenLinkView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root><a href=\"{% url 'nope' %}\">x</a></div>"
 
         request = RequestFactory().get("/")
@@ -242,6 +244,23 @@ class TestNeverSwallowed:
         request.session.session_key = "test-session-2563"
         with pytest.raises(NoReverseMatch):
             BrokenLinkView.as_view()(request)
+
+    @override_settings(DEBUG=False)
+    def test_without_debug_the_get_fails_closed_without_the_detail(self):
+        """Without DEBUG the explicit GET still refuses (500), and says nothing about why."""
+        from djust import LiveView
+
+        class BrokenLinkView(LiveView):
+            exposure_policy = "explicit"
+            template = "<div dj-root><a href=\"{% url 'nope' %}\">x</a></div>"
+
+        request = RequestFactory().get("/")
+        request.session = MagicMock()  # item assignment for the view's session save
+        request.session.session_key = "test-session-2563"
+        response = BrokenLinkView.as_view()(request)
+        assert response.status_code == 500
+        assert b'href=""' not in response.content
+        assert b"nope" not in response.content
 
 
 # ---------------------------------------------------------------------------

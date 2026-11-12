@@ -27,12 +27,14 @@ import tests.conftest  # noqa: F401  -- configure Django settings
 import pytest
 
 from djust.decorators import action, event_handler, is_action, is_event_handler
+from djust import state as djust_state
+from django.test import override_settings
 
 
 class _FakeView:
     """Minimal stand-in for a LiveView — only what @action touches."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def __init__(self):
         self._action_state: dict = {}
@@ -138,6 +140,8 @@ class TestActionSuccess:
 
 
 class TestActionException:
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_action_captures_exception_message(self):
         @action
         def create_todo(self, title: str = "", **kwargs):
@@ -155,6 +159,8 @@ class TestActionException:
         assert state["error"] == "Title is required"
         assert state["result"] is None
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_action_falls_back_to_class_name_for_empty_message(self):
         """Some exceptions have no message. Fall back to the exception
         class name so the template never sees an empty string."""
@@ -170,6 +176,8 @@ class TestActionException:
 
         assert view._action_state["boom"]["error"] == "ValueError"
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_action_does_NOT_re_raise_after_recording(self):
         """Closes #1276. The exception must NOT propagate to the
         dispatcher — re-raising routes the dispatcher to its
@@ -189,6 +197,18 @@ class TestActionException:
         assert view._action_state["boom"]["error"] == "kaboom"
         assert view._action_state["boom"]["result"] is None
         assert view._action_state["boom"]["pending"] is False
+
+    @override_settings(DEBUG=False)
+    def test_action_message_is_withheld_without_debug(self):
+        """Without DEBUG an explicit view records a generic error, never the message."""
+
+        @action
+        def create_todo(self, title: str = "", **kwargs):
+            raise ValueError("Title is required")
+
+        view = _FakeView()
+        create_todo(view, title="")
+        assert view._action_state["create_todo"]["error"] == "Action failed"
 
     def test_action_keyboard_interrupt_still_propagates(self):
         """``BaseException`` subclasses (``KeyboardInterrupt``,
@@ -227,6 +247,8 @@ class TestMultipleActions:
         assert view._action_state["create_todo"]["result"] == {"id": 1}
         assert view._action_state["delete_todo"]["result"] == {"deleted": True}
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_one_action_failing_does_not_affect_other(self):
         @action
         def good(self, **kwargs):
@@ -254,6 +276,8 @@ class TestMultipleActions:
 
 
 class TestReRunSemantics:
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_re_running_clears_previous_error(self):
         """If an action failed and is then re-run successfully, the
         error field must be cleared to None — otherwise a successful
@@ -276,6 +300,8 @@ class TestReRunSemantics:
         assert view._action_state["maybe"]["error"] is None
         assert view._action_state["maybe"]["result"] == "second call ok"
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_re_running_clears_previous_result(self):
         """Inverse: if a previous successful run set a result, a
         subsequent failure must clear it. Templates should not see a
@@ -333,7 +359,8 @@ class TestContextInjection:
         from djust.mixins.context import ContextMixin
 
         class _ContextTestView(ContextMixin):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            todos = djust_state(default_factory=lambda: ["a", "b"])
             template_name = "test.html"
 
             def __init__(self):
@@ -362,7 +389,8 @@ class TestContextInjection:
         from djust.mixins.context import ContextMixin
 
         class _NoActionView(ContextMixin):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            x = djust_state(1)
             template_name = "test.html"
 
             def __init__(self):

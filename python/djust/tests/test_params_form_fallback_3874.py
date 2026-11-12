@@ -35,6 +35,7 @@ from djust import LiveView
 from djust.testing import LiveViewTestClient
 
 from ._ws_frames import drain_extra, receive_until
+from djust import state as djust_state
 
 pytestmark = pytest.mark.django_db
 
@@ -388,7 +389,8 @@ _TEMPLATE = '<div dj-root><p id="state">{{ shown }}</p><p>ERRS:{{ params_errors|
 
 
 class _Base(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    shown = djust_state("unset")
     login_required = False
     template = _TEMPLATE
 
@@ -1223,6 +1225,8 @@ class TestTheDeclaration:
             ExposureContract("app.View", {"params_form_fallback": FieldExposure()})
 
     def test_an_instance_assignment_is_not_reactive_state(self):
+        # Legacy on purpose: the subject is the legacy state APIs (get_state,
+        # _capture_snapshot_state), which read the attribute walk.
         class Assigns(LiveView):
             exposure_policy = "legacy"
             template = "<div dj-root></div>"
@@ -1242,7 +1246,7 @@ class TestTheDeclaration:
         from djust._params_form import run_handle_params_sync
 
         class Overrides(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
             params_form = FilterParams
             params_form_fallback = "fields"
@@ -1269,10 +1273,10 @@ class TestTheDeclaration:
             params_form_fallback = "fields"
 
         class After(LiveView, Mixin):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
         class Before(Mixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
         assert After.params_form_fallback == "initial"
         assert Before.params_form_fallback == "fields"
@@ -1456,6 +1460,8 @@ class TestFallbackValues:
             _, _, view = self._bound(SpanParams, params)
             assert set(view.params_errors) == {"hi"}
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_a_clean_that_fails_on_the_merged_values_is_logged_without_the_exception_text(
         self, caplog
     ):
@@ -1918,6 +1924,8 @@ class TestFallbackValues:
         assert result["tags"] is not held
         assert held == ["b", "X"]  # the held form's list was not mutated
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_values_that_cannot_be_copied_give_the_plain_initials_and_a_warning(self, caplog):
         import logging
 
@@ -1942,6 +1950,8 @@ class TestFallbackValues:
         assert result == {"odd": None, "n": 1}
         assert any("failed on the merged fields" in r.getMessage() for r in caplog.records)
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     @pytest.mark.parametrize("exc", ["PermissionDenied", "Http404"])
     def test_an_exception_raised_only_on_the_second_call_gives_the_plain_initials(
         self, exc, caplog
@@ -2113,14 +2123,14 @@ class TestFallbackValues:
 
 
 class CheckGood(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     params_form = FilterParams
     params_form_fallback = "fields"
 
 
 class CheckBad(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     params_form = FilterParams
     params_form_fallback = "field"
@@ -2131,7 +2141,7 @@ class CheckBadInherited(CheckBad):
 
 
 class CheckBadNotAString(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     params_form = FilterParams
     params_form_fallback = ["fields"]
@@ -2140,13 +2150,13 @@ class CheckBadNotAString(LiveView):
 class CheckNoForm(LiveView):
     """No ``params_form``: the mode is never read, so there is nothing to report."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     params_form_fallback = "nonsense"
 
 
 class CheckBothBroken(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     params_form = "myapp.forms.Filter"
     params_form_fallback = "nonsense"
@@ -2207,7 +2217,7 @@ class TestV023Fallback:
         from djust._params_form import fallback_problem, run_handle_params_sync
 
         class Probe(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
             params_form = FilterParams
             params_form_fallback = declared
@@ -2243,6 +2253,8 @@ class TestAsyncOverrideRunsTheRecheckOnTheLoop:
         finally:
             await communicator.disconnect()
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     async def test_an_async_override_gets_the_plain_initials_and_a_warning_over_the_socket(
         self, caplog
     ):
@@ -2260,6 +2272,8 @@ class TestAsyncOverrideRunsTheRecheckOnTheLoop:
         assert response.status_code == 200
         assert CALLS[-1][0] == {"a": 5, "b": 2}
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     async def test_an_async_override_gets_the_plain_initials_and_a_warning_over_http(self, caplog):
         with caplog.at_level("WARNING", logger="djust._params_form"):
             response = await sync_to_async(Client().get)(_url("OrmAsync", self.QUERY))

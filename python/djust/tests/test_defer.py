@@ -14,12 +14,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from djust.mixins.async_work import AsyncWorkMixin
+from django.test import override_settings
 
 
 class FakeView(AsyncWorkMixin):
     """Minimal view-like class for direct mixin testing."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     pass
 
 
@@ -193,6 +194,8 @@ async def test_flush_deferred_passes_args_and_kwargs():
     assert captured == {"args": ("x", "y"), "key": "z", "flag": True}
 
 
+# The subject is the failure's message, which explicit views show only under DEBUG.
+@override_settings(DEBUG=True)
 @pytest.mark.asyncio
 async def test_flush_deferred_logs_and_continues_on_exception(caplog):
     """A failing deferred callback must not break the connection or stop
@@ -253,6 +256,8 @@ async def test_flush_deferred_handles_view_without_drain_method():
     await _FakeConsumer(_LegacyView())._flush_deferred()
 
 
+# The subject is the failure's message, which explicit views show only under DEBUG.
+@override_settings(DEBUG=True)
 @pytest.mark.asyncio
 async def test_flush_deferred_async_exception_isolated(caplog):
     """Async-callback failure must isolate the same way sync-callback
@@ -408,6 +413,8 @@ async def test_sse_flush_deferred_handles_view_without_drain_method():
     await _flush_deferred_to_sse(_LegacyView())
 
 
+# The subject is the failure's message, which explicit views show only under DEBUG.
+@override_settings(DEBUG=True)
 @pytest.mark.asyncio
 async def test_sse_flush_deferred_isolates_callback_exceptions(caplog):
     """SSE-side exception isolation must match WS-side: failed callback
