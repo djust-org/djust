@@ -831,6 +831,14 @@ A view that declares a `params_form` is also held to its `params_form_fallback`:
 
 **Fix**: Delete the override and set `self.state` to a state the map names. For a real special case, call `super().get_http_status()` first so the map still applies. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V025"]}`.
 
+### V026: plain component in a view's class body
+
+**Severity**: Warning
+
+**What causes it**: A LiveView (or a mixin or base class it inherits) declares a plain `Component` instance in its class body, such as `status = StatusDot("green")`. The instance is created once and shared by every user of that view in the process, so a handler that changes it changes it for everyone. Message: "<class> declares the plain component '<name>' in its class body. ..."
+
+**Fix**: Create the component in `mount()` (`self.status = StatusDot("green")`) so each view instance has its own. A component that no handler changes can stay. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V026"]}`.
+
 ---
 
 ## Security Errors (S0xx)

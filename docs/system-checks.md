@@ -56,6 +56,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V023 | LiveView | Error | A `params_form` the request path cannot use: not a form class, or a form whose `__init__` needs arguments beyond `data=`; or a `params_form_fallback` that is not `"initial"` or `"fields"` |
 | V024 | LiveView | Error | A `query_budget` nothing can enforce: an unknown key, a bool or negative number, a handler named in `events` that the view lacks or that is `async def` / `@background` |
 | V025 | LiveView | Warning | A class defines `get_http_status()` while `LIVEVIEW_CONFIG['http_status_of_state']` is configured: the override replaces the project-wide map |
+| V026 | LiveView | Warning | A view declares a plain component instance in its class body: one object shared by every user of the view in the process |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -487,6 +488,14 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Fix**: delete the override and set `self.state` to a state the map names; or, for a real special case, have the override call `super().get_http_status()` first so the map still applies. It is a Warning because an override can be right (a status that is not a function of one state), and the check cannot see a `super()` call.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V025"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V025"]`
 - **False positives**: an override that calls `super().get_http_status()`
+
+### V026 — plain component in a view's class body
+- **Severity**: Warning
+- **Method**: Runtime (class inspection; no view is constructed).
+- **What it detects**: a plain `Component` instance (`status = StatusDot("green")`, `badge = Badge("new")`) in the class body of a LiveView, or of a mixin or base class it inherits, reported once for the class whose body holds it. The instance is created once, when the class is defined, and shared by every user of that view in the process: a handler that changes it (`self.badge.label = ...`) changes it for everyone. A `LiveComponent` declared at class level (its descriptor gives each view instance its own state) and a component created in `mount()` are not reported, nor are djust's own classes.
+- **Fix**: create the component in `mount()` (`self.status = StatusDot("green")`) so each view instance has its own.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V026"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V026"]`
+- **False positives**: a component no handler ever changes (a fixed label). Sharing it is harmless; suppress, or move it to `mount()` anyway.
 
 ---
 
