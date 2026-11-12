@@ -615,11 +615,16 @@ class TestBoundComponentParity:
         assert hits == []
 
     def test_session_gates_share_one_type_tuple(self):
-        """The save gate and both restore gates must not drift apart (#1646)."""
+        """The save gate and the restore gate must not drift apart (#1646).
+
+        The save (``mixins/components.py``) and the HTTP page-POST fallback
+        restore (``mixins/request.py``) share the predicate. ``runtime.py`` had
+        the socket restore's gate, removed in 2.0 with ``enable_state_snapshot``;
+        it is pinned at 0, so a restore added back there has to update this pin."""
         sources = {
             "python/djust/mixins/components.py": 1,
             "python/djust/mixins/request.py": 1,
-            "python/djust/runtime.py": 1,
+            "python/djust/runtime.py": 0,
         }
         for rel, expected in sources.items():
             text = (REPO / rel).read_text()
