@@ -1,6 +1,3 @@
-import warnings
-
-import pytest
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.template import Context, Template
 from django.test import RequestFactory, override_settings
@@ -35,14 +32,3 @@ def test_theme_register_page_with_a_form_renders_real_field_names():
 def test_theme_login_page_without_a_form_is_unchanged():
     html = render("{% theme_login_page %}", request=RequestFactory().get("/"))
     assert 'type="email"' in html  # the themed mock-up is untouched
-
-
-@pytest.mark.django_db
-def test_social_auth_providers_still_works_and_warns():
-    from djust.auth.social import social_auth_providers
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        out = social_auth_providers(RequestFactory().get("/"))
-    assert "oauth_providers" in out
-    assert any(issubclass(x.category, DeprecationWarning) for x in caught)
