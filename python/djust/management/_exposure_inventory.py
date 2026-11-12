@@ -223,27 +223,66 @@ def _state_type(descriptor: Any) -> Optional[str]:
     return None if default is None else type(default).__name__
 
 
-def _suggest(name: str, kind: str, type_name: Optional[str], declared: bool) -> str:
+def _persists_today(view_class: type, policy: str) -> bool:
+    """Whether legacy restores this view's state on a reconnect today.
+
+    Only a legacy view that sets ``enable_state_snapshot`` (``PersistentLiveView``
+    sets it for its subclasses) restores saved state instead of running
+    ``mount()`` again; every other view remounts fresh. The flag is read
+    statically, so one that is not a plain class value (a property, say) counts
+    as not established, and the suggestions then grant nothing.
+    """
+    if policy != "legacy":
+        return False
+    flag = inspect.getattr_static(view_class, "enable_state_snapshot", False)
+    return isinstance(flag, (bool, int)) and bool(flag)
+
+
+def _suggest(
+    name: str, kind: str, type_name: Optional[str], declared: bool, persists: bool = False
+) -> str:
+    """A suggested explicit declaration that grants no more than the view has today.
+
+    ``persists`` is :func:`_persists_today` for the view. Without it no
+    persistence grant is suggested (#4023): the name does not survive a
+    reconnect today, so ``persist="server"`` would add behaviour and put the
+    value in the session. Nothing here is inferred from what a template reads.
+    """
     annotation = f": {type_name}" if type_name and " " not in type_name else ""
     supply = f"supply {name}=self.{name} from get_context_data() if the template uses it"
+    restored = "this view restores it on a reconnect today (enable_state_snapshot)"
     if kind == "state":
+        if declared:
+            return f"declared; review its persist/client grants; {supply}"
+        if persists:
+            return (
+                f'keep {name} = state(...); {restored}: add persist="server" to keep that; {supply}'
+            )
         return (
-            f'keep {name} = state(...); add persist="server" if it must survive reconnect, '
-            f"client=True only if the browser must read it; {supply}"
-            if not declared
-            else f"declared; review its persist/client grants; {supply}"
+            f"keep {name} = state(...); it does not survive a reconnect today, so it "
+            f"needs no persistence grant; {supply}"
         )
     if kind == "instance":
+        if persists:
+            return (
+                f'{name}{annotation} = state(persist="server")  # {restored}; drop persist '
+                f"if it need not survive one; {supply}"
+            )
         return (
-            f'{name}{annotation} = state(persist="server")  # add client=True only if the '
-            f"browser must read it; or drop persist for render-only data; {supply}"
+            f"{name}{annotation} = state(...)  # not restored on a reconnect today, so no "
+            f"persistence grant is needed; {supply}"
         )
     if kind == "private":
         public = name.lstrip("_") or name
+        if persists:
+            return (
+                f"explicit mode never persists underscore attributes; {restored} if it was "
+                f'saved: to keep that declare {public}{annotation} = state(persist="server"), '
+                f"otherwise leave it instance-only"
+            )
         return (
-            f"explicit mode never persists underscore attributes; if it must survive "
-            f'reconnect declare {public}{annotation} = state(persist="server"), '
-            f"otherwise leave it instance-only"
+            "explicit mode never persists underscore attributes, and this view does not "
+            "restore them on a reconnect today; leave it instance-only"
         )
     return f"render-only: {supply}; no state declaration needed"
 
@@ -261,6 +300,7 @@ def inventory_view(view_class: type) -> dict[str, Any]:
 
     policy_obj = inspect.getattr_static(view_class, "exposure_policy", "legacy")
     policy = policy_obj if isinstance(policy_obj, str) else "unreadable"
+    persists = _persists_today(view_class, policy)
 
     entries: dict[str, dict[str, Any]] = {}
 
@@ -297,7 +337,9 @@ def inventory_view(view_class: type) -> dict[str, Any]:
                 conditional=[] if slot_private and touched else ["private_session"],
                 storage_key=f"_state_{name}",
                 declared={"persist": obj.exposure.persist, "client": obj.exposure.client},
-                suggestion=_suggest(name, "state", None, obj.exposure != type(obj.exposure)()),
+                suggestion=_suggest(
+                    name, "state", None, obj.exposure != type(obj.exposure)(), persists
+                ),
             )
 
     for name, types in sorted(stored.items()):
@@ -312,7 +354,7 @@ def inventory_view(view_class: type) -> dict[str, Any]:
                 type=type_name,
                 destinations=["private_session"] if in_mount else [],
                 conditional=[] if in_mount else ["private_session"],
-                suggestion=_suggest(name, "private", type_name, False),
+                suggestion=_suggest(name, "private", type_name, False, persists),
             )
         else:
             add(
@@ -321,7 +363,7 @@ def inventory_view(view_class: type) -> dict[str, Any]:
                 type=type_name,
                 destinations=list(_PUBLIC_INSTANCE),
                 conditional=[],
-                suggestion=_suggest(name, "instance", type_name, False),
+                suggestion=_suggest(name, "instance", type_name, False, persists),
             )
 
     for name, obj in sorted(attrs.items()):
@@ -358,6 +400,7 @@ def inventory_view(view_class: type) -> dict[str, Any]:
     return {
         "view": f"{view_class.__module__}.{view_class.__qualname__}",
         "policy": policy,
+        "persists_today": persists,
         "source_unavailable": scan.unavailable,
         "names": sorted(entries.values(), key=lambda e: (e["name"].startswith("_"), e["name"])),
     }
@@ -385,7 +428,8 @@ def format_text(views: list[dict[str, Any]]) -> str:
     """Human-readable report. Contains names, type names and destinations only."""
     lines = ["ADR-038 exposure inventory (legacy destinations; values redacted)", ""]
     for view in views:
-        lines.append(f"{view['view']}  [policy: {view['policy']}]")
+        restore = "restored (enable_state_snapshot)" if view["persists_today"] else "fresh mount"
+        lines.append(f"{view['view']}  [policy: {view['policy']}; reconnect: {restore}]")
         for missing in view["source_unavailable"]:
             lines.append(f"  ! source unavailable for {missing}; assignments not scanned")
         if not view["names"]:
