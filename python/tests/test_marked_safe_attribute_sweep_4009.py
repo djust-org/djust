@@ -3,10 +3,12 @@
 ``conditional_escape`` leaves a marked-safe value unescaped, which is right in a text slot and lets
 the value out of an attribute. #4008 fixed ``toggle_group``; a sweep of every component tag with a
 marked-safe value that breaks out of a quoted attribute (``marked_safe_sweep_4009``) finds the
-tags below still doing it. They are the Python tags, and since 2.0 the Python tag is the only
-render path (the Rust engine renders its node), so this list is the whole of the defect: the native
-twins that also had it are gone, and the four kept layout handlers escape their attributes with
-``attr_text`` (``test_component_single_render_path.py``).
+tags below still doing it. They are the Python tags, which the Django engine renders and, for every
+tag that is not a kept native twin, the Rust engine too. The sweep covers the tag functions and
+nodes and, separately, the inclusion tags rendered through their templates (whose attributes now
+use ``force_escape``). It does NOT cover the kept native twins (``rust_handlers``): the core layout
+handlers are pinned by ``test_component_single_render_path.py``; the other restored twins are swept
+by ``payload_sweep_3774`` with plain payloads only.
 
 The fix is a structural pass over the tags (``attr_text`` in every attribute slot), tracked on #4009;
 it is not part of the single-render-path change. Until then this pins the set EXACTLY, in both
@@ -203,6 +205,34 @@ def test_the_marked_safe_breakouts_are_exactly_the_known_ones():
     assert sorted(KNOWN_BREAKOUTS - found) == [], (
         "fixed (good): remove these from KNOWN_BREAKOUTS so they cannot regress"
     )
+
+
+@pytest.mark.parametrize("name", safe_sweep.inclusion_tags())
+def test_no_inclusion_tag_lets_a_marked_safe_argument_out_of_an_attribute(name):
+    """Each inclusion tag, through its template, with a marked-safe attribute-breaking value in each
+    of its arguments in turn (the templates' attribute slots use ``force_escape``)."""
+    assert safe_sweep.inclusion_tags(), "no inclusion tag found: the sweep is vacuous"
+    found = {n for n in safe_sweep.inclusion_breakouts() if n.endswith(":" + name)}
+    assert found == set(), found
+
+
+def test_the_inclusion_sweep_sees_a_raw_attribute():
+    """Gate-off for the inclusion sweep: with ``force_escape`` taken out of ``progress.html``'s
+    ``aria-label`` (a copy of the template, rendered the same way), the payload breaks out."""
+    from django.template import engines
+
+    from djust.components.templatetags.djust_components import progress
+
+    template = (
+        '{% load djust_components %}<div{% if label %} aria-label="{{ label }}"{% endif %}></div>'
+    )
+    ctx = progress(value=3, label=safe_sweep.SAFE_PAYLOAD)
+    raw = engines["django"].from_string(template).render(ctx)
+    from payload_sweep_3774 import injections
+
+    assert any("onmouseover" in hit for hit in injections(raw))
+    shipped = safe_sweep.render_inclusion("progress", "label", safe_sweep.SAFE_PAYLOAD)
+    assert not any("onmouseover" in hit for hit in injections(shipped)), shipped
 
 
 def test_the_sweep_sees_a_breakout_and_not_a_text_slot():

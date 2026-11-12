@@ -131,6 +131,14 @@ def _native_names() -> dict[str, set[str]]:
     }
 
 
+def _components_natives() -> set[str]:
+    from djust.components import rust_handlers as rh
+
+    return {n for n, _h in rh.NATIVE_INLINE_HANDLERS} | {
+        n for n, _e, _h in rh.NATIVE_BLOCK_HANDLERS
+    }
+
+
 def _components_library() -> Any:
     from djust.components.templatetags.djust_components import register
 
@@ -458,9 +466,9 @@ class TestErrors:
     @pytest.mark.parametrize("tag", WITH_PARAMS, ids=lambda t: t["name"])
     def test_parameter_given_by_position_and_by_keyword(self, engines, tag):
         """Django notices this at the Python call, so it is a ``TypeError`` when the
-        node renders. A ``djust_components`` tag renders that same node under the Rust
-        engine (one render path per tag), so it is the same ``TypeError``; a native
-        ``theme_tags`` handler refuses it when the template compiles, as a
+        node renders. A bridged ``djust_components`` tag renders that same node under the
+        Rust engine (one render path per tag), so it is the same ``TypeError``; a native
+        handler (a kept component twin, a ``theme_tags`` handler) refuses it when the template compiles, as a
         ``TemplateSyntaxError`` carrying ``parse_bits``' own wording for a parameter
         given twice. Both refuse, and neither renders a value."""
         first = tag["params"][0]
@@ -471,7 +479,7 @@ class TestErrors:
         assert django[:2] == ("err", "TypeError"), django
         assert f"multiple values for argument '{first}'" in django[2]
         rust = _render(engines, "rust", src)
-        if tag["label"] == "djust_components":
+        if tag["label"] == "djust_components" and tag["name"] not in _components_natives():
             assert rust == django
             return
         assert rust[:2] == ("err", "TemplateSyntaxError"), rust

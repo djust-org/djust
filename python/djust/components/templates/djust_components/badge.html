@@ -1,4 +1,4 @@
-<span class="dj-badge dj-badge--{{ status }}">
+<span class="dj-badge dj-badge--{{ status|force_escape }}">
   <span class="dj-badge__dot{% if pulse %} dj-badge__dot--pulse{% endif %}" aria-hidden="true"></span>
   {% if status and status != "default" %}<span class="sr-only">Status: {{ status }}</span>{% endif %}
   <span class="dj-badge__label">{{ label }}</span>

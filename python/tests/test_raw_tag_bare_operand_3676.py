@@ -157,8 +157,16 @@ def _call(tag: dict[str, Any], args: str) -> str:
 _ID = re.compile(r"(?<=[-_])[0-9a-f]{6,12}\b")
 
 
-#: The core layout tags, which keep a native handler (``rust_handlers.NATIVE_BLOCK_HANDLERS``).
-_NATIVE_LAYOUT = frozenset({"app_shell", "app_sidebar", "app_header", "app_content"})
+#: The kept native twins (``rust_handlers.NATIVE_INLINE_HANDLERS`` / ``NATIVE_BLOCK_HANDLERS``).
+def _native_names() -> frozenset[str]:
+    from djust.components import rust_handlers as rh
+
+    return frozenset(
+        [n for n, _h in rh.NATIVE_INLINE_HANDLERS] + [n for n, _e, _h in rh.NATIVE_BLOCK_HANDLERS]
+    )
+
+
+_NATIVE_LAYOUT = _native_names()
 
 
 def _norm(html: str) -> str:
@@ -334,8 +342,8 @@ class TestBareOperandRefusedLikeDjango:
             src = _call(tag, f"{key}=1")
             out = _render(engines, "rust", src, {})
             if tag["name"] in _NATIVE_LAYOUT:
-                # Kept native (the root-proof protocol): a slot tag renders itself outside a
-                # shell, where the Python tag renders nothing. The call compiles and renders.
+                # A kept native twin renders its own markup (its divergence from the Python tag is
+                # listed in test_component_single_render_path.py). The call compiles and renders.
                 assert out[0] == "ok", (tag["name"], key, out)
                 continue
             assert out == _render(engines, "django", src, {}), (tag["name"], key, out)

@@ -181,17 +181,17 @@ def test_a_value_that_reads_like_an_unresolved_name_is_kept() -> None:
         assert ("button", "dj-click", "nope") in dj_attrs(html), html
 
 
-def test_a_value_that_is_also_a_variable_name_is_not_resolved_a_second_time() -> None:
-    """#3882, fixed by one render path per tag: ``same_name`` resolves to the text ``name``, which
-    is ALSO a context variable (``"n"``). The native handlers' ``context.get(val, val)`` looked the
-    VALUE up again and printed ``n``; the Rust engine now renders the Python tag's node, which
-    prints ``name`` as Django does."""
-    for src in (
-        "{% nav_menu toggle_event=same_name %}{% endnav_menu %}",
-        '{% dj_button label="L" event=same_name %}',
-    ):
-        assert ("button", "dj-click", "name") in dj_attrs(_django(src, CTX)), src
-        assert dj_attrs(_rust(src, CTX)) == dj_attrs(_django(src, CTX)), src
+def test_a_value_that_is_also_a_variable_name_is_resolved_a_second_time() -> None:
+    """#3882: ``same_name`` resolves to the text ``name``, which is ALSO a context variable
+    (``"n"``). The ``context.get(val, val)`` fallback of ``_parse_args`` looks the VALUE up again,
+    so a kept native twin (``nav_menu``) prints ``n`` where Django prints ``name``. A bridged tag
+    (``dj_button``) renders its Python node (one render path per tag) and prints ``name``."""
+    src = "{% nav_menu toggle_event=same_name %}{% endnav_menu %}"
+    assert ("button", "dj-click", "name") in dj_attrs(_django(src, CTX))
+    assert ("button", "dj-click", "n") in dj_attrs(_rust(src, CTX))
+    src = '{% dj_button label="L" event=same_name %}'
+    assert ("button", "dj-click", "name") in dj_attrs(_django(src, CTX))
+    assert dj_attrs(_rust(src, CTX)) == dj_attrs(_django(src, CTX))
 
 
 def test_a_literal_naming_a_variable_stays_a_literal() -> None:
@@ -434,15 +434,16 @@ def test_a_number_is_written_unlocalised(settings) -> None:
     assert cells(html) == [["N", "1234567"]], html
 
 
-def test_a_marked_safe_cell_is_kept_on_both_engines() -> None:
-    """The Python tag honours ``mark_safe`` in a cell (a text slot); the native handler was handed
-    text and escaped it (#3870). One render path: both engines keep it."""
+def test_a_marked_safe_cell_is_kept_by_the_python_tag_and_escaped_natively() -> None:
+    """The escaping policy of every native handler (the ``escaping`` aspect of the parity
+    baseline): the Python tag honours ``mark_safe``, the native handler is handed text. Pinned so
+    the template's behaviour for the cells that DO render is on record (#3870)."""
     from django.utils.safestring import mark_safe
 
     ctx = {"rows": [{"id": 1, "name": mark_safe("<i>a</i>"), "age": 1}], "cols": COLS}
     src = "{% data_table rows=rows columns=cols %}"
     assert "<i>a</i>" in _django(src, ctx)
-    assert "<i>a</i>" in _rust(src, ctx)
+    assert "<i>a</i>" not in _rust(src, ctx)
 
 
 @pytest.mark.parametrize("value", ['"', "'", '""x', "x'"], ids=repr)

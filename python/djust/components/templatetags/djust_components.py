@@ -12,6 +12,7 @@ Usage:
 
 import calendar as _calendar
 import datetime
+import hashlib
 import itertools
 import json as _json
 import re as _re
@@ -591,10 +592,22 @@ def toast_container(toasts: Any, dismiss_event: Any = "dismiss_toast") -> "dict[
 # ---------------------------------------------------------------------------
 
 
-# Process-wide monotonic counter so each rendered tooltip without an
-# explicit component_id still gets a unique tip id (the WAI-ARIA tooltip
-# pattern requires a stable id to anchor aria-describedby).
+# No longer read: a tooltip's default tip id is derived from its arguments (``_stable_id``), so
+# a LiveView re-render does not change it. Kept because the test-isolation reset and the parity
+# harness still reset it.
 _tooltip_id_counter = itertools.count(1)
+
+
+def _stable_id(prefix: str, *parts: Any) -> str:
+    """An element id derived from a tag's arguments, the same on every render of the same call.
+
+    A LiveView re-renders every tag on every turn: an id drawn at random (``uuid4``) or from a
+    process-wide counter changes each time, and each change is a patch on every turn. Derived
+    from the arguments, two identical calls on one page share an id; pass an explicit id
+    (``component_id`` / ``name``) where that matters.
+    """
+    digest = hashlib.sha1(repr(parts).encode("utf-8"), usedforsecurity=False).hexdigest()
+    return f"{prefix}-{digest[:6]}"
 
 
 class TooltipNode(template.Node):
@@ -613,13 +626,13 @@ class TooltipNode(template.Node):
         )
 
         # Derive a stable, escaped tip id. When the caller supplies a
-        # component_id, anchor on it (deterministic); otherwise fall back to
-        # a process-wide counter so concurrently-rendered tooltips on one
-        # page never collide.
+        # component_id, anchor on it; otherwise derive it from the tooltip's
+        # text, position and content, so a re-render keeps it (two identical
+        # tooltips on one page share it: give each a component_id then).
         if component_id:
             tip_id = f"{conditional_escape(component_id)}-tip"
         else:
-            tip_id = f"dj-tooltip-tip-{next(_tooltip_id_counter)}"
+            tip_id = _stable_id("dj-tooltip-tip", text, position, str(content))
 
         return mark_safe(
             f'<span class="dj-tooltip dj-tooltip--{conditional_escape(position)}"{cid_attr}'
@@ -4095,7 +4108,7 @@ def otp_input(
     dj_event = conditional_escape(event or name)
     disabled_attr = " disabled" if disabled else ""
 
-    uid = f"otp-{uuid.uuid4().hex[:6]}"
+    uid = _stable_id("otp", name, digits, event, label, disabled)
 
     box_parts = []
     for i in range(digits):
@@ -4221,7 +4234,7 @@ def tag_input(
     dj_event = conditional_escape(event or name)
     disabled_attr = " disabled" if disabled else ""
 
-    uid = f"ti-{uuid.uuid4().hex[:6]}"
+    uid = _stable_id("ti", name, event, placeholder, label, disabled)
 
     # Build existing tag chips
     tag_parts = []
@@ -6751,10 +6764,7 @@ class ToolbarNode(template.Node):
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        # A constant default, not a random one: a LiveView re-renders the tag on every turn, and
-        # a new id each time is a patch each time (the native handler used "toolbar" for that
-        # reason; since 2.0 the Rust engine renders this node, one render path per tag).
-        toolbar_id = kw.get("id", "toolbar")
+        toolbar_id = kw.get("id", f"toolbar-{uuid.uuid4().hex[:8]}")
         custom_class = kw.get("class", "")
         size = kw.get("size", "md")
         variant = kw.get("variant", "default")
@@ -6898,15 +6908,15 @@ class FilterSearchNode(template.Node):
 def render_filter_bar(
     kw: Any, controls: Any, *, default_id: Any = None, extra_html: Any = ""
 ) -> SafeString:
-    """Markup for ``{% filter_bar %}`` (#3669).
+    """Markup for ``{% filter_bar %}``, shared by the Django tag and the native handler (#3669).
 
     ``kw`` is the bar's own resolved arguments; ``controls`` is a list of ``(kind, kwargs)``
     with ``kind`` one of ``select`` / ``date_range`` / ``search`` and ``kwargs`` the child
     tag's resolved arguments. The bar owns ``event`` and ``clear_event``: a child's own
-    ``event=`` is never read. ``default_id`` is the id used when the bar has none (the tag passes
-    the constant ``filter-bar``, so a LiveView re-render does not change it; without one a random
-    id is drawn). ``extra_html`` is appended inside the controls row (no caller passes it since
-    the native handler was removed).
+    ``event=`` is never read. ``default_id`` is the id used when the bar has none (the Django
+    tag draws a random one; the native handler passes a constant so a socket render does not
+    change it). ``extra_html`` is appended inside the controls row (the native handler keeps
+    whatever else the template put in the bar; the Django tag has none).
     """
     bar_id = kw.get(
         "id", default_id if default_id is not None else f"filter-bar-{uuid.uuid4().hex[:8]}"
@@ -7018,8 +7028,7 @@ class FilterBarNode(template.Node):
             for n in self.nodelist
             if type(n) in _FILTER_KINDS
         ]
-        # A constant default id (as the native handler had): see ``ToolbarNode``.
-        return render_filter_bar(kw, controls, default_id="filter-bar")
+        return render_filter_bar(kw, controls)
 
 
 @register.tag("filter_bar")

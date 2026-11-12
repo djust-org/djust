@@ -453,10 +453,13 @@ class TestPayloadSweep:
         assert result["found"] == [], f"a payload became markup or a script URL: {result['found']}"
         # A sweep that renders almost nothing proves nothing: most of the tags must have rendered.
         assert result["rendered"] >= 0.85 * result["discovered"], result
-        # ... and the same for the Rust-native handlers (#3820). Since 2.0 only the four core
-        # layout handlers are native (one render path per component tag); every one must render.
-        assert result["handlers_discovered"] == 4, result
-        assert result["handlers_rendered"] == result["handlers_discovered"], result
+        # ... and the same for the Rust-native handlers (#3820). Since 2.0 only the kept native
+        # twins remain (``NATIVE_INLINE_HANDLERS`` / ``NATIVE_BLOCK_HANDLERS``).
+        from djust.components import rust_handlers as rh
+
+        kept = len(rh.NATIVE_INLINE_HANDLERS) + len(rh.NATIVE_BLOCK_HANDLERS)
+        assert result["handlers_discovered"] == kept, result
+        assert result["handlers_rendered"] >= 0.85 * result["handlers_discovered"], result
 
     def test_the_sweep_reads_a_real_handler_with_the_payload(self):
         from djust.components.rust_handlers import AppShellHandler

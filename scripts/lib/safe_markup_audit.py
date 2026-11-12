@@ -235,10 +235,15 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (DC, "render_filter_bar"): S(
         1,
-        "bar id, class, event and clear_event, every control's name, label, option value and label, date and search value and placeholder are conditional_escape'd; debounce is int(); `extra_html` is empty: the Django tag never passes it (the native handler that did was removed in 2.0, one render path per tag)",
+        "bar id, class, event and clear_event, every control's name, label, option value and label, date and search value and placeholder are conditional_escape'd; debounce is int(); `extra_html` is whatever else the template put in the bar, the Rust block handler's already-rendered children (autoescaped by the engine) with the filter comments removed, and empty for the Django tag",
         (DC, "e_event = conditional_escape(event)"),
         (DC, "e_clear = conditional_escape(clear_event)"),
         (DC, 'dj-debounce="{int(debounce)}"'),
+        (
+            PKG + "components/rust_handlers.py",
+            'extra_html=rest if rest.strip() else ""',
+            "FilterBarHandler.render",
+        ),
     ),
     (FM, "render_popconfirm"): S(
         1,
@@ -301,6 +306,19 @@ AUDITED: dict[tuple[str, str], Audit] = {
             "return render_modal_description(self.nodelist.render(context))",
             "ModalDescriptionNode.render",
         ),
+    ),
+    (DC, "otp_input"): S(
+        1,
+        "uid is _stable_id(...): a constant prefix and a hex digest of the arguments; name, label and event conditional_escape'd; digits int() in 1..12",
+        (DC, 'uid = _stable_id("otp", name, digits, event, label, disabled)'),
+        (DC, 'return f"{prefix}-{digest[:6]}"', "_stable_id"),
+        (DC, "digits = max(1, min(12, digits))"),
+    ),
+    (DC, "tag_input"): S(
+        1,
+        "uid is _stable_id(...): a constant prefix and a hex digest of the arguments; name, label, placeholder, event and each tag conditional_escape'd / attr_text'd",
+        (DC, 'uid = _stable_id("ti", name, event, placeholder, label, disabled)'),
+        (DC, 'return f"{prefix}-{digest[:6]}"', "_stable_id"),
     ),
     (DC, "render_modal"): S(
         2,
@@ -432,6 +450,23 @@ AUDITED: dict[tuple[str, str], Audit] = {
             'return (len(content[:start].encode()), len(content[:end].encode())), ""',
             "_layout_body_part",
         ),
+    ),
+    (RH, "DataTableHandler.render"): S(
+        2,
+        "everything the guard cannot see through is the nested _dbtn(val, label), whose only call sites pass the literals ('compact', 'comfortable', 'spacious') and their labels, and whose `density_event` was conditional_escape'd at the top; the rest of the table (cells, toolbar, search, pagination, footer) is proved by the guard: every kw value is conditional_escape'd or int()-coerced where it is read, the footer aggregates are sum/min/max/round/len of float() values",
+        (RH, 'density_event = conditional_escape(kw.get("density_event", "on_table_density"))'),
+        (RH, "f\"{_dbtn('compact', 'Compact')}\""),
+        (RH, "f\"{_dbtn('comfortable', 'Comfortable')}\""),
+        (RH, "f\"{_dbtn('spacious', 'Spacious')}\""),
+        (RH, "vals.append(float(v))"),
+        (RH, "agg_val = round(sum(vals) / len(vals), 2)"),
+    ),
+    (RH, "ProgressHandler.render"): S(
+        1,
+        "value is the Python tag's clamp, max(0, min(100, int(value))): an int in 0..100; label, size and colour conditional_escape'd; the track size is a constant looked up by the escaped size",
+        (RH, 'value = _progress(value=kw.get("value", 0))["value"]'),
+        (RH, 'label = conditional_escape(kw.get("label", ""))'),
+        (DC, "value = max(0, min(100, int(value)))", "progress"),
     ),
     (DT, "FileTreeNode.render"): S(
         1,

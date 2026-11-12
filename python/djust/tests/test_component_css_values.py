@@ -392,6 +392,29 @@ class TestOtherColours:
         _assert_absent(out, color)
 
 
+class TestDataTableTwin:
+    """``data_table`` keeps its native twin, whose ``conditional_formatting`` is native-only (#3869)."""
+
+    def test_data_table_colour_scale_single_stop(self):
+        def render(colors):
+            return str(
+                rh.DataTableHandler().render(
+                    ["rows=rows", "columns=cols", "conditional_formatting=cf"],
+                    {
+                        "rows": [{"id": 1, "n": 50}],
+                        "cols": [{"key": "n", "label": "N"}],
+                        "cf": [{"column": "n", "type": "color_scale", "colors": colors}],
+                    },
+                )
+            )
+
+        assert 'style="background-color:#abcdef"' in render(["#abcdef"])
+        out = render(["red;position:fixed"])
+        assert "background-color" not in out
+        _assert_absent(out, "red;position:fixed")
+        assert 'style="background-color:#7f7f00"' in render(["#ff0000", "#00ff00"])
+
+
 # ---------------------------------------------------------------------------
 # Lengths, ratios and numbers
 # ---------------------------------------------------------------------------
@@ -452,6 +475,12 @@ def _data_table_paths() -> dict[str, Callable[[Any], str]]:
     rows = [{"id": 1, "a": "x"}]
     return {
         "tag": lambda v: _tag("{% data_table rows=r columns=c %}", c=_grid_columns(v), r=rows),
+        # ``data_table`` keeps its native twin (one render path per tag where it costs nothing).
+        "handler": lambda v: str(
+            rh.DataTableHandler().render(
+                ["rows=r", "columns=c"], {"c": _grid_columns(v), "r": rows}
+            )
+        ),
     }
 
 

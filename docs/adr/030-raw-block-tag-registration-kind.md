@@ -160,7 +160,7 @@ No Rust step.
 - **Not a `simple_block_tag` deprecation.** It remains the right shape for new libraries on Django 5.2+.
 - **Not a replacement of the 52 native handlers.** They keep precedence. Whether wrapper-shaped ones could later be retired in favour of the bridge is a separate question with its own measurement.
 
-  *Update (2.0, decided 2026-11-12, S3 of `docs/reviews/2026-11-11-djust-2-consolidated.md`):* that separate question was answered: every `djust_components` tag now renders through this bridge and the native handlers are gone, except the four core layout tags (the root-proof protocol). A wrapper-shaped tag takes `LibraryBlockTagHandler` as decided here; a tag whose node reads its children takes the raw-body kind with the library added to its parser (`rust_handlers.RAW_BODY_TAGS`), and the raw body now ends at the end tag that closes the tag rather than the first one, so such a tag can be nested in itself. See `docs/TEMPLATE_BACKEND.md`, *One render path per component tag*.
+  *Update (2.0, decided 2026-11-12, S3 of `docs/reviews/2026-11-11-djust-2-consolidated.md`):* that separate question was answered for most of the library: a `djust_components` tag now renders through this bridge unless a benchmark or a missing bridge capability keeps its native twin (the core layout tags, five inclusion tags, and the parents that read their children, which the raw-body route would hand to Django's engine). The raw body now ends at the end tag that closes the tag rather than the first one, so a raw-body tag can be nested in itself. See `docs/TEMPLATE_BACKEND.md`, *One render path per component tag*.
 - **Not a gallery change.** The gallery's theming defects were fixed independently.
 
 ## 7. Record of what the earlier drafts got wrong

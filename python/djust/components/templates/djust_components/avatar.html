@@ -1,10 +1,10 @@
-<div class="dj-avatar dj-avatar--{{ size }}">
+<div class="dj-avatar dj-avatar--{{ size|force_escape }}">
   {% if src %}
-    <img class="dj-avatar__img" src="{{ src }}" alt="{{ alt }}">
+    <img class="dj-avatar__img" src="{{ src }}" alt="{{ alt|force_escape }}">
   {% else %}
-    <span class="dj-avatar__initials" role="img" aria-label="{{ alt|default:initials }}">{{ initials }}</span>
+    <span class="dj-avatar__initials" role="img" aria-label="{{ alt|default:initials|force_escape }}">{{ initials }}</span>
   {% endif %}
   {% if status %}
-    <span class="dj-avatar__status dj-avatar__status--{{ status }}" aria-hidden="true"></span>
+    <span class="dj-avatar__status dj-avatar__status--{{ status|force_escape }}" aria-hidden="true"></span>
   {% endif %}
 </div>

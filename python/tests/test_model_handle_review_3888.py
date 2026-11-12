@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import html as html_lib
 import json
+import re
 
 import pytest
 from django.contrib.auth.models import Group, User
@@ -48,8 +49,7 @@ def _backend(src: str, ctx: dict) -> str:
     from djust.template import DjustTemplateBackend
 
     backend = DjustTemplateBackend(
-        # APP_DIRS: an inclusion tag (``data_table``) loads its template, under either engine.
-        params={"NAME": "djust", "DIRS": [], "APP_DIRS": True, "OPTIONS": LIBS}
+        params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": LIBS}
     )
     return html_lib.unescape(str(backend.from_string(src).render(context=dict(ctx), request=None)))
 
@@ -223,59 +223,51 @@ class TestATagArgumentIsStillTheFlooredDict:
         ]
         assert got == _expected_rows(users)
 
-    def test_data_table_over_a_list_of_models_renders_as_django_renders_it(self, users) -> None:
-        """The Rust engine renders the Python tag's own node (one render path per tag). Its
-        ``table_cell`` reads a cell by key from a MAPPING, so a model row is an empty row under
-        Django's engine and here alike (the native handler was handed JSON dicts and drew the
-        fields; #3895 records the row shape as the reference's decision). A LiveView normalises a
-        model in its state to the floored dict before render, so a table over view state still
-        draws its rows. Nothing floored is printed either way."""
-        from django.template import engines
-
+    def test_data_table_over_a_list_of_models_renders_its_rows(self, users) -> None:
         cols = [{"key": "username", "label": "U"}, {"key": "email", "label": "E"}]
-        src = "{% data_table rows=rows columns=cols %}"
-        got = _backend(src, {"rows": list(users), "cols": cols})
-        django = html_lib.unescape(
-            engines["django"]
-            .from_string("{% load djust_components %}" + src)
-            .render({"rows": list(users), "cols": cols})
+        got = _backend(
+            "{% data_table rows=rows columns=cols %}", {"rows": list(users), "cols": cols}
         )
-        assert got == django
-        assert SECRET not in got
-        dicts = [{"username": u.username, "email": u.email} for u in users]
-        drawn = _backend(src, {"rows": dicts, "cols": cols})
         for needle in ("root", "r@example.com", "other", "o@example.com"):
-            assert needle in drawn, drawn
+            assert needle in got, got
+        assert SECRET not in got
 
-    def test_no_inline_tag_prints_a_floored_field_of_a_list_of_models(self, users) -> None:
-        """The sweep over EVERY inline component tag the Rust engine serves: for each list-like
-        argument name, a list of models never puts a floored field (the password hash) in the
-        output. The tag's own node renders (one render path per tag) and reads each model through
-        the bridge floor, so what it prints of a model is what Django's tag prints of it, minus
-        what the floor refuses. Derived from the bridge registration, not listed by hand."""
+    def test_every_native_tag_renders_a_list_of_models_as_it_renders_their_dicts(
+        self, users
+    ) -> None:
+        """The differential over EVERY registered inline native tag: for each list-like argument
+        name, a list of models and the list of their floored dicts render the same bytes (or raise
+        the same error). Derived from ``rust_handlers.NATIVE_INLINE_HANDLERS``, not listed by hand."""
         from djust.components import rust_handlers
-        from djust.components.templatetags.djust_components import register
+        from djust.serialization import normalize_django_value
 
+        dicts = [normalize_django_value(u) for u in users]
         cols = [{"key": "username", "label": "U"}, {"key": "email", "label": "E"}]
         keys = ["rows", "items", "options", "cards", "data", "entries", "steps", "tabs", "list"]
-        checked = rendered = 0
-        inline = [
-            name
-            for name, (kind, _handler) in rust_handlers._bridged_handlers(register).items()
-            if kind == "tag"
-        ]
-        for name in inline:
+        checked = 0
+        differing: dict[str, str] = {}
+        for name, _handler in rust_handlers.NATIVE_INLINE_HANDLERS:
             for key in keys:
                 src = "{% " + name + " " + key + "=rows columns=cols %}"
+                outcomes = []
+                for rows in (list(users), dicts):
+                    try:
+                        out = _backend(src, {"rows": rows, "cols": cols})
+                        # generated element ids (uuid / random suffixes) differ per render
+                        outcomes.append(("ok", re.sub(r"(?<=[-_])[0-9a-f]{6,12}\b", "ID", out)))
+                    except Exception as exc:  # noqa: BLE001
+                        outcomes.append(("raised", type(exc).__name__))
                 checked += 1
-                try:
-                    out = _backend(src, {"rows": list(users), "cols": cols})
-                except Exception:  # noqa: BLE001 - a tag that refuses the argument prints nothing
-                    continue
-                rendered += 1
-                assert SECRET not in out, (name, key)
+                if outcomes[0] != outcomes[1]:
+                    differing[name] = key
         assert checked > 200, checked
-        assert rendered > 100, rendered
+        # The only tags that differ SPELL their argument rather than read rows from it: a data dump
+        # (the same family as `|json_script` / `|pprint`, which print each model as its `str()`).
+        assert set(differing) <= DUMP_TAGS, differing
+
+
+#: native tags that print the value they are given instead of reading rows from it
+DUMP_TAGS = {"json_viewer"}
 
 
 # -- 3. a snapshot never holds a handle ------------------------------------------------------------

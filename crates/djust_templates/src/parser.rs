@@ -2879,8 +2879,26 @@ fn collect_nested_raw_source(
 ) -> Result<(String, usize)> {
     let mut content = String::new();
     let mut depth = 0usize;
+    // A `{% comment %}` block is not template code: a same-named tag inside it neither opens
+    // nor closes anything (Django's parser skips the whole block). `{% verbatim %}` needs no
+    // care here: the lexer already hands its body over as text.
+    let mut comment_depth = 0usize;
     let mut j = start;
     while j < tokens.len() {
+        if let (Token::Tag(name, _), Some(_)) = (&tokens[j], open_name) {
+            if name == "comment" {
+                comment_depth += 1;
+            } else if name == "endcomment" && comment_depth > 0 {
+                comment_depth -= 1;
+            }
+        }
+        if comment_depth > 0 {
+            if let Token::Tag(name, args) = &tokens[j] {
+                push_raw_tag(&mut content, name, args);
+                j += 1;
+                continue;
+            }
+        }
         if let (Token::Tag(name, args), Some(open)) = (&tokens[j], open_name) {
             if name == open {
                 depth += 1;
@@ -5190,6 +5208,20 @@ mod tests {
         let (first, _) = collect_raw_source(&tokens, 0, &["endaccordion"], "boom".to_string())
             .expect("collect failed");
         assert_eq!(first, "a{% accordion x=1 %}b");
+        // A same-named tag inside `{% comment %}` is not counted (Django skips the block).
+        let commented =
+            tokenize("a{% comment %}{% accordion %}{% endcomment %}b{% endaccordion %}tail")
+                .expect("tokenize failed");
+        let (body, end_pos) = collect_nested_raw_source(
+            &commented,
+            0,
+            Some("accordion"),
+            &["endaccordion"],
+            "boom".to_string(),
+        )
+        .expect("collect failed");
+        assert_eq!(body, "a{% comment %}{% accordion %}{% endcomment %}b");
+        assert!(matches!(&commented[end_pos + 1], Token::Text(t) if t == "tail"));
         // An inner pair left open is still unclosed.
         let open = tokenize("{% accordion %}x{% endaccordion %}").expect("tokenize failed");
         assert!(collect_nested_raw_source(
