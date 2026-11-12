@@ -25,9 +25,12 @@ class ItemView(LiveView):
         self.query = ""
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(query=self.query, selected_id=self.selected_id)
-        return context
+        # The template gets what is returned here, not the view's attributes.
+        return {
+            **super().get_context_data(**kwargs),
+            "selected_id": self.selected_id,
+            "query": self.query,
+        }
 
     @event_handler(parameter_policy="strict")
     def select_item(self, item_id: int, active: bool = False) -> None:

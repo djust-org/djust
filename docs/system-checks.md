@@ -85,6 +85,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T023 | Templates | Info | T019-T022 were skipped: no usable template engine (none configured, or it could not be built) |
 | T024 | Templates | Warning | A template an owner renders reads `is_staff`, `is_superuser` or `password` through a `user` variable; djust never serializes them |
 | T025 | Templates | Warning | `dj-view` / `dj-root` on `<html>` or `<head>`: unsupported and ignored, no live view is mounted and the page stays a plain HTTP page (`<body>` is a supported root) |
+| T027 | Templates | Warning | An explicit-exposure view's template reads a name the view holds as an attribute but does not supply from `get_context_data()` (renders blank, no error) |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -910,6 +911,34 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   renderer, and a `{% verbatim %}` written inside a `{{ '...' }}` string literal can
   hide a real tag. A tag written inside another tag's attribute value is reported
   once per tag; the renderer warns once.
+
+### T027 — Template name held but not supplied (explicit exposure)
+- **Severity**: Warning
+- **Method**: AST (the view's source) plus regex (the template), the same
+  extraction as T018 and `djust_typecheck`
+- **What it detects**: A view under explicit exposure (the default since 2.0)
+  whose template reads a name that the view sets as a public attribute
+  (`self.count = 0`), declares with `state()`, or defines as a class value or
+  property, and that the view's `get_context_data()` does not return. Under
+  explicit exposure a template gets what `get_context_data()` and the
+  framework's providers supply, so the name renders as empty string with no
+  error. This is what a view written for djust 1.x looks like after the
+  default changed. T018 does not report it, because T018 counts an attribute
+  as defined.
+- **Fix**: Return the name from `get_context_data()`
+  (`return {**super().get_context_data(**kwargs), "count": self.count}`), and
+  declare it with `state()` if it must be persisted or sent to the browser. To
+  keep the 1.x behaviour while migrating, set `exposure_policy = "legacy"` on
+  the view. See [Migrating to djust 2.0](website/guides/migrating-to-2.0.md).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T027"]}`, or one name
+  with a `{# djust_typecheck: noqa name #}` template comment
+- **Not checked**: a view that states `exposure_policy = "legacy"`; a view
+  whose `get_context_data()` does more than return a literal dict or
+  `super().get_context_data()` (its keys cannot be read statically); a
+  template that uses `{% extends %}`; a name the template reads only through
+  an `{% include %}`. With `DEBUG = True` the same condition is logged at
+  render time for every view, once per view and name, on the `djust.exposure`
+  logger.
 
 ### T019–T022 — Template event bindings (ADR-037)
 - **Severity**: Warning (all four, in 1.3)

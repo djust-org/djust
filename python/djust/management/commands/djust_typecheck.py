@@ -137,8 +137,12 @@ def _public_class_attrs(cls: type) -> Set[str]:
     return names
 
 
-def _extract_context_keys_from_ast(cls: type) -> Set[str]:
+def _extract_context_keys_from_ast(cls: type, *, attributes: bool = True) -> Set[str]:
     """Best-effort static extraction of context-provided names.
+
+    ``attributes=False`` leaves out sources 2 and 3 (``self.foo = ...`` and
+    properties): what is left is what a view *supplies* under explicit
+    exposure, where an attribute is not template context (``djust.T027``).
 
     Collects three sources from the class source, walking the MRO so keys
     set on any user-code ancestor (mixins, base views) are visible to the
@@ -194,11 +198,13 @@ def _extract_context_keys_from_ast(cls: type) -> Set[str]:
             tree = ast.parse(textwrap.dedent(src))
         except SyntaxError:
             continue
-        _collect_context_keys_from_tree(tree, keys)
+        _collect_context_keys_from_tree(tree, keys, attributes=attributes)
     return keys
 
 
-def _collect_context_keys_from_tree(tree: ast.AST, keys: Set[str]) -> None:
+def _collect_context_keys_from_tree(
+    tree: ast.AST, keys: Set[str], *, attributes: bool = True
+) -> None:
     """Walk a parsed class body and add discoverable context keys to ``keys``."""
     for node in ast.walk(tree):
         # 1. get_context_data literal returns
@@ -208,6 +214,8 @@ def _collect_context_keys_from_tree(tree: ast.AST, keys: Set[str]) -> None:
                     for k in sub.value.keys:
                         if isinstance(k, ast.Constant) and isinstance(k.value, str):
                             keys.add(k.value)
+        if not attributes:
+            continue
         # 2. self.attr = ... assignments
         if isinstance(node, ast.Assign):
             for target in node.targets:

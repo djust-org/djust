@@ -30,6 +30,31 @@ inherit from, and then migrate them one at a time. Without it an unmigrated
 view renders the names nothing supplies as empty, with no error. See
 [Keeping the legacy policy](../state/explicit-exposure.md#keeping-the-legacy-policy).
 
+Stating `"legacy"` raises a `DeprecationWarning` when the class is defined. If
+your tests run with warnings as errors, that fails the import of every module
+that states it, so allow this one warning until the views are migrated. With
+pytest:
+
+```toml
+# pyproject.toml
+[tool.pytest.ini_options]
+filterwarnings = [
+    "error",
+    'ignore:exposure_policy = "legacy" \(stated on:DeprecationWarning',
+]
+```
+
+With `python -W` or `PYTHONWARNINGS` the message part is matched literally
+from its start, so the entry is
+`-W 'ignore:exposure_policy = "legacy":DeprecationWarning'`, placed after
+`-W error`.
+
+Two things tell you which names a view still has to supply. With
+`DEBUG = True` djust logs a warning on the `djust.exposure` logger the first
+time a view renders a name that its template reads and the view sets but does
+not supply. `python manage.py check` reports the same statically as
+`djust.T027`.
+
 > **Where 2.0 is today.** There is no 2.0 release yet. On the development line
 > (`2.0.0.dev0`) the removals listed under [Removed names](#3-replace-removed-names-and-settings)
 > have landed, and explicit exposure is the default: a view that states no
