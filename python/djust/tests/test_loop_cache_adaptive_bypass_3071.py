@@ -22,6 +22,7 @@ _seq = itertools.count()
 
 
 class _LoopView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="djust.tests.test_loop_cache_adaptive_bypass_3071._LoopView"'
         ' dj-id="0"><ul>{% for x in xs %}<li>{{ x.name }}</li>{% endfor %}</ul></div>'
@@ -92,6 +93,7 @@ class TestLoopCacheAdaptiveBypass:
 
     def test_a_view_without_cacheable_loops_is_left_alone(self):
         class NoLoop(LiveView):
+            exposure_policy = "legacy"
             template = (
                 '<div dj-root dj-view="djust.tests.test_loop_cache_adaptive_bypass_3071.NoLoop"'
                 ' dj-id="0">{{ n }}</div>'

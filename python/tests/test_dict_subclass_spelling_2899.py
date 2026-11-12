@@ -176,6 +176,7 @@ def test_normalize_keeps_a_self_spelling_subclass_for_the_render_path():
 
 
 class Page(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-id="0">[{{ box }}][{{ box.a }}][{{ od }}][{{ od.b }}]'
         "[{{ request.GET }}][{{ request.GET.q }}][{{ ts }}][{{ ts.active }}]"

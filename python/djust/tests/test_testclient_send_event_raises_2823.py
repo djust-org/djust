@@ -24,6 +24,7 @@ from djust.testing import LiveViewTestClient, NoHandlerFoundError
 
 
 class SimpleView(LiveView):
+    exposure_policy = "legacy"
     template = "<div>n={{ n }}</div>"
 
     def mount(self, request, **kwargs):
@@ -75,6 +76,7 @@ def test_param_validation_failure_still_returns_envelope_unchanged():
     (#2823 scope)."""
 
     class TypedView(LiveView):
+        exposure_policy = "legacy"
         template = "<div></div>"
 
         def mount(self, request, **kwargs):

@@ -31,6 +31,8 @@ class NoTemplateDemo(LiveView):
     The template_string is static for efficient VDOM patching.
     """
 
+    exposure_policy = "legacy"
+
     # No template file! Everything is generated from Python
     template_name = None
 

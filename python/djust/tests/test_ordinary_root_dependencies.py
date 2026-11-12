@@ -33,6 +33,7 @@ def test_stateful_ordinary_include_uses_one_page_and_baseline(tmp_path, monkeypa
     monkeypatch.setattr("djust.state_backends.get_backend", lambda: backend)
 
     class OrdinaryIncludeView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
         name = "value"
 
@@ -77,6 +78,7 @@ def test_ordinary_include_retains_root_fields_and_diff(tmp_path):
     )
 
     class OrdinaryView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
         name = "before"
         shell_only = "shell"
@@ -110,6 +112,7 @@ def test_ordinary_root_bindings_after_opaque_tag_output(tmp_path):
     )
 
     class OrdinaryView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
         name = "before"
 
@@ -140,6 +143,7 @@ def test_ordinary_root_cannot_switch_to_untrusted_competing_root(tmp_path):
     )
 
     class OrdinaryView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
         name = "before"
         prefix = ""
@@ -176,6 +180,7 @@ def test_static_include_gaining_partial_replans_before_render(tmp_path):
     path.write_text("<main dj-root>first</main>")
 
     class Page(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
         injected = "<aside dj-root>injected</aside>"
 
@@ -225,6 +230,7 @@ def test_ordinary_wrapper_competing_root_does_not_advance_baseline(tmp_path, mon
     monkeypatch.setattr("djust.state_backends.get_backend", lambda: backend)
 
     class View(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
         wrapper_template = "wrapper.html"
 

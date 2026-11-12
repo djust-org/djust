@@ -29,6 +29,8 @@ class _FakeView:
     `_is_serializable` or falls back to json.dumps — either works.
     """
 
+    exposure_policy = "legacy"
+
     def __init__(self):
         self.counter = 0
         self.label = "initial"

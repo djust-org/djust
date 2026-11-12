@@ -16,6 +16,7 @@ SENTINEL = "REACT_PROP_SENTINEL"
 
 
 class ReactPropView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root><div data-react-component="ExposureCard" '
         'data-react-props=\'{"note": "{{ secret_note }}", "title": "{{ title }}"}\'>'

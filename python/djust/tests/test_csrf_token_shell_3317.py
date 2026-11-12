@@ -85,6 +85,7 @@ def test_shell_csrf_token_without_the_csrf_processor(make_templates, backend, op
             "V3317",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "template_name": "page_3317.html",
                 "login_required": False,
                 "mount": lambda self, request, **kwargs: setattr(self, "n", 1),

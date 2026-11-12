@@ -388,6 +388,7 @@ _TEMPLATE = '<div dj-root><p id="state">{{ shown }}</p><p>ERRS:{{ params_errors|
 
 
 class _Base(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = _TEMPLATE
 
@@ -1223,6 +1224,7 @@ class TestTheDeclaration:
 
     def test_an_instance_assignment_is_not_reactive_state(self):
         class Assigns(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
 
             def mount(self, request, **kwargs):
@@ -1240,6 +1242,7 @@ class TestTheDeclaration:
         from djust._params_form import run_handle_params_sync
 
         class Overrides(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
             params_form = FilterParams
             params_form_fallback = "fields"
@@ -1266,10 +1269,10 @@ class TestTheDeclaration:
             params_form_fallback = "fields"
 
         class After(LiveView, Mixin):
-            pass
+            exposure_policy = "legacy"
 
         class Before(Mixin, LiveView):
-            pass
+            exposure_policy = "legacy"
 
         assert After.params_form_fallback == "initial"
         assert Before.params_form_fallback == "fields"
@@ -2110,12 +2113,14 @@ class TestFallbackValues:
 
 
 class CheckGood(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     params_form = FilterParams
     params_form_fallback = "fields"
 
 
 class CheckBad(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     params_form = FilterParams
     params_form_fallback = "field"
@@ -2126,6 +2131,7 @@ class CheckBadInherited(CheckBad):
 
 
 class CheckBadNotAString(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     params_form = FilterParams
     params_form_fallback = ["fields"]
@@ -2134,11 +2140,13 @@ class CheckBadNotAString(LiveView):
 class CheckNoForm(LiveView):
     """No ``params_form``: the mode is never read, so there is nothing to report."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     params_form_fallback = "nonsense"
 
 
 class CheckBothBroken(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     params_form = "myapp.forms.Filter"
     params_form_fallback = "nonsense"
@@ -2199,6 +2207,7 @@ class TestV023Fallback:
         from djust._params_form import fallback_problem, run_handle_params_sync
 
         class Probe(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
             params_form = FilterParams
             params_form_fallback = declared

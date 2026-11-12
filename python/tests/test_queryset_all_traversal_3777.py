@@ -68,6 +68,8 @@ def _body(html: str) -> str:
 
 def _liveview_render(source: str, context: dict) -> str:
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             for name, value in context.items():
                 setattr(self, name, value)
@@ -269,6 +271,7 @@ class TestACalledAllStillHonoursTheCallGuard3777:
 # The two entries that are not a template call: HTTP GET and WS mount
 # ---------------------------------------------------------------------------
 class UsersGroupsView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = """<div dj-view="test_queryset_all_traversal_3777.UsersGroupsView">
     {% for u in users %}<p>{{ u.username }}[{% for g in u.groups.all %}{{ g.name }},{% endfor %}]</p>{% endfor %}</div>"""

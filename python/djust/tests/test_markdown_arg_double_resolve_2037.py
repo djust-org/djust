@@ -111,6 +111,8 @@ class TestMarkdownHandlerResolvedSource:
 
 def _render(template, ctx_blocks):
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             self.blocks = ctx_blocks
 

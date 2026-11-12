@@ -172,6 +172,7 @@ class TestEndToEndSessionRoundTrip:
         from djust.live_view import LiveView
 
         class MyUploadView(UploadMixin, LiveView):
+            exposure_policy = "legacy"
             template_name = "ignored.html"
 
             def mount(self, request, **kwargs):

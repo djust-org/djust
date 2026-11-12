@@ -377,6 +377,7 @@ def _render_held_as_liveview_state(src, context):
     from djust.testing import LiveViewTestClient
 
     class Held(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root>" + src + "</div>"
 
         def mount(self, request, **kwargs):

@@ -20,6 +20,7 @@ class DraftModeTestView(DraftModeMixin, LiveView):
     - Persistence across page refreshes
     """
 
+    exposure_policy = "legacy"
     template_name = 'tests/draft_mode_test.html'
     draft_enabled = True
     draft_key = 'test_article_editor'

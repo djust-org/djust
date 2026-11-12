@@ -13,6 +13,7 @@ class TestLiveViewBasics:
         """Test LiveView can be instantiated."""
 
         class SimpleView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ message }}</div>"
 
         view = SimpleView()
@@ -23,6 +24,7 @@ class TestLiveViewBasics:
         """Test get_template returns template string."""
 
         class SimpleView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>Hello</div>"
 
         view = SimpleView()
@@ -34,6 +36,7 @@ class TestLiveViewBasics:
         """Test mount method is called on GET request."""
 
         class CounterView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ count }}</div>"
             mount_called = False
 
@@ -70,6 +73,7 @@ class TestSessionCleanup:
 
         # Create a LiveView to populate cache
         class SimpleView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>Test</div>"
 
         view = SimpleView()
@@ -137,6 +141,7 @@ class TestTemplateInheritance:
 
         # Test that get_template() extracts liveview-root from resolved template
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template_name = "child.html"
 
         view = TestView()
@@ -166,6 +171,7 @@ class TestTemplateInheritance:
         """Test get_template without {% extends %} returns raw source."""
 
         class SimpleView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ message }}</div>"
 
         view = SimpleView()
@@ -201,6 +207,7 @@ class TestTemplateInheritance:
         engines._engines = {}
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test_syntax.html"
 
         view = TestView()
@@ -218,6 +225,7 @@ class TestTemplateInheritance:
         """Test standalone templates still use {{ }} syntax."""
 
         class StandaloneView(LiveView):
+            exposure_policy = "legacy"
             template_name = None
             template = "<div>{{ count }}</div>"
 
@@ -237,6 +245,7 @@ class TestErrorHandling:
         import json
 
         class SimpleView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ count }}</div>"
 
             def mount(self, request, **kwargs):

@@ -133,6 +133,7 @@ class TestHttpRenderPath:
         from djust import LiveView
 
         class _HttpCounter(LiveView):
+            exposure_policy = "legacy"
             template = COUNTER_TEMPLATE
 
             def mount(self, request, **kwargs):
@@ -154,6 +155,7 @@ class TestHttpRenderPath:
         from djust import LiveView
 
         class _HttpList(LiveView):
+            exposure_policy = "legacy"
             template = LIST_TEMPLATE
 
             def mount(self, request, **kwargs):
@@ -208,6 +210,7 @@ class TestWebsocketMountPath:
         global _WSMountCounter
 
         class _WSMountCounter(LiveView):  # noqa: F811 — benchmark-only shim
+            exposure_policy = "legacy"
             template = (
                 '<div dj-view="tests.benchmarks.test_request_path._WSMountCounter" '
                 'dj-id="0">'
@@ -303,6 +306,7 @@ class TestEventDispatchPath:
         from djust.testing import LiveViewTestClient
 
         class _EvtCounter(LiveView):
+            exposure_policy = "legacy"
             template = COUNTER_TEMPLATE
 
             def mount(self, request, **kwargs):

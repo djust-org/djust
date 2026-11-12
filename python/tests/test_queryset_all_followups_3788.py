@@ -148,6 +148,8 @@ class TestAQuerySetReachedThroughAContainer3788:
         holder: dict = {}
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.d = {"users": _users()}
                 holder["view"] = self
@@ -160,6 +162,8 @@ class TestAQuerySetReachedThroughAContainer3788:
 
     def test_an_event_rerender_keeps_the_rows(self, world) -> None:
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.d = {"users": _users()}
                 self.n = 0
@@ -184,6 +188,8 @@ class TestAQuerySetReachedThroughAContainer3788:
         a top-level name: the hash never reaches the context that is sent."""
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.d = {"users": _users()}
 
@@ -249,6 +255,8 @@ class TestThePathLookupForAContainer3788:
         from djust.websocket import _compute_changed_keys, _snapshot_assigns
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.d = {"users": _users()}
 
@@ -888,6 +896,7 @@ class TestTheWholeMark3788:
 # The entries that are not a template call: HTTP GET and WebSocket mount
 # ===========================================================================
 class NestedView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = """<div dj-view="test_queryset_all_followups_3788.NestedView">
     {% for x in d.users %}<p>{{ x.username }}[{% for g in x.groups.all %}{{ g.name }},{% endfor %}]</p>{% endfor %}</div>"""
@@ -897,6 +906,7 @@ class NestedView(LiveView):
 
 
 class CountView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = """<div dj-view="test_queryset_all_followups_3788.CountView">
     {% for u in users %}<p>{{ u.username }}:{{ u.groups.all.count }}/{{ u.groups.all.first.name }}</p>{% endfor %}</div>"""

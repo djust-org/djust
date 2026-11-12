@@ -172,6 +172,7 @@ def _names_of(formset, field):
 
 
 class OrderView(FormSetHelpersMixin, LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     formset_classes = {"items": ItemFormSet}
     parent_pk = None  # the test's lever: the order the view opens
@@ -217,6 +218,7 @@ def test_the_mixins_remove_row_event_keeps_the_instance():
 
 def test_a_view_without_get_formset_kwargs_behaves_as_before():
     class Legacy(FormSetHelpersMixin, LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root></div>"
         formset_classes = {"rows": formset_factory(forms.Form, extra=1)}
 

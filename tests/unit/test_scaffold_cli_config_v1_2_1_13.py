@@ -275,6 +275,7 @@ def test_jit_serialization_setting_is_honoured(enabled, jit_called):
     from djust.live_view import LiveView
 
     class ModelView(LiveView):
+        exposure_policy = "legacy"
         template = "<div>{{ profile.username }}</div>"
 
     view = ModelView()

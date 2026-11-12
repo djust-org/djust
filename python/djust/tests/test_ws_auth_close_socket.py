@@ -56,6 +56,7 @@ _HANDLER_RAN = False
 class _LoginRequiredView(LiveView):
     """A login-gated view whose handler records execution."""
 
+    exposure_policy = "legacy"
     login_required = True
     template = (
         '<div dj-view="djust.tests.test_ws_auth_close_socket._LoginRequiredView" dj-id="0">x</div>'
@@ -86,6 +87,7 @@ class _PublicView(LiveView):
     contract and tells S005 the auth decision was made.
     """
 
+    exposure_policy = "legacy"
     login_required = False
 
     template = (
@@ -115,6 +117,7 @@ class _ObjPermDeniedView(LiveView):
     ``_PublicView`` (this is a module-level subclass walked by S005).
     """
 
+    exposure_policy = "legacy"
     login_required = False
 
     template = (

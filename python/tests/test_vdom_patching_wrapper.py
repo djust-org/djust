@@ -15,6 +15,7 @@ from django.contrib.sessions.middleware import SessionMiddleware
 class SimpleCounterView(LiveView):
     """Simple counter view for testing VDOM patching"""
 
+    exposure_policy = "legacy"
     template = """<div dj-root>
     <div class="container">
         <h1>Counter Demo</h1>

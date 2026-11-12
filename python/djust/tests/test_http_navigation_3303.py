@@ -27,6 +27,7 @@ PATH = "/nav-probe/"
 
 
 class NavPage(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0"><h1>{{ title }}</h1><p>{{ whoami }}</p></div>'
 
     rendered_for: list = []

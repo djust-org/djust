@@ -135,6 +135,7 @@ class _Widget(LiveComponent):
 class ComponentParentView(LiveView):
     """Parent hosting a LiveComponent (``component_id`` routing target)."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.ComponentParentView" '
         'dj-id="0"><h1>parent {{ parent_n }}</h1><p>last={{ last_label }}</p></div>'
@@ -163,6 +164,7 @@ class ComponentParentView(LiveView):
 class TimeTravelView(LiveView):
     """View with time-travel recording enabled (DEBUG + class opt-in)."""
 
+    exposure_policy = "legacy"
     time_travel_enabled = True
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.TimeTravelView" '
@@ -180,6 +182,7 @@ class TimeTravelView(LiveView):
 class PlainView(LiveView):
     """No time-travel buffer — the gate-off control for the tt-event test."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.PlainView" '
         'dj-id="0">n={{ n }}</div>'
@@ -203,6 +206,7 @@ class ActivityView(LiveView):
     ``_djust_activities`` map the tag populates).
     """
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.ActivityView" '
         'dj-id="0">n={{ n }} opens={{ opens }}</div>'
@@ -233,6 +237,7 @@ class ActivityView(LiveView):
 class ActorEventView(LiveView):
     """View driven by the Rust actor system (``use_actors = True``)."""
 
+    exposure_policy = "legacy"
     use_actors = True
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.ActorEventView" '
@@ -255,6 +260,7 @@ class RefView(LiveView):
     a noop (no state change), a patch (text change), an html_update
     (``_force_full_html``)."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.RefView" '
         'dj-id="0"><p>n={{ n }}</p></div>'
@@ -284,6 +290,7 @@ class ForceView(LiveView):
     """Force-full-html on the FIRST event, normal patch on the SECOND —
     proves the flag is consumed (not sticky)."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.ForceView" '
         'dj-id="0"><p>n={{ n }}</p></div>'
@@ -309,6 +316,7 @@ class _DebugProbeView(LiveView):
     """A view with a public assign so ``get_debug_update()`` yields a non-empty
     variables dump for the #1908 ``_debug``-payload unit tests."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896._DebugProbeView" '
         'dj-id="0"><p>n={{ n }}</p></div>'
@@ -822,6 +830,7 @@ class TestResidualFoldObservability:
         return WSConsumerTransport(_FakeConsumer())
 
     class _V:
+        exposure_policy = "legacy"
         template_name = "tmpl.html"
 
     def test_dje053_warning_fires_on_no_patches_with_baseline(self, caplog):
@@ -1136,6 +1145,7 @@ class _BackgroundView(LiveView):
     background work that updates state + clears the flag (the @background
     pattern)."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896._BackgroundView" '
         'dj-id="0"><p>val={{ val }} loading={{ loading }}</p></div>'

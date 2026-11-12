@@ -185,6 +185,7 @@ def _page(src: str) -> str:
 
 def _view_class(src: str, make: Callable[[], dict[str, Any]]) -> type[LiveView]:
     class HeldView(LiveView):
+        exposure_policy = "legacy"
         template = _page(src)
 
         def mount(self, request, **kwargs):
@@ -256,6 +257,7 @@ class TestTheIssuesExactClaims:
 class SteppingView(LiveView):
     """A form that CHANGES: the partial-render path only runs for a changed name."""
 
+    exposure_policy = "legacy"
     template = _page("")
 
     def mount(self, request, **kwargs):
@@ -464,6 +466,7 @@ class TestTheLimit:
         wrapped = self._wrapped
 
         class V(LiveView):
+            exposure_policy = "legacy"
             template = _page("[{{ deep4.0.0.0.0.name.errors }}][{{ deep5.0.0.0.0.0.name.errors }}]")
 
             def mount(self, request, **kwargs):
@@ -517,6 +520,7 @@ class TestAManagementFormHeldDirectly:
 
     def _live(self, src, attrs):
         class V(LiveView):
+            exposure_policy = "legacy"
             template = _page(src)
 
             def mount(self, request, **kwargs):
@@ -551,6 +555,7 @@ class TestAManagementFormHeldDirectly:
 
 
 class KeepView(LiveView):
+    exposure_policy = "legacy"
     template = _page(
         "{% for f in forms %}{{ f.name.errors }}{% endfor %}{{ d.form.name.errors }}[{{ tick }}]"
     )
@@ -609,6 +614,7 @@ class TestAContainerOfFormsSurvivesAnEventThatDoesNotChangeIt:
 class TestAFormIsNotState:
     def _view(self):
         class V(LiveView):
+            exposure_policy = "legacy"
             template = _page("{{ form.name }}{{ plain }}")
 
             def mount(self, request, **kwargs):
@@ -633,6 +639,7 @@ class TestAFormIsNotState:
         the state, and the snapshot then holds its markup."""
 
         class V(LiveView):
+            exposure_policy = "legacy"
             template = _page("{{ plain }}")
 
             def mount(self, request, **kwargs):
@@ -666,6 +673,7 @@ class TestAFormIsNotState:
         event that does not re-send the form too."""
 
         class V(LiveView):
+            exposure_policy = "legacy"
             template = _page("{{ form.name }}[{{ tick }}]")
 
             def mount(self, request, **kwargs):
@@ -707,6 +715,7 @@ def _http_get(view_cls: type[LiveView]) -> str:
 
 
 class WsFormView(LiveView):
+    exposure_policy = "legacy"
     template = _page(COMPOSITE)
 
     def mount(self, request, **kwargs):
@@ -729,6 +738,7 @@ class ActorFormView(WsFormView):
 
 
 class HttpFormView(LiveView):
+    exposure_policy = "legacy"
     template = _page(COMPOSITE)
 
     def mount(self, request, **kwargs):
@@ -856,6 +866,7 @@ class TestIncludesCarryTheForm:
         src = "{% include 'form_3767.html' %}"
 
         class V(LiveView):
+            exposure_policy = "legacy"
             template = _page(src)
 
             def mount(self, request, **kwargs):
@@ -930,6 +941,7 @@ class ShellView(LiveView):
     """The form is read OUTSIDE the dj-root too: the page shell renders that part, on its own
     ``RustLiveView`` (``render_full_template``), which only a ``template_name`` view has."""
 
+    exposure_policy = "legacy"
     template_name = "page_3767.html"
 
     def mount(self, request, **kwargs):

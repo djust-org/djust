@@ -331,7 +331,7 @@ def _make_live_view_class(template_name="allowlist_view.html", extra=None):
     }
     if extra:
         body.update(extra)
-    return type("AllowlistLiveView", (LiveView,), body)
+    return type("AllowlistLiveView", (LiveView,), {"exposure_policy": "legacy", **body})
 
 
 @pytest.mark.django_db

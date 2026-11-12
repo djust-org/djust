@@ -78,6 +78,7 @@ async def _connect_and_mount(view_path: str, url: str = "/modal/"):
 class ModalHostView(LiveView):
     """Parent hosting an open ``ModalComponent`` under ``component_id`` ``m1``."""
 
+    exposure_policy = "legacy"
     template = (
         f'<div dj-root dj-view="{_MODULE}.ModalHostView" dj-id="0">'
         "<p>open={{ modal_open }}</p></div>"

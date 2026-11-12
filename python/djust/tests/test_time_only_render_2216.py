@@ -19,6 +19,7 @@ from djust import LiveView
 
 
 class _TimeView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-id="0">{{ opens|time:"H:i" }}</div>'
     _value = dt.time(9, 5, 30)
 

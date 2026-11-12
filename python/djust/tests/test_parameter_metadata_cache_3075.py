@@ -79,6 +79,8 @@ def reference_event_methods(owner: Any) -> dict[str, Any]:
 
 
 class Base(LiveView):
+    exposure_policy = "legacy"
+
     @event_handler()
     def legacy(self, value: str = "", **kwargs):
         pass
@@ -157,6 +159,7 @@ class Picker(LiveComponent):
 
 
 class Page(LiveView):
+    exposure_policy = "legacy"
     menu = Menu()
     picker = Picker()
 
@@ -278,6 +281,8 @@ def test_hot_view_replacement_swaps_the_class_and_the_plan():
     assert "strict" in pm._event_methods(view)
 
     class Replaced(LiveView):
+        exposure_policy = "legacy"
+
         @event_handler()
         def only_new(self, **kwargs):
             pass
@@ -307,7 +312,7 @@ def test_swapping_two_attributes_values_rebuilds_the_plan():
         pass
 
     class Swap(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     Swap.a, Swap.b = first, second
     view = Swap()
@@ -320,11 +325,15 @@ def test_swapping_two_attributes_values_rebuilds_the_plan():
 
 def test_reassigning_bases_rebuilds_the_plan():
     class B1(LiveView):
+        exposure_policy = "legacy"
+
         @event_handler()
         def from_base(self, **kwargs):
             return "b1"
 
     class B2(LiveView):
+        exposure_policy = "legacy"
+
         @event_handler()
         def from_base(self, **kwargs):
             return "b2"
@@ -346,6 +355,7 @@ def test_a_descriptor_class_gaining_delete_rebuilds_the_plan(monkeypatch):
             raise AssertionError("discovery must not evaluate a descriptor")
 
     class Holder(LiveView):
+        exposure_policy = "legacy"
         slot = Plain()
 
     view = Holder()
@@ -374,6 +384,7 @@ def test_a_descriptor_class_rebased_onto_a_data_descriptor_rebuilds_the_plan():
             raise AssertionError("discovery must not evaluate a descriptor")
 
     class Holder(LiveView):
+        exposure_policy = "legacy"
         slot = Plain()
 
     view = Holder()

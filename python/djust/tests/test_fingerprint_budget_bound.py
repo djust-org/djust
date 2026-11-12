@@ -58,6 +58,7 @@ def test_computed_rechecks_truncated_dependencies():
 
 
 class LargeTailView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><p>{{ rows.20004.0 }}</p></div>"
 
     def mount(self, request, **kwargs):
@@ -108,6 +109,8 @@ def test_truncated_bookkeeping_stays_out_of_session_and_render_context():
     from djust.decorators import computed
 
     class View(LiveView):
+        exposure_policy = "legacy"
+
         @computed("rows")
         def last(self):
             return self.rows[-1][0]

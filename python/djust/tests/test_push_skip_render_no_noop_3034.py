@@ -18,6 +18,7 @@ _ALLOWED = "djust.tests.test_push_skip_render_no_noop_3034"
 
 
 class QuietPushView(LiveView):
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.QuietPushView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):

@@ -21,6 +21,7 @@ from djust.testing import LiveViewSmokeTest, _UNFUZZED_WARNED, _unfuzzed_reachab
 
 
 class _Mixed(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ n }}</div>"
 
     def mount(self, request, **kwargs):
@@ -42,6 +43,7 @@ class _Mixed(LiveView):
 
 
 class _DecoratedOnly(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
 
     @event_handler
@@ -105,6 +107,7 @@ def test_lists_exactly_the_app_methods(monkeypatch):
 class _DecoratedButNotHandlers(LiveView):
     """Reachable under warn/open, yet not ``@event_handler``: each must be named."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
 
     @optimistic

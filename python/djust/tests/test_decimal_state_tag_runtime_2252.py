@@ -47,6 +47,7 @@ TAG = "__djust_decimal__"
 class BootstrapView(LiveView):
     """Trivial view mounted only to obtain a live consumer."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.BootstrapView" dj-id="0">boot</div>'
 
     def mount(self, request, **kwargs):
@@ -61,6 +62,7 @@ class PriceView(LiveView):
     `total` through `|floatformat:2`, so a dict, a string and a float each
     produce a DIFFERENT wrong answer from the `Decimal`."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.PriceView" dj-id="0">'

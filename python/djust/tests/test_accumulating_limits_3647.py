@@ -138,6 +138,7 @@ class TestIncludedTemplatesAreScanned:
         }
 
         class Named(LiveView):
+            exposure_policy = "legacy"
             temporary_assigns = {"rows": []}
             template_name = "pages/p.html"
 
@@ -562,6 +563,7 @@ class TestTheScanIsBounded:
 
 
 class _Page(LiveView):
+    exposure_policy = "legacy"
     temporary_assigns = {"rows": []}
     template = container("{% for r in rows %}x{% endfor %}")
 
@@ -659,6 +661,7 @@ class TestTheScanNeverRaises:
 
 
 class _Renamed(LiveView):
+    exposure_policy = "legacy"
     temporary_assigns = {"rows": []}
     template = container("{% for r in items %}x{% endfor %}")
 
@@ -726,6 +729,7 @@ def _wrap(view: str, inner: str, before: str = "", after: str = "") -> str:
 
 
 class _Base(LiveView):
+    exposure_policy = "legacy"
     temporary_assigns = {"rows": []}
 
     def mount(self, request, **kwargs):
@@ -1019,6 +1023,7 @@ def _fresh_view(template=None):
     """A view class of its own (the cache lives on the class)."""
 
     class Fresh(LiveView):
+        exposure_policy = "legacy"
         temporary_assigns = {"rows": []}
 
     Fresh.template = template or container("{% for r in rows %}x{% endfor %}")
@@ -1082,6 +1087,7 @@ class TestATransientFailureIsNotKept:
         state = {"fail": True}
 
         class Flaky(LiveView):
+            exposure_policy = "legacy"
             temporary_assigns = {"rows": []}
 
             def get_template(self):

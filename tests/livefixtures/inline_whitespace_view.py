@@ -36,6 +36,7 @@ _TEMPLATE = """
 
 
 class InlineWhitespaceView(LiveView):
+    exposure_policy = "legacy"
     template = _TEMPLATE
 
     def mount(self, request, **kwargs):
@@ -103,6 +104,7 @@ KEYED_LIST_TEMPLATES = {
 
 def keyed_list_view(shape):
     class _KeyedListView(LiveView):
+        exposure_policy = "legacy"
         template = KEYED_LIST_TEMPLATES[shape]
 
         def mount(self, request, **kwargs):
@@ -188,7 +190,7 @@ def state_view(template, initial):
     from djust.decorators import event_handler
 
     class _StateView(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     _StateView.template = template
 

@@ -99,6 +99,7 @@ _INDEX_BEFORE = """\
 
 
 class ScriptCommentAfterRootView(LiveView):
+    exposure_policy = "legacy"
     template_name = "demo2663/index_after.html"
 
     def mount(self, request, **kwargs):
@@ -106,6 +107,7 @@ class ScriptCommentAfterRootView(LiveView):
 
 
 class ScriptCommentBeforeRootView(LiveView):
+    exposure_policy = "legacy"
     template_name = "demo2663/index_before.html"
 
     def mount(self, request, **kwargs):

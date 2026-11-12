@@ -56,6 +56,7 @@ def _parse(html: str) -> _AttrCollector:
 
 
 class _SimpleCounter(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -68,6 +69,7 @@ class _SimpleCounter(LiveView):
 class _SnapshotCounter(LiveView):
     """Counter with state-snapshot restoration opt-in."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
@@ -81,6 +83,7 @@ class _SnapshotCounter(LiveView):
 class _SnapshotRejecting(LiveView):
     """Opt-in but rejects all snapshots via _should_restore_snapshot override."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
@@ -98,6 +101,7 @@ class _SnapshotRejecting(LiveView):
 class _NonSnapshot(LiveView):
     """No enable_state_snapshot — default False; mount() must always run."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -111,6 +115,7 @@ class _NonSnapshot(LiveView):
 class _PushEventOnMount(LiveView):
     """View that calls push_event() during mount() — exercises #1295."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><span>Hello</span></div>"
 
     def mount(self, request, **kwargs):

@@ -32,6 +32,7 @@ _RAN: list[str] = []
 
 
 class _StoredSessionView(LiveView):
+    exposure_policy = "legacy"
     login_required = True
     template = '<div dj-view="djust.tests.test_reauth_reads_stored_session._StoredSessionView" dj-id="0">x</div>'
 

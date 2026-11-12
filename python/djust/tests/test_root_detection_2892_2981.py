@@ -63,6 +63,7 @@ def _view(name: str, template: str):
         name,
         (LiveView,),
         {
+            "exposure_policy": "legacy",
             "template": template,
             "__module__": __name__,
             "mount": lambda self, request, **kwargs: setattr(self, "n", 1),
@@ -203,6 +204,7 @@ def _extends_view(name: str):
         name,
         (LiveView,),
         {
+            "exposure_policy": "legacy",
             "template_name": "child_2892.html",
             "mount": lambda self, request, **kwargs: setattr(self, "items", ["a", "b"]),
             "get_context_data": lambda self, **kwargs: {"items": self.items},
@@ -543,6 +545,7 @@ def test_v012_flags_sticky_child_with_dj_view_on_section():
         "StickySectionChild2892",
         (LiveView,),
         {
+            "exposure_policy": "legacy",
             "__module__": "djust.tests.test_root_detection_2892_2981",
             "sticky": True,
             "sticky_id": "s2892",

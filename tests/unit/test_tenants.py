@@ -653,7 +653,7 @@ class TestTenantMixin:
         from djust.tenants.resolvers import TenantInfo
 
         class TestClass(TenantMixin):
-            pass
+            exposure_policy = "legacy"
 
         obj = TestClass()
         request = Mock()
@@ -689,6 +689,7 @@ class TestTenantMixin:
         from djust.tenants.mixin import TenantMixin
 
         class TestClass(TenantMixin):
+            exposure_policy = "legacy"
             tenant_required = False
 
         obj = TestClass()
@@ -704,6 +705,8 @@ class TestTenantMixin:
         from djust.tenants.resolvers import TenantInfo
 
         class ParentClass:
+            exposure_policy = "legacy"
+
             def get_context_data(self, **kwargs):
                 return {"existing": "value"}
 
@@ -727,6 +730,7 @@ class TestTenantMixin:
         from djust.tenants.resolvers import TenantInfo
 
         class TestClass(TenantMixin):
+            exposure_policy = "legacy"
             tenant_context_name = "organization"
 
         obj = TestClass()

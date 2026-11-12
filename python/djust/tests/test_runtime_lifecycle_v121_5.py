@@ -152,6 +152,7 @@ def fake_pg_listener(monkeypatch):
 
 
 class ListenInMountView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><p>{{ seen }}</p></div>"
 
     def mount(self, request, **kwargs):
@@ -163,6 +164,7 @@ class ListenInMountView(LiveView):
 
 
 class ListenLaterView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><p>{{ seen }}</p></div>"
 
     def mount(self, request, **kwargs):
@@ -260,6 +262,7 @@ class Quiet(LiveComponent):
 
 
 class QuietPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><h1>{{ title }}</h1>{{ quiet }}</div>"
     quiet = Quiet()
 
@@ -344,6 +347,7 @@ class TestCancelAsyncAll:
 
     def test_sticky_unmount_cancels(self):
         class StickyChild(LiveView):
+            exposure_policy = "legacy"
             sticky = True
             sticky_id = "c"
             template = "<div>x</div>"
@@ -357,6 +361,7 @@ class TestCancelAsyncAll:
 
 
 class SlowView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><p>{{ result }}</p></div>"
 
     def mount(self, request: Any, **kwargs: Any) -> None:
@@ -445,6 +450,7 @@ class TestRuntimeHonoursCancel:
 
 
 class KwChild(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "kwchild"
     template = "<div>child {{ n }}</div>"
@@ -457,6 +463,7 @@ class KwChild(LiveView):
 
 
 class KwParent(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + _MOD + '.KwParent">'

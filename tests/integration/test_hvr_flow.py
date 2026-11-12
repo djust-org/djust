@@ -56,6 +56,7 @@ async def test_hvr_module_reload_roundtrip(tmp_path):
                 from djust.decorators import event_handler
 
                 class IntegrationView(LiveView):
+                    exposure_policy = "legacy"
                     template = "<div>{{ count }}</div>"
 
                     @event_handler
@@ -85,6 +86,7 @@ async def test_hvr_module_reload_roundtrip(tmp_path):
                     from djust.decorators import event_handler
 
                     class IntegrationView(LiveView):
+                        exposure_policy = "legacy"
                         template = "<div>{{ count }}</div>"
 
                         @event_handler
@@ -129,6 +131,7 @@ async def test_hvr_non_liveview_file_triggers_template_reload():
     from djust.websocket import LiveViewConsumer
 
     class TemplateView(LiveView):
+        exposure_policy = "legacy"
         template = "<div>x</div>"
 
     consumer = LiveViewConsumer()

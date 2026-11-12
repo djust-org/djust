@@ -89,6 +89,7 @@ def _seen(site):
 
 
 class TurnView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-view="x" dj-id="0">n={{ n }}</div>'
     tick_interval = None
 
@@ -624,6 +625,7 @@ def test_api_dispatch_runs_the_chain():
     from djust.api.registry import register_api_view, reset_registry
 
     class ApiView(LiveView):
+        exposure_policy = "legacy"
         api_name = "turns.api"
 
         def mount(self, request, **kwargs):

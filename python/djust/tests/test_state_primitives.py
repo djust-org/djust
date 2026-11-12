@@ -20,6 +20,7 @@ def test_computed_plain_form_recomputes_each_access():
     calls = {"n": 0}
 
     class V(LiveView):
+        exposure_policy = "legacy"
         count = 0
 
         @computed
@@ -44,6 +45,7 @@ def test_computed_memoized_caches_until_dep_changes():
     calls = {"n": 0}
 
     class V(LiveView):
+        exposure_policy = "legacy"
         items = []
         tax_rate = 0.0
 
@@ -66,6 +68,7 @@ def test_computed_memoized_recomputes_on_reassignment():
     calls = {"n": 0}
 
     class V(LiveView):
+        exposure_policy = "legacy"
         items = [{"price": 5, "qty": 1}]
 
         @computed("items")
@@ -88,6 +91,7 @@ def test_computed_memoized_detects_in_place_append_via_length_change():
     calls = {"n": 0}
 
     class V(LiveView):
+        exposure_policy = "legacy"
         items = []
 
         @computed("items")
@@ -107,6 +111,8 @@ def test_computed_memoized_rejects_non_string_deps():
     with pytest.raises(TypeError):
 
         class V(LiveView):
+            exposure_policy = "legacy"
+
             @computed(42, "ok")
             def bad(self):
                 return None
@@ -116,6 +122,8 @@ def test_computed_memoized_handles_missing_attr():
     """Referencing an undefined attr in the dep list must not crash."""
 
     class V(LiveView):
+        exposure_policy = "legacy"
+
         @computed("nope_never_set")
         def go(self):
             return "ok"
@@ -132,6 +140,7 @@ def test_computed_memoized_handles_missing_attr():
 
 def test_is_dirty_false_before_baseline_captured():
     class V(LiveView):
+        exposure_policy = "legacy"
         count = 0
 
     v = V()
@@ -142,6 +151,7 @@ def test_is_dirty_false_before_baseline_captured():
 
 def test_is_dirty_detects_public_attr_change():
     class V(LiveView):
+        exposure_policy = "legacy"
         count = 0
         name = ""
 
@@ -155,6 +165,7 @@ def test_is_dirty_detects_public_attr_change():
 
 def test_is_dirty_ignores_private_attrs():
     class V(LiveView):
+        exposure_policy = "legacy"
         count = 0
 
     v = V()
@@ -165,6 +176,7 @@ def test_is_dirty_ignores_private_attrs():
 
 def test_mark_clean_resets_baseline():
     class V(LiveView):
+        exposure_policy = "legacy"
         count = 0
 
     v = V()
@@ -177,6 +189,7 @@ def test_mark_clean_resets_baseline():
 
 def test_dirty_tracks_multiple_attrs():
     class V(LiveView):
+        exposure_policy = "legacy"
         a = 0
         b = 0
         c = 0
@@ -190,6 +203,7 @@ def test_dirty_tracks_multiple_attrs():
 
 def test_dirty_respects_static_assigns():
     class V(LiveView):
+        exposure_policy = "legacy"
         config = "immutable"
         static_assigns = ["config"]
 
@@ -207,7 +221,7 @@ def test_dirty_respects_static_assigns():
 
 def test_unique_id_sequence_is_stable_across_resets():
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     v = V()
     first_pass = [v.unique_id() for _ in range(3)]
@@ -218,7 +232,7 @@ def test_unique_id_sequence_is_stable_across_resets():
 
 def test_unique_id_monotonic_within_a_render():
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     v = V()
     a, b, c = v.unique_id(), v.unique_id(), v.unique_id()
@@ -230,7 +244,7 @@ def test_unique_id_monotonic_within_a_render():
 
 def test_unique_id_with_suffix():
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     v = V()
     assert v.unique_id("label") == "djust-v-0-label"
@@ -238,7 +252,7 @@ def test_unique_id_with_suffix():
 
 def test_unique_id_uses_class_name_slug():
     class MyFancyView(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     v = MyFancyView()
     assert v.unique_id().startswith("djust-myfancyview-")
@@ -248,7 +262,7 @@ def test_unique_id_resets_per_render_via_get_context_data():
     """``get_context_data`` resets the counter so IDs are stable across renders."""
 
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     v = V()
     # Simulate two render cycles; each triggers get_context_data.
@@ -266,7 +280,7 @@ def test_unique_id_resets_per_render_via_get_context_data():
 
 def test_provide_and_consume_context_same_view():
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     v = V()
     v.provide_context("theme", "dark")
@@ -275,7 +289,7 @@ def test_provide_and_consume_context_same_view():
 
 def test_consume_context_falls_back_to_default():
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     v = V()
     assert v.consume_context("missing") is None
@@ -284,10 +298,10 @@ def test_consume_context_falls_back_to_default():
 
 def test_consume_context_walks_parent_chain():
     class Parent(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     class Child(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     parent = Parent()
     parent.provide_context("theme", "dark")
@@ -298,7 +312,7 @@ def test_consume_context_walks_parent_chain():
 
 def test_child_provider_shadows_parent():
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     parent, child = V(), V()
     parent.provide_context("theme", "dark")
@@ -309,7 +323,7 @@ def test_child_provider_shadows_parent():
 
 def test_clear_context_providers():
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     v = V()
     v.provide_context("theme", "dark")
@@ -324,7 +338,7 @@ def test_component_parent_wired_for_context_chain_walk():
     from djust.components.base import LiveComponent
 
     class ParentView(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     class MyComponent(LiveComponent):
         def render(self, assigns):
@@ -342,7 +356,7 @@ def test_consume_returns_default_when_parent_has_no_providers():
     """A parent set but without any provider dict still degrades gracefully."""
 
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     child = V()
     child._djust_context_parent = V()  # no provide_context called on parent

@@ -66,6 +66,8 @@ class _Probe:
 
 def _make_view(template):
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             self._probe = _Probe()
 
@@ -177,6 +179,7 @@ class TestReportedSymptoms:
         user.groups.add(Group.objects.create(name="g1"), Group.objects.create(name="g2"))
 
         class _V(LiveView):
+            exposure_policy = "legacy"
             template = "<div>[{{ member.groups.count }}]</div>"
 
             def mount(self, request, **kwargs):
@@ -204,6 +207,7 @@ class TestReportedSymptoms:
         user = User.objects.create_user(username="warn-probe")
 
         class _V(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ warnee.groups.count }}</div>"
 
             def mount(self, request, **kwargs):
@@ -250,6 +254,7 @@ class TestSidecarSerializationFloor:
         u = self._user()
 
         class _V(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div>pw=[{{ m.password }}] su=[{{ m.is_superuser }}] "
                 "st=[{{ m.is_staff }}] sess=[{{ m.get_session_auth_hash }}]</div>"
@@ -276,6 +281,7 @@ class TestSidecarSerializationFloor:
         u = self._user()
 
         class _V(LiveView):
+            exposure_policy = "legacy"
             template = "<div>pw=[{{ user.password }}] su=[{{ user.is_superuser }}]</div>"
 
             def mount(self, request, **kwargs):
@@ -297,6 +303,7 @@ class TestSidecarSerializationFloor:
         u = self._user()
 
         class _V(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div>n=[{{ m.get_full_name }}] g=[{{ m.groups.count }}] u=[{{ m.username }}]</div>"
             )
@@ -323,6 +330,7 @@ class TestSidecarSerializationFloor:
         u = self._user()
 
         class _V(LiveView):
+            exposure_policy = "legacy"
             template = "<div>ln=[{{ m.last_name }}] fn=[{{ m.first_name }}]</div>"
 
             def mount(self, request, **kwargs):
@@ -346,6 +354,7 @@ class TestSidecarSerializationFloor:
         u = self._user()
 
         class _V(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div>f=[{{ m.groups.first.user_set.first.password }}] "
                 "g=[{{ m.groups.first.user_set.get.password }}]</div>"
@@ -373,6 +382,7 @@ class TestSidecarSerializationFloor:
         u = self._user()
 
         class _V(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<ul>{% for x in m.groups.first.user_set.all %}"
                 "<li>pw=[{{ x.password }}] u=[{{ x.username }}]</li>"
@@ -403,6 +413,7 @@ class TestSidecarSerializationFloor:
         u = self._user()
 
         class _V(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div>"
                 "{% for x in m.groups.first.user_set.values %}<span>vpw=[{{ x.password }}]</span>{% endfor %}"
@@ -486,6 +497,7 @@ class TestSidecarSerializationFloor:
                 return self.user
 
         class _V(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div>"
                 "a=[{{ p.user.password }}] b=[{{ p.user.is_superuser }}] "
@@ -535,6 +547,7 @@ class TestSidecarSerializationFloor:
                 self.tup = tuple(users)  # raw TUPLE of raw models
 
         class _V(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div>"
                 "{% for x in h.items %}<i>lp=[{{ x.password }}] lu=[{{ x.username }}]</i>{% endfor %}"

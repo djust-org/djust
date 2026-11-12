@@ -40,6 +40,8 @@ class _RaisingChildView:
     an attacker-influenced message. ``_render_embedded_child`` calls
     ``get_context_data()`` first, so raising there exercises the except path."""
 
+    exposure_policy = "legacy"
+
     def get_context_data(self):  # noqa: D401 - test stub
         raise ValueError(_RAISING_MESSAGE)
 

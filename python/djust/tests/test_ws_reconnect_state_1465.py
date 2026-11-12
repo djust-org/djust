@@ -49,6 +49,7 @@ class CounterView(LiveView):
     state snapshot. The save block in ``handle_event`` mirrors the HTTP
     POST save, so this view exercises the same code path."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ count }}</span></div>"
     enable_state_snapshot = True
 
@@ -399,6 +400,7 @@ def test_mount_envelope_resume_path_omits_html():
 class _WSReconnectCounter(LiveView):
     """Module-level CounterView for WebsocketCommunicator integration test."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ws_reconnect_state_1465._WSReconnectCounter" '
         'dj-id="0">Counter: {{ count }}</div>'
@@ -536,6 +538,7 @@ class _WSDefaultCounter(LiveView):
     Pins the negative case: the save block must NOT fire for this view.
     """
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ws_reconnect_state_1465._WSDefaultCounter" '
         'dj-id="0">Counter: {{ count }}</div>'
@@ -676,6 +679,7 @@ class _WSSlowOptInCounter(LiveView):
     itself (the sync API), not queueing.
     """
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ws_reconnect_state_1465._WSSlowOptInCounter" '
         'dj-id="0">Counter: {{ count }}</div>'

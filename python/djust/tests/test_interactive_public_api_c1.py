@@ -21,6 +21,7 @@ CALLS: list = []
 
 
 class JumpPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ menu }}{{ other }}<p>{{ result }}</p></div>"
     time_travel_enabled = True
     menu = DropdownMenu(label="Project", items=[{"label": "Edit", "value": "edit"}])
@@ -90,13 +91,16 @@ def test_v020_reports_an_actor_view_that_declares_an_interactive_component():
     from djust.checks.components import check_interactive_actor_views
 
     class ActorMenuPage(LiveView):
+        exposure_policy = "legacy"
         use_actors = True
         menu = DropdownMenu(label="Project", items=[])
 
     class PlainMenuPage(LiveView):
+        exposure_policy = "legacy"
         menu = DropdownMenu(label="Project", items=[])
 
     class ActorWithoutMenus(LiveView):
+        exposure_policy = "legacy"
         use_actors = True
 
     try:

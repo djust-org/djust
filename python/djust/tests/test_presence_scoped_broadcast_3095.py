@@ -36,6 +36,7 @@ def _tpl(name):
 class _ScopedRoomView(PresenceMixin, LiveView):
     """Snake's shape: push_scope = room, presence key per room."""
 
+    exposure_policy = "legacy"
     template = _tpl("_ScopedRoomView")
     presence_key = "room3095:{room}"
     presence_unique_per_connection = True

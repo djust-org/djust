@@ -42,6 +42,8 @@ class _DbOnlyView(_EventSpineMixin, LiveView):
     identity only; a plain dict would be seen structurally since #2664), with
     NO public ``self.*`` attr ever changing in the handler."""
 
+    exposure_policy = "legacy"
+
     def mount(self, request, **kwargs):
         self._external = _Row(n=0)  # stands in for a DB row
 

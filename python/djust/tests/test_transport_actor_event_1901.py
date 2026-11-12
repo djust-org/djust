@@ -130,6 +130,7 @@ class _ActorView:
     (the in-process path) — the actor path must NOT flip it (the actor runs the
     handler inside the Rust actor, not via this Python attribute)."""
 
+    exposure_policy = "legacy"
     _view_id = "top-actor-view"
     request = None
 

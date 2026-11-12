@@ -94,6 +94,7 @@ class _SentinelChild(LiveView):
     the sentinel must be ABSENT — proving ``mount()`` did NOT run.
     """
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "counter"
     enable_state_snapshot = True
@@ -114,6 +115,7 @@ class _SentinelChild(LiveView):
 class _SentinelParent(LiveView):
     """Parent embedding :class:`_SentinelChild`."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = (
         "{% load live_tags %}"
@@ -135,6 +137,7 @@ class _ReplayChild(LiveView):
     the Decision-6 ``_restore_*`` replay runs on a restored child.
     """
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "counter"
     enable_state_snapshot = True
@@ -157,6 +160,7 @@ class _ReplayChild(LiveView):
 class _ReplayParent(LiveView):
     """Parent embedding :class:`_ReplayChild`."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = (
         "{% load live_tags %}"

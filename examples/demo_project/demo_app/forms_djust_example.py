@@ -218,6 +218,7 @@ class StatusChangeFormView(FormMixin, LiveView):
     - Simpler mental model
     """
 
+    exposure_policy = "legacy"
     form_class = StatusChangeForm
     template_name = 'forms/status_change_djust.html'
 

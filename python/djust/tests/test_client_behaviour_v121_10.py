@@ -21,6 +21,7 @@ from djust.drafts import DraftModeMixin
 
 
 class DraftView(DraftModeMixin, LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root><form data-draft-enabled data-draft-key="{{ draft_key }}"'
         "{% if draft_clear %} data-draft-clear{% endif %}>x</form></div>"
@@ -63,6 +64,7 @@ class TestClearDraftReArms:
 
 
 class Feed(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root><ul dj-stream="messages">'
         '{% for m in streams.messages %}<li id="messages-{{ m.id }}">{{ m.t }}</li>{% endfor %}'

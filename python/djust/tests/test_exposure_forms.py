@@ -73,6 +73,7 @@ class ExplicitFormView(FormMixin, LiveView):
 
 
 class LegacyFormView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = SignupForm
     template = TEMPLATE
 

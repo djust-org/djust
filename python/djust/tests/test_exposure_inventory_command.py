@@ -26,6 +26,7 @@ def _exploding_factory():
 
 
 class SecretHoldingView(LiveView):
+    exposure_policy = "legacy"
     template = "<p>{{ count }}</p>"
     api_token = SECRET
     page_size = 25
@@ -65,6 +66,7 @@ class DeclaredExplicitView(LiveView):
 class ParityView(LiveView):
     """Small legacy view used to check the inventory against the runtime."""
 
+    exposure_policy = "legacy"
     template = "<p>{{ count }}</p>"
     heading = "Inventory"
     level = state(1)

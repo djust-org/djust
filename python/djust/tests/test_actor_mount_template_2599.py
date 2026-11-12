@@ -24,6 +24,7 @@ _ALLOWED = "djust.tests.test_actor_mount_template_2599"
 
 
 class ActorTemplateView(LiveView):
+    exposure_policy = "legacy"
     use_actors = True
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.ActorTemplateView" dj-id="0">'
@@ -39,6 +40,7 @@ _BODY = "<p>label={{ label }}</p>{% if show %}<b>shown</b>{% endif %}"
 
 
 class ActorTwinView(LiveView):
+    exposure_policy = "legacy"
     use_actors = True
     template = f'<div dj-root dj-view="{_ALLOWED}.ActorTwinView" dj-id="0">{_BODY}</div>'
 
@@ -48,6 +50,7 @@ class ActorTwinView(LiveView):
 
 
 class PlainTwinView(LiveView):
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.PlainTwinView" dj-id="0">{_BODY}</div>'
 
     def mount(self, request, **kwargs):

@@ -42,6 +42,7 @@ from djust.http_streaming import ChunkEmitter
 
 
 class _LazyChildA(LiveView):
+    exposure_policy = "legacy"
     template = '<div class="child-a"><p>Child A content {{ value }}</p></div>'
 
     def mount(self, request, **kwargs):
@@ -49,6 +50,7 @@ class _LazyChildA(LiveView):
 
 
 class _LazyChildB(LiveView):
+    exposure_policy = "legacy"
     template = '<div class="child-b"><span>Child B</span></div>'
 
     def mount(self, request, **kwargs):
@@ -60,6 +62,7 @@ class _LazyParentView(LiveView):
     Django template engine to bypass the Rust engine's tag-handler
     requirement (Rust engine doesn't know `{% live_render %}`)."""
 
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<!DOCTYPE html><html><head><title>lazy</title></head><body>"
@@ -169,6 +172,7 @@ class TestLazyEndToEnd:
         leaving a permanent placeholder."""
 
         class _FailingChild(LiveView):
+            exposure_policy = "legacy"
             template = "<div>never</div>"
 
             def mount(self, request, **kwargs):
@@ -178,6 +182,7 @@ class TestLazyEndToEnd:
         globals()["_FailingChild"] = _FailingChild
 
         class _FailingParent(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "{% load live_tags %}"
                 "<!DOCTYPE html><html><body><div dj-root>"

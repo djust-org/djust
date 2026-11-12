@@ -18,6 +18,7 @@ READS: list = []
 
 
 class MixedPage(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0"><p>{{ menu.is_open }}</p><p>{{ dialog.is_open }}</p></div>'
     menu = Dropdown()
     dialog = Modal()
@@ -64,6 +65,7 @@ def test_alias_never_reads_an_arbitrary_view_attribute(target):
 
 def test_auto_resolution_needs_exactly_one_instance_of_the_type():
     class TwoMenus(LiveView):
+        exposure_policy = "legacy"
         first = Dropdown()
         second = Dropdown()
 

@@ -25,6 +25,7 @@ from djust.websocket import LiveViewConsumer
 class _TTView(LiveView):
     """Minimal LiveView that opts into time travel (mirrors test_time_travel_flow.py)."""
 
+    exposure_policy = "legacy"
     template = "<div>{{ count }}</div>"
     time_travel_enabled = True
 
@@ -97,6 +98,7 @@ async def test_bug_capture_share_rejected_without_mounted_view():
 @pytest.mark.asyncio
 async def test_bug_capture_share_rejected_when_time_travel_disabled():
     class _NoTTView(LiveView):
+        exposure_policy = "legacy"
         template = "<div>{{ count }}</div>"
         # time_travel_enabled left at the class default (False).
 

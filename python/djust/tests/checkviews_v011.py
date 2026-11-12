@@ -25,6 +25,7 @@ from djust import LiveView
 class OptedInChild(LiveView):
     """Sticky child that DOES opt into snapshot persistence."""
 
+    exposure_policy = "legacy"
     template = "<div>opted-in child</div>"
     sticky = True
     sticky_id = "v011_optin_child"
@@ -34,6 +35,7 @@ class OptedInChild(LiveView):
 class NotOptedInChild(LiveView):
     """Sticky child that does NOT opt into snapshot persistence."""
 
+    exposure_policy = "legacy"
     template = "<div>not-opted-in child</div>"
     sticky = True
     sticky_id = "v011_no_optin_child"
@@ -43,6 +45,7 @@ class NotOptedInChild(LiveView):
 class OptedInParent(LiveView):
     """Parent LiveView that DOES opt in — matches a misconfig-free template."""
 
+    exposure_policy = "legacy"
     template_name = "v011_parent_optin.html"
     enable_state_snapshot = True
 
@@ -51,6 +54,7 @@ class NotOptedInParent(LiveView):
     """Parent LiveView that does NOT opt in — the V011 trigger when it
     embeds an opted-in sticky child."""
 
+    exposure_policy = "legacy"
     template_name = "v011_parent_no_optin.html"
     # NOTE: no ``enable_state_snapshot`` opt-in.
 
@@ -58,6 +62,7 @@ class NotOptedInParent(LiveView):
 class SecondNotOptedInParent(LiveView):
     """A second non-opted-in parent for the multi-parent test."""
 
+    exposure_policy = "legacy"
     template_name = "v011_parent_multi.html"
     # NOTE: no ``enable_state_snapshot`` opt-in.
 
@@ -69,5 +74,6 @@ class MultiOptedInParent(LiveView):
     a list of length > 1): the same opted-in sticky child is reachable from a
     non-opted-in parent (flagged) and an opted-in parent (silent)."""
 
+    exposure_policy = "legacy"
     template_name = "v011_parent_multi.html"
     enable_state_snapshot = True

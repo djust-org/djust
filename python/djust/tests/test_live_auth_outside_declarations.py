@@ -134,6 +134,7 @@ def _template(name, body):
 
 
 class _Base(LiveView):
+    exposure_policy = "legacy"
     abstract = True
 
     def mount(self, request, **kwargs):
@@ -167,6 +168,7 @@ class StaffRequiredMixin(AccessMixin):
 
 
 class StaffOnlyView(StaffRequiredMixin, LiveView):
+    exposure_policy = "legacy"
     template = _template("StaffOnlyView", "STAFF-ONLY-MARKER {{ state }}")
 
     def mount(self, request, **kwargs):
@@ -183,6 +185,7 @@ class StaffOnlyView(StaffRequiredMixin, LiveView):
 
 @method_decorator(login_required, name="get")
 class GatedGetView(LiveView):
+    exposure_policy = "legacy"
     template = _template("GatedGetView", "GATED-GET-MARKER")
 
     def mount(self, request, **kwargs):
@@ -426,6 +429,7 @@ _djust_shop = _third_party_module(
     "        return super().dispatch(request, *args, **kwargs)\n"
     "from djust import LiveView\n"
     "class ShopView(StaffMixin, LiveView):\n"
+    "    exposure_policy = 'legacy'\n"
     "    template = '<div>shop</div>'\n",
 )
 DjustAuthPackageView = _view("DjustAuthPackageView", [_djust_auth.LoginRequiredLiveViewMixin])

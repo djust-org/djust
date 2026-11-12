@@ -64,6 +64,7 @@ class BootstrapView(LiveView):
     """Trivial view mounted via the bespoke path solely to obtain a live
     consumer; reset away before the runtime drive."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.BootstrapView" dj-id="0">boot</div>'
 
     def mount(self, request, **kwargs):
@@ -74,6 +75,7 @@ class BootstrapView(LiveView):
 
 
 class PlainView(LiveView):
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.PlainView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -87,6 +89,7 @@ class ActorView(LiveView):
     """``use_actors=True`` view — the runtime must mount it through
     ``dispatch_actor_mount`` (render frame), NOT the SSE-style refusal."""
 
+    exposure_policy = "legacy"
     use_actors = True
     template = f'<div dj-root dj-view="{_ALLOWED}.ActorView" dj-id="0">c={{{{ c }}}}</div>'
 
@@ -100,6 +103,7 @@ class ActorView(LiveView):
 class OptInSnapView(LiveView):
     """Opt-in snapshot view (Phase 3.1 state-restore parity)."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = f'<div dj-root dj-view="{_ALLOWED}.OptInSnapView" dj-id="0">n={{{{ n }}}}</div>'
 
@@ -114,6 +118,7 @@ class LoginRequiredView(LiveView):
     """A view whose pre-mount auth returns a redirect URL (login-required shape)
     so the runtime emits a ``navigate`` frame + finalize_mount_auth gated close."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.LoginRequiredView" dj-id="0">secret</div>'
 
     def mount(self, request, **kwargs):

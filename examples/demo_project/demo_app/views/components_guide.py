@@ -20,6 +20,7 @@ class ComponentsGuideView(LiveView):
     - The badge updates when the counter changes!
     """
 
+    exposure_policy = "legacy"
     template_name = 'components-guide.html'
 
     def mount(self, request, **kwargs):

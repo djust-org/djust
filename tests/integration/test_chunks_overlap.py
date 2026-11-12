@@ -84,6 +84,7 @@ def make_parent():
     from djust import LiveView
 
     class _ParallelTestParent(LiveView):
+        exposure_policy = "legacy"
         template = "<!DOCTYPE html><html><body><div dj-root></div></body></html>"
 
         def mount(self, request, **kwargs):

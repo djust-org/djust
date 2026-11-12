@@ -42,6 +42,7 @@ class DoneStep(forms.Form):
 
 
 class TicketWizard(WizardMixin, LiveView):
+    exposure_policy = "legacy"
     wizard_steps = [
         {"name": "ticket", "title": "Ticket", "form_class": TicketStep},
         {"name": "done", "title": "Done", "form_class": DoneStep},
@@ -122,6 +123,7 @@ class PickStep(forms.Form):
 
 
 class PickWizard(WizardMixin, LiveView):
+    exposure_policy = "legacy"
     wizard_steps = [
         {"name": "pick", "title": "Pick", "form_class": PickStep},
         {"name": "done", "title": "Done", "form_class": DoneStep},

@@ -175,6 +175,7 @@ _MODULE = "djust.tests.test_root_selection_3031"
 class ChildP3031(LiveView):
     """A child whose own template declares a ``dj-root``."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root><p class="child-body">child</p></div>'
 
     def mount(self, request, **kwargs):
@@ -185,6 +186,7 @@ class ParentP3031(LiveView):
     """A parent whose root is declared with ``dj-view`` only (the auto-inferred
     root) and which embeds the child above."""
 
+    exposure_policy = "legacy"
     template = (
         '{% load live_tags %}<div dj-view="' + _MODULE + '.ParentP3031">'
         '<p class="count">{{ n }}</p>{% live_render "' + _MODULE + '.ChildP3031" %}</div>'

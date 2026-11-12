@@ -79,6 +79,7 @@ def _find_activity(html: str):
 class _PanelView(LiveView):
     """LiveView with two panels wrapped in {% dj_activity %} blocks."""
 
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"

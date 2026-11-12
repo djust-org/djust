@@ -45,6 +45,7 @@ _LIST = '<div id="list">{% for r in rows %}<div id="row-{{ r.id }}">{{ r.body }}
 
 
 class PlainList(LiveView):
+    exposure_policy = "legacy"
     template = _root("PlainList", _LIST)
 
     def mount(self, request, **kwargs):

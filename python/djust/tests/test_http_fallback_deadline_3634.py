@@ -61,6 +61,7 @@ CTX: ContextVar = ContextVar("deadline_ctx", default="unset")
 
 
 class Watching(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root dj-id='0'><p>{{ status }}</p></div>"
 
     def mount(self, request, **kwargs):

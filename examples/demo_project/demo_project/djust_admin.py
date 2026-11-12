@@ -33,6 +33,7 @@ djust_admin_site = DjustAdminSite(name="djust_admin_demo")
 class DemoProgressViewWidget(LiveView):
     """Tiny LiveView that renders next to the change form body."""
 
+    exposure_policy = "legacy"
     template_name = "djust_admin/demo/progress_widget.html"
     label = "Change summary"
     size = "md"

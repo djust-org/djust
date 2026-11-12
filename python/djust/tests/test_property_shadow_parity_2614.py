@@ -134,6 +134,7 @@ def _sidecar(obj, name):
 class _ShadowView(LiveView):
     """Module-level so the WS mount can name it by dotted path."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_property_shadow_parity_2614._ShadowView" dj-id="0">'
         "n={{ n }} label=[{{ m.label }}]"
@@ -415,6 +416,7 @@ class _JitView(LiveView):
     """PUBLIC ``self.m`` — the shape the issue reproduced on: the context loop
     in ``mixins/context.py`` JIT-serializes it through codegen."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_property_shadow_parity_2614._JitView" dj-id="0">'
         "n={{ n }} label=[{{ m.label }}] password=[{{ m.password }}]"
@@ -751,6 +753,7 @@ def _qs_rows(n=2):
 class _QsView(LiveView):
     """A real QuerySet on a public attr — the #2688 shape."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_property_shadow_parity_2614._QsView" dj-id="0">'
         "n={{ n }}"

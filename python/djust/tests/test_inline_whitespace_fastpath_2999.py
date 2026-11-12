@@ -26,7 +26,7 @@ pytestmark = [pytest.mark.django_db]
 
 def _view(template: str, initial: Dict[str, Any]) -> type:
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     V.template = template
 

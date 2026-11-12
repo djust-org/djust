@@ -64,6 +64,7 @@ class _PermSSEView(LiveView):
     mid-session — exactly what login/owner binding cannot catch.
     """
 
+    exposure_policy = "legacy"
     permission_required = "app.view_thing"
     template = "<div dj-root><span>{{ count }}</span></div>"
 
@@ -90,6 +91,7 @@ class _PermSSEView(LiveView):
 
 
 class _CounterSSEView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ count }}</span></div>"
 
     def mount(self, request, **kwargs):

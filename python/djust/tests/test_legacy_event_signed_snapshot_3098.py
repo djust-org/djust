@@ -28,6 +28,7 @@ VIEW = f"{_MOD}.Counter3098"
 
 
 class Counter3098(LiveView):
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = f'<div dj-root dj-view="{VIEW}" dj-id="0">n={{{{ n }}}}</div>'
 

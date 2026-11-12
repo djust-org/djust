@@ -32,6 +32,7 @@ from djust.decorators import event_handler
 class BrowserSmokeView(LiveView):
     """Minimal mounting LiveView for the browser-smoke canary."""
 
+    exposure_policy = "legacy"
     template_name = "demos/browser_smoke.html"
 
     def mount(self, request, **kwargs):

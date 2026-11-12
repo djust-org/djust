@@ -17,6 +17,8 @@ from djust.decorators import action
 class _ActionView(LiveView):
     """View with an @action handler that populates _action_state."""
 
+    exposure_policy = "legacy"
+
     @action
     def create_todo(self, title: str = "", **kwargs):
         if not title:

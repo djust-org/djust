@@ -10,6 +10,7 @@ from djust.state_backends.memory import InMemoryStateBackend
 
 
 class CachedView(LiveView):
+    exposure_policy = "legacy"
     template = "<p>{{ display }}</p>"
 
 

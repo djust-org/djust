@@ -40,6 +40,7 @@ class _Client:
 class CounterView(LiveView):
     """Public, JSON private and non-JSON private state, all set in mount()."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True  # the socket save is opt-in; prove it is still skipped
     template = '<div dj-root dj-id="0"><p>{{ count }}</p><p>{{ greeting }}</p></div>'
     mounts = 0

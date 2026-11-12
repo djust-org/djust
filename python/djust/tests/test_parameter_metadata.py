@@ -97,6 +97,7 @@ def test_bound_descriptor_methods_use_bound_signature_without_state_values():
             pass
 
     class Page(LiveView):
+        exposure_policy = "legacy"
         left = Menu()
         right = Menu()
 
@@ -128,6 +129,7 @@ def test_wrapper_method_precedence_hides_descriptor_handler():
             raise AssertionError("not the callable resolved by dispatch")
 
     class Page(LiveView):
+        exposure_policy = "legacy"
         menu = Menu()
 
     page = Page()
@@ -169,6 +171,7 @@ def test_bound_instance_shadowing_including_none_matches_dispatch():
             pass
 
     class Page(LiveView):
+        exposure_policy = "legacy"
         menu = Menu()
 
     page = Page()

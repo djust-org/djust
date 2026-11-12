@@ -52,6 +52,7 @@ _FEED_TEMPLATE = (
 
 
 class Feed(LiveView):
+    exposure_policy = "legacy"
     template = _FEED_TEMPLATE.format(view=f"{MODULE}.Feed")
 
     def mount(self, request, **kwargs):

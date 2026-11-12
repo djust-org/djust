@@ -77,10 +77,12 @@ class TestAnyOfValue:
 
 
 class _AnyView(LiveView):
+    exposure_policy = "legacy"
     permission_required = AnyOf("runs.agent_run", "chat.chat_general")
 
 
 class _MixedView(LiveView):
+    exposure_policy = "legacy"
     permission_required = ["runs.view_run", AnyOf("runs.review", "runs.approve")]
 
 
@@ -165,11 +167,15 @@ class TestRouteMapAnyOf:
 
 
 class _RefusesFalse(LiveView):
+    exposure_policy = "legacy"
+
     def check_permissions(self, request):
         return False
 
 
 class _RefusesRaise(LiveView):
+    exposure_policy = "legacy"
+
     def check_permissions(self, request):
         raise PermissionDenied("not yours")
 
@@ -239,6 +245,7 @@ class TestAuditAnyOf:
         from djust.management.commands.djust_audit import _extract_auth_info
 
         class View(LiveView):
+            exposure_policy = "legacy"
             permission_required = ("a.x", "b.y")
 
         assert _extract_auth_info(View)["permission_required"] == ["a.x", "b.y"]
@@ -324,6 +331,7 @@ class TestAuditAnyOf:
 
 class TestHandlerInventoryAnyOf:
     class _View(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root></div>"
 
         @permission_required(AnyOf("runs.review", "runs.approve"))

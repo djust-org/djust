@@ -25,6 +25,7 @@ from djust import LiveView
 
 
 class _BareRootView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>n={{ n }}</div>"
 
     def mount(self, request, **kwargs):
@@ -32,6 +33,7 @@ class _BareRootView(LiveView):
 
 
 class _PhantomView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-view="{{ dj_view_id }}">n={{ n }}</div>'
 
     def mount(self, request, **kwargs):

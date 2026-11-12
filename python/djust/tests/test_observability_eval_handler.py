@@ -24,6 +24,8 @@ def clean_registry():
 
 
 class _FakeCounterView:
+    exposure_policy = "legacy"
+
     def __init__(self):
         self.count = 0
         self.label = "initial"

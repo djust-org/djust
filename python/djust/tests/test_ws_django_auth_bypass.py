@@ -36,6 +36,7 @@ def _anon_request():
 
 
 class _LoginRequiredView(LoginRequiredMixin, LiveView):
+    exposure_policy = "legacy"
     template_name = None
 
     def get_context_data(self, **kwargs):
@@ -43,6 +44,7 @@ class _LoginRequiredView(LoginRequiredMixin, LiveView):
 
 
 class _SuperuserOnlyView(UserPassesTestMixin, LiveView):
+    exposure_policy = "legacy"
     template_name = None
 
     def test_func(self):
@@ -53,6 +55,7 @@ class _SuperuserOnlyView(UserPassesTestMixin, LiveView):
 
 
 class _PermRequiredView(PermissionRequiredMixin, LiveView):
+    exposure_policy = "legacy"
     permission_required = "auth.view_user"
     template_name = None
 

@@ -443,6 +443,7 @@ def test_the_mixin_on_an_old_contract_backend_behaves_as_it_always_did(installed
     seen = []
 
     class Room(PresenceMixin, LiveView):
+        exposure_policy = "legacy"
         presence_key = ROOM
 
         def get_presence_user_id(self):

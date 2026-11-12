@@ -34,6 +34,7 @@ class _User:
 
 
 class _View(LiveView):
+    exposure_policy = "legacy"
     permission_required = AnyOf("runs.agent_run", "chat.chat_general")
     template = "<div dj-root></div>"
 

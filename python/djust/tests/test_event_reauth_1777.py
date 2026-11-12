@@ -31,6 +31,7 @@ _HANDLER_RAN = False
 
 
 class _LoginView(LiveView):
+    exposure_policy = "legacy"
     login_required = True
     template = '<div dj-view="djust.tests.test_event_reauth_1777._LoginView" dj-id="0">x</div>'
 

@@ -205,6 +205,8 @@ def test_context_blocks_urllib():
 class _FakeViewPure:
     """Pure state mutation — survives dry_run unscathed."""
 
+    exposure_policy = "legacy"
+
     def __init__(self):
         self.count = 0
 
@@ -215,6 +217,8 @@ class _FakeViewPure:
 
 class _FakeViewWithHttp:
     """Makes an HTTP call — dry_run blocks it."""
+
+    exposure_policy = "legacy"
 
     def __init__(self):
         self.count = 0
@@ -235,6 +239,8 @@ class _FakeViewWithRecordableSideEffect:
     requests.get runs (we mock it at patch-install time so it doesn't
     hit the network). Then self.count increments.
     """
+
+    exposure_policy = "legacy"
 
     def __init__(self):
         self.count = 0

@@ -67,6 +67,7 @@ _TEMPLATE = (
 class ListView(LiveView):
     """The docstring's example, with the form the issue proposes."""
 
+    exposure_policy = "legacy"
     login_required = False
     params_form = ListParams
     template = _TEMPLATE
@@ -89,6 +90,7 @@ class ListView(LiveView):
 class RawListView(LiveView):
     """No ``params_form``: the raw dict, exactly as before."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>{{ page }}</div>"
 
@@ -141,6 +143,7 @@ class TagParams(forms.Form):
 
 
 class TagView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     params_form = TagParams
     template = "<div dj-root>{{ q }}|{{ tag }}|{{ when }}|{{ params_errors }}</div>"
@@ -160,6 +163,7 @@ class TagView(LiveView):
 class AsyncListView(LiveView):
     """``handle_params`` may be ``async def``; the default fallback awaits it."""
 
+    exposure_policy = "legacy"
     login_required = False
     params_form = ListParams
     template = _TEMPLATE
@@ -209,6 +213,7 @@ class GroupParams(forms.Form):
 
 
 class GroupView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     params_form = GroupParams
     template = "<div dj-root>{{ picked }}|{{ params_errors|length }}</div>"
@@ -230,6 +235,7 @@ class ExplodingParams(forms.Form):
 
 
 class ExplodingView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     params_form = ExplodingParams
     template = "<div dj-root>never</div>"
@@ -244,6 +250,7 @@ class FlagParams(forms.Form):
 
 
 class FlagView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     params_form = FlagParams
     template = "<div dj-root>{{ closed }}|{{ n }}</div>"
@@ -267,6 +274,7 @@ class AsyncSuperView(AsyncListView):
 
 
 class BrokenDeclaration(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     params_form = "not a form class"
     template = "<div dj-root>x</div>"
@@ -279,6 +287,7 @@ class CleanedNotInitial(forms.Form):
 
 
 class RequiredView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     params_form = CleanedNotInitial
     template = "<div dj-root>{{ token }}|{{ params_errors.token.0 }}</div>"
@@ -383,6 +392,7 @@ class TestTheDocumentedExample:
         block = doc.split("Example::", 1)[1].split("Invalid input goes to", 1)[0]
         namespace = {"forms": forms, "LiveView": LiveView}
         exec(textwrap.dedent(block), namespace)  # noqa: S102 - the documented snippet itself
+        namespace["ListView"].exposure_policy = "legacy"
 
         view = namespace["ListView"]()
         run_handle_params_sync(view, {"page": "abc"}, "/list/?page=abc")
@@ -403,6 +413,7 @@ class TestTheDocumentedExample:
         ]
         namespace: dict = {}
         exec(snippet, namespace)  # noqa: S102 - the documented snippet itself
+        namespace["ListView"].exposure_policy = "legacy"
 
         view = namespace["ListView"]()
         view.mount(None)
@@ -482,6 +493,7 @@ class MultiKeyParams(forms.Form):
 
 
 class MultiKeyView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     params_form = MultiKeyParams
     template = "<div dj-root>{{ when }}|{{ day }}</div>"

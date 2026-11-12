@@ -87,6 +87,7 @@ def _make_view(name: str, relation: bool, select: bool = True) -> str:
     rel_cell = "<td>{{ row.author.email }}</td>" if relation else ""
 
     class _V(LiveView):
+        exposure_policy = "legacy"
         template = (
             f'<div dj-view="{MOD}.{name}" dj-id="0"><p>{{{{ label }}}}</p><table><tbody>'
             "{% for row in rows %}<tr><td>{{ row.title }}</td><td>{{ row.views }}</td>"

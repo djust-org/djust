@@ -16,6 +16,7 @@ from djust import LiveView
 
 
 class StrictTransportView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ result }}</div>"
     api_name = "strict.transport"
 
@@ -41,6 +42,8 @@ def test_contract_cache_does_not_retain_owner_and_metadata_omits_defaults():
     from djust.validation import get_strict_handler_contract
 
     class Owner(LiveView):
+        exposure_policy = "legacy"
+
         @event_handler(parameter_policy="strict")
         def choose(self, value: str = "SERVER_DEFAULT_SENTINEL"):
             pass
@@ -367,6 +370,8 @@ def test_invalid_result_cannot_be_invoked():
 @pytest.mark.parametrize("decorator", [event_handler, server_function])
 def test_class_forward_return_reference_does_not_block_input_contract(decorator):
     class ForwardView(LiveView):
+        exposure_policy = "legacy"
+
         @decorator(parameter_policy="strict")
         def choose(self, value: int) -> "ForwardView":
             return self

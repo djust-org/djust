@@ -16,6 +16,7 @@ from djust import LiveView
 
 
 class _MaybeMissing(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{% if found %}found{% else %}No document at this ID{% endif %}</div>"
 
     def mount(self, request, doc_id: str = "", **kwargs):
@@ -26,6 +27,7 @@ class _MaybeMissing(LiveView):
 
 
 class _Plain(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>plain</div>"
 
 

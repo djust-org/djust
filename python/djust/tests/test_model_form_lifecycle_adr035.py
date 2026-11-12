@@ -39,6 +39,7 @@ class GroupForm(forms.ModelForm):
 
 
 class EditGroupView(ModelFormMixin[Group], LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root><h1>{{ object.name }}</h1><input name="name" '
         'value="{{ form_data.name }}"><p>{{ success_message }}</p></div>'
@@ -79,6 +80,7 @@ class SnapshotEditGroupView(EditGroupView):
 
 
 class OtherView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
 
 
@@ -323,6 +325,7 @@ def test_mixing_model_instance_is_a_configuration_error():
     with pytest.raises(ImproperlyConfigured, match="_model_instance"):
 
         class Mixed(ModelFormMixin, LiveView):
+            exposure_policy = "legacy"
             model = Group
             form_class = GroupForm
             _model_instance = None
@@ -333,6 +336,7 @@ def test_context_object_name_must_be_a_free_template_name(name):
     with pytest.raises(ImproperlyConfigured, match="context_object_name"):
 
         class Aliased(ModelFormMixin, LiveView):
+            exposure_policy = "legacy"
             model = Group
             form_class = GroupForm
             context_object_name = name
@@ -357,10 +361,12 @@ def test_plain_form_class_is_refused_and_denied():
 
 def test_generic_subscription_is_optional_at_runtime():
     class Bare(ModelFormMixin, LiveView):
+        exposure_policy = "legacy"
         model = Group
         form_class = GroupForm
 
     class Typed(ModelFormMixin[Group], LiveView):
+        exposure_policy = "legacy"
         model = Group
         form_class = GroupForm
 
@@ -619,6 +625,7 @@ class SelfForm(forms.ModelForm):
 
 
 class EditSelfView(ModelFormMixin, LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><p>{{ object.username }}|{{ object.password }}|</p></div>"
     form_class = SelfForm
 
@@ -655,6 +662,7 @@ def test_s013_flags_an_adapter_that_neither_scopes_nor_authorizes():
     from djust.checks.security import check_model_form_object_policy
 
     class UnscopedEditView(ModelFormMixin, LiveView):
+        exposure_policy = "legacy"
         model = Group
         form_class = GroupForm
 
@@ -663,6 +671,7 @@ def test_s013_flags_an_adapter_that_neither_scopes_nor_authorizes():
             return False
 
     class AcknowledgedEditView(ModelFormMixin, LiveView):  # noqa: S013
+        exposure_policy = "legacy"
         model = Group
         form_class = GroupForm
 

@@ -72,6 +72,7 @@ class _AuthedUser:
 class _LoginRequiredView(LiveView):
     """A login-gated view; records whether mount() ran."""
 
+    exposure_policy = "legacy"
     login_required = True
     template = (
         '<div dj-view="djust.tests.test_mount_security_sequence_1853._LoginRequiredView" '
@@ -86,6 +87,7 @@ class _LoginRequiredView(LiveView):
 class _PublicView(LiveView):
     """A public view used for the happy-path / sticky / snapshot cases."""
 
+    exposure_policy = "legacy"
     login_required = False
     enable_state_snapshot = True
     template = (
@@ -103,6 +105,7 @@ class _PublicView(LiveView):
 class _ObjectDeniedView(LiveView):
     """Opts into the object-permission lifecycle and DENIES access."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = (
         '<div dj-view="djust.tests.test_mount_security_sequence_1853._ObjectDeniedView" '
@@ -120,6 +123,7 @@ class _ObjectDeniedView(LiveView):
 
 
 class _ObjectAllowedView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = (
         '<div dj-view="djust.tests.test_mount_security_sequence_1853._ObjectAllowedView" '
@@ -139,6 +143,7 @@ class _ObjectAllowedView(LiveView):
 class _StickyChild(LiveView):
     """A sticky child embedded in the parent below."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "seq1853child"
     template = "<div>child:{{ n }}</div>"
@@ -157,6 +162,7 @@ class _StickyParentView(LiveView):
     pre-mount auth+tenant sequence converged onto run_pre_mount_auth (#1853 left
     all sticky/snapshot/actor/render mechanics untouched)."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = (
         "{% load live_tags %}"
@@ -266,6 +272,7 @@ class TestRunPreMountAuthHelper:
         propagates PermissionDenied (each transport maps it to its 403 shape)."""
 
         class _PermView(LiveView):
+            exposure_policy = "legacy"
             permission_required = "app.view_thing"
             template = "<div dj-id='0'>x</div>"
 
@@ -287,6 +294,7 @@ class TestRunPreMountAuthHelper:
         ensure_calls = []
 
         class _TenantLoginView(LiveView):
+            exposure_policy = "legacy"
             login_required = True
             template = "<div dj-id='0'>x</div>"
 
@@ -312,6 +320,7 @@ class TestRunPreMountAuthHelper:
             id = 42
 
         class _TenantView(LiveView):
+            exposure_policy = "legacy"
             login_required = False
             template = "<div dj-id='0'>x</div>"
 

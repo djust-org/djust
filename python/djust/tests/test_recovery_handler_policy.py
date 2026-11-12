@@ -20,6 +20,7 @@ ENVELOPE = {"_form_values": {"title": "T"}, "_data_attrs": {"canvas-id": "main"}
 
 
 class RecoveryView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root><div dj-auto-recover="restore_state" data-canvas-id="main">'
         '<input name="title"></div><button dj-click="pick">x</button></div>'
@@ -128,6 +129,8 @@ MOD = __name__
 
 
 class _RecoveryBase(LiveView):
+    exposure_policy = "legacy"
+
     def mount(self, request, **kwargs):
         self.show = False
         self.target = "restore_state"

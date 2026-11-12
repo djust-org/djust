@@ -72,6 +72,8 @@ SHAPES = [
 
 def _make_delete_view(make_value: Any, source: str) -> type:
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             self.k = make_value()
 
@@ -107,6 +109,8 @@ class TestDeleteThenRenderOnTheLiveViewEntry2564:
         """Removal is not a tombstone: re-adding the key re-renders it."""
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.k = SECRET
 
@@ -138,6 +142,8 @@ class TestDeleteThenRenderOnTheLiveViewEntry2564:
 # ---------------------------------------------------------------------------
 def _make_gated_view(source: str) -> type:
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             self.show = True
             self.n = 0
@@ -283,6 +289,7 @@ class TestRetainStateKeys2564:
 class TestFrameworkKeysAreRetained2564:
     def test_static_assigns_and_processor_keys_survive_a_second_render(self) -> None:
         class _V(LiveView):
+            exposure_policy = "legacy"
             static_assigns = ["title"]
 
             def mount(self, request, **kwargs):

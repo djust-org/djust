@@ -27,6 +27,7 @@ OBSERVED: list = []
 
 
 class InteractiveDropdownView(LiveView):
+    exposure_policy = "legacy"
     template_name = "demos/interactive_dropdown.html"
 
     project_menu = DropdownMenu(

@@ -191,6 +191,7 @@ def test_forward_partial_queryset_loop_survives_liveview_update():
     expected = permission.content_type.app_label
 
     class PartialRowsView(LiveView):
+        exposure_policy = "legacy"
         template = (
             "<div dj-root><span>{{ label }}</span>{% for row in rows %}"
             "{% partial cell %}{% endfor %}"
@@ -396,6 +397,7 @@ def test_liveview_root_extraction_keeps_partial_definitions(tmp_path, root_in_ch
     ]
 
     class NamedPartialView(LiveView):
+        exposure_policy = "legacy"
         template_name = "child.html"
 
         def mount(self, request, **kwargs):
@@ -451,6 +453,7 @@ def test_liveview_uses_only_one_executed_authored_root(tmp_path, invoke, separat
     ]
 
     class PartialRootView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
     with override_settings(TEMPLATES=templates):
@@ -485,6 +488,7 @@ async def test_uncalled_partial_does_not_hide_websocket_root_or_events(tmp_path)
     events = []
 
     class PartialRootSocketView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
         changed = False
 
@@ -545,6 +549,7 @@ def test_uncalled_partial_does_not_hide_http_root(tmp_path):
     ]
 
     class PartialRootHttpView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
     request = RequestFactory().get("/")
@@ -598,6 +603,7 @@ def test_named_liveview_partial_include_uses_defining_template_directory(
     ]
 
     class PartialIncludeView(LiveView):
+        exposure_policy = "legacy"
         template_name = name
 
     with override_settings(TEMPLATES=templates):

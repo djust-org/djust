@@ -63,6 +63,7 @@ class _PostFallbackThrottled(LiveView):
     runner stalls between them.
     """
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ratelimit_post_fallback._PostFallbackThrottled" '
         'dj-id="0">x</div>'
@@ -85,6 +86,7 @@ class _PostFallbackAliased(LiveView):
     that let a caller multiply the limit by using both names.
     """
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ratelimit_post_fallback._PostFallbackAliased" '
         'dj-id="0">x</div>'
@@ -127,6 +129,7 @@ class _PostFallbackFactoryCollision(LiveView):
     settings, so the stricter limit is not just shared but WEAKENED.
     """
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ratelimit_post_fallback.'
         '_PostFallbackFactoryCollision" dj-id="0">x</div>'
@@ -177,6 +180,7 @@ def _make_dynamic_descriptor_view():
         bucket and apply no limit at all.
         """
 
+        exposure_policy = "legacy"
         template = (
             '<div dj-view="djust.tests.test_ratelimit_post_fallback.'
             '_DynamicDescriptorView" dj-id="0">x</div>'
@@ -241,6 +245,7 @@ def _make_minting_descriptor_view():
     class _MintingDescriptorView(LiveView):
         """A handler behind a non-data descriptor that mints a fresh function."""
 
+        exposure_policy = "legacy"
         template = (
             '<div dj-view="djust.tests.test_ratelimit_post_fallback.'
             '_MintingDescriptorView" dj-id="0">x</div>'
@@ -269,6 +274,7 @@ class _ThrottledCounter(LiveComponent):
 class _ComponentHost(LiveView):
     """A view hosting the component — events route through ``component_id``."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ratelimit_post_fallback._ComponentHost" '
         'dj-id="0">{{ counter }}</div>'
@@ -287,6 +293,7 @@ class _ShadowedAliasHost(LiveView):
     callable ends up with two budgets.
     """
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ratelimit_post_fallback._ShadowedAliasHost" '
         'dj-id="0">x</div>'
@@ -310,6 +317,7 @@ class _ShadowedAliasHost(LiveView):
 class _PostFallbackUnthrottled(LiveView):
     """A view whose handler declares no ``@rate_limit`` — must stay callable."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ratelimit_post_fallback._PostFallbackUnthrottled" '
         'dj-id="0">x</div>'
@@ -777,6 +785,7 @@ def test_an_unrelated_descriptor_attribute_does_not_decide_a_handler_identity():
         send_alias = _make_limited(99)
 
     class Host(LiveView):
+        exposure_policy = "legacy"
         template = (
             '<div dj-view="djust.tests.test_ratelimit_post_fallback.'
             "test_an_unrelated_descriptor_attribute_does_not_decide_a_handler_identity."
@@ -813,6 +822,7 @@ def test_a_descriptor_property_on_an_ordinary_owner_is_not_executed():
     touched = []
 
     class Host(LiveView):
+        exposure_policy = "legacy"
         template = (
             '<div dj-view="djust.tests.test_ratelimit_post_fallback.'
             "test_a_descriptor_property_on_an_ordinary_owner_is_not_executed."
@@ -874,6 +884,7 @@ def test_an_instance_alias_shares_the_budget_of_the_method_it_aliases():
     """
 
     class Host(LiveView):
+        exposure_policy = "legacy"
         template = (
             '<div dj-view="djust.tests.test_ratelimit_post_fallback.'
             "test_an_instance_alias_shares_the_budget_of_the_method_it_aliases."

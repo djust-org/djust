@@ -104,6 +104,7 @@ class _CollisionHandler:
 class CollisionEventView(_CollisionHandler, LiveView):
     """Event path (runtime.dispatch_event): handler sets BOTH flags."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.CollisionEventView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -120,6 +121,7 @@ class CollisionEventView(_CollisionHandler, LiveView):
 class SkipOnlyEventView(LiveView):
     """Gate-off sibling: ``_skip_render`` only — must still skip (noop)."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.SkipOnlyEventView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -136,6 +138,7 @@ class SkipOnlyEventView(LiveView):
 class CollisionPushView(_CollisionHandler, LiveView):
     """server_push path: the channel-layer handler sets BOTH flags."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.CollisionPushView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -155,6 +158,7 @@ class CollisionNotifyView(_CollisionHandler, LiveView):
     """db_notify path: ``handle_info`` sets BOTH flags (or skip-only, per the
     payload's ``mode`` — one view covers both arms of this path)."""
 
+    exposure_policy = "legacy"
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.CollisionNotifyView" dj-id="0">c={{{{ c }}}}</div>'
     )
@@ -182,6 +186,7 @@ class CollisionDeferredView(_CollisionHandler, LiveView):
     decorated, exactly like the live ``dispatch_event`` view's.
     """
 
+    exposure_policy = "legacy"
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.CollisionDeferredView" dj-id="0">c={{{{ c }}}}</div>'
     )

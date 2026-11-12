@@ -1212,7 +1212,11 @@ class TestV001MissingTemplateName:
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
 
-        cls = type("V001NoTemplateView", (LiveView,), {"__module__": "myapp.views"})
+        cls = type(
+            "V001NoTemplateView",
+            (LiveView,),
+            {"exposure_policy": "legacy", "__module__": "myapp.views"},
+        )
 
         try:
             errors = check_liveviews(None)
@@ -1231,7 +1235,11 @@ class TestV001MissingTemplateName:
         cls = type(
             "V001WithTemplateView",
             (LiveView,),
-            {"__module__": "myapp.views", "template_name": "my_template.html"},
+            {
+                "exposure_policy": "legacy",
+                "__module__": "myapp.views",
+                "template_name": "my_template.html",
+            },
         )
 
         try:
@@ -1255,7 +1263,7 @@ class TestV002MissingMount:
         cls = type(
             "V002NoMountView",
             (LiveView,),
-            {"__module__": "myapp.views", "template_name": "t.html"},
+            {"exposure_policy": "legacy", "__module__": "myapp.views", "template_name": "t.html"},
         )
 
         try:
@@ -1278,7 +1286,12 @@ class TestV002MissingMount:
         cls = type(
             "V002HasMountView",
             (LiveView,),
-            {"__module__": "myapp.views", "template_name": "t.html", "mount": mount},
+            {
+                "exposure_policy": "legacy",
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": mount,
+            },
         )
 
         try:
@@ -1305,7 +1318,12 @@ class TestV003MountSignature:
         cls = type(
             "V003BadMountView",
             (LiveView,),
-            {"__module__": "myapp.views", "template_name": "t.html", "mount": mount},
+            {
+                "exposure_policy": "legacy",
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": mount,
+            },
         )
 
         try:
@@ -1328,7 +1346,12 @@ class TestV003MountSignature:
         cls = type(
             "V003WrongParamView",
             (LiveView,),
-            {"__module__": "myapp.views", "template_name": "t.html", "mount": mount},
+            {
+                "exposure_policy": "legacy",
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": mount,
+            },
         )
 
         try:
@@ -1351,7 +1374,12 @@ class TestV003MountSignature:
         cls = type(
             "V003GoodMountView",
             (LiveView,),
-            {"__module__": "myapp.views", "template_name": "t.html", "mount": mount},
+            {
+                "exposure_policy": "legacy",
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": mount,
+            },
         )
 
         try:
@@ -1382,6 +1410,7 @@ class TestV004MissingEventHandlerDecorator:
             "V004MissingDecView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "t.html",
                 "mount": mount,
@@ -1415,6 +1444,7 @@ class TestV004MissingEventHandlerDecorator:
             "V004PushOnlyView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "t.html",
                 "mount": mount,
@@ -1448,6 +1478,7 @@ class TestV004MissingEventHandlerDecorator:
             "V004DecoratedView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "t.html",
                 "mount": mount,
@@ -1479,6 +1510,7 @@ class TestV004MissingEventHandlerDecorator:
             "V004PrivateView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "t.html",
                 "mount": mount,
@@ -1510,6 +1542,7 @@ class TestV005AllowedModules:
             "V005NotAllowedView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "test.html",
             },
@@ -1536,6 +1569,7 @@ class TestV005AllowedModules:
             "V005AllowedView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "test.html",
             },
@@ -1563,6 +1597,7 @@ class TestV005AllowedModules:
             "V005NoSettingView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "test.html",
             },
@@ -1598,6 +1633,7 @@ class TestS005UnauthenticatedViews:
             "UnauthView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "test.html",
                 "mount": mount,
@@ -1625,6 +1661,7 @@ class TestS005UnauthenticatedViews:
             "AuthRequiredView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "test.html",
                 "mount": mount,
@@ -1653,6 +1690,7 @@ class TestS005UnauthenticatedViews:
             "PublicView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "test.html",
                 "mount": mount,
@@ -2657,6 +2695,7 @@ class TestV007Retired:
             "V007ClosedSignatureView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "t.html",
                 "mount": mount,
@@ -4067,7 +4106,7 @@ class TestV004LifecycleMethods:
         cls = type(
             "V004Lifecycle_Batch",
             (LiveView,),
-            attrs,
+            {"exposure_policy": "legacy", **attrs},
         )
 
         try:
@@ -4331,6 +4370,7 @@ class TestV009OnMountValidation:
             "V009NonListView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "t.html",
                 "mount": mount,
@@ -4359,6 +4399,7 @@ class TestV009OnMountValidation:
             "V009NonCallableView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "t.html",
                 "mount": mount,
@@ -4392,6 +4433,7 @@ class TestV009OnMountValidation:
             "V009ValidView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "t.html",
                 "mount": mount,

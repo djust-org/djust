@@ -78,6 +78,7 @@ def _make_view_class(name: str):
         name,
         (LiveView,),
         {
+            "exposure_policy": "legacy",
             "template_name": "child_mlb.html",
             "mount": lambda self, request, **kwargs: None,
             "get_context_data": lambda self, **kwargs: {},

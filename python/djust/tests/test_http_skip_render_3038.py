@@ -35,6 +35,7 @@ class Quiet(LiveComponent):
 
 
 class SkipPage(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0"><h1>{{ title }}</h1>{{ quiet }}</div>'
     quiet = Quiet()
 

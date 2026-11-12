@@ -35,6 +35,7 @@ pytestmark = pytest.mark.django_db
 class _GatedPresenceView(PresenceMixin, LiveView):
     """Presence view that requires a logged-in user."""
 
+    exposure_policy = "legacy"
     login_required = True
     template = '<div dj-view="gated" dj-id="0">members only</div>'
 
@@ -45,6 +46,7 @@ class _GatedPresenceView(PresenceMixin, LiveView):
 class _OpenPresenceView(PresenceMixin, LiveView):
     """Presence view open to anonymous users."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = '<div dj-view="open" dj-id="0">open</div>'
 
@@ -55,6 +57,7 @@ class _OpenPresenceView(PresenceMixin, LiveView):
 class _ObjectGatedPresenceView(PresenceMixin, LiveView):
     """Presence view whose object check refuses every request (runs after mount())."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = '<div dj-view="obj" dj-id="0">object</div>'
 
@@ -69,6 +72,7 @@ class _ObjectGatedPresenceView(PresenceMixin, LiveView):
 
 
 class _PlainView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = '<div dj-view="plain" dj-id="0">plain</div>'
 

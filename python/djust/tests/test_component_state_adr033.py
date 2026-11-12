@@ -66,6 +66,7 @@ _ALLOWED = "djust.tests.test_component_state_adr033"
 class RatingView(LiveView):
     """The code a Django developer writes (ADR-033, summary)."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">{{ rating }}</div>'
 
     def mount(self, request: Any, **kwargs: Any) -> None:
@@ -82,6 +83,7 @@ class Toggle(LiveComponent):
 
 
 class ToggleView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">{{ toggle.on }}</div>'
     toggle = Toggle()
 

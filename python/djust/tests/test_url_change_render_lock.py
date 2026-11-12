@@ -22,7 +22,7 @@ def setup(kind):
         transport = SSESessionTransport(host)
     host.send_error = AsyncMock()
     runtime = ViewRuntime(transport)
-    runtime.view_instance = SimpleNamespace(_tenant=None)
+    runtime.view_instance = SimpleNamespace(_tenant=None, exposure_policy="legacy")
     return runtime, host
 
 
@@ -55,7 +55,7 @@ async def test_url_waiter_cannot_operate_on_a_replacement_owner(kind):
     async with host._render_lock:
         task = asyncio.create_task(runtime.dispatch_url_change({}))
         await asyncio.sleep(0)
-        runtime.view_instance = SimpleNamespace(_tenant=None)
+        runtime.view_instance = SimpleNamespace(_tenant=None, exposure_policy="legacy")
     await task
     body.assert_not_awaited()
     host.send_error.assert_awaited_once_with("View changed. Please reload the page.")

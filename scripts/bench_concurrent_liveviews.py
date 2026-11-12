@@ -120,6 +120,8 @@ def _install_views(rows: int, query: bool) -> None:
         return Session.objects.count()
 
     class BenchView(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             self.title = "Bench"
             self.count = _read_db() if query else 0

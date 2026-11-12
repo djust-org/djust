@@ -32,6 +32,7 @@ from djust.websocket import LiveViewConsumer
 
 
 class _FlowCounter(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -42,6 +43,7 @@ class _FlowCounter(LiveView):
 
 
 class _FlowSnapshotView(LiveView):
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = "<div dj-root><span>n={{ n }}</span></div>"
 

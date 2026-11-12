@@ -66,6 +66,7 @@ class UserListComponent(LiveComponent):
 class TodoDashboardView(LiveView):
     """Test view with child components."""
 
+    exposure_policy = "legacy"
     template = """
         <div>
             <h1>Dashboard</h1>
@@ -95,6 +96,7 @@ class TodoDashboardView(LiveView):
 class MultiComponentView(LiveView):
     """Test view with multiple child components."""
 
+    exposure_policy = "legacy"
     template = """
         <div>
             {{ user_list.render }}
@@ -231,6 +233,7 @@ class TestComponentAutoRegistration:
             template = "<div>Hello</div>"
 
         class SimpleView(LiveView):
+            exposure_policy = "legacy"
             template = "{{ simple.render }}"
 
             def mount(self, request, **kwargs):
@@ -324,6 +327,7 @@ class TestComponentPropUpdates:
                 return {"title": self.title, "count": self.count}
 
         class ConfigView(LiveView):
+            exposure_policy = "legacy"
             template = "{{ config.render }}"
 
             def mount(self, request, **kwargs):
@@ -372,6 +376,7 @@ class TestUpdateComponentNoUpdateOverride:
                 return {"label": self.label}
 
         class BareView(LiveView):
+            exposure_policy = "legacy"
             template = "{{ widget.render }}"
 
             def mount(self, request, **kwargs):
@@ -428,6 +433,7 @@ class TestUpdateComponentNoUpdateOverride:
                 return {"value": self.value}
 
         class CustomView(LiveView):
+            exposure_policy = "legacy"
             template = "{{ widget.render }}"
 
             def mount(self, request, **kwargs):
@@ -452,6 +458,7 @@ class TestDefaultHandleComponentEvent:
         """Test default handle_component_event() does nothing."""
 
         class MinimalView(LiveView):
+            exposure_policy = "legacy"
             template = "{{ comp.render }}"
 
             def mount(self, request, **kwargs):

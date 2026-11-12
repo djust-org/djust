@@ -65,6 +65,7 @@ class ExposureMatrixView(LiveView):
 class LegacyExposureMatrixView(LiveView):
     """The legacy twin: same behaviour, implicit exposure. Harness control."""
 
+    exposure_policy = "legacy"
     template_name = "demos/exposure_matrix_legacy.html"
 
     def mount(self, request, **kwargs):

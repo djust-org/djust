@@ -22,6 +22,7 @@ DEFERRED: list = []
 
 
 class SideChannelView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ message }}</span></div>"
 
     def mount(self, request, **kwargs):

@@ -24,6 +24,7 @@ RAN: list = []
 
 
 class _EmoteView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-view="{}" dj-id="0">n={{{{ n }}}}</div>'.format(
         "djust.tests.test_rate_limit_on_exceed_drop_3003._EmoteView"
     )

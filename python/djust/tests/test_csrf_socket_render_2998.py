@@ -37,6 +37,7 @@ _TEMPLATE = (
 
 
 class _FormView(LiveView):
+    exposure_policy = "legacy"
     template = _TEMPLATE
 
     def mount(self, request, **kwargs):

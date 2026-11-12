@@ -36,6 +36,7 @@ class RecordingConsumer(LiveViewConsumer):
 
 
 class ScoreView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><b>{{ score }}</b></div>"
 
     def mount(self, request, **kwargs):

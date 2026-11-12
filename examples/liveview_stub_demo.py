@@ -16,6 +16,7 @@ from djust import LiveView
 class ProductListView(LiveView):
     """Demo view showing type-checked LiveView methods."""
 
+    exposure_policy = "legacy"
     template_name = "products.html"
 
     def mount(self, request, **kwargs):

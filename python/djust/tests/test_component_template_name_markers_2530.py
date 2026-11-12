@@ -43,6 +43,7 @@ class Card(LiveComponent):
 
 
 class Parent(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ card }}</div>"
 
     def mount(self, request, **kwargs):

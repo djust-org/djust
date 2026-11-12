@@ -146,6 +146,7 @@ def test_a_raw_clone_answers_empty_for_a_handle_only_name_after_a_round_trip(
 
 
 class _DatetimeRestoreView(LiveView):
+    exposure_policy = "legacy"
     template = RESTORE_HEAD + _restore_source("resolution", "year") + "</div>"
 
     def mount(self, request, **kwargs):

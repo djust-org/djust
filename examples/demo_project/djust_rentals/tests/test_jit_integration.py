@@ -346,6 +346,7 @@ class JITEdgeCasesTestCase(TestCase):
         from djust.live_view import LiveView
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template_string = "{% for lease in leases %}{{ lease.id }}{% endfor %}"
 
             def mount(self, request):
@@ -386,6 +387,7 @@ class JITEdgeCasesTestCase(TestCase):
             )
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template_string = "{% for lease in leases %}{{ lease.property.name }}{% endfor %}"
 
             def mount(self, request):
@@ -426,6 +428,7 @@ class JITEdgeCasesTestCase(TestCase):
             )
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template_string = "{% for lease in leases %}{{ lease.status }}{% endfor %}"
 
             def mount(self, request):

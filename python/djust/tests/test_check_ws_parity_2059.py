@@ -60,6 +60,7 @@ class _BadDispatchMixin:
 class _ViewWithBadDispatchMixin(_BadDispatchMixin, LiveView):
     """Synthetic LiveView whose MRO carries an HTTP-only dispatch() override."""
 
+    exposure_policy = "legacy"
     template_name = "checkviews_v013_dummy.html"
 
     def mount(self, request, **kwargs):
@@ -70,6 +71,7 @@ class _CleanLiveView(LiveView):
     """A LiveView with no dispatch()/get()/post() override anywhere in its
     own (non-djust) MRO -- the negative control."""
 
+    exposure_policy = "legacy"
     template_name = "checkviews_v013_dummy.html"
 
     def mount(self, request, **kwargs):
@@ -84,6 +86,7 @@ class _ViewWithDjustTenantMixin(TenantMixin, LiveView):
     NOT trigger V013 -- this is the canonical exclusion case study cited in
     the issue."""
 
+    exposure_policy = "legacy"
     template_name = "checkviews_v013_dummy.html"
 
     def mount(self, request, **kwargs):

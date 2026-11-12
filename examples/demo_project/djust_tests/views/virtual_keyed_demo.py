@@ -28,6 +28,7 @@ ROWS = 60
 
 
 class VirtualKeyedDemoView(LiveView):
+    exposure_policy = "legacy"
     template_name = "tests/virtual_keyed_demo.html"
 
     def mount(self, request, **kwargs):

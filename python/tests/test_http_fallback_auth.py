@@ -28,6 +28,7 @@ from djust.decorators import event_handler
 class AuthAwareView(LiveView):
     """View whose template depends on user.is_authenticated."""
 
+    exposure_policy = "legacy"
     template = """<div dj-root>
     {% if user.is_authenticated %}
         <span class="auth">Welcome, {{ user.username }}</span>

@@ -54,6 +54,7 @@ from djust.decorators import event_handler
 class NotificationsView(LiveView):
     """Sticky child with a state-mutating ``dismiss`` handler."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "notifications"
     template = (
@@ -82,6 +83,7 @@ class NotificationsView(LiveView):
 class HomeView(LiveView):
     """Parent page embedding the sticky child via ``{% live_render sticky=True %}``."""
 
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="djust.tests.test_sticky_child_recovery_1813.HomeView" '

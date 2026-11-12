@@ -53,6 +53,7 @@ class OrmView(LiveView):
 class LegacyOrmView(LiveView):
     """Legacy control: the same model is an ordinary public attribute."""
 
+    exposure_policy = "legacy"
     template = TEMPLATE
 
     def mount(self, request, **kwargs):

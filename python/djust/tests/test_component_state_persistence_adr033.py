@@ -55,6 +55,7 @@ _ALLOWED = "djust.tests.test_component_state_persistence_adr033"
 
 
 class RatingView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">{{ rating }}</div>'
     enable_state_snapshot = True
 

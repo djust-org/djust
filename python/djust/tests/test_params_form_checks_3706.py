@@ -65,45 +65,54 @@ class NotAForm:
 
 
 class GoodView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     params_form = Plain
 
 
 class UndeclaredView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
 
 
 class NotAClassView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     params_form = "myapp.forms.ListParams"  # the string a FormView-style API might take
 
 
 class InstanceView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     params_form = Plain()  # an instance, not the class
 
 
 class WrongClassView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     params_form = NotAForm
 
 
 class NeedsUserView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     params_form = NeedsUser
 
 
 class NeedsKeywordOnlyView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     params_form = NeedsKeywordOnly
 
 
 class OptionalExtraView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     params_form = OptionalExtra
 
 
 class NoDataView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     params_form = NoDataParameter
 
@@ -189,6 +198,7 @@ class TestTheCheckAgreesWithTheRuntime:
         assert (problem is None) is buildable, problem
 
         class Probe(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
             params_form = form_class
 
@@ -209,6 +219,7 @@ class TestTheCheckAgreesWithTheRuntime:
         assert form_class_problem(declared) is not None
 
         class Probe(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
             params_form = declared
 
@@ -261,6 +272,7 @@ class TestReservedNames:
         """``self.state_attribute = ...`` in ``mount()`` must not become template state."""
 
         class Assigns(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
 
             def mount(self, request, **kwargs):

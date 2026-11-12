@@ -164,6 +164,7 @@ from djust.components.mixins.data_table import DataTableMixin  # noqa: E402
 
 
 class TableView(DataTableMixin, LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>table</span></div>"
     table_columns = [{"key": "id", "label": "Id"}, {"key": "name", "label": "Name"}]
     table_server_mode = True
@@ -236,6 +237,7 @@ from djust.wizard import WizardMixin  # noqa: E402
 
 
 class DraftView(DraftModeMixin, LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>draft</span></div>"
 
     def mount(self, request, **kwargs):
@@ -258,6 +260,7 @@ class _WizardStep(forms.Form):
 
 
 class WizardView(WizardMixin, LiveView):
+    exposure_policy = "legacy"
     wizard_steps = [{"name": "only", "title": "Only", "form_class": _WizardStep}]
     template = "<div dj-root><span>wizard</span></div>"
 
@@ -286,6 +289,7 @@ class AuditForm(forms.Form):
 
 
 class FormPage(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = AuditForm
     template = (
         "{% load live_tags %}<div dj-root>"
@@ -434,6 +438,7 @@ from djust.presence import PresenceMixin  # noqa: E402
 
 
 class PresencePage(PresenceMixin, LiveView):
+    exposure_policy = "legacy"
     presence_key = "audit-room"
     template = "<div dj-root><span>presence</span></div>"
 
@@ -502,6 +507,7 @@ class Badge(Component):
 
 
 class ComponentPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ counter }}{{ badge }}</div>"
 
     def mount(self, request, **kwargs):
@@ -572,6 +578,7 @@ class AuditTabs(DescriptorComponent):
 
 
 class TabsPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ nav }}</div>"
     nav = AuditTabs()
 
@@ -591,6 +598,7 @@ def _component_handle_event(mp):
 
 
 class RenderOnlyPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ note }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -612,6 +620,7 @@ def _render_only_context(mp):
 
 
 class StickyInner(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "audit-dock"
     template = "<div><span>dock</span></div>"
@@ -624,6 +633,7 @@ class StickyInner(LiveView):
 
 
 class StickyHost(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}<div dj-root>"
         "{% live_render '" + MOD + ".StickyInner' sticky=True label=label %}</div>"
@@ -872,6 +882,7 @@ class ChoiceForm(forms.Form):
 
 
 class ChoicePage(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = ChoiceForm
     template = "{% load live_tags %}<div dj-root>{% live_field view 'group' %}</div>"
 

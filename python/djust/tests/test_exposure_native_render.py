@@ -19,6 +19,7 @@ NATIVE_TEMPLATE = "<Stack><Text>{{ secret_note }}</Text><Text>{{ title }}</Text>
 
 
 class NativeExposureView(LiveView):
+    exposure_policy = "legacy"
     template_name = "native_exposure.html"
 
     def mount(self, request, **kwargs):

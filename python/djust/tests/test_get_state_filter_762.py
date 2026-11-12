@@ -27,6 +27,7 @@ class TestGetStateFiltersFrameworkAttrs:
         """No framework-internal attr name appears in get_state() output."""
 
         class EmptyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -46,6 +47,7 @@ class TestGetStateFiltersFrameworkAttrs:
         """User-set public attrs MUST still surface — this is the whole point."""
 
         class CounterView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -63,6 +65,7 @@ class TestGetStateFiltersFrameworkAttrs:
         """Django ``View``-inherited attrs (http_method_names, args, kwargs) filtered."""
 
         class FilteredView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -85,6 +88,7 @@ class TestGetStateFiltersFrameworkAttrs:
         """djust LiveView config attrs (sync_safe, login_required, template_name, ...) filtered."""
 
         class ConfigView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -128,6 +132,7 @@ class TestSnapshotAssignsFiltersFrameworkAttrs:
 
     def test_snapshot_assigns_skips_framework_attrs(self):
         class SnapshotView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -150,6 +155,7 @@ class TestSnapshotAssignsFiltersFrameworkAttrs:
         """Non-underscore user-set attrs still show up in snapshot."""
 
         class UserView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -169,6 +175,7 @@ class TestDebugStateSizesFiltersFrameworkAttrs:
 
     def test_state_sizes_debug_payload_skips_framework_attrs(self):
         class DebugView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):

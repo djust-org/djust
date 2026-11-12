@@ -19,6 +19,7 @@ from djust.websocket import LiveViewConsumer
 class TickCounterView(LiveView):
     """Test view with tick_interval that increments a counter."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ count }}</div>"
     tick_interval = 100  # 100ms tick
 

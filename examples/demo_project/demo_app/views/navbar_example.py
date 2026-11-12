@@ -20,6 +20,8 @@ class BaseViewWithNavbar(LiveView):
     Views can safely inherit from LiveView directly instead.
     """
 
+    exposure_policy = "legacy"
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         # Navbar is now provided globally via context processor
@@ -60,6 +62,7 @@ class CustomNavbarView(LiveView):
     on a per-view basis.
     """
 
+    exposure_policy = "legacy"
     template_name = 'custom_navbar.html'
 
     def mount(self, request, **kwargs):
@@ -98,6 +101,7 @@ class DynamicNavbarView(LiveView):
     - Dynamically updating the active item
     """
 
+    exposure_policy = "legacy"
     template_name = 'dynamic_navbar.html'
 
     def mount(self, request, **kwargs):

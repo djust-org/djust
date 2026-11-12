@@ -64,6 +64,7 @@ def count_patch_types(patches):
 
 
 class DeepNestingView(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
     <div class="l1"><div class="l2"><div class="l3"><div class="l4">
     <div class="l5"><div class="l6"><div class="l7"><div class="l8">
@@ -99,6 +100,7 @@ def test_torture_deep_nesting():
 
 
 class LargeListView(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
     <ul>{% for item in items %}<li>{{ item }}</li>{% endfor %}</ul>
 </div>"""
@@ -155,6 +157,7 @@ def test_torture_large_list_change_middle():
 
 
 class ConditionalView(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
     {% if show_detail %}
         <div class="detail">
@@ -227,6 +230,7 @@ def test_torture_conditional_toggle_twice():
 
 
 class MultiChangeView(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
     <header class="{{ header_class }}">{{ title }}</header>
     <main>
@@ -271,6 +275,7 @@ def test_torture_multiple_changes():
 
 
 class ReplaceStressView(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
     <div class="sidebar">Sidebar</div>
     <div data-djust-replace id="content">
@@ -322,6 +327,7 @@ def test_torture_replace_with_siblings():
 
 
 class FormValidationView(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
     <form>
         {% for field in fields %}
@@ -371,6 +377,7 @@ def test_torture_form_clear_5_errors():
 
 
 class CounterView(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
     <span id="count">{{ count }}</span>
 </div>"""
@@ -419,6 +426,7 @@ def test_torture_rapid_counter():
 
 
 class EmptyStateView(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
     {% if items %}
         <ul>{% for item in items %}<li>{{ item }}</li>{% endfor %}</ul>
@@ -488,6 +496,7 @@ def test_torture_content_to_empty():
 
 
 class UnicodeView(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
     <p>{{ text }}</p>
 </div>"""
@@ -514,6 +523,7 @@ def test_torture_unicode_and_special_chars():
 
 
 class NoChangeView(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
     <p>{{ text }}</p>
     <span class="badge">{{ badge }}</span>
@@ -549,6 +559,7 @@ def test_torture_no_change_produces_no_patches():
 
 
 class TableView(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
     <table>
         <thead><tr><th>Name</th><th>Score</th></tr></thead>

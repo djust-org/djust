@@ -22,6 +22,7 @@ from djust.components.ui import (
 class ComponentShowcaseView(LiveView):
     """Interactive showcase of all djust components."""
 
+    exposure_policy = "legacy"
     template_name = 'demos/component_showcase.html'
 
     def mount(self, request):

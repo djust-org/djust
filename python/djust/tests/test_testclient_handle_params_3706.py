@@ -42,6 +42,7 @@ class ListParams(forms.Form):
 class FormView(LiveView):
     """The #3689 example: a form-declared URL."""
 
+    exposure_policy = "legacy"
     login_required = False
     params_form = ListParams
     template = "<div dj-root>{{ category }}/{{ page }}</div>"
@@ -59,6 +60,7 @@ class FormView(LiveView):
 class RawView(LiveView):
     """No ``params_form``: ``handle_params`` gets the raw dict."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>{{ tab }}</div>"
 
@@ -73,6 +75,7 @@ class RawView(LiveView):
 class NoParamsHookView(LiveView):
     """Never defines ``handle_params``: the default hook must be harmless."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
 

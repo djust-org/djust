@@ -32,6 +32,7 @@ from djust.decorators import action, event_handler
 class _KanbanView(LiveView):
     """The djust.org kanban shape: a dict of lists mutated in place."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_in_place_mutation_2664._KanbanView" dj-id="0">'
         "{% for col, cards in kanban_columns.items %}"
@@ -147,6 +148,7 @@ class _ReviewView(LiveView):
     an error (``_action_state`` is template-visible), and a tuple holding a
     mutable item (tuples must be walked like every other container)."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_in_place_mutation_2664._ReviewView" dj-id="0">'
         "<p>err={{ create_thing.error }}</p>"
@@ -231,6 +233,7 @@ class _DirtyView(LiveView):
     """#2682 re-review: ``mark_clean()`` alone must re-render ``{{ is_dirty }}``
     without ``_snapshot_assigns`` walking the (excluded) ``_dirty_baseline``."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_in_place_mutation_2664._DirtyView" dj-id="0">'
         "<p>dirty={{ dirty }}</p><p>n={{ n }}</p></div>"

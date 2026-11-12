@@ -15,6 +15,7 @@ from djust.components.data import TableComponent
 class TableSelectView(LiveView):
     """Minimal LiveView holding one selectable three-row table."""
 
+    exposure_policy = "legacy"
     template_name = "demos/table_select.html"
 
     def mount(self, request, **kwargs):

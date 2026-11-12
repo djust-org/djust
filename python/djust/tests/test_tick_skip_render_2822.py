@@ -86,6 +86,7 @@ class SkipRenderTickView(LiveView):
     """The #2822 non-host-session shape: handle_tick early-returns having set
     ``_skip_render = True`` and touched no public attr."""
 
+    exposure_policy = "legacy"
     tick_interval = 50
     template = f'<div dj-root dj-view="{_ALLOWED}.SkipRenderTickView" dj-id="0">c={{{{ c }}}}</div>'
 
@@ -103,6 +104,7 @@ class MutatingTickView(LiveView):
     """Control: handle_tick changes public state and does NOT set
     ``_skip_render`` — must render normally (both snapshots taken)."""
 
+    exposure_policy = "legacy"
     tick_interval = 50
     template = f'<div dj-root dj-view="{_ALLOWED}.MutatingTickView" dj-id="0">c={{{{ c }}}}</div>'
 
@@ -122,6 +124,7 @@ class SkipRenderDespiteMutationTickView(LiveView):
     ``_skip_render`` unconditionally, before any change-detection), so an
     explicit skip request wins even though the state did change."""
 
+    exposure_policy = "legacy"
     tick_interval = 50
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.SkipRenderDespiteMutationTickView" dj-id="0">'
@@ -144,6 +147,7 @@ class ForceFullHtmlWinsOverSkipRenderTickView(LiveView):
     ``set_changed_keys()``) set in the same tick — ``_force_full_html`` must
     win: the render must still happen."""
 
+    exposure_policy = "legacy"
     tick_interval = 50
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.ForceFullHtmlWinsOverSkipRenderTickView" dj-id="0">'
@@ -167,6 +171,7 @@ class ConsumedSkipRenderTickView(LiveView):
     (reset to False) rather than leaking into the next tick and silently
     suppressing an unrelated later render."""
 
+    exposure_policy = "legacy"
     tick_interval = 50
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.ConsumedSkipRenderTickView" dj-id="0">'

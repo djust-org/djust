@@ -44,6 +44,7 @@ ADMIN_TEMPLATES = Path(__file__).resolve().parents[1] / "admin_ext" / "templates
 class ChangeSummaryWidget(LiveView):
     """A change-form widget, as ``examples/demo_project/demo_project/djust_admin.py`` has."""
 
+    exposure_policy = "legacy"
     template = '<p class="widget-body">Editing group {{ object_id }}</p>'
     label = "Change summary"
 

@@ -243,6 +243,7 @@ class TestClassicPost:
 
 
 class EditView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root><form dj-submit="submit_form">{{ form }}<button>go</button></form></div>'
     )

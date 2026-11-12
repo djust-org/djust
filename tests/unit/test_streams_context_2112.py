@@ -25,6 +25,7 @@ from djust import LiveView
 
 
 class _StreamView(LiveView):
+    exposure_policy = "legacy"
     template_name = "unused.html"
 
     def mount(self, request, **kwargs):  # noqa: D102
@@ -77,6 +78,7 @@ class _Msg:
 
 def test_stream_delete_is_reflected():
     class DelView(LiveView):
+        exposure_policy = "legacy"
         template_name = "unused.html"
 
         def mount(self, request, **kwargs):
@@ -91,6 +93,7 @@ def test_stream_delete_is_reflected():
 
 def test_multiple_streams_all_exposed():
     class Multi(LiveView):
+        exposure_policy = "legacy"
         template_name = "unused.html"
 
         def mount(self, request, **kwargs):
@@ -116,6 +119,7 @@ def test_live_streams_win_over_a_stale_streams_attribute():
     """
 
     class Clashing(LiveView):
+        exposure_policy = "legacy"
         template_name = "unused.html"
 
         def mount(self, request, **kwargs):
@@ -133,6 +137,7 @@ def test_view_without_streams_keeps_its_own_streams_attribute():
     """An app that never calls stream() is left completely alone."""
 
     class OwnUse(LiveView):
+        exposure_policy = "legacy"
         template_name = "unused.html"
 
         def mount(self, request, **kwargs):
@@ -156,6 +161,7 @@ def test_top_level_stream_name_is_NOT_exposed():
 
 def test_no_streams_leaves_context_unchanged():
     class Plain(LiveView):
+        exposure_policy = "legacy"
         template_name = "unused.html"
 
         def mount(self, request, **kwargs):
@@ -190,6 +196,7 @@ def test_assert_stream_insert_alone_cannot_prove_rendering():
 @pytest.mark.parametrize("name", ["messages", "items", "rows"])
 def test_stream_name_becomes_the_context_key(name):
     class Named(LiveView):
+        exposure_policy = "legacy"
         template_name = "unused.html"
 
         def mount(self, request, **kwargs):

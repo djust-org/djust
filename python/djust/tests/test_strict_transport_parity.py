@@ -34,6 +34,7 @@ def strict(**options):
 
 
 class ParityView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><p>{{ n }}</p></div>"
     api_name = "strict.parity"
 

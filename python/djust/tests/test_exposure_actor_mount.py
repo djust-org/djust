@@ -21,6 +21,7 @@ class ExplicitActorView(LiveView):
 
 
 class SurvivorView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>survivor</div>"
 
 

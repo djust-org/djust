@@ -14,6 +14,7 @@ class WrongChild(Page):
 
 
 class BadPage(PrototypeOwner):
+    exposure_policy = "legacy"
     menu = DropdownMenu(label="Project", items=[])
 
     @menu.on.selected  # error: wrong payload type
@@ -65,6 +66,7 @@ DropdownMenu(label="Bad", items=[], visibility="automatic")  # error: invalid vi
 
 
 class BadRows(PrototypeOwner):
+    exposure_policy = "legacy"
     rows = DropdownMenu.collection()
 
     @rows.on.selected  # error: collection payload type

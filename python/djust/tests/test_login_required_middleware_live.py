@@ -97,6 +97,7 @@ class _PassThroughAuth:
 
 
 class _LrmBase(LiveView):
+    exposure_policy = "legacy"
     login_required = False  # not an exemption under the middleware
 
     def mount(self, request, **kwargs):

@@ -47,6 +47,7 @@ class _WSVersionView(LiveView):
     non-sequential Rust version — the exact #1788 drift trigger.
     """
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ws_send_version_1788._WSVersionView" '
         'dj-id="0">Count: {{ count }}</div>'
@@ -78,6 +79,8 @@ _HVR_TEMPLATE_BODY = ["Count: {{ count }}"]
 
 class _WSHvrView(LiveView):
     """View used to exercise the channel-layer ``hotreload`` handler (HIDDEN #1)."""
+
+    exposure_policy = "legacy"
 
     @property
     def template(self):

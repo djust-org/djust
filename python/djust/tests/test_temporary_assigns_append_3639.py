@@ -62,6 +62,7 @@ def _tpl(view, mode="append", extra="|{{ k }}"):
 
 
 class Temp(LiveView):
+    exposure_policy = "legacy"
     temporary_assigns = {"rows": []}
     template = _tpl("Temp")
 
@@ -120,6 +121,7 @@ class TempStream(LiveView):
     (``_reset_temporary_assigns`` -> ``_reset_streams``), so the stream container
     needs ``dj-update="append"`` for the stored rows to stay."""
 
+    exposure_policy = "legacy"
     temporary_assigns = {"unused": []}
     template = (
         f'<div dj-view="{MODULE}.TempStream" dj-id="0">'
@@ -145,6 +147,7 @@ class AppendNoTemp(LiveView):
     the full list is re-rendered every time, so a removal must still reach the
     page as before."""
 
+    exposure_policy = "legacy"
     template = _tpl("AppendNoTemp")
 
     def mount(self, request, **kwargs):
@@ -306,6 +309,7 @@ class MixedList(LiveView):
     """``temporary_assigns`` for something else; the ``dj-update`` list is an
     ordinary attribute and is re-rendered whole."""
 
+    exposure_policy = "legacy"
     temporary_assigns = {"flash": []}
     template = (
         f'<div dj-view="{MODULE}.MixedList" dj-id="0"><div id="list" dj-update="append">'

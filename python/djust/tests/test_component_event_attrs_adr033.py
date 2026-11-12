@@ -148,6 +148,7 @@ class TestEventAttrs:
 
 
 class RowsView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-id="0">{% for r in ratings %}<section>{{ r }}</section>{% endfor %}</div>'
     )

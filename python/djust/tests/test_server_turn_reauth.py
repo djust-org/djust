@@ -41,6 +41,7 @@ class _User:
 
 
 class PushView(LiveView):
+    exposure_policy = "legacy"
     login_required = True
     tick_interval = 30
     template = '<div dj-view="x" dj-id="0">v={{ secret }}</div>'

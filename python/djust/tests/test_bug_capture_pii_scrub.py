@@ -59,7 +59,7 @@ def _view_with_state(before, after, **class_attrs):
     Built as a fresh subclass per call rather than by mutating a shared class
     (#1109), so class-level state never leaks between tests.
     """
-    cls = type("_PiiScrubView", (LiveView,), dict(class_attrs))
+    cls = type("_PiiScrubView", (LiveView,), {"exposure_policy": "legacy", **class_attrs})
     view = cls()
     view._time_travel_buffer = _FakeBuffer(
         [{"event_name": "submit", "state_before": before, "state_after": after}]
@@ -282,7 +282,7 @@ def _messages_for(cls):
 
 
 def _view(name, **attrs):
-    return type(name, (LiveView,), dict(attrs))
+    return type(name, (LiveView,), {"exposure_policy": "legacy", **attrs})
 
 
 class TestV014Firing:

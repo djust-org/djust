@@ -38,6 +38,7 @@ class ComponentsOnlyDemo(LiveView):
     - All without writing HTML!
     """
 
+    exposure_policy = "legacy"
     template_name = 'demos/components_only.html'
 
     def mount(self, request, **kwargs):

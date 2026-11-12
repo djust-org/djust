@@ -34,6 +34,7 @@ from djust import LiveView
 class _StreamingFlowView(LiveView):
     """Streaming view used by the integration tests."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><p>integration streaming</p></div>"
     streaming_render = True
 
@@ -41,6 +42,7 @@ class _StreamingFlowView(LiveView):
 class _NonStreamingFlowView(LiveView):
     """Non-streaming baseline used to compare rendered bodies."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><p>integration streaming</p></div>"
     streaming_render = False
 

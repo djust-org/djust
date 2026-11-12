@@ -646,7 +646,7 @@ def _bound(template: str, **state: Any) -> str:
 
     state_cls = type("State", (TypedState,), {"__annotations__": {k: Any for k in state}})
     box_cls = type("Box", (DescriptorLiveComponent,), {"State": state_cls, "template": template})
-    page_cls = type("Page", (LiveView,), {"box": box_cls(**state)})
+    page_cls = type("Page", (LiveView,), {"exposure_policy": "legacy", "box": box_cls(**state)})
     return str(page_cls().box)
 
 
@@ -1050,6 +1050,7 @@ class TestBoundComponentTemplate:
             template = '<a href="{{ url }}">x</a>'
 
         class Page(LiveView):
+            exposure_policy = "legacy"
             box = Box()
 
         page = Page()

@@ -81,6 +81,7 @@ def test_the_warning_follows_the_user_frame_behind_liveview_init_subclass():
         warnings.simplefilter("always")
 
         class _Page(LiveView, ModalMixin):  # <- the user frame
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
 
     hit = _one_deprecation(record, "ModalMixin")

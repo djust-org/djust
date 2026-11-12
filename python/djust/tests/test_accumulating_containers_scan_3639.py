@@ -72,6 +72,7 @@ def test_the_view_helper_reads_the_template_once_per_class():
     calls = []
 
     class Counted(LiveView):
+        exposure_policy = "legacy"
         temporary_assigns = {"rows": []}
         template = PAGE
 

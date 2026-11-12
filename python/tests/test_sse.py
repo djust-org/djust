@@ -348,6 +348,8 @@ def _make_dummy_view_class():
     captured = {"mount_kwargs": None, "handle_params": []}
 
     class _DummyLV(LiveView):
+        exposure_policy = "legacy"
+
         # Skip Rust VDOM init for these unit tests — render_with_diff is
         # short-circuited.
         def _initialize_rust_view(self, request):

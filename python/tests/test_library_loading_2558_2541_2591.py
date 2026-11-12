@@ -107,6 +107,8 @@ def liveview_render(source: str, context: Optional[dict] = None, request=None) -
     values = dict(context or {})
 
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             pass
 

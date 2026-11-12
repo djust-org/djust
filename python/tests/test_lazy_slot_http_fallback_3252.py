@@ -24,6 +24,7 @@ from djust import LiveView
 
 
 class _LazyChild(LiveView):
+    exposure_policy = "legacy"
     template = "<div><p>Lazy {{ value }}</p></div>"
 
     def mount(self, request, **kwargs):
@@ -31,6 +32,7 @@ class _LazyChild(LiveView):
 
 
 class _PageWithLazySlot(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<html><body><div dj-root>"
@@ -47,6 +49,7 @@ class _ExplicitPage(_PageWithLazySlot):
 
 
 class _PlainPage(LiveView):
+    exposure_policy = "legacy"
     template = "<html><body><div dj-root><p>no slots</p></div></body></html>"
 
     def mount(self, request, **kwargs):

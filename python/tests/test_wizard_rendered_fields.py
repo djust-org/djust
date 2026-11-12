@@ -38,6 +38,8 @@ class _BigForm(forms.Form):
 class _StubLiveView:
     """Minimal stub providing get_context_data for WizardMixin to super() into."""
 
+    exposure_policy = "legacy"
+
     def get_context_data(self, **kwargs):
         return dict(kwargs)
 

@@ -61,6 +61,7 @@ def test_legacy_policy_preserves_current_context_behavior():
 )
 def test_legacy_views_cannot_silently_ignore_exposure_grants(options):
     class View(LiveView):
+        exposure_policy = "legacy"
         value = state(0, **options)
 
     with pytest.raises(ExposureConfigurationError, match="cannot honor"):

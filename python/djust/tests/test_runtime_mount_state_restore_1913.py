@@ -123,6 +123,7 @@ class _OptInSnapView(LiveView):
     """Opt-in snapshot view. ``mount`` installs a safe default; a snapshot that
     survives the HMAC gate would overwrite ``role`` (the injection vector)."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = '<div dj-root dj-id="0">role={{ role }} n={{ n }}</div>'
 
@@ -137,6 +138,7 @@ class _OptInSnapView(LiveView):
 class _DefaultSnapView(LiveView):
     """Does NOT opt in (#1552: must never restore / emit)."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">role={{ role }} n={{ n }}</div>'
 
     def mount(self, request, **kwargs):
@@ -150,6 +152,7 @@ class _DefaultSnapView(LiveView):
 class _RedirectHookView(LiveView):
     """A view whose registered on_mount hook redirects (login-required shape)."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">never rendered</div>'
 
     def mount(self, request, **kwargs):

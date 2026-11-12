@@ -298,6 +298,7 @@ def test_a_liveview_re_render_patches_the_block_body():
     from djust import LiveView
 
     class CardView(LiveView):
+        exposure_policy = "legacy"
         template = (
             LOAD + "<div dj-root>{% theme_card_block title='T' %}"
             "<p>{{ count }}</p>{% theme_button 'Go' dj_click='go' %}"
@@ -374,7 +375,12 @@ def _extending_view(name: str):
     return type(
         f"Extends2894_{name}",
         (LiveView,),
-        {"template_name": f"child_{name}.html", "__module__": __name__, "mount": mount},
+        {
+            "exposure_policy": "legacy",
+            "template_name": f"child_{name}.html",
+            "__module__": __name__,
+            "mount": mount,
+        },
     )
 
 

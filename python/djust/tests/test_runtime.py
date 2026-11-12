@@ -192,6 +192,8 @@ class _FakeView:
     """A bare-minimum stand-in for LiveView used by tests where we only
     care about parameter plumbing, not actual rendering."""
 
+    exposure_policy = "legacy"
+
     def __init__(self):
         self.kwargs_received: Optional[Dict[str, Any]] = None
         self.handle_params_calls: List = []

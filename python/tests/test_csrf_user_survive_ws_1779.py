@@ -32,6 +32,7 @@ pytestmark = pytest.mark.skipif(
 
 
 class _AuthUIView(LiveView):
+    exposure_policy = "legacy"
     template_name = "_1779_page.html"
 
     def mount(self, request, **kwargs):

@@ -96,6 +96,7 @@ class TestVerbatimInExtendedBlock2890:
             "Verbatim2890",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "template_name": "child_2890.html",
                 "__module__": __name__,
                 "mount": lambda self, request, **kw: (
@@ -147,6 +148,7 @@ def _rust_and_django(body: str, context: dict):
 
 
 class _FormView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = _NameForm
     template = "<div dj-root></div>"
 
@@ -188,6 +190,7 @@ def test_dj_activity_registers_on_the_view_during_a_rust_render():
     active-parent-view thread-local, as ``{% live_render %}`` does."""
 
     class V(LiveView):
+        exposure_policy = "legacy"
         template = (
             "{% load live_tags %}<div dj-root>"
             '{% dj_activity "panel" visible=show %}<p>{{ n }}</p>{% enddj_activity %}</div>'
@@ -238,6 +241,7 @@ def test_form_tags_and_filters_work_in_a_real_root_liveview():
     so the tags and filters fall back to the view being rendered."""
 
     class V(FormMixin, LiveView):
+        exposure_policy = "legacy"
         form_class = _NameForm
         template = (
             "{% load live_tags %}<div dj-root>"

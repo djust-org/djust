@@ -637,6 +637,7 @@ class TestIntegration:
         set_backend(InMemoryStateBackend())
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ message }}</div>"
 
             def mount(self, request):

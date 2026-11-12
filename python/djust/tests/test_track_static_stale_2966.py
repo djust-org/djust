@@ -121,6 +121,7 @@ class TestStaleStaticUrls:
 
 
 class Page2966(LiveView):
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_MOD}.Page2966" dj-id="0">page</div>'
 
     #: The mount kwargs of the last mount (the SSE case checks the tracking

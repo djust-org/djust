@@ -70,6 +70,7 @@ _LEAK_TYPE_NAMES = (
 class _AnalyticsInsightsView(LiveView):
     """Mirrors the production view: assigns ONLY JSON-serializable scalars."""
 
+    exposure_policy = "legacy"
     template_name = "_1786_insights.html"
 
     def mount(self, request, **kwargs):

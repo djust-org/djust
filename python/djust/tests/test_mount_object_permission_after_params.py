@@ -62,6 +62,7 @@ class _AuthedUser:
 class _ParamsDocView(LiveView):
     """Resolves its document from ``?id=`` in handle_params; mount() sets none."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = (
         '<div dj-root dj-view="djust.tests.test_mount_object_permission_after_params.'

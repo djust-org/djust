@@ -85,6 +85,7 @@ def test_a_broken_templatetags_module_does_not_stop_the_scan(project):
 
 def test_recovery_scan_still_reads_templates_that_load_the_working_libraries(project):
     class Page(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
     _RECOVERY_HANDLERS.clear()
@@ -100,6 +101,7 @@ def test_an_engine_that_cannot_be_built_skips_the_scan_instead_of_raising(projec
     monkeypatch.setattr(django.template, "Engine", explode)
 
     class Page(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
     _RECOVERY_HANDLERS.clear()

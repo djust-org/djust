@@ -41,6 +41,7 @@ BARRIER = "barrier"
 
 
 class TV(TenantMixin, LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-view="' + MOD + '.TV"><b>{{ n }}</b></div>'
 
     def mount(self, request, **kwargs):

@@ -24,6 +24,7 @@ from djust.decorators import event_handler
 class NavDemoPageAView(LiveView):
     """Page A of the dj-navigate dogfood flow."""
 
+    exposure_policy = "legacy"
     template_name = "demos/nav_demo_a.html"
 
     def mount(self, request, **kwargs):
@@ -38,6 +39,7 @@ class NavDemoPageAView(LiveView):
 class NavDemoPageBView(LiveView):
     """Page B of the dj-navigate dogfood flow."""
 
+    exposure_policy = "legacy"
     template_name = "demos/nav_demo_b.html"
 
     def mount(self, request, **kwargs):

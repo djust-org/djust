@@ -34,6 +34,7 @@ PROJECT_MAP = {"not_found": 404, "gone": 410}
 class ProjectView(LiveView):
     """Declares nothing: the project's map applies."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>{{ state }}</div>"
 
@@ -333,10 +334,12 @@ class TestConfigValidation:
 
 
 class PlainView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
 
 
 class OverridesDirectly(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
 
     def get_http_status(self):
@@ -349,10 +352,12 @@ class OverridesViaMixin:
 
 
 class MixinUser(OverridesViaMixin, LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
 
 
 class AbstractBaseOverride(LiveView):
+    exposure_policy = "legacy"
     abstract = True
 
     def get_http_status(self):

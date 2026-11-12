@@ -186,6 +186,7 @@ def model_table(mode):
 class Child(LiveView):
     """A non-sticky child view for ``{% live_render %}`` (resolved by dotted path)."""
 
+    exposure_policy = "legacy"
     template = "<button dj-click='go'>{{ v }}</button>"
 
     def mount(self, request, **kwargs):
@@ -198,6 +199,7 @@ class StickyChild(Child):
 
 
 class Parent(LiveView):
+    exposure_policy = "legacy"
     template = "<div></div>"
 
 

@@ -55,6 +55,7 @@ ALLOWED_ORIGIN = "https://example.com"
 class _CounterSSEView(LiveView):
     """A minimal counter view used for the mount + event + async paths."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -91,6 +92,7 @@ class _CounterSSEView(LiveView):
 class _DocSSEView(LiveView):
     """Object-scoped view: only doc_id == 1 is permitted (IDOR gate)."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><main>{{ doc }}</main></div>"
 
     def __init__(self, *args, **kwargs):

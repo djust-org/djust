@@ -55,6 +55,7 @@ def test_t018_fires_only_on_the_undefined_name_3020():
     from djust.live_view import LiveView
 
     class T018Literals3020View(LiveView):
+        exposure_policy = "legacy"
         template = (
             "<div dj-root>"
             "{% if app.status == 'running' %}r"

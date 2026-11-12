@@ -24,6 +24,7 @@ RAN: list = []
 
 
 class EnvelopeView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ n }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -60,6 +61,8 @@ class TestHttpEnvelope:
 
 class TestDjChangeValue:
     class View(LiveView):
+        exposure_policy = "legacy"
+
         @event_handler(parameter_policy="legacy")
         def toggle_untyped(self, value=False, **kw):
             return value
@@ -154,6 +157,7 @@ class TestRenderKeepsTheList:
         from djust.forms import FormMixin
 
         class View(FormMixin, LiveView):
+            exposure_policy = "legacy"
             form_class = TagsForm
 
         view = View()

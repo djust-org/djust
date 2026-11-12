@@ -39,6 +39,7 @@ class _Client:
 
 
 class ShadowingView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><p>{{ count }}</p><p>{{ status }}</p></div>"
 
     def mount(self, request, **kwargs):
@@ -64,6 +65,7 @@ class ShadowingView(LiveView):
 
 
 class ServiceView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><p>{{ count }}</p><p>{{ greeting }}</p></div>"
     mounts = 0
 
@@ -154,6 +156,7 @@ def test_private_attributes_that_cannot_be_saved_are_rebuilt_by_mount():
 
 
 class JsonOnlyView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><p>{{ count }}</p></div>"
     mounts = 0
 

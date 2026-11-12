@@ -63,6 +63,7 @@ class ShellPage(LiveView):
 
 
 class LegacyShellWidget(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "legacy-shell"
     template = '<div><button dj-click="poke">x</button></div>'
@@ -73,6 +74,7 @@ class LegacyShellWidget(LiveView):
 
 
 class LegacyShellPage(LiveView):
+    exposure_policy = "legacy"
     template_name = "e3_6_legacy_page.html"
 
 

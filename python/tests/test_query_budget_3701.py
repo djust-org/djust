@@ -52,6 +52,7 @@ def _queries(n):
 class Base(LiveView):
     """Each phase spends the number of queries its ``spend_*`` attribute says."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
     spend_mount = 0
@@ -730,6 +731,7 @@ class TestNestedSteps:
 class SpendView(LiveView):
     """The transports' view: 3 queries in mount, 1 in handle_params, 2 in render, 5 in an event."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
     query_budget = {"mount": 1, "render": 1, "event": 1}
@@ -800,6 +802,7 @@ class TestHttpGet:
 class FormMountView(LiveView):
     """Mount and handle_params are free; only the form's ``ModelChoiceField`` queries."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
     query_budget = {"mount": 0}
@@ -953,17 +956,20 @@ class TestWebSocket:
 
 
 class AuditedPlain(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root></div>"
 
 
 class AuditedInt(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root></div>"
     query_budget = 5
 
 
 class AuditedDict(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root></div>"
     query_budget = {"mount": 2, "render": 1, "events": {"go": 3}}
@@ -1026,6 +1032,7 @@ class TestAuditListing:
 
     def test_an_invalid_budget_is_listed_as_invalid_with_its_reason(self):
         class Typo(LiveView):
+            exposure_policy = "legacy"
             login_required = False
             template = "<div dj-root></div>"
             query_budget = {"mout": 1}

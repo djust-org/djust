@@ -13,6 +13,7 @@ class NavBarDemoView(LiveView):
     Demonstration of NavBar component in various configurations.
     """
 
+    exposure_policy = "legacy"
     template_name = 'demos/navbar_demo.html'
 
     def mount(self, request, **kwargs):

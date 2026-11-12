@@ -266,6 +266,7 @@ def test_the_mixin_captures_the_env_it_pushed():
     from djust.testing import LiveViewTestClient
 
     class V(LiveView):
+        exposure_policy = "legacy"
         template = "<div>{{ v }}</div>"
 
         def mount(self, request, **kwargs):
@@ -342,6 +343,7 @@ def _actor_view(name: str):
         name,
         (LiveView,),
         {
+            "exposure_policy": "legacy",
             "use_actors": True,
             "template": f'<div dj-root dj-view="{_ALLOWED}.{name}" dj-id="0">{PROBE}</div>',
             "mount": mount,

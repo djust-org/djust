@@ -40,6 +40,7 @@ from djust.time_travel import (
 class _FakeView:
     """Stand-in for a LiveView with the surface time_travel needs."""
 
+    exposure_policy = "legacy"
     time_travel_enabled = True
 
     def __init__(self, max_events: int = 5, enabled: bool = True):
@@ -499,6 +500,7 @@ def test_snapshot_breaks_reference_aliasing_on_lists():
     from djust.live_view import LiveView
 
     class V(LiveView):
+        exposure_policy = "legacy"
         time_travel_enabled = True
         template = "<div dj-root>items</div>"
 
@@ -531,6 +533,7 @@ def test_snapshot_breaks_reference_aliasing_on_dicts():
     from djust.live_view import LiveView
 
     class V(LiveView):
+        exposure_policy = "legacy"
         time_travel_enabled = True
         template = "<div dj-root>metrics</div>"
 
@@ -562,6 +565,7 @@ def test_capture_snapshot_state_deep_copies_nested_list():
     from djust.live_view import LiveView
 
     class V(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root>x</div>"
 
         def mount(self, request, **kwargs):
@@ -597,6 +601,7 @@ class _ParentWithComponents:
     same registry layout the production ``_assign_component_ids`` populates.
     """
 
+    exposure_policy = "legacy"
     time_travel_enabled = True
 
     def __init__(self):
@@ -809,6 +814,7 @@ class TestComponentLevelTimeTravel:
 class _CounterView:
     """LiveView-like fixture with a counter handler used to test replay."""
 
+    exposure_policy = "legacy"
     time_travel_enabled = True
 
     def __init__(self):
@@ -950,6 +956,7 @@ class TestReplayEvent:
         captured value, not the live value."""
 
         class _ComponentReadingView:
+            exposure_policy = "legacy"
             time_travel_enabled = True
 
             def __init__(self):
@@ -1188,6 +1195,7 @@ class TestDescriptorPatternComponentTimeTravel:
                 self.component_id = kwargs.get("component_id", "badge_descr")
 
         class _ParentView:
+            exposure_policy = "legacy"
             time_travel_enabled = True
 
             def __init__(self):
@@ -1256,6 +1264,7 @@ class TestDescriptorPatternComponentTimeTravel:
                 self.slots = []
 
         class _ParentView:
+            exposure_policy = "legacy"
             time_travel_enabled = True
 
             def __init__(self):
@@ -1297,6 +1306,8 @@ def test_restore_component_snapshot_does_not_touch_parent_state():
             self.value = 0
 
     class _View:
+        exposure_policy = "legacy"
+
         def __init__(self):
             self.total = 100  # parent attr — must be untouched
             self._components = {"comp-a": _Comp(), "comp-b": _Comp()}
@@ -1331,6 +1342,7 @@ def test_restore_component_snapshot_returns_false_for_missing_component():
     from djust.time_travel import restore_component_snapshot
 
     class _View:
+        exposure_policy = "legacy"
         _components: dict = {}
 
     snap = EventSnapshot(

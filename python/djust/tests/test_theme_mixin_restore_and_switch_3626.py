@@ -54,6 +54,7 @@ _ROOT = (
 class Snapshotted(ThemeMixin, LiveView):
     """Opts in to state restore, so a reconnect skips ``mount()``."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = _ROOT.format(path=__name__ + ".Snapshotted")
 
@@ -166,6 +167,7 @@ class TestTheDerivedNames:
         from django.test import RequestFactory
 
         class Shell(ThemeMixin, LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<html><head>[{{ theme_presets_count }}]</head><body>"
                 "<div dj-root>{{ theme_presets_count }}</div></body></html>"

@@ -37,6 +37,7 @@ class CacheDemoView(LiveView):
     - Uses key_params to cache based on search query only
     """
 
+    exposure_policy = "legacy"
     template = """
     <div dj-root class="container mt-5">
         <div class="row">

@@ -32,6 +32,7 @@ pytestmark = pytest.mark.pr_tier
 
 
 class CustomDefaults(TtydTerminalView):
+    exposure_policy = "legacy"
     rows = 40
     cols = 120
 
@@ -155,6 +156,7 @@ class TestClamped:
         query string is untrusted, so an absent query keeps the default as written."""
 
         class Tall(TtydTerminalView):
+            exposure_policy = "legacy"
             rows = 700
 
         assert _mount(Tall, "").rows == 700

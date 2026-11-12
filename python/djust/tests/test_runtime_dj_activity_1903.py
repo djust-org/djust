@@ -173,6 +173,7 @@ def _make_runtime(view: LiveView, *, scope: Optional[dict] = None):
 class _ActivityView(LiveView):
     """Counter with a ``panel`` activity registered HIDDEN at mount."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">count={{ count }} opens={{ opens }}</div>'
 
     def mount(self, request, **kwargs):
@@ -200,6 +201,7 @@ class _NoActivityView(LiveView):
     """A plain counter with NO activity region — the gate must be a total no-op
     (zero-cost-when-unused)."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">count={{ count }}</div>'
 
     def mount(self, request, **kwargs):
@@ -427,6 +429,7 @@ class _ActivitySSEView(LiveView):
     inline Rust engine doesn't support the tag — same #1896 parity-net pattern as
     the direct-runtime views above)."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">count={{ count }} opens={{ opens }}</div>'
 
     def mount(self, request, **kwargs):
@@ -448,6 +451,7 @@ class _ActivitySSEView(LiveView):
 
 
 class _NoActivitySSEView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">count={{ count }}</div>'
 
     def mount(self, request, **kwargs):

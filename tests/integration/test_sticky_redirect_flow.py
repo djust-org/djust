@@ -39,6 +39,7 @@ from djust.websocket import LiveViewConsumer
 
 
 class _AudioPlayerSticky(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "audio-player"
     template = '<div><button dj-click="play">Play {{ current_track }}</button></div>'
@@ -51,6 +52,7 @@ class _AudioPlayerSticky(LiveView):
 
 
 class _DashboardView(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -67,6 +69,7 @@ class _DashboardView(LiveView):
 
 
 class _SettingsWithSlotView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root><h1>Settings</h1><div dj-sticky-slot="audio-player"></div></div>'
 
     def mount(self, request, **kwargs):
@@ -77,6 +80,7 @@ class _SettingsWithSlotView(LiveView):
 
 
 class _SettingsNoSlotView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><h1>Settings (no slot)</h1></div>"
 
     def mount(self, request, **kwargs):

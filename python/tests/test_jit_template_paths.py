@@ -73,6 +73,7 @@ def test_a_raw_body_that_does_not_parse_alone_contributes_nothing():
 
 
 class TabsView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-view="tests.TabsView">' + TABS + "</div>"
 
     def mount(self, request, **kwargs):
@@ -115,6 +116,7 @@ def partial_dir(tmp_path, settings):
 
 
 class InlineView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-view="tests.InlineView">{% include "jit_paths/_rows.html" %}</div>'
 
     def mount(self, request, **kwargs):
@@ -122,6 +124,7 @@ class InlineView(LiveView):
 
 
 class FileView(LiveView):
+    exposure_policy = "legacy"
     template_name = "jit_paths/page.html"
 
     def mount(self, request, **kwargs):
@@ -183,6 +186,7 @@ class Card:
 
 
 class CardsView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="tests.CardsView">'
         "{% for card in cards %}<h2>{{ card.title }} {{ card.get_badge }}</h2>"
@@ -250,12 +254,14 @@ def test_serialize_for_template_models_go_through_the_jit():
     User.objects.create(username="n33-ada", email="ada@example.com")
 
     class UsersView(LiveView):
+        exposure_policy = "legacy"
         template = (
             '<div dj-root dj-view="tests.UsersView">'
             "{% for u in people %}{{ u.username }}{% endfor %}</div>"
         )
 
     class UserListView(LiveView):
+        exposure_policy = "legacy"
         template = (
             '<div dj-root dj-view="tests.UserListView">'
             "{% for u in members %}{{ u.username }}{% endfor %}</div>"

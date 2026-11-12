@@ -91,6 +91,7 @@ def test_every_ws_render_emits_the_style_block():
     """``render_with_diff`` (the WS path) opens a fresh scope per render."""
 
     class V(LiveView):
+        exposure_policy = "legacy"
         template = (
             "{% load live_tags %}<div dj-root>{% djust_skeleton %}{{ n }}{% djust_skeleton %}</div>"
         )
@@ -119,6 +120,7 @@ def test_root_liveview_template_renders_them():
     the WS ``render_with_diff`` path)."""
 
     class V(LiveView):
+        exposure_policy = "legacy"
         template = (
             "{% load live_tags %}<div dj-root>"
             '{% live_input "text" handler="search" value=q %}'
