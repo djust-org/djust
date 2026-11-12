@@ -2977,9 +2977,15 @@ class SSESessionTransport:
         return True
 
     async def explicit_event_request(self, view: Any) -> Any:
-        """Use the current owner-checked POST; never fall back to mount auth."""
+        """Use the current owner-checked POST; never fall back to mount auth.
+
+        A project without ``AuthenticationMiddleware`` gives the POST no user.
+        The mount read its user from the session then, so the event does too.
+        """
         request = getattr(self._session, "_event_request", None)
         self._session._event_request = None
+        if request is not None:
+            await sync_to_async(_derive_missing_principal)(request)
         return request
 
     # ------------------------------------------------------------------ #
@@ -3379,7 +3385,12 @@ def _derive_missing_principal(request: Any) -> None:
         return
     from django.contrib.auth import get_user
 
+    from .auth.core import USER_READ_FROM_SESSION
+
     request.user = get_user(request)
+    # The access check keeps judging this request as the stack built it
+    # (``auth.core.request_as_the_stack_built_it``), wherever it is reused.
+    setattr(request, USER_READ_FROM_SESSION, True)
 
 
 class ViewRuntime(RuntimeTurnPort):

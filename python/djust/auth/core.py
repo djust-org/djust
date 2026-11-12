@@ -106,10 +106,39 @@ def check_view_auth(
         "auth",
         _check_view_auth,
         view_instance,
-        request,
+        request_as_the_stack_built_it(request),
         http_dispatched=http_dispatched,
         event=event,
     )
+
+
+#: Set on a request whose ``user`` djust read from the session because the
+#: transport's stack supplied none (``runtime._derive_missing_principal``).
+USER_READ_FROM_SESSION = "_djust_user_read_from_session"
+
+
+def request_as_the_stack_built_it(request: Any) -> Any:
+    """The request a view's access check is judged against.
+
+    Behind a session-only stack an explicit view's request has no ``user``;
+    djust reads one from the session so the view's state has a principal to
+    bind to. That user decides nothing about access: a ``login_required`` view
+    is refused behind such a stack, because the stack authenticated nobody.
+    This is where that holds for every caller of the check (the root mount,
+    an embedded, sticky or lazy child, a restored child, each event), so a
+    child that reuses its parent's request is judged as a root would be. Such
+    a request is handed to the check without its user; any other request is
+    returned unchanged.
+    """
+    # ``is True``: only the flag djust set counts, never a truthy attribute a
+    # request-like object happens to answer with.
+    if request is None or getattr(request, USER_READ_FROM_SESSION, False) is not True:
+        return request
+    from copy import copy
+
+    bare = copy(request)
+    bare.__dict__.pop("user", None)
+    return bare
 
 
 def _check_view_auth(
@@ -2218,6 +2247,7 @@ async def acheck_view_auth(
             view_instance, request, http_dispatched=http_dispatched, event=event
         )
 
+    request = request_as_the_stack_built_it(request)
     login_url = _view_login_url(view_instance)
     redirect = await sync_to_async(
         guarded_step(view_instance, "auth", _check_login_and_permission)
