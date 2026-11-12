@@ -1415,6 +1415,26 @@ function storeSignedSnapshot(data, primaryViewPath) {
     }
 }
 
+// #3988: the token a reconnecting page view sends back with its mount frame.
+//
+// `storeSignedSnapshot` keeps the newest signed token for the page view, and
+// until now only navigation echoed it (18-navigation.js), so a
+// `state(persist="client")` field reset on an ordinary reconnect: the server
+// restores only from a token the mount frame carries. The token is opaque and
+// echoed verbatim; the server validates its signature, age and binding, and
+// ignores one it does not accept. Shared by the WebSocket and SSE mounts (#1646).
+// Only a reconnect sends it: a first mount has no earlier state to bring back.
+function reconnectStateSnapshot(viewPath) {
+    if (!(window.djust && window.djust._isReconnect)) return null;
+    const bag = window.djust._clientState;
+    if (!bag || typeof viewPath !== 'string' || !viewPath ||
+        !Object.prototype.hasOwnProperty.call(bag, viewPath)) return null;
+    // eslint-disable-next-line security/detect-object-injection
+    const token = bag[viewPath];
+    if (typeof token !== 'string' || !token) return null;
+    return { view_slug: viewPath, state_json: token };
+}
+
 // #1610: morph the HTTP-prerendered DOM against a mount frame's HTML, so
 // mount-context state (per-connection values, and ADR-034's per-instance
 // component identities) reaches the page. Shared by the WebSocket and SSE
@@ -2641,6 +2661,10 @@ class LiveViewWebSocket {
         if (options.primary && trackStatic) {
             Object.assign(frame, trackStatic.mountFields(Boolean(window.djust._isReconnect)));
         }
+        // #3988: the page view's client-held state comes back on a reconnect.
+        // Never for a view mounted beside it: the server ships no token for one.
+        const snapshot = options.primary ? reconnectStateSnapshot(viewPath) : null;
+        if (snapshot) frame.state_snapshot = snapshot;
         this.sendMessage(frame);
         return true;
     }
@@ -3559,14 +3583,18 @@ class LiveViewSSE {
         let tz = null;
         try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* noop */ }
         // dj-track-static URLs ride the stream GET, not this frame (#2966).
-        return this.sendMessage({
+        const frame = {
             type: 'mount',
             view: viewPath,
             params,
             url: window.location.pathname,
             has_prerendered: false,
             client_timezone: tz,
-        });
+        };
+        // #3988: as the WebSocket mount does (reconnectStateSnapshot, 03-websocket.js).
+        const snapshot = reconnectStateSnapshot(viewPath);
+        if (snapshot) frame.state_snapshot = snapshot;
+        return this.sendMessage(frame);
     }
 
     /**
@@ -9227,6 +9255,34 @@ function isSignificantChild(child, preserveWhitespace = false) {
  *   indices).
  * @returns {Object|null} Saved focus state, or null if no form element is focused.
  */
+// Patch types that can put a new element on the page.
+const _INSERTING_PATCH_TYPES = new Set(['InsertChild', 'InsertSubtree', 'Replace', 'VirtualInsert']);
+
+function _patchCanInsert(patch) {
+    return _INSERTING_PATCH_TYPES.has(patch.type);
+}
+
+/**
+ * Focus the first [autofocus] element the batch inserted (#617, #3987).
+ *
+ * `prior` is the set of [autofocus] elements that were on the page before the
+ * batch, or null when nothing should be focused: a form field the user is in
+ * keeps focus, and a batch that inserts nothing has nothing new to focus.
+ * An element that was already there is never focused again. The old guard
+ * (`!focusState.id`, a field saveFocusState never sets) was always true, so
+ * every patch focused the page's [autofocus] element: `blur` and `focusout`
+ * fired on the field being typed in, and a clicked button lost focus to it.
+ */
+function _focusInsertedAutofocus(scope, prior) {
+    if (!prior) return;
+    for (const el of scope.querySelectorAll('[autofocus]')) {
+        if (!prior.has(el)) {
+            if (document.activeElement !== el) el.focus();
+            return;
+        }
+    }
+}
+
 function saveFocusState(rootEl = null) {
     const active = document.activeElement;
     if (!active || active === document.body || active === document.documentElement) {
@@ -12259,6 +12315,12 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
     // Save focus state before any DOM mutations (#559 follow-up: focus preservation)
     const focusState = saveFocusState(rootEl);
     const autofocusScope = rootEl || document;
+    // #3987: only an element THIS batch inserts can ask for focus. Remember the
+    // [autofocus] elements already on the page, and only when a patch can insert
+    // one, so a text or attribute update costs no query at all.
+    const priorAutofocus = !focusState && patches.some(_patchCanInsert)
+        ? new Set(autofocusScope.querySelectorAll('[autofocus]'))
+        : null;
 
     // #2999: one model for every batch size — resolve removals against the
     // pre-batch DOM, remove, place inserts + moves (children and dj-if spans)
@@ -12268,12 +12330,7 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
     if (failedCount > 0) {
         console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (${successCount} succeeded; indices: ${failedIndices.join(', ')})`);
         // Still handle autofocus even when some patches failed (#617)
-        if (!focusState || !focusState.id) {
-            const autoFocusEl = autofocusScope.querySelector('[autofocus]');
-            if (autoFocusEl && document.activeElement !== autoFocusEl) {
-                autoFocusEl.focus();
-            }
-        }
+        _focusInsertedAutofocus(autofocusScope, priorAutofocus);
         restoreFocusState(focusState, rootEl);
         return false;
     }
@@ -12285,12 +12342,7 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
     // Handle autofocus on dynamically inserted elements (#617)
     // Browser only honors autofocus on initial page load, so we
     // manually focus the first element with autofocus after a patch.
-    if (!focusState || !focusState.id) {
-        const autoFocusEl = autofocusScope.querySelector('[autofocus]');
-        if (autoFocusEl && document.activeElement !== autoFocusEl) {
-            autoFocusEl.focus();
-        }
-    }
+    _focusInsertedAutofocus(autofocusScope, priorAutofocus);
 
     restoreFocusState(focusState, rootEl);
     return true;
@@ -13111,8 +13163,9 @@ function djustInit() {
         window.djust.extractColocatedHooks(document);
     }
 
-    // Mount dj-hook elements
-    mountHooks();
+    // Mount dj-hook elements. A hook a later script registers is retried once
+    // the document's deferred scripts have run, not warned about now (#3992).
+    mountHooks(document, { deferMissing: true });
 
     // Bind dj-model elements
     bindModelElements();
@@ -15651,25 +15704,29 @@ function _createHookInstance(hookDef, el) {
     instance.el = el;
     instance.viewName = el.closest('[dj-view]')?.getAttribute('dj-view') || '';
 
-    // pushEvent: send a custom event to the server
+    // pushEvent: send a custom event to the server.
+    //
+    // #3990: through the transport's own event path (`sendEvent`), not a frame
+    // built here. The hand-built frame had no `ref`, so the server's reply
+    // could not be told from the reply to another event: with one other event
+    // pending it resolved THAT event's promise, and the hook itself got no
+    // acknowledgment at all. Returns the promise `sendEvent` returns: it
+    // resolves with the server's reply frame, or `null` when the event was
+    // cancelled or there is no live connection to send it on.
     instance.pushEvent = function(event, payload = {}) {
         const transport = window.djust.liveViewInstance;
-        const frame = {
-            type: 'event',
-            event: event,
-            params: payload,
-            // A hook inside a view mounted beside the page view talks to
-            // that view, not the page view (#3252).
-            ...slotFrameFields(slotIdFor(el)),
-        };
-        if (transport && transport.ws) {
-            transport.ws.send(JSON.stringify(frame));
-        } else if (transport && transport.transportName === 'sse' && transport.viewMounted) {
-            // The SSE transport posts the frame, as it does for every event.
-            transport.sendMessage(frame);
-        } else {
+        // A hook inside a view mounted beside the page view talks to that
+        // view, not the page view (#3252): its slot is named explicitly, and
+        // the hook's element is not passed as the trigger, so it takes no
+        // loading state from its own events.
+        const sent = transport && typeof transport.sendEvent === 'function'
+            ? transport.sendEvent(event, payload, null, slotIdFor(el))
+            : false;
+        if (!sent) {
             console.warn(`[dj-hook] Cannot pushEvent "${event}" — no live connection`);
+            return Promise.resolve(null);
         }
+        return sent;
     };
 
     // handleEvent: register a callback for server-pushed events
@@ -15781,8 +15838,36 @@ function _safeCallHook(fn, label, ...args) {
  * Scan the DOM for elements with dj-hook and mount their hooks.
  * Called on init. For post-patch and post-navigation updates, use updateHooks().
  */
-function mountHooks(root) {
+// #3992: the page's first sweep runs as soon as the client script has, and a
+// script after it (an official adapter under ext/, or the app's own
+// deferred script) registers its hook a moment later. That sweep used to warn
+// "No hook registered" for it on every load and leave the element unmounted
+// until some later patch swept again. The first sweep now waits instead: one
+// retry when the document's deferred scripts have run, which mounts the hook or,
+// if it is still missing, says so. `var`, read during init (#1370).
+var _missingHookRetryArmed = false; // eslint-disable-line no-var
+
+function _deferMissingHookSweep() {
+    if (document.readyState === 'complete') return false;
+    if (!_missingHookRetryArmed) {
+        _missingHookRetryArmed = true;
+        let done = false;
+        const retry = () => {
+            if (done) return;
+            done = true;
+            mountHooks(document);
+        };
+        // DOMContentLoaded follows the deferred scripts; `load` covers a client
+        // script that was itself added after DOMContentLoaded.
+        document.addEventListener('DOMContentLoaded', retry, { once: true });
+        window.addEventListener('load', retry, { once: true });
+    }
+    return true;
+}
+
+function mountHooks(root, options) {
     _ensureHooksInit();
+    const deferMissing = Boolean(options && options.deferMissing);
     root = root || document;
     const hooks = _getHookDefs();
     const elements = root.querySelectorAll('[dj-hook]');
@@ -15799,6 +15884,7 @@ function mountHooks(root) {
         // eslint-disable-next-line security/detect-object-injection
         const hookDef = hooks[hookName];
         if (!hookDef) {
+            if (deferMissing && _deferMissingHookSweep()) return;
             console.warn(`[dj-hook] No hook registered for "${hookName}"`);
             return;
         }

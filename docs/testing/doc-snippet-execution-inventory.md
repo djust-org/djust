@@ -18,6 +18,8 @@ A block is counted as passing when it has no inline template too: it is mounted 
 
 ### 1a. Failures
 
+> **Update 2026-11-11 (#3994).** Seven of the eight rows below are fixed in the guides and removed from `KNOWN_FAILURES`. The one that remains is the deliberate `error-overlay.md` example. The table is kept as the record of what the first run found.
+
 | file:line | class | what failed | likely cause |
 |---|---|---|---|
 | `docs/website/guides/declarative-ux-attrs.md:L710` | ChatView | ChatView.send: 'ChatView' object has no attribute '_post' | phantom attribute |

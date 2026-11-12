@@ -534,6 +534,9 @@ Without the decorator, the method cannot be called from templates via `dj-click`
 from djust.decorators import event_handler
 
 class MyView(LiveView):
+    def mount(self, request, **kwargs):
+        self.sidebar_open = False
+
     @event_handler()
     def toggle_sidebar(self, **kwargs):
         self.sidebar_open = not self.sidebar_open

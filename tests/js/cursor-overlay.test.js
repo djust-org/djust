@@ -201,10 +201,11 @@ describe('CursorOverlay hook', () => {
             const { window, document } = createEnv(HOOK_HTML);
             const sent = [];
 
+            // #3990: a hook's pushEvent goes through the transport's sendEvent.
             window.djust.liveViewInstance = {
-                ws: {
-                    send(msg) { sent.push(JSON.parse(msg)); },
-                    readyState: 1,
+                sendEvent(event, params) {
+                    sent.push({ type: 'event', event, params });
+                    return Promise.resolve(null);
                 },
             };
 

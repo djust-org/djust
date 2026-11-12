@@ -837,7 +837,7 @@ class ProductSearchView(LiveView):
 **Performance:**
 
 - **Server requests**: 1 per query (after 500ms silence)
-- **Bundle size**: ~80 KB gzipped (`client.min.js`, served automatically)
+- **Bundle size**: ~83 KB gzipped (`client.min.js`, served automatically)
 
 ## Next Steps
 

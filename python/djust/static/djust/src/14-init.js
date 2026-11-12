@@ -153,8 +153,9 @@ function djustInit() {
         window.djust.extractColocatedHooks(document);
     }
 
-    // Mount dj-hook elements
-    mountHooks();
+    // Mount dj-hook elements. A hook a later script registers is retried once
+    // the document's deferred scripts have run, not warned about now (#3992).
+    mountHooks(document, { deferMissing: true });
 
     // Bind dj-model elements
     bindModelElements();

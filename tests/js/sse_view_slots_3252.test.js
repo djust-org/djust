@@ -170,7 +170,8 @@ describe('a dj-hook', () => {
         page.doc.getElementById('hook').click();
         await tick();
         expect(eventsOf(page)).toEqual([
-            { type: 'event', event: 'hooked', params: { n: 1 }, target_id: 'w1' },
+            // #3990: a hook's event carries a ref, like every other event
+            { type: 'event', event: 'hooked', params: { n: 1 }, ref: expect.any(Number), target_id: 'w1' },
         ]);
     });
 });

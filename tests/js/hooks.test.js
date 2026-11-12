@@ -322,15 +322,18 @@ describe('hooks', () => {
             expect(hasPushEvent).toBe(true);
         });
 
-        it('sends params (not data) in the WS message', () => {
+        it('hands the event name and params to the transport\'s sendEvent (#3990)', () => {
             const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             const sentMessages = [];
             let hookInstance = null;
 
-            // Mock WebSocket on the liveViewInstance
+            // The transport's own event path builds the frame (ref included);
+            // the hook passes it the event name and params, and no trigger element.
             window.djust.liveViewInstance = {
-                ws: {
-                    send(msg) { sentMessages.push(JSON.parse(msg)); },
+                sendEvent(event, params, trigger) {
+                    sentMessages.push({ type: 'event', event, params });
+                    expect(trigger).toBeNull();
+                    return Promise.resolve({ type: 'noop' });
                 },
             };
 

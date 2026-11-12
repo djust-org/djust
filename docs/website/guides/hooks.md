@@ -263,7 +263,7 @@ See [Typed values & targets](#typed-values--targets) below for
 
 ### Methods
 
-**`this.pushEvent(event, payload)`** -- Send an event to the server LiveView.
+**`this.pushEvent(event, payload)`** -- Send an event to the server LiveView. It returns a promise that resolves with the server's reply frame once the event is acknowledged, or with `null` when the event was cancelled or there is no live connection.
 
 ```javascript
 this.pushEvent('item_clicked', { id: this.values.itemId });
@@ -485,6 +485,10 @@ class DashboardView(LiveView):
 
     def mount(self, request, **kwargs):
         self.sales_data = self.fetch_sales()
+
+    def fetch_sales(self):
+        # Your own query; a list the chart can plot.
+        return [120, 180, 150, 210]
 
     @event_handler()
     def refresh_data(self, **kwargs):
