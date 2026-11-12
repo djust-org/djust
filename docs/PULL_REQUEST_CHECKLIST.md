@@ -255,10 +255,12 @@ each) is in [`docs/SECURE_DEFAULTS.md`](SECURE_DEFAULTS.md).
   (`password`/`is_superuser`/`is_staff`) is unconditional — an allowlist must
   not opt it back in. *(SECURE_DEFAULTS.md pattern 1.)*
 - [ ] **Accepts state echoed back from the client? Sign + verify** - Sign on
-  emit (`sign_snapshot`), verify on receive (`unsign_snapshot`), treat a `None`
-  verdict as reject-and-fall-through. HMAC covers **public** state only — do not
-  store auth/ownership/PII in `_*` attrs expecting integrity (the private-attr
-  restore path is unsigned). *(SECURE_DEFAULTS.md pattern 2.)*
+  emit, verify on receive (`ClientSnapshot.capture` / `.restore` in
+  `_exposure_snapshots.py` is the model), bind the token to who may send it
+  back, and treat a failed verdict as reject-and-fall-through. The signature
+  covers **declared client fields** only — do not store auth/ownership/PII in
+  `_*` attrs expecting integrity (the private-attr restore path is unsigned).
+  *(SECURE_DEFAULTS.md pattern 2.)*
 - [ ] **Adds an endpoint / diagnostic surface? Fail closed, non-disclosing** -
   Does this new endpoint/feature **fail closed**? Gate it with a precedence
   ladder whose **default branch denies**, enforced inside the view, returning a

@@ -58,7 +58,52 @@ REMOVED_VIEW_ATTRIBUTES: dict[str, str] = {
         "the standard runtime, which already runs one turn at a time per connection. "
         "For work that should not block a turn, use start_async() or @background"
     ),
+    # A method, not a flag: the base class no longer defines it, so any value
+    # found on a view is an override the application wrote and djust would
+    # never call.
+    "_restore_snapshot": (
+        "the legacy signed back-navigation snapshot that called this override was "
+        "removed, so it would never run; delete it, declare the fields the browser "
+        'may hold with state(..., persist="client", client=True), and move what '
+        "the override did after restoring into handle_restore()"
+    ),
 }
+
+
+#: Where each refusal sends the reader for the replacement.
+MIGRATION_GUIDE_URL = "https://docs.djust.org/guides/migrating-to-2.0/"
+
+_SIGNED_SNAPSHOT = (
+    "the legacy signed back-navigation snapshot was removed. Declare the fields "
+    'the browser may hold with state(..., persist="client", client=True); djust '
+    "signs and verifies their token itself"
+)
+
+#: Importable names 2.0 removed, by the module they were imported from. A module
+#: ``__getattr__`` passes its misses to :func:`refuse_removed_name`, so
+#: ``from djust.security import sign_snapshot`` names the replacement instead of
+#: failing with a bare "cannot import name".
+REMOVED_NAMES: dict[tuple[str, str], str] = {
+    ("djust.security", "sign_snapshot"): _SIGNED_SNAPSHOT,
+    ("djust.security", "unsign_snapshot"): _SIGNED_SNAPSHOT,
+    ("djust.security", "SNAPSHOT_SALT"): _SIGNED_SNAPSHOT,
+}
+
+
+def refuse_removed_name(module: str, name: str) -> None:
+    """Raise ``ImportError`` if ``module.name`` is a name djust 2.0 removed.
+
+    ``ImportError`` and not ``AttributeError``: the import system replaces an
+    ``AttributeError`` from a module ``__getattr__`` with its own "cannot
+    import name", which would drop the replacement this message names.
+    """
+    replacement = REMOVED_NAMES.get((module, name))
+    if replacement is not None:
+        raise ImportError(
+            "%s.%s was removed in djust 2.0: %s. See %s"
+            % (module, name, replacement, MIGRATION_GUIDE_URL),
+            name=module,
+        )
 
 
 #: Instance attributes 2.0 stopped reading, which a handler assigns rather than a
@@ -121,8 +166,8 @@ def reject_removed_view_attributes(view: Any) -> None:
             from django.core.exceptions import ImproperlyConfigured
 
             raise ImproperlyConfigured(
-                "%s.%s sets %s, which was removed in djust 2.0: %s."
-                % (cls.__module__, cls.__qualname__, name, replacement)
+                "%s.%s sets %s, which was removed in djust 2.0: %s. See %s"
+                % (cls.__module__, cls.__qualname__, name, replacement, MIGRATION_GUIDE_URL)
             )
 
 

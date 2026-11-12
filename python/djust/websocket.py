@@ -2281,11 +2281,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if not committed:
                 return
         elif runtime is not None and getattr(view, "enable_state_snapshot", False):
-            saved = await runtime._persist_state_after_event(view, event_name)
-            if skip_render:
-                snapshot_fields = await runtime._legacy_noop_snapshot(view, saved, pre_assigns)
-            else:
-                snapshot_fields = await runtime._legacy_event_snapshot(view)
+            await runtime._persist_state_after_event(view, event_name)
 
         if skip_render:
             # (_skip_render was already consumed by _resolve_skip_render —
@@ -4827,10 +4823,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # the view itself with every child that is not kept sticky (#3244).
         await self._release_mounted_views(reason="view_navigation", keep=sticky_preserved)
 
-        # Parse state_snapshot if the client sent one (v0.6.0) so it can
-        # be forwarded to handle_mount for back-nav state restoration.
-        # Per-view opt-in is still enforced inside handle_mount via the
-        # class-level ``enable_state_snapshot`` flag + slug match.
+        # Parse state_snapshot if the client sent one so it can be forwarded
+        # to handle_mount for back-nav state restoration. The mount restores
+        # it only for an explicit view's ``persist="client"`` fields, after
+        # verifying the token.
         state_snapshot = data.get("state_snapshot")
         if state_snapshot is not None and not isinstance(state_snapshot, dict):
             # Malformed payload — ignore and proceed with fresh mount.

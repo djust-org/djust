@@ -201,14 +201,16 @@ class TestTaggedForm:
 
 
 class TestSnapshotPaths:
-    def test_signed_snapshot_captures_and_restores(self):
+    def test_a_captured_component_is_rebuilt_by_the_public_state_restore(self):
+        from djust._state_restore import restore_public_state
+
         view = RatingView()
         view.mount(None)
         view.rating.value = 5
-        snap = view._capture_snapshot_state(strict=True)
+        snap = view._capture_snapshot_state()
         assert snap["rating"][STATE_COMPONENT_TAG].endswith(".Rating")
-        fresh = RatingView()  # mount() is skipped on a signed-snapshot restore
-        fresh._restore_snapshot(decode_state_roundtrip(json.loads(json.dumps(snap))))
+        fresh = RatingView()  # mount() is skipped on a session restore
+        restore_public_state(fresh, decode_state_roundtrip(json.loads(json.dumps(snap))))
         assert isinstance(fresh.rating, Rating)
         assert _full_stars(fresh.render_with_diff()[0]) == 5
 

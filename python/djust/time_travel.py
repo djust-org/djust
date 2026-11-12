@@ -360,10 +360,6 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
     # here. Time-travel restores literal captured state at each layer;
     # if the user wants live-recomputed invariants they should derive
     # them at render time, not at restore time.
-    #
-    # The dispatch is shared with the signed back-navigation restore
-    # (``LiveView._restore_snapshot``, #2896): one helper, so the two paths
-    # agree on which component ids are valid targets.
     if components_state:
         from djust.live_view import restore_components_snapshot
 
