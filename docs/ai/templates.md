@@ -2,6 +2,24 @@
 
 djust templates are standard Django templates with `dj-*` attributes for reactivity.
 
+What a template can read (explicit exposure, the default): fields declared with
+`state()` (unless `render=False`), what `get_context_data()` returns (which wins
+over a declared field of the same name), framework providers and Django context
+processors. Any other attribute on `self` renders empty. Rendering is not a
+browser grant: `client=True` and `persist=` stay separate.
+
+```python
+from djust import LiveView, event_handler, state
+
+class CounterView(LiveView):
+    template = "<div dj-root><p>{{ count }}</p><button dj-click='inc'>+</button></div>"
+    count = state(0)  # renders as {{ count }}; no get_context_data() needed
+
+    @event_handler()
+    def inc(self):
+        self.count += 1
+```
+
 ```html
 <!-- Click events -->
 <button dj-click="increment">+1</button>

@@ -143,9 +143,9 @@ def test_readme_liveview_snippets_mount_and_render(lineno: int, code: str, setti
 def test_readme_liveview_snippets_are_explicit_views(lineno: int, code: str):
     """A README view states no policy, so a reader's copy runs under the default.
 
-    The default is explicit exposure, which is why each snippet supplies its
-    template's names in ``get_context_data()`` (the test above fails when one
-    does not). A snippet that stated ``"legacy"`` to get around that would
+    The default is explicit exposure, which is why each snippet declares its
+    template's names with ``state()`` or supplies them in
+    ``get_context_data()`` (the test above fails when one does neither). A snippet that stated ``"legacy"`` to get around that would
     teach a deprecated policy on the project's front page.
     """
     try:

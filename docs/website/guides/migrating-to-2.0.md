@@ -53,7 +53,8 @@ Two things tell you which names a view still has to supply. With
 `DEBUG = True` djust logs a warning on the `djust.exposure` logger the first
 time a view renders a name that its template reads and the view sets but does
 not supply. `python manage.py check` reports the same statically as
-`djust.T027`.
+`djust.T027`. A field declared with `state()` is supplied: it renders without
+a `get_context_data()` ([#4050](https://github.com/djust-org/djust/issues/4050)).
 
 > **Where 2.0 is today.** There is no 2.0 release yet. On the development line
 > (`2.0.0.dev0`) the removals listed under [Removed names](#3-replace-removed-names-and-settings)
@@ -94,8 +95,9 @@ not supply. `python manage.py check` reports the same statically as
 Do this for one view at a time:
 
 1. Run the inventory command on the view.
-2. Put everything the template reads into `get_context_data()`.
-3. Declare the state you want kept or sent to the browser with `state()`.
+2. Declare the view's state with `state()`. A declared field renders; choose
+   `persist` and `client` only for what must be kept or sent to the browser.
+3. Return everything else the template reads from `get_context_data()`.
 4. Set `exposure_policy = "explicit"` on the class. On 1.3 this is what turns
    the new behaviour on. On 2.0 it is the default, so the line changes nothing
    and you can remove it after you upgrade.
@@ -109,7 +111,7 @@ session and the client state. Under `"explicit"`:
 
 | Destination | What goes there |
 | --- | --- |
-| The template | What `get_context_data()` returns, what Django context processors add (`user`, `perms`, `messages`, `request`), and what framework features provide (forms, uploads, streams, components declared on the class) |
+| The template | Fields declared with `state()` (unless `render=False`), what `get_context_data()` returns, what Django context processors add (`user`, `perms`, `messages`, `request`), and what framework features provide (forms, uploads, streams, components declared on the class) |
 | The browser, as raw data (`get_state()`, HTTP API `assigns`) | `state(..., client=True)` fields only |
 | The session, restored on a reconnect | `state(..., persist="server")` fields only |
 | The signed back-navigation snapshot | `state(..., persist="client", client=True)` fields only |
@@ -163,11 +165,11 @@ ADR-038 exposure inventory (legacy destinations; values redacted)
 
 shop.views.CartView  [policy: legacy; reconnect: fresh mount]
   coupon  str  instance  -> template_context, render_cache, session_state, client_state, snapshot
-      suggest: coupon: str = state(...)  # not restored on a reconnect today, so no persistence grant is needed; supply coupon=self.coupon from get_context_data() if the template uses it
+      suggest: coupon: str = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
   items  list  instance  -> template_context, render_cache, session_state, client_state, snapshot
-      suggest: items: list = state(...)  # not restored on a reconnect today, so no persistence grant is needed; supply items=self.items from get_context_data() if the template uses it
+      suggest: items: list = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
   page  int  instance  -> template_context, render_cache, session_state, client_state, snapshot
-      suggest: page: int = state(...)  # not restored on a reconnect today, so no persistence grant is needed; supply page=self.page from get_context_data() if the template uses it
+      suggest: page: int = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
   _audit_note  str  private  -> private_session
       suggest: explicit mode never persists underscore attributes, and this view does not restore them on a reconnect today; leave it instance-only
 ```
@@ -198,8 +200,9 @@ persistence the view does not have today.
 
 ### Step 2: supply the template
 
-List the names your template reads, and return each one from
-`get_context_data()`. **A name the template reads that nothing supplies
+List the names your template reads. Each one is either declared with `state()`
+(step 3), which renders it, or returned from `get_context_data()`. **A name
+the template reads that nothing supplies
 renders as an empty string, with no error and no warning.** This is the
 mistake to look for: after the switch, open every state of the page and look
 for blanks. Remember names used only inside `{% if %}`, in `{% include %}`d
@@ -231,7 +234,7 @@ processors; you do not add those.
 values that are the view's state. It takes two independent grants:
 
 - no grant (`state(0)`): the field lives for the life of the connection. It
-  is not saved and not sent as data.
+  renders in the template, and is not saved and not sent as data.
 - `persist="server"`: saved in the session after each event and restored when
   the same user reconnects or the request lands on another worker.
 - `client=True`: the raw value may reach the browser, through `get_state()`
@@ -239,6 +242,9 @@ values that are the view's state. It takes two independent grants:
 - `persist="client", client=True`: restored from the signed snapshot on
   back-navigation. `persist="client"` without `client=True` is refused when
   the class is defined.
+- `render=False`: kept out of the template. Rendering is the default for a
+  declared field; it is not a grant, and it never puts the value in
+  `get_state()` or the session.
 
 Anything you do not want saved or sent (a service object, a model instance, a
 cache) stays a plain attribute set in `mount()`. Assigning a plain attribute
@@ -270,11 +276,6 @@ class CartView(LiveView):
     def mount(self, request, **kwargs):
         self._audit_note = "internal"
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(items=self.items, coupon=self.coupon, page=self.page)
-        return context
-
     @event_handler(parameter_policy="strict")
     def add(self, sku: str):
         self.items.append(sku)
@@ -283,6 +284,13 @@ class CartView(LiveView):
     def apply_coupon(self, value: str):
         self.coupon = value
 ```
+
+`items`, `coupon` and `page` render because they are declared; the view needs
+no `get_context_data()`. Releases without
+[#4050](https://github.com/djust-org/djust/issues/4050), including 1.3.x, do
+not render a declared field by itself: there, also return the three from
+`get_context_data()`. That hand-over keeps working after the upgrade, where a
+`get_context_data()` value of the same name wins.
 
 The handlers are also moved to strict parameters here; [section 2](#2-make-event-handlers-strict)
 covers that change, and you can do it separately.
@@ -333,9 +341,8 @@ class ReportView(LiveView):
         return [{"n": n} for n in range(report_id)]
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(report_id=self.report_id, status=self.status, rows=self.rows)
-        return context
+        # report_id and status are declared, so they render already.
+        return super().get_context_data(rows=self.rows, **kwargs)
 
     @event_handler(parameter_policy="strict")
     def load(self, report_id: int):

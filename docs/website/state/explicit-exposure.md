@@ -21,25 +21,21 @@ class CounterView(LiveView):
 
     count = state(0, persist="server")
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["count"] = self.count
-        return context
-
     @event_handler()
     def increment(self):
         self.count += 1
 ```
 
-`self.service`, `self.object`, `self.internal_note` and every other ordinary
-attribute stay in server memory, available to your handlers and never
-exported.
+`{{ count }}` renders because `count` is declared with `state()`: a declared
+field is template context without a `get_context_data()`. `self.service`,
+`self.object`, `self.internal_note` and every other ordinary attribute stay in
+server memory, available to your handlers and never exported.
 
 ## Where values can go
 
 | Destination | Comes only from |
 | --- | --- |
-| Template context | `get_context_data()` additions and registered framework providers |
+| Template context | Declared `state()` fields, `get_context_data()` additions and registered framework providers |
 | Server persistence (reconnect, cross-worker restore) | `state(..., persist="server")` fields |
 | Raw browser data (`get_state()`, HTTP API `assigns`) | `state(..., client=True)` fields |
 | Back-navigation snapshot | `state(..., persist="client", client=True)` fields |
@@ -47,17 +43,48 @@ exported.
 
 A value you render is visible in the HTML, as with any Django template. Being
 rendered does not also put it in the state mirror, the snapshot or the debug
-panel.
+panel: a declared field renders, but it reaches `get_state()` only with
+`client=True`, and survives a reconnect only with `persist=`.
+
+### What the template sees
+
+`get_context_data()` stays for derived and render-only values, and it can
+override what a declared field renders as. Values are settled in this order,
+the later one winning:
+
+1. Declared `state()` fields (not `state(render=False)`).
+2. `get_context_data()`: keyword arguments to `super().get_context_data()`, and
+   keys set on its result.
+3. Django context processors fill only names nothing above supplied, so a
+   declared `user` field renders instead of `request.user`, as a `user` key from
+   `get_context_data()` would.
+
+A name a framework provider owns (`online_count` on a `PresenceMixin` view, a
+formset name, `streams`, `csrf_token`) is rendered by its provider, never from
+a declaration of the same name, and a framework-reserved name (`request`,
+`view`, `kwargs`, `template_name`) never becomes template context through
+`state()`. A `get_context_data()` that returns a new dict without calling
+`super().get_context_data()` supplies no declared field (nor any provider).
+
+The rule applies to `state()` only. A `@computed` value, an `assign_async()`
+result and an ordinary attribute still have to be returned from
+`get_context_data()`.
 
 ## Declaring state
 
 ```python
 from djust.decorators import state
 
-count = state(0)                                 # reactive, not persisted
+count = state(0)                                 # reactive, rendered, not persisted
 cart = state(default_factory=list, persist="server")
 page = state(1, persist="client", client=True)   # restorable on back-navigation
+token = state("", persist="server", render=False)  # handlers only, never template context
 ```
+
+- Every declared field is template context unless it says `render=False`. Use
+  that for a value only handlers need, or a large one the template never reads,
+  so it is not synced to the renderer for nothing. A legacy view refuses
+  `render=False`, because its attribute walk renders every public field.
 
 - `persist="server"` saves the field in a server-side session envelope, bound
   to the session, the user, the tenant and the route.
@@ -246,14 +273,19 @@ not yours to change.
    It lists the names legacy mode exports and where each one goes, and suggests
    declarations. It never prints values and never instantiates the view.
 3. Declare the fields you meant to keep with `state()`, choosing `persist` and
-   `client` for each one deliberately.
-4. Move everything the template reads into `get_context_data()`.
+   `client` for each one deliberately. A declared field renders without
+   anything else.
+4. Return everything else the template reads (derived values, `@computed`
+   values, models loaded from a stored id) from `get_context_data()`.
 5. Remove the `exposure_policy` line, then test your reconnect and
    back-navigation flows. A template name that nothing supplies renders empty,
    so look at every page the view renders. Two things point at such a name:
    with `DEBUG = True` djust logs a warning (logger `djust.exposure`) the first
    time a view renders a name its template reads and the view sets but does not
-   supply, and `python manage.py check` reports it as `djust.T027`.
+   supply, and `python manage.py check` reports it as `djust.T027`. Neither
+   reports a declared field that rendered; both still name one declared
+   `render=False`, or one dropped by a `get_context_data()` that does not build
+   on `super()`.
 
 **Cost.** An explicit WebSocket event costs roughly twice a legacy one, because
 of the per-turn authorization and the state save. The measured numbers and

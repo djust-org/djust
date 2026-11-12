@@ -444,3 +444,18 @@ This amendment records direction the project owner settled for 2.0. The decision
 - An inventory or checker must not infer client grants or persistence for a field merely because a template can see it.
 
 **Still open:** production diagnostics (D-a for server-only sinks); public-page and service-worker caching (D-b); the 1.4 combined opt-in's API. See [the exposure flip plan](../plans/2.0-exposure-flip.md) §6 and [the delivery plan](../plans/2.0-delivery-plan.md).
+
+## Amendment (2026-11-12): declared state renders by default
+
+The project owner decided this on 2026-11-12 ([#4050](https://github.com/djust-org/djust/issues/4050), option 1). It amends D1's *Template context* row and D2's example; the rest of D1 to D6 stands.
+
+**Decision.** Under explicit exposure a field declared with `state()` is template context by default. `count = state(0)` makes `{{ count }}` render with no `get_context_data()`.
+
+- `get_context_data()` stays for derived and render-only values, and wins over a declared field of the same name (a keyword to `super().get_context_data()` or a key set on its result).
+- Rendering grants nothing else. A declared field reaches the browser as data only with `client=True`, the session only with `persist="server"`, and the back-navigation snapshot only with `persist="client", client=True`. Rendered HTML is visible to the browser, as D1 already says of any template value.
+- An undeclared attribute still does not render. The base context reads a per-class registry of declared descriptors, built once from the class (`rendered_state_names`, `python/djust/mixins/context.py`), not a walk of instance or class attributes, so D1's *Not implied by: a walk of instance/class attributes* still holds.
+- `state(render=False)` keeps a declared field out of the template. It is not part of `FieldExposure` or the schema digest, so it is not a grant and does not invalidate stored envelopes. A legacy view refuses it, as it refuses grants.
+- A name a registered provider owns (D5) is rendered by the provider, never from a declaration of the same name. A framework-reserved name (`view`, `request`, `kwargs`, the `LiveView` namespace) never becomes template context through `state()`. Django context processors fill only names the view did not supply, so a declared field wins over one, as a `get_context_data()` key does.
+- `@computed` values and `assign_async()` results are not covered: they are still returned from `get_context_data()`.
+
+**What this changes in the text above.** D1's *Template context* row now reads: permitted source "declared `state()` fields, explicit context additions and registered providers". D2's `CounterView` no longer needs its `get_context_data()`; the example stands as a valid way to override what a field renders as. The D3 sentence "`state(default=...)` declares reactive state; persistence defaults to none" gains: "and it renders by default". The DEBUG unsupplied-name warning and `djust.T027` treat a declared field as supplied.
