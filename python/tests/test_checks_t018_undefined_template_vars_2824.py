@@ -45,6 +45,8 @@ class TestT018EmpiricalCanary:
         from djust.checks.templates import check_undefined_template_vars
 
         class T018CanaryView(LiveView):
+            exposure_policy = "legacy"
+
             # (a) genuinely undefined -- MUST fire.
             # (b) false-positive classes -- MUST NOT fire:
             #     csrf_token (framework), forloop (loop-injected),
@@ -94,6 +96,7 @@ class TestT018EmpiricalCanary:
         from djust.checks.templates import check_undefined_template_vars
 
         class T018GateOffView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ never_set_anywhere }}</div>"
 
             def mount(self, request, **kwargs):
@@ -133,6 +136,7 @@ class TestT018TemplateNameFilePath:
         ]
 
         class T018FileView(LiveView):
+            exposure_policy = "legacy"
             template_name = "t018_file.html"
 
             def mount(self, request, **kwargs):
@@ -165,6 +169,7 @@ class TestT018ExtendsSkipped:
         from djust.checks.templates import check_undefined_template_vars
 
         class T018ExtendsView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 '{% extends "base.html" %}'
                 "{% block content %}{{ never_set_in_extends }}{% endblock %}"
@@ -195,6 +200,8 @@ class TestT018DynamicGetContextData:
         from djust.checks.templates import check_undefined_template_vars
 
         class T018DynamicCtxView(LiveView):
+            exposure_policy = "legacy"
+
             # 'extra' is added via subscript-assignment on a super()-derived
             # dict -- not a literal {"extra": ...} return, not a
             # self.extra = ... assignment. Unanalyzable statically.
@@ -226,6 +233,7 @@ class TestT018DynamicGetContextData:
         from djust.checks import templates as _t
 
         class T018DynamicCtxGateOffView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ defined }}{{ extra }}</div>"
 
             def mount(self, request, **kwargs):
@@ -257,6 +265,7 @@ class TestT018DynamicGetContextData:
         from djust.checks.templates import check_undefined_template_vars
 
         class T018BareSuperView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ defined }}{{ never_set_bare_super }}</div>"
 
             def mount(self, request, **kwargs):
@@ -281,6 +290,7 @@ class TestT018AbstractAndSuppression:
         from djust.checks.templates import check_undefined_template_vars
 
         class T018AbstractView(LiveView):
+            exposure_policy = "legacy"
             abstract = True
             template = "<div>{{ never_set_abstract }}</div>"
 
@@ -302,6 +312,7 @@ class TestT018AbstractAndSuppression:
         settings.DJUST_CONFIG = {"suppress_checks": ["T018"]}
 
         class T018SuppressedView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ never_set_suppressed }}</div>"
 
             def mount(self, request, **kwargs):
@@ -322,6 +333,7 @@ class TestT018AbstractAndSuppression:
         settings.DJUST_CONFIG = {"suppress_checks": ["djust.T018"]}
 
         class T018SuppressedQualifiedView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ never_set_suppressed_q }}</div>"
 
             def mount(self, request, **kwargs):
@@ -343,6 +355,7 @@ class TestT018AbstractAndSuppression:
         from djust.checks.templates import check_undefined_template_vars
 
         class T018NoqaView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div>{{ never_set_noqa }}{{ still_undefined }}"
                 "{# djust_typecheck: noqa never_set_noqa #}</div>"

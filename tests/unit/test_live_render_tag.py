@@ -145,6 +145,7 @@ def _elements_with_attr(html: str, attr: str) -> List[Tuple[str, Dict[str, str]]
 class _ChildLiveView(LiveView):
     """Embedded child — simple counter exposed to the template."""
 
+    exposure_policy = "legacy"
     template = '<div><button dj-click="bump">Bump {{ count }}</button></div>'
 
     def mount(self, request, **kwargs):  # noqa: D401 — LiveView contract
@@ -157,6 +158,7 @@ class _ChildLiveView(LiveView):
 class _ChildWithKwargs(LiveView):
     """Child that surfaces mount kwargs on the instance for inspection."""
 
+    exposure_policy = "legacy"
     template = "<div>{{ foo }}/{{ bar }}</div>"
 
     def mount(self, request, **kwargs):
@@ -167,6 +169,7 @@ class _ChildWithKwargs(LiveView):
 class _ChildWithClickHandler(LiveView):
     """Child that carries multiple event-attribute-bearing elements."""
 
+    exposure_policy = "legacy"
     template = (
         "<section>"
         '<button dj-click="inc">inc</button>'
@@ -191,6 +194,7 @@ class _ChildWithTrickyAttrs(LiveView):
     first ``>`` inside the quoted value and stamp the wrong place.
     """
 
+    exposure_policy = "legacy"
     template = (
         "<div>"
         '<input value="a>b" dj-click="x"/>'
@@ -221,6 +225,7 @@ class _ChildWithKeyboardEventAttrs(LiveView):
     dotted AND bare.
     """
 
+    exposure_policy = "legacy"
     template = (
         "<div>"
         '<input dj-keydown.enter="submit_search"/>'
@@ -251,6 +256,7 @@ class _NotALiveView:
 class _ParentView(LiveView):
     """Parent whose template embeds a ``{% live_render %}`` child."""
 
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -266,6 +272,7 @@ class _ParentView(LiveView):
 class _GrandparentView(LiveView):
     """Parent whose child itself embeds another live_render — nested test."""
 
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -280,6 +287,7 @@ class _GrandparentView(LiveView):
 class _MidChildView(LiveView):
     """Child that embeds a grandchild."""
 
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<section>"
@@ -298,6 +306,7 @@ class _MidChildView(LiveView):
 class _AdminOnlyChildView(LiveView):
     """Child guarded by permission_required — must trip the auth gate."""
 
+    exposure_policy = "legacy"
     permission_required = "auth.admin"
     template = '<div><button dj-click="secret">x</button></div>'
 
@@ -311,6 +320,7 @@ class _AdminOnlyChildView(LiveView):
 class _LoginOnlyChildView(LiveView):
     """Child guarded by login_required — returns redirect URL when anonymous."""
 
+    exposure_policy = "legacy"
     login_required = True
     template = '<div><button dj-click="private">x</button></div>'
 
@@ -1015,6 +1025,7 @@ class TestAllowlist:
 class _StickyChildView(LiveView):
     """Sticky child used for the auto-detect tests (#1032)."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "audio-player"
     template = '<div><button dj-click="play">play</button></div>'
@@ -1028,6 +1039,7 @@ class _StickyChildView(LiveView):
 
 
 class _StickyParentView(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"

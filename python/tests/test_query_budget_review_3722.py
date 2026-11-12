@@ -44,6 +44,7 @@ def _queries(n):
 
 
 class Base(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
 
@@ -394,6 +395,7 @@ GET_CALLS: list = []
 class CountedGet(LiveView):
     """Overrides ``get_context_data`` WITHOUT calling super: the review's case."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
 
@@ -408,6 +410,7 @@ class CountedGet(LiveView):
 class CountedGetSuper(LiveView):
     """Overrides it and calls ``super()``: the framework's own short-circuit applies inside."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
 
@@ -443,6 +446,7 @@ class SpendingGetTight(SpendingGet):
 class PlainGet(LiveView):
     """No override: the stock ``get_context_data`` and its ``_cached_context`` short-circuit."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>{{ counted }}</div>"
 

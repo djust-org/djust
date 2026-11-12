@@ -12,6 +12,7 @@ from djust import LiveView
 
 
 class ReusableChild(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "guarded"
     template = "<div>PERMITTED_CHILD_CONTENT</div>"

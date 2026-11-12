@@ -49,6 +49,7 @@ pytestmark = [pytest.mark.django_db(transaction=False)]
 
 
 class _RustLazyChild(LiveView):
+    exposure_policy = "legacy"
     template = "<div><p>RustLazy {{ value }}</p></div>"
 
     def mount(self, request, **kwargs):
@@ -56,6 +57,7 @@ class _RustLazyChild(LiveView):
 
 
 class _RustLazyChildSticky(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "rust-lazy-sticky"
     template = "<div>sticky+lazy collision target</div>"
@@ -65,6 +67,7 @@ class _RustLazyChildSticky(LiveView):
 
 
 class _RustParentView(LiveView):
+    exposure_policy = "legacy"
     template = "{% load live_tags %}<div dj-root></div>"
 
     def mount(self, request, **kwargs):
@@ -273,6 +276,7 @@ class TestInlineAttributeMode:
         """
 
         class _InlineParent(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "{% load live_tags %}<div dj-root>"
                 '{% live_render "tests.unit.test_rust_live_render_lazy_1145._RustLazyChild" '

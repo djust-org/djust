@@ -498,6 +498,7 @@ class TestUsageWithEvents:
         from djust.components import Rating
 
         class V(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{{ component }}</div>"
 
             def mount(self, request: object, **kwargs: object) -> None:

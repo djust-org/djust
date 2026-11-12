@@ -180,6 +180,7 @@ class SelectableTableHostView(LiveView):
     """Renders the table (so the response HTML carries ``checked``) and a
     ``sel=`` summary of ``selected_rows`` for the assertions."""
 
+    exposure_policy = "legacy"
     template = (
         f'<div dj-root dj-view="{_MODULE}.SelectableTableHostView" dj-id="0">'
         "<p>sel={{ sel }}</p>{{ table.render }}</div>"

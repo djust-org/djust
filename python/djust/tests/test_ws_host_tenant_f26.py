@@ -56,6 +56,7 @@ class _TenantDocView(TenantMixin, LiveView):
     not a crash.
     """
 
+    exposure_policy = "legacy"
     tenant_required = False
     template = (
         '<div dj-view="djust.tests.test_ws_host_tenant_f26._TenantDocView" dj-id="0">doc</div>'

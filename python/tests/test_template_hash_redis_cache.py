@@ -452,12 +452,15 @@ def test_framework_cache_key_includes_template_hash_via_initialize_rust_view():
     from djust import LiveView
 
     class ViewA(LiveView):
+        exposure_policy = "legacy"
         template = "<div>VERSION_A {{ x }}</div>"
 
         def mount(self, request, **kwargs):
             self.x = 1
 
     class ViewB(LiveView):
+        exposure_policy = "legacy"
+
         # Same shape, different bytes → different template hash.
         template = "<div>VERSION_B {{ x }}</div>"
 
@@ -535,7 +538,7 @@ def test_template_hash_slot_is_cached_on_view_class():
     DynView = type(
         "DynViewHashSlotMemo",
         (LiveView,),
-        {"template": "<div>{{ x }}</div>"},
+        {"exposure_policy": "legacy", "template": "<div>{{ x }}</div>"},
     )
 
     # Sanity: no cached slot before the first call.
@@ -604,7 +607,7 @@ def test_initialize_rust_view_cache_hit_does_not_call_get_template():
     DynView = type(
         "DynViewCacheHitNoLoad",
         (LiveView,),
-        {"template": "<div>{{ y }}</div>"},
+        {"exposure_policy": "legacy", "template": "<div>{{ y }}</div>"},
     )
 
     def _mount(self, request, **kwargs):

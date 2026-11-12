@@ -21,6 +21,7 @@ class DropdownDemo(LiveView):
     Demo page showcasing both stateless and stateful dropdown components.
     """
 
+    exposure_policy = "legacy"
     template_name = 'demos/dropdown_demo.html'
 
     def mount(self, request, **kwargs):

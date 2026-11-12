@@ -91,6 +91,8 @@ def test_eval_handler_rejects_non_event_handler(monkeypatch):
     from djust.decorators import event_handler
 
     class _V:
+        exposure_policy = "legacy"
+
         def delete_account(self):  # public, NOT decorated
             self.deleted = True
             return "deleted"

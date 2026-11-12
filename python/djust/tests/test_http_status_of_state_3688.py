@@ -25,6 +25,7 @@ from djust import LiveView
 class ArticleView(LiveView):
     """The issue's repro, with the status declared instead of overridden."""
 
+    exposure_policy = "legacy"
     login_required = False
     http_status_of_state = {"not_found": 404, "forbidden": 403, "gone": 410}
     template = (
@@ -40,6 +41,7 @@ class ArticleView(LiveView):
 class ArticleBase(LiveView):
     """A project's base view: the map is set once, here."""
 
+    exposure_policy = "legacy"
     abstract = True
     login_required = False
     http_status_of_state = {"not_found": 404}
@@ -53,6 +55,7 @@ class InheritingView(ArticleBase):
 
 
 class CustomAttributeView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     http_status_of_state = {"missing": 404}
     state_attribute = "load_state"
@@ -67,6 +70,7 @@ class CustomAttributeView(LiveView):
 class NoMapView(LiveView):
     """No map declared: a state named ``not_found`` changes nothing (back-compat)."""
 
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>{{ state }}</div>"
 
@@ -77,6 +81,7 @@ class NoMapView(LiveView):
 class OverridingView(LiveView):
     """A view with a real special case keeps its own ``get_http_status()``."""
 
+    exposure_policy = "legacy"
     login_required = False
     http_status_of_state = {"not_found": 404}
     template = "<div dj-root>{{ state }}</div>"
@@ -96,6 +101,7 @@ class OverridingNoneView(OverridingView):
 class OddStateView(LiveView):
     """A state that is not a string never matches (and never raises)."""
 
+    exposure_policy = "legacy"
     login_required = False
     http_status_of_state = {"not_found": 404}
     template = "<div dj-root>odd</div>"

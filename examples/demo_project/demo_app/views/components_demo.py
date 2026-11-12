@@ -23,6 +23,7 @@ class ComponentsDemoView(LiveView):
     - Automatic Rust optimization if available
     """
 
+    exposure_policy = "legacy"
     template = """
     <!DOCTYPE html>
     <html lang="en">

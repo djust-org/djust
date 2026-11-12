@@ -163,6 +163,8 @@ class TestTheMethodReadWidensNothing3801:
         from djust.testing import LiveViewTestClient
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.users = _users()
 
@@ -183,6 +185,8 @@ class TestTheMethodReadWidensNothing3801:
 
         def kept(source: str) -> dict:
             class _V(LiveView):
+                exposure_policy = "legacy"
+
                 def mount(self, request, **kwargs):
                     self.users = _users()
 
@@ -203,6 +207,8 @@ class TestTheMethodReadWidensNothing3801:
         from djust.testing import LiveViewTestClient
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.users = _users()
 
@@ -313,6 +319,7 @@ from djust.live_view import LiveView  # noqa: E402
 
 
 class MixedView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = """<div dj-view="test_queryset_all_residuals_3801.MixedView">
     {% for u in users %}<p>{{ u.username }}:{{ u.groups.all.count }}[{% for g in u.groups.all %}{{ g.name }},{% endfor %}]</p>{% endfor %}</div>"""

@@ -73,6 +73,8 @@ class _StateTargetView:
     attribute and the test can observe it (#1650 reproduction fidelity).
     """
 
+    exposure_policy = "legacy"
+
     def __init__(self):
         # User-facing public state (legitimately settable).
         self.count = 0
@@ -223,6 +225,7 @@ class _UploadView(LiveView, UploadMixin):
     """An upload-enabled LiveView so ``_upload_manager`` is non-None and the
     real ``_handle_upload_frame`` path is reachable for legit frames."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ws_transport_hardening_f21_f17._UploadView"'
         ' dj-id="0">up</div>'

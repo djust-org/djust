@@ -44,6 +44,8 @@ class _SpyView:
     handler time.
     """
 
+    exposure_policy = "legacy"
+
     def __init__(self, name, lock_probe=None):
         self.name = name
         self.writes = []

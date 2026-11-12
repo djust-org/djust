@@ -133,6 +133,8 @@ def liveview_render(source: str, ctx: dict) -> str:
     from djust.testing import LiveViewTestClient
 
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             for name, value in ctx.items():
                 setattr(self, name, value)
@@ -152,6 +154,8 @@ def http_get_render(source: str, ctx: dict) -> str:
     from djust.live_view import LiveView
 
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             for name, value in ctx.items():
                 setattr(self, name, value)
@@ -582,7 +586,7 @@ def _child(source: str, ctx: dict, name: str | None = None) -> Any:
     else:
         _TEMPLATES[name] = source
         attrs["template_name"] = name
-    child = type("Child3880", (LiveView,), attrs)()
+    child = type("Child3880", (LiveView,), {"exposure_policy": "legacy", **attrs})()
     child.mount(None)
     return child
 
@@ -660,12 +664,13 @@ def _live_render_site(tag_args: str, named: bool = False) -> Callable[[str, dict
             attrs["template_name"] = "live_render_child_3880.html"
         else:
             attrs["template"] = source
-        child_cls = type("LiveRenderChild3880", (LiveView,), attrs)
+        child_cls = type("LiveRenderChild3880", (LiveView,), {"exposure_policy": "legacy", **attrs})
         setattr(sys.modules[__name__], "LiveRenderChild3880", child_cls)
         page_cls = type(
             "LiveRenderPage3880",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "template": (
                     "{% load live_tags %}<html><body><div dj-root>"
                     '{% live_render "' + __name__ + '.LiveRenderChild3880" ' + tag_args + " %}"
@@ -955,6 +960,7 @@ def test_the_embedded_child_reproducer_from_the_issue():
         render.alters_data = True
 
     class C(LiveView):
+        exposure_policy = "legacy"
         template = "[{% include obj %}]"
 
         def mount(self, request, **kw):
@@ -1257,6 +1263,7 @@ def testing_client_site(source: str, ctx: dict) -> str:
     _TEMPLATES["client_3880.html"] = source
 
     class _V(LiveView):
+        exposure_policy = "legacy"
         template_name = "client_3880.html"
 
         def mount(self, request, **kwargs):
@@ -1344,7 +1351,7 @@ def bound_component_extends_site(source: str, ctx: dict) -> str:
     )
     state = type("State", (TypedState,), {"__annotations__": {"obj": Any}, "obj": None})
     comp = type("Nav3880", (LiveComponent,), {"State": state, "template_name": "bound_3880.html"})
-    page = type("Page3880", (LiveView,), {"nav": comp(obj=ctx["obj"])})
+    page = type("Page3880", (LiveView,), {"exposure_policy": "legacy", "nav": comp(obj=ctx["obj"])})
     html = str(page().nav)
     match = re.search(r"<c>(.*)</c>", html, re.S)
     assert match is not None, html

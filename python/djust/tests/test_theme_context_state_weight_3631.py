@@ -42,6 +42,7 @@ PROCESSOR = "djust.theming.context_processors.theme_context"
 class Counter(LiveView):
     """The issue's reproduction: no theme mixin, one counter, no theme variable."""
 
+    exposure_policy = "legacy"
     template = "<html><head></head><body><div dj-root>C{{ count }}</div></body></html>"
 
     def mount(self, request, **kwargs):
@@ -55,6 +56,7 @@ class Counter(LiveView):
 class ReadsPresets(LiveView):
     """A page that reads the list in the dj-root and in the page shell."""
 
+    exposure_policy = "legacy"
     template = (
         "<html><head>[S{{ theme_presets|length }}]</head><body><div dj-root>"
         "C{{ count }}|n{{ theme_presets|length }}|first={{ theme_presets.0.name }}"
@@ -205,6 +207,7 @@ def shell_templates(settings):
 
 
 class ShellView(LiveView):
+    exposure_policy = "legacy"
     template_name = "child_3631.html"
 
     def mount(self, request, **kwargs):
@@ -450,6 +453,7 @@ class TestTheThemeMixinSuppliesTheSameType:
         from djust.theming import ThemeMixin
 
         class Mixed(ThemeMixin, LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<html><head></head><body><div dj-root>C{{ count }}"
                 '{{ theme_presets|json_script:"p" }}</div></body></html>'

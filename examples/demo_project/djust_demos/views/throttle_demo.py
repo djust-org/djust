@@ -19,6 +19,7 @@ class ThrottleScrollView(LiveView):
     to demonstrate scroll tracking with custom styling.
     """
 
+    exposure_policy = "legacy"
     template_name = "demos/throttle.html"
 
     def mount(self, request):

@@ -121,12 +121,18 @@ class TestIsSerializable:
 # ---------------------------------------------------------------------------
 
 
+class _LegacyLiveView(LiveView):
+    """A bare LiveView under the legacy policy, whatever the framework default is."""
+
+    exposure_policy = "legacy"
+
+
 class TestGetState:
     """Test the get_state method on LiveView instances."""
 
     def _make_view(self, **attrs):
         """Create a LiveView instance with given public attributes."""
-        view = LiveView()
+        view = _LegacyLiveView()
         for k, v in attrs.items():
             setattr(view, k, v)
         return view

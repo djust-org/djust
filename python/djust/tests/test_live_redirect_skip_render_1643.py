@@ -52,6 +52,7 @@ class _RedirectSkipView(LiveView):
     """Sync handler that changes NO public state, only redirects — hits the
     auto-skip-render branch."""
 
+    exposure_policy = "legacy"
     template = '<div dj-view="djust.tests.x._RedirectSkipView" dj-id="0">confirm</div>'
 
     def mount(self, request, **kwargs):
@@ -69,6 +70,7 @@ class _RedirectAndChangeView(LiveView):
     """Control: handler changes public state AND redirects — takes the
     render/_send_update path, which already flushes navigation."""
 
+    exposure_policy = "legacy"
     template = '<div dj-view="djust.tests.x._RedirectAndChangeView" dj-id="0">{{ label }}</div>'
 
     def mount(self, request, **kwargs):

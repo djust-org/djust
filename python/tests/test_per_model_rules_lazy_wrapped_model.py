@@ -546,7 +546,11 @@ class TestRequestUserFromAContextProcessor:
         return type(
             "WhoLazy",
             (LiveView,),
-            {"template_name": "who_lazy.html", "mount": lambda self, request, **kw: None},
+            {
+                "exposure_policy": "legacy",
+                "template_name": "who_lazy.html",
+                "mount": lambda self, request, **kw: None,
+            },
         )
 
     @pytest.mark.parametrize("rule", ["exclude", "column-type"])
@@ -588,6 +592,7 @@ class TestLiveViewState:
         lazy = _lazy(world, rule)[0] if held == "lazy" else _instance(world, rule)
 
         class StateView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>[{{ member.name }}][{{ member.%s }}]</div>" % field
 
             def mount(self, request, **kwargs):

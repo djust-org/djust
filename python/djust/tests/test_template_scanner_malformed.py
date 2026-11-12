@@ -33,6 +33,7 @@ def test_malformed_inline_template_does_not_abort_checks(monkeypatch, malformed)
     _marked_sections_raise(monkeypatch)
 
     class MalformedView(LiveView):
+        exposure_policy = "legacy"
         template = '<button dj-click="missing">before</button>' + malformed
 
     try:

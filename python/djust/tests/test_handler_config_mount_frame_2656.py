@@ -33,6 +33,7 @@ MOD = __name__
 class RateLimited2656(LiveView):
     """One handler per decorator shape the client gate can consume."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-view="{MOD}.RateLimited2656" dj-id="0"><p>{{{{ q }}}}</p></div>'
 
     def mount(self, request: Any, **kwargs: Any) -> None:
@@ -143,6 +144,7 @@ class TestExtractHandlerConfig:
         from djust.runtime import ViewRuntime
 
         class Bare2656(LiveView):
+            exposure_policy = "legacy"
             template = "<div></div>"
 
             @event_handler()

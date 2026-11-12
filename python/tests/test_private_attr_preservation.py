@@ -30,6 +30,7 @@ from djust.decorators import event_handler
 class PrivateAttrView(LiveView):
     """View that sets private attrs in mount() and handlers."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ visible }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -51,6 +52,7 @@ class PrivateAttrView(LiveView):
 class NonSerializablePrivateView(LiveView):
     """View with private attrs that cannot be JSON-serialized."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ status }}</span></div>"
 
     def mount(self, request, **kwargs):

@@ -38,6 +38,7 @@ def _note(key):
 
 
 class _OffloadView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="djust.tests.test_event_loop_offload_3074._OffloadView">'
         "<b>{{ count }}</b><i>{{ label }}</i></div>"

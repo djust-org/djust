@@ -59,6 +59,7 @@ class Contact(forms.Form):
 
 
 class WsContact(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = Contact
     last = None
     template = (
@@ -342,6 +343,7 @@ class TwoStep(forms.Form):
 
 
 class Wizard(WizardMixin, LiveView):
+    exposure_policy = "legacy"
     wizard_steps = [{"name": "one", "title": "One", "form_class": TwoStep}]
     template = "<div dj-root></div>"
 
@@ -561,6 +563,7 @@ Big = type("Big", (forms.Form,), {"f%d" % i: forms.CharField(required=False) for
 
 
 class BigView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = Big
     template = "<div dj-root></div>"
 
@@ -627,6 +630,7 @@ Wide = type("Wide", (forms.Form,), {"w%d" % i: forms.CharField(required=False) f
 
 
 class WideWizard(WizardMixin, LiveView):
+    exposure_policy = "legacy"
     wizard_steps = [{"name": "one", "title": "One", "form_class": Wide}]
     template = "<div dj-root></div>"
 

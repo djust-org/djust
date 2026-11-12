@@ -13,6 +13,7 @@ observations = []
 
 
 class ObserverPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ menu }}{{ quiet }}<p>{{ last }}</p></div>"
     enable_state_snapshot = True
     menu = DropdownMenu(

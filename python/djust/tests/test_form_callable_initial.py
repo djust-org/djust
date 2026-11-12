@@ -27,6 +27,7 @@ class TokenForm(forms.Form):
 
 
 class TokenView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = TokenForm
     template = "<div dj-root>{{ form_data.token }}</div>"
 
@@ -66,6 +67,7 @@ def test_plain_initial_and_no_initial_are_unchanged():
         note = forms.CharField(required=False)
 
     class PlainView(FormMixin, LiveView):
+        exposure_policy = "legacy"
         form_class = Plain
         template = "<div dj-root></div>"
 
@@ -82,6 +84,7 @@ def test_zero_and_false_initials_are_kept():
         opt_in = forms.BooleanField(initial=False, required=False)
 
     class FlagsView(FormMixin, LiveView):
+        exposure_policy = "legacy"
         form_class = Flags
         template = "<div dj-root></div>"
 
@@ -98,6 +101,7 @@ def test_wizard_calls_a_callable_initial_and_keeps_falsy_initials():
         count = forms.IntegerField(initial=0)
 
     class Wizard(WizardMixin, LiveView):
+        exposure_policy = "legacy"
         wizard_steps = [{"name": "only", "title": "Only", "form_class": Step}]
         template = "<div dj-root></div>"
 

@@ -54,6 +54,7 @@ class StickyPersisted(TransientChild):
 
 
 class LegacyChild(LiveView):
+    exposure_policy = "legacy"
     template = "<div>Legacy child</div>"
 
 
@@ -185,9 +186,15 @@ def test_lazy_explicit_child_is_refused_without_placeholder(rf, lazy):
     assert not getattr(parent, "_lazy_thunks", None)
 
 
+class _LegacyLiveView(LiveView):
+    """A bare LiveView under the legacy policy, whatever the framework default is."""
+
+    exposure_policy = "legacy"
+
+
 def test_lazy_legacy_child_keeps_its_placeholder(rf):
     """Legacy control: the lazy placeholder path is unchanged."""
-    parent = LiveView()
+    parent = _LegacyLiveView()
     request = make_request(rf, SessionStore())
     html = render(parent, request, f'{{% live_render "{MODULE}.LegacyChild" lazy=True %}}')
     assert "<dj-lazy-slot" in html
@@ -195,7 +202,7 @@ def test_lazy_legacy_child_keeps_its_placeholder(rf):
 
 
 def test_explicit_server_persistence_under_legacy_parent_is_refused(rf):
-    parent = LiveView()
+    parent = _LegacyLiveView()
     request = make_request(rf, SessionStore())
     with pytest.raises(ExposureError):
         render(parent, request, f'{{% live_render "{MODULE}.StickyPersisted" sticky=True %}}')
@@ -224,6 +231,7 @@ class RawViewProbe(TransientChild):
 
 
 class LegacyRawViewProbe(LiveView):
+    exposure_policy = "legacy"
     template = "<div>{{ view.raw_attr }}</div>"
 
     def mount(self, request, **kwargs):

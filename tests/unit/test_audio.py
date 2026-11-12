@@ -11,6 +11,8 @@ from djust.mixins.push_events import PushEventMixin
 
 
 class ContextBase:
+    exposure_policy = "legacy"
+
     def __init__(self, **kwargs):
         pass
 
@@ -108,7 +110,7 @@ def test_private_audio_epoch_and_cursors_never_restore():
     from djust import LiveView
 
     class RealView(AudioMixin, LiveView):
-        pass
+        exposure_policy = "legacy"
 
     view = RealView()
     view._audio_cursor = 42
@@ -136,6 +138,7 @@ async def test_tick_with_audio_only_flushes_without_rendering():
     from djust.websocket import LiveViewConsumer
 
     class TickView(AudioMixin, LiveView):
+        exposure_policy = "legacy"
         audio_banks = View.audio_banks
 
         def handle_tick(self):
@@ -245,6 +248,7 @@ def test_the_manifest_cache_is_never_persisted():
     from djust import LiveView
 
     class RealView(AudioMixin, LiveView):
+        exposure_policy = "legacy"
         audio_banks = View.audio_banks
 
     view = RealView()

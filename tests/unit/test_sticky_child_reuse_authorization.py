@@ -42,6 +42,7 @@ class _FakeUser:
 
 
 class _ObjectScopedSticky(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "doc-panel"
     template = "<div><p>{{ body }}</p><span>{{ clicks }}</span></div>"
@@ -65,6 +66,7 @@ class _ObjectScopedSticky(LiveView):
 
 
 class _PermissionSticky(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "perm-panel"
     permission_required = "auth.view_doc"
@@ -75,6 +77,7 @@ class _PermissionSticky(LiveView):
 
 
 class _LoginSticky(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "login-panel"
     login_required = True
@@ -85,6 +88,7 @@ class _LoginSticky(LiveView):
 
 
 class _ParentObject(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}<div dj-root>"
         '{% live_render "' + _MOD + '._ObjectScopedSticky" sticky=True %}'
@@ -96,6 +100,7 @@ class _ParentObject(LiveView):
 
 
 class _ParentPermission(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}<div dj-root>"
         '{% live_render "' + _MOD + '._PermissionSticky" sticky=True %}'
@@ -107,6 +112,7 @@ class _ParentPermission(LiveView):
 
 
 class _ParentLogin(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}<div dj-root>"
         '{% live_render "' + _MOD + '._LoginSticky" sticky=True %}'

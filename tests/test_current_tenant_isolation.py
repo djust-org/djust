@@ -28,6 +28,7 @@ class _FakeTenant:
 
 
 class _TenantView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-id='0'>x</div>"
 

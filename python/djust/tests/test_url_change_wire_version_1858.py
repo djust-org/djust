@@ -48,6 +48,7 @@ class _UrlChangeView(LiveView):
     test.
     """
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_url_change_wire_version_1858._UrlChangeView" '
         'dj-id="0">Count: {{ count }} / Tab: {{ tab }}</div>'

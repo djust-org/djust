@@ -147,6 +147,8 @@ def liveview_render(source: str, context: dict) -> str:
     """The REAL LiveView entry — the path the arm sits on. Needs `django_db`."""
 
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             pass
 
@@ -396,6 +398,7 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
         `normalize_django_value(..., state_roundtrip=True)`."""
 
         class _CallableStateView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{{ cb }}</div>"
 
             def mount(self, request, **kwargs):
@@ -437,6 +440,7 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
         """
 
         class _StateView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{{ cb }}{{ plain }}</div>"
 
             def mount(self, request, **kwargs):
@@ -471,6 +475,7 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
         """
 
         class _AttrView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>[{{ cb }}][{{ plain }}]</div>"
 
             def mount(self, request, **kwargs):

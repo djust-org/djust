@@ -55,6 +55,7 @@ class Card2686(LiveComponent):
 
 
 class TwoCards2686(LiveView):
+    exposure_policy = "legacy"
     template = (
         f'<div dj-root dj-view="{MOD}.TwoCards2686" dj-id="0">'
         "<div id='a'>{{ first }}</div><div id='b'>{{ second }}</div></div>"

@@ -129,6 +129,7 @@ class _FilterView(LiveView):
     reconnect scenario where the fresh-mount baseline diverges from the client's
     live DOM."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = '<div dj-root dj-id="0">author={{ author }} n={{ n }}</div>'
 

@@ -38,6 +38,7 @@ class Toggle(LiveComponent):
 
 
 class HardenPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ toggle }}</div>"
     toggle = Toggle(active="a")
 

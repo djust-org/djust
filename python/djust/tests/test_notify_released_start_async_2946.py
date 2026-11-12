@@ -26,6 +26,7 @@ RAN = []
 
 
 class NotifyAsyncView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ count }}</div>"
     # Class-level so the consumer joins the NOTIFY group at wiring time.
     _listen_channels = frozenset({"notify_async_2946"})

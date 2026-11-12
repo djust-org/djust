@@ -24,6 +24,7 @@ class DebugPart:
 
 
 class DebugView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ count }} / {{ component_value }}</div>"
     time_travel_enabled = True
 

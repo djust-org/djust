@@ -32,6 +32,7 @@ pytestmark = pytest.mark.django_db
 
 
 class _RoomChatView(PresenceMixin, LiveView):
+    exposure_policy = "legacy"
     login_required = False
     presence_key = "chat:{room}"
     template = '<div dj-view="chat" dj-id="0">{{ room }}</div>'

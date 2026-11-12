@@ -35,6 +35,7 @@ RESORTED = sorted(ALL_ITEMS, key=lambda s: ((int(s[4:]) * 37) % 69, s))
 
 def keyed_filter_view(shape):
     class _KeyedFilterView(LiveView):
+        exposure_policy = "legacy"
         template = KEYED_FILTER_TEMPLATES[shape]
 
         def mount(self, request, **kwargs):

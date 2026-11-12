@@ -141,6 +141,7 @@ class MockTransport:
 class _OptInCounter(LiveView):
     """Top-level view that opts into per-event state persistence."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = '<div dj-root dj-id="0">count={{ count }}</div>'
 
@@ -159,6 +160,7 @@ class _OptInCounter(LiveView):
 class _DefaultCounter(LiveView):
     """Top-level view that does NOT opt in (#1552: must never persist)."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">count={{ count }}</div>'
 
     def mount(self, request, **kwargs):
@@ -175,6 +177,7 @@ class _DefaultCounter(LiveView):
 class _TimeTravelCounter(LiveView):
     """Top-level view with time-travel enabled (gets a _time_travel_buffer)."""
 
+    exposure_policy = "legacy"
     time_travel_enabled = True
     template = '<div dj-root dj-id="0">count={{ count }}</div>'
 
@@ -483,6 +486,7 @@ def test_runtime_save_reads_scope_or_mount_request():
 class _StickyOptInChild(LiveView):
     """A sticky child that opts into per-event persistence (Decision 5)."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "child"
     enable_state_snapshot = True
@@ -502,6 +506,7 @@ class _StickyOptInChild(LiveView):
 class _StickyOptInParent(LiveView):
     """A parent that opts in (Decision 5 requires BOTH child + parent)."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = '<div dj-root dj-id="0"><h1>parent={{ parent_count }}</h1></div>'
 
@@ -561,6 +566,7 @@ class TestRuntimeStickyChildSave:
         session = await sync_to_async(_make_db_session)()
 
         class _NonOptInParent(LiveView):
+            exposure_policy = "legacy"
             template = '<div dj-root dj-id="0">p={{ parent_count }}</div>'
 
             def mount(self, request, **kwargs):

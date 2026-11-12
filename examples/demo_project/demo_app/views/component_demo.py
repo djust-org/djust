@@ -211,6 +211,7 @@ class ComponentDemoView(LiveView):
     - State isolation
     """
 
+    exposure_policy = "legacy"
     template_name = "demos/component_demo.html"
 
     def mount(self, request, **kwargs):

@@ -133,7 +133,11 @@ def _view_class(name: str, mount=None):
         if mount is not None:
             mount(self, request)
 
-    return type(name, (LiveView,), {"template_name": "child_3061.html", "mount": _mount})
+    return type(
+        name,
+        (LiveView,),
+        {"exposure_policy": "legacy", "template_name": "child_3061.html", "mount": _mount},
+    )
 
 
 def _get(view_cls, user=None, message=None):

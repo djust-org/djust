@@ -248,6 +248,7 @@ def test_liveview_render_with_django_model_datefield_no_quote_wrap(db):
     user.date_joined = date(2026, 5, 3)
 
     class V(LiveView):
+        exposure_policy = "legacy"
         template = (
             "<div>\n"
             'A: {{ u.date_joined|date:"M d, Y" }}\n'
@@ -285,6 +286,7 @@ def test_liveview_render_with_list_of_models_jit_path_no_quote_wrap(db):
     u2.date_joined = date(2026, 6, 15)
 
     class V(LiveView):
+        exposure_policy = "legacy"
         template = (
             "<ul>\n"
             "{% for u in users %}"
@@ -329,6 +331,7 @@ def test_render_with_diff_full_no_quote_wrap(db):
     user.date_joined = date(2026, 5, 3)
 
     class V(LiveView):
+        exposure_policy = "legacy"
         template = (
             "<div>\n"
             'A: {{ u.date_joined|date:"M d, Y" }}\n'
@@ -371,6 +374,7 @@ def test_render_with_diff_tab_navigation_no_quote_wrap(db):
     user.date_joined = date(2026, 5, 3)
 
     class TabbedView(LiveView):
+        exposure_policy = "legacy"
         template = (
             "<div>\n"
             "Tab: {{ tab }}\n"
@@ -435,6 +439,7 @@ def test_render_with_diff_partial_no_quote_wrap(db):
     user.date_joined = date(2026, 5, 3)
 
     class V(LiveView):
+        exposure_policy = "legacy"
         template = (
             '<div>\nA: {{ u.date_joined|date:"M d, Y" }}\nB: {{ counter|default:"0" }}\n</div>\n'
         )

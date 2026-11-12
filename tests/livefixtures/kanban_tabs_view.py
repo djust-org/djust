@@ -108,6 +108,7 @@ def _initial_columns():
 class KanbanTabsView(LiveView):
     """8-tab dashboard, tab 3 = keyed kanban. State: ``active_tab``, ``columns``."""
 
+    exposure_policy = "legacy"
     template = '<div class="tabs-content">' + _TAB_BLOCKS + "</div>"
 
     def mount(self, request, active_tab=0):

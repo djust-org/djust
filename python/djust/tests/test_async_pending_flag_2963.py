@@ -31,6 +31,7 @@ SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 
 
 class SpinnerView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ status }}</span></div>"
 
     def mount(self, request, **kwargs):

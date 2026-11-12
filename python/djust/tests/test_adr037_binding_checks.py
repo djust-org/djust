@@ -61,6 +61,7 @@ def audited(function):
 
 
 class Decorated(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root><button dj-click="archive">x</button></div>"""
 
     @event_handler
@@ -76,6 +77,7 @@ class UserForm(forms.ModelForm):
 
 
 class EditUser(ModelFormMixin[User], LiveView):
+    exposure_policy = "legacy"
     """A managed ``self.object``: the framework owns its persistence."""
 
     model = User
@@ -88,6 +90,7 @@ class EditUser(ModelFormMixin[User], LiveView):
 
 
 class UserList(LiveView):
+    exposure_policy = "legacy"
     """Authorized ORM values rendered from the context, never persisted."""
 
     template = """<div dj-root>{% for user in users %}
@@ -110,6 +113,7 @@ class Handlers:
 
 
 class Names(Handlers, LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
 <button dj-click="nope">a</button>
 <button dj-click="helper">b</button>
@@ -142,6 +146,7 @@ class Names(Handlers, LiveView):
 
 
 class Legacy(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
 <input name="q" dj-input="search">
 <input name="q" dj-input="search_open">
@@ -174,6 +179,7 @@ class Legacy(LiveView):
 
 
 class Strict(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
 <button dj-click="pick" data-item-id="4">data only</button>
 <button dj-click="pick" dj-value-item-id:int="4">ok</button>
@@ -197,6 +203,7 @@ class Strict(LiveView):
 
 
 class Dynamic(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
 <button dj-click="{{ handler }}">computed</button>
 <div data-component-id="c1"><button dj-click="inside">component</button></div>
@@ -207,6 +214,7 @@ class Dynamic(LiveView):
 
 
 class Suppressed(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
 {# noqa: T019 -- rendered by a third-party widget that adds the handler #}
 <button dj-click="reasoned">a</button>
@@ -215,6 +223,7 @@ class Suppressed(LiveView):
 
 
 class Files(LiveView):
+    exposure_policy = "legacy"
     template_name = "fixture/page.html"
 
     @event_handler
@@ -223,6 +232,7 @@ class Files(LiveView):
 
 
 class OtherFiles(LiveView):
+    exposure_policy = "legacy"
     template_name = "fixture/page.html"
 
 
@@ -231,6 +241,7 @@ class ContactForm(forms.Form):
 
 
 class FormView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = ContactForm
     template = """<div dj-root>
 <input name="email" dj-change="validate_field">
@@ -248,6 +259,7 @@ class Counter(LiveComponent):
 
 
 class Exploding(LiveView):
+    exposure_policy = "legacy"
     """Nothing here may run during a check."""
 
     template = """<div dj-root>{% for item in items %}

@@ -237,6 +237,7 @@ class TestCaching:
         monkeypatch.setattr(_page_shell, "_entries", lambda src: calls.append(1) or real(src))
 
         class Inline(LiveView):
+            exposure_policy = "legacy"
             template = _doc(head='<link rel="stylesheet" href="/a.css">')
 
         with override_settings(**SETTINGS):
@@ -247,9 +248,11 @@ class TestCaching:
 
     def test_changed_inline_content_is_not_served_stale(self):
         class One(LiveView):
+            exposure_policy = "legacy"
             template = _doc(head='<link rel="stylesheet" href="/a.css">')
 
         class Two(LiveView):
+            exposure_policy = "legacy"
             template = _doc(head='<link rel="stylesheet" href="/b.css">')
 
         with override_settings(**SETTINGS):
@@ -274,6 +277,7 @@ class TestCaching:
             ]
 
         class Named(LiveView):
+            exposure_policy = "legacy"
             template_name = "t.html"
 
         with override_settings(TEMPLATES=templates(a_dir), **SETTINGS):
@@ -284,14 +288,17 @@ class TestCaching:
 
 
 class SourcePage(LiveView):
+    exposure_policy = "legacy"
     template = _doc(head='<link rel="stylesheet" href="/app.css">', body="<p>home</p>")
 
 
 class SameShellPage(LiveView):
+    exposure_policy = "legacy"
     template = _doc(head='<link rel="stylesheet" href="/app.css">', body="<p>same shell</p>")
 
 
 class OtherShellPage(LiveView):
+    exposure_policy = "legacy"
     template = _doc(
         head='<link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/examples.css">',
         after='<script src="/examples.js"></script>',
@@ -300,6 +307,7 @@ class OtherShellPage(LiveView):
 
 
 class FragmentPage(LiveView):
+    exposure_policy = "legacy"
     template = "<p dj-root>no document</p>"
 
 
@@ -366,12 +374,15 @@ class TestPageCarriesItsFingerprint:
         ]
 
         class A(LiveView):
+            exposure_policy = "legacy"
             template_name = "a.html"
 
         class B(LiveView):
+            exposure_policy = "legacy"
             template_name = "b.html"
 
         class A2(LiveView):
+            exposure_policy = "legacy"
             template_name = "a2.html"
 
         with override_settings(TEMPLATES=templates, **SETTINGS):
@@ -382,6 +393,7 @@ class TestPageCarriesItsFingerprint:
 
     def test_a_template_that_cannot_load_gives_none_and_never_raises(self):
         class Missing(LiveView):
+            exposure_policy = "legacy"
             template_name = "does-not-exist.html"
 
         with override_settings(**SETTINGS):

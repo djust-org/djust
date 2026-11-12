@@ -37,6 +37,7 @@ ROWS = {"all": ["a", "b", "c"], "mine": ["a"]}
 class ScopedView(LiveView):
     """Reads its scope from the URL in ``handle_params()``, like a filtered list."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-id="0"><p>{{ scope }}</p><p>{{ rows_text }}</p><p>{{ note }}</p></div>'
     )
@@ -254,6 +255,7 @@ class _Repo:
 class PrivateFromUrl(LiveView):
     """Default policy; non-JSON private state, one part built from the URL."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0"><p>{{ count }}</p><p>{{ note }}</p></div>'
 
     def mount(self, request, **kwargs):

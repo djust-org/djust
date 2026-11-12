@@ -23,6 +23,7 @@ def _queries(n):
 class FewMountQueries(LiveView):
     """Mount runs 3 queries, render runs none."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>few</div>"
 
     def mount(self, request, **kwargs):
@@ -32,6 +33,7 @@ class FewMountQueries(LiveView):
 class ManyMountQueries(LiveView):
     """Mount runs 35 queries (the issue's SalesReportView)."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>many</div>"
 
     def mount(self, request, **kwargs):
@@ -41,6 +43,7 @@ class ManyMountQueries(LiveView):
 class RenderQueries(LiveView):
     """Mount runs 1 query; rendering runs 4 more."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ n }}</div>"
 
     def mount(self, request, **kwargs):
@@ -105,7 +108,9 @@ class TestPerViewBudget:
         _fails([_with_budget(FewMountQueries, 2)], max_queries=100)
 
     def test_zero_budget_means_no_queries(self):
-        no_queries = _with_budget(type("Quiet", (LiveView,), {"template": "<div>q</div>"}), 0)
+        no_queries = _with_budget(
+            type("Quiet", (LiveView,), {"exposure_policy": "legacy", "template": "<div>q</div>"}), 0
+        )
         _run([no_queries], max_queries=100)
         _fails([_with_budget(FewMountQueries, 0)], max_queries=100)
 
@@ -212,6 +217,7 @@ class TestAttribute:
         """``self.query_budget = n`` in mount() is config, like ``self.tick_interval``."""
 
         class Budgeted(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{{ count }}</div>"
 
             def mount(self, request, **kwargs):

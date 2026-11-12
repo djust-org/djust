@@ -68,7 +68,11 @@ def _http_get(shell: str, text: str, directory: str) -> str:
     view = type(
         "WhitespaceView",
         (LiveView,),
-        {"template_name": name, "mount": lambda self, request, **kw: setattr(self, "t", text)},
+        {
+            "exposure_policy": "legacy",
+            "template_name": name,
+            "mount": lambda self, request, **kw: setattr(self, "t", text),
+        },
     )
     request = RequestFactory().get("/")
     request.user = AnonymousUser()

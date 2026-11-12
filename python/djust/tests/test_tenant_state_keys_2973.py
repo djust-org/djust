@@ -38,6 +38,7 @@ _URL = "/state-keys-2973/"
 
 
 class _TenantView(TenantMixin, LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">tenant view</div>'
 
     def mount(self, request, **kwargs):
@@ -45,6 +46,7 @@ class _TenantView(TenantMixin, LiveView):
 
 
 class _OptionalTenantView(TenantMixin, LiveView):
+    exposure_policy = "legacy"
     tenant_required = False
     template = '<div dj-root dj-id="0">optional tenant view</div>'
 
@@ -53,6 +55,7 @@ class _OptionalTenantView(TenantMixin, LiveView):
 
 
 class _PlainView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">plain view</div>'
 
     def mount(self, request, **kwargs):
@@ -221,6 +224,8 @@ class TestStateKeyHelper:
 
     def test_custom_hook_returning_empty_means_no_saved_state(self):
         class Opt(TenantMixin, LiveView):
+            exposure_policy = "legacy"
+
             def get_state_key_prefix(self):
                 return ""
 

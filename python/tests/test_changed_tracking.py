@@ -30,6 +30,7 @@ def _mock_rust_view() -> Mock:
 class CounterView(LiveView):
     """Simple view to test changed/unchanged attribute tracking."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ count }}</div>"
 
     def mount(self, request, **kwargs):
@@ -39,6 +40,7 @@ class CounterView(LiveView):
 class CachedDemoView(LiveView):
     """View using @lru_cache for expensive computed data."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ demos }} {{ count }}</div>"
 
     def mount(self, request, **kwargs):
@@ -59,6 +61,7 @@ def _get_cached_demos():
 class MultiAttrView(LiveView):
     """View with multiple attributes for selective change testing."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ a }} {{ b }} {{ c }}</div>"
 
     def mount(self, request, **kwargs):
@@ -477,6 +480,7 @@ class TestCollectSubIds:
 class DerivedContextView(LiveView):
     """View that exposes a sub-object of a mutated dict as a derived context var."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ person_data.first_name }}</div>"
 
     def mount(self, request, **kwargs):
@@ -492,6 +496,7 @@ class DerivedContextView(LiveView):
 class DerivedListView(LiveView):
     """View that exposes a list element sub-object as a derived context var."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ first_item.name }}</div>"
 
     def mount(self, request, **kwargs):
@@ -578,6 +583,7 @@ class TestDerivedContextSubObjectSync:
         changed value from self.__dict__, not from full_context."""
 
         class PrivateParentView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{{ claimant.first_name }}</div>"
 
             def mount(self, request, **kwargs):
@@ -649,6 +655,7 @@ class TestDerivedImmutableSync:
         """int counter computed from a list length must sync when list changes."""
 
         class TodoStatsView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{{ total_count }} / {{ completed_count }}</div>"
 
             def mount(self, request, **kwargs):
@@ -693,6 +700,7 @@ class TestDerivedImmutableSync:
         """str derived value must sync when its text changes."""
 
         class StatusView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{{ label }}</div>"
 
             def mount(self, request, **kwargs):
@@ -723,6 +731,7 @@ class TestDerivedImmutableSync:
         resent to Rust (would trigger spurious node re-renders)."""
 
         class FixedView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{{ n }}</div>"
 
             def mount(self, request, **kwargs):

@@ -46,6 +46,8 @@ class _RenderStubMixin:
     html_update. These tests assert handler-run + waiter resolution (not the frame),
     so a trivial render stub is enough to exercise the real runtime path."""
 
+    exposure_policy = "legacy"
+
     def render_with_diff(self, *args: Any, **kwargs: Any):
         # (html, patches, version) — patches=None drives the full-HTML branch.
         return ("<div>stub</div>", None, 1)

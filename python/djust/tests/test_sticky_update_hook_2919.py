@@ -26,6 +26,7 @@ _MOD = "djust.tests.test_sticky_update_hook_2919"
 class HookChild(LiveView):
     """Takes ``n`` and ``label`` at mount; ``_on_sticky_update`` re-applies them."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "hookchild"
     template = '<div>child {{ n }} {{ label }} clicks={{ clicks }}</div><b dj-click="bump">b</b>'
@@ -54,6 +55,7 @@ class HookChild(LiveView):
 
 
 class HookParent(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + _MOD + '.HookParent">'
@@ -77,6 +79,7 @@ class HookParent(LiveView):
 class PlainChild(LiveView):
     """No override: kwargs stay mount-time only, with a warning."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "plainchild"
     template = "<div>plain {{ n }}</div>"
@@ -89,6 +92,7 @@ class PlainChild(LiveView):
 
 
 class PlainParent(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + _MOD + '.PlainParent">'

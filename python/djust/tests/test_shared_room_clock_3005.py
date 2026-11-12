@@ -834,6 +834,7 @@ def test_liveview_testclient_can_mount_with_clocks_disabled_and_http_is_noop():
     c = RoomClock(name="testclient", interval=0.1, step=lambda _: None)
 
     class TestView(PresenceMixin, LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root>{{ value }}</div>"
         room_clock = c
         presence_key = "testclient-room"

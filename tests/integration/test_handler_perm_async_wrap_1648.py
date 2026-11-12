@@ -55,6 +55,7 @@ async def test_permission_required_handler_does_not_raise_sync_only(rf):
     user = await sync_to_async(User.objects.get)(pk=user.pk)
 
     class _PermView(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root>{{ x }}</div>"
 
         def mount(self, request, **kwargs):
@@ -100,6 +101,7 @@ async def test_permission_required_handler_denies_without_perm(rf):
     user = await sync_to_async(User.objects.create_user)(username="noperm-1648")
 
     class _PermView2(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root>{{ x }}</div>"
 
         def mount(self, request, **kwargs):

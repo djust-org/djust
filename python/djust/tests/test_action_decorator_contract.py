@@ -34,6 +34,8 @@ class _MinimalActionHost:
     initialize it on demand — we exercise that path too.
     """
 
+    exposure_policy = "legacy"
+
     def __init__(self):
         self._action_state = {}
 
@@ -172,6 +174,8 @@ class TestActionLazyInitializesActionState:
 class _ActionBackgroundHost:
     """Minimal host that provides both @action's _action_state and
     @background's start_async + handle_async_result."""
+
+    exposure_policy = "legacy"
 
     def __init__(self):
         self._action_state = {}

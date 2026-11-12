@@ -10,6 +10,7 @@ from djust.websocket import LiveViewConsumer
 
 
 class BackgroundView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>Count: {{ count }}</div>"
 
     def mount(self, request, **kwargs):

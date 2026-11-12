@@ -25,6 +25,8 @@ def clean_registry():
 class _FakeView:
     """Stand-in matching the contract get_state() expects."""
 
+    exposure_policy = "legacy"
+
     def __init__(self, count=0, label="test"):
         self.count = count
         self.label = label

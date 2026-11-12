@@ -293,6 +293,8 @@ def liveview_render(source: str, context: dict) -> str:
     """The REAL LiveView entry (see the module docstring). Needs `django_db`."""
 
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             pass
 
@@ -980,6 +982,8 @@ def render_page_shell(template: str, *, with_serialized_context: bool, card_cls=
     from django.test import RequestFactory
 
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             self.c = card_cls()
 

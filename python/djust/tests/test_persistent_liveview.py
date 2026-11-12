@@ -19,6 +19,7 @@ from djust.live_view import PersistentLiveView as PersistentLiveViewFromModule
 
 
 class Counter(PersistentLiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ count }}</div>"
 
     def mount(self, request, **kwargs):
@@ -26,6 +27,7 @@ class Counter(PersistentLiveView):
 
 
 class OptedOut(PersistentLiveView):
+    exposure_policy = "legacy"
     enable_state_snapshot = False
 
 
@@ -97,6 +99,7 @@ def _c304_messages():
 
 def test_c304_fires_for_persistent_subclass_with_pii_name():
     class LeakyPersistent(PersistentLiveView):
+        exposure_policy = "legacy"
         password = ""
 
     messages = _c304_messages()
@@ -107,9 +110,11 @@ def test_c304_fires_for_persistent_subclass_with_pii_name():
 
 def test_c304_silent_for_opted_out_and_clean_subclasses():
     class CleanPersistent(PersistentLiveView):
+        exposure_policy = "legacy"
         title = ""
 
     class OptedOutLeaky(PersistentLiveView):
+        exposure_policy = "legacy"
         enable_state_snapshot = False
         password = ""
 

@@ -149,6 +149,7 @@ def test_request_mixin_rejects_unsafe_hook_redirect(db, settings):
         return "https://evil.com/steal"
 
     class EvilHookView(LiveView):
+        exposure_policy = "legacy"
         template_name = "djust_theming/components/button.html"
         on_mount = [redirect_to_evil]
 
@@ -181,6 +182,7 @@ def test_request_mixin_accepts_safe_hook_redirect(db, settings):
         return "/accounts/login/"
 
     class SafeHookView(LiveView):
+        exposure_policy = "legacy"
         template_name = "djust_theming/components/button.html"
         on_mount = [redirect_to_login]
 

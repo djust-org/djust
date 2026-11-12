@@ -55,6 +55,7 @@ def _tpl(name: str) -> str:
 class PlainContact2667(FormMixin, LiveView):
     """Control: the correct shape — no user ``mount()`` at all."""
 
+    exposure_policy = "legacy"
     form_class = Contact2667Form
     template = _tpl("PlainContact2667")
 
@@ -65,6 +66,7 @@ class PlainContact2667(FormMixin, LiveView):
 class OwnMountNoSuper2667(FormMixin, LiveView):
     """A ``mount()`` override that forgets ``super().mount()``."""
 
+    exposure_policy = "legacy"
     form_class = Contact2667Form
     template = _tpl("OwnMountNoSuper2667")
 
@@ -79,6 +81,7 @@ class OwnMountNoSuper2667(FormMixin, LiveView):
 class ReversedMro2667(LiveView, FormMixin):
     """Bases in the wrong order — ``LiveView.mount`` wins the MRO."""
 
+    exposure_policy = "legacy"
     form_class = Contact2667Form
     template = _tpl("ReversedMro2667")
 

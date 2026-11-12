@@ -25,6 +25,7 @@ DOCS = {1: "ACME private (yours)", 2: "GLOBEX private (NOT yours)"}
 class _DocView(LiveView):
     """Object-scoped view (ADR-017): only doc 1 is permitted."""
 
+    exposure_policy = "legacy"
     template_name = None
     doc_id = 1
 
@@ -51,6 +52,7 @@ class _DocView(LiveView):
 class _PublicView(LiveView):
     """No custom get_object → object-perm lifecycle inactive (must stay no-op)."""
 
+    exposure_policy = "legacy"
     template_name = None
 
     def get_context_data(self, **kwargs):

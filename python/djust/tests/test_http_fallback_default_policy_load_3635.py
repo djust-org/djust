@@ -41,6 +41,7 @@ LOG: list = []
 class Loads(LiveView):
     """The page reads its rows after its first render."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root dj-id='0'><p>{{ status }}</p><p>{{ data }}</p><p>{{ token }}</p></div>"
     loads = 0
     mounts = 0
@@ -85,6 +86,7 @@ class Loads(LiveView):
 
 
 class NoWork(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root dj-id='0'><p>{{ status }}</p></div>"
 
     def mount(self, request, **kwargs):

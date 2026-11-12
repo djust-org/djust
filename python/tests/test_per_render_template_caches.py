@@ -56,6 +56,7 @@ def page_dir(tmp_path, settings):
 
 
 class CachedPage(LiveView):
+    exposure_policy = "legacy"
     template_name = "rc/page.html"
 
     def mount(self, request, **kwargs):

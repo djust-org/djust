@@ -99,6 +99,7 @@ class Idempotent(LiveComponent):
 
 
 class IdempotentPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ banner }}</div>"
     banner = Idempotent()
 
@@ -125,6 +126,7 @@ class Probe(LiveComponent):
 class OpaquePage(LiveView):
     """``{{ nav }}`` is the only read of the component: D2 holds."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><h1>{{ title }}</h1>{{ nav }}<i>{{ note }}</i></div>"
     nav = Tabs()
 
@@ -155,6 +157,7 @@ class OpaquePage(LiveView):
 class ReadsStatePage(LiveView):
     """``{{ nav.active }}`` elsewhere: not opaque, page render."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ nav }}|{{ nav.active }}</div>"
     nav = Tabs()
 
@@ -165,6 +168,7 @@ class ReadsStatePage(LiveView):
 class ComputedPage(LiveView):
     """A memoised ``@computed`` over the component: page render."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ nav }}<b>{{ label }}</b></div>"
     nav = Tabs()
 
@@ -180,6 +184,7 @@ class PropertyPage(LiveView):
     """A view ``@property`` derived from the component, read by the template
     under another name (review of #2920 🔴1)."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ nav }}<b>{{ label }}</b></div>"
     nav = Tabs()
 
@@ -194,6 +199,7 @@ class PropertyPage(LiveView):
 class ContextDataPage(LiveView):
     """``get_context_data`` derives a value from the component."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ nav }}<b>{{ label }}</b></div>"
     nav = Tabs()
 
@@ -209,6 +215,7 @@ class ContextDataPage(LiveView):
 class PlainComputedPage(LiveView):
     """A dep-less ``@computed`` over the component."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ nav }}<b>{{ label }}</b></div>"
     nav = Tabs()
 
@@ -221,6 +228,7 @@ class PlainComputedPage(LiveView):
 
 
 class AliasPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><h1>{{ title }}</h1>{{ probe }}</div>"
     probe = Probe()
 
@@ -352,6 +360,7 @@ class TestScopedComponentFor:
                 x: int = 0
 
         class Page(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{{ plain }}</div>"
             plain = Plain()
 

@@ -47,6 +47,8 @@ async def _connect_and_mount(view_suffix, url):
 
 
 class _StrictHotView(LiveView):
+    exposure_policy = "legacy"
+
     @property
     def template(self):
         return (
@@ -79,6 +81,7 @@ class _LegacyHotView(_StrictHotView):
 
 
 class _StrictPushView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_producer_parameter_contracts._StrictPushView" '
         'dj-id="0">Step: {{ step }}</div>'
@@ -209,6 +212,7 @@ class _LegacyPick(LiveComponent):
 
 
 class _OwnerLifecycleView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_producer_parameter_contracts._OwnerLifecycleView" '
         'dj-id="0">Owners: {{ owners }}</div>'

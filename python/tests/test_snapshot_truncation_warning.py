@@ -16,11 +16,11 @@ from djust.websocket import _snapshot_assigns
 
 
 class _ListView(LiveView):
-    pass
+    exposure_policy = "legacy"
 
 
 class _DictView(LiveView):
-    pass
+    exposure_policy = "legacy"
 
 
 def _reset_truncation_sentinels(*classes):

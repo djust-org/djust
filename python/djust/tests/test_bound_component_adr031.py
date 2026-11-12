@@ -153,6 +153,7 @@ class Toggle(LiveComponent):
 
 
 class Page(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0"><p>{{ nav.active }}</p></div>'
 
     nav = Toggle(active="a")
@@ -177,6 +178,7 @@ class LegacyNoState(BaseLiveComponent):
 
 
 class LegacyPage(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">x</div>'
     widget = LegacyNoState()
 
@@ -289,6 +291,7 @@ class TestBoundComponentBinding:
         nor write into the State (a ``_x`` write would reach the session)."""
 
         class TabsPage(LiveView):
+            exposure_policy = "legacy"
             tabs = Tabs(active="one")
 
         bound = TabsPage().tabs
@@ -367,6 +370,7 @@ class TestBoundComponentEvents:
         ``_handle_event``; an event carrying their ``component_id`` reaches it."""
 
         class TabsPage(LiveView):
+            exposure_policy = "legacy"
             template = '<div dj-root dj-id="0">{{ tabs.active }}</div>'
             tabs = Tabs(active="one")
 
@@ -400,6 +404,7 @@ class TestBoundComponentEvents:
         monkeypatch.setattr(Tabs, "_handle_event", spy)
 
         class TabsPage(LiveView):
+            exposure_policy = "legacy"
             tabs = Tabs(active="one")
 
         view = TabsPage()
@@ -426,7 +431,7 @@ class TestBoundComponentEvents:
         monkeypatch.setattr(descriptor_cls, "_handle_event", spy)
         event = descriptor_cls.Meta.event
 
-        View = type("View", (LiveView,), {"comp": descriptor_cls()})
+        View = type("View", (LiveView,), {"exposure_policy": "legacy", "comp": descriptor_cls()})
         view = View()
         bound = view.comp
         assert isinstance(bound, BoundComponent)

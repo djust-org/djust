@@ -114,7 +114,7 @@ class TestThePremiseThatBlockedThisFix:
 
         from djust import LiveView
 
-        view = type("_V", (LiveView,), {"template": template})()
+        view = type("_V", (LiveView,), {"exposure_policy": "legacy", "template": template})()
         request = RequestFactory().get("/")
         view.mount(request)
         for k, v in state.items():

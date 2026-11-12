@@ -34,6 +34,7 @@ HEAVY_NAMES = ("theme_head", "theme_css", "theme_switcher", "theme_presets")
 class TagOnlyView(ThemeMixin, LiveView):
     """The page from the issue: it prints the tag and reads none of the four."""
 
+    exposure_policy = "legacy"
     template = (
         "{% load theme_tags %}<html><head>{% theme_head %}</head>"
         "<body><div dj-root>C{{ count }}</div></body></html>"
@@ -47,6 +48,7 @@ class TagOnlyView(ThemeMixin, LiveView):
 class VariableView(ThemeMixin, LiveView):
     """A page that prints the variable forms the mixin documents."""
 
+    exposure_policy = "legacy"
     template = (
         "<html><head>[{{ theme_head }}]</head><body><div dj-root>"
         "C{{ count }}|{{ theme_switcher }}|{{ theme_mode }}"
@@ -318,6 +320,7 @@ class TestAViewRestoredFromAnOlderSession:
 
 
 class WsThemed(ThemeMixin, LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_theme_mixin_state_weight_3626.WsThemed" dj-id="0">'
         "[{{ theme_head }}]|[{{ theme_switcher }}]|{{ theme_presets|length }}"

@@ -27,6 +27,7 @@ _MOD = "djust.tests.test_realtime_v121_6"
 
 
 class RoomView(PresenceMixin, LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><p>{{ online }}</p></div>"
     presence_key = "room_2968"
 
@@ -39,6 +40,7 @@ class RoomView(PresenceMixin, LiveView):
 
 
 class PlainView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><p>plain</p></div>"
 
     def mount(self, request: Any, **kwargs: Any) -> None:

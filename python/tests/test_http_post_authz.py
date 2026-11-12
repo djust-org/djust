@@ -48,6 +48,7 @@ RAN: list = []
 class LoginRequiredView(LiveView):
     """Layer 1: view-level ``login_required``."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ status }}</div>"
     login_required = True
 
@@ -66,6 +67,7 @@ class ViewPermissionView(LiveView):
     500 rather than a denial.
     """
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ status }}</div>"
     login_required = True
     permission_required = "auth.view_user"
@@ -79,6 +81,7 @@ class ViewPermissionView(LiveView):
 class HandlerPermissionView(LiveView):
     """Layer 2: ``@permission_required`` on the handler itself."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ status }}</div>"
 
     @require_permission("auth.view_user")
@@ -91,6 +94,7 @@ class HandlerPermissionView(LiveView):
 class ObjectPermissionView(LiveView):
     """Layer 3: ADR-017 object-level denial (``has_object_permission`` False)."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ status }}</div>"
 
     def get_object(self):
@@ -108,6 +112,7 @@ class ObjectPermissionView(LiveView):
 class AuthorizedView(LiveView):
     """Control: a caller who satisfies every layer must still get through."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ status }}</div>"
     login_required = True
     permission_required = "auth.view_user"
@@ -133,6 +138,7 @@ class OpenView(LiveView):
     depends on — the fix must not change it.
     """
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ status }}</div>"
 
     @event_handler()

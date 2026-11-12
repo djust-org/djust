@@ -112,6 +112,7 @@ def _template(name, body):
 
 
 class _Base(LiveView):
+    exposure_policy = "legacy"
     abstract = True
 
     def mount(self, request, **kwargs):
@@ -213,6 +214,7 @@ SetupGateView = _view("SetupGateView", {"setup": _setup_gate})
 class BodyGateView(LiveView):
     """Visible to both the source scan and the inspect-based S012."""
 
+    exposure_policy = "legacy"
     template = _template("BodyGateView", "BODYGATEVIEW-MARKER")
 
     def dispatch(self, request, *args, **kwargs):
@@ -339,6 +341,7 @@ _pkg = _module(
     "            return self.handle_no_permission()\n"
     "        return super().dispatch(request, *args, **kwargs)\n"
     "class EditorView(EditorMixin, LiveView):\n"
+    "    exposure_policy = 'legacy'\n"
     "    template = '<div>editor</div>'\n",
 )
 

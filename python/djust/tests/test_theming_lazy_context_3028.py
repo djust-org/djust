@@ -515,7 +515,7 @@ def _view_class(template_name, explicit=False):
             self.count = 0
 
         attrs["mount"] = mount
-    return type("V3028", (LiveView,), attrs)
+    return type("V3028", (LiveView,), {"exposure_policy": "legacy", **attrs})
 
 
 def _mounted(view_cls, request):

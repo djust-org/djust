@@ -49,6 +49,7 @@ LIST_CONTEXT_TEMPLATE = """
 class WizardView(LiveView):
     """View that computes current_step from step_index."""
 
+    exposure_policy = "legacy"
     template_name = None
 
     def get_template(self):
@@ -104,6 +105,7 @@ class TestDerivedContextAutoDetection:
         re-sent to Rust even if only a source attribute changed."""
 
         class DictView(LiveView):
+            exposure_policy = "legacy"
             template_name = None
 
             def get_template(self):
@@ -140,6 +142,7 @@ class TestDerivedContextAutoDetection:
         re-sent to Rust automatically."""
 
         class ListView(LiveView):
+            exposure_policy = "legacy"
             template_name = None
 
             def get_template(self):

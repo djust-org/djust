@@ -33,6 +33,7 @@ NBSP = " "
 
 
 class _NumView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-id="0">{{ n }}</div>'
     _value = 1234.5
 

@@ -16,6 +16,7 @@ class DebounceSearchView(LiveView):
     - Demonstrates max_wait forcing execution after 2 seconds
     """
 
+    exposure_policy = "legacy"
     template = """
     <div dj-root class="container mt-5">
         <div class="row">

@@ -28,6 +28,7 @@ def _mock_rust_view() -> Mock:
 class StaticView(LiveView):
     """View with static_assigns configured."""
 
+    exposure_policy = "legacy"
     template = "<div data-djust-root>{{ demos }} {{ count }}</div>"
     static_assigns = ["demos"]
 
@@ -39,6 +40,7 @@ class StaticView(LiveView):
 class OverlappingView(LiveView):
     """View with overlapping static and temporary assigns (invalid)."""
 
+    exposure_policy = "legacy"
     template = "<div data-djust-root>{{ items }}</div>"
     static_assigns = ["items"]
     temporary_assigns = {"items": []}
@@ -50,6 +52,7 @@ class OverlappingView(LiveView):
 class NoStaticView(LiveView):
     """View without static_assigns (baseline)."""
 
+    exposure_policy = "legacy"
     template = "<div data-djust-root>{{ count }}</div>"
 
     def mount(self, request, **kwargs):

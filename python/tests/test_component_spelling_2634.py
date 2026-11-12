@@ -95,6 +95,7 @@ class TestStrIsRender:
 
 
 class SpellingView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root><i id="bare">{{ c }}</i><i id="dotted">{{ c.render }}</i></div>'
 
     def mount(self, request, **kwargs):

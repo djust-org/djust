@@ -32,6 +32,7 @@ def _read(cursor):
 
 
 class ListView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-view="tests.ListView">{{ cursor }} {{ shown }}</div>'
     restores = 0
 
@@ -57,6 +58,7 @@ class ListView(LiveView):
 class AllSavedView(LiveView):
     """Every private attribute is JSON, so the fallback never calls mount()."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root dj-view="tests.AllSavedView">{{ shown }}</div>'
 
     def mount(self, request, **kwargs):

@@ -43,7 +43,11 @@ class TestV010TutorialMixinMRO:
         cls = type(
             "BadView_691a",
             (LiveView, TutorialMixin),
-            {"__module__": "myapp.test_views", "template_name": "t.html"},
+            {
+                "exposure_policy": "legacy",
+                "__module__": "myapp.test_views",
+                "template_name": "t.html",
+            },
         )
         v010 = self._run_check_for_v010(cls)
         assert len(v010) >= 1
@@ -56,7 +60,11 @@ class TestV010TutorialMixinMRO:
         cls = type(
             "GoodView_691b",
             (TutorialMixin, LiveView),
-            {"__module__": "myapp.test_views", "template_name": "t.html"},
+            {
+                "exposure_policy": "legacy",
+                "__module__": "myapp.test_views",
+                "template_name": "t.html",
+            },
         )
         v010 = self._run_check_for_v010(cls)
         # Filter to only this class
@@ -70,7 +78,11 @@ class TestV010TutorialMixinMRO:
         cls = type(
             "PlainView_691c",
             (LiveView,),
-            {"__module__": "myapp.test_views", "template_name": "t.html"},
+            {
+                "exposure_policy": "legacy",
+                "__module__": "myapp.test_views",
+                "template_name": "t.html",
+            },
         )
         v010 = self._run_check_for_v010(cls)
         relevant = [e for e in v010 if "PlainView_691c" in e.msg]
@@ -83,7 +95,11 @@ class TestV010TutorialMixinMRO:
         cls = type(
             "SuppressedView_691d",
             (LiveView, TutorialMixin),
-            {"__module__": "myapp.test_views", "template_name": "t.html"},
+            {
+                "exposure_policy": "legacy",
+                "__module__": "myapp.test_views",
+                "template_name": "t.html",
+            },
         )
         try:
             with override_settings(DJUST_CONFIG={"suppress_checks": ["V010"]}):
@@ -103,7 +119,11 @@ class TestV010TutorialMixinMRO:
         cls = type(
             "HintView_691e",
             (LiveView, TutorialMixin),
-            {"__module__": "myapp.test_views", "template_name": "t.html"},
+            {
+                "exposure_policy": "legacy",
+                "__module__": "myapp.test_views",
+                "template_name": "t.html",
+            },
         )
         try:
             from djust.checks import check_liveviews
@@ -130,6 +150,7 @@ class TestContextNonSerializableClassAttrs:
         from djust.mixins.context import ContextMixin
 
         class FakeView(ContextMixin):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def __init__(self, **kwargs):
@@ -170,6 +191,8 @@ class TestContextNonSerializableClassAttrs:
         from djust.mixins.context import ContextMixin
 
         class TestView(ContextMixin):
+            exposure_policy = "legacy"
+
             def __init__(self):
                 pass
 
@@ -212,6 +235,7 @@ class TestContextNonSerializableClassAttrs:
         from djust.mixins.waiters import WaiterMixin
 
         class TourView(WaiterMixin, PushEventMixin, TutorialMixin, ContextMixin):
+            exposure_policy = "legacy"
             _tutorial_steps = [
                 TutorialStep(target="#a", message="Step 1"),
             ]

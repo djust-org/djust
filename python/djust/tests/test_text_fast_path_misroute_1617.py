@@ -96,6 +96,7 @@ class TestIssue1617MisrouteRepro:
         rockets-node path."""
 
         class ChipPlusReactionsView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div dj-root>"
                 '<span class="chip">{{ online_count }} online</span>'
@@ -153,6 +154,7 @@ class TestIssue1617MisrouteRepro:
         a misrouted bare-value patch to an unrelated sibling."""
 
         class AdjacentView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div dj-root>"
                 '<span class="ab">{{ a }}{{ b }}</span>'
@@ -198,6 +200,7 @@ class TestIssue1617MisrouteRepro:
         the position-aware fix must not regress it."""
 
         class PureView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 '<div dj-root><span class="x">{{ x }}</span><span class="y">{{ y }}</span></div>'
             )

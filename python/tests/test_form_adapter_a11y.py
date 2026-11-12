@@ -353,6 +353,7 @@ class TestThemeClasses:
 
 
 class OrderView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = OrderForm
     template = (
         '{% load live_tags %}<div dj-root><form dj-submit="submit_form">'

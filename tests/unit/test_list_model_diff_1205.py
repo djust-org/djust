@@ -45,6 +45,7 @@ class TestListModelDiff1205:
         re-render when a model field mutates."""
 
         class TaskView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div>"
                 "{% for task in tasks %}"
@@ -99,6 +100,7 @@ class TestListModelDiff1205:
         User.objects.create(username="bob", is_active=False)
 
         class UserListView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div>"
                 "{% for u in users %}"
@@ -132,6 +134,7 @@ class TestListModelDiff1205:
         must also propagate field mutations."""
 
         class ProfileView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div>{% if profile.is_active %}A{% else %}I{% endif %}{{ profile.username }}</div>"
             )
@@ -175,6 +178,7 @@ class TestListModelDiff1205:
         """
 
         class JITView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{% for t in tasks %}{{ t.username }}{% endfor %}</div>"
             tasks = [
                 User(username="alice", pk=1, is_active=True),
@@ -210,6 +214,7 @@ class TestListModelDiff1205:
         """An empty list (not list[Model]) must not trip the normalize pass."""
 
         class EmptyView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{% for t in tasks %}{{ t }}{% endfor %}empty</div>"
 
             def mount(self, request, **kwargs):
@@ -230,6 +235,7 @@ class TestListModelDiff1205:
         ``normalize_django_value(item)`` (which is a no-op on plain dicts)."""
 
         class MixedView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{% for t in items %}|{{ t }}{% endfor %}</div>"
 
             def mount(self, request, **kwargs):
@@ -265,6 +271,7 @@ class TestListModelDiff1205:
         """
 
         class HetView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div>"
                 "{% for t in items %}"
@@ -311,6 +318,7 @@ class TestListModelDiff1205:
         """
 
         class GroupedView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div>"
                 "{% for group in groups %}"

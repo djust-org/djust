@@ -98,6 +98,7 @@ async def _connect_and_mount(view_path: str, url: str = "/ui/"):
 
 
 class AlertHostView(LiveView):
+    exposure_policy = "legacy"
     template = (
         f'<div dj-root dj-view="{_MODULE}.AlertHostView" dj-id="0"><p>visible={{{{ v }}}}</p></div>'
     )
@@ -112,6 +113,7 @@ class AlertHostView(LiveView):
 
 
 class BadgeHostView(LiveView):
+    exposure_policy = "legacy"
     template = (
         f'<div dj-root dj-view="{_MODULE}.BadgeHostView" dj-id="0"><p>visible={{{{ v }}}}</p></div>'
     )
@@ -272,7 +274,11 @@ def _mounted_component(cls):
 
     kwargs = _RENDER_KWARGS.get(cls.__name__, {})
     if issubclass(cls, ComponentDeclaration):
-        owner = type("CatalogueAuditOwner", (LiveView,), {"component": cls(**kwargs)})()
+        owner = type(
+            "CatalogueAuditOwner",
+            (LiveView,),
+            {"exposure_policy": "legacy", "component": cls(**kwargs)},
+        )()
         bound = owner.component
         if isinstance(bound, DropdownMenu):
             bound.open = True  # Include selection controls, not only the trigger.

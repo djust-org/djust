@@ -31,6 +31,7 @@ from djust.testing import LiveViewTestClient
 
 
 class _SimpleView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root><div class="c"><span>{{ n }}</span></div></div>'
 
     def mount(self, request, **kwargs):
@@ -41,6 +42,7 @@ class _IfAddView(LiveView):
     """The #1641 shape: a false->true {% if %} add with no {% else %}, plus a
     sibling form control."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root><div class="c">'
         '<div class="card">Settings</div>'
@@ -61,6 +63,7 @@ class _IfAddView(LiveView):
 
 
 class _NestedIfElifView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root><div class="c"><section><div class="b">'
         "<p>v: <strong>{{ q }}</strong></p>"

@@ -90,6 +90,8 @@ class MockTransport:
 class _SymmetryView:
     """A minimal LiveView-shaped object used to compare outputs."""
 
+    exposure_policy = "legacy"
+
     def __init__(self):
         self.kwargs_received: Optional[Dict[str, Any]] = None
         self.handle_params_calls: List = []

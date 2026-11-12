@@ -102,7 +102,11 @@ def test_shell_splice_reads_template_syntax_as_text():
         self.snippet = _IF_TEXT
 
     with _TemplateHarness(_BASE, child):
-        cls = type("ShellIfText", (LiveView,), {"template_name": "child_1746.html", "mount": mount})
+        cls = type(
+            "ShellIfText",
+            (LiveView,),
+            {"exposure_policy": "legacy", "template_name": "child_1746.html", "mount": mount},
+        )
         view = cls()
         view.mount(None)
         view.get_template()

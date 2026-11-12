@@ -37,6 +37,7 @@ def _body(kind: str, salt: str) -> str:
 
 
 class _DeepView(LiveView):
+    exposure_policy = "legacy"
     template = (
         f'<div dj-view="{_MODULE}._DeepView" dj-root>'
         '{{ body|safe }}<p id="n">{{ n }}</p></div>'

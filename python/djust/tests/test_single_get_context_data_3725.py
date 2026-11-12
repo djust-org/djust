@@ -57,6 +57,7 @@ INSTANCES: list = []
 
 
 class _Base(LiveView):
+    exposure_policy = "legacy"
     login_required = False
 
     @event_handler()

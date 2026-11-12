@@ -52,6 +52,7 @@ class IncludeView(LiveView):
     """dj-root template includes a partial that uses a context-processor var
     AND a plain view attr (the discriminator)."""
 
+    exposure_policy = "legacy"
     template_name = "_1722_page.html"
 
     def mount(self, request, **kwargs):

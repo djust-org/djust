@@ -66,6 +66,8 @@ def raw_render(source: str, context: dict) -> str:
 
 def liveview_render(source: str, context: dict) -> str:
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             pass
 
@@ -492,6 +494,8 @@ class TestTheHandleIsReleasedAtTeardown2539:
             cls_attr = "class-level"
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.obj = _Held()
 

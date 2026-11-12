@@ -81,6 +81,7 @@ def _elements_with_attr(html: str, attr: str) -> List[Tuple[str, Dict[str, str]]
 class _StickyAudioPlayer(LiveView):
     """Sticky child — mimics an audio player preserved across navigation."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "audio-player"
     template = '<div><button dj-click="play">Play {{ current_track }}</button></div>'
@@ -95,6 +96,7 @@ class _StickyAudioPlayer(LiveView):
 class _StickyAlsoPreserved(LiveView):
     """Second sticky child — multi-sticky coexistence test."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "chat-widget"
     template = "<div><span>Chat {{ msg }}</span></div>"
@@ -106,6 +108,7 @@ class _StickyAlsoPreserved(LiveView):
 class _NonStickyChild(LiveView):
     """A regular (non-sticky) child — should be discarded on live_redirect."""
 
+    exposure_policy = "legacy"
     template = '<div><button dj-click="click">Ephemeral</button></div>'
 
     def mount(self, request, **kwargs):
@@ -118,6 +121,7 @@ class _NonStickyChild(LiveView):
 class _StickyButClassFalse(LiveView):
     """Class does NOT set ``sticky = True`` — the tag kwarg must error."""
 
+    exposure_policy = "legacy"
     template = "<div>nope</div>"
 
     def mount(self, request, **kwargs):
@@ -127,6 +131,7 @@ class _StickyButClassFalse(LiveView):
 class _StickyAdminOnly(LiveView):
     """Sticky + permission-gated — for the auth re-check test."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "admin-widget"
     permission_required = "auth.admin"
@@ -142,6 +147,7 @@ class _StickyAdminOnly(LiveView):
 
 
 class _ParentWithSticky(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -155,6 +161,7 @@ class _ParentWithSticky(LiveView):
 
 
 class _ParentWithNonSticky(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -168,6 +175,7 @@ class _ParentWithNonSticky(LiveView):
 
 
 class _ParentWithMultipleSticky(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -181,6 +189,7 @@ class _ParentWithMultipleSticky(LiveView):
 
 
 class _ParentWithStickyAndAdmin(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -908,6 +917,7 @@ class _StrictSticky(LiveView):
     attribute path covered by ``TestAuthRecheckRevoked``.
     """
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "strict-widget"
     template = "<div>strict</div>"
@@ -920,6 +930,7 @@ class _StrictSticky(LiveView):
 
 
 class _ParentWithStrictSticky(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -969,6 +980,7 @@ class TestOnStickyUnmountCancelsAsync:
         calls: list[str] = []
 
         class _StickyWithAsync(LiveView):
+            exposure_policy = "legacy"
             sticky = True
             sticky_id = "async-widget"
             template = "<div>async</div>"
@@ -1001,6 +1013,7 @@ class TestOnStickyUnmountCancelsAsync:
         never break the disconnect / redirect loop."""
 
         class _StickyWithBrokenCancel(LiveView):
+            exposure_policy = "legacy"
             sticky = True
             sticky_id = "broken-async"
             template = "<div>broken</div>"

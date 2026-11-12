@@ -63,6 +63,7 @@ class TestCheckViewAuthLoginRequired:
         from djust.live_view import LiveView
 
         class SecureView(LiveView):
+            exposure_policy = "legacy"
             login_required = True
 
         view = SecureView()
@@ -74,6 +75,7 @@ class TestCheckViewAuthLoginRequired:
         from djust.live_view import LiveView
 
         class SecureView(LiveView):
+            exposure_policy = "legacy"
             login_required = True
 
         view = SecureView()
@@ -87,6 +89,7 @@ class TestCheckViewAuthLoginRequired:
         from djust.live_view import LiveView
 
         class SecureView(LiveView):
+            exposure_policy = "legacy"
             login_required = True
 
         view = SecureView()
@@ -99,6 +102,7 @@ class TestCheckViewAuthLoginRequired:
         from djust.live_view import LiveView
 
         class SecureView(LiveView):
+            exposure_policy = "legacy"
             login_required = True
             login_url = "/my-login/"
 
@@ -112,6 +116,7 @@ class TestCheckViewAuthLoginRequired:
         from djust.live_view import LiveView
 
         class PublicView(LiveView):
+            exposure_policy = "legacy"
             login_required = False
 
         view = PublicView()
@@ -125,6 +130,7 @@ class TestCheckViewAuthPermissions:
         from djust.live_view import LiveView
 
         class AdminView(LiveView):
+            exposure_policy = "legacy"
             login_required = True
             permission_required = "myapp.view_dashboard"
 
@@ -137,6 +143,7 @@ class TestCheckViewAuthPermissions:
         from djust.live_view import LiveView
 
         class AdminView(LiveView):
+            exposure_policy = "legacy"
             login_required = True
             permission_required = "myapp.view_dashboard"
 
@@ -150,6 +157,7 @@ class TestCheckViewAuthPermissions:
         from djust.live_view import LiveView
 
         class AdminView(LiveView):
+            exposure_policy = "legacy"
             permission_required = "myapp.view_dashboard"
 
         view = AdminView()
@@ -163,6 +171,7 @@ class TestCheckViewAuthPermissions:
         from djust.live_view import LiveView
 
         class AdminView(LiveView):
+            exposure_policy = "legacy"
             login_required = True
             permission_required = ["myapp.view_dashboard", "myapp.edit_dashboard"]
 
@@ -178,6 +187,7 @@ class TestCheckViewAuthPermissions:
         from djust.live_view import LiveView
 
         class AdminView(LiveView):
+            exposure_policy = "legacy"
             login_required = True
             permission_required = ["myapp.view_dashboard", "myapp.edit_dashboard"]
 
@@ -194,6 +204,7 @@ class TestCheckViewAuthPermissions:
         from djust.live_view import LiveView
 
         class PermOnlyView(LiveView):
+            exposure_policy = "legacy"
             permission_required = "myapp.view_public"
 
         view = PermOnlyView()
@@ -209,6 +220,7 @@ class TestCheckViewAuthCustomHook:
         from djust.live_view import LiveView
 
         class CustomView(LiveView):
+            exposure_policy = "legacy"
             login_required = True
 
             def check_permissions(self, request):
@@ -223,6 +235,7 @@ class TestCheckViewAuthCustomHook:
         from djust.live_view import LiveView
 
         class CustomView(LiveView):
+            exposure_policy = "legacy"
             login_required = True
 
             def check_permissions(self, request):
@@ -238,6 +251,7 @@ class TestCheckViewAuthCustomHook:
         from djust.live_view import LiveView
 
         class CustomView(LiveView):
+            exposure_policy = "legacy"
             login_required = True
 
             def check_permissions(self, request):
@@ -253,6 +267,8 @@ class TestCheckViewAuthCustomHook:
         from djust.live_view import LiveView
 
         class CustomView(LiveView):
+            exposure_policy = "legacy"
+
             def check_permissions(self, request):
                 return False
 
@@ -349,6 +365,7 @@ class TestMixins:
         from djust.live_view import LiveView
 
         class MyView(LoginRequiredMixin, LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
         view = MyView()
@@ -359,6 +376,7 @@ class TestMixins:
         from djust.live_view import LiveView
 
         class MyView(PermissionRequiredMixin, LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             permission_required = "myapp.view_thing"
 
@@ -371,6 +389,7 @@ class TestMixins:
         from djust.live_view import LiveView
 
         class MyView(LoginRequiredMixin, LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
         view = MyView()
@@ -388,6 +407,7 @@ class TestMixins:
         from djust.live_view import LiveView
 
         class MyView(PermissionRequiredMixin, LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             permission_required = "myapp.edit_item"
 

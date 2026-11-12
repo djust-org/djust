@@ -68,6 +68,7 @@ def _clear_shared_store():
 class _RateLimitedView(LiveView):
     """A view with a per-handler @rate_limit(rate=5, burst=5) handler."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ratelimit_per_caller_f27_f28._RateLimitedView" '
         'dj-id="0">x</div>'
@@ -90,6 +91,7 @@ class _SlowRefillView(LiveView):
     meaningful refill happens within an end-to-end WS test window — keeping the
     accepted-count assertion deterministic regardless of round-trip timing."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ratelimit_per_caller_f27_f28._SlowRefillView" '
         'dj-id="0">x</div>'

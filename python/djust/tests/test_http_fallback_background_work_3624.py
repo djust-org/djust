@@ -36,6 +36,7 @@ LOG: list = []
 
 
 class BackgroundView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0"><p>{{ status }}</p><p>{{ data }}</p></div>'
 
     def mount(self, request, **kwargs):

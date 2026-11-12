@@ -41,6 +41,7 @@ class _StubDocument:
 class _DenyView(LiveView):
     """Always denies via has_object_permission(...) -> False."""
 
+    exposure_policy = "legacy"
     template = "<div>denied</div>"
 
     def mount(self, request, document_id: int = 0, **kwargs):
@@ -56,6 +57,7 @@ class _DenyView(LiveView):
 class _AllowView(LiveView):
     """Always allows; should populate self._object."""
 
+    exposure_policy = "legacy"
     template = "<div>{{ document_id }}</div>"
 
     def mount(self, request, document_id: int = 0, **kwargs):
@@ -71,6 +73,7 @@ class _AllowView(LiveView):
 class _NoOverrideView(LiveView):
     """No override — control case for Decision 6 (zero behavior change)."""
 
+    exposure_policy = "legacy"
     template = "<div>noop</div>"
 
     def mount(self, request, **kwargs):
@@ -81,6 +84,7 @@ class _CounterView(LiveView):
     """Counts get_object() calls so the cache-invalidate test can verify
     that get_object() actually re-runs after invalidation."""
 
+    exposure_policy = "legacy"
     template = "<div>{{ value }}</div>"
     _calls: int = 0
 
@@ -103,6 +107,7 @@ class _NoneObjectView(LiveView):
     raise 404 (not 403, which would leak existence).
     """
 
+    exposure_policy = "legacy"
     template = "<div>none</div>"
 
     def mount(self, request, **kwargs):
@@ -122,6 +127,7 @@ class _DoesNotExistView(LiveView):
     treat the object as None — automating the 404-shape OWASP pattern.
     """
 
+    exposure_policy = "legacy"
     template = "<div>missing</div>"
 
     def mount(self, request, **kwargs):
@@ -147,6 +153,7 @@ class _Http404View(LiveView):
     Same 404-shape semantics as ObjectDoesNotExist.
     """
 
+    exposure_policy = "legacy"
     template = "<div>404</div>"
 
     def mount(self, request, **kwargs):
@@ -170,6 +177,7 @@ class _PermissionDeniedView(LiveView):
     this test locks the contract.
     """
 
+    exposure_policy = "legacy"
     template = "<div>denied-via-raise</div>"
 
     def mount(self, request, **kwargs):
@@ -192,6 +200,7 @@ class _FalsyObjectView(LiveView):
     a truthiness check.
     """
 
+    exposure_policy = "legacy"
     template = "<div>falsy</div>"
 
     def mount(self, request, **kwargs):

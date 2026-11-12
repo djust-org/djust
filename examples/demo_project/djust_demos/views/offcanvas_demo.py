@@ -13,6 +13,7 @@ class OffcanvasDemoView(LiveView):
     Demonstration of Offcanvas component in various configurations.
     """
 
+    exposure_policy = "legacy"
     template_name = 'demos/offcanvas_demo.html'
 
     def mount(self, request, **kwargs):

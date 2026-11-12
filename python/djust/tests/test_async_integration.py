@@ -50,6 +50,7 @@ def _close_swallowed_coroutines(mock_ensure_future):
 class AsyncTestView(LiveView):
     """Test view with async operations."""
 
+    exposure_policy = "legacy"
     template_name = "async_test.html"
 
     def mount(self, request, **kwargs):
@@ -101,6 +102,7 @@ class AsyncTestView(LiveView):
 class CancellableView(LiveView):
     """Test view with cancellable operations."""
 
+    exposure_policy = "legacy"
     template_name = "cancel_test.html"
 
     def mount(self, request, **kwargs):

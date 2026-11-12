@@ -1170,6 +1170,8 @@ class TestTheLiveViewPathsComponentExclusion:
         from djust.testing import LiveViewTestClient
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self._card = Card()
 
@@ -1195,6 +1197,8 @@ class TestTheLiveViewPathsComponentExclusion:
         from djust.testing import LiveViewTestClient
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self._live_card = LiveCard()
                 self._live_card.mount()
@@ -1299,6 +1303,8 @@ class TestMutatorsRefusedOnTheLiveViewPath:
 
         def _make_view(tpl):
             class V(LiveView):
+                exposure_policy = "legacy"
+
                 def mount(self, request, **kwargs):
                     self.c = _Mutating()
                     self.c.mount()
@@ -1790,6 +1796,8 @@ class TestTheShellRenderPathHadTheSameWrapperDictBug:
                 return "<b>shellcard</b>"
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.c = _ShellCard()
 

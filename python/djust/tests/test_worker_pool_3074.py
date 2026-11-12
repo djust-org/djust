@@ -40,6 +40,7 @@ def _record(view, what):
 
 
 class _PoolView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="djust.tests.test_worker_pool_3074._PoolView">'
         "{{ session_tag }}:{{ count }}</div>"

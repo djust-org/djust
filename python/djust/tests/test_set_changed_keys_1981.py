@@ -46,6 +46,8 @@ class _InPlaceView(_EventSpineMixin, LiveView):
     is the shape the structural fingerprint cannot see (identity leaf); moving
     the card between lists IS seen (#2664)."""
 
+    exposure_policy = "legacy"
+
     def mount(self, request, **kwargs):
         self.count = 0
         self.rows = _fresh_rows()

@@ -41,6 +41,7 @@ from djust.live_view import LiveView
 class _HttpGetWidgetView(LiveView):
     """Sticky child embedded by the home page below."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "http-get-widget"
     template = '<div dj-root><span class="widget-marker">widget value {{ wval }}</span></div>'
@@ -58,6 +59,7 @@ class _HttpGetHomeView(LiveView):
     dashboard page (see ``test_sticky_demo_dashboard_http_get_200`` below).
     """
 
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<!DOCTYPE html><html><head><title>Home</title></head><body>"

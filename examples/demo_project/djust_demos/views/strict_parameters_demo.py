@@ -12,6 +12,7 @@ from djust.decorators import event_handler
 
 
 class StrictParametersView(LiveView):
+    exposure_policy = "legacy"
     template_name = "demos/strict_parameters.html"
 
     def mount(self, request, **kwargs):

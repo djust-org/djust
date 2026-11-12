@@ -49,6 +49,7 @@ def default_rows():
 
 
 class RowsPage(LiveView):
+    exposure_policy = "legacy"
     template = (
         "<div dj-root>{% for row in rows.values %}<section>{{ row }}</section>{% endfor %}"
         "{{ fixed }}<p>{{ result }}</p><i>{{ calls }}</i></div>"
@@ -230,6 +231,7 @@ def test_selection_reaches_the_collection_callback_with_the_member():
 
 def test_toggled_observes_only_client_members():
     class ObservedRows(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root>{% for row in rows.values %}{{ row }}{% endfor %}</div>"
         rows = DropdownMenu.collection()
 

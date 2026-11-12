@@ -53,16 +53,19 @@ from djust.live_view import LiveView
 
 
 class PublicView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>public</div>"
 
 
 class ProtectedView(LiveView):
+    exposure_policy = "legacy"
     login_required = True
     template = "<div dj-root>protected</div>"
 
 
 class ParamsView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = "<div dj-root>{{ active_tab }}</div>"
 

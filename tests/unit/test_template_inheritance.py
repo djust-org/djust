@@ -39,6 +39,7 @@ class TestTemplateInheritanceExtraction:
         from djust.live_view import LiveView
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template = """
             <div class="container" dj-root dj-view="test">
                 <!-- This is a comment -->
@@ -234,6 +235,7 @@ class TestTemplateInheritanceIntegration:
         from djust.live_view import LiveView
 
         class ChildView(LiveView):
+            exposure_policy = "legacy"
             template_name = "child.html"
 
         # Temporarily override template dirs
@@ -254,6 +256,7 @@ class TestTemplateInheritanceIntegration:
         from djust.live_view import LiveView
 
         class ChildView(LiveView):
+            exposure_policy = "legacy"
             template_name = "child.html"
 
             def mount(self, request, **kwargs):
@@ -299,6 +302,8 @@ class TestVDOMStructureMatching:
         from djust.live_view import LiveView
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
+
             # Use simple template without comments to avoid stripping complexity
             template = """<div dj-root><div class="row"><p>Hello {{ name }}</p></div></div>"""
 
@@ -336,6 +341,7 @@ class TestVDOMStructureMatching:
         from djust.live_view import LiveView
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root><p>{{ text }}</p></div>"
 
             def mount(self, request, **kwargs):
@@ -360,6 +366,7 @@ class TestVDOMStructureMatching:
         from djust.live_view import LiveView
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root><p>{{ text }}</p></div>"
 
             def mount(self, request, **kwargs):

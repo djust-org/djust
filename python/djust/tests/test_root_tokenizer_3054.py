@@ -90,6 +90,7 @@ def test_http_get_stamps_the_tokenizer_owned_root():
     from djust import LiveView
 
     class Page(LiveView):
+        exposure_policy = "legacy"
         template = '<?bogus "<div dj-root>" ?><main dj-root><p>real</p></main>'
 
     request = RequestFactory().get("/tokenizer-3054/")

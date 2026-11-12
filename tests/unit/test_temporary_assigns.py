@@ -14,10 +14,12 @@ from djust.live_view import LiveView
 
 
 class _ListView(LiveView):
+    exposure_policy = "legacy"
     temporary_assigns = {"messages": [], "notifications": []}
 
 
 class _MixedView(LiveView):
+    exposure_policy = "legacy"
     temporary_assigns = {
         "items": [],
         "flags": {"seen": False},
@@ -81,6 +83,7 @@ def test_instance_level_temporary_assigns_honored():
     still works against the instance's copy."""
 
     class _Per(LiveView):
+        exposure_policy = "legacy"
         temporary_assigns = {"a": []}
 
     view = _Per()
@@ -95,6 +98,7 @@ def test_instance_level_temporary_assigns_honored():
 
 def test_reset_noop_when_temporary_assigns_empty():
     class _Empty(LiveView):
+        exposure_policy = "legacy"
         temporary_assigns: dict = {}
 
     view = _Empty()

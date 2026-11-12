@@ -81,6 +81,7 @@ class DemoLiveComponent(LiveComponent):
 class ComponentRenderingView(LiveView):
     """Test view that uses components in context"""
 
+    exposure_policy = "legacy"
     template = """
     <div dj-root>
         {{ component }}

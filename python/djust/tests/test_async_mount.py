@@ -246,7 +246,11 @@ def test_live_render_runs_an_async_child_mount(rf):
     page_cls = type(
         "AsyncMountPage",
         (LiveView,),
-        {"template_name": "async_mount_page.html", "mount": lambda self, request, **kw: None},
+        {
+            "exposure_policy": "legacy",
+            "template_name": "async_mount_page.html",
+            "mount": lambda self, request, **kw: None,
+        },
     )
     try:
         with override_settings(TEMPLATES=templates, DJUST_LIVE_RENDER_ALLOWED_MODULES=[_MODULE]):

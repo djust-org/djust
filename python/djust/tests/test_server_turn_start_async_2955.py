@@ -32,6 +32,7 @@ RAN = []
 
 
 class WorkView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ count }}</span></div>"
     _listen_channels = frozenset({"turn_work_2955"})
 
@@ -75,6 +76,7 @@ class FailingWorkPushView(LiveView):
     """No ``handle_async_result``: the failed work must still produce the
     ``source="async"`` frame (consumer twin of the #2963 runtime change)."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ count }}</span></div>"
 
     def mount(self, request, **kwargs):

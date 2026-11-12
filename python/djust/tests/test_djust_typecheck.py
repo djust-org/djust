@@ -155,6 +155,7 @@ def test_extract_referenced_names_extracts_blocktrans_with_rhs():
 
 def test_public_class_attrs_returns_non_underscore_names():
     class _V(LiveView):
+        exposure_policy = "legacy"
         foo = 1
         bar = 2
         _private = 3
@@ -166,6 +167,8 @@ def test_public_class_attrs_returns_non_underscore_names():
 
 def test_extract_context_keys_from_ast_finds_literal_dict_returns():
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def get_context_data(self, **kwargs):
             return {"alpha": 1, "beta": 2}
 
@@ -175,6 +178,8 @@ def test_extract_context_keys_from_ast_finds_literal_dict_returns():
 
 def test_extract_context_keys_from_ast_finds_self_assignments():
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request=None, **kwargs):
             self.count = 0
             self.items = []
@@ -190,6 +195,8 @@ def test_extract_context_keys_from_ast_finds_annotated_assignments():
     """Typed `self.x: int = 0` declarations must be picked up (Stage 11 regression)."""
 
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request=None, **kwargs):
             self.count: int = 0
             self.label: str = ""
@@ -206,6 +213,8 @@ def test_extract_context_keys_from_ast_walks_mro_for_parent_assigns():
     """
 
     class BaseView(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request=None, **kwargs):
             self.parent_attr = "set-by-parent"
 
@@ -223,6 +232,8 @@ def test_extract_context_keys_from_ast_skips_django_framework_classes():
     """MRO walk must not surface `request`/`head`/`kwargs`/`args` from django.views.View."""
 
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def get_context_data(self, **kwargs):
             return {"alpha": 1}
 
@@ -234,6 +245,8 @@ def test_extract_context_keys_from_ast_skips_django_framework_classes():
 
 def test_extract_context_keys_from_ast_finds_property_methods():
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         @property
         def display_name(self):
             return "x"
@@ -262,7 +275,7 @@ def test_extract_context_keys_from_ast_reads_form_mixin_manifest():
     from djust.forms import FormMixin
 
     class _FormView(FormMixin, LiveView):
-        pass
+        exposure_policy = "legacy"
 
     keys = _extract_context_keys_from_ast(_FormView)
     assert {
@@ -287,6 +300,7 @@ def test_check_view_form_mixin_template_vars_resolve(monkeypatch):
     path = _template("<p>{{ form_data }}</p><p>{{ field_errors }}</p>")
 
     class _MixinFormView(FormMixin, LiveView):
+        exposure_policy = "legacy"
         template_name = "mixin_form.html"
 
     monkeypatch.setattr(
@@ -303,6 +317,7 @@ def test_check_view_without_mixin_still_flags_same_names(monkeypatch):
     path = _template("<p>{{ form_data }}</p><p>{{ field_errors }}</p>")
 
     class _PlainView(LiveView):
+        exposure_policy = "legacy"
         template_name = "plain_form.html"
 
     monkeypatch.setattr(
@@ -363,6 +378,7 @@ def test_check_view_returns_none_when_all_names_resolve(monkeypatch):
     path = _template("<p>Hello {{ name }}</p>")
 
     class _V(LiveView):
+        exposure_policy = "legacy"
         template_name = "ok.html"
         name = ""
 
@@ -378,6 +394,7 @@ def test_check_view_reports_missing_names(monkeypatch):
     path = _template("<p>{{ missing_var }}</p>")
 
     class _V(LiveView):
+        exposure_policy = "legacy"
         template_name = "bad.html"
 
     monkeypatch.setattr(
@@ -393,6 +410,7 @@ def test_check_view_respects_noqa_pragma(monkeypatch):
     path = _template("<p>{{ missing_var }}</p>\n{# djust_typecheck: noqa missing_var #}")
 
     class _V(LiveView):
+        exposure_policy = "legacy"
         template_name = "pragma.html"
 
     monkeypatch.setattr(
@@ -406,6 +424,7 @@ def test_check_view_strict_flag_flows_through(monkeypatch):
     path = _template("<p>{{ missing }}</p>")
 
     class _V(LiveView):
+        exposure_policy = "legacy"
         template_name = "strict.html"
         strict_context = True
 
@@ -423,6 +442,7 @@ def test_check_view_honors_DJUST_TEMPLATE_GLOBALS(monkeypatch, settings):
     path = _template("<p>{{ navbar }}</p>")
 
     class _V(LiveView):
+        exposure_policy = "legacy"
         template_name = "globals.html"
 
     settings.DJUST_TEMPLATE_GLOBALS = ["navbar"]
@@ -437,6 +457,7 @@ def test_check_view_reports_when_template_not_found(monkeypatch):
     """Template loader failures must be surfaced, not silently swallowed."""
 
     class _V(LiveView):
+        exposure_policy = "legacy"
         template_name = "does_not_exist.html"
 
     monkeypatch.setattr(
@@ -450,7 +471,7 @@ def test_check_view_reports_when_template_not_found(monkeypatch):
 
 def test_check_view_skips_when_no_template_name():
     class _V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     report = _check_view(_V)
     assert report is None  # template_name=None short-circuits

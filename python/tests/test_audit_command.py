@@ -36,7 +36,7 @@ def make_view_class():
             for hname, hfunc in handlers.items():
                 body[hname] = hfunc
 
-        cls = type(name, (LiveView,), body)
+        cls = type(name, (LiveView,), {"exposure_policy": "legacy", **body})
         return cls
 
     return _make
@@ -263,6 +263,7 @@ class TestExtractExposedState:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -281,6 +282,7 @@ class TestExtractExposedState:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -299,6 +301,7 @@ class TestExtractExposedState:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -318,6 +321,7 @@ class TestExtractExposedState:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -339,6 +343,7 @@ class TestExtractExposedState:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -356,6 +361,7 @@ class TestExtractExposedState:
         from djust.live_view import LiveView
 
         class BaseView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -378,6 +384,7 @@ class TestExtractExposedState:
         from djust.live_view import LiveView
 
         class EmptyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -391,6 +398,7 @@ class TestAuditClassExposedState:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -410,6 +418,7 @@ class TestAuditClassExposedState:
         # Class must exist as a LiveView subclass so djust_audit discovers it
         # via __subclasses__() — not referenced directly but must stay alive.
         class JSONTestView(LiveView):  # noqa: F841
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -429,6 +438,7 @@ class TestAuditClassExposedState:
         # Class must exist as a LiveView subclass so djust_audit discovers it
         # via __subclasses__() — not referenced directly but must stay alive.
         class PrettyTestView(LiveView):  # noqa: F841
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -452,6 +462,7 @@ class TestExtractAuthInfo:
         from djust.live_view import LiveView
 
         class PlainView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -463,6 +474,7 @@ class TestExtractAuthInfo:
         from djust.live_view import LiveView
 
         class SecureView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             login_required = True
             __module__ = "myapp.views"
@@ -475,6 +487,7 @@ class TestExtractAuthInfo:
         from djust.live_view import LiveView
 
         class AdminView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             login_required = True
             permission_required = "myapp.view_dashboard"
@@ -488,6 +501,7 @@ class TestExtractAuthInfo:
         from djust.live_view import LiveView
 
         class AdminView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             login_required = True
             permission_required = ["myapp.view", "myapp.edit"]
@@ -501,6 +515,7 @@ class TestExtractAuthInfo:
         from djust.live_view import LiveView
 
         class CustomView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             login_required = True
             __module__ = "myapp.views"
@@ -516,6 +531,7 @@ class TestExtractAuthInfo:
         from djust.live_view import LiveView
 
         class PublicView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             login_required = False
             __module__ = "myapp.views"
@@ -534,6 +550,7 @@ class TestExtractAuthInfo:
                 return super().dispatch(request, *args, **kwargs)
 
         class BaseCRMView(LoginRequiredLiveViewMixin, LiveView):
+            exposure_policy = "legacy"
             template_name = "base.html"
             __module__ = "crm.views"
 
@@ -549,6 +566,7 @@ class TestExtractAuthInfo:
         from djust.live_view import LiveView
 
         class PlainView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -563,6 +581,7 @@ class TestExtractAuthInfo:
             login_required = True
 
         class ProtectedView(LoginRequiredMixin, LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -577,6 +596,7 @@ class TestAuditClassAuth:
         from djust.live_view import LiveView
 
         class SecureView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             login_required = True
             permission_required = "myapp.view_item"
@@ -592,6 +612,7 @@ class TestAuditClassAuth:
         from djust.live_view import LiveView
 
         class PublicView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 
@@ -605,6 +626,7 @@ class TestAuthInOutput:
         from djust.live_view import LiveView
 
         class AuthJSONView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             login_required = True
             __module__ = "myapp.views"
@@ -622,6 +644,7 @@ class TestAuthInOutput:
         from djust.live_view import LiveView
 
         class AuthPrettyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             login_required = True
             permission_required = "myapp.view_thing"
@@ -638,6 +661,7 @@ class TestAuthInOutput:
         from djust.live_view import LiveView
 
         class UnprotectedAuditView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             __module__ = "myapp.views"
 

@@ -47,6 +47,7 @@ NAIVE = dt.datetime(2026, 8, 22, 23, 30, 0)
 
 
 class _StampView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-id="0">{{ created|date:"Y-m-d H:i" }}</div>'
     _value = AWARE_SUMMER
 

@@ -18,6 +18,7 @@ class CacheTestView(LiveView):
     - Cache key generation works with key_params
     """
 
+    exposure_policy = "legacy"
     template_name = 'tests/cache_test.html'
 
     def mount(self, request):

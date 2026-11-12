@@ -60,6 +60,7 @@ class DictFeed(LiveView):
     """Like ``Feed`` with rows as dicts: the HTTP fallback round-trips the view's
     state through the session, which turns a dataclass into its repr."""
 
+    exposure_policy = "legacy"
     template = (
         f'<div dj-view="{MODULE}.DictFeed" dj-id="0"><div id="list" dj-stream="rows">'
         '{% for r in streams.rows %}<div id="rows-{{ r.id }}">{{ r.body }}</div>{% endfor %}'
@@ -84,6 +85,7 @@ class DictFeed(LiveView):
 
 
 class DictTemp(LiveView):
+    exposure_policy = "legacy"
     temporary_assigns = {"rows": []}
     template = (
         f'<div dj-view="{MODULE}.DictTemp" dj-id="0"><div id="list" dj-update="append">'
@@ -102,6 +104,7 @@ class DictTemp(LiveView):
 
 
 class TickFeed(LiveView):
+    exposure_policy = "legacy"
     tick_interval = 50
     template = f'<div dj-view="{MODULE}.TickFeed" dj-id="0"><div id="list">{{% for r in streams.rows %}}<div id="rows-{{{{ r.id }}}}">{{{{ r.body }}}}</div>{{% endfor %}}</div></div>'
 
@@ -449,6 +452,7 @@ class TestCallSiteInventory:
 class _StreamChild(LiveView):
     """A sticky child whose only handler effect is a stream insert."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "child"
     template = (
@@ -464,6 +468,7 @@ class _StreamChild(LiveView):
 
 
 class _Parent(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0"><h1>parent</h1></div>'
 
     def mount(self, request, **kwargs):

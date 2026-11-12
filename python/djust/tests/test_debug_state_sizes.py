@@ -17,6 +17,7 @@ class TestDebugStateSizes:
         """Test basic state size calculation for simple types."""
 
         class SimpleView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -48,6 +49,7 @@ class TestDebugStateSizes:
         """Test that private attributes are excluded from size report."""
 
         class PrivateView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -69,6 +71,7 @@ class TestDebugStateSizes:
         """Test that methods are excluded from size report."""
 
         class MethodView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -95,6 +98,7 @@ class TestDebugStateSizes:
             pass
 
         class NonSerializableView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -119,6 +123,7 @@ class TestDebugStateSizes:
         """Test that size report keys are sorted alphabetically."""
 
         class UnsortedView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -139,6 +144,7 @@ class TestDebugStateSizes:
         """Test that serialized size accurately reflects UTF-8 byte count."""
 
         class StringView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -168,6 +174,7 @@ class TestDebugStateSizes:
         """Test that state_sizes is included in get_debug_info() response."""
 
         class InfoView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -187,6 +194,7 @@ class TestDebugStateSizes:
         """Test that state_sizes is included in get_debug_update() response."""
 
         class UpdateView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -206,6 +214,7 @@ class TestDebugStateSizes:
         """Test that memory size uses sys.getsizeof."""
 
         class MemoryView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -230,6 +239,7 @@ class TestDebugStateSizes:
         from datetime import datetime
 
         class DateView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -253,6 +263,7 @@ class TestDebugStateSizes:
         """Test size report for view with no public state variables."""
 
         class EmptyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):

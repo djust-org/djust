@@ -30,7 +30,7 @@ class TestV002Suppress:
         cls = type(
             "V002SuppressedView",
             (LiveView,),
-            {"__module__": "myapp.views", "template_name": "t.html"},
+            {"exposure_policy": "legacy", "__module__": "myapp.views", "template_name": "t.html"},
         )
         try:
             errors = _check_liveviews_errors()
@@ -47,7 +47,7 @@ class TestV002Suppress:
         cls = type(
             "V002NotSuppressedView",
             (LiveView,),
-            {"__module__": "myapp.views", "template_name": "t.html"},
+            {"exposure_policy": "legacy", "__module__": "myapp.views", "template_name": "t.html"},
         )
         try:
             errors = _check_liveviews_errors()
@@ -72,7 +72,12 @@ class TestV003Suppress:
         cls = type(
             "V003SuppressedView",
             (LiveView,),
-            {"__module__": "myapp.views", "template_name": "t.html", "mount": bad_mount},
+            {
+                "exposure_policy": "legacy",
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": bad_mount,
+            },
         )
         try:
             errors = _check_liveviews_errors()
@@ -93,7 +98,12 @@ class TestV003Suppress:
         cls = type(
             "V003NotSuppressedView",
             (LiveView,),
-            {"__module__": "myapp.views", "template_name": "t.html", "mount": bad_mount},
+            {
+                "exposure_policy": "legacy",
+                "__module__": "myapp.views",
+                "template_name": "t.html",
+                "mount": bad_mount,
+            },
         )
         try:
             errors = _check_liveviews_errors()
@@ -122,6 +132,7 @@ class TestV004Suppress:
             "V004SuppressedView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "t.html",
                 "mount": mount,
@@ -151,6 +162,7 @@ class TestV004Suppress:
             "V004NotSuppressedView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "t.html",
                 "mount": mount,
@@ -181,6 +193,7 @@ class TestQ007Suppress:
             "Q007SuppressedView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "t.html",
                 "mount": mount,
@@ -208,6 +221,7 @@ class TestQ007Suppress:
             "Q007NotSuppressedView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "myapp.views",
                 "template_name": "t.html",
                 "mount": mount,

@@ -111,6 +111,7 @@ def test_template_tag_bounds_nested_quotes_through_a_live_view_render():
     page = {}
 
     class _V(LiveView):
+        exposure_policy = "legacy"
         template = '<div dj-root class="prose">{% djust_markdown body %}</div>'
 
         def mount(self, request, **kwargs):

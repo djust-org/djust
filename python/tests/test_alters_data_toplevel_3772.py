@@ -62,6 +62,8 @@ def liveview_render(source: str, context: dict) -> str:
     """
 
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             for name, value in context.items():
                 setattr(self, name, value)

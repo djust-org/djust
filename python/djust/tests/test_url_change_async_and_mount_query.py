@@ -18,6 +18,7 @@ from djust import LiveView
 
 
 class _AsyncParamsView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_url_change_async_and_mount_query._AsyncParamsView" '
         'dj-id="0">Tab: {{ tab }} / Loaded: {{ loaded }} / Q: {{ q }}</div>'

@@ -54,7 +54,9 @@ def _lv(src: str, **state) -> str:
             setattr(self, name, value)
 
     view = type(
-        "ContainerView", (LiveView,), {"template": f"<div dj-root>{src}</div>", "mount": mount}
+        "ContainerView",
+        (LiveView,),
+        {"exposure_policy": "legacy", "template": f"<div dj-root>{src}</div>", "mount": mount},
     )
     client = LiveViewTestClient(view)
     client.mount()
@@ -308,7 +310,11 @@ class TestWhatDoesNotChange:
         view = type(
             "StateView",
             (LiveView,),
-            {"template": "<div dj-root>{{ rows|pprint }}</div>", "mount": mount},
+            {
+                "exposure_policy": "legacy",
+                "template": "<div dj-root>{{ rows|pprint }}</div>",
+                "mount": mount,
+            },
         )
         client = LiveViewTestClient(view)
         client.mount()
@@ -664,6 +670,7 @@ class TestAModelWithAMarkupSafeTextIsAModelToo:
             "RawView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "template": "<div dj-root>{{ rows }}|{{ rows|pprint }}|{{ rows.0 }}</div>",
                 "mount": mount,
             },
@@ -682,7 +689,11 @@ class TestAModelWithAMarkupSafeTextIsAModelToo:
         view = type(
             "RawView2",
             (LiveView,),
-            {"template": "<div dj-root>{{ rows }}|{{ rows|pprint }}</div>", "mount": mount},
+            {
+                "exposure_policy": "legacy",
+                "template": "<div dj-root>{{ rows }}|{{ rows|pprint }}</div>",
+                "mount": mount,
+            },
         )
         client = LiveViewTestClient(view)
         client.mount()

@@ -17,6 +17,7 @@ from djust.mixins import request as request_mixin
 
 
 class LegacyPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><button dj-click='go'>Go</button></div>"
 
     @event_handler()

@@ -19,6 +19,7 @@ from djust.mixins.async_work import AsyncWorkMixin
 class FakeView(AsyncWorkMixin):
     """Minimal view-like class for direct mixin testing."""
 
+    exposure_policy = "legacy"
     pass
 
 

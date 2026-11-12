@@ -91,6 +91,8 @@ def liveview_render(src: str, ctx: Optional[Dict[str, Any]] = None, path: str = 
     values = dict(ctx or {})
 
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             for key, value in values.items():
                 setattr(self, key, value)
@@ -679,6 +681,8 @@ class TestDebugTag:
         from djust.live_view import LiveView
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.public_thing = "PUBLIC_MARK"
                 self._secret_thing = "PRIVATE_MARK"
@@ -802,6 +806,8 @@ class TestQuerystringTag:
         from djust.testing import LiveViewTestClient
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.x = 1
 
@@ -938,6 +944,8 @@ class TestQueryDictLookupsKeepDjangosLastValue:
         assert backend_render(src, {}, request=request, request_context=True) == expected
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.x = 1
 
@@ -988,6 +996,8 @@ class TestQueryDictLookupsKeepDjangosLastValue:
         assert backend_render(src, ctx) == expected
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.qd = QueryDict("a=1&a=2&page=3")
 
@@ -1122,6 +1132,8 @@ def _probe_liveview(ctx: Dict[str, Any]) -> Dict[str, Any]:
     values = dict(ctx)
 
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             for key, value in values.items():
                 setattr(self, key, value)
@@ -1307,6 +1319,8 @@ class TestProtectingAMultiValueDictKeepsItsType:
         from djust.testing import LiveViewTestClient
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.qd = make_qd()
 

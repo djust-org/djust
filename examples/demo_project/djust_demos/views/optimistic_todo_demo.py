@@ -18,6 +18,7 @@ class OptimisticTodoView(LiveView):
     - Simulated network delay to show optimistic behavior
     """
 
+    exposure_policy = "legacy"
     template = """
     <!DOCTYPE html>
     <html>

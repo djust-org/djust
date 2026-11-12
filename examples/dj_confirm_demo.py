@@ -24,6 +24,7 @@ from djust import LiveView
 class ConfirmDemoView(LiveView):
     """Demo of dj-confirm attribute."""
 
+    exposure_policy = "legacy"
     template_name = 'inline'
 
     def mount(self, request, **kwargs):

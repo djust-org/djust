@@ -25,6 +25,7 @@ TICKS = []
 
 
 class SlowMountTickView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ n }}</div>"
     tick_interval = 20  # far shorter than the mount below
 

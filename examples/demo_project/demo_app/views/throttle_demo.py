@@ -16,6 +16,7 @@ class ThrottleScrollView(LiveView):
     - Demonstrates leading + trailing execution
     """
 
+    exposure_policy = "legacy"
     template = """
     <!DOCTYPE html>
     <html>

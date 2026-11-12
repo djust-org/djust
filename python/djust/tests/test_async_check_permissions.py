@@ -87,6 +87,7 @@ def _answer():
 
 
 class _Base(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-view="x" dj-id="0">n={{ n }}</div>'
     login_required = True
     tick_interval = None

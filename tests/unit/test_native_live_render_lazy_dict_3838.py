@@ -43,6 +43,7 @@ SRC = "{% live_render '" + CHILD + "' lazy=cfg %}"
 
 
 class _Child(LiveView):
+    exposure_policy = "legacy"
     template = "<div>child</div>"
 
     def mount(self, request, **kwargs):
@@ -50,6 +51,7 @@ class _Child(LiveView):
 
 
 class _Parent(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
 
     def mount(self, request, **kwargs):
@@ -148,6 +150,7 @@ class TestDictLazyReachesTheNativeHandler:
         placeholders = {"safe": mark_safe("<i>wait</i>"), "plain": "<i>wait</i>"}
 
         class _CfgParent(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>" + SRC + "</div>"
             kind = "safe"
 

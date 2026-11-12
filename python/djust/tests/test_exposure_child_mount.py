@@ -172,10 +172,16 @@ def test_unregistered_ancestor_cannot_claim_another_parent_scope(rf):
     assert request.session.session_key is None
 
 
+class _LegacyLiveView(LiveView):
+    """A bare LiveView under the legacy policy, whatever the framework default is."""
+
+    exposure_policy = "legacy"
+
+
 def test_mixed_policy_does_not_implicitly_gain_an_explicit_contract(rf):
     request = make_request(rf, SessionStore())
     with pytest.raises(ExposureError, match="ancestry"):
-        child_state_adapter(MountChild(), LiveView(), request, "counter", {}, create=True)
+        child_state_adapter(MountChild(), _LegacyLiveView(), request, "counter", {}, create=True)
     assert request.session.session_key is None
 
 

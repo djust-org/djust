@@ -85,7 +85,7 @@ def poke_target():
 def _view_with_poke(**extra: Any) -> type:
     attrs = {"template": "<div dj-root>{{ a }}</div>", "a": 1, "poke": _Poke(), "z": 2}
     attrs.update(extra)
-    return type(f"PokeView{next(_COUNTER)}", (LiveView,), attrs)
+    return type(f"PokeView{next(_COUNTER)}", (LiveView,), {"exposure_policy": "legacy", **attrs})
 
 
 def test_descriptor_fields_survives_a_class_write_mid_walk(poke_target):
@@ -187,7 +187,7 @@ def _base_view() -> type:
         raise AttributeError("boom")
 
     attrs["boom"] = property(boom)
-    return type(f"SharedBase{next(_COUNTER)}", (LiveView,), attrs)
+    return type(f"SharedBase{next(_COUNTER)}", (LiveView,), {"exposure_policy": "legacy", **attrs})
 
 
 def _descriptor_walk(leaf: type) -> None:

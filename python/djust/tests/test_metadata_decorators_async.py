@@ -74,6 +74,7 @@ _RAN: list[str] = []
 
 
 class _AsyncHandlersView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-view="djust.tests.test_metadata_decorators_async._AsyncHandlersView" dj-id="0">{{ n }}</div>'
 
     def mount(self, request, **kwargs):

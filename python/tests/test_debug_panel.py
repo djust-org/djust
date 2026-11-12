@@ -32,6 +32,7 @@ class TestGetDebugInfo:
         """Test that event handlers are extracted with correct metadata"""
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             count = 0
 
@@ -84,6 +85,7 @@ class TestGetDebugInfo:
         """Test that decorator metadata is included"""
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             @debounce(wait=0.5)
@@ -115,6 +117,7 @@ class TestGetDebugInfo:
         """Test that public variables are extracted"""
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             count = 42
             message = "Hello World"
@@ -146,6 +149,7 @@ class TestGetDebugInfo:
         """Test that private attributes are not included"""
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             count = 0
             _private = "secret"
@@ -177,6 +181,7 @@ class TestGetDebugInfo:
         """
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def plain_method(self):
@@ -200,6 +205,7 @@ class TestGetDebugInfo:
         """Test that inherited Django View methods are not listed as handlers (#193)"""
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             @event_handler
@@ -222,6 +228,7 @@ class TestGetDebugInfo:
         """Test that long variable values are truncated"""
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             long_string = "x" * 200  # 200 character string
 
@@ -237,6 +244,7 @@ class TestGetDebugInfo:
         """Test when template_name is not set"""
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_string = "<div>Hello</div>"
 
             @event_handler
@@ -326,6 +334,7 @@ class TestDebugInfoInjection:
         mock_settings.STATIC_URL = "/static/"
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_string = """
             <html>
             <head><title>Test</title></head>
@@ -414,6 +423,7 @@ class TestDebugInfoInjection:
         mock_settings.STATIC_URL = "/cdn/"
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_string = "<html><head></head><body></body></html>"
 
         with override_settings(STATIC_URL="/cdn/"):
@@ -433,6 +443,7 @@ class TestDebugInfoInjection:
         mock_settings.STATIC_URL = "/static/"
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_string = """
             <html>
             <head><title>Test</title></head>
@@ -470,6 +481,7 @@ class TestDebugInfoInjection:
         mock_settings.STATIC_URL = "/static/"
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_string = """
             <html>
             <head>
@@ -512,6 +524,7 @@ class TestDebugPanelMetadata:
         mock_settings.STATIC_URL = "/static/"
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_string = "<div>Test</div>"
 
             @event_handler
@@ -560,6 +573,7 @@ class TestAttachDebugPayload:
         from unittest.mock import MagicMock
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             count = 0
 
@@ -696,6 +710,7 @@ class TestDebugPanelSvgEscaping:
         """Verify that DJUST_DEBUG_INFO JSON injection doesn't double-escape."""
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template_name = "test.html"
             name = "O'Brien & Sons"  # Contains characters that need escaping
 

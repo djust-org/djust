@@ -174,6 +174,7 @@ class _Mounted:
             "UnsavedRowsView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "template_name": name,
                 "mount": lambda self, request, **kwargs: setattr(self, "rows", rows),
             },

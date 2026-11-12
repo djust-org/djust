@@ -58,7 +58,7 @@ def _make_view_cls(name="V", slug="dispatch.v", body=None):
     body = body or {}
     attrs = {"api_name": slug}
     attrs.update(body)
-    return type(name, (LiveView,), attrs)
+    return type(name, (LiveView,), {"exposure_policy": "legacy", **attrs})
 
 
 def test_404_when_view_slug_unknown(authenticated_request_factory):
@@ -70,6 +70,7 @@ def test_404_when_view_slug_unknown(authenticated_request_factory):
 
 def test_404_when_handler_not_exposed(authenticated_request_factory):
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "dispatch.hidden"
 
         @event_handler  # NOT expose_api=True
@@ -85,6 +86,7 @@ def test_404_when_handler_not_exposed(authenticated_request_factory):
 
 def test_404_when_handler_does_not_exist(authenticated_request_factory):
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "dispatch.empty"
 
         @event_handler(expose_api=True)
@@ -100,6 +102,7 @@ def test_404_when_handler_does_not_exist(authenticated_request_factory):
 
 def test_401_when_unauthenticated():
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "dispatch.auth"
 
         @event_handler(expose_api=True)
@@ -118,6 +121,7 @@ def test_401_when_unauthenticated():
 
 def test_400_on_malformed_json(authenticated_request_factory):
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "dispatch.badjson"
 
         @event_handler(expose_api=True)
@@ -133,6 +137,7 @@ def test_400_on_malformed_json(authenticated_request_factory):
 
 def test_400_on_missing_required_param(authenticated_request_factory):
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "dispatch.required"
 
         @event_handler(expose_api=True)
@@ -150,6 +155,7 @@ def test_400_on_missing_required_param(authenticated_request_factory):
 
 def test_200_happy_path_with_coercion_and_diff(authenticated_request_factory):
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "dispatch.happy"
         counter = 0
 
@@ -173,6 +179,7 @@ def test_200_happy_path_with_coercion_and_diff(authenticated_request_factory):
 
 def test_403_when_permission_required_denies(authenticated_request_factory):
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "dispatch.perm"
 
         @event_handler(expose_api=True)
@@ -189,6 +196,7 @@ def test_403_when_permission_required_denies(authenticated_request_factory):
 
 def test_429_when_rate_limit_exceeded(authenticated_request_factory):
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "dispatch.rl"
 
         @event_handler(expose_api=True)
@@ -210,6 +218,7 @@ def test_429_when_rate_limit_exceeded(authenticated_request_factory):
 
 def test_500_when_handler_raises(authenticated_request_factory, caplog):
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "dispatch.boom"
 
         @event_handler(expose_api=True)
@@ -228,6 +237,7 @@ def test_500_when_handler_raises(authenticated_request_factory, caplog):
 
 def test_response_envelope_shape(authenticated_request_factory):
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "dispatch.envelope"
         name = ""
 
@@ -262,6 +272,7 @@ def test_custom_auth_class_with_csrf_exempt():
             return None
 
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "dispatch.token"
         api_auth_classes = [HeaderTokenAuth]
 
@@ -289,6 +300,7 @@ def test_csrf_required_for_session_auth():
     """Session auth is not csrf-exempt — a request without the bypass flag must 403."""
 
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "dispatch.csrf"
 
         @event_handler(expose_api=True)
@@ -328,6 +340,7 @@ def test_rate_bucket_lru_cap_bounds_memory():
     try:
 
         class V(LiveView):
+            exposure_policy = "legacy"
             api_name = "dispatch.lru"
 
             @event_handler(expose_api=True)
@@ -362,6 +375,7 @@ def test_rate_bucket_lru_cap_bounds_memory():
 
 def test_empty_body_defaults_to_empty_object(authenticated_request_factory):
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "dispatch.empty_body"
 
         @event_handler(expose_api=True)

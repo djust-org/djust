@@ -112,6 +112,7 @@ def test_generated_code_and_queryset_path_agree(agent):
 
 
 class AgentListView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="tests.AgentListView">'
         "{% for a in agents %}{% for tool in a.tools %}<b>{{ tool.name }}</b>{% endfor %}"

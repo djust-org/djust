@@ -19,6 +19,7 @@ class InboxView(LiveView):
     - Flat mode (when sender_id is set): shows flat list of emails from one sender
     """
 
+    exposure_policy = "legacy"
     template = """<div dj-root dj-view="InboxView">
     <main class="content">
         {% if filter_mode == 'sender' %}

@@ -18,6 +18,7 @@ from djust.decorators import event_handler
 class FlashView(LiveView):
     """View that uses put_flash in an event handler."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ message }}</span></div>"
 
     def mount(self, request, **kwargs):

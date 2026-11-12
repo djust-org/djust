@@ -741,6 +741,7 @@ async def test_the_event_snapshot_refresh_captures_state_inside_a_lifecycle_step
 
 
 class LazyKid(LiveView):
+    exposure_policy = "legacy"
     template = "<div><p>lazy {{ value }}</p></div>"
 
     def mount(self, request, **kwargs):
@@ -753,6 +754,7 @@ class LazyKid(LiveView):
 
 
 class LazyPage(LiveView):
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         "<html><body><div dj-root>"
@@ -792,6 +794,7 @@ async def test_a_lazy_childs_mount_and_context_run_inside_the_wrapper():
 
 
 class SequencePage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ count }}</span></div>"
 
     def mount(self, request, **kwargs):

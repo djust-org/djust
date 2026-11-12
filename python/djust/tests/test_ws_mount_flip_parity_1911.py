@@ -181,6 +181,7 @@ _ALLOWED = "djust.tests.test_ws_mount_flip_parity_1911"
 class PlainMountView(LiveView):
     """A plain view: the "other group" in the broadcast gate-off."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.PlainMountView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -194,6 +195,7 @@ class TickView(LiveView):
     """A view with a short ``tick_interval`` whose ``handle_tick`` changes public
     state — so the tick loop emits a ``source="tick"`` render frame."""
 
+    exposure_policy = "legacy"
     tick_interval = 50  # ms
     template = f'<div dj-root dj-view="{_ALLOWED}.TickView" dj-id="0">t={{{{ t }}}}</div>'
 
@@ -212,6 +214,7 @@ class StaticTickView(LiveView):
     NOTHING, so the #560 no-change guard must suppress the render. Proves a
     tick frame comes from a STATE CHANGE, not merely from a tick firing."""
 
+    exposure_policy = "legacy"
     tick_interval = 50  # ms
     template = f'<div dj-root dj-view="{_ALLOWED}.StaticTickView" dj-id="0">t={{{{ t }}}}</div>'
 
@@ -229,6 +232,7 @@ class NoTickView(LiveView):
     """Gate-off control: NO ``tick_interval`` → no tick frame ever (proves the
     tick frame comes from the interval opt-in, not from every mount)."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.NoTickView" dj-id="0">t={{{{ t }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -242,6 +246,7 @@ class BroadcastView(LiveView):
     """Plain view — mount joins the per-view channel group, so a server-push
     broadcast to that group reaches this session (proves group_add at mount)."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.BroadcastView" dj-id="0">v={{{{ v }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -268,6 +273,7 @@ class OptimisticUploadMountView(LiveView):
     manager) on its mount frame — the Phase-3.0 grows, characterized against the
     BESPOKE WS path."""
 
+    exposure_policy = "legacy"
     _component_descriptors = {"acc": _OptDescriptor()}
     template = f'<div dj-root dj-view="{_ALLOWED}.OptimisticUploadMountView" dj-id="0">ready</div>'
 
@@ -281,6 +287,7 @@ class OptimisticUploadMountView(LiveView):
 class PlainNoExtrasView(LiveView):
     """Gate-off control: no descriptors, no upload manager → neither key."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.PlainNoExtrasView" dj-id="0">ready</div>'
 
     def mount(self, request, **kwargs):
@@ -296,6 +303,7 @@ class PlainNoExtrasView(LiveView):
 class StickyChild(LiveView):
     """Sticky child embedded via ``{% live_render sticky=True %}``."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "sticky-widget"
     template = "<div>track={{ track }}</div>"
@@ -310,6 +318,7 @@ class StickyChild(LiveView):
 class StickyParentView(LiveView):
     """Parent embedding the sticky child (the live_redirect SOURCE)."""
 
+    exposure_policy = "legacy"
     template = (
         "{% load live_tags %}"
         f'<div dj-root dj-view="{_ALLOWED}.StickyParentView" dj-id="0">'
@@ -329,6 +338,7 @@ class DestinationWithSlotView(LiveView):
     """live_redirect DESTINATION carrying a matching ``[dj-sticky-slot]`` so the
     survivor reattaches and appears in the sticky_hold ``views`` list."""
 
+    exposure_policy = "legacy"
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.DestinationWithSlotView" dj-id="0">'
         '<h1>Dest B</h1><div dj-sticky-slot="sticky-widget"></div></div>'
@@ -344,6 +354,7 @@ class DestinationWithSlotView(LiveView):
 class RedirectViewA(LiveView):
     """Plain re-mount source A (no sticky) for the idempotency test."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.RedirectViewA" dj-id="0"><h1>A</h1></div>'
 
     def mount(self, request, **kwargs):
@@ -356,6 +367,7 @@ class RedirectViewA(LiveView):
 class RedirectViewB(LiveView):
     """Plain re-mount destination B for the idempotency test."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.RedirectViewB" dj-id="0"><h1>B</h1></div>'
 
     def mount(self, request, **kwargs):

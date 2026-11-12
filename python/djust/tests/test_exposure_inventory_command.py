@@ -27,6 +27,7 @@ def _exploding_factory():
 
 
 class SecretHoldingView(LiveView):
+    exposure_policy = "legacy"
     template = "<p>{{ count }}</p>"
     api_token = SECRET
     page_size = 25
@@ -66,6 +67,7 @@ class DeclaredExplicitView(LiveView):
 class ParityView(LiveView):
     """Small legacy view used to check the inventory against the runtime."""
 
+    exposure_policy = "legacy"
     template = "<p>{{ count }}</p>"
     heading = "Inventory"
     level = state(1)
@@ -91,16 +93,21 @@ class _ShapesMixin:
 class FreshMountView(_ShapesMixin, LiveView):
     """Legacy view without snapshot persistence: remounts fresh on a reconnect."""
 
+    exposure_policy = "legacy"
+
 
 class SnapshotFlagView(_ShapesMixin, LiveView):
+    exposure_policy = "legacy"
     enable_state_snapshot = True
 
 
 class PersistentBaseView(_ShapesMixin, PersistentLiveView):
+    exposure_policy = "legacy"
     pass
 
 
 class PersistentOptedOutView(_ShapesMixin, PersistentLiveView):
+    exposure_policy = "legacy"
     enable_state_snapshot = False
 
 
@@ -113,6 +120,8 @@ class ExplicitWithFlagView(_ShapesMixin, LiveView):
 
 class DynamicFlagView(_ShapesMixin, LiveView):
     """A flag that is not a plain class value is not established statically."""
+
+    exposure_policy = "legacy"
 
     @property
     def enable_state_snapshot(self):
