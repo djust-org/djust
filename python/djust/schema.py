@@ -1037,9 +1037,16 @@ DECORATORS: List[Dict[str, Any]] = [
         "name": "state()",
         "import": "from djust.decorators import state",
         "description": "Descriptor for reactive state. Cleaner than setting attributes in mount(). "
-        "Automatically included in context and triggers re-renders.",
+        "Rendered in the template context by default (no get_context_data() needed) and "
+        "triggers re-renders. Rendering is not a browser grant: the value reaches the "
+        "client state payload only with client=True, and survives a reconnect only with "
+        "persist=.",
         "params": {
             "default": "Any — default value for the state property",
+            "default_factory": "Callable — builds a fresh default per instance (lists, dicts)",
+            "persist": '"server" | "client" | None — persistence grant (explicit exposure)',
+            "client": "bool — permit raw browser exposure (explicit exposure)",
+            "render": "bool = True — False keeps the field out of the template context",
         },
         "usage": [
             "count = state(default=0)\nmessage = state(default='Hello')",
@@ -1048,8 +1055,9 @@ DECORATORS: List[Dict[str, Any]] = [
     {
         "name": "@computed",
         "import": "from djust.decorators import computed",
-        "description": "Computed property derived from state. Available in templates, "
-        "auto-recalculated when state changes.",
+        "description": "Computed property derived from state, auto-recalculated when "
+        "state changes. Under explicit exposure it is not template context by itself: "
+        "return it from get_context_data().",
         "params": {},
         "usage": [
             "@computed\ndef count_doubled(self):\n    return self.count * 2",

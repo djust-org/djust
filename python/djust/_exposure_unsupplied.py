@@ -1,11 +1,17 @@
 """DEBUG-only notice for a template name an explicit view holds but does not supply.
 
-Under explicit exposure (ADR-038, the default) a template gets what
-``get_context_data()`` and the framework's providers hand it. A view written
-for the attribute walk sets ``self.count`` in ``mount()`` and reads
-``{{ count }}`` in its template: that name now renders empty, and Django's
+Under explicit exposure (ADR-038, the default) a template gets the view's
+declared ``state()`` fields (#4050), what ``get_context_data()`` returns and
+what the framework's providers hand it. A view written for the attribute walk
+sets ``self.count`` in ``mount()`` without declaring it and reads
+``{{ count }}`` in its template: that name renders empty, and Django's
 template semantics make an unknown name silent. This module makes it audible
 while ``DEBUG`` is on.
+
+A declared field is supplied by the base ``get_context_data()``, so it is
+reported only when it still did not arrive: it was declared
+``state(render=False)``, or the view's ``get_context_data()`` returned a new
+dict without calling ``super().get_context_data()``.
 
 The check runs where the render path settles its context
 (``ContextMixin._context_for_render``). With ``DEBUG`` off it is one settings
@@ -59,6 +65,35 @@ def _held_by_view(view: Any, name: str) -> bool:
     return False
 
 
+def _declared_state(view: Any, name: str) -> Any:
+    """The ``state()`` descriptor the view's class declares for ``name``, or None."""
+    from inspect import getattr_static
+
+    from ._state import StateProperty
+
+    declaration = getattr_static(type(view), name, None)
+    return declaration if issubclass(type(declaration), StateProperty) else None
+
+
+def _advice(view: Any, name: str) -> str:
+    declaration = _declared_state(view, name)
+    if declaration is None:
+        return (
+            "Under explicit exposure (the default) declare it with state(), which "
+            "renders it, or return it from get_context_data()."
+        )
+    if declaration.render is False:
+        return (
+            "It is declared with state(render=False), which keeps it out of the "
+            "template; drop render=False or return it from get_context_data()."
+        )
+    return (
+        "It is declared with state(), which renders it, but get_context_data() "
+        "returned a dict without calling super().get_context_data(); build on "
+        "the super() result instead."
+    )
+
+
 def unsupplied_template_names(view: Any, context: Mapping[str, Any]) -> list[str]:
     """Names the view's template reads, the view holds, and ``context`` lacks."""
     paths = view.template_paths()
@@ -95,15 +130,15 @@ def warn_unsupplied_template_names(view: Any, context: Any) -> None:
             reported.add(name)
             logger.warning(
                 "%s.%s: the template reads {{ %s }} and the view sets %s, but nothing "
-                "supplies it to the template, so it renders empty. Under explicit "
-                "exposure (the default) return it from get_context_data(), and declare "
-                "it with state() if it must be persisted or sent to the browser. "
-                'To keep the 1.x behaviour for now, set exposure_policy = "legacy" on '
+                "supplies it to the template, so it renders empty. %s "
+                "Persisting it or sending it to the browser takes its own grant "
+                '(persist=, client=True). To keep the 1.x behaviour for now, set exposure_policy = "legacy" on '
                 "the view. See %s",
                 cls.__module__,
                 cls.__qualname__,
                 name,
                 name,
+                _advice(view, name),
                 MIGRATION_GUIDE_URL,
             )
     except Exception:  # noqa: BLE001 — never let the diagnostic break a render

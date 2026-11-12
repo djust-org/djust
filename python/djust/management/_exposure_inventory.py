@@ -250,27 +250,30 @@ def _suggest(
     """
     annotation = f": {type_name}" if type_name and " " not in type_name else ""
     supply = f"supply {name}=self.{name} from get_context_data() if the template uses it"
+    # A declared field is template context under explicit exposure (#4050).
+    renders = "a declared field renders in the template without get_context_data()"
     restored = "this view restores it on a reconnect today (enable_state_snapshot)"
     if kind == "state":
         if declared:
-            return f"declared; review its persist/client grants; {supply}"
+            return f"declared; review its persist/client grants; {renders}"
         if persists:
             return (
-                f'keep {name} = state(...); {restored}: add persist="server" to keep that; {supply}'
+                f'keep {name} = state(...); {restored}: add persist="server" to keep that; '
+                f"{renders}"
             )
         return (
             f"keep {name} = state(...); it does not survive a reconnect today, so it "
-            f"needs no persistence grant; {supply}"
+            f"needs no persistence grant; {renders}"
         )
     if kind == "instance":
         if persists:
             return (
                 f'{name}{annotation} = state(persist="server")  # {restored}; drop persist '
-                f"if it need not survive one; {supply}"
+                f"if it need not survive one; {renders}"
             )
         return (
             f"{name}{annotation} = state(...)  # not restored on a reconnect today, so no "
-            f"persistence grant is needed; {supply}"
+            f"persistence grant is needed; {renders}"
         )
     if kind == "private":
         public = name.lstrip("_") or name
