@@ -166,7 +166,6 @@ Rules:
     row key.
   - `get(key)` returns the row or `None`.
 - **Authorization:** callbacks must authorize the record a value refers to.
-- **Actor views:** not supported (`djust.V020`).
 
 ## Common Patterns
 

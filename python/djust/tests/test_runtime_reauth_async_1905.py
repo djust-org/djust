@@ -7,7 +7,7 @@ Three sub-folds:
     per-event auth re-check (#1777, T3). Now the turn chain's ``reauth`` built-in
     (ADR-044 D7); originally wired into ``_dispatch_event_inner`` at
     the SAME point the WS bespoke handler does (after the view-mounted check,
-    BEFORE the actor branch / handler). GOES LIVE for SSE (events route through
+    BEFORE the handler). GOES LIVE for SSE (events route through
     the runtime since Iter 1, #1887); WS keeps its own inline copy until the
     Phase 2.3b flip. #291 multiplexed-path care: the runtime clears
     ``view_instance`` UNCONDITIONALLY on a False return; the transport close is
@@ -340,9 +340,6 @@ class TestReauthHookShape291:
                 # the state-clear, not the close).
                 return False
 
-            def uses_actors(self, v):
-                return False
-
             def event_context(self, v):
                 # Reached ONLY if the reauth gate failed to block — the gate-off
                 # witness: gate the recheck off and the event WOULD render here.
@@ -370,7 +367,7 @@ class TestReauthHookShape291:
 
     @pytest.mark.asyncio
     async def test_authorized_reauth_proceeds_to_handler(self):
-        """A True recheck lets the event proceed into event_context (non-actor)."""
+        """A True recheck lets the event proceed into event_context."""
         reached = {"render": False}
 
         class _FakeTransport:

@@ -272,8 +272,6 @@ def _audit_class(
         config["temporary_assigns"] = (
             list(temp_assigns.keys()) if isinstance(temp_assigns, dict) else temp_assigns
         )
-    if getattr(cls, "use_actors", False):
-        config["use_actors"] = True
 
     # Exposed state (always included — core security info)
     exposed_state = _extract_exposed_state(cls)
@@ -1072,8 +1070,6 @@ class Command(BaseCommand):
                         "    Temp assigns: %s"
                         % ", ".join(str(t) for t in config["temporary_assigns"])
                     )
-                if config.get("use_actors"):
-                    self.stdout.write("    Actors:     enabled")
 
                 # Exposed state
                 exposed = audit.get("exposed_state", {})

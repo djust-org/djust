@@ -10,7 +10,6 @@ Generated for djust framework - see crates/djust_live/src/lib.rs
 
 from typing import (
     Any,
-    Awaitable,
     Callable,
     Dict,
     List,
@@ -1042,7 +1041,7 @@ def get_registered_custom_filters() -> List[str]:
     ...
 
 # ============================================================================
-# Actor System
+# Render environment
 # ============================================================================
 
 class RenderEnv:
@@ -1065,102 +1064,6 @@ class RenderEnv:
     def number_format(self) -> Optional[Tuple[str, str, List[int], bool]]: ...
     @property
     def unlocalized_number_format(self) -> Optional[Tuple[str, str, List[int], bool]]: ...
-
-class SessionActorHandle:
-    """
-    Handle to a session actor for async state management.
-
-    Provides async methods for interacting with the actor-based
-    session state system.
-    """
-
-    def mount(
-        self,
-        view_path: str,
-        params: Dict[str, Any],
-        request_meta: Dict[str, Any],
-    ) -> Awaitable[Tuple[str, str]]:
-        """
-        Mount a LiveView and render initial HTML.
-
-        Args:
-            view_path: Python path to the LiveView class (e.g., "app.views.Counter")
-            params: Initial state parameters
-            request_meta: Request metadata (user, session, etc.)
-
-        Returns:
-            Awaitable that resolves to (view_id, html)
-        """
-        ...
-
-    def handle_event(
-        self,
-        view_id: str,
-        event: str,
-        params: Dict[str, Any],
-    ) -> Awaitable[str]:
-        """
-        Handle an event on a mounted view.
-
-        Args:
-            view_id: ID of the view (from mount)
-            event: Event name (e.g., "increment", "submit")
-            params: Event parameters
-
-        Returns:
-            Awaitable that resolves to HTML patches JSON
-        """
-        ...
-
-    def shutdown(self) -> Awaitable[None]:
-        """
-        Shutdown the session actor.
-
-        Returns:
-            Awaitable that resolves when shutdown is complete
-        """
-        ...
-
-class SupervisorStatsPy:
-    """
-    Statistics for the actor supervisor.
-
-    Provides metrics about active sessions, memory usage, etc.
-    """
-
-    active_sessions: int
-    total_created: int
-    total_dropped: int
-    ttl_secs: int
-
-def create_session_actor(session_id: str) -> Awaitable[SessionActorHandle]:
-    """
-    Create or retrieve a session actor.
-
-    Creates a new session actor or returns existing one for the given
-    session ID. Uses the global supervisor for lifecycle management.
-
-    Args:
-        session_id: Unique session identifier
-
-    Returns:
-        Awaitable that resolves to SessionActorHandle
-
-    Example::
-
-        handle = await create_session_actor("session-123")
-        view_id, html = await handle.mount("app.views.Counter", {}, {})
-    """
-    ...
-
-def get_actor_stats() -> SupervisorStatsPy:
-    """
-    Get statistics from the actor supervisor.
-
-    Returns:
-        SupervisorStatsPy with metrics about active sessions
-    """
-    ...
 
 # ============================================================================
 # RustLiveView Backend
@@ -1685,13 +1588,8 @@ __all__ = [
     "has_custom_filter",
     "clear_custom_filters",
     "get_registered_custom_filters",
-    # Actor system
-    "SessionActorHandle",
     # Render environment (ADR-029)
     "RenderEnv",
-    "SupervisorStatsPy",
-    "create_session_actor",
-    "get_actor_stats",
     # LiveView backend
     "RustLiveView",
     # UI Components

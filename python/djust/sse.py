@@ -10,7 +10,6 @@ certain enterprise environments). The SSE transport is one-directional:
 Feature limitations compared to WebSocket transport:
 - No binary file uploads (use WebSocket or direct HTTP upload endpoints)
 - No presence tracking (requires persistent bidirectional channel)
-- No actor-based state management
 - No embedded child-view scoped updates (full-page updates only)
 - ``push_to_view()`` groups, ``scope=`` push scopes and ``db_notify`` are WebSocket-only:
   they are delivered through the channel layer, which an SSE session does not join,

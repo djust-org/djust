@@ -721,13 +721,6 @@ class WsFormView(LiveView):
         self.form = _valid()
 
 
-class ActorFormView(WsFormView):
-    """The Tokio-actor transport reads ``get_context_data()`` itself, in Rust, and never runs
-    ``_sync_state_to_rust``: a form crosses there as the engine converts any object."""
-
-    use_actors = True
-
-
 class HttpFormView(LiveView):
     template = _page(COMPOSITE)
 
@@ -799,27 +792,6 @@ class TestTheRealEntries:
         assert got == expected
         assert len(set(got)) == 3, "the steps differ from each other (not vacuous)"
         assert REQUIRED in got[1] and REQUIRED not in got[2]
-
-    def test_the_actor_transport_reads_the_form_after_an_event(self):
-        """The actor transport reads ``get_context_data()`` in Rust (``sync_state_from_python``) and
-        never runs ``_sync_state_to_rust``: a form crosses there as the engine converts any object,
-        so the render after an event is correct. Unchanged by #3767; pinned so it stays so."""
-        pytest.importorskip("channels")
-        with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-            frames = asyncio.run(_ws_run(f"{__name__}.ActorFormView", ["to_invalid"]))
-        assert _canon(frames[1]) == _canon(_django(COMPOSITE, {"form": _invalid()}))
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason="NOT fixed here: the actor MOUNT (SessionActorHandle.mount) converts get_context_data() "
-        "through a different door and hands the engine str(form), so a loop over the form iterates "
-        "characters. Identical before #3767; remove this marker when the mount is fixed.",
-    )
-    def test_the_actor_mount_frame_is_still_a_known_gap(self):
-        pytest.importorskip("channels")
-        with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-            frames = asyncio.run(_ws_run(f"{__name__}.ActorFormView", []))
-        assert _canon(frames[0]) == _canon(_django(COMPOSITE, {"form": _unbound()}))
 
 
 # --------------------------------------------------------------------------- #

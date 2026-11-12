@@ -158,8 +158,8 @@ class TestGuardCoversTheRenderSurface:
     # Every `_rust` entry point that executes template source, walks HTML, or
     # converts a user value -- i.e. everything that can reach the 25k lines of
     # the template engine and the differ. The config setters/getters
-    # (`set_active_timezone`, `virtual_keyed_ops_enabled`, ...) and the actor
-    # handles are deliberately absent: they store or read a scalar and never
+    # (`set_active_timezone`, `virtual_keyed_ops_enabled`, ...) are
+    # deliberately absent: they store or read a scalar and never
     # enter the engine.
     _GUARDED = frozenset(
         {

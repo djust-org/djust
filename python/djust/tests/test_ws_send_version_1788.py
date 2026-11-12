@@ -412,9 +412,7 @@ def test_every_client_checked_send_path_uses_next_version():
     NOT counted.
 
     #1817: the bare ``_next_version()`` is reserved for NON-render frames (the mount
-    baseline) plus the one path deliberately left unarmed pending follow-up (the actor
-    event path — its ``result['html']`` shape is not the pre-strip render the recovery
-    path expects). The shared helper ``_next_version_armed(html)`` (which internally
+    baseline). The shared helper ``_next_version_armed(html)`` (which internally
     calls ``_next_version()`` once) is the canonical primitive for render-send paths.
 
     Every count below is taken over PROSE-STRIPPED source (#2238) — see
@@ -474,21 +472,17 @@ def test_every_client_checked_send_path_uses_next_version():
     )
 
     # --- NON-render / pending paths: bare self._next_version() ---
-    # The bare form is now reserved for: the helper body's single delegated call, the
-    # mount baseline (non-render), and the actor event path (left unarmed, #1817
-    # follow-up). Count send-site bare invocations EXCLUDING the helper-internal one.
+    # The bare form is now reserved for: the helper body's single delegated call and
+    # the mount baseline (non-render). Count send-site bare invocations EXCLUDING the helper-internal one.
     bare_inline = counts["bare_inline"]
     bare_assign = counts["bare_assign"]
     helper_internal = counts["helper_internal"]
     bare_send_sites = counts["bare_send_sites"]
 
-    # Bare send-site invocations (verified at #1817; actor site moved at #1907;
-    # mount baseline moved at #1919):
+    # Bare send-site invocations (verified at #1817; mount baseline moved at #1919):
     #   (none remain in websocket.py).
     #
-    # #1907 THE FLIP: the actor event path's INLINE ``version=self._next_version()``
-    # moved to ``WSConsumerTransport.dispatch_actor_event`` (runtime.py) in Phase
-    # 2.3a. #1919 THE MOUNT FLIP: the ``handle_mount`` baseline
+    # #1919 THE MOUNT FLIP: the ``handle_mount`` baseline
     # ``version = self._next_version()`` moved to
     # ``WSConsumerTransport.next_mount_version`` (runtime.py, Finding C) — it calls
     # ``consumer._next_version()`` (still the consumer counter, still the NO-ARM
@@ -518,7 +512,7 @@ def test_every_client_checked_send_path_uses_next_version():
         "so the version allocation and recovery baseline can never drift (#1817)."
     )
 
-    # The mount frame must stamp the consumer counter (covers actor mount too).
+    # The mount frame must stamp the consumer counter.
     # Post-#1919 (THE MOUNT FLIP) the bespoke handle_mount baseline stamp moved to
     # the ``WSConsumerTransport.next_mount_version`` hook (runtime.py, Finding C),
     # which returns ``self._consumer._next_version()`` — the SAME monotonic counter,
@@ -528,8 +522,7 @@ def test_every_client_checked_send_path_uses_next_version():
     mount_ver_src = without_prose(inspect.getsource(rt_mod.WSConsumerTransport.next_mount_version))
     assert "self._consumer._next_version()" in mount_ver_src, (
         "WSConsumerTransport.next_mount_version must stamp the mount frame version via "
-        "the consumer counter (consumer._next_version()) so the client baseline = 1 and "
-        "the actor mount path does not trust result['version']."
+        "the consumer counter (consumer._next_version()) so the client baseline = 1."
     )
 
     # handle_request_html must send the consumer-owned recovery version, NOT a fresh

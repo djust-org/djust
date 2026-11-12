@@ -347,8 +347,7 @@ Everything above is the sync code djust runs on a worker thread through
   `"render"` steps.
 - **`get_template()` inside the render** (while the template is built for a view
   render) runs in the framework's render plumbing with no step open; an HTTP GET
-  shows none. Only the two direct calls (the actor mount, a hot reload) are
-  `"render"` steps.
+  shows none. Only the direct call from a hot reload is a `"render"` step.
 - **A task you start yourself** with `create_task()`: it inherits the context
   variables of the turn but is not a sync step. Handlers run inside an `"event"`
   step, so what they call directly is covered; a task they start is not.

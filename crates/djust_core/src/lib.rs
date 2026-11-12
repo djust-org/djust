@@ -3814,8 +3814,8 @@ pub fn dict_subclass_spells_itself(ob: &Bound<'_, PyAny>) -> bool {
 /// `None` for anything that is not one: an exact `dict` costs a single type
 /// check and no attribute lookup; a subclass is recognised by the
 /// `getlist` + `lists` pair that `MultiValueDict` defines and a plain
-/// mapping does not. One helper, three converters (`FromPyObject for Value`,
-/// `python_to_value`, `python_to_json_value`) — the #1646 shape.
+/// mapping does not. One helper, two converters (`FromPyObject for Value`,
+/// `python_to_json_value`) — the #1646 shape.
 pub fn multi_value_dict_pairs<'py>(
     ob: &Bound<'py, PyAny>,
 ) -> Option<Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)>> {

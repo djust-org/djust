@@ -99,12 +99,6 @@ Provides type information for Rust-exported functions and classes:
 - `unregister_tag_handler()` - Remove tag handler
 - `clear_tag_handlers()` - Clear all handlers
 
-#### Actor System
-- `SessionActorHandle` - Async session state management
-- `SupervisorStatsPy` - Actor supervisor statistics
-- `create_session_actor()` - Create/retrieve session actor
-- `get_actor_stats()` - Get supervisor metrics
-
 #### LiveView Backend
 - `RustLiveView` - Rust-backed LiveView component
 

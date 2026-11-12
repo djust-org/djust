@@ -470,7 +470,6 @@ A few real constraints worth knowing:
       predicate=lambda kw: kw.get("component_id") == "project_form",
   )
   ```
-- **Actor-mode views bypass the dispatch hook.** Tours don't work on views running under `use_actors = True`. The non-actor path is the default and is fully supported.
 - **Handlers that fail parameter validation don't run** — meaning a waiter on them never resolves via the handler path, only via timeout. Make sure your `wait_for` handlers have matching client-side call shapes (the inline `dj-click="handler_name(args)"` syntax works fine).
 - **Tours are single-user.** A tour running on user A's session doesn't affect user B. Instructor-led multi-user tours (one instructor drives many students) need multi-user broadcast (`broadcast_commands` + the ADR-005 consent envelope), which is planned and not yet shipped.
 

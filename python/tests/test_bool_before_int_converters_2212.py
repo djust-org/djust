@@ -15,7 +15,9 @@ gate-off re-introduced the #2211 bug in ``python_to_value`` and the entire suite
 stayed green — 10,278 passed, 0 failed. Only ``serialize_python_value`` has
 behavioural coverage (``test_template_serialization.py::TestBoolRoundTrip2212``).
 That is why the parser below is defensive rather than quick: when a guard is the
-sole protection, its own defects are the real risk.
+sole protection, its own defects are the real risk. (``python_to_value`` was the
+actor system's converter; 2.0 removed it with the actors, and it left
+``EXPECTED`` then.)
 
 Three parser defects found in review and fixed here:
 
@@ -68,7 +70,6 @@ EXPECTED = {
     # landed, which is the net working.
     ("crates/djust_core/src/lib.rs", "crosses_as_encoded"),
     ("crates/djust_live/src/lib.rs", "python_to_json_value"),
-    ("crates/djust_live/src/lib.rs", "python_to_value"),
     ("crates/djust_live/src/lib.rs", "serialize_python_value"),
     ("crates/djust_live/src/lib.rs", "queryset_value_to_json"),
     ("crates/djust_live/src/model_serializer.rs", "python_to_json"),

@@ -2,7 +2,7 @@
 Ring-buffered exception capture.
 
 Populated from `djust.security.error_handling.handle_exception()`, which
-is the single entry point every consumer / view / actor error flows
+is the single entry point every consumer / view error flows
 through. The MCP reads this via /_djust/observability/last_traceback/.
 """
 

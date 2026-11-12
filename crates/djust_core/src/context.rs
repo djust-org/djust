@@ -546,8 +546,8 @@ pub struct Context {
     raw_py_objects: Option<std::sync::Arc<HashMap<String, Py<PyAny>>>>,
     /// Django-parity auto-call of callables during sidecar `getattr`
     /// resolution (ADR-024). Default `true`. Only the `auto_call` argument of
-    /// the plain `render_template*` entries and the actor component config
-    /// set it; `false` is the pre-ADR plain-getattr walk.
+    /// the plain `render_template*` entries
+    /// sets it; `false` is the pre-ADR plain-getattr walk.
     auto_call: bool,
     /// Emit the `<!--dj-if-->` placeholder (#295) and the
     /// `<!--dj-if id="if-…"-->…<!--/dj-if-->` boundary pair (#1358/#1832)

@@ -95,7 +95,6 @@ async def _drive_event(view_cls, event_name):
     consumer.scope = {"session": None}
     consumer.session_id = "s1"
     consumer.view_instance = view
-    consumer.use_actors = False
     consumer._view_path = f"djust.tests.x.{view_cls.__name__}"
     rl = MagicMock()
     rl.check.return_value = True

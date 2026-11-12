@@ -127,7 +127,7 @@ Running `djust_audit` with no mode flags walks every `LiveView` and
 - Exposed public attributes (anything that doesn't start with `_`)
 - Event handlers and their decorators (`@event_handler`, `@debounce`,
   `@throttle`, `@rate_limit`, `@cache`, `@optimistic`, etc.)
-- Config flags (`tick_interval`, `temporary_assigns`, `use_actors`)
+- Config flags (`tick_interval`, `temporary_assigns`)
 - The view's declared [`query_budget`](../testing/index.md#per-view-query-budgets), or
   that it has none (`Query budget: (none)`; `"query_budget": null` in `--json`). A view
   that spends on the database without a limit is as visible as one that has one. The

@@ -79,10 +79,6 @@ This directory contains comprehensive documentation for djust organized by topic
 - [Phase 5: @optimistic & DraftMode](state-management/IMPLEMENTATION_PHASE5.md)
 - [Loading Attribute Improvements](state-management/LOADING_ATTRIBUTE_IMPROVEMENTS.md)
 
-### 🎭 Actors
-- **[Actor Limitations](actors/ACTOR_LIMITATIONS.md)** - Known limitations
-- **[Actor State Management](actors/ACTOR_STATE_MANAGEMENT.md)** - Managing state in actors
-
 ### 🌳 Virtual DOM
 - **[VDOM Patching Issue](vdom/VDOM_PATCHING_ISSUE.md)** - Form value preservation
 - **[VDOM Root Cause](vdom/VDOM_ROOT_CAUSE.md)** - Deep dive into VDOM issues
@@ -157,7 +153,6 @@ Essential files kept in the project root:
 ```
 docs/
 ├── README.md (this file)
-├── actors/           # Actor system documentation
 ├── archive/          # Historical documents
 ├── components/       # Component system & library
 ├── development/      # Development process & CI/CD

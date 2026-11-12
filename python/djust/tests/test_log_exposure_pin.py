@@ -60,7 +60,6 @@ FRAMEWORK_ONLY = {
         "teardown step names; confirm no application hook runs there"
     ),
     ("_attach_debug_payload", "Failed to attach debug payload: %s"): "debug payload assembly",
-    ("disconnect", "Error shutting down actor: %s"): "Rust actor shutdown",
     ("_scope_session_key", "failed to read the session key: %s"): "session key read",
     ("_handle_upload_resume", "upload_resume: re-attaching the upload failed"): (
         "upload manager re-attach; writers hold upload bytes and metadata, never view state"
@@ -104,9 +103,6 @@ RUNTIME_LEGACY_GATED = {
     ),
     ("_settle_cancelled_async", "Runtime: error settling cancelled async task for"): (
         "inside `if uses_legacy_exposure(view)`"
-    ),
-    ("dispatch_actor_event", "dj_activity: deferred-event flush raised (actor "): (
-        "actor events are refused for nonlegacy views before this transport hook"
     ),
     ("_dispatch_mount_body", "state_snapshot _restore_snapshot failed for %s; "): (
         "restore runs only when `opt_in and legacy_exposure`"

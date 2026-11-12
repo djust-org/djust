@@ -36,6 +36,7 @@ from django.core.exceptions import ImproperlyConfigured, SynchronousOnlyOperatio
 from django.http import QueryDict
 
 from . import _form_data_bounds
+from ._removed_settings import reject_removed_view_attributes
 from ._view_hooks import call_hook, call_hook_sync
 from .sync_turn import guarded_step, run_guarded_step
 
@@ -449,8 +450,23 @@ def bind_params(view: Any, form_class: type, params: Any) -> BoundParams:
     return form, None
 
 
+def _refuse_removed_configuration(view: Any) -> None:
+    """Refuse a view that still turns on an attribute 2.0 removed (``use_actors``).
+
+    The class-creation check cannot see a value ``__init__`` or ``mount()`` set
+    on the instance, one assigned to the class afterwards, or a class whose
+    mixin's ``__init_subclass__`` skipped ``super()``. Every transport calls the
+    params hook right after ``mount()``, so this is where they are refused.
+    """
+    from .live_view import LiveView
+
+    if isinstance(view, LiveView):
+        reject_removed_view_attributes(view)
+
+
 async def run_handle_params(view: Any, params: Any, uri: str) -> None:
     """Call the view's params hook from async code (the socket, SSE, ``url_change``)."""
+    _refuse_removed_configuration(view)
     form_class = _declared_form_class(view)
     if form_class is None:
         if hasattr(view, "handle_params"):
@@ -469,6 +485,7 @@ async def run_handle_params(view: Any, params: Any, uri: str) -> None:
 
 def run_handle_params_sync(view: Any, params: Any, uri: str) -> None:
     """Call the view's params hook from sync code (the HTTP GET and fallback POST)."""
+    _refuse_removed_configuration(view)
     form_class = _declared_form_class(view)
     if form_class is None:
         if hasattr(view, "handle_params"):
