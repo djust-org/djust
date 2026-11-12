@@ -59,7 +59,15 @@ A piece is clean when it is:
   is (it is returned when ``k`` is missing);
 * a call to a function or method THIS FILE defines exactly once (``helper(x)``, ``self.helper(x)``),
   when every value it returns is clean, judged in its own scope where its parameters are raw: so the
-  verdict does not depend on the arguments.
+  verdict does not depend on the arguments. The exception (#3845) is a function NESTED in another
+  whose name is only ever the callee of a plain call in that function (not handed to ``map``,
+  returned or stored): every call site is in view, so its parameters hold what those calls pass (and
+  a default, where a call omits one). A method is not bound that way: a subclass anywhere can call it;
+* type facts of the standard library and the project (#3847): a ``date`` / ``datetime`` value's
+  ``isoformat()`` / ``weekday()`` / ``.year`` / ``(a - b).days`` (a ``date`` accepts ints only), the
+  elements (at any depth) of ``calendar.Calendar(...).monthdayscalendar(...)``, and
+  ``djust.components.utils.interpolate_color`` (pinned by a hostile-payload test), also when a class
+  aliases it as ``_f = staticmethod(interpolate_color)`` and calls ``self._f(...)``;
 
 FLOW (#3820). A name is judged by the bindings that REACH the use, not by every binding it has:
 ``width = kw.get("width", 400)`` then ``width = int(width)`` leaves ``f"{width}"`` clean, because the
@@ -76,7 +84,9 @@ NARROWING (#3820). On the branch where it holds, ``x in COLLECTION`` (a tuple / 
 ``frozenset`` of literals, a module or local name that only holds one, or a class attribute the class
 writes out), ``x == "a"`` and ``isinstance(x, int)`` (also ``float`` / ``bool``) make ``x`` a value the
 developer wrote or a number. ``not``, ``and``, ``or``, ``if`` / ``else``, a conditional expression and
-an early ``raise`` / ``return`` carry it to the right edge. ``assert`` narrows nothing (``python -O``
+an early ``raise`` / ``return`` carry it to the right edge. ``str(x) in COLLECTION`` narrows the
+EXPRESSION ``str(x)`` (not ``x``, which may be an object whose ``str()`` is in the table) for as long
+as ``x`` keeps its bindings, and only where every path into the use carries it (#3846). ``assert`` narrows nothing (``python -O``
 removes it), and a non-literal member, a collection that is mutated or reassigned anywhere in the
 file, or ``self.X = ...`` shadowing the class attribute turns it off.
 
@@ -93,15 +103,24 @@ What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
   ``self``, a helper that returns an interpolated string and is passed straight to the sink.
 * ``mark_safe(x)`` where ``x`` is a bare parameter or an unknown call's result: that is how trusted
   markup is passed in, and no syntax says whether ``x`` was escaped.
-* A sink reached without a call to it by name: ``partial(mark_safe, f"..")``,
-  ``map(mark_safe, [..])``, ``getattr(safestring, "mark_safe")(..)``.
-* ``functools.reduce`` over raw items, and any builder not listed above.
-* Known false negatives probed by the review of #3848 (the cases are in ``safe_markup_corpus_3848``'s
-  neighbours and listed in the issue it filed): a dict KEY built from raw data and then iterated, a
-  closure that appends to the enclosing function's list, ``format_html_join``'s format string, an
-  ``await`` or ``*args`` as the sink argument, ``@html_safe`` / ``__html__`` and a ``SafeString``
-  subclass, a sink in a default argument or a decorator, ``str.translate``, a module-level or
-  class-body loop, Python 3.14 t-strings.
+* A sink reached through ``functools.reduce``, ``exec`` (code held in a string), and any builder not
+  listed above. A sink reached WITHOUT its name in the call IS seen since the follow-up of #3850:
+  ``partial(mark_safe, f"..")``, ``map(mark_safe, [..])``, ``getattr(safestring, "mark_safe")(..)``,
+  ``self._ms`` of ``self._ms = mark_safe``, ``FUNCS["safe"]`` of a container that holds one,
+  ``mark_safe if c else str``, ``str.__new__(SafeString, ..)``, an instance of a class whose
+  ``__call__`` marks its argument, a class whose ``__html__`` returns itself, and the format string of
+  ``format_html_join``. The value returned by a ``__html__`` method and by ``__str__`` of an
+  ``@html_safe`` class is judged as a sink argument (Django takes it as safe markup).
+* Known false negatives the review of #3848 probed, and what became of them (#3850): a dict KEY
+  built from raw data and then iterated, a closure that appends to (or stores into) the enclosing
+  function's container, a nested container (``rows[0].append(x)``), a ``for`` / ``with`` target that
+  is a subscript, an ``await`` or ``*args`` as the sink argument, ``str.translate``, ``(s % x) * n``,
+  ``html.escape(x, quote=False)`` and a ``from x import *`` (which makes every free name's origin
+  unknown) are caught. Still not: a ``str`` subclass without ``__html__`` (Django escapes it), a
+  sink inside ``exec``'s string, ``mark_safe(param)`` handed to ``conditional_escape``, and a sink in a
+  default argument, a decorator, a class body or a module-level loop whose payload is a LITERAL (literal
+  markup is the developer's by design; the same positions with any other value are flagged). Python
+  3.14 t-strings are parsed and then skipped.
 * Whether a name it trusts is the real thing: ``x.render()`` and ``.strip()`` are trusted by method
   name, whatever ``x`` is.
 * WHERE a clean fragment is placed. ``format_html`` output, ``rich_html`` and the record builders are
@@ -113,18 +132,28 @@ What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
   literal, a call of a function of this file that always returns one, or passed as a literal argument
   counts; a trailing ``<`` is a tag name). A string BUILT from such an output (``'' + safe_url(x)``,
   ``'%s' % ..``, a helper that returns one, a ``join`` or container of it) is judged again where it is
-  placed. The exception is a BALANCED fragment: the output sits inside a quote the builder itself
-  opens (the literal text before the first part the guard cannot read leaves a quote open, as in
-  ``' style="' + safe_css_length(x)``) and the builder's whole literal text leaves no quote open. A
-  plain ``<`` or an unclosed quote does not qualify. Such a fragment is placed UNCHECKED: between
+  placed. The exception is a BALANCED fragment: EVERY part the guard cannot read sits inside a quote
+  the builder itself opens (the literal text before each such part leaves a quote open, as in
+  ``' style="' + safe_css_length(x)``; a second output after the quote closed, ``' title="' +
+  safe_url(x) + '" z=' + safe_url(x)``, does not qualify since #3864) and the builder's whole literal
+  text leaves no quote open. A plain ``<`` or an unclosed quote does not qualify. Such a fragment is placed UNCHECKED: between
   attributes, which is its purpose, but also inside a quoted value or as an unquoted value, where it
   would be wrong and the guard does not see it (#3864). A bare output anywhere nobody checked
-  (``join`` of bare outputs, an argument) is not clean. What that check still cannot see (#3850, #3864): a prefix the guard cannot
-  read (any unknown earlier part is assumed position-neutral), a function that takes the output as a
-  PARAMETER and builds the tag (the helper is judged with its parameter raw), a lambda,
-  ``format_map`` / a dict ``%`` (flagged, not cleared), a metaclass data descriptor of the same name as
-  a class attribute, and a module attribute replaced from outside the file
-  (``sys.modules[__name__].helper = ...``, ``setattr`` on an imported module).
+  (``join`` of bare outputs, an argument) is not clean. What that check still cannot see (#3850,
+  #3864): a prefix the guard cannot read (any unknown earlier part is assumed position-neutral;
+  treating markup-carrying parts as unknown flagged over a hundred correct sites in the tree, so it
+  was not done), a function that takes the output as a PARAMETER and builds the tag (the helper is
+  judged with its parameter raw, and a call of it with clean arguments is not a built string), a
+  lambda that does the same, ``format_map`` (flagged, not cleared), and a module attribute replaced
+  from outside the file (``sys.modules[__name__].helper = ...``, ``setattr`` on an imported module).
+  A metaclass data descriptor of a class attribute's name is no longer missed: ``cls.X`` / ``C.X`` of
+  a class with a metaclass (or any class keyword) is not trusted (``self.X`` is, since an instance
+  lookup never reaches the metaclass).
+* Class attributes of a class whose base writes attributes from keywords: the package's own
+  (``Component``, found by :func:`dynamic_class_names`) and Django's class-based views and forms
+  (``EXTERNAL_DYNAMIC_BASES``, matched by name: ``View.__init__`` ``setattr``s every ``as_view()``
+  keyword) are defaults, not constants. The command line passes the classes it finds in the files it
+  is given (#3864).
 * A subclass in ANOTHER file that overrides a method or class attribute the guard resolved with
   something computed: that is the developer's own code, not request data. (One in the same file is
   seen: the name is no longer trusted.)
@@ -137,6 +166,7 @@ Refs #3766, #3775, #3820, #1859, #1468.
 from __future__ import annotations
 
 import ast
+import copy
 import re
 import string
 import sys
@@ -150,8 +180,47 @@ SINKS = frozenset({"mark_safe", "SafeString", "SafeText", "_safe", "safe_html"})
 #: interpolated string handed to one is the same hole; before #3820 they were not sinks and about 190
 #: call sites were invisible to the guard, the audited baseline and the payload sweep.
 WRAPPER_SINKS = frozenset({"_safe", "safe_html"})
-#: Sinks whose FIRST argument is a markup template: an interpolated one is the same hole.
-FORMAT_SINKS = frozenset({"format_html"})
+#: Sinks with an argument that is a markup template, and its position: an interpolated one is the
+#: same hole. ``format_html_join(sep, format_string, args)`` takes it second (#3850).
+FORMAT_SINK_ARG = {"format_html": 0, "format_html_join": 1}
+FORMAT_SINKS = frozenset(FORMAT_SINK_ARG)
+#: Constructors of ``datetime.date`` / ``datetime.datetime`` values (#3847). ``date(...)`` accepts ints
+#: only (it raises on anything else), so what such a value prints through ``isoformat()`` and the
+#: numbers it yields (``weekday()``, ``.year``, ``(a - b).days``) are digits, ``-``, ``:``, ``T``,
+#: ``.`` and ``+``: never markup.
+DATE_ORIGINS = frozenset(
+    {
+        "datetime.date",
+        "datetime.date.today",
+        "datetime.date.fromordinal",
+        "datetime.datetime",
+        "datetime.datetime.now",
+        "datetime.datetime.utcnow",
+        "datetime.datetime.fromordinal",
+    }
+)
+DELTA_ORIGINS = frozenset({"datetime.timedelta"})
+#: Methods of a date value that return digits (``isoformat``) or an int.
+DATE_DIGIT_METHODS = frozenset({"isoformat", "weekday", "isoweekday", "toordinal"})
+#: Attributes of a date / timedelta value that are ints.
+DATE_DIGIT_ATTRS = frozenset({"year", "month", "day", "days", "seconds", "microseconds"})
+#: ``calendar.Calendar`` methods whose result is (nested) ints: every element, at any depth, is
+#: an int (#3847). Called on an instance of these classes.
+CALENDAR_CLASSES = frozenset(
+    {"calendar.Calendar", "calendar.TextCalendar", "calendar.HTMLCalendar"}
+)
+CALENDAR_DIGIT_METHODS = frozenset(
+    {"monthdayscalendar", "itermonthdays", "monthdays2calendar", "yeardayscalendar"}
+)
+#: Origins (in the project) whose result is clean for ANY argument; each is pinned by a
+#: hostile-payload test in ``python/tests/test_safe_markup_guard_3820.py`` (#3847).
+#: ``interpolate_color`` returns ``f"#{r:02x}{g:02x}{b:02x}"`` of ``int()``s, or raises.
+CLEAN_PROJECT_ORIGINS = frozenset({"djust.components.utils.interpolate_color"})
+#: Escapers with a ``quote`` switch (and its position): only clean when it is left on.
+QUOTE_ESCAPERS = {"html.escape": 1}
+#: Calls that apply their FIRST argument to the rest: ``map(mark_safe, items)``,
+#: ``partial(mark_safe, x)``. With a sink first, the rest is what it marks (#3850).
+APPLY_CALLS = frozenset({"map", "partial"})
 
 #: Resolved ORIGINS (through the module's imports) of calls whose result holds no raw markup.
 CLEAN_ORIGINS = frozenset(
@@ -387,6 +456,33 @@ class _ElementOf:
         self.iterable = iterable
 
 
+class _Foreign:
+    """A value put into a container from ANOTHER scope: a closure's ``parts.append(s)`` where ``parts``
+    is the enclosing function's (#3850). It is judged in the scope that wrote it."""
+
+    __slots__ = ("expr", "scope")
+
+    def __init__(self, expr: ast.expr, scope: _Scope) -> None:
+        self.expr = expr
+        self.scope = scope
+
+
+class _AnyOf:
+    """A parameter of a nested function bound from its call sites: it holds one of ``values``, each
+    judged in the scope of its call (or, for a default, of the ``def``) (#3845)."""
+
+    __slots__ = ("values",)
+
+    def __init__(self, values: list[_Foreign]) -> None:
+        self.values = values
+
+
+def _unwrap(value: object, owner: _Scope) -> tuple[object, _Scope]:
+    if isinstance(value, _Foreign):
+        return value.expr, value.scope
+    return value, owner
+
+
 class _Def:
     """One binding of a name: what reaches a use is a SET of these (see :class:`_Flow`)."""
 
@@ -417,9 +513,16 @@ class _Scope:
         self.assigns: dict[str, list[object]] = {}
         #: name -> every value put INTO it (append / extend / insert / ``d[k] = v`` / ``+= [..]``)
         self.contents: dict[str, list[ast.expr]] = {}
+        #: name -> every KEY stored into it (``d[k] = v``): what iterating a dict yields (#3850).
+        #: Kept apart from ``contents``: a key is an element when the container is ITERATED, not a
+        #: piece of a string a call builds out of the container.
+        self.keys: dict[str, list[object]] = {}
         #: name -> every value ``+=``-ed onto it as a string piece
         self.pieces: dict[str, list[ast.expr]] = {}
         self.sinks: list[ast.Call] = []
+        #: ``return`` statements whose value Django takes as already-safe markup: those of a
+        #: ``__html__`` method, and of ``__str__`` in an ``@html_safe`` class (#3850)
+        self.html_returns: list[ast.Return] = []
         #: id(AST node) -> the ``(name, value)`` pairs it appended to ``assigns``: the flow analysis
         #: reads the SAME value objects back, so a binding it passes is the binding that was recorded.
         self.node_defs: dict[int, list[tuple[str, object]]] = {}
@@ -468,6 +571,17 @@ def _own_nodes(scope_node: ast.AST):
         stack.extend(ast.iter_child_nodes(node))
 
 
+def _subscript_targets(target: ast.expr) -> list[ast.Subscript]:
+    """The ``c[k]`` stores a ``for`` / ``with`` target makes (``for box[0], n in ...``)."""
+    if isinstance(target, ast.Subscript):
+        return [target]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [x for t in target.elts for x in _subscript_targets(t)]
+    if isinstance(target, ast.Starred):
+        return _subscript_targets(target.value)
+    return []
+
+
 def _target_names(target: ast.expr) -> list[str]:
     if isinstance(target, ast.Name):
         return [target.id]
@@ -490,7 +604,7 @@ class _Module:
         #: names of classes (anywhere in the package) that write attributes under names the source
         #: does not show (``Component``: ``setattr(self, key, value)`` for every kwarg), and the
         #: classes that inherit from them: see :func:`dynamic_class_names`
-        self.dynamic_bases = dynamic_bases
+        self.dynamic_bases = dynamic_bases | EXTERNAL_DYNAMIC_BASES
         #: The dotted name this source is importable as (``djust.components.utils``), when known.
         #: It resolves a relative import to its ORIGIN and names the functions this file defines.
         self.module = module
@@ -522,8 +636,12 @@ class _Module:
         self._scan_hazards()
         self.sinks = set(SINKS)
         self.format_sinks = set(FORMAT_SINKS)
+        #: name of a container display that holds a sink -> that sink (``FUNCS["safe"](...)``)
+        self.sink_containers: dict[str, str] = {}
         #: local name -> dotted origin, or ``None`` when the file imports it as two different things
         self.imports: dict[str, str | None] = {}
+        #: the file has a ``from x import *``: no free name has a known origin
+        self.star_import = False
         self._collect_imports()
         self._collect_aliases()
         self._collect_wrappers()
@@ -532,7 +650,11 @@ class _Module:
         self.reach: dict[int, tuple[_Scope, tuple[_Def, ...]]] = {}
         #: id(function node) -> the scope it opens (to judge a call to it by what it returns)
         self.scope_of: dict[int, _Scope] = {}
+        #: ids of ``str(x)`` calls that only run where ``str(x) in CONSTANT`` held (#3846)
+        self.narrowed_exprs: set[int] = set()
         self._build(self.tree, "<module>", None)
+        self._closure_writes()
+        self._bind_nested_parameters()
         for scope in self.scopes:
             if isinstance(scope.node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 _Flow(self, scope).run()
@@ -763,6 +885,36 @@ class _Module:
     def _collect_wrappers(self) -> None:
         for name in wrapper_names(self.tree, self.sinks):
             self.sinks.add(name)
+        # ``class Safe: def __call__(self, v): return mark_safe(v)``; ``_wrap = Safe()``: the
+        # instance is a sink (#3850). So is the class's name called directly on a value? No: that
+        # constructs one. Only a name bound to an instance is.
+        callable_classes = set()
+        for cls in (n for n in ast.walk(self.tree) if isinstance(n, ast.ClassDef)):
+            for stmt in cls.body:
+                # ``class H(str): def __html__(self): return str(self)``: constructing one marks
+                # the value it is built from safe, so the class itself is a sink (#3850)
+                if (
+                    isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and stmt.name == "__html__"
+                    and stmt.args.args
+                ):
+                    me = {stmt.args.args[0].arg}
+                    returns = [r.value for r in _own_nodes(stmt) if isinstance(r, ast.Return)]
+                    if returns and all(r is not None and _transparent(r, me) for r in returns):
+                        self.sinks.add(cls.name)
+                if (
+                    isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and stmt.name == "__call__"
+                ):
+                    probe = copy.copy(stmt)
+                    probe.name = "_djust_probe_call"
+                    module = ast.Module(body=[probe], type_ignores=[])
+                    if "_djust_probe_call" in wrapper_names(module, self.sinks):
+                        callable_classes.add(cls.name)
+        if callable_classes:
+            for dst, value in self._alias_pairs():
+                if isinstance(value, ast.Call) and _callee(value.func) in callable_classes:
+                    self.sinks.add(dst)
 
     # -- imports and aliases --------------------------------------------------------------
     def _collect_imports(self) -> None:
@@ -778,6 +930,10 @@ class _Module:
             elif isinstance(node, ast.ImportFrom):
                 module = self._absolute(node.level, node.module or "")
                 for alias in node.names:
+                    if alias.name == "*":
+                        # ``from re import *`` can rebind ANY name, ``escape`` included (#3850)
+                        self.star_import = True
+                        continue
                     self._import(alias.asname or alias.name, f"{module}.{alias.name}")
 
     def _import(self, local: str, origin: str) -> None:
@@ -818,6 +974,8 @@ class _Module:
                 return None
             owner = sc.find(e.id)
             if owner is None:
+                if self.star_import:
+                    return None  # a ``from x import *`` may have rebound it: nothing is trusted
                 return self.imports.get(e.id, e.id)
             values = owner.assigns.get(e.id, [])
             if (
@@ -842,6 +1000,22 @@ class _Module:
                     return found.pop()
             return None
         if isinstance(e, ast.Attribute):
+            # ``self._f`` of a class body ``_f = staticmethod(f)`` (#3847): the alias resolves to ``f``
+            if isinstance(e.value, ast.Name) and e.value.id in ("self", "cls"):
+                found = self.class_attribute(e, sc)
+                if found is not None and len(found[1]) == 1:
+                    value = found[1][0]
+                    if (
+                        isinstance(value, ast.Call)
+                        and isinstance(value.func, ast.Name)
+                        and value.func.id == "staticmethod"
+                        and found[0].find("staticmethod") is None
+                        and len(value.args) == 1
+                        and not value.keywords
+                        and isinstance(value.args[0], (ast.Name, ast.Attribute))
+                    ):
+                        return self.origin(value.args[0], found[0], depth + 1)
+                return None
             base = self.origin(e.value, sc, depth + 1)
             return None if base is None else f"{base}.{e.attr}"
         return None
@@ -864,13 +1038,30 @@ class _Module:
         ):  # ``ms = mark_safe``; ``m2 = ms``; ``a = b = mark_safe``; ``(ms := mark_safe)``
             changed = False
             for dst, value in self._alias_pairs():
-                src = _callee(value)
-                if src is None or not isinstance(value, (ast.Name, ast.Attribute)):
-                    continue
-                for group in (self.sinks, self.format_sinks):
-                    if src in group and dst not in group:
-                        group.add(dst)
-                        changed = True
+                # ``mark_safe if c else str`` / ``x or mark_safe``: either may be what is bound (#3850)
+                for src in self._alias_sources(value):
+                    for group in (self.sinks, self.format_sinks):
+                        if src in group and dst not in group:
+                            group.add(dst)
+                            changed = True
+                # ``FUNCS = {"safe": mark_safe}`` / ``[mark_safe]``: an element of it is a sink
+                if isinstance(value, (ast.Dict, ast.List, ast.Tuple, ast.Set)):
+                    elts = value.values if isinstance(value, ast.Dict) else value.elts
+                    for elt in elts:
+                        for src in self._alias_sources(elt) if elt is not None else ():
+                            if src in self.sinks and dst not in self.sink_containers:
+                                self.sink_containers[dst] = src
+                                changed = True
+
+    @staticmethod
+    def _alias_sources(value: ast.AST) -> list[str]:
+        if isinstance(value, (ast.Name, ast.Attribute)):
+            return [_callee(value)]  # type: ignore[list-item]
+        if isinstance(value, ast.IfExp):
+            return [*_Module._alias_sources(value.body), *_Module._alias_sources(value.orelse)]
+        if isinstance(value, ast.BoolOp):
+            return [n for v in value.values for n in _Module._alias_sources(v)]
+        return []
 
     def _alias_pairs(self):
         """``(name, value)`` for every way a name can be bound to a plain name / attribute: an
@@ -898,6 +1089,9 @@ class _Module:
     def _pairs(self, target: ast.AST, value: ast.AST):
         if isinstance(target, ast.Name):
             yield target.id, value
+        elif isinstance(target, ast.Attribute):
+            # ``self._ms = mark_safe``: ``self._ms(...)`` is matched by the attribute name (#3850)
+            yield target.attr, value
         elif (
             isinstance(target, (ast.Tuple, ast.List))
             and isinstance(value, (ast.Tuple, ast.List))
@@ -923,6 +1117,8 @@ class _Module:
                 value: object = ast.Constant("") if arg.arg in engine else RAW
                 scope.assigns.setdefault(arg.arg, []).append(value)
                 scope.params[arg.arg] = value
+        if self._returns_markup(node, parent):
+            scope.html_returns.extend(n for n in _own_nodes(node) if isinstance(n, ast.Return))
         for child in _own_nodes(node):
             self._record(scope, child)
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -933,6 +1129,144 @@ class _Module:
             elif isinstance(child, ast.ClassDef):
                 prefix = "" if name == "<module>" else name + "."
                 self._build(child, prefix + child.name, scope)
+
+    def _closure_writes(self) -> None:
+        """A nested function that fills a container of an ENCLOSING scope (``parts.append(s)``,
+        ``state["v"] = raw``, ``box[0] = raw``) without binding the name itself changes the enclosing
+        scope's container (#3850): its writes become the owner's contents, judged where they were
+        written."""
+        for scope in self.scopes:
+            if not isinstance(scope.node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue
+            for store in ("contents", "keys"):
+                for name, values in list(getattr(scope, store).items()):
+                    if name in scope.assigns or name in scope.opaque:
+                        continue  # its own local
+                    outer = scope.parent
+                    while outer is not None and isinstance(outer.node, ast.ClassDef):
+                        outer = outer.parent
+                    owner = outer.find(name) if outer is not None else None
+                    if owner is None:
+                        continue
+                    getattr(owner, store).setdefault(name, []).extend(
+                        _Foreign(v, scope) if not isinstance(v, _Foreign) else v for v in values
+                    )
+
+    def _returns_markup(self, node: ast.AST, parent: _Scope | None) -> bool:
+        """``node`` is a method whose return value Django treats as safe markup: ``__html__`` (what
+        ``conditional_escape`` / ``format_html`` call), or ``__str__`` of a class decorated with
+        ``django.utils.html.html_safe`` (which makes ``__html__`` return it)."""
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or parent is None:
+            return False
+        if not isinstance(parent.node, ast.ClassDef):
+            return False
+        if node.name == "__html__":
+            return True
+        return node.name == "__str__" and any(
+            self.origin(d, parent) == "django.utils.html.html_safe" or _callee(d) == "html_safe"
+            for d in parent.node.decorator_list
+        )
+
+    def _bind_nested_parameters(self) -> None:
+        """A function NESTED in another, whose name is only ever the callee of a plain call in that
+        function, has every call site in view: its parameters hold what those calls pass (#3845).
+
+        Not for a method (a subclass anywhere can call it with anything), a name used any other way
+        (``map(_btn, xs)``, returned, stored, passed), a decorated function, a call with ``*args`` /
+        ``**kw``, or a ``*args`` / ``**kw`` parameter. A parameter a call omits holds its default.
+        """
+        for fscope in self.scopes:
+            fn = fscope.node
+            holder = fscope.parent
+            if (
+                not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                or fn.decorator_list
+                or holder is None
+                or not isinstance(holder.node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                or len(holder.def_nodes.get(fn.name, [])) != 1
+                or len(holder.assigns.get(fn.name, [])) != 1
+                or fn.name in holder.opaque
+                or fn.name in self.rebound_names
+                or self.dynamic_globals
+            ):
+                continue
+            calls = self._only_called(fn.name, holder)
+            if not calls:
+                continue
+            positional = [*fn.args.posonlyargs, *fn.args.args]
+            names = [a.arg for a in positional]
+            defaults: dict[str, ast.expr] = dict(
+                zip(names[len(names) - len(fn.args.defaults) :], fn.args.defaults)
+            )
+            for arg, default in zip(fn.args.kwonlyargs, fn.args.kw_defaults):
+                if default is not None:
+                    defaults[arg.arg] = default
+            bound: dict[str, list[_Foreign]] = {
+                a.arg: [] for a in [*positional, *fn.args.kwonlyargs]
+            }
+            ok = True
+            for call, call_scope in calls:
+                given: dict[str, ast.expr] = {}
+                if len(call.args) > len(positional):
+                    ok = False
+                    break
+                for param, value in zip(names, call.args):
+                    given[param] = value
+                for kw in call.keywords:
+                    if (
+                        kw.arg not in bound
+                        or kw.arg in given
+                        or kw.arg in names[: len(fn.args.posonlyargs)]
+                    ):
+                        ok = False
+                        break
+                    given[kw.arg] = kw.value
+                if not ok:
+                    break
+                for param in bound:
+                    if param in given:
+                        bound[param].append(_Foreign(given[param], call_scope))
+                    elif param in defaults:
+                        bound[param].append(_Foreign(defaults[param], holder))
+                    else:
+                        ok = False  # a call that would raise: nothing to learn from it
+                        break
+                if not ok:
+                    break
+            if not ok:
+                continue
+            for param, values in bound.items():
+                if fscope.params.get(param) is not RAW:
+                    continue  # the engine vouched for it already
+                value = _AnyOf(values)
+                fscope.params[param] = value
+                fscope.assigns[param] = [value if v is RAW else v for v in fscope.assigns[param]]
+
+    def _only_called(self, name: str, holder: _Scope) -> list[tuple[ast.Call, _Scope]] | None:
+        """Every use of ``name`` inside ``holder`` (nested scopes included), when each one is the
+        callee of a call without ``*args`` / ``**kw`` that resolves to ``holder``'s binding; else
+        ``None``."""
+        parents = {id(c): n for n in ast.walk(holder.node) for c in ast.iter_child_nodes(n)}
+        calls: list[tuple[ast.Call, _Scope]] = []
+        for node in ast.walk(holder.node):
+            if not (isinstance(node, ast.Name) and node.id == name):
+                continue
+            if not isinstance(node.ctx, ast.Load):
+                if node is not None and isinstance(node.ctx, (ast.Store, ast.Del)):
+                    return None  # rebound or deleted somewhere
+                continue
+            call = parents.get(id(node))
+            if not (isinstance(call, ast.Call) and call.func is node) or self._has_star(call):
+                return None
+            # the scope the call is evaluated in, and it must see ``holder``'s ``name``
+            owner = parents.get(id(call))
+            while owner is not None and id(owner) not in self.scope_of:
+                owner = parents.get(id(owner))
+            call_scope = self.scope_of.get(id(owner)) if owner is not None else holder
+            if call_scope is None or call_scope.find(name) is not holder:
+                return None
+            calls.append((call, call_scope))
+        return calls or None
 
     def _engine_parameters(self, node: ast.AST) -> set[str]:
         """The parameters of a block-handler ``render`` the engine passes as rendered markup."""
@@ -957,8 +1291,8 @@ class _Module:
                     self._bind(scope, node, target.id, node.value)
                 elif isinstance(target, (ast.Tuple, ast.List)):
                     self._bind_unpack(scope, node, target, node.value)
-                elif isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
-                    scope.contents.setdefault(target.value.id, []).append(node.value)
+                elif isinstance(target, ast.Subscript):
+                    self._store_into(scope, target, node.value)
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
             if isinstance(node.target, ast.Name):
                 self._bind(scope, node, node.target.id, node.value)
@@ -969,8 +1303,16 @@ class _Module:
                 scope.contents.setdefault(n, []).extend(node.value.elts)
             elif isinstance(node.op, (ast.Add, ast.Mod, ast.BitOr)):
                 scope.pieces.setdefault(n, []).append(node.value)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Subscript):
+            self._store_into(scope, node.target, node.value)  # ``d[k] += raw``
         elif isinstance(node, (ast.For, ast.AsyncFor)):
             self._bind_iteration(scope, node, node.target, node.iter)
+            for leaf in _subscript_targets(node.target):  # ``for box[0] in items`` (#3850)
+                self._store_into(
+                    scope,
+                    leaf,
+                    ast.Subscript(value=node.iter, slice=ast.Constant(0), ctx=ast.Load()),
+                )
         elif isinstance(node, ast.comprehension):
             # a comprehension variable is visible to a sink inside the comprehension
             self._bind_iteration(scope, node, node.target, node.iter, comprehension=True)
@@ -989,14 +1331,23 @@ class _Module:
                 if item.optional_vars is not None:
                     for n in _target_names(item.optional_vars):
                         self._bind(scope, node, n, RAW)
+                    for leaf in _subscript_targets(item.optional_vars):  # ``as box[0]`` (#3850)
+                        self._store_into(scope, leaf, item.context_expr)
         elif isinstance(node, ast.NamedExpr):
             self._bind(scope, node, node.target.id, node.value)
         elif isinstance(node, (ast.ExceptHandler,)) and node.name:
             self._bind(scope, node, node.name, RAW)
         elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
             call = node.value
-            if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name):
-                n, method = call.func.value.id, call.func.attr
+            root = (
+                self._container_root(call.func.value)
+                if isinstance(call.func, ast.Attribute)
+                else None
+            )
+            if root is not None:
+                # ``rows[0].append(x)`` / ``d["a"].append(x)`` / ``d.setdefault("a", []).append(x)``:
+                # an element of an element of the root container, judged as one of its elements
+                n, method = root, call.func.attr  # type: ignore[union-attr]
                 if method in ("append", "add") and call.args:
                     scope.contents.setdefault(n, []).append(call.args[0])
                 elif method == "insert" and len(call.args) >= 2:
@@ -1025,9 +1376,87 @@ class _Module:
                         )
         # a sink call is recorded wherever it appears in this scope's own nodes
         if isinstance(node, ast.Call):
-            name = _callee(node.func)
+            name = self._sink_name(node.func, scope)
             if name in self.sinks or name in self.format_sinks:
                 scope.sinks.append(node)
+            elif (
+                isinstance(node.func, ast.Name)
+                and node.func.id in APPLY_CALLS
+                and node.args
+                and self._sink_name(node.args[0], scope) in self.sinks
+            ):
+                scope.sinks.append(node)  # ``map(mark_safe, items)``, ``partial(mark_safe, x)``
+            elif (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "__new__"
+                and node.args
+                and self._sink_name(node.args[0], scope) in self.sinks
+            ):
+                scope.sinks.append(node)  # ``str.__new__(SafeString, x)``: a SafeString of ``x``
+
+    def _sink_name(self, func: ast.expr, scope: _Scope | None = None) -> str | None:
+        """The sink a callee spells, by NAME (#3850): ``mark_safe``, ``ss.mark_safe``, ``self._ms`` of
+        ``self._ms = mark_safe``, ``FUNCS["safe"]`` of a container that holds a sink,
+        ``getattr(ss, "mark_safe")``, ``(mark_safe if c else str)``, ``str.__new__`` handed a
+        ``SafeString`` is not a callee (it is in :meth:`findings`)."""
+        name = _callee(func)
+        if name is not None:
+            return name
+        if isinstance(func, ast.Subscript):
+            root = func.value
+            while isinstance(root, ast.Subscript):
+                root = root.value
+            key = _callee(root)
+            return self.sink_containers.get(key) if key else None
+        if (
+            isinstance(func, ast.Call)
+            and isinstance(func.func, ast.Name)
+            and func.func.id == "getattr"
+            and len(func.args) >= 2
+            and isinstance(func.args[1], ast.Constant)
+            and isinstance(func.args[1].value, str)
+        ):
+            return func.args[1].value
+        if isinstance(func, ast.IfExp):
+            for branch in (func.body, func.orelse):
+                name = self._sink_name(branch, scope)
+                if name in self.sinks or name in self.format_sinks:
+                    return name
+        if isinstance(func, ast.BoolOp):
+            for value in func.values:
+                name = self._sink_name(value, scope)
+                if name in self.sinks or name in self.format_sinks:
+                    return name
+        return None
+
+    @staticmethod
+    def _container_root(e: ast.expr) -> str | None:
+        """The local container ``e`` reaches into: ``rows`` of ``rows``, ``rows[0]``, ``d["a"][1]``,
+        ``d.get("a")``, ``d.setdefault("a", [])``; ``None`` for anything else."""
+        while True:
+            if isinstance(e, ast.Name):
+                return e.id
+            if isinstance(e, ast.Subscript):
+                e = e.value
+            elif (
+                isinstance(e, ast.Call)
+                and isinstance(e.func, ast.Attribute)
+                and e.func.attr in ("get", "setdefault", "pop")
+            ):
+                e = e.func.value
+            else:
+                return None
+
+    def _store_into(self, scope: _Scope, target: ast.Subscript, value: ast.expr) -> None:
+        """``c[k] = value`` (or ``c[i][j] = value``): ``value`` and the KEY ``k`` become elements of
+        the root container ``c`` (a dict's keys are what iterating it yields, #3850)."""
+        root = self._container_root(target.value)
+        if root is None:
+            return
+        scope.contents.setdefault(root, []).append(value)
+        key = target.slice
+        if not isinstance(key, ast.Slice):
+            scope.keys.setdefault(root, []).append(key)
 
     def _bind_unpack(self, scope: _Scope, key: ast.AST, target: ast.expr, value: ast.expr) -> None:
         """``a, b = x, y`` binds each name to its own element; any other unpack binds RAW.
@@ -1173,6 +1602,10 @@ class _Module:
             return None
         if cls.node.decorator_list or e.attr in cls.annotated:  # type: ignore[attr-defined]
             return None  # a dataclass / NamedTuple field is a default the constructor replaces
+        if e.value.id != "self" and cls.node.keywords:  # type: ignore[attr-defined]
+            # ``cls.X`` / ``C.X`` with a metaclass: a data descriptor ``X`` on the metaclass wins over
+            # the class body's ``X`` (#3864). An instance lookup (``self.X``) never sees it.
+            return None
         if self._class_dynamic(cls):
             return None  # ``setattr(self, key, value)`` and kin: any attribute may be replaced
         if self._mutated_or_rebound(e.attr) or e.attr in self.assigned_attrs:
@@ -1252,9 +1685,17 @@ class _Module:
         out: list[Finding] = []
         for scope in self.scopes:
             for call in scope.sinks:
-                name = _callee(call.func) or "?"
-                if name in self.format_sinks and name not in self.sinks:
-                    args = call.args[:1] or [kw.value for kw in call.keywords][:1]
+                name = self._sink_name(call.func, scope) or "?"
+                if (isinstance(call.func, ast.Name) and call.func.id in APPLY_CALLS) or (
+                    isinstance(call.func, ast.Attribute) and call.func.attr == "__new__"
+                ):
+                    args = [*call.args[1:], *(kw.value for kw in call.keywords)]
+                elif name in self.format_sinks and name not in self.sinks:
+                    position = FORMAT_SINK_ARG.get(name, 0)
+                    args = call.args[position : position + 1]
+                    if not args:  # by keyword (``format_string=``), or hidden in ``**kw``
+                        named = [kw.value for kw in call.keywords if kw.arg == "format_string"]
+                        args = named or [kw.value for kw in call.keywords][:1]
                 else:
                     args = [*call.args, *(kw.value for kw in call.keywords)]
                 for arg in args:
@@ -1268,13 +1709,40 @@ class _Module:
                             )
                         )
                         break
+            judged = {id(c) for c in scope.sinks}
+            for ret in scope.html_returns:
+                value = ret.value
+                while (  # ``str(mark_safe(..))`` / ``cast(str, mark_safe(..))`` is that sink's value
+                    isinstance(value, ast.Call)
+                    and id(value) not in judged
+                    and _callee(value.func) in ("str", "cast")
+                    and value.args
+                ):
+                    value = value.args[-1]
+                if value is None or id(value) in judged:
+                    continue  # ``return mark_safe(..)``: that sink is judged (and counted) already
+                if self.tainted(ret.value, scope, 0, frozenset()):
+                    out.append(
+                        Finding(
+                            ret.lineno,
+                            scope.name,
+                            "__html__",
+                            (ast.get_source_segment(self.source, ret.value) or "")[:90],
+                        )
+                    )
         return sorted(set(out), key=lambda f: (f.lineno, f.function))
 
     # clean: no raw data anywhere in this expression
     def clean(self, e: object, sc: _Scope, depth: int, seen: frozenset) -> bool:
         if depth > _DEPTH or e is RAW:
             return False
+        if isinstance(e, _Foreign):
+            return self.clean(e.expr, e.scope, depth + 1, seen)
+        if isinstance(e, _AnyOf):
+            return bool(e.values) and all(self.clean(v, sc, depth + 1, seen) for v in e.values)
         if isinstance(e, _ElementOf):
+            if self._deep_digits(e.iterable, sc):
+                return True  # ``for day in week`` of ``cal.monthdayscalendar(...)``: an int
             return self.elements_clean(e.iterable, sc, depth + 1, seen)
         if not isinstance(e, ast.expr):
             return False
@@ -1287,8 +1755,10 @@ class _Module:
                 for i, v in enumerate(e.values)
                 if isinstance(v, ast.FormattedValue)
             )
-        if isinstance(e, ast.NamedExpr):
+        if isinstance(e, (ast.NamedExpr, ast.Await)):
             return self.clean(e.value, sc, d, seen)
+        if isinstance(e, ast.Starred):  # ``*items``: what it spreads
+            return self.elements_clean(e.value, sc, d, seen)
         if isinstance(e, ast.BinOp):
             if isinstance(e.op, ast.Add):
                 return self._add_clean(e, sc, d, seen)
@@ -1317,6 +1787,18 @@ class _Module:
                 return self.clean(e.value, sc, d, seen)
             return self.elements_clean(e.value, sc, d, seen)
         if isinstance(e, ast.Attribute):
+            # ``(end - start).days`` / ``current.year``: an int (#3847)
+            if e.attr in DATE_DIGIT_ATTRS and (
+                self._is_date(e.value, sc)
+                or self._is_delta(e.value, sc)
+                or (
+                    isinstance(e.value, ast.BinOp)
+                    and isinstance(e.value.op, ast.Sub)
+                    and self._is_date(e.value.left, sc)
+                    and self._is_date(e.value.right, sc)
+                )
+            ):
+                return True
             # ``uuid.uuid4().hex``: a fixed alphabet
             if (
                 e.attr == "hex"
@@ -1335,6 +1817,8 @@ class _Module:
                 return True
             return self._name_clean(e, sc, d, seen)
         if isinstance(e, ast.Call):
+            if id(e) in self.narrowed_exprs:
+                return True  # ``str(x)`` where ``str(x) in CONSTANT`` holds: a value from the table
             if _CTX_OK not in seen and (
                 self.origin(e.func, sc) in CONTEXT_SENSITIVE_ORIGINS
                 or self.origin(e.func, sc) in JSON_ESCAPERS
@@ -1345,7 +1829,7 @@ class _Module:
 
     def _origin_of_import(self, e: ast.Name, sc: _Scope) -> str | None:
         """The origin of ``e`` when it is a bare imported name nothing in the code rebinds."""
-        if sc.find(e.id) is not None:
+        if sc.find(e.id) is not None or self.star_import:
             return None
         return self.imports.get(e.id)
 
@@ -1425,19 +1909,18 @@ class _Module:
                 return 0
             values, _ = self._bindings(value, value.id, owner, sc)
             inner = visited | {key}
-            level = max(
-                (self._hold_level(v, owner, origins, d, inner) for v in values), default=0
-            )
+            level = max((self._hold_level(v, owner, origins, d, inner) for v in values), default=0)
             extra = [*owner.contents.get(value.id, []), *owner.pieces.get(value.id, [])]
-            if any(self._hold_level(v, owner, origins, d, inner) for v in extra):
+            if any(
+                self._hold_level(*_unwrap(v, owner), origins, d, inner)  # type: ignore[arg-type]
+                for v in extra
+            ):
                 level = 2
             return level
         if isinstance(value, ast.BinOp):
             return built([value.left, value.right])
         if isinstance(value, ast.JoinedStr):
-            return built(
-                [v.value for v in value.values if isinstance(v, ast.FormattedValue)]
-            )
+            return built([v.value for v in value.values if isinstance(v, ast.FormattedValue)])
         if isinstance(value, ast.FormattedValue):
             return built([value.value])
         if isinstance(value, ast.Starred):
@@ -1505,7 +1988,10 @@ class _Module:
             if owner is None:
                 return None
             values, _ = self._bindings(e, e.id, owner, sc)
-            out: list[tuple[ast.expr, _Scope]] = [(c, owner) for c in owner.contents.get(e.id, [])]
+            out: list[tuple[ast.expr, _Scope]] = [
+                _unwrap(c, owner)  # type: ignore[misc]
+                for c in owner.contents.get(e.id, [])
+            ]
             for v in values:
                 inner = self._elements_of(v, owner, depth + 1) if isinstance(v, ast.expr) else None
                 if inner is None:
@@ -1561,10 +2047,16 @@ class _Module:
                     # attributes (the case that matters), but also inside a quoted value or an
                     # unquoted one, which the guard does not see (#3864).
                     text = self._leaf_text(alt, asc)
-                    head = text.split("\x00")[0]
                     whole = text.replace("\x00", "0")
+                    # EVERY part the guard cannot read sits inside a quote the builder opened, not
+                    # only the first (#3864: ``' title="' + safe_url(x) + '" z=' + safe_url(x)``)
+                    unread = [i for i, ch in enumerate(text) if ch == "\x00"]
                     balanced = (
-                        self._position("<x " + head) == "quoted"
+                        bool(unread)
+                        and all(
+                            self._position("<x " + text[:i].replace("\x00", "0")) == "quoted"
+                            for i in unread
+                        )
                         and self._position("<x " + whole) != "quoted"
                     )
                     if not balanced:
@@ -1719,6 +2211,8 @@ class _Module:
             and func.attr == "format"
             and isinstance(recv, ast.Constant)
             and isinstance(recv.value, str)
+            # ``*args`` / ``**kw`` shift which value lands in which field: no position is known
+            and not self._has_star(call)
         ):
             keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
             try:
@@ -1813,8 +2307,20 @@ class _Module:
     def _trusted_call(self, e: ast.Call, sc: _Scope) -> bool:
         """A call whose result is clean whatever its arguments (an escaper, a number, an engine)."""
         origin = self.origin(e.func, sc)
+        if origin in QUOTE_ESCAPERS and not self._quotes_escaped(e, QUOTE_ESCAPERS[origin]):
+            return False  # ``html.escape(x, quote=False)`` leaves ``"`` / ``'`` as they are (#3850)
         if origin in CLEAN_ORIGINS or origin in SAFE_ALPHABET_ORIGINS:
             return True
+        if origin in CLEAN_PROJECT_ORIGINS:
+            return True
+        if (
+            isinstance(e.func, ast.Attribute)
+            and e.func.attr in DATE_DIGIT_METHODS
+            and not e.args
+            and not e.keywords  # ``d.isoformat(sep=raw)``: the separator is the caller's (#4068)
+            and self._is_date(e.func.value, sc)
+        ):
+            return True  # ``current.isoformat()`` / ``start.weekday()`` of a date value
         if origin in CLEAN_RECORD_ORIGINS:
             return True
         name = _callee(e.func)
@@ -1824,6 +2330,96 @@ class _Module:
         return (
             name in RENDER_CALLS
         )  # ``tmpl.render(...)``: by method name, see the module docstring
+
+    def _is_date(
+        self, e: object, sc: _Scope, depth: int = 0, seen: frozenset = frozenset()
+    ) -> bool:
+        """``e`` is a ``date`` / ``datetime`` value: a constructor of ``DATE_ORIGINS``, a date plus or
+        minus a ``timedelta``, or a name that only ever holds one (``+= timedelta(...)`` included)."""
+        if depth > 8 or not isinstance(e, ast.expr):
+            return False
+        d = depth + 1
+        if isinstance(e, ast.Call):
+            return self.origin(e.func, sc) in DATE_ORIGINS
+        if isinstance(e, ast.BinOp) and isinstance(e.op, (ast.Add, ast.Sub)):
+            return (self._is_date(e.left, sc, d, seen) and self._is_delta(e.right, sc)) or (
+                isinstance(e.op, ast.Add)
+                and self._is_delta(e.left, sc)
+                and self._is_date(e.right, sc, d, seen)
+            )
+        if isinstance(e, ast.Name):
+            owner = sc.find(e.id)
+            if owner is None or owner.contents.get(e.id):
+                return False
+            values, defs = self._bindings(e, e.id, owner, sc)
+            key = ("date", e.id, id(owner), defs)
+            if key in seen:
+                return True
+            seen = seen | {key}
+            return (
+                bool(values)
+                and all(self._is_date(v, owner, d, seen) for v in values)
+                and all(self._is_delta(p, owner) for p in owner.pieces.get(e.id, []))
+            )
+        return False
+
+    def _is_delta(self, e: object, sc: _Scope) -> bool:
+        return isinstance(e, ast.Call) and self.origin(e.func, sc) in DELTA_ORIGINS
+
+    def _calendar_digits(self, e: object, sc: _Scope) -> bool:
+        """``cal.monthdayscalendar(...)`` of a ``calendar.Calendar``: (nested) ints only (#3847)."""
+        if not (
+            isinstance(e, ast.Call)
+            and isinstance(e.func, ast.Attribute)
+            and e.func.attr in CALENDAR_DIGIT_METHODS
+        ):
+            return False
+        recv = e.func.value
+        if isinstance(recv, ast.Call):
+            return self.origin(recv.func, sc) in CALENDAR_CLASSES
+        if isinstance(recv, ast.Name):
+            owner = sc.find(recv.id)
+            if owner is None or owner.contents.get(recv.id) or owner.pieces.get(recv.id):
+                return False
+            values, _ = self._bindings(recv, recv.id, owner, sc)
+            return bool(values) and all(
+                isinstance(v, ast.Call) and self.origin(v.func, owner) in CALENDAR_CLASSES
+                for v in values
+            )
+        return False
+
+    def _deep_digits(self, e: object, sc: _Scope, depth: int = 0) -> bool:
+        """Every element of ``e``, at any depth, is an int: a calendar digit method's result, or an
+        element of one (``for week in weeks: for day in week``)."""
+        if depth > 8:
+            return False
+        if isinstance(e, _ElementOf):
+            return self._deep_digits(e.iterable, sc, depth + 1)
+        if self._calendar_digits(e, sc):
+            return True
+        if isinstance(e, ast.Name):
+            owner = sc.find(e.id)
+            if owner is None or owner.contents.get(e.id) or owner.pieces.get(e.id):
+                return False
+            values, _ = self._bindings(e, e.id, owner, sc)
+            return bool(values) and all(
+                self._deep_digits(v, owner, depth + 1)
+                or (isinstance(v, ast.List) and not v.elts)  # ``weeks = []`` in an ``except``
+                for v in values
+            )
+        return False
+
+    @staticmethod
+    def _quotes_escaped(call: ast.Call, position: int) -> bool:
+        """The ``quote`` argument is absent or the literal ``True`` (and nothing hides it in ``*``)."""
+        if any(isinstance(a, ast.Starred) for a in call.args) or any(
+            kw.arg is None for kw in call.keywords
+        ):
+            return False
+        values = [kw.value for kw in call.keywords if kw.arg == "quote"]
+        if len(call.args) > position:
+            values.append(call.args[position])
+        return all(isinstance(v, ast.Constant) and v.value is True for v in values)
 
     def _call_clean(self, e: ast.Call, sc: _Scope, d: int, seen: frozenset) -> bool:
         if self._trusted_call(e, sc):
@@ -1943,6 +2539,10 @@ class _Module:
                 return None
             if cls.node.decorator_list or self._class_dynamic(cls):  # type: ignore[attr-defined]
                 return None
+            if func.value.id != "self" and cls.node.keywords:  # type: ignore[attr-defined]
+                return (
+                    None  # a metaclass data descriptor of that name wins for ``cls.helper`` (#3864)
+                )
             if func.attr in self.assigned_attrs or self._overridden_in_file(cls, func.attr):
                 return None
             if self._falls_through(cls) and not self._defined_unconditionally(cls, func.attr):
@@ -2079,6 +2679,12 @@ class _Module:
 
     # elements_clean: every element / value pulled out of this container is clean
     def elements_clean(self, e: object, sc: _Scope, depth: int, seen: frozenset) -> bool:
+        if isinstance(e, _Foreign):
+            return self.elements_clean(e.expr, e.scope, depth + 1, seen)
+        if isinstance(e, _AnyOf):
+            return bool(e.values) and all(
+                self.elements_clean(v, sc, depth + 1, seen) for v in e.values
+            )
         if depth > _DEPTH or e is RAW or isinstance(e, _ElementOf) or not isinstance(e, ast.expr):
             return False
         d = depth + 1
@@ -2087,11 +2693,16 @@ class _Module:
         if isinstance(e, (ast.List, ast.Tuple, ast.Set)):
             return all(self.clean(x, sc, d, seen) for x in e.elts)
         if isinstance(e, ast.Dict):
-            return all(self.clean(v, sc, d, seen) for v in e.values if v is not None)
+            # iterating a dict yields its KEYS (``for k in d``, ``sorted(d)``, ``d.items()``): an
+            # element pulled out of it is a key or a value, so both must be clean (#3850)
+            return all(self.clean(v, sc, d, seen) for v in e.values if v is not None) and all(
+                self.clean(k, sc, d, seen) for k in e.keys if k is not None
+            )
         if isinstance(e, (ast.ListComp, ast.GeneratorExp, ast.SetComp, ast.DictComp)):
             inner = self._comprehension_scope(e, sc)
-            elt = e.value if isinstance(e, ast.DictComp) else e.elt
-            return self.clean(elt, inner, d, seen)
+            if isinstance(e, ast.DictComp):
+                return self.clean(e.value, inner, d, seen) and self.clean(e.key, inner, d, seen)
+            return self.clean(e.elt, inner, d, seen)
         if isinstance(e, ast.Subscript):
             return self.elements_clean(e.value, sc, d, seen)
         if isinstance(e, ast.IfExp):
@@ -2116,6 +2727,7 @@ class _Module:
             return (
                 all(self.elements_clean(v, owner, d, seen) for v in values)
                 and all(self.clean(c, owner, d, seen) for c in owner.contents.get(e.id, []))
+                and all(self.clean(k, owner, d, seen) for k in owner.keys.get(e.id, []))
                 # ``items += more``: the elements of ``more`` join the container
                 and all(self.elements_clean(p, owner, d, seen) for p in owner.pieces.get(e.id, []))
             )
@@ -2149,6 +2761,10 @@ class _Module:
 
     # tainted: a string BUILT from raw pieces
     def tainted(self, e: object, sc: _Scope, depth: int, seen: frozenset) -> bool:
+        if isinstance(e, _Foreign):
+            return self.tainted(e.expr, e.scope, depth + 1, seen)
+        if isinstance(e, _AnyOf):
+            return any(self.tainted(v, sc, depth + 1, seen) for v in e.values)
         if not isinstance(e, ast.expr):
             return False
         if depth > _DEPTH:
@@ -2160,7 +2776,9 @@ class _Module:
                 for i, v in enumerate(e.values)
                 if isinstance(v, ast.FormattedValue)
             )
-        if isinstance(e, ast.NamedExpr):
+        if isinstance(e, (ast.NamedExpr, ast.Await)):  # ``await coro(f"..")``: what it returns
+            return self.tainted(e.value, sc, d, seen)
+        if isinstance(e, ast.Starred):  # ``mark_safe(*[f".."])``: each value it spreads (#3850)
             return self.tainted(e.value, sc, d, seen)
         if isinstance(e, (ast.ListComp, ast.GeneratorExp, ast.SetComp, ast.DictComp)):
             inner = self._comprehension_scope(e, sc)
@@ -2176,7 +2794,10 @@ class _Module:
                     or (isinstance(x, ast.Constant) and isinstance(x.value, str))
                     for x in (e.left, e.right)
                 )
-                return text and not self.clean(e, sc, d, seen)
+                # ``("<li>%s</li>" % raw) * n``: a string built from raw, repeated (#3850)
+                return (text and not self.clean(e, sc, d, seen)) or any(
+                    self.tainted(x, sc, d, seen) for x in (e.left, e.right)
+                )
             return False
         if isinstance(e, ast.IfExp):
             return self.tainted(e.body, sc, d, seen) or self.tainted(e.orelse, sc, d, seen)
@@ -2216,6 +2837,14 @@ class _Module:
                     )
                 if name in ("sub", "subn") and len(e.args) >= 2:
                     return not all(self.clean(a, sc, d, seen) for a in e.args[:2])
+                if name == "translate" and e.args:
+                    # ``"<b>x</b>".translate({ord("x"): raw})``: the table's VALUES go in (#3850)
+                    table = e.args[0]
+                    if isinstance(table, ast.Dict):
+                        return not all(
+                            self.clean(v, sc, d, seen) for v in table.values if v is not None
+                        ) or any(v is None for v in table.values)
+                    return not self.elements_clean(table, sc, d, seen)
                 if name in STR_METHODS and name not in PURE_TRANSFORMS:
                     # ``TEMPLATE.replace("@@", raw)`` puts the argument into the string
                     if not all(self.clean(a, sc, d, seen) for a in e.args):
@@ -2269,6 +2898,11 @@ def _merge(*states: State | None) -> State | None:
     for state in live:
         for name, defs in state.items():
             out[name] = out[name] | defs if name in out else defs
+    # a narrowing FACT about an expression (``("str", x)``, #3846) holds after the join only if it
+    # holds, unchanged, on every path that reaches it
+    for key in [k for k in out if isinstance(k, tuple)]:
+        if not all(state.get(key) == out[key] for state in live):
+            del out[key]
     return out
 
 
@@ -2318,6 +2952,25 @@ class _Flow:
         self.loops: list[dict[str, list[State | None]]] = []
         self.uses: dict[int, tuple[str, set[_Def]]] = {}
         self.disabled: set[str] = set()
+        #: id(``str(x)`` call) -> ``x``, for each call evaluated where ``str(x) in CONST`` held
+        #: on every path (#3846)
+        self.narrowed_calls: dict[int, set[str]] = {}
+        #: whether a ``str(x)`` call was evaluated, somewhere, where the fact did NOT hold
+        self.unnarrowed_calls: set[int] = set()
+        #: id(``str(x)`` call) -> the narrowing tests (their marker defs) it relied on
+        self.call_markers: dict[int, set[_Def]] = {}
+        #: marker defs of narrowing tests whose ``x`` was USED, while the fact held, other than as
+        #: ``str(x)`` (``x.append(raw)``, ``x.name = raw``, ``f(x)``): ``str(x)`` may differ now
+        self.spoiled: set[_Def] = set()
+        #: names a nested function or lambda reads: it may change ``x`` behind the flow's back
+        self.closure_names: set[str] = {
+            n.id
+            for sub in ast.walk(self.fn)
+            if sub is not self.fn
+            and isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef))
+            for n in ast.walk(sub)
+            if isinstance(n, ast.Name)
+        }
 
     # -- driver ---------------------------------------------------------------------------
     def run(self) -> None:
@@ -2330,6 +2983,13 @@ class _Flow:
         for key, (name, defs) in self.uses.items():
             if name not in bad:
                 self.mod.reach[key] = (self.scope, tuple(defs))
+        for call_id, names in self.narrowed_calls.items():
+            if (
+                call_id not in self.unnarrowed_calls
+                and not names & bad
+                and not self.call_markers.get(call_id, set()) & self.spoiled
+            ):
+                self.mod.narrowed_exprs.add(call_id)
 
     def _analyse(self) -> None:
         args = self.fn.args  # type: ignore[attr-defined]
@@ -2394,6 +3054,7 @@ class _Flow:
 
     def _note(self, state: State, name: str, d: _Def) -> None:
         state[name] = frozenset({d})
+        state.pop(("str", name), None)  # a rebound ``x`` ends what ``str(x) in T`` said
         for coll in self.collectors:
             coll.setdefault(name, set()).add(d)
 
@@ -2419,12 +3080,40 @@ class _Flow:
         if defs:
             self.uses.setdefault(id(node), (node.id, set()))[1].update(defs)
 
+    def _str_of_name(self, e: ast.AST) -> ast.Name | None:
+        """``x`` of ``str(x)`` (the builtin, one positional argument that is a name), else ``None``."""
+        if (
+            isinstance(e, ast.Call)
+            and isinstance(e.func, ast.Name)
+            and self.mod.origin(e.func, self.scope) == "str"
+            and len(e.args) == 1
+            and not e.keywords
+            and isinstance(e.args[0], ast.Name)
+        ):
+            return e.args[0]
+        return None
+
     def loads(self, e: ast.AST | None, state: State | None) -> None:
         if e is None or state is None:
+            return
+        arg = self._str_of_name(e)
+        if arg is not None:
+            fact = state.get(("str", arg.id))
+            markers = {d for d in fact or () if d.name is None}
+            if fact is not None and (fact - markers) == state.get(arg.id):
+                self.narrowed_calls.setdefault(id(e), set()).add(arg.id)
+                self.call_markers.setdefault(id(e), set()).update(markers)
+            else:
+                self.unnarrowed_calls.add(id(e))
+            self._load(arg, state)  # ``str(x)`` reads ``x`` without spoiling the fact
+            self.loads(e.func, state)  # type: ignore[attr-defined]
             return
         if isinstance(e, ast.Name):
             if isinstance(e.ctx, ast.Load):
                 self._load(e, state)
+                fact = state.get(("str", e.id))
+                if fact:  # any other use of ``x`` while the fact holds may change ``str(x)``
+                    self.spoiled.update(d for d in fact if d.name is None)
         elif isinstance(e, ast.Lambda):
             # the body runs later, with whatever the names hold then: the old, whole answer
             for default in [*e.args.defaults, *(d for d in e.args.kw_defaults if d)]:
@@ -2499,6 +3188,24 @@ class _Flow:
                 if self.mod.constant_set(right, self.scope):
                     held = self.narrow(state, left, test)
                     return (held, state) if isinstance(op, ast.In) else (state, held)
+            arg = self._str_of_name(left)
+            if (
+                isinstance(op, (ast.In, ast.NotIn))
+                and arg is not None
+                and arg.id in state
+                and arg.id not in self.disabled
+                and arg.id not in self.closure_names
+                and self.mod.constant_set(right, self.scope)
+            ):
+                # ``str(x) in TABLE``: the EXPRESSION ``str(x)`` is a value the developer wrote on
+                # this branch, as long as ``x`` keeps the bindings it has now (#3846). ``x`` itself
+                # is not narrowed: it may be an object whose ``str()`` is in the table.
+                held = dict(state)
+                # the fact is x's bindings now plus a marker naming THIS test (``name=None``), so a
+                # later use of ``x`` that may change ``str(x)`` can withdraw it (review of #4068)
+                marker = self._def(("str-fact", id(test)), None, None, counted=False)  # type: ignore[arg-type]
+                held[("str", arg.id)] = state[arg.id] | {marker}
+                return (held, state) if isinstance(op, ast.In) else (state, held)
             if isinstance(op, (ast.Eq, ast.NotEq)):
                 for name, other in ((left, right), (right, left)):
                     if isinstance(name, ast.Name) and isinstance(other, ast.Constant):
@@ -2829,6 +3536,36 @@ def wrapper_names(
     return found
 
 
+#: Classes OUTSIDE the scanned sources that write attributes under names the source does not show:
+#: Django's ``View.__init__`` does ``setattr(self, key, value)`` for every ``as_view()`` keyword, so
+#: a class attribute of a class-based view is a default the URLconf can replace; a ``Form``'s
+#: metaclass moves declared fields off the class (#3864). Matched by base-class NAME.
+EXTERNAL_DYNAMIC_BASES = frozenset(
+    {
+        "View",
+        "TemplateView",
+        "RedirectView",
+        "FormView",
+        "CreateView",
+        "UpdateView",
+        "DeleteView",
+        "ListView",
+        "DetailView",
+        "ArchiveIndexView",
+        "YearArchiveView",
+        "MonthArchiveView",
+        "WeekArchiveView",
+        "DayArchiveView",
+        "TodayArchiveView",
+        "DateDetailView",
+        "BaseForm",
+        "Form",
+        "ModelForm",
+        "BaseModelForm",
+    }
+)
+
+
 def dynamic_class_names(sources: Iterable[str]) -> frozenset[str]:
     """Names of the classes, across ``sources``, that write attributes under a name the source does
     not show (``setattr(self, key, value)``, ``self.__dict__.update``, ``object.__setattr__``,
@@ -2836,7 +3573,7 @@ def dynamic_class_names(sources: Iterable[str]) -> frozenset[str]:
     ``Component`` does this for every constructor and ``update()`` keyword, so a class attribute of a
     ``Component`` subclass is a default the caller replaces, not a constant (#3848)."""
     classes: dict[str, set[str]] = {}
-    hazardous: set[str] = set()
+    hazardous: set[str] = set(EXTERNAL_DYNAMIC_BASES)
     for source in sources:
         try:
             tree = ast.parse(source)
@@ -2892,9 +3629,12 @@ def find_unsafe_markup(
 def _main(argv: list[str]) -> int:
     paths = [Path(a) for a in argv]
     files = [f for p in paths for f in (sorted(p.rglob("*.py")) if p.is_dir() else [p])]
+    # the classes that write attributes from keywords, over every file given (#3864): without it a
+    # class attribute of a ``Component`` / ``View`` subclass is trusted as a constant
+    dynamic = dynamic_class_names(f.read_text() for f in files)
     total = 0
     for path in files:
-        for finding in find_unsafe_markup(path.read_text()):
+        for finding in find_unsafe_markup(path.read_text(), dynamic_bases=dynamic):
             print(f"{path}:{finding}")
             total += 1
     print(f"{total} finding(s) in {len(files)} file(s)", file=sys.stderr)

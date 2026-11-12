@@ -822,6 +822,127 @@ NARROWING = {
         """,
         True,
     ),
+    # #3846: ``str(x) in TABLE`` narrows the EXPRESSION ``str(x)``, never ``x`` itself
+    "str(x) in TABLE narrows str(x)": (
+        """
+        TABLE = {"a": "1"}
+        def f(status):
+            status = str(status) if str(status) in TABLE else "a"
+            return mark_safe(f"<i class={status}>")
+        """,
+        False,
+    ),
+    "str(x) in TABLE, then an early return": (
+        """
+        TABLE = {"a": "1"}
+        def f(status):
+            if str(status) not in TABLE:
+                return ""
+            return mark_safe(f"<i class={str(status)}>")
+        """,
+        False,
+    ),
+    "str(x) in TABLE does not narrow x": (
+        """
+        TABLE = {"a": "1"}
+        def f(status):
+            if str(status) in TABLE:
+                return mark_safe(f"<i class={status}>")
+            return ""
+        """,
+        True,
+    ),
+    "str(x) in TABLE, then x rebound": (
+        """
+        TABLE = {"a": "1"}
+        def f(status, other):
+            if str(status) in TABLE:
+                status = other
+                return mark_safe(f"<i class={str(status)}>")
+            return ""
+        """,
+        True,
+    ),
+    "str(x) in TABLE on one path only": (
+        """
+        TABLE = {"a": "1"}
+        def f(status, c):
+            if c:
+                if str(status) not in TABLE:
+                    return ""
+            return mark_safe(f"<i class={str(status)}>")
+        """,
+        True,
+    ),
+    "str(x) in a parameter": (
+        """
+        def f(status, table):
+            if str(status) in table:
+                return mark_safe(f"<i class={str(status)}>")
+            return ""
+        """,
+        True,
+    ),
+    "str(x) in TABLE, then x changed in place (review of #4068)": (
+        """
+        T = {"[]": 1}
+        def f(items, raw):
+            if str(items) in T:
+                items.append(raw)
+                return mark_safe(f"<b>{str(items)}</b>")
+            return ""
+        """,
+        True,
+    ),
+    "str(x) in TABLE, then an attribute of x set (review of #4068)": (
+        """
+        T = {"ok": 1}
+        class Obj:
+            name = "ok"
+            def __str__(self):
+                return self.name
+        def f(obj, raw):
+            if str(obj) in T:
+                obj.name = raw
+                return mark_safe(f"<b>{str(obj)}</b>")
+            return ""
+        """,
+        True,
+    ),
+    "str(x) in TABLE, then x handed to a call": (
+        """
+        T = {"ok": 1}
+        def f(obj):
+            if str(obj) in T:
+                mutate(obj)
+                return mark_safe(f"<b>{str(obj)}</b>")
+            return ""
+        """,
+        True,
+    ),
+    "str(x) in TABLE, x read by a closure": (
+        """
+        T = {"ok": 1}
+        def f(obj, raw):
+            def g():
+                obj.name = raw
+            if str(obj) in T:
+                g()
+                return mark_safe(f"<b>{str(obj)}</b>")
+            return ""
+        """,
+        True,
+    ),
+    "str(x) in TABLE says nothing about str(y)": (
+        """
+        TABLE = {"a": "1"}
+        def f(status, other):
+            if str(status) in TABLE:
+                return mark_safe(f"<i class={str(other)}>")
+            return ""
+        """,
+        True,
+    ),
 }
 
 
@@ -1021,7 +1142,9 @@ def _break_any_json_escape_is_clean(monkeypatch):
     monkeypatch.setattr(
         taint._Module,
         "_position_ok",
-        lambda self, kind, prefix: True if kind.startswith("json") else original(self, kind, prefix),
+        lambda self, kind, prefix: (
+            True if kind.startswith("json") else original(self, kind, prefix)
+        ),
     )
 
 
@@ -1041,6 +1164,48 @@ def _break_a_trusted_origin_may_be_rebound(monkeypatch):
             self.rebound_names, self.dynamic_globals = saved, saved_g
 
     monkeypatch.setattr(taint._Module, "origin", origin)
+
+
+def _break_str_facts_survive_a_merge(monkeypatch):
+    """A ``str(x) in T`` fact kept at a join where one path does not have it (#3846)."""
+    original = taint._merge
+
+    def merge(*states):
+        live = [st for st in states if st is not None]
+        out = original(*states)
+        if out is None:
+            return out
+        out = dict(out)
+        for st in live:
+            for key, value in st.items():
+                if isinstance(key, tuple):
+                    out.setdefault(key, value)
+        return out
+
+    monkeypatch.setattr(taint, "_merge", merge)
+
+
+def _break_nested_binding_reads_one_call(monkeypatch):
+    """A nested function's parameters bound from its FIRST call site only (#3845)."""
+    original = taint._Module._only_called
+
+    def first_only(self, name, holder):
+        calls = original(self, name, holder)
+        return calls[:1] if calls else calls
+
+    monkeypatch.setattr(taint._Module, "_only_called", first_only)
+
+
+def _break_anything_is_a_date(monkeypatch):
+    """Any receiver of ``isoformat()`` / ``weekday()`` is a date (#3847)."""
+    monkeypatch.setattr(
+        taint._Module, "_is_date", lambda self, e, sc, depth=0, seen=frozenset(): True
+    )
+
+
+def _break_closure_writes_stay_in_the_closure(monkeypatch):
+    """A closure's ``parts.append(x)`` does not reach the enclosing ``parts`` (#3850)."""
+    monkeypatch.setattr(taint._Module, "_closure_writes", lambda self: None)
 
 
 def _break_get_default_is_ignored(monkeypatch):
@@ -1076,6 +1241,12 @@ MUTANTS = {
     "escape_json_for_script is clean for anything": _break_any_json_escape_is_clean,
     "star arguments are not examined": _break_star_args_are_ignored,
     "a trusted import may be rebound": _break_a_trusted_origin_may_be_rebound,
+    # #3846
+    "a str(x) fact survives a join it does not hold on": _break_str_facts_survive_a_merge,
+    # #3845, #3847, #3850
+    "a nested function is bound from its first call only": _break_nested_binding_reads_one_call,
+    "anything with isoformat() is a date": _break_anything_is_a_date,
+    "a closure's writes stay in the closure": _break_closure_writes_stay_in_the_closure,
 }
 
 
@@ -1264,6 +1435,9 @@ class TestProjectEscapersAreTrustedByOrigin:
             *taint.JSON_ESCAPERS,
             *taint.JSON_PRODUCERS,
             *taint.CONTEXT_SENSITIVE_ORIGINS,
+            *taint.CLEAN_PROJECT_ORIGINS,
+            *taint.DELTA_ORIGINS,
+            *taint.CALENDAR_CLASSES,
         }
         missing = []
         for origin in sorted(origins):
@@ -2015,6 +2189,206 @@ STRUCTURE = {
         """,
         True,
     ),
+    # #3845: a nested function whose every call site is in view holds what those calls pass
+    "a nested function called with literal arguments": (
+        """
+        def f(density):
+            def btn(val, label):
+                return f'<button data-d="{val}">{label}</button>'
+            return mark_safe(f"<p>{btn('compact', 'Compact')}</p>")
+        """,
+        False,
+    ),
+    "a nested function called once with raw data": (
+        """
+        def f(density, raw):
+            def btn(val, label):
+                return f'<button data-d="{val}">{label}</button>'
+            return mark_safe(f"<p>{btn('compact', 'C')}{btn(raw, 'R')}</p>")
+        """,
+        True,
+    ),
+    "a nested function also handed to map": (
+        """
+        def f(xs):
+            def btn(val):
+                return f'<b>{val}</b>'
+            extra = list(map(btn, xs))
+            return mark_safe(f"<p>{btn('a')}</p>")
+        """,
+        True,
+    ),
+    "a nested function that is returned": (
+        """
+        def f(xs):
+            def btn(val):
+                return f'<b>{val}</b>'
+            out = mark_safe(f"<p>{btn('a')}</p>")
+            return btn
+        """,
+        True,
+    ),
+    "a nested function with a raw default": (
+        """
+        def f(raw):
+            def btn(val=raw):
+                return f'<b>{val}</b>'
+            return mark_safe(f"<p>{btn()}</p>")
+        """,
+        True,
+    ),
+    "a nested function called from another nested function with raw data": (
+        """
+        def f(raw):
+            def btn(val):
+                return f'<b>{val}</b>'
+            def g(y):
+                return btn(y)
+            return mark_safe(f"<p>{btn('a')}{g(raw)}</p>")
+        """,
+        True,
+    ),
+    "a sink inside a nested function called with literals": (
+        """
+        def f(raw):
+            def btn(val):
+                return mark_safe(f'<b>{val}</b>')
+            return btn('a')
+        """,
+        False,
+    ),
+    "a sink inside a nested function called with raw data": (
+        """
+        def f(raw):
+            def btn(val):
+                return mark_safe(f'<b>{val}</b>')
+            return btn(raw)
+        """,
+        True,
+    ),
+    # #3847: type facts the standard library and the project guarantee
+    "calendar days are ints": (
+        """
+        import calendar
+        def f(year, month):
+            weeks = calendar.Calendar().monthdayscalendar(int(year), int(month))
+            return mark_safe("".join(f"<td>{d}</td>" for w in weeks for d in w))
+        """,
+        False,
+    ),
+    "a method of that name on something that is not a calendar": (
+        """
+        def f(year, month, cal):
+            weeks = cal.monthdayscalendar(year, month)
+            return mark_safe("".join(f"<td>{d}</td>" for w in weeks for d in w))
+        """,
+        True,
+    ),
+    "calendar dates are not in the digit table": (
+        """
+        import calendar
+        def f(year, month):
+            weeks = calendar.Calendar().monthdatescalendar(int(year), int(month))
+            return mark_safe("".join(f"<td>{d}</td>" for w in weeks for d in w))
+        """,
+        True,
+    ),
+    "a date's isoformat and weekday": (
+        """
+        from datetime import date, timedelta
+        def f(year):
+            current = date(int(year), 1, 1)
+            current += timedelta(days=1)
+            end = date(int(year), 12, 31)
+            return mark_safe(
+                f"<i data-d={current.isoformat()} w={current.weekday()} n={(end - current).days}>"
+            )
+        """,
+        False,
+    ),
+    "isoformat with a separator from the caller": (
+        """
+        from datetime import datetime
+        def f(sep):
+            return mark_safe(f"<i title={datetime(2020, 1, 1).isoformat(sep=sep)}>")
+        """,
+        True,
+    ),
+    "isoformat with a positional separator from the caller": (
+        """
+        from datetime import datetime
+        def f(sep):
+            return mark_safe(f"<i title={datetime(2020, 1, 1).isoformat(sep)}>")
+        """,
+        True,
+    ),
+    "strftime of a date takes its format from the caller": (
+        """
+        from datetime import date
+        def f(year, fmt):
+            return mark_safe(f"<i>{date(int(year), 1, 1).strftime(fmt)}</i>")
+        """,
+        True,
+    ),
+    "isoformat of something that is not a date": (
+        """
+        def f(when):
+            return mark_safe(f"<i>{when.isoformat()}</i>")
+        """,
+        True,
+    ),
+    "a date name that is also bound to raw data": (
+        """
+        from datetime import date
+        def f(year, other, c):
+            current = date(int(year), 1, 1)
+            if c:
+                current = other
+            return mark_safe(f"<i>{current.isoformat()}</i>")
+        """,
+        True,
+    ),
+    "staticmethod of an imported digit helper": (
+        """
+        from djust.components.utils import interpolate_color
+        class H:
+            _ic = staticmethod(interpolate_color)
+            def r(self, a, b, t):
+                return mark_safe(f'<i style="fill:{self._ic(a, b, t)}">')
+        """,
+        False,
+    ),
+    "staticmethod of a helper from elsewhere": (
+        """
+        from somewhere.other import interpolate_color
+        class H:
+            _ic = staticmethod(interpolate_color)
+            def r(self, a, b, t):
+                return mark_safe(f'<i style="fill:{self._ic(a, b, t)}">')
+        """,
+        True,
+    ),
+    "staticmethod alias the file also rebinds": (
+        """
+        from djust.components.utils import interpolate_color
+        class H:
+            _ic = staticmethod(interpolate_color)
+            def r(self, a, b, t):
+                return mark_safe(f'<i style="fill:{self._ic(a, b, t)}">')
+        def patch(h, g):
+            h._ic = g
+        """,
+        True,
+    ),
+    "a module-level function is not bound from its call sites": (
+        """
+        def btn(val):
+            return mark_safe(f'<b>{val}</b>')
+        def f(raw):
+            return btn('a')
+        """,
+        True,
+    ),
 }
 
 
@@ -2119,29 +2493,11 @@ class TestNoEscaperIsImportedThroughAReExport:
 
 #: Code that is SAFE and still flagged: the reason the 13 handlers in the audited baseline are there.
 STILL_FLAGGED_BUT_SAFE = {
-    "str(x) in TABLE narrows x, not str(x)": """
-        TABLE = {"a": "1"}
-        def f(status):
-            status = str(status) if str(status) in TABLE else "a"
-            return mark_safe(f"<i class={status}>")
-        """,
     "a parameter the caller escaped": """
         def item(e_event):
             return f'<i dj-click="{e_event}">'
         def f(event):
             return mark_safe(f"<p>{item(conditional_escape(event))}</p>")
-        """,
-    "a nested function called with literal arguments": """
-        def f(density):
-            def btn(val, label):
-                return f'<button data-d="{val}">{label}</button>'
-            return mark_safe(f"<p>{btn('compact', 'Compact')}</p>")
-        """,
-    "a value the standard library makes digits": """
-        import calendar
-        def f(year, month):
-            weeks = calendar.Calendar().monthdayscalendar(int(year), int(month))
-            return mark_safe("".join(f"<td>{d}</td>" for w in weeks for d in w))
         """,
 }
 
@@ -2172,9 +2528,38 @@ class TestTheRealTree:
         sinks = sum(len(v) for v in found.values())
         # Over the same tree, with `_safe` / `safe_html` as sinks, the first guard flagged 199 sinks.
         assert sinks == sum(e.sites for e in audit.AUDITED.values())
-        assert sinks <= 60, sinks
+        assert sinks <= 46, sinks  # 57 before #3845 / #3846 / #3847 proved ten functions
 
     def test_the_wrappers_are_scanned_in_every_file_that_calls_them(self, tree_scan):
         files = {path for (path, _fn) in tree_scan}
         assert any(f.endswith("rust_handlers.py") for f in files)
         assert any(f.endswith("_dev_tools.py") for f in files)
+
+
+class TestCleanProjectOrigins:
+    """#3847: an origin trusted for ANY argument is pinned by what it does with a hostile one."""
+
+    def test_interpolate_color_prints_a_hex_colour_or_raises(self):
+        import re
+
+        from djust.components.utils import interpolate_color
+
+        # ``#rrggbb``; a factor outside 0..1 can push a channel past ff or below 0 (more hex digits,
+        # a ``-``), never a character that means anything in markup
+        hex_colour = re.compile(r"#[0-9a-f-]+")
+        for c1, c2, t in (("#000000", "#ffffff", 0.5), ("#abc", "#def", 2.0), ("#fff", "#000", -9)):
+            assert hex_colour.fullmatch(interpolate_color(c1, c2, t))
+        for hostile in ('"><script>', "#zz0000", "", "#12"):
+            with pytest.raises((ValueError, IndexError)):
+                interpolate_color(hostile, "#000000", 0.5)
+
+    def test_the_date_constructors_exist(self):
+        import datetime
+
+        for origin in taint.DATE_ORIGINS:
+            parts = origin.split(".")
+            assert parts[0] == "datetime"
+            obj = datetime
+            for part in parts[1:]:
+                obj = getattr(obj, part)
+            assert callable(obj), origin

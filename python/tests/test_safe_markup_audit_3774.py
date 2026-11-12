@@ -544,10 +544,11 @@ class TestEverySinkIsReached:
         assert 3 in lines and 4 not in lines
 
     def test_sink_groups_are_one_per_flagged_call(self):
-        # render_modal has two flagged sinks, RibbonNode.render one: coverage is per sink.
+        # render_modal has two flagged sinks, OrgChartNode.render one: coverage is per sink.
+        # (RibbonNode.render was the one-sink example until #3846 proved it.)
         modal = audit.sink_groups((audit.DC, "render_modal"))
-        ribbon = audit.sink_groups((audit.ADV, "RibbonNode.render"))
-        assert len(modal) == 2 and len(ribbon) == 1
+        org = audit.sink_groups((audit.ADV, "OrgChartNode.render"))
+        assert len(modal) == 2 and len(org) == 1
         assert not modal[0] & modal[1]
 
 
