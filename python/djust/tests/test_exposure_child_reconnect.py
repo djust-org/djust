@@ -259,7 +259,7 @@ async def test_cold_reconnect_owns_only_current_children_and_revokes_stale_route
         socket.scope["session"] = SessionStore(key)
         socket.scope["user"] = AnonymousUser()
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=5)
+        await socket.receive_json_from()
         await socket.send_json_to(
             {
                 "type": "mount",
@@ -268,7 +268,7 @@ async def test_cold_reconnect_owns_only_current_children_and_revokes_stale_route
                 "has_prerendered": True,
             }
         )
-        frame = await socket.receive_json_from(timeout=5)
+        frame = await socket.receive_json_from()
         if frame["type"] != "mount":
             await socket.disconnect()
         assert frame["type"] == "mount", (frame, failures)
