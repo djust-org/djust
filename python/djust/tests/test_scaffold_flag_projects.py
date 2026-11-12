@@ -77,7 +77,9 @@ from django.test import Client
 client = Client()
 resp = client.get("/")
 html = resp.content.decode()
-markers["app_shell"] = 'class="dj-app-shell"' in html and "dj-app-shell__main" in html
+markers["site_header"] = '<header class="site-header">' in html
+markers["catalog_css"] = "djust_components/components.css" in html
+markers["theme_css"] = "djust_theming/css/components.css" in html
 markers["status"] = resp.status_code
 markers["doctype"] = "<!DOCTYPE html>" in html
 markers["djroot"] = "dj-root" in html
@@ -188,7 +190,11 @@ def _assert_combo(tmp_path, flags):
     if not flags.get("bare"):
         assert markers["doctype"], markers
     demo = not flags.get("bare")
-    assert markers["app_shell"] is demo, markers
+    assert markers["site_header"] is demo, markers
+    # #4003: the starter pages use the theme pack's component CSS and never
+    # load the component catalog's 330 KB stylesheet.
+    assert markers["theme_css"] is demo, markers
+    assert markers["catalog_css"] is False, markers
     if flags.get("with_auth") and demo:
         assert markers["login_link"], json.dumps(markers, indent=1)
         assert markers["authenticated_nav"] is True, markers

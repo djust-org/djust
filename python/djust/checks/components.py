@@ -2185,3 +2185,83 @@ def check_declared_authorization_names(app_configs: Any, **kwargs: Any) -> list[
                 )
             )
     return messages
+
+
+@register("djust")
+def check_legacy_exposure_policy(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V028 (Warning): an application class states ``exposure_policy = "legacy"`` (#4047).
+
+    Explicit exposure is the default since djust 2.0, and ``"legacy"`` is to be
+    removed before 2.0.0. Stating it already raises a ``DeprecationWarning`` when
+    the class is created, but a warning raised at import time is easy to miss
+    (most test runners and servers hide it); a system check is listed on every
+    ``manage.py check`` and ``runserver`` start. This reports the class whose body
+    states the policy, once, wherever the views that use it inherit it from, the
+    same owner the deprecation warning names. djust's own classes (a shipped view
+    pinned to ``"legacy"``, and djust's test modules) are not reported: that
+    statement is not the application's to change.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V028"):
+        return messages
+    try:
+        from djust._exposure_unsupplied import MIGRATION_GUIDE_URL
+        from djust.live_view import LiveView
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    owners: dict[type, list[type]] = {}
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in candidates:
+        # The class whose body states the policy the view runs under: the same
+        # lookup attribute access does, so a policy stated on a mixin is found too.
+        owner = next((c for c in cls.__mro__ if "exposure_policy" in vars(c)), None)
+        if owner is None:
+            continue
+        policy = vars(owner)["exposure_policy"]
+        if type(policy) is not str or policy != "legacy":
+            continue
+        module = getattr(owner, "__module__", "") or ""
+        if module == "djust" or module.startswith("djust."):
+            continue
+        owners.setdefault(owner, []).append(cls)
+
+    for owner in sorted(owners, key=lambda c: (c.__module__, c.__qualname__)):
+        label = "%s.%s" % (owner.__module__, owner.__qualname__)
+        users = sorted(
+            "%s.%s" % (c.__module__, c.__qualname__) for c in owners[owner] if c is not owner
+        )
+        inherited = ""
+        if users:
+            shown = ", ".join(users[:3]) + (", ..." if len(users) > 3 else "")
+            inherited = " %d view(s) inherit it: %s." % (len(users), shown)
+        owner_file = ""
+        owner_line = None
+        try:
+            owner_file = inspect.getfile(owner)
+            owner_line = inspect.getsourcelines(owner)[1]
+        except (OSError, TypeError):
+            pass  # Source introspection may fail for dynamically created classes
+        messages.append(
+            DjustWarning(
+                '%s states exposure_policy = "legacy", which is deprecated and is removed '
+                "before djust 2.0.0: every public attribute of the view reaches the "
+                "template and the browser.%s" % (label, inherited),
+                hint=(
+                    "Move the view to explicit exposure, the default: declare persisted "
+                    "fields with state(), return template names from get_context_data(), "
+                    "then delete the exposure_policy line. `python manage.py "
+                    "djust_exposure_inventory` lists what each view exposes today. See %s. "
+                    "Suppress with DJUST_CONFIG = {'suppress_checks': ['V028']}."
+                    % MIGRATION_GUIDE_URL
+                ),
+                id="djust.V028",
+                fix_hint=(
+                    'Migrate `%s` to explicit exposure and delete `exposure_policy = "legacy"`.'
+                    % owner.__qualname__
+                ),
+                file_path=owner_file,
+                line_number=owner_line,
+            )
+        )
+    return messages

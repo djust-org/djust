@@ -41,11 +41,10 @@ The public API — the surface SemVer covers — is:
   (`from djust import X`).
 - The documented decorators in `djust.decorators` — `@event_handler`,
   `@server_function`, `@push_handler`, `@permission_required`, `@rate_limit`,
-  `@computed`, `@debounce`, `@throttle`, `@optimistic`, `@cache`,
-  `@client_state`, `@background`, `@on_mount`, plus the `state()`
-  descriptor (`count = state(default=0)`). `@optimistic` and
-  `@client_state` are stable *names* but are inert markers today: they
-  have no runtime effect (see #2699 / #2680).
+  `@computed`, `@debounce`, `@throttle`, `@cache`, `@background`,
+  `@on_mount`, plus the `state()` descriptor (`count = state(default=0)`).
+  `@optimistic` and `@client_state`, which had no runtime effect, were
+  removed in djust 2.0 (#4006).
 - The documented public methods and lifecycle hooks of `LiveView`,
   `LiveComponent`, and `Component`.
 - The mixins re-exported from the top-level `djust` package (`FormMixin`,

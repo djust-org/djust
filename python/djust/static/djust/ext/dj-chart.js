@@ -114,10 +114,13 @@
         },
 
         shouldUpdate() {
-            // Existing adapters may read external plugin/theme state. Only
-            // an explicitly opted-in chart promises attributes capture every
-            // dependency; callers can change dj-chart-revision to invalidate.
-            if (this.el.getAttribute('dj-chart-update') !== 'attributes') return true;
+            // Since 2.0 (#4004) a chart redraws only when one of its canvas
+            // attributes changed: chart.update() on every server turn cost
+            // about 1.3 ms of script and 130-180 KB of garbage per turn for
+            // unchanged data. A chart whose plugins read state from outside
+            // its attributes changes dj-chart-revision to invalidate, or opts
+            // out with dj-chart-update="always" (the 1.x behaviour).
+            if (this.el.getAttribute('dj-chart-update') === 'always') return true;
             const previous = inputs.get(this.el);
             if (!this._chart || !previous) return true; // retry late library loading
             return this.el.attributes.length !== previous.length ||

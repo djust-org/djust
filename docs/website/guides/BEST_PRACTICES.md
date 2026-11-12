@@ -9,12 +9,6 @@ description: "The conventions that keep a djust project maintainable."
 
 # djust Best Practices
 
-> **`@optimistic` is INERT.** It records handler metadata that nothing in the
-> shipped client reads, so applying it changes nothing at runtime — a bare
-> `@optimistic` declares no DOM change for a client to apply. Examples below
-> that use it still work, but without the optimistic-update behaviour they
-> describe. Tracked in issue #2699.
->
 > `@debounce` and `@throttle` ARE implemented (#2656) — the client gate is
 > `static/djust/src/05-handler-rate-limit.js`, configured from the mount
 > frame's `handler_config`.
@@ -354,10 +348,8 @@ def search(self, value: str = "", **kwargs):
 def on_scroll(self, scroll_y: int = 0, **kwargs):
     self.scroll_position = scroll_y
 
-# Like button marked @optimistic (INERT at 1.2.0rc10, #2699: no client-side
-# optimistic update happens; the server round-trip updates the UI)
+# Like button: the server round-trip updates the UI
 @event_handler
-@optimistic
 def like_post(self, post_id: int = 0, **kwargs):
     Post.objects.filter(id=post_id).update(likes=F("likes") + 1)
 
@@ -386,9 +378,9 @@ def expensive_operation(self, **kwargs):
 | ----------------------------- | --------------------------- | -------------- |
 | Search/filter input           | `@debounce(wait=0.5)`       | 300-500ms      |
 | Scroll/resize/mousemove       | `@throttle(interval=0.1)`   | 100-200ms      |
-| Like/toggle/vote              | `@optimistic` (INERT, #2699) | —              |
+| Like/toggle/vote              | `@event_handler` (+ `dj-loading.*`) | —              |
 | Autocomplete/repeated lookups | `@cache(ttl=300)`           | 60-300s TTL    |
-| Multi-component coordination  | one handler + the server re-render (`@client_state` is INERT, #2680) | —              |
+| Multi-component coordination  | one handler + the server re-render | —              |
 | Destructive/admin actions     | `@permission_required(...)` | Django perms   |
 | Abuse prevention              | `@rate_limit(rate=N)`       | 5-10 req/s     |
 | Long-form editing             | `DraftModeMixin`            | auto-save      |

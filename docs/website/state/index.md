@@ -1,10 +1,9 @@
 # State Management
 
-> **`@optimistic` is INERT.** It records handler metadata that nothing in the
-> shipped client reads, so applying it changes nothing at runtime — a bare
-> `@optimistic` declares no DOM change for a client to apply. Examples below
-> that use it still work, but without the optimistic-update behaviour they
-> describe. Tracked in issue #2699.
+> **`@optimistic` and `@client_state` were removed in djust 2.0 (#4006).**
+> They recorded metadata nothing in the shipped client read. For instant
+> feedback use `dj-loading.*` attributes or JS Commands; to keep two values in
+> step, set both in one handler.
 >
 > `@debounce` and `@throttle` ARE implemented (#2656) — the client gate is
 > `static/djust/src/05-handler-rate-limit.js`, configured from the mount
@@ -18,9 +17,9 @@ djust's state management decorators replace patterns that traditionally require 
 ```
 User is typing?           → @debounce(wait=0.5)
 Rapid scroll/resize?      → @throttle(interval=0.1)
-Need instant UI feedback? → dj-loading.* attributes (@optimistic is INERT, #2699)
+Need instant UI feedback? → dj-loading.* attributes or JS Commands
 Same query repeated?      → @cache(ttl=300)
-Coordinating components?  → one handler, one re-render (@client_state is INERT, #2680)
+Coordinating components?  → one handler, one re-render
 Auto-save forms?          → DraftModeMixin
 ```
 
@@ -69,23 +68,11 @@ For spinners, show/hide, and CSS classes, see
 
 ## Optimistic Updates
 
-`@optimistic` is **inert at rc10** (#2699): it is recorded but has no client
-implementation, so no optimistic update is applied and nothing is rolled back.
-The handler below behaves exactly as it would undecorated — the UI updates
-when the server re-render arrives:
-
-```python
-from djust.decorators import event_handler, optimistic
-
-@event_handler()
-@optimistic  # inert: no effect at runtime
-def toggle_like(self, item_id: int = 0, **kwargs):
-    item = next(i for i in self.items if i["id"] == item_id)
-    item["liked"] = not item["liked"]
-```
-
-For instant feedback today, use `dj-loading.*` attributes (see
-[Loading States](#loading-states)) or JS Commands.
+For feedback before the server answers, use `dj-loading.*` attributes (see
+[Loading States](#loading-states)) or [JS Commands](../guides/js-commands.md),
+which change the page in the browser and let the server re-render settle it.
+(The `@optimistic` decorator recorded metadata nothing read and was removed in
+djust 2.0, #4006.)
 
 ## Caching
 
@@ -113,29 +100,6 @@ Decorators compose — apply multiple to one handler. Their order does not chang
 def search(self, value: str = "", **kwargs):
     self.results = Product.objects.filter(name__icontains=value)[:20]
 ```
-
-## Client State
-
-> **`@client_state` is INERT (#2680).** It stamps metadata nothing in the
-> shipped client reads, so the handler below behaves exactly as it would
-> undecorated. Nothing is stored client-side and nothing is synced; the
-> `StateBus` this section used to describe was deleted in #2680.
-> To coordinate two values today, set both in one handler — the single
-> server re-render carries both.
-
-
-```python
-from djust.decorators import event_handler, client_state
-
-@event_handler()
-@client_state(keys=["filter", "sort"])
-def update_filter(self, filter: str = "all", **kwargs):
-    self.filter = filter
-    self._refresh()
-```
-
-The decorator publishes nothing. The page updates because the handler's
-assignments trigger djust's normal server re-render.
 
 ## DraftModeMixin
 
@@ -221,9 +185,7 @@ For example, a `@cache` hit logs:
 | `@debounce(wait)`         | `wait`: seconds (float)                 | Search, autosave     |
 | `@throttle(interval)`     | `interval`: seconds (float)             | Scroll, resize       |
 | `@background`             | —                                       | API calls, AI gen    |
-| `@optimistic`             | —                                       | *(INERT — no client impl, #2699)* |
 | `@cache(ttl, key_params)` | `ttl`: seconds, `key_params`: list[str] | Expensive queries    |
-| `@client_state(keys)`     | `keys`: list[str]                       | *(INERT — no client impl, #2680)* |
 | `DraftModeMixin`          | `draft_enabled`, `draft_key`            | Auto-save forms      |
 
 For detailed API docs, see [API Reference: Decorators](../api-reference/decorators.md).

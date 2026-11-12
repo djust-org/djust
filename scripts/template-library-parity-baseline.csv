@@ -200,7 +200,7 @@ djust_components:wizard,DIFFERENT-escape-policy-only,2,escaping:2,,17,7/7,17
 theme_tags:theme_css,DIFFERENT-escape-policy-only,3,escaping:3+other-attrs:1,,10,1/1,10
 theme_tags:theme_css_link,IDENTICAL,0,,,7,0/0,7
 theme_tags:theme_framework_overrides,UNEXERCISED,0,,,10,1/1,0
-theme_tags:theme_head,DIFFERENT-escape-policy-only,3,escaping:3+other-attrs:1,,15,3/3,15
+theme_tags:theme_head,DIFFERENT-escape-policy-only,3,escaping:3+other-attrs:1,,17,4/4,17
 theme_tags:theme_mode,IDENTICAL,0,,,7,0/0,7
 theme_tags:theme_mode_toggle,DIFFERENT-escape-policy-only,3,classes:1+escaping:3,,11,2/2,11
 theme_tags:theme_panel,IDENTICAL,0,,,9,5/5,9

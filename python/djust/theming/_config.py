@@ -43,6 +43,15 @@ DEFAULT_CONFIG = {
     "critical_css": True,  # Split CSS into critical (inlined) and deferred (async-loaded)
     "themes_dir": "themes/",  # User theme directory, relative to BASE_DIR
     "direction": "auto",  # Text direction: "ltr", "rtl", or "auto" (detect from LANGUAGE_CODE)
+    # Whether ``{% theme_head %}`` links the component catalog's stylesheet,
+    # ``djust_components/components.css`` (about 330 KB), when ``djust.components``
+    # is installed. Off by default since 2.0 (#4003): the theme's own component CSS
+    # (.card, .btn, .input, ...) is always linked, and only pages that render
+    # catalog tags ({% modal %}, {% data_table %}, {% app_shell %}, ...) need this
+    # file. Only ``True`` restores the 1.x behaviour (a truthy string does not);
+    # the ``{{ theme_head }}`` context variable follows it. djust_theming.W004 reports a
+    # project that installs djust.components without stating either value.
+    "component_catalog_css": False,
 }
 
 

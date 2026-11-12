@@ -58,6 +58,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V025 | LiveView | Warning | A class defines `get_http_status()` while `LIVEVIEW_CONFIG['http_status_of_state']` is configured: the override replaces the project-wide map |
 | V026 | LiveView | Warning | A legacy view declares a plain component in its class body: one object shared by every session, rendered for every user |
 | V027 | LiveView | Warning | An explicit view declares a `state()` field named `user` or `perms` (without `render=False`): it replaces `request.user` / the permission proxy in every template the view renders |
+| V028 | LiveView | Warning | An application class states `exposure_policy = "legacy"`, which is deprecated and removed before 2.0.0 |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -504,6 +505,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: an explicit view that declares `user = state(...)` or `perms = state(...)` without `render=False`. A declared field is template context (#4050), and view context wins over Django's context processors, so the field replaces `request.user` or the permission proxy in every template the view renders, including base templates that test it for authorization (`{% if user.is_staff %}`). Reported once, on the class that declares the field. Other context-processor names (`messages`, `debug`, `LANGUAGE_CODE`) are shadowed the same way and are not reported. Legacy views are not checked: their attribute walk shadowed these names in 1.x too. With `DEBUG = True`, djust also logs one warning per view class (logger `djust.exposure`) when it renders such a shadow.
 - **Fix**: rename the field (`selected_user`), or declare it `state(..., render=False)` if no template reads it.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V027"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V027"]`
+
+### V028 — a class states `exposure_policy = "legacy"`
+- **Severity**: Warning
+- **Method**: Runtime (class inspection; no view is constructed).
+- **What it detects**: an application class whose own body states `exposure_policy = "legacy"`, reported once for that class, wherever the views that use it inherit it from (a view, an abstract base or a mixin); the message names up to three of those views. Explicit exposure is the default since djust 2.0 and `"legacy"` is removed before 2.0.0. Stating it also raises a `DeprecationWarning` when the class is created, which most test runners and servers hide. djust's own classes (the legacy-pinned shipped views and djust's test modules) are not reported, and a subclass that states `"explicit"` is not either (#4047).
+- **Fix**: move the view to explicit exposure (declare persisted fields with `state()`, return template names from `get_context_data()`) and delete the line. `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](website/guides/migrating-to-2.0.md).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V028"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V028"]`
 
 ---
 

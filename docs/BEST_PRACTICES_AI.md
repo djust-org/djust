@@ -345,8 +345,7 @@ def delete_item(self, item_id: int, **kwargs):
 ### Decorator Usage
 
 > `@debounce`, `@throttle` and `@cache` are wired end-to-end. `@optimistic`
-> and `@client_state` are markers with no client implementation — the
-> handler still fires exactly as an undecorated one would (#2699, #2680).
+> and `@client_state` did nothing and were removed in djust 2.0 (#4006).
 
 ```python
 # Debouncing — the client waits 0.5s after the last keystroke, then sends once
@@ -362,9 +361,8 @@ def search(self, value: str = "", **kwargs):
 def track_scroll(self, position: int = 0, **kwargs):
     self.scroll_position = position
 
-# Optimistic updates (INERT — no client impl, #2699; UI does not update early)
+# A server action; add a JS Command chain for feedback before the server answers
 @event_handler()
-@optimistic
 def like_post(self, post_id: int, **kwargs):
     post = Post.objects.get(id=post_id)
     post.likes += 1
@@ -375,13 +373,6 @@ def like_post(self, post_id: int, **kwargs):
 @cache(ttl=300, key_params=["query"])  # 5 min cache
 def autocomplete(self, query: str = "", **kwargs):
     return City.objects.filter(name__istartswith=query)[:10]
-
-# Client state sync (INERT — no client impl, #2680; coordinates nothing.
-# The tab switch works because the server re-renders.)
-@event_handler()
-@client_state(keys=["active_tab"])
-def switch_tab(self, tab: str = "overview", **kwargs):
-    self.active_tab = tab
 ```
 
 ---
@@ -726,13 +717,11 @@ def autocomplete(self, query: str = "", **kwargs):
         name__istartswith=query
     )[:10]
 
-# Cached filter. NOTE: @client_state is INERT (#2680) and the StateBus it
-# named was deleted (#2680) — only @cache does anything here.
+# Cached filter.
 @event_handler()
-@client_state(keys=["filter"])
 @cache(ttl=60)
 def apply_filter(self, filter: str = "all", **kwargs):
-    """Caches the response. The @client_state publish does NOT happen."""
+    """Caches the response."""
     self.filter = filter
     self._refresh_results()
 ```
@@ -914,7 +903,7 @@ Like button?           → @event_handler (server round-trip);
                          JS Command chain for immediate feedback
 Autocomplete?          → @cache(ttl=300)
 Multi-component sync?  → one handler updating both; the single server
-                         re-render carries both. (@client_state is INERT, #2680.)
+                         re-render carries both.
 Draft saving?          → DraftModeMixin
 ```
 
@@ -1111,5 +1100,5 @@ DATABASES = {"default": dj_database_url.config(default=os.environ["DATABASE_URL"
 - Forms → FormMixin + validation
 - Server-authoritative real-time → @event_handler (server round-trip)
 - Immediate visual feedback for a server action → JS Commands +
-  `@event_handler`; `@optimistic` is inert
+  `@event_handler`
 - Autocomplete → @cache + @debounce

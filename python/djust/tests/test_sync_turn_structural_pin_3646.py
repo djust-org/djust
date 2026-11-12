@@ -55,6 +55,10 @@ import pytest
 
 from djust.sync_turn import SYNC_STEPS
 
+# A whole-tree pin: any PR can break it, so it runs on PRs and in the merge
+# queue whatever .test_durations records for it (#4051, tests/slow_tier.py).
+pytestmark = pytest.mark.pr_tier
+
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 
 # ---------------------------------------------------------------------------

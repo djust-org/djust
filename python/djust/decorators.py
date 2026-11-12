@@ -48,8 +48,6 @@ _PUSH_INERT_DECORATORS = frozenset(
         "debounce",
         "throttle",
         "cache",
-        "optimistic",
-        "client_state",
     }
 )
 
@@ -66,7 +64,7 @@ def _add_decorator_metadata(func: Callable, key: str, value: Any) -> None:
     """
     Add decorator metadata to function.
 
-    Internal helper for @debounce, @throttle, @optimistic, @cache, @client_state.
+    Internal helper for @debounce, @throttle, @cache and the other metadata decorators.
     Ensures consistent metadata structure across all decorators.
 
     Args:
@@ -109,7 +107,7 @@ def _make_metadata_decorator(key: str, value: Any) -> Callable[[F], F]:
     """
     Create a decorator that adds metadata without modifying execution.
 
-    Factory for @debounce, @throttle, @cache, @client_state which only add
+    Factory for @debounce, @throttle and @cache, which only add
     metadata for client-side processing, not runtime behavior.
 
     Args:
@@ -706,8 +704,8 @@ def push_handler(func: Optional[F] = None) -> Any:
 
     It cannot be combined with ``@event_handler`` or ``@server_function``
     (``TypeError`` at decoration time). It also cannot be combined with
-    ``@permission_required``, ``@rate_limit``, ``@debounce``, ``@throttle``,
-    ``@cache``, ``@optimistic`` or ``@client_state`` (``TypeError``): server
+    ``@permission_required``, ``@rate_limit``, ``@debounce``, ``@throttle``
+    or ``@cache`` (``TypeError``): server
     push enforces none of them, so on a push handler they would be inert and
     would read as protection that is not there. ``@background`` is allowed.
 
@@ -1025,48 +1023,6 @@ def throttle(
     )
 
 
-def optimistic(func: F) -> F:
-    """
-    Mark a handler as intended for optimistic client updates (INERT).
-
-    .. warning::
-       **Not implemented client-side.** ``window.djust.optimistic`` is read
-       once in ``09-event-binding.js`` and never assigned anywhere in
-       ``static/djust/src/``, so no optimistic update is ever applied and
-       there is no revert path. Applying this decorator changes nothing at
-       runtime; it records a declaration a future client would consume.
-
-       Unlike ``@debounce`` / ``@throttle``, which #2656 implemented, a bare
-       ``@optimistic`` takes no arguments and so declares NO DOM change for a
-       client to apply — which is why it was not implemented alongside them.
-       The already-wired DEP-002 ``optimistic_rules`` path (descriptor
-       components, applied in ``11-event-handler.js``) does have that
-       declaration. Tracked in issue #2699.
-
-    Usage:
-        class MyView(LiveView):
-            @optimistic
-            def increment(self, **kwargs):
-                self.count += 1
-
-            @optimistic
-            def toggle_todo(self, todo_id: int = 0, **kwargs):
-                todo = Todo.objects.get(id=todo_id)
-                todo.completed = not todo.completed
-                todo.save()
-
-    Returns:
-        Decorated function with optimistic metadata (no runtime effect)
-    """
-
-    wrapper = _passthrough(func)
-
-    # Add standardized metadata using helper
-    _add_decorator_metadata(wrapper, "optimistic", True)
-
-    return cast(F, wrapper)
-
-
 def cache(ttl: int = 60, key_params: Optional[List[str]] = None) -> Callable[[F], F]:
     """
     Cache handler responses client-side.
@@ -1095,61 +1051,12 @@ def cache(ttl: int = 60, key_params: Optional[List[str]] = None) -> Callable[[F]
     return _make_metadata_decorator("cache", {"ttl": ttl, "key_params": key_params or []})
 
 
-def client_state(keys: List[str]) -> Callable[[F], F]:
-    """
-    MARKER ONLY — this decorator does nothing at runtime.
+def __getattr__(name: str) -> Any:  # PEP 562
+    """Name the replacement for a decorator djust 2.0 removed (#4006)."""
+    from ._removed_settings import refuse_removed_name
 
-    .. warning::
-        Like ``@optimistic`` (#2699), this stamps metadata that **nothing in
-        the shipped client reads**, so a handler decorated with it behaves
-        exactly like an undecorated one. (``@debounce`` / ``@throttle`` were
-        in this family until #2656 implemented them.) The ``StateBus`` class
-        that was meant to consume it lived at
-        ``static/djust/src/05-state-bus.js`` with zero consumers in the
-        bundle and was deleted as dead code in #2680; whether to implement
-        the client half is tracked in #2680.
-
-        To coordinate two pieces of state today, update both in ONE handler:
-        the single server render sends both, with no client-side bus to keep
-        in sync.
-
-    The intended semantics, for whoever implements it: when this handler
-    executes, the specified keys are published to a client-side bus, and
-    other handlers subscribed to the same keys are notified of changes.
-
-    Usage (the shape the metadata records — not working behaviour):
-        class DashboardView(LiveView):
-            @client_state(keys=["filter"])  # INERT (#2680)
-            def update_filter(self, filter: str = "", **kwargs):
-                # WOULD publish "filter" — today this comment is the
-                # only thing that happens.
-                self.filter = filter
-
-            @client_state(keys=["filter"])  # INERT (#2680)
-            def on_filter_change(self, filter: str = "", **kwargs):
-                # WOULD be called when "filter" changes; it is not.
-                self.apply_filter()
-
-            @client_state(keys=["filter", "sort"])  # INERT (#2680)
-            def apply_filters(self, filter: str = "", sort: str = "", **kwargs):
-                # WOULD publish both "filter" and "sort".
-                self.filter = filter
-                self.sort = sort
-                self.update_results()
-
-    Args:
-        keys: List of state keys to publish/subscribe
-              Example: ["filter", "sort", "page"]
-
-    Returns:
-        Decorator function
-
-    Raises:
-        ValueError: If keys list is empty
-    """
-    if not keys:
-        raise ValueError("At least one key must be specified for @client_state decorator")
-    return _make_metadata_decorator("client_state", {"keys": keys})
+    refuse_removed_name(__name__, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 RATE_LIMIT_ON_EXCEED = ("disconnect", "drop")
@@ -1361,9 +1268,7 @@ __all__ = [
     "computed",
     "debounce",
     "throttle",
-    "optimistic",
     "cache",
-    "client_state",
     "background",
     "on_mount",
     "alters_data",
