@@ -15,6 +15,7 @@ import pytest
 from django.core.management import call_command
 
 from djust import LiveView, event_handler
+from djust.live_view import PersistentLiveView
 from djust.decorators import state
 
 SECRET = "INVENTORY_SECRET_VALUE_7f3a91"
@@ -76,6 +77,58 @@ class ParityView(LiveView):
         self.level = 2
 
 
+class _ShapesMixin:
+    """One name per suggestion shape: undeclared state(), instance, underscore."""
+
+    template = "<p>{{ count }}</p>"
+    level = state(1)
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+        self._cursor = 3
+
+
+class FreshMountView(_ShapesMixin, LiveView):
+    """Legacy view without snapshot persistence: remounts fresh on a reconnect."""
+
+
+class SnapshotFlagView(_ShapesMixin, LiveView):
+    enable_state_snapshot = True
+
+
+class PersistentBaseView(_ShapesMixin, PersistentLiveView):
+    pass
+
+
+class PersistentOptedOutView(_ShapesMixin, PersistentLiveView):
+    enable_state_snapshot = False
+
+
+class ExplicitWithFlagView(_ShapesMixin, LiveView):
+    """Under explicit exposure the flag has no effect, so nothing persists."""
+
+    exposure_policy = "explicit"
+    enable_state_snapshot = True
+
+
+class DynamicFlagView(_ShapesMixin, LiveView):
+    """A flag that is not a plain class value is not established statically."""
+
+    @property
+    def enable_state_snapshot(self):
+        return False
+
+
+# kind -> name in _ShapesMixin
+SHAPES = {"state": "level", "instance": "count", "private": "_cursor"}
+NOT_PERSISTING = (
+    "FreshMountView",
+    "PersistentOptedOutView",
+    "ExplicitWithFlagView",
+    "DynamicFlagView",
+)
+PERSISTING = ("SnapshotFlagView", "PersistentBaseView")
+
 VIEW = f"{__name__}.SecretHoldingView"
 
 
@@ -132,7 +185,7 @@ def test_destinations_types_and_suggestions(no_construction):
     public = {"template_context", "render_cache", "session_state", "client_state", "snapshot"}
     assert set(names["count"]["destinations"]) == public
     assert names["count"]["type"] == "int"
-    assert names["count"]["suggestion"].startswith('count: int = state(persist="server")')
+    assert names["count"]["suggestion"].startswith("count: int = state(...)")
     assert set(names["secret_key"]["destinations"]) == public
     # Types come from literals only; a name on the right-hand side stays unknown.
     assert names["secret_key"]["type"] is None
@@ -207,3 +260,63 @@ def test_inventory_matches_the_legacy_runtime():
     assert "_state_level" not in private
     assert {names[n].get("storage_key", n) for n in listed("private_session")} == expected_private
     assert names["level"]["conditional"] == ["private_session"]
+
+
+def _shape_report(view_name):
+    view = f"{__name__}.{view_name}"
+    report = json.loads(run("--view", view, "--json"))
+    return report["views"][0], names_of(report, view)
+
+
+@pytest.mark.parametrize("kind", sorted(SHAPES))
+@pytest.mark.parametrize("view_name", NOT_PERSISTING)
+def test_no_persistence_grant_for_a_view_that_does_not_persist_today(
+    no_construction, view_name, kind
+):
+    """#4023: such a view remounts fresh, so persist="server" would add behaviour."""
+    entry, names = _shape_report(view_name)
+    assert entry["persists_today"] is False
+    item = names[SHAPES[kind]]
+    assert item["kind"] == kind
+    assert "persist=" not in item["suggestion"], item["suggestion"]
+    assert "client=" not in item["suggestion"], item["suggestion"]
+
+
+def test_plain_declaration_shapes_without_snapshot_persistence(no_construction):
+    _, names = _shape_report("FreshMountView")
+    assert names["level"]["suggestion"].startswith("keep level = state(...); ")
+    assert names["count"]["suggestion"].startswith("count: int = state(...)  # ")
+    assert names["_cursor"]["suggestion"].endswith("leave it instance-only")
+    assert "state(" not in names["_cursor"]["suggestion"]
+
+
+@pytest.mark.parametrize("view_name", PERSISTING)
+def test_server_persistence_is_suggested_where_the_view_persists_today(no_construction, view_name):
+    entry, names = _shape_report(view_name)
+    assert entry["persists_today"] is True
+    assert 'add persist="server"' in names["level"]["suggestion"]
+    assert names["count"]["suggestion"].startswith('count: int = state(persist="server")')
+    assert 'declare cursor: int = state(persist="server")' in names["_cursor"]["suggestion"]
+    for name in SHAPES.values():
+        # Never a client grant: the browser-readable choice is the owner's.
+        assert 'persist="client"' not in names[name]["suggestion"]
+        assert "client=" not in names[name]["suggestion"]
+
+
+def test_text_output_has_no_persist_suggestion_without_snapshot_persistence(no_construction):
+    output = run("--view", f"{__name__}.FreshMountView")
+    assert "reconnect: fresh mount" in output
+    assert "persist=" not in output
+    output = run("--view", f"{__name__}.PersistentBaseView")
+    assert "reconnect: restored (enable_state_snapshot)" in output
+    assert 'persist="server"' in output
+
+
+def test_reported_persistence_matches_the_runtime_flag():
+    """The static read agrees with what the reconnect path reads off an instance."""
+    for view_name in (*NOT_PERSISTING, *PERSISTING):
+        entry, _ = _shape_report(view_name)
+        cls = globals()[view_name]
+        view = cls()
+        legacy = view.exposure_policy == "legacy"
+        assert entry["persists_today"] == (bool(view.enable_state_snapshot) and legacy), view_name
