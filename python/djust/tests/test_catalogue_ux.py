@@ -251,6 +251,21 @@ class TestRecentlyViewed:
 # ---------------------------------------------------------------------------
 
 
+def _page_scope(communicator):
+    """Give the socket what the app's ASGI session and auth middleware provide.
+
+    The catalogue views use explicit exposure, which binds a mount to the
+    page's session and principal (the session the HTTP GET established).
+    """
+    from django.contrib.auth.models import AnonymousUser
+    from django.contrib.sessions.backends.db import SessionStore
+
+    session = SessionStore()
+    session.create()
+    communicator.scope["session"] = session
+    communicator.scope["user"] = AnonymousUser()
+
+
 async def _mount(component_name: str):
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
@@ -258,6 +273,9 @@ async def _mount(component_name: str):
     from djust.websocket import LiveViewConsumer
 
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    from asgiref.sync import sync_to_async
+
+    await sync_to_async(_page_scope)(communicator)
     connected, _ = await communicator.connect()
     assert connected
     await communicator.receive_json_from()
@@ -448,10 +466,12 @@ class TestUsageWithEvents:
     def test_the_index_state_holds_names_not_component_dicts(self):
         """#2926 review 🟡5: ~380 KB of state per event before."""
         view = _index()
-        state = view.get_state()
-        assert "visible_components" not in state and "components_by_category" not in state
-        assert isinstance(state["visible_names"][0], str)
-        assert view.get_context_data()["visible_components"][0]["name"] == state["visible_names"][0]
+        # The view keeps names; the enriched dicts are built per render. With
+        # explicit exposure none of it is browser-readable state either.
+        assert isinstance(view.visible_names[0], str)
+        assert not hasattr(view, "visible_components")
+        assert view.get_state() == {}
+        assert view.get_context_data()["visible_components"][0]["name"] == view.visible_names[0]
 
     def test_a_demo_event_gets_a_handler_stub_with_the_kwarg_it_drives(self):
         view = _detail("rating")

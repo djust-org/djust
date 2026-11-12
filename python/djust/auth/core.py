@@ -106,10 +106,46 @@ def check_view_auth(
         "auth",
         _check_view_auth,
         view_instance,
-        request,
+        request_as_the_stack_built_it(request),
         http_dispatched=http_dispatched,
         event=event,
     )
+
+
+#: Set on a request whose ``user`` djust read from the session because the
+#: transport's stack supplied none (``runtime._derive_missing_principal``).
+USER_READ_FROM_SESSION = "_djust_user_read_from_session"
+
+
+def request_as_the_stack_built_it(request: Any) -> Any:
+    """The request a view's access check is judged against.
+
+    Behind a session-only stack an explicit view's request has no ``user``;
+    djust reads one from the session so the view's state has a principal to
+    bind to. That user decides nothing about access: a ``login_required`` view
+    is refused behind such a stack, because the stack authenticated nobody.
+    Every gate in this module judges its request through this function: the
+    view check (root mount, an embedded, sticky or lazy child, a restored
+    child, each event), the ``post()``-only access control of an event, a
+    handler's ``@permission_required`` and ``has_object_permission``. So a
+    child that reuses its parent's request is judged as a root would be, and a
+    handler as its view would be. Such a request is handed to the gate without
+    its user; any other request is returned unchanged.
+
+    Not gates, and so not routed through here: the view's own code (``mount``,
+    handlers, ``get_object``, ``get_context_data``), the state binding,
+    presence identity, rate-limit keys and tenant resolution. They see the
+    session's user.
+    """
+    # ``is True``: only the flag djust set counts, never a truthy attribute a
+    # request-like object happens to answer with.
+    if request is None or getattr(request, USER_READ_FROM_SESSION, False) is not True:
+        return request
+    from copy import copy
+
+    bare = copy(request)
+    bare.__dict__.pop("user", None)
+    return bare
 
 
 def _check_view_auth(
@@ -280,7 +316,13 @@ def check_event_auth(view_instance: Any, request: Any) -> Optional[str]:
     )
     # The decorators it replays are application code: an ``"auth"`` step (#3637).
     return run_guarded_step(
-        view_instance, "auth", _http_only_access, view_instance, request, login_url, _PHASE_EVENT
+        view_instance,
+        "auth",
+        _http_only_access,
+        view_instance,
+        request_as_the_stack_built_it(request),
+        login_url,
+        _PHASE_EVENT,
     )
 
 
@@ -1993,7 +2035,9 @@ def _resolve_object_permission(view_instance: Any, request: Any) -> Optional[Tup
     # `_object` for the same view instance. Strict ordering: check
     # first, cache second.
     try:
-        ok = view_instance.has_object_permission(request, obj)
+        # Judged as the stack built the request. ``request`` itself keeps its
+        # identity above and for the caller (the one-shot verdict, the note).
+        ok = view_instance.has_object_permission(request_as_the_stack_built_it(request), obj)
     except Exception:
         if required:
             view_instance._object = None
@@ -2218,6 +2262,7 @@ async def acheck_view_auth(
             view_instance, request, http_dispatched=http_dispatched, event=event
         )
 
+    request = request_as_the_stack_built_it(request)
     login_url = _view_login_url(view_instance)
     redirect = await sync_to_async(
         guarded_step(view_instance, "auth", _check_login_and_permission)
@@ -2306,7 +2351,7 @@ def check_handler_permission(handler: Any, request: Any) -> bool:
         getattr(handler, "__self__", None),
         "auth",
         user_has_permission_spec,
-        getattr(request, "user", None),
+        getattr(request_as_the_stack_built_it(request), "user", None),
         perm,
     )
 

@@ -147,7 +147,19 @@ class GalleryCategoryMixin(_GalleryMixinBase):
                     "rendered_html": rendered_html,
                 }
             )
-        return super().get_context_data(**kwargs)
+        context = super().get_context_data(**kwargs)
+        # Explicit exposure: the names the gallery templates read. The
+        # declared components (``accordion``, ``tabs``...) render by name.
+        # ``raw_components`` is the mixin's working data, not template data.
+        context.update(
+            category_label=self.category_label,
+            category_cards=self.category_cards,
+            active_category=self.active_category,
+            prev_category=self.prev_category,
+            next_category=self.next_category,
+            rendered_components=self.rendered_components,
+        )
+        return context
 
     def _build_extra_context(self, comp_name: str) -> Dict[str, Any]:
         """Pass descriptor state into template rendering automatically."""
@@ -170,6 +182,7 @@ class GalleryCategoryMixin(_GalleryMixinBase):
 class GalleryIndexView(LiveView):
     """Landing page showing category cards with search."""
 
+    exposure_policy = "explicit"
     template_name = "djust_components/gallery/index.html"
     login_required = False
 
@@ -215,6 +228,18 @@ class GalleryIndexView(LiveView):
                     }
                 )
 
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        context = super().get_context_data(**kwargs)
+        # Explicit exposure: the names the index template reads.
+        context.update(
+            category_cards=self.category_cards,
+            total_count=self.total_count,
+            search_query=self.search_query,
+            filtered_cards=self.filtered_cards,
+            filtered_count=self.filtered_count,
+        )
+        return context
+
     @event_handler
     def search(self, value: str = "", **kwargs: Any) -> None:
         self.search_query = value.strip()
@@ -248,6 +273,7 @@ class GalleryIndexView(LiveView):
 
 
 class LayoutGalleryView(GalleryCategoryMixin, LiveView):
+    exposure_policy = "explicit"
     category_slug = "layout"
     accordion = Accordion()
     tabs = Tabs()
@@ -257,39 +283,47 @@ class LayoutGalleryView(GalleryCategoryMixin, LiveView):
 
 
 class FormGalleryView(GalleryCategoryMixin, LiveView):
+    exposure_policy = "explicit"
     category_slug = "form"
 
 
 class DataGalleryView(GalleryCategoryMixin, LiveView):
+    exposure_policy = "explicit"
     category_slug = "data"
     tabs = Tabs()
 
 
 class OverlayGalleryView(GalleryCategoryMixin, LiveView):
+    exposure_policy = "explicit"
     category_slug = "overlay"
     modal = Modal()
     sheet = Sheet()
 
 
 class FeedbackGalleryView(GalleryCategoryMixin, LiveView):
+    exposure_policy = "explicit"
     category_slug = "feedback"
 
 
 class NavGalleryView(GalleryCategoryMixin, LiveView):
+    exposure_policy = "explicit"
     category_slug = "navigation"
     accordion = Accordion()
     tabs = Tabs()
 
 
 class IndicatorGalleryView(GalleryCategoryMixin, LiveView):
+    exposure_policy = "explicit"
     category_slug = "indicator"
 
 
 class TypographyGalleryView(GalleryCategoryMixin, LiveView):
+    exposure_policy = "explicit"
     category_slug = "typography"
 
 
 class MiscGalleryView(GalleryCategoryMixin, LiveView):
+    exposure_policy = "explicit"
     category_slug = "misc"
     accordion = Accordion()
     tabs = Tabs()

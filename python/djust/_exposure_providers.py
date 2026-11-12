@@ -142,6 +142,81 @@ def require_no_provider_keys(
         raise ExposureError(COLLISION)
 
 
+def require_mixin_before_view(cls: type, mixin: type) -> None:
+    """Refuse an explicit view that lists a context-providing mixin after its view base.
+
+    Such a mixin provides its names from ``get_context_data()``. The view
+    base's ``get_context_data()`` does not call ``super()``, so a mixin listed
+    after it is never asked and its names would render empty without an
+    error. A legacy view is not checked: its attribute walk renders the names
+    in either order, and it keeps working as written.
+    """
+    from django.views import View
+
+    mro = cls.__mro__
+    if (
+        View in mro
+        and mixin in mro
+        and mro.index(View) < mro.index(mixin)
+        and getattr(cls, "exposure_policy", None) == "explicit"
+    ):
+        host = next(c for c in mro if issubclass(c, View) and c is not cls)
+        raise TypeError(
+            '%s lists %s after %s. With exposure_policy = "explicit" the mixin provides '
+            "its template names from get_context_data(), which is never reached in that "
+            "order, so they would render empty. Put the mixin first: class %s(%s, %s)."
+            % (
+                cls.__name__,
+                mixin.__name__,
+                host.__name__,
+                cls.__name__,
+                mixin.__name__,
+                host.__name__,
+            )
+        )
+
+
+def renderable_provider_names(
+    view_class: type, names: Iterable[Any], provider: Any
+) -> frozenset[str]:
+    """The ``names`` a provider whose keys come from application configuration can own.
+
+    A name is left out when it is not a valid provider key (an underscore
+    name, a reserved or unsafe name) or when another provider the class
+    registers already renders it (``streams``, a declared component). The
+    caller says so in a diagnostic; registering the name would make the whole
+    view unmountable. ``provider`` is the caller's own manifest entry, which is
+    skipped while the other providers' keys are collected.
+    """
+    taken: set[str] = set()
+    for owner in view_class.__mro__:
+        declared = vars(owner).get("_djust_context_providers")
+        if type(declared) is not tuple:
+            continue
+        for entry in declared:
+            if entry is provider:
+                continue
+            contract = entry if type(entry) is ProviderContract else None
+            if contract is None and callable(entry):
+                try:
+                    contract = entry(view_class)
+                except ExposureError:
+                    # Reported where the manifest is collected, not here.
+                    continue
+            if type(contract) is ProviderContract:
+                taken.update(contract.rendered)
+    usable = set()
+    for name in names:
+        if type(name) is not str or name in taken:
+            continue
+        try:
+            ProviderContract("djust.probe", rendered=frozenset({name}))
+        except ExposureError:
+            continue
+        usable.add(name)
+    return frozenset(usable)
+
+
 # --------------------------------------------------------------------------
 # Framework providers that already existed before the manifest (E2-0).
 # --------------------------------------------------------------------------

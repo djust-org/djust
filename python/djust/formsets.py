@@ -40,7 +40,13 @@ from django.forms import BaseFormSet
 from django.forms.models import BaseModelFormSet
 
 from . import _form_data_bounds
+from ._exposure import ProviderContract, uses_legacy_exposure
 from ._exposure_diagnostics import log_failure_for
+from ._exposure_providers import (
+    provide_context,
+    renderable_provider_names,
+    require_mixin_before_view,
+)
 from .decorators import event_handler
 
 
@@ -313,6 +319,39 @@ def remove_row(
     return formset_cls(data, prefix=prefix, **formset_kwargs)
 
 
+_FORMSETS_PROVIDER = "djust.formsets"
+
+#: The contract per view class, with the ``formset_classes`` keys it was built
+#: from: it is asked for on every explicit render.
+_PROVIDER_CACHE: "weakref.WeakKeyDictionary[type, tuple[tuple, ProviderContract]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _formsets_provider(view_class: type) -> ProviderContract:
+    """The formset names a ``FormSetHelpersMixin`` view declares in ``formset_classes``."""
+    declared = getattr(view_class, "formset_classes", None)
+    names = tuple(declared) if isinstance(declared, dict) else ()
+    cached = _PROVIDER_CACHE.get(view_class)
+    if cached is not None and cached[0] == names:
+        return cached[1]
+    # A key that cannot be a provider key (``_rows``) or that another provider
+    # owns (``streams``) is left out, and that formset is not rendered; the
+    # view still mounts. ``get_context_data`` reports it.
+    contract = ProviderContract(
+        _FORMSETS_PROVIDER,
+        rendered=renderable_provider_names(view_class, names, _formsets_provider),
+    )
+    _PROVIDER_CACHE[view_class] = (names, contract)
+    return contract
+
+
+_UNSET: Any = object()
+
+#: Classes already told about a formset name that cannot be rendered.
+_UNRENDERABLE_REPORTED: "weakref.WeakSet[type]" = weakref.WeakSet()
+
+
 class FormSetHelpersMixin:
     """LiveView mixin with pre-baked ``add_row`` / ``remove_row`` event handlers.
 
@@ -334,6 +373,53 @@ class FormSetHelpersMixin:
 
     #: Map of ``dj-value-formset`` name → Django ``BaseFormSet`` subclass.
     formset_classes: Dict[str, Type[BaseFormSet]] = {}
+
+    _djust_context_providers = (_formsets_provider,)
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        require_mixin_before_view(cls, FormSetHelpersMixin)
+
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        """Render the declared formsets for a view with explicit exposure.
+
+        ``add_row`` / ``remove_row`` assign the rebuilt formset to the attribute
+        named in ``formset_classes``. A legacy view is untouched: its attribute
+        walk already renders that attribute. An explicit view renders nothing it
+        is not given, so the mixin provides each declared name the view has
+        assigned. Render-only: the formset and ``_formset_data`` are neither
+        persisted nor sent to the browser as data.
+        """
+        # FormSetHelpersMixin is mixed into a LiveView at runtime; the MRO
+        # supplies get_context_data(). mypy only sees object here.
+        context: Dict[str, Any] = (
+            super().get_context_data(**kwargs)  # type: ignore[misc]
+            if hasattr(super(), "get_context_data")
+            else {}
+        )
+        if uses_legacy_exposure(self):
+            return context
+        view_class = type(self)
+        rendered = _formsets_provider(view_class).rendered
+        declared = self.formset_classes if isinstance(self.formset_classes, dict) else {}
+        skipped = sorted(str(name) for name in declared if name not in rendered)
+        if skipped and view_class not in _UNRENDERABLE_REPORTED:
+            _UNRENDERABLE_REPORTED.add(view_class)
+            logger.warning(
+                "%s.formset_classes names %s cannot be template names under explicit "
+                "exposure (a name must not start with an underscore, be reserved, or "
+                "belong to another framework provider such as 'streams'). Those formsets "
+                "are not rendered; rename the key.",
+                view_class.__name__,
+                ", ".join(repr(name) for name in skipped),
+            )
+        for name in sorted(rendered):
+            # ``getattr``, not ``__dict__``: the view may declare the name
+            # with ``state()``. A method of that name is not a formset.
+            value = getattr(self, name, _UNSET)
+            if value is not _UNSET and not callable(value):
+                provide_context(self, context, _FORMSETS_PROVIDER, name, value)
+        return context
 
     def _resolve_formset_class(self, name: str) -> Type[BaseFormSet]:
         cls = self.formset_classes.get(name)

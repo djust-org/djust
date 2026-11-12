@@ -25,6 +25,11 @@ from .models import %(model_name)s
 class %(view_class)s(LiveView):
     template_name = "%(app_name)s/%(model_slug)s_list.html"
 
+    # Explicit exposure: the template gets only what get_context_data()
+    # provides, and nothing is stored or sent to the browser as data unless
+    # a state(...) declaration grants it.
+    exposure_policy = "explicit"
+
     def mount(self, request, **kwargs):
         self.search_query = ""
         self.selected = None
@@ -79,6 +84,7 @@ class %(view_class)s(LiveView):
     def get_context_data(self, **kwargs):
         self._compute()
         return {
+            **super().get_context_data(**kwargs),
             "items": self.items,
             "selected": self.selected,
             "search_query": self.search_query,
@@ -102,6 +108,8 @@ from .models import %(model_name)s
 
 class %(view_class)s(LiveView):
     \"\"\"JSON API for %(model_name)s CRUD.\"\"\"
+
+    exposure_policy = "explicit"
 
     def mount(self, request, **kwargs):
         self.search_query = ""

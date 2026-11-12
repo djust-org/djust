@@ -114,6 +114,16 @@ def DjustMiddlewareStack(inner: Any, *, validate_origin: bool = True) -> Any:
     populated) and, by default, with :class:`DjustOriginValidator` to prevent
     Cross-Site WebSocket Hijacking (CSWSH, #653).
 
+    The stack puts no user in the scope, so a view with ``login_required`` or
+    ``permission_required`` is refused behind it. A view with explicit
+    exposure that passes that check still needs a principal to bind its state
+    to: its mount reads the user from the session, as each of its events does
+    (``django.contrib.auth.get_user``), so the two agree. That user is what the
+    view's own code, the state binding, presence, rate limits and tenant
+    resolution see. It grants nothing: every access decision (view and handler
+    permissions, ``check_permissions``, ``has_object_permission``, ``on_mount``
+    hooks) is still made against the request as this stack built it.
+
     Args:
         inner: The ASGI application to wrap (typically a ``URLRouter``).
         validate_origin: When True (the default), the returned stack denies
@@ -296,6 +306,17 @@ def _view_auth_requirement(pattern: URLPattern, view_cls: type) -> Optional[dict
     # wrap as login-gated — fail closed (we can't prove the decorator is
     # auth-related, so an unauthorized client doesn't get the route).
     cb = getattr(pattern, "callback", None)
+    # An explicit-exposure view's ``as_view()`` returns djust's own wrapper
+    # around Django's callable (it reports failures without values, ADR-038
+    # D-a). It guards nothing, so it is looked through: otherwise every public
+    # explicit route would read as decorator-gated and be dropped from an
+    # anonymous visitor's route map. Matched by identity, so a real decorator
+    # applied around it (``login_required(View.as_view())``) is still the
+    # callback here and still gates the route.
+    from .live_view import is_protected_http_entry
+
+    if is_protected_http_entry(cb):
+        cb = getattr(cb, "__wrapped__", None)
     inner = getattr(cb, "__wrapped__", None)
     if inner is not None and getattr(inner, "view_class", None) is not None:
         login = True

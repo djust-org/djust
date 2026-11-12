@@ -65,6 +65,21 @@ async def close_catalogue_http_worker_connections(transactional_db):
     await sync_to_async(close_new_connections)(before)
 
 
+def _page_scope(communicator):
+    """Give the socket what the app's ASGI session and auth middleware provide.
+
+    The catalogue views use explicit exposure, which binds a mount to the
+    page's session and principal (the session the HTTP GET established).
+    """
+    from django.contrib.auth.models import AnonymousUser
+    from django.contrib.sessions.backends.db import SessionStore
+
+    session = SessionStore()
+    session.create()
+    communicator.scope["session"] = session
+    communicator.scope["user"] = AnonymousUser()
+
+
 async def _mount(component_name: str):
     """Mount the catalogue LiveView over a real WebSocket."""
     pytest.importorskip("channels")
@@ -73,6 +88,9 @@ async def _mount(component_name: str):
     from djust.websocket import LiveViewConsumer
 
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    from asgiref.sync import sync_to_async
+
+    await sync_to_async(_page_scope)(communicator)
     connected, _ = await communicator.connect()
     assert connected, "the WebSocket did not accept the connection"
 

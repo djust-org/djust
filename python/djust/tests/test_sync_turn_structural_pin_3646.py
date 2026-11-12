@@ -605,6 +605,14 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         _SESSION
     ),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "request_binding"): plumbing(_SESSION),
+    ("runtime.py", "ViewRuntime._dispatch_mount_body", "_derive_missing_principal"): plumbing(
+        _SESSION
+    ),
+    (
+        "runtime.py",
+        "SSESessionTransport.explicit_event_request",
+        "_derive_missing_principal",
+    ): plumbing(_SESSION),
     (
         "runtime.py",
         "ViewRuntime._dispatch_mount_body",

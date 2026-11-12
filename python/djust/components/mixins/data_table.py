@@ -40,6 +40,9 @@ import math
 import re
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
+from djust._class_snapshot import namespace as _class_namespace
+from djust._exposure import ProviderContract, uses_legacy_exposure
+from djust._exposure_providers import provide_context, require_mixin_before_view
 from djust.components.utils import format_cell, interpolate_color_gradient
 from djust.decorators import event_handler
 
@@ -303,6 +306,50 @@ _PRE_MOUNT_TABLE_CONTEXT = {
 }
 
 
+#: Public instance state ``DataTableMixin`` assigns (``init_table_state()``, the
+#: export / copy / import handlers). With the class-level ``table_*``
+#: configuration it is what the legacy attribute walk rendered.
+_TABLE_STATE_NAMES = (
+    "table_active_expressions",
+    "table_collapsed_groups",
+    "table_column_order",
+    "table_column_stats",
+    "table_copy_data",
+    "table_current_density",
+    "table_current_group_by",
+    "table_editing_rows",
+    "table_expanded_rows",
+    "table_export_data",
+    "table_export_format",
+    "table_facet_counts",
+    "table_filters",
+    "table_import_errors",
+    "table_import_pending",
+    "table_import_preview_data",
+    "table_loading",
+    "table_page",
+    "table_row_order",
+    "table_rows",
+    "table_search_query",
+    "table_selected_rows",
+    "table_sort_by",
+    "table_sort_desc",
+    "table_total_pages",
+    "table_visible_columns",
+)
+
+#: Configuration that is never rendered: a model class and a queryset are how
+#: the table finds its rows, not template data.
+_TABLE_UNRENDERED_NAMES = frozenset({"table_model", "table_queryset"})
+
+_DATA_TABLE_PROVIDER = "djust.data_table"
+
+
+def _data_table_provider(view_class: type) -> ProviderContract:
+    """The ``table_*`` names a ``DataTableMixin`` view renders under explicit exposure."""
+    return ProviderContract(_DATA_TABLE_PROVIDER, rendered=_TABLE_CONTEXT_NAMES)
+
+
 class DataTableMixin:
     """Mixin for LiveViews that provides automatic data table event handlers.
 
@@ -430,6 +477,51 @@ class DataTableMixin:
     )
     table_row_click_value_key = "id"  # which row key to send as data-value
     table_row_url = ""  # if set, row becomes a static link (Option A in #1111)
+
+    _djust_context_providers = (_data_table_provider,)
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        require_mixin_before_view(cls, DataTableMixin)
+
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        """Render the mixin's ``table_*`` names for a view with explicit exposure.
+
+        A legacy view is untouched: its attribute walk already renders these
+        names. An explicit view renders nothing it is not given, so the mixin
+        provides the names it publishes: its class-level ``table_*``
+        configuration and the state ``init_table_state()`` and the handlers
+        assign. A name that is not set yet (before ``init_table_state()``) is
+        left out, and so is a callable (``table_row_class_map`` may be one)
+        and a class-level value that is not plain data, as the walk left them
+        out. Render-only: nothing here is persisted or
+        sent to the browser as data. ``table_model`` and ``table_queryset``
+        are never rendered.
+        """
+        # DataTableMixin is mixed into a LiveView at runtime; the MRO supplies
+        # get_context_data(). mypy only sees object here.
+        context: Dict[str, Any] = (
+            super().get_context_data(**kwargs)  # type: ignore[misc]
+            if hasattr(super(), "get_context_data")
+            else {}
+        )
+        if uses_legacy_exposure(self):
+            return context
+        from djust.mixins.context import _is_json_serializable
+
+        missing = _TABLE_UNSET
+        assigned = self.__dict__
+        for name in sorted(_TABLE_CONTEXT_NAMES):
+            value = getattr(self, name, missing)
+            if value is missing or callable(value):
+                continue
+            # The walk rendered a class-level value only when it was plain
+            # data (#694): a column definition holding an object, or a set,
+            # stayed out of the template. Same rule here.
+            if name not in assigned and not _is_json_serializable(value):
+                continue
+            provide_context(self, context, _DATA_TABLE_PROVIDER, name, value)
+        return context
 
     def init_table_state(self) -> None:
         """Initialize instance state. Call from mount()."""
@@ -1452,3 +1544,19 @@ class DataTableMixin:
         Called by refresh_table() when table_server_mode is True.
         """
         pass
+
+
+_TABLE_UNSET: Any = object()
+
+#: Every name the mixin provides under explicit exposure: the public
+#: ``table_*`` class attributes above (minus the unrendered configuration)
+#: plus the instance state. Derived from the class so a new ``table_*``
+#: option is rendered without a second list to keep in step.
+_TABLE_CONTEXT_NAMES: frozenset = (
+    frozenset(
+        name
+        for name, value in _class_namespace(DataTableMixin).items()  # #3151
+        if name.startswith("table_") and not callable(value)
+    ).union(_TABLE_STATE_NAMES)
+    - _TABLE_UNRENDERED_NAMES
+)

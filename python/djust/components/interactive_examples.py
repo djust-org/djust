@@ -11,6 +11,9 @@ from djust.components.interactive import DropdownMenu
 
 
 class DropdownMenuExample(LiveView):
+    # The legacy policy: without a WebSocket a menu's event reaches its menu
+    # only on a legacy view (the component registry is kept between requests).
+    exposure_policy = "legacy"
     template_name = "djust_theming/catalogue/examples/interactive_dropdown_menu_page.html"
     login_required = False  # a public demo: it holds no user data
 

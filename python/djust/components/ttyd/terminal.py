@@ -174,8 +174,29 @@ class TtydTerminalView(LiveView):
 
             def on_ttyd_disconnect(self, timestamp="", code=0, reason="", **kwargs):
                 self.session_log.append(f"Disconnected at {timestamp} (code={code})")
+
+    The view keeps ``exposure_policy = "legacy"``, so a subclass's public
+    attributes reach its template as they always have. A subclass that sets
+    ``exposure_policy = "explicit"`` lists what its own template reads; the
+    terminal's names (``ttyd_url``, ``rows``, ``cols``, ``theme_json``) come
+    from ``super()``::
+
+        class MyTerminalView(TtydTerminalView):
+            exposure_policy = "explicit"
+
+            def get_context_data(self, **kwargs):
+                return super().get_context_data(
+                    session_log=self.session_log,
+                    terminal_connected=self.terminal_connected,
+                    **kwargs,
+                )
     """
 
+    # Pinned to the legacy policy: this is a base class applications subclass,
+    # and a subclass's own public attributes (``session_log`` above) render
+    # through the attribute walk. A subclass opts in to explicit exposure
+    # itself; ``get_context_data()`` below already supplies this template's names.
+    exposure_policy = "legacy"
     template_name = "djust_components/ttyd_terminal.html"
     login_required = False  # v1: assume open/local access; override in subclasses
 
@@ -235,6 +256,11 @@ class TtydTerminalView(LiveView):
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         ctx = super().get_context_data(**kwargs)
+        # The names this template reads, so an explicit subclass gets them
+        # from ``super()`` (a legacy view's walk supplies the same values).
+        ctx["ttyd_url"] = self.ttyd_url
+        ctx["rows"] = self.rows
+        ctx["cols"] = self.cols
         ctx["theme_json"] = json.dumps(self.theme or {})
         return ctx
 

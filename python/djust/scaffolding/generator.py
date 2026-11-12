@@ -410,6 +410,8 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     content += "class %s(%s):\n" % (ctx["view_class"], view_bases)
     content += '    template_name = "%s/index.html"\n' % app_name
     content += "\n"
+    content += T.EXPLICIT_EXPOSURE_NOTE
+    content += "\n"
     # This starter demo to-do list has no per-user data, so it is intentionally
     # public. ``login_required = False`` acknowledges that explicitly (silences
     # djust.S005). Set ``login_required = True`` when you add user-scoped state.
@@ -437,6 +439,7 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     content += "    def get_context_data(self, **kwargs):\n"
     content += "        self._compute()\n"
     content += "        return {\n"
+    content += "            **super().get_context_data(**kwargs),\n"
     content += '            "items": self.items,\n'
     content += '            "search_query": self.search_query,\n'
     content += '            "total_count": self.total_count,\n'

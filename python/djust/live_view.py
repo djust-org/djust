@@ -7,6 +7,7 @@ import json
 import logging
 import socket
 import threading
+import weakref
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Set, Union, cast
 
@@ -472,6 +473,28 @@ class NonPersistableStateError(TypeError):
     """
 
 
+#: The wrappers :func:`_protect_http_entry` returns, by identity. A wrapper made
+#: with ``functools.wraps`` copies the wrapped callable's ``__dict__``, so an
+#: attribute marker would be inherited by any decorator applied around it;
+#: membership here cannot be.
+_PROTECTED_HTTP_ENTRIES: "weakref.WeakSet[Any]" = weakref.WeakSet()
+
+
+def is_protected_http_entry(callback: Any) -> bool:
+    """Whether ``callback`` is the error-handling wrapper ``as_view()`` returned.
+
+    That wrapper is how an explicit view reports a failure without values
+    (ADR-038 D-a). It is not an access gate, and code that reads a route's
+    callback to decide whether a decorator guards it (the client route map,
+    #1758) must not mistake it for one. Only the exact object counts: a
+    decorator applied around it is a different callable and is not in the set.
+    """
+    try:
+        return callback in _PROTECTED_HTTP_ENTRIES
+    except TypeError:  # not weak-referenceable: not one of ours
+        return False
+
+
 def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., Any]:
     """ADR-038 D-a: a nonlegacy class's HTTP entry fails with a value-free 500.
 
@@ -515,6 +538,7 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
             return await sync_to_async(protected_server_error)(request, logger, outcome)
 
         markcoroutinefunction(protected_async)
+        _PROTECTED_HTTP_ENTRIES.add(protected_async)
         return protected_async
 
     @wraps(view)
@@ -530,6 +554,7 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
                 del exc
         return protected_server_error(request, logger, outcome)
 
+    _PROTECTED_HTTP_ENTRIES.add(protected)
     return protected
 
 
@@ -2105,6 +2130,9 @@ class PersistentLiveView(LiveView):
 
     abstract = True
     enable_state_snapshot = True
+    # Stated, not inherited from the default: the snapshot this class turns on
+    # exists only under the legacy policy. A subclass may still set "explicit".
+    exposure_policy = "legacy"
 
 
 def _declares_interactive_collection(view_class: type) -> bool:
@@ -2151,7 +2179,9 @@ def live_view(
         def wrapper(request: Any, *args: Any, **kwargs: Any) -> Any:
             # Create a dynamic LiveView class
             class DynamicLiveView(LiveView):
-                pass
+                # The decorated function's returned locals are set as view
+                # attributes below and rendered by the attribute walk.
+                exposure_policy = "legacy"
 
             if template_name:
                 DynamicLiveView.template_name = template_name

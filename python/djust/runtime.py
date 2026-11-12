@@ -2552,9 +2552,15 @@ class SSESessionTransport:
         return True
 
     async def explicit_event_request(self, view: Any) -> Any:
-        """Use the current owner-checked POST; never fall back to mount auth."""
+        """Use the current owner-checked POST; never fall back to mount auth.
+
+        A project without ``AuthenticationMiddleware`` gives the POST no user.
+        The mount read its user from the session then, so the event does too.
+        """
         request = getattr(self._session, "_event_request", None)
         self._session._event_request = None
+        if request is not None:
+            await sync_to_async(_derive_missing_principal)(request)
         return request
 
     # ------------------------------------------------------------------ #
@@ -2912,6 +2918,45 @@ def _public_decorator_metadata(view_instance: Any) -> List[Tuple[str, Dict[str, 
 #: How often a deferred SSE push re-checks that the client is draining (#3809).
 #: A pause between checks only while the client is backlogged; nothing asserts on it.
 _BACKLOG_POLL_S = 0.05
+
+
+def _derive_missing_principal(request: Any) -> None:
+    """Give an explicit mount the principal its events will have.
+
+    A socket request has a ``user`` only when the ASGI stack put one in the
+    scope. Behind a session-only stack (``DjustMiddlewareStack``) it has none,
+    and an explicit mount binds its state to the request's user, so it could
+    not mount at all. Every explicit event already reads its user from the
+    session (``_exposure_auth.fresh_socket_request``), so the mount reads it
+    the same way: mount and event then name the same principal, which the
+    event check requires.
+
+    Called after the pre-mount auth sequence and the ``on_mount`` hooks have
+    passed with the request as the stack built it, so which views that stack
+    admits is unchanged: a ``login_required`` or ``permission_required`` view
+    is still refused there. Later gates keep judging it that way
+    (``auth.core.request_as_the_stack_built_it``); the view's own code, the
+    state binding, presence, rate limits and tenant resolution see the user.
+    A ``user`` the stack supplied is never replaced, and a legacy view is
+    never given one. Without ``django.contrib.auth`` there is nothing to read
+    and the binding's own refusal stands.
+    """
+    if getattr(request, "user", None) is not None:
+        return
+    from django.apps import apps
+
+    if not apps.is_installed("django.contrib.auth"):
+        return
+    if getattr(request, "session", None) is None:
+        return
+    from django.contrib.auth import get_user
+
+    from .auth.core import USER_READ_FROM_SESSION
+
+    request.user = get_user(request)
+    # The access check keeps judging this request as the stack built it
+    # (``auth.core.request_as_the_stack_built_it``), wherever it is reused.
+    setattr(request, USER_READ_FROM_SESSION, True)
 
 
 class ViewRuntime(RuntimeTurnPort):
@@ -3367,6 +3412,11 @@ class ViewRuntime(RuntimeTurnPort):
             self.view_instance = None
             return
         # ---- End on_mount hooks ----
+
+        # After every admission decision (the auth sequence and the on_mount
+        # hooks judged the request as the stack built it), before mount().
+        if not uses_legacy_exposure(view_instance):
+            await sync_to_async(_derive_missing_principal)(request)
 
         # Transport-specific identity + post-mount setup hook (#1887 / #1919):
         # SSE stamps _sse_session_id / _sse_session + the real query string here so

@@ -188,6 +188,8 @@ class BulkActionProgressWidget(LiveView):
     gets a 403.
     """
 
+    exposure_policy = "explicit"
+
     template_name = "djust_admin/bulk_progress.html"
     login_required = True
 
