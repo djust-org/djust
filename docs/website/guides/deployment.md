@@ -11,7 +11,7 @@ description: "Deploy djust with uvicorn, Redis state backend, and Nginx load bal
 
 This guide covers deploying djust applications to production with horizontal scaling, Redis state backend, and WebSocket-aware load balancing.
 
-Before running more than one process or pod, read [Scaling djust](scaling.md). It lists the settings a multi-pod deployment needs, with measured numbers and failover behaviour. In particular, the Redis state backend on its own does not bring a view's state back after a reconnect to another process: that takes `enable_state_snapshot` or `state(..., persist="server")` and a session store every process shares (see [Option B](scaling.md#option-b-redis-between-processes)).
+Before running more than one process or pod, read [Scaling djust](scaling.md). It lists the settings a multi-pod deployment needs, with measured numbers and failover behaviour. In particular, the Redis state backend on its own does not bring a view's state back after a reconnect to another process: that takes `state(..., persist="server")` and a session store every process shares (see [Option B](scaling.md#option-b-redis-between-processes)).
 
 ## Architecture Overview
 
@@ -153,7 +153,7 @@ When a VDOM patch fails on the client, djust falls back to the server-rendered "
 
 | Concern | Setting | What it does |
 |---|---|---|
-| **State backend** | `DJUST_CONFIG['STATE_BACKEND']` (and `DJUST_CONFIG['REDIS_URL']`) | Caches each session's compiled view (`RustLiveView`) as the diff baseline for its next WebSocket mount. It does not restore a view's state (its assigns) on another process: that needs `enable_state_snapshot` or `state(..., persist="server")` plus a session store every process shares (see [Option B](scaling.md#option-b-redis-between-processes)). |
+| **State backend** | `DJUST_CONFIG['STATE_BACKEND']` (and `DJUST_CONFIG['REDIS_URL']`) | Caches each session's compiled view (`RustLiveView`) as the diff baseline for its next WebSocket mount. It does not restore a view's state (its assigns) on another process: that needs `state(..., persist="server")` plus a session store every process shares (see [Option B](scaling.md#option-b-redis-between-processes)). |
 | **Channel layer** | `CHANNEL_LAYERS` (Django Channels) | Carries messages between sessions: `push_to_view()`, presence, cursor tracking and DB-change notifications. Messages between processes need a Redis layer. |
 
 **Required configuration** any time more than one process serves WebSockets, **or** any code calls [`push_to_view` / `apush_to_view`](../advanced/server-push.md) from another process (Celery workers, management commands, cron jobs):
@@ -287,7 +287,7 @@ uvicorn myproject.asgi:application \
     --access-log
 ```
 
-**`--workers 4` is four processes.** Each has its own memory, so everything in [More than one process or pod](scaling.md#more-than-one-process-or-pod) applies: a Redis channel layer (with the `socket_timeout` above), Redis state and presence backends, a session store every process shares, `enable_state_snapshot` or `persist="server"` for state that must survive a reconnect, and no in-process shared state such as a dict of rooms. The settings are listed in [Option B](scaling.md#option-b-redis-between-processes). To stay in one process instead, run one worker; on free-threaded Python it can use several cores ([One process across cores](scaling.md#one-process-across-cores)).
+**`--workers 4` is four processes.** Each has its own memory, so everything in [More than one process or pod](scaling.md#more-than-one-process-or-pod) applies: a Redis channel layer (with the `socket_timeout` above), Redis state and presence backends, a session store every process shares, `persist="server"` for state that must survive a reconnect, and no in-process shared state such as a dict of rooms. The settings are listed in [Option B](scaling.md#option-b-redis-between-processes). To stay in one process instead, run one worker; on free-threaded Python it can use several cores ([One process across cores](scaling.md#one-process-across-cores)).
 
 **The event loop is uvloop by default.** uvicorn's default `--loop auto` uses uvloop whenever it is installed, and `uvicorn[standard]`, which djust installs, installs it. So do gunicorn's `UvicornWorker` and `djust serve` (its `--loop` also defaults to `auto`). Leaving the flag out does not avoid uvloop. It is a trade-off, measured once (#3095):
 
@@ -854,7 +854,7 @@ How it works:
 1. User loads any page → Django's `SessionMiddleware` sets `sessionid` on the response.
 2. Browser opens WebSocket → upgrade request includes the `sessionid` cookie.
 3. ALB routes the upgrade by `sessionid` hash → pinned to the same task.
-4. If the task dies and the client reconnects, ALB picks a healthy task and the cookie now hashes to the new one. The view's state comes back only if it is persisted (`enable_state_snapshot` or `state(..., persist="server")` with a shared session store); otherwise the view mounts again. See [Option B](scaling.md#option-b-redis-between-processes), which also found stickiness unnecessary in its measured setup.
+4. If the task dies and the client reconnects, ALB picks a healthy task and the cookie now hashes to the new one. The view's state comes back only if it is persisted (`state(..., persist="server")` with a shared session store); otherwise the view mounts again. See [Option B](scaling.md#option-b-redis-between-processes), which also found stickiness unnecessary in its measured setup.
 
 Caveat: pages that open a WebSocket WITHOUT a prior session-creating request won't have the cookie set yet → the first WS connect goes to whichever target ALB picks. After that, subsequent reconnects have `sessionid` and pin correctly. This is fine when `SessionMiddleware` is in `MIDDLEWARE` (default for any Django app); if you've removed it, you'll want to set a fresh cookie on the WS upgrade response yourself.
 
@@ -1064,7 +1064,7 @@ Set CloudWatch alarms (or equivalents) for each trigger. Don't escalate on a hun
 
 Anti-recommendation list. Things you should NOT re-evaluate on every deployment — they're canonical patterns built into the framework:
 
-- **djust state in Redis** is the canonical multi-server pattern (`DJUST_CONFIG["STATE_BACKEND"] = "redis"`). It caches each session's compiled view as the diff baseline for its next mount, on any process. It does not bring a view's state back after a reconnect to another process: that takes `enable_state_snapshot` or `state(..., persist="server")` and a shared session store ([Option B](scaling.md#option-b-redis-between-processes)).
+- **djust state in Redis** is the canonical multi-server pattern (`DJUST_CONFIG["STATE_BACKEND"] = "redis"`). It caches each session's compiled view as the diff baseline for its next mount, on any process. It does not bring a view's state back after a reconnect to another process: that takes `state(..., persist="server")` and a shared session store ([Option B](scaling.md#option-b-redis-between-processes)).
 - **`channels_redis` is required for more than one process** when any view uses `push_to_view`, presence, cursor tracking, or any other cross-process feature, and whenever a Celery worker, management command or cron job pushes to views. An in-memory layer reaches only the sessions of its own process. With exactly one process and no out-of-process pushes, `djust.layers.InMemoryChannelLayer` is the right production choice (`djust.layers.MultiLoopInMemoryChannelLayer` under `djust serve --loops`).
 - **`sync_to_async` for ORM** in event handlers is handled by djust's event dispatcher: sync handlers run via `sync_to_async`, so no manual wrapping is needed in your view code.
 - **`transaction.on_commit()` for Celery enqueue** is the right pattern; never `.delay(...)` directly from a view.

@@ -425,8 +425,8 @@ last state as they navigate forward/back.
    (tab backgrounded long enough for idle timeout, network blip, server
    restart), the sticky dies on the server side and the client's
    stash is cleared. Re-mount happens from scratch on reconnect.
-   With `enable_state_snapshot = True` on both the sticky child and
-   its parent, the child's state is restored — see
+   A sticky child under explicit exposure gets its declared
+   `state(..., persist="server")` fields back; see
    [Sticky-Child State Persistence](sticky-child-persistence.md).
 2. **No cross-tab sync**. Two tabs of the same app don't share a
    sticky instance. Each tab has its own WS and its own sticky.

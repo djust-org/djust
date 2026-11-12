@@ -406,13 +406,13 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
-### C304: State snapshot with PII-like attribute names
+### C304: Client state with PII-like field names
 
 **Severity**: Warning
 
-**What causes it**: A LiveView sets `enable_state_snapshot = True` and declares public class attributes or annotations whose names look sensitive (matching `password`, `token`, `secret`, `api_key`, `pii`, `ssn`, `credit_card`, `bearer`, `private_key`, `auth_header`, `sensitive` or `credential`). Message: "<view>: enable_state_snapshot=True with PII-like attribute names: ...". State snapshots are cached client-side by the service worker, so these values would be stored in browser cache storage.
+**What causes it**: A LiveView declares a `state(..., client=True)` field, or a `state(..., persist="client", client=True)` field, whose name looks sensitive (matching `password`, `token`, `secret`, `api_key`, `pii`, `ssn`, `credit_card`, `bearer`, `private_key`, `auth_header`, `sensitive` or `credential`). Message: "<view>: state() fields the browser receives have PII-like names: ...". The value of a `client=True` field is sent to the browser as data, and a `persist="client"` field is also kept in the signed (not encrypted) snapshot that the browser and the service worker store. Fields without `client=True`, including `persist="server"` ones, are not checked: they stay on the server.
 
-**Fix**: Make the attributes private (leading `_`), or turn off `enable_state_snapshot` for this view. The check also covers subclasses of `PersistentLiveView`, which set the flag.
+**Fix**: Drop the client grant (declare the field with `persist="server"` to keep it across a reconnect, or with no grant). If the field holds nothing sensitive, rename it or suppress with `DJUST_CONFIG = {"suppress_checks": ["C304"]}`. Before 2.0 this check read views that set `enable_state_snapshot`, which 2.0 removed.
 
 ---
 
@@ -678,13 +678,9 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 ---
 
-### V011: Sticky child snapshots state but its parent doesn't
+### V011: Sticky child snapshots state but its parent doesn't (removed in 2.0)
 
-**Severity**: Warning
-
-**What causes it**: A view embedded as a sticky child sets `enable_state_snapshot = True`, but the parent that embeds it does not. Message: "<child>: used as a sticky child with enable_state_snapshot=True, but embedding parent <parent> does not opt in — the child's state will be silently dropped on reconnect." A sticky child is restored across a WebSocket reconnect only when both the child and its embedding parent opt in.
-
-**Fix**: Set `enable_state_snapshot = True` on the parent as well, or suppress with `DJUST_CONFIG = {"suppress_checks": ["V011"]}`. See [Sticky Child Persistence](sticky-child-persistence.md).
+Retired in 2.0 with `enable_state_snapshot`, the opt-in it compared between a sticky child and its parent. Nothing reports it; remove it from `suppress_checks` or `SILENCED_SYSTEM_CHECKS`. See [Sticky-Child State Persistence](sticky-child-persistence.md).
 
 ---
 
