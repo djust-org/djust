@@ -124,6 +124,15 @@ class NewIssueView(LiveView):
     # One query per settled keystroke is a few per second at most. A
     # caller past that gets HTTP 429, which fetchSuggestions treats as
     # "no suggestions".
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            title=self.title,
+            description=self.description,
+            selected_tags=self.selected_tags,
+        )
+        return context
+
     @rate_limit(rate=5, burst=10)
     @server_function
     def search_tags(self, q: str = "", limit: int = 8, **kwargs) -> list[dict]:

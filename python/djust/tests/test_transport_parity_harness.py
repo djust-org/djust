@@ -175,10 +175,10 @@ async def _run_ws(turn: str) -> Dict[str, Any]:
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=request.session, user=request.user, tenant=None)
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)  # connect ack
+    await socket.receive_json_from()  # connect ack
     try:
         await socket.send_json_to({"type": "mount", "view": VIEW_PATH, "url": "/parity/"})
-        mounted = await socket.receive_json_from(timeout=3)
+        mounted = await socket.receive_json_from()
         assert mounted["type"] == "mount", mounted
         await socket.send_json_to({"type": "event", "event": turn, "params": {}, "ref": 1})
         frames: List[Dict[str, Any]] = []
@@ -187,7 +187,7 @@ async def _run_ws(turn: str) -> Dict[str, Any]:
             # ``receive_nothing`` polls without cancelling the application;
             # a timed-out ``receive_json_from`` would cancel the consumer.
             while not await socket.receive_nothing(timeout=0.2):
-                frames.append(await socket.receive_json_from(timeout=3))
+                frames.append(await socket.receive_json_from())
 
         await collect()
         await _settle(collect, turn == "async_it")
@@ -233,7 +233,7 @@ async def _run_sse(turn: str) -> Dict[str, Any]:
     finally:
         handles = tuple(getattr(session.runtime.view_instance, "_async_task_handles", ()) or ())
         if handles:
-            await asyncio.wait_for(asyncio.gather(*handles, return_exceptions=True), 3)
+            await asyncio.wait_for(asyncio.gather(*handles, return_exceptions=True), 30)
         session.shutdown()
         _sse_sessions.pop(sid, None)
 

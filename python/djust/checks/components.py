@@ -1237,6 +1237,67 @@ def check_time_travel_pii_fields(app_configs: Any, **kwargs: Any) -> list[CheckM
     return errors
 
 
+def _explicit_exposure_classes() -> dict[tuple[str, str], bool]:
+    """``(realpath, class name) -> explicit`` for every imported LiveView class.
+
+    V006/V008 warn that a value assigned in ``mount()`` cannot be serialized.
+    Under ``exposure_policy = "explicit"`` a plain attribute is never
+    serialized (template context, session, ``get_state()`` and snapshots read
+    only declared state), so the warning only applies to a legacy view (#4032).
+    The checks are AST-based; this maps their ``ClassDef`` back to the imported
+    class, whose resolved policy includes an inherited or defaulted one. Two
+    classes sharing a name in one file count as explicit only if both are.
+    """
+    try:
+        from djust._exposure import uses_legacy_exposure
+        from djust.live_view import LiveView
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing is known
+        return {}
+    explicit: dict[tuple[str, str], bool] = {}
+    for cls in _walk_subclasses(LiveView):
+        try:
+            source = inspect.getsourcefile(cls)
+        except (OSError, TypeError):
+            continue
+        if not source:
+            continue
+        key = (os.path.realpath(source), cls.__name__)
+        explicit[key] = explicit.get(key, True) and not uses_legacy_exposure(cls)
+    return explicit
+
+
+def _states_explicit_exposure(node: ast.ClassDef) -> bool:
+    """Whether ``node``'s body literally assigns ``exposure_policy = "explicit"``."""
+    for stmt in node.body:
+        if isinstance(stmt, ast.Assign):
+            targets = stmt.targets
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            targets = [stmt.target]
+        else:
+            continue
+        if (
+            any(isinstance(t, ast.Name) and t.id == "exposure_policy" for t in targets)
+            and isinstance(stmt.value, ast.Constant)
+            and stmt.value.value == "explicit"
+        ):
+            return True
+    return False
+
+
+def _serializes_plain_attributes(
+    node: ast.ClassDef, filepath: str, explicit: dict[tuple[str, str], bool]
+) -> bool:
+    """False for a class V006/V008 must skip: an explicit-exposure view.
+
+    The imported class's resolved policy decides; a class that is not imported
+    (or not a LiveView) is skipped only when its own body states explicit.
+    """
+    known = explicit.get((os.path.realpath(filepath), node.name))
+    if known is not None:
+        return not known
+    return not _states_explicit_exposure(node)
+
+
 def _check_service_instances_in_mount(errors: list[CheckMessage]) -> None:
     """V006 (Warning): Detect service/client/session instantiation in mount() methods via AST.
 
@@ -1247,6 +1308,7 @@ def _check_service_instances_in_mount(errors: list[CheckMessage]) -> None:
     app_dirs = _root._get_project_app_dirs()  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
     if not app_dirs:
         return
+    explicit = _explicit_exposure_classes()
 
     for filepath in _iter_python_files(app_dirs):
         tree, source_lines = _parse_python_file(filepath)
@@ -1257,6 +1319,8 @@ def _check_service_instances_in_mount(errors: list[CheckMessage]) -> None:
 
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
+                continue
+            if not _serializes_plain_attributes(node, filepath, explicit):
                 continue
 
             # Find mount() methods inside class definitions
@@ -1424,6 +1488,7 @@ def _check_non_primitive_assignments_in_mount(errors: list[CheckMessage]) -> Non
         "read_text",
     }
 
+    explicit = _explicit_exposure_classes()
     for filepath in _iter_python_files(app_dirs):
         tree, source_lines = _parse_python_file(filepath)
         if tree is None:
@@ -1437,6 +1502,8 @@ def _check_non_primitive_assignments_in_mount(errors: list[CheckMessage]) -> Non
 
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
+                continue
+            if not _serializes_plain_attributes(node, filepath, explicit):
                 continue
 
             # Find mount() methods inside class definitions

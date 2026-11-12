@@ -492,6 +492,9 @@ class MyView(LiveView):
 
     def mount(self, request, **kwargs):
         self.count = 0
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count}
 ```
 
 ---
@@ -536,6 +539,9 @@ from djust.decorators import event_handler
 class MyView(LiveView):
     def mount(self, request, **kwargs):
         self.sidebar_open = False
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "sidebar_open": self.sidebar_open}
 
     @event_handler()
     def toggle_sidebar(self, **kwargs):
@@ -1172,6 +1178,9 @@ In your LiveView, read the URL parameter in the `handle_params()` lifecycle hook
 class MyView(LiveView):
     def mount(self, request, **kwargs):
         self.current_view = "dashboard"
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "current_view": self.current_view}
 
     def handle_params(self, params, uri):
         # Called after mount and on every dj-patch / back-forward URL change
@@ -2695,6 +2704,9 @@ class ContactDetailView(LiveView):
         self.contact = Contact.objects.filter(
             owner=request.user
         ).get(pk=pk)
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "contact": self.contact}
 ```
 
 Or override `check_permissions()` with an explicit membership check and add `# djust: noqa X001` on the `.get()` call if the scoping is implicit (e.g. the tenant filter sits inside a helper manager).

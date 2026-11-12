@@ -44,6 +44,11 @@ class AudioPlayerView(LiveView):
         self.track_title = "Nothing playing"
         self.is_playing = False
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(track_title=self.track_title, is_playing=self.is_playing)
+        return context
+
     @event_handler
     def toggle_play(self, **kwargs):
         self.is_playing = not self.is_playing
@@ -191,6 +196,11 @@ class Sidebar(LiveView):
     def mount(self, request, section="home", **kwargs):
         self.section = section
         self.collapsed = False
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(section=self.section, collapsed=self.collapsed)
+        return context
 
     def _on_sticky_update(self, changed):
         if "section" in changed:

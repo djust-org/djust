@@ -62,9 +62,9 @@ class ProductListView(LiveView):
     Standard LiveView lifecycle pattern.
 
     Pattern:
-    1. mount() → initialize state (public variables)
-    2. _refresh() → build QuerySet (private variable)
-    3. get_context_data() → JIT serialization
+    1. mount() → initialize state
+    2. _refresh() → build QuerySet
+    3. get_context_data() → hand the template what it reads
     4. Event handlers → update state + refresh
     """
     template_name = 'products/list.html'
@@ -74,12 +74,11 @@ class ProductListView(LiveView):
         Phase 1: Initialize state
 
         Rules:
-        - Set public variables only (exposed to template)
         - Initialize filters, search queries, sort options
         - Call _refresh() to load initial data
-        - DON'T assign QuerySets directly to public variables
+        - Nothing set here reaches the template by itself:
+          get_context_data() supplies it (explicit exposure)
         """
-        # Public: exposed to template
         self.search_query = ""
         self.filter_category = "all"
         self.sort_by = "name"
@@ -89,13 +88,12 @@ class ProductListView(LiveView):
 
     def _refresh_products(self):
         """
-        Phase 2: Build QuerySet (CRITICAL: private variable)
+        Phase 2: Build QuerySet
 
         Rules:
         - Build QuerySet with filters/sorts
         - Keep as QuerySet (don't convert to list)
-        - Store in PRIVATE variable (self._products)
-        - This enables Rust JIT serialization
+        - Keep it on the view (self._products) for get_context_data()
         """
         # Start with base QuerySet
         products = Product.objects.all()
@@ -150,18 +148,16 @@ class ProductListView(LiveView):
         Phase 3: Expose data for rendering
 
         Rules:
-        - Assign private QuerySet to public variable
-        - Call super() to trigger Rust JIT serialization
-        - Add non-model context only
+        - Call super(), then add every name the template reads
+        - Hand the QuerySet over as it is (Rust JIT serialization)
         - DON'T manually serialize QuerySets
         """
-        # JIT serialization: private → public
-        self.products = self._products
-
-        # CRITICAL: Call super() to trigger Rust serialization
         context = super().get_context_data(**kwargs)
 
-        # Add non-model context
+        # The QuerySet itself: serialized for the fields the template reads
+        context['products'] = self._products
+
+        # Plain state the template reads
         context.update({
             'search_query': self.search_query,
             'filter_category': self.filter_category,
@@ -219,19 +215,24 @@ class ProductListView(LiveView):
 ### The Pattern (Rust-backed serialization)
 
 ```python
-# ✅ CORRECT: Private → Public in get_context_data
+# ✅ CORRECT: the QuerySet goes into the context in get_context_data
 def _refresh_items(self):
     items = MyModel.objects.filter(...)
-    self._items = items  # PRIVATE variable
+    self._items = items
 
 def get_context_data(self, **kwargs):
-    self.items = self._items  # PUBLIC ← PRIVATE
-    context = super().get_context_data(**kwargs)  # Triggers Rust JIT
+    context = super().get_context_data(**kwargs)
+    context['items'] = self._items  # serialized by the Rust JIT
     return context
 
-# ❌ WRONG: Direct assignment to public
+# ❌ WRONG: an attribute alone
 def mount(self, request):
-    self.items = MyModel.objects.all()  # NO! Bypasses JIT
+    self.items = MyModel.objects.all()  # NO! Nothing supplies it: {{ items }} is empty
+
+# ❌ WRONG: the 1.x idiom
+def get_context_data(self, **kwargs):
+    self.items = self._items  # NO! Publishes nothing under explicit exposure
+    return super().get_context_data(**kwargs)
 
 # ❌ WRONG: Converting to list
 def _refresh_items(self):
@@ -276,16 +277,11 @@ class PropertyListView(BaseViewWithNavbar):
         if self.filter_status != "all":
             properties = properties.filter(status=self.filter_status)
 
-        # CRITICAL: Store in private variable
         self._properties = properties
 
     def get_context_data(self, **kwargs):
-        # JIT serialization happens here
-        self.properties = self._properties
-
         context = super().get_context_data(**kwargs)
-        # Note: Don't add 'properties' to context - parent did it!
-        # Auto-generated: properties_count
+        context["properties"] = self._properties  # JIT serialization happens here
         return context
 ```
 
@@ -419,8 +415,7 @@ def _refresh_items(self):
     self._items = Item.objects.all()
 
 def get_context_data(self, **kwargs):
-    self.items = self._items  # JIT happens here
-    return super().get_context_data(**kwargs)
+    return {**super().get_context_data(**kwargs), "items": self._items}
 ```
 
 ### Mistake 3: Wrong Parameter Names
@@ -466,8 +461,7 @@ def get_context_data(self, **kwargs):
 
 # ✅ CORRECT
 def get_context_data(self, **kwargs):
-    self.items = self._items  # Let Rust do it
-    return super().get_context_data(**kwargs)
+    return {**super().get_context_data(**kwargs), "items": self._items}
 ```
 
 ### Mistake 6: Forgetting Default Values
@@ -769,8 +763,7 @@ See [List Reordering Performance Guide](website/guides/keyed-lists-performance.m
 # ✅ GOOD: Return only needed fields
 def get_context_data(self, **kwargs):
     # JIT only serializes fields used in template
-    self.items = self._items
-    return super().get_context_data(**kwargs)
+    return {**super().get_context_data(**kwargs), "items": self._items}
 
 # ✅ BETTER: Limit queryset size
 def _refresh_items(self):
@@ -832,17 +825,13 @@ class ProductListViewTests(TestCase):
         view = ProductListView()
         view.mount(request)
 
-        # Private variable set
+        # mount() built the QuerySet and kept it on the view
         self.assertTrue(hasattr(view, '_products'))
-
-        # Public variable not set until get_context_data
-        self.assertFalse(hasattr(view, 'products'))
 
         context = view.get_context_data()
 
-        # Now public variable set
-        self.assertTrue(hasattr(view, 'products'))
-        self.assertEqual(view.products, view._products)
+        # get_context_data() is what hands it to the template
+        self.assertIn('products', context)
 ```
 
 ### Testing Event Handlers
@@ -939,9 +928,8 @@ Draft saving?          → DraftModeMixin
 - [ ] Use `value` parameter for @input/@change events
 - [ ] Declare the parameters each binding sends (`manage.py check`: `djust.T020`); keep `**kwargs` on legacy `dj-input`/`dj-change`/`dj-submit` handlers, or declare `field`/`_target`
 - [ ] Build QuerySets in private methods (`_refresh_*`)
-- [ ] Store QuerySets in private variables (`self._items`)
-- [ ] Assign to public in `get_context_data()` only
-- [ ] Call `super().get_context_data()` to trigger JIT
+- [ ] Keep QuerySets on the view (`self._items`)
+- [ ] Supply every name the template reads in `get_context_data()` (`context["items"] = self._items` after `super()`)
 - [ ] Never convert QuerySets to lists
 - [ ] Add CSRF token to all forms
 
@@ -1041,9 +1029,8 @@ class PropertyListView(LiveView):
 
     def get_context_data(self, **kwargs):
         # JIT serialization
-        self.properties = self._properties
-
         context = super().get_context_data(**kwargs)
+        context["properties"] = self._properties
 
         # Non-model context
         context.update({
@@ -1098,11 +1085,11 @@ DATABASES = {"default": dj_database_url.config(default=os.environ["DATABASE_URL"
 **When writing djust code, always:**
 
 1. **Use the lifecycle pattern**: mount → _refresh → get_context_data
-2. **Use JIT serialization**: Private variable → public in get_context_data
+2. **Use JIT serialization**: put the QuerySet itself in the context in get_context_data
 3. **Use @event_handler** decorator on all handlers
 4. **Use 'value' parameter** for form inputs
 5. **Keep QuerySets as QuerySets** (never convert to list)
-6. **Call super().get_context_data()** to trigger Rust serialization
+6. **Supply every template name in get_context_data()** (call `super()`, then add them); an attribute on `self` alone renders empty
 7. **Check authorization** in mount() and event handlers
 8. **Use type hints** for automatic validation
 9. **Trust auto-escaping** — `{{ var }}` is HTML-escaped by default; use `|safe` only for server-generated HTML
@@ -1111,7 +1098,7 @@ DATABASES = {"default": dj_database_url.config(default=os.environ["DATABASE_URL"
 **Common pitfalls to avoid:**
 
 1. ❌ Converting QuerySets to lists
-2. ❌ Assigning QuerySets to public variables outside get_context_data
+2. ❌ Expecting `self.items = ...` to reach the template (it does not; add it in get_context_data)
 3. ❌ Using wrong parameter names (query vs value)
 4. ❌ Forgetting @event_handler decorator
 5. ❌ Missing default parameter values

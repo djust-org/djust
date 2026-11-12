@@ -44,6 +44,9 @@ class ProfileView(UploadMixin, LiveView):
             max_file_size=5_000_000,  # 5MB
         )
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "avatar_url": self.avatar_url}
+
     @event_handler()
     def save_avatar(self, **kwargs):
         for entry in self.consume_uploaded_entries('avatar'):
@@ -91,9 +94,12 @@ class ProfileView(UploadMixin, LiveView):
 class PhotosView(UploadMixin, LiveView):
     def mount(self, request, **kwargs):
         self.allow_upload("photos", accept="image/*", max_entries=5, max_file_size=5_000_000)
-        self.upload = ImageUploadPreview(
+        self._upload = ImageUploadPreview(
             name="photos", upload="photos", max=5, max_size=5_000_000, event="photos_uploaded"
         )
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "upload": self._upload}
 
     @event_handler()
     def photos_uploaded(self, count=0, **kwargs):
@@ -178,6 +184,9 @@ class GalleryView(UploadMixin, LiveView):
             max_entries=5,
             max_file_size=10_000_000,
         )
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "images": self.images}
 
     @event_handler()
     def upload_photos(self, **kwargs):

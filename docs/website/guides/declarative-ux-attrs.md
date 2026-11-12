@@ -713,6 +713,11 @@ class ChatView(LiveView):
         self.messages = []
         self.composer = ""
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(composer=self.composer, messages=self.messages)
+        return context
+
     @event_handler
     def send(self, value: str = "", **kwargs):
         self.messages = [*self.messages, value]

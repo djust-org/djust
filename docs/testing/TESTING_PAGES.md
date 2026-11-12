@@ -103,6 +103,13 @@ class MyFeatureTestView(LiveView):
         else:
             context['success_rate'] = 0
 
+        context["test_results"] = self.test_results
+        context["tests_run"] = self.tests_run
+        context["tests_passed"] = self.tests_passed
+        context["tests_failed"] = self.tests_failed
+        context["all_tests_passed"] = self.all_tests_passed
+        context["call_count"] = self.call_count
+        context["result"] = self.result
         return context
 
     @my_decorator(params="here")

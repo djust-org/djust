@@ -231,6 +231,13 @@ from .forms import ContactForm
 class ContactView(LiveView):
     template_name = "contact.html"
 
+    def mount(self, request, **kwargs):
+        self.message = ""
+        self.errors = {}
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "message": self.message, "errors": self.errors}
+
     @event_handler()
     def save(self, **form_data):
         form = ContactForm(data=form_data)

@@ -121,6 +121,11 @@ class ActivityFeedView(LiveView):
         self.cursor = first_page[-1]["id"] if first_page else 0
         self.has_more = len(first_page) == PAGE_SIZE
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(activities=self.activities, has_more=self.has_more)
+        return context
+
     @event_handler
     def load_more(self, **kwargs):
         if not self.has_more:

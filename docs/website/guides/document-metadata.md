@@ -32,6 +32,9 @@ class ChatView(LiveView):
         self.unread = 0
         self.page_title = "Chat"
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "unread": self.unread}
+
     @event_handler()
     def new_message(self, **kwargs):
         self.unread += 1
@@ -122,6 +125,9 @@ class InboxView(LiveView):
     def mount(self, request, **kwargs):
         self.unread = Message.objects.filter(read=False, user=request.user).count()
         self._update_title()
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "unread": self.unread}
 
     @event_handler()
     def mark_read(self, message_id: int = 0, **kwargs):

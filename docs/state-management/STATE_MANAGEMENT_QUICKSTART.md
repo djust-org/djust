@@ -38,6 +38,9 @@ class ProductSearchView(LiveView):
     def mount(self, request):
         self.results = []
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "results": self.results}
+
     @debounce(wait=0.5)  # Wait 500ms after typing stops
     def search(self, query: str = "", **kwargs):
         from myapp.models import Product
