@@ -817,12 +817,12 @@ _URL = "from djust.components.utils import safe_url\n"
 _JSON = "import json\nfrom djust.security.json_script import escape_json_for_script\n"
 for _label, _body, _bad in (
     ("concatenation", '"<a href=" + safe_url(x) + ">go</a>"', True),
-    ("concatenation into a quoted value", '\'<a href="\' + safe_url(x) + \'">go</a>\'', False),
+    ("concatenation into a quoted value", "'<a href=\"' + safe_url(x) + '\">go</a>'", False),
     ("concatenation into text", '"<p>" + safe_url(x) + "</p>"', False),
     ("a % format string", '"<a href=%s>go</a>" % safe_url(x)', True),
-    ("a % format string into a quoted value", '\'<a href="%s">go</a>\' % safe_url(x)', False),
+    ("a % format string into a quoted value", "'<a href=\"%s\">go</a>' % safe_url(x)", False),
     ("str.format", '"<a href={}>go</a>".format(safe_url(x))', True),
-    ("str.format into a quoted value", '\'<a href="{}">go</a>\'.format(safe_url(x))', False),
+    ("str.format into a quoted value", "'<a href=\"{}\">go</a>'.format(safe_url(x))", False),
     ("str.format by name", '"<a href={u}>go</a>".format(u=safe_url(x))', True),
     ("join", '"<a href=" + ",".join(safe_url(y) for y in x) + ">"', True),
 ):
@@ -911,7 +911,7 @@ row(
 )
 row(
     "safe_url chosen between a direct call and a helper that returns it (the position check stops at the call)",
-    f'{_URL}def link(p):\n    return safe_url(p)\ndef f(x, c):\n    u = safe_url(x) if c else link(x)\n    return mark_safe(f\'<a href="{{u}}">go</a>\')\n',
+    f"{_URL}def link(p):\n    return safe_url(p)\ndef f(x, c):\n    u = safe_url(x) if c else link(x)\n    return mark_safe(f'<a href=\"{{u}}\">go</a>')\n",
     True,
 )
 
@@ -957,15 +957,13 @@ for _label, _body in _COMPOSITES.items():
     row("composite: " + _label, _URL + _body, True)
 row(
     "composite: a list of attribute fragments joined, placed between attributes",
-    _URL
-    + "def f(x):\n    attrs = [f'href=\"{safe_url(x)}\"']\n"
+    _URL + "def f(x):\n    attrs = [f'href=\"{safe_url(x)}\"']\n"
     "    return mark_safe(f'<a {\" \".join(attrs)}>go</a>')\n",
     False,
 )
 row(
     "composite: an attribute fragment built in place and placed between attributes",
-    _URL
-    + "def f(x, c):\n    style = f' style=\"background:{safe_url(x)}\"' if c else ''\n"
+    _URL + "def f(x, c):\n    style = f' style=\"background:{safe_url(x)}\"' if c else ''\n"
     "    return mark_safe(f'<div class=\"a\"{style}>go</div>')\n",
     False,
 )
@@ -981,12 +979,14 @@ row(
 )
 row(
     "composite: conditional_escape(safe_url(x)) placed in an unquoted attribute",
-    _URL + "def f(x):\n    u = conditional_escape(safe_url(x))\n    return mark_safe(f'<a href={u}>')\n",
+    _URL
+    + "def f(x):\n    u = conditional_escape(safe_url(x))\n    return mark_safe(f'<a href={u}>')\n",
     True,
 )
 row(
     "composite: conditional_escape(safe_url(x)) placed in a quoted attribute",
-    _URL + "def f(x):\n    u = conditional_escape(safe_url(x))\n    return mark_safe(f'<a href=\"{u}\">')\n",
+    _URL
+    + "def f(x):\n    u = conditional_escape(safe_url(x))\n    return mark_safe(f'<a href=\"{u}\">')\n",
     False,
 )
 
@@ -1013,7 +1013,8 @@ row(
 )
 row(
     "safe_url chosen with or, in a quoted attribute",
-    _URL + "def f(x):\n    u = safe_url(x) or '#'\n    return mark_safe('<a href=\"' + u + '\">')\n",
+    _URL
+    + "def f(x):\n    u = safe_url(x) or '#'\n    return mark_safe('<a href=\"' + u + '\">')\n",
     False,
 )
 # str.format with *args: the arguments do not line up with the fields
@@ -1057,9 +1058,19 @@ row(
 )
 
 # --- #3850 round 2 item 3: the tag name ----------------------------------------------------
-row("a tag name in an f-string", _URL + "def f(x):\n    return mark_safe(f'<{safe_url(x)}>x')\n", True)
-row("a tag name in a + chain", _URL + "def f(x):\n    return mark_safe('<' + safe_url(x) + '>')\n", True)
-row("a closing tag name", _URL + "def f(x):\n    return mark_safe('</' + safe_url(x) + '>')\n", True)
+row(
+    "a tag name in an f-string",
+    _URL + "def f(x):\n    return mark_safe(f'<{safe_url(x)}>x')\n",
+    True,
+)
+row(
+    "a tag name in a + chain",
+    _URL + "def f(x):\n    return mark_safe('<' + safe_url(x) + '>')\n",
+    True,
+)
+row(
+    "a closing tag name", _URL + "def f(x):\n    return mark_safe('</' + safe_url(x) + '>')\n", True
+)
 row(
     "a less-than sign followed by a space is text",
     _URL + "def f(x):\n    return mark_safe('a < ' + safe_url(x))\n",
@@ -1115,7 +1126,11 @@ row(
     "def f():\n    return mark_safe(" + " + ".join(["'a'"] * 2000) + ")\n",
     True,
 )
-row("a + chain of 6 literals", "def f():\n    return mark_safe(" + " + ".join(["'a'"] * 6) + ")\n", False)
+row(
+    "a + chain of 6 literals",
+    "def f():\n    return mark_safe(" + " + ".join(["'a'"] * 6) + ")\n",
+    False,
+)
 
 # --- the remaining branches of the composite rule --------------------------------------------
 _nested = "safe_url(x)"
@@ -1167,15 +1182,13 @@ row(
 )
 row(
     "composite: an attribute fragment from a helper that always returns one shape",
-    _URL
-    + "def attr(x):\n    return ' href=\"' + safe_url(x) + '\"'\n"
+    _URL + "def attr(x):\n    return ' href=\"' + safe_url(x) + '\"'\n"
     "def f(x):\n    return mark_safe('<a class=\"a\"' + attr(x) + '>go</a>')\n",
     False,
 )
 row(
     "composite: an attribute fragment chosen between two shapes",
-    _URL
-    + "def f(x, c):\n    frag = ' href=\"' + safe_url(x) + '\"' if c else ''\n"
+    _URL + "def f(x, c):\n    frag = ' href=\"' + safe_url(x) + '\"' if c else ''\n"
     "    return mark_safe('<a class=\"a\"' + frag + '>go</a>')\n",
     False,
 )
@@ -1184,7 +1197,8 @@ row(
 # so only the composite rule stops them being placed in an unquoted attribute) ------------------
 row(
     "composite: a % string around an `or` of the output",
-    _URL + "def f(x):\n    u = '%s' % (safe_url(x) or '#')\n    return mark_safe('<a href=' + u + '>')\n",
+    _URL
+    + "def f(x):\n    u = '%s' % (safe_url(x) or '#')\n    return mark_safe('<a href=' + u + '>')\n",
     True,
 )
 row(
@@ -1195,7 +1209,8 @@ row(
 )
 row(
     "composite: a % string around a walrus of the output",
-    _URL + "def f(x):\n    u = '%s' % (v := safe_url(x))\n    return mark_safe('<a href=' + u + '>')\n",
+    _URL
+    + "def f(x):\n    u = '%s' % (v := safe_url(x))\n    return mark_safe('<a href=' + u + '>')\n",
     True,
 )
 row(
@@ -1253,3 +1268,281 @@ for _helper in ("data_url_attr", "attr_text"):
             f"{_imp}def f(x):\n    return mark_safe({_body})\n",
             _bad,
         )
+
+# --- #3850 follow-up: each rule that turned a pinned miss into a catch, with its clean twin ------
+# The caught cases themselves are in ``safe_markup_corpus_3848`` (RUN, and flagged); these rows pin
+# the twin the same rule must NOT flag, and a second unsafe shape where one helps.
+for _label, _source, _bad in (
+    # sinks reached without a call by name
+    (
+        "a sink bound to self is still a sink",
+        "class C:\n    def __init__(self):\n        self._ms = mark_safe\n    def r(self, raw):\n        return self._ms(f'<b>{raw}</b>')\n",
+        True,
+    ),
+    (
+        "a non-sink bound to self is not a sink",
+        "class C:\n    def __init__(self):\n        self._f = str\n    def r(self, raw):\n        return self._f(f'<b>{raw}</b>')\n",
+        False,
+    ),
+    (
+        "a container holding a non-sink is not a sink",
+        "FUNCS = {'s': str}\ndef f(raw):\n    return FUNCS['s'](f'<b>{raw}</b>')\n",
+        False,
+    ),
+    (
+        "a sink in a list, dispatched",
+        "FUNCS = [str, mark_safe]\ndef f(raw):\n    return FUNCS[1](f'<b>{raw}</b>')\n",
+        True,
+    ),
+    (
+        "getattr of a non-sink name is not a sink",
+        "import django.utils.html as h\ndef f(raw):\n    return getattr(h, 'escape')(f'<b>{raw}</b>')\n",
+        False,
+    ),
+    (
+        "map of a sink over literals",
+        "def f(raw):\n    return list(map(mark_safe, ['<b>', '<i>']))\n",
+        False,
+    ),
+    ("map of a non-sink", "def f(raw):\n    return list(map(str, [f'<b>{raw}</b>']))\n", False),
+    (
+        "partial of a sink over a built string",
+        "from functools import partial\ndef f(raw):\n    return partial(mark_safe, f'<b>{raw}</b>')()\n",
+        True,
+    ),
+    (
+        "partial of a sink over a literal",
+        "from functools import partial\ndef f(raw):\n    return partial(mark_safe, '<b>x</b>')()\n",
+        False,
+    ),
+    (
+        "str.__new__ of a SafeString over a literal",
+        "def f(raw):\n    return str.__new__(SafeString, '<b>x</b>')\n",
+        False,
+    ),
+    (
+        "a conditional alias of two non-sinks",
+        "_w = str if True else repr\ndef f(raw):\n    return _w(f'<b>{raw}</b>')\n",
+        False,
+    ),
+    (
+        "an or alias that may be the sink",
+        "_w = None or mark_safe\ndef f(raw):\n    return _w(f'<b>{raw}</b>')\n",
+        True,
+    ),
+    (
+        "a callable instance that escapes",
+        "class E:\n    def __call__(self, v):\n        return mark_safe(escape(v))\n_e = E()\ndef f(raw):\n    return _e(f'<b>{raw}</b>')\n",
+        False,
+    ),
+    (
+        "format_html_join with a literal format string",
+        "from django.utils.html import format_html_join\ndef f(raw):\n    return format_html_join(',', '<b>{}</b>', [(raw,)])\n",
+        False,
+    ),
+    (
+        "format_html_join's format string by keyword",
+        "from django.utils.html import format_html_join\ndef f(raw):\n    return format_html_join(',', format_string=f'<b>{raw}</b>{{}}', args_generator=[('a',)])\n",
+        True,
+    ),
+    # Django's safe-markup protocol
+    (
+        "__html__ that escapes",
+        "class W:\n    def __init__(self, v):\n        self.v = v\n    def __html__(self):\n        return f'<b>{escape(self.v)}</b>'\n",
+        False,
+    ),
+    (
+        "__html__ that builds from an attribute",
+        "class W:\n    def __html__(self):\n        return '<b>' + self.v + '</b>'\n",
+        True,
+    ),
+    (
+        "__str__ of a plain class is not marked safe",
+        "class W:\n    def __str__(self):\n        return f'<b>{self.v}</b>'\n",
+        False,
+    ),
+    (
+        "__str__ of an @html_safe class that escapes",
+        "from django.utils.html import html_safe\n@html_safe\nclass W:\n    def __str__(self):\n        return f'<b>{escape(self.v)}</b>'\n",
+        False,
+    ),
+    (
+        "a str subclass whose __html__ is itself, over a literal",
+        "class H(str):\n    def __html__(self):\n        return str(self)\ndef f(raw):\n    return H('<b>x</b>')\n",
+        False,
+    ),
+    # expression forms
+    ("a starred literal list", "def f(raw):\n    return mark_safe(*['<b>x</b>'])\n", False),
+    (
+        "a starred name holding a built string",
+        "def f(raw):\n    parts = [f'<b>{raw}</b>']\n    return mark_safe(*parts)\n",
+        True,
+    ),
+    (
+        "await of an escaped value",
+        "async def ident(x):\n    return x\nasync def f(raw):\n    return mark_safe(f'<b>{await ident(escape(raw))}</b>')\n",
+        True,
+    ),
+    (
+        "await of a literal",
+        "async def ident(x):\n    return x\nasync def f(raw):\n    return mark_safe(await ident('<b>x</b>'))\n",
+        False,
+    ),
+    (
+        "a literal repeated",
+        "def f(raw, n=2):\n    return mark_safe('<li>x</li>' * int(n))\n",
+        False,
+    ),
+    (
+        "an escaped piece repeated",
+        "def f(raw, n=2):\n    return mark_safe(('<li>%s</li>' % escape(raw)) * n)\n",
+        False,
+    ),
+    (
+        "an f-string piece repeated",
+        "def f(raw, n=2):\n    return mark_safe(f'<li>{raw}</li>' * n)\n",
+        True,
+    ),
+    (
+        "translate with a literal table",
+        "def f(raw):\n    return mark_safe('<b>x</b>'.translate({ord('x'): 'y'}))\n",
+        False,
+    ),
+    (
+        "translate with a str.maketrans of raw",
+        "def f(raw):\n    return mark_safe('<b>x</b>'.translate({ord('x'): raw.upper()}))\n",
+        True,
+    ),
+    (
+        "html.escape with quote=True",
+        "import html\ndef f(raw):\n    return mark_safe(f'<a title=\"{html.escape(raw, quote=True)}\">')\n",
+        False,
+    ),
+    (
+        "html.escape with the default quote",
+        "import html\ndef f(raw):\n    return mark_safe(f'<a title=\"{html.escape(raw)}\">')\n",
+        False,
+    ),
+    (
+        "html.escape with quote=False",
+        "import html\ndef f(raw):\n    return mark_safe(f'<a title=\"{html.escape(raw, quote=False)}\">')\n",
+        True,
+    ),
+    (
+        "html.escape with a quote flag from a variable",
+        "import html\ndef f(raw, q):\n    return mark_safe(f'<a title=\"{html.escape(raw, q)}\">')\n",
+        True,
+    ),
+    (
+        "a star import makes an escaper untrusted",
+        "from re import *\ndef f(raw):\n    return mark_safe(f'<b>{escape(raw)}</b>')\n",
+        True,
+    ),
+    # containers
+    (
+        "a closure appends an escaped value",
+        "def f(raw):\n    parts = ['<div>']\n    def add(s):\n        parts.append(escape(s))\n    add(raw)\n    return mark_safe(''.join(parts))\n",
+        False,
+    ),
+    (
+        "a closure appends a literal",
+        "def f(raw):\n    parts = ['<div>']\n    def add():\n        parts.append('</div>')\n    add()\n    return mark_safe(''.join(parts))\n",
+        False,
+    ),
+    (
+        "a closure with its own list of that name",
+        "def f(raw):\n    parts = ['<div>']\n    def add(s):\n        parts = []\n        parts.append(s)\n    add(raw)\n    return mark_safe(''.join(parts))\n",
+        False,
+    ),
+    (
+        "a closure stores raw into a dict entry concatenated later",
+        "def f(raw):\n    state = {'v': 'ok'}\n    def setv():\n        state['v'] = raw\n    setv()\n    return mark_safe('<b>' + state['v'] + '</b>')\n",
+        True,
+    ),
+    (
+        "dict keys from range iterated",
+        "def f(raw):\n    d = {}\n    for i in range(3):\n        d[i] = 1\n    return mark_safe(''.join(f'<li>{k}</li>' for k in d))\n",
+        False,
+    ),
+    (
+        "dict keys literal iterated",
+        "def f(raw):\n    d = {'a': escape(raw)}\n    return mark_safe(''.join(f'<li>{k}</li>' for k in d))\n",
+        False,
+    ),
+    (
+        "dict values of raw keys read by key",
+        "def f(raw):\n    d = {}\n    d[raw] = '<i>x</i>'\n    return mark_safe(d.get(raw, ''))\n",
+        False,
+    ),
+    (
+        "raw dict keys through sorted(d.items())",
+        "def f(raw):\n    d = {raw: 1}\n    return mark_safe(''.join(f'<li>{k}</li>' for k, v in sorted(d.items())))\n",
+        True,
+    ),
+    (
+        "a nested list of escaped values",
+        "def f(raw):\n    rows = [['<i>']]\n    rows[0].append(escape(raw))\n    return mark_safe(''.join(rows[0]))\n",
+        False,
+    ),
+    (
+        "a nested list item written raw",
+        "def f(raw):\n    rows = [['<i>']]\n    rows[0][0] = raw\n    return mark_safe(''.join(rows[0]))\n",
+        True,
+    ),
+    (
+        "a for target subscript over literals",
+        "def f(raw):\n    box = ['ok']\n    for box[0] in ['a', 'b']:\n        pass\n    return mark_safe(f'<b>{box[0]}</b>')\n",
+        False,
+    ),
+    (
+        "a subscript augmented with raw",
+        "def f(raw):\n    box = ['<b>']\n    box[0] += raw\n    return mark_safe(''.join(box))\n",
+        True,
+    ),
+):
+    row(f"#3850: {_label}", _source, _bad)
+
+# --- #3864: an exempt fragment needs EVERY output inside a quote; a metaclass; Django's bases ------
+for _label, _source, _bad in (
+    (
+        "a second output outside the quotes of a balanced fragment",
+        "def f(x):\n    frag = ' title=\"' + safe_url(x) + '\" z=' + safe_url(x)\n"
+        "    return mark_safe('<a class=\"c\"' + frag + '>')\n",
+        True,
+    ),
+    (
+        "two outputs, each inside a quote the fragment opens and closes",
+        "def f(x, y):\n    frag = ' title=\"' + safe_url(x) + '\" alt=\"' + safe_url(y) + '\"'\n"
+        "    return mark_safe('<a class=\"c\"' + frag + '>')\n",
+        False,
+    ),
+    (
+        "a fragment whose whole text leaves a quote open (condition ii, second row)",
+        'def f(x):\n    frag = \' data-a="b" title="\' + safe_url(x) + \'" y="\'\n'
+        "    return mark_safe('<a class=\"c\"' + frag + '>')\n",
+        True,
+    ),
+    (
+        "cls.X of a class with a metaclass",
+        "class C(metaclass=M):\n    X = 'ok'\n    @classmethod\n    def r(cls):\n"
+        "        return mark_safe(f'<b>{cls.X}</b>')\n",
+        True,
+    ),
+    (
+        "self.X of a class with a metaclass",
+        "class C(metaclass=M):\n    X = 'ok'\n    def r(self):\n        return mark_safe(f'<b>{self.X}</b>')\n",
+        False,
+    ),
+    (
+        "a class attribute of a Django class-based view",
+        "class V(TemplateView):\n    LABEL = 'ok'\n    def r(self):\n"
+        "        return mark_safe(f'<b>{self.LABEL}</b>')\n",
+        True,
+    ),
+    (
+        "a class attribute of a plain class",
+        "class V:\n    LABEL = 'ok'\n    def r(self):\n        return mark_safe(f'<b>{self.LABEL}</b>')\n",
+        False,
+    ),
+):
+    row(f"#3864: {_label}", (_URL if "safe_url" in _source else "") + _source, _bad)

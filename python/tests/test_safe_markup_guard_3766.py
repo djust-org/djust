@@ -429,14 +429,6 @@ KNOWN_MISSES = {
         "from functools import reduce\n"
         "def f(a, b):\n    return mark_safe(reduce(lambda p, q: p + q, [a, b]))\n"
     ),
-    "partial-of-the-sink": (
-        'from functools import partial\ndef f(x):\n    return partial(mark_safe, f"<a {x}>")()\n'
-    ),
-    "map-of-the-sink": 'def f(xs):\n    return list(map(mark_safe, [f"<a {x}>" for x in xs]))\n',
-    "getattr-of-the-sink": (
-        "from django.utils import safestring\n"
-        'def f(x):\n    return getattr(safestring, "mark_safe")(f"<a {x}>")\n'
-    ),
     "built-in-one-function-marked-safe-in-another (the switcher)": (
         "def options(presets):\n    out = ''\n    for p in presets:\n"
         "        out += f'<option value=\"{p}\">{p}</option>'\n    return f'<select>{out}</select>'\n"
@@ -452,6 +444,19 @@ KNOWN_MISSES = {
     "a-bare-parameter": "def f(markup):\n    return mark_safe(markup)\n",
     "render-trusted-by-method-name": (
         'def f(thing, x):\n    return mark_safe(thing.render(f"<a {x}>"))\n'
+    ),
+}
+
+#: Misses this list pinned that the guard catches since the follow-up of #3850: a sink reached
+#: through ``partial`` / ``map`` / ``getattr`` by its name.
+CAUGHT_SINCE_3850 = {
+    "partial-of-the-sink": (
+        'from functools import partial\ndef f(x):\n    return partial(mark_safe, f"<a {x}>")()\n'
+    ),
+    "map-of-the-sink": 'def f(xs):\n    return list(map(mark_safe, [f"<a {x}>" for x in xs]))\n',
+    "getattr-of-the-sink": (
+        "from django.utils import safestring\n"
+        'def f(x):\n    return getattr(safestring, "mark_safe")(f"<a {x}>")\n'
     ),
 }
 
@@ -552,15 +557,13 @@ class TestKnownMisses:
         from scripts.lib import safe_markup_taint
 
         doc = safe_markup_taint.__doc__ or ""
-        for needle in (
-            "partial(mark_safe",
-            "map(mark_safe",
-            "getattr(safestring",
-            "reduce",
-            "self",
-        ):
+        for needle in ("reduce", "self"):
             assert needle in doc, needle
         assert "switcher" in doc and "NAME-based" in doc and "SINGLE-FUNCTION" in doc
+
+    @pytest.mark.parametrize("label", sorted(CAUGHT_SINCE_3850))
+    def test_a_former_miss_is_caught(self, label):
+        assert _flagged(CAUGHT_SINCE_3850[label]) == ["f"], label
 
 
 class TestTheOriginalCode:
