@@ -833,6 +833,10 @@ class ComponentsSidebarMixin:
             "sidebar_groups": groups,
             "recent_nav_items": [nav_item(c) for c in getattr(self, "recent_components", [])],
             "section_items": section_items,
+            # The two sidebar assigns the chrome template reads directly
+            # (explicit exposure renders only what it is given).
+            "search_query": getattr(self, "search_query", ""),
+            "sidebar_components": getattr(self, "sidebar_components", []),
             **catalogue_chrome(),
         }
 
@@ -967,6 +971,7 @@ class ComponentsAccessMixin:
 class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveView):
     """One component's catalogue page, with its examples actually working."""
 
+    exposure_policy = "explicit"
     template_name = "djust_theming/catalogue/detail.html"
     login_required = False
 
@@ -1158,6 +1163,8 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         ctx = super().get_context_data(**kwargs)
         ctx.update(self._base_ctx)
         ctx["current_component"] = self.current_component
+        # Derived once at mount (see there); `_doc_context` reads it back.
+        ctx["styles"] = self.styles
         self._components_gallery_url = ctx.get("components_gallery_url")
         ctx["prev_component"], ctx["next_component"] = self._neighbours()
         ctx["props_count"] = len(ctx.get("required_context") or []) + len(
@@ -1365,6 +1372,11 @@ class InteractiveDropdownCatalogueView(
     """The interactive DropdownMenu's catalogue page: the canonical example,
     served as-is inside the catalogue chrome (ADR-037 D2)."""
 
+    # Stays on the legacy policy with the example it serves
+    # (``DropdownMenuExample``; see the note in ``test_exposure_framework_views``):
+    # an interactive component is addressed by a per-instance id, and only the
+    # legacy HTTP fallback carries the component registry from one request to
+    # the next, so an explicit view cannot answer the menu's event there yet.
     template_name = "djust_theming/catalogue/interactive_detail.html"
     login_required = False
     component_name = "interactive_dropdown_menu"
@@ -1408,6 +1420,7 @@ class ComponentsIndexView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVie
     what is being shown.
     """
 
+    exposure_policy = "explicit"
     template_name = "djust_theming/catalogue/index.html"
     login_required = False
 
@@ -1436,6 +1449,8 @@ class ComponentsIndexView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVie
         by_name = {c["name"]: c for c in self._all_components}
         ctx["visible_components"] = [by_name[n] for n in self.visible_names if n in by_name]
         ctx["components_by_category"] = self.category_counts
+        ctx["total_count"] = self.total_count
+        ctx["active_category"] = self.active_category
         ctx["category_options"] = [{"value": "all", "label": f"All ({self.total_count})"}] + [
             {"value": g["category"], "label": f"{g['category']} ({g['count']})"}
             for g in self.category_counts
@@ -1473,6 +1488,7 @@ class ComponentsIndexView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVie
 class ComponentsCategoryView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveView):
     """One category's components. Same sidebar, so the same handlers."""
 
+    exposure_policy = "explicit"
     template_name = "djust_theming/catalogue/category.html"
     login_required = False
 
@@ -1520,6 +1536,8 @@ class ComponentsCategoryView(ComponentsAccessMixin, ComponentsSidebarMixin, Live
             },
             {"label": self.category, "url": ""},
         ]
+        ctx["category"] = self.category
+        ctx["category_components"] = self.category_components
         return ctx
 
 

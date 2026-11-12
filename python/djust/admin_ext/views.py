@@ -255,6 +255,8 @@ class AdminIndexView(AdminBaseMixin, LiveView):
     Shows widgets from plugins + all registered apps and models.
     """
 
+    exposure_policy = "explicit"
+
     template_name = "djust_admin/index.html"
 
     def mount(self, request: HttpRequest, **kwargs: Any) -> None:
@@ -277,6 +279,13 @@ class ModelListView(AdminBaseMixin, LiveView):
     Model list view with real-time search, filtering, and bulk actions.
     """
 
+    # Stays on the legacy policy for now (ADR-038 Step R, PR 0b): the page embeds
+    # the ModelAdmin's widget views with ``{% live_render %}``, and those are
+    # application classes that still default to legacy. An explicit root cannot
+    # hold a legacy child today: the HTTP GET's child save asks every
+    # registered child for its explicit binding
+    # (``_exposure_child_persistence._capture_children``) and a legacy child
+    # has none. Convert together with the default flip.
     template_name = "djust_admin/model_list.html"
 
     # Reactive state
@@ -642,6 +651,13 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
     Model detail/edit view with real-time form validation.
     """
 
+    # Stays on the legacy policy for now (ADR-038 Step R, PR 0b): the page embeds
+    # the ModelAdmin's widget views with ``{% live_render %}``, and those are
+    # application classes that still default to legacy. An explicit root cannot
+    # hold a legacy child today: the HTTP GET's child save asks every
+    # registered child for its explicit binding
+    # (``_exposure_child_persistence._capture_children``) and a legacy child
+    # has none. Convert together with the default flip.
     template_name = "djust_admin/model_detail.html"
 
     is_saving = state(default=False)
@@ -806,6 +822,8 @@ class ModelCreateView(ModelDetailView):
 class ModelDeleteView(AdminBaseMixin, LiveView):
     """Model delete confirmation view."""
 
+    exposure_policy = "explicit"
+
     template_name = "djust_admin/model_delete.html"
 
     confirmed = state(default=False)
@@ -885,6 +903,8 @@ class LoginView(_AdminRegistryMixin, DjangoLoginView):
 
 class LogoutView(_AdminRegistryMixin, LiveView):
     """Admin logout view."""
+
+    exposure_policy = "explicit"
 
     template_name = "djust_admin/logout.html"
 

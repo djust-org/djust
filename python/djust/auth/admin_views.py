@@ -32,6 +32,7 @@ except ImportError:
 class OAuthProvidersView(AdminBaseMixin, LiveView):
     """Admin page showing configured OAuth providers and their status."""
 
+    exposure_policy = "explicit"
     template_name = "djust_auth/admin/providers.html"
 
     def mount(self, request: HttpRequest, **kwargs: Any) -> None:
@@ -252,6 +253,7 @@ class OAuthProvidersView(AdminBaseMixin, LiveView):
 class SocialAccountsView(AdminBaseMixin, LiveView):
     """Admin page showing all linked social accounts with search/filter."""
 
+    exposure_policy = "explicit"
     template_name = "djust_auth/admin/social_accounts.html"
 
     # Fields ``sort_by`` accepts (each optionally prefixed by ``-``).

@@ -296,6 +296,17 @@ def _view_auth_requirement(pattern: URLPattern, view_cls: type) -> Optional[dict
     # wrap as login-gated — fail closed (we can't prove the decorator is
     # auth-related, so an unauthorized client doesn't get the route).
     cb = getattr(pattern, "callback", None)
+    # An explicit-exposure view's ``as_view()`` returns djust's own wrapper
+    # around Django's callable (it reports failures without values, ADR-038
+    # D-a). It guards nothing, so it is looked through: otherwise every public
+    # explicit route would read as decorator-gated and be dropped from an
+    # anonymous visitor's route map. Matched by identity, so a real decorator
+    # applied around it (``login_required(View.as_view())``) is still the
+    # callback here and still gates the route.
+    from .live_view import is_protected_http_entry
+
+    if is_protected_http_entry(cb):
+        cb = getattr(cb, "__wrapped__", None)
     inner = getattr(cb, "__wrapped__", None)
     if inner is not None and getattr(inner, "view_class", None) is not None:
         login = True

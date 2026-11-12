@@ -434,6 +434,14 @@ urlpatterns = [
 # views.py — base (no features)
 # ---------------------------------------------------------------------------
 
+#: The class-body lines every generated LiveView opens with (ADR-038).
+EXPLICIT_EXPOSURE_NOTE = """\
+    # Explicit exposure: the template gets only what get_context_data()
+    # provides, and nothing is stored or sent to the browser as data unless
+    # a state(...) declaration grants it.
+    exposure_policy = "explicit"
+"""
+
 VIEWS_PY_BASE = """\
 \"\"\"LiveView for %(app_name)s.\"\"\"
 
@@ -458,6 +466,11 @@ def quick_packs():
 %(extra_data)s
 class %(view_class)s(%(view_bases)s):
     template_name = "%(app_name)s/index.html"
+
+    # Explicit exposure: the template gets only what get_context_data()
+    # provides, and nothing is stored or sent to the browser as data unless
+    # a state(...) declaration grants it.
+    exposure_policy = "explicit"
 
     # This starter demo is an in-memory to-do list with no per-user data, so
     # it is intentionally public. ``login_required = False`` acknowledges that
@@ -521,7 +534,8 @@ class %(view_class)s(%(view_bases)s):
 
     def get_context_data(self, **kwargs):
         self._compute()
-        return {
+        context = super().get_context_data(**kwargs)
+        context.update({
             "items": self.filtered_items,
             "search_query": self.search_query,
             "total_count": self.total_count,
@@ -529,7 +543,8 @@ class %(view_class)s(%(view_bases)s):
             "theme_packs": quick_packs(),
             "theme_pack_count": len(get_all_theme_packs()),
             "djust_version": djust.__version__,
-%(extra_context)s        }
+%(extra_context)s        })
+        return context
 %(extra_methods)s"""
 
 # ---------------------------------------------------------------------------
@@ -546,6 +561,11 @@ from djust.decorators import event_handler
 class %(view_class)s(LiveView):
     template_name = "%(app_name)s/index.html"
 
+    # Explicit exposure: the template gets only what get_context_data()
+    # provides, and nothing is stored or sent to the browser as data unless
+    # a state(...) declaration grants it.
+    exposure_policy = "explicit"
+
     # Nothing user-specific here yet, so the page is public (djust.S005).
     login_required = False
 
@@ -557,7 +577,7 @@ class %(view_class)s(LiveView):
         self.pings += 1
 
     def get_context_data(self, **kwargs):
-        return {"pings": self.pings}
+        return super().get_context_data(pings=self.pings, **kwargs)
 """
 
 BARE_BASE_HTML = """\
@@ -1158,6 +1178,11 @@ SCHEMA_VIEW_CLASS = """\
 class %(view_class)s(LiveView):
     template_name = "%(app_name)s/%(template_name)s"
 
+    # Explicit exposure: the template gets only what get_context_data()
+    # provides, and nothing is stored or sent to the browser as data unless
+    # a state(...) declaration grants it.
+    exposure_policy = "explicit"
+
     def mount(self, request, **kwargs):
 %(mount_body)s
         self._compute()
@@ -1169,8 +1194,10 @@ class %(view_class)s(LiveView):
 %(handler_methods)s
     def get_context_data(self, **kwargs):
         self._compute()
-        return {
-%(context_body)s        }
+        context = super().get_context_data(**kwargs)
+        context.update({
+%(context_body)s        })
+        return context
 """
 
 SCHEMA_MODELS_PY = """\

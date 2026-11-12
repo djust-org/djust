@@ -35,6 +35,10 @@ class NonPersistableStateError(TypeError): ...
 # ``LiveView._restore_snapshot`` and ``time_travel.restore_snapshot``.
 def restore_components_snapshot(view: Any, components_state: Any, *, source: str) -> bool: ...
 
+# Whether a URL callback is the wrapper ``as_view()`` returns for an explicit
+# view (read by ``routing._view_auth_requirement``).
+def is_protected_http_entry(callback: Any) -> bool: ...
+
 class LiveView(
     StreamsMixin,
     StreamingMixin,

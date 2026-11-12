@@ -176,6 +176,7 @@ class TtydTerminalView(LiveView):
                 self.session_log.append(f"Disconnected at {timestamp} (code={code})")
     """
 
+    exposure_policy = "explicit"
     template_name = "djust_components/ttyd_terminal.html"
     login_required = False  # v1: assume open/local access; override in subclasses
 
@@ -235,6 +236,12 @@ class TtydTerminalView(LiveView):
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         ctx = super().get_context_data(**kwargs)
+        # Explicit exposure: the template gets exactly the names it reads. A
+        # subclass that renders more (``session_log``, ``terminal_connected``)
+        # adds them in its own ``get_context_data()``.
+        ctx["ttyd_url"] = self.ttyd_url
+        ctx["rows"] = self.rows
+        ctx["cols"] = self.cols
         ctx["theme_json"] = json.dumps(self.theme or {})
         return ctx
 

@@ -159,6 +159,21 @@ def test_no_gallery_template_names_the_static_namespace_as_a_package():
 # ---------------------------------------------------------------------------
 
 
+def _page_scope(communicator):
+    """Give the socket what the app's ASGI session and auth middleware provide.
+
+    The catalogue views use explicit exposure, which binds a mount to the
+    page's session and principal (the session the HTTP GET established).
+    """
+    from django.contrib.auth.models import AnonymousUser
+    from django.contrib.sessions.backends.db import SessionStore
+
+    session = SessionStore()
+    session.create()
+    communicator.scope["session"] = session
+    communicator.scope["user"] = AnonymousUser()
+
+
 async def _mount(view_path: str, page_url: str):
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
@@ -166,6 +181,9 @@ async def _mount(view_path: str, page_url: str):
     from djust.websocket import LiveViewConsumer
 
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    from asgiref.sync import sync_to_async
+
+    await sync_to_async(_page_scope)(communicator)
     connected, _ = await communicator.connect()
     assert connected, "the WebSocket did not accept the connection"
 
