@@ -260,7 +260,13 @@ class TestATagArgumentIsStillTheFlooredDict:
                 checked += 1
                 if outcomes[0] != outcomes[1]:
                     differing[name] = key
-        assert checked > 200, checked
+        # Derived, not restated: one check per (inline native tag, key). Since #4071 bridged the
+        # component tags only the kept twins are native (10 inline ones), so the old `> 200`
+        # floor counted handlers that no longer exist.
+        assert rust_handlers.NATIVE_INLINE_HANDLERS, (
+            "no inline native tags: the loop checked nothing"
+        )
+        assert checked == len(rust_handlers.NATIVE_INLINE_HANDLERS) * len(keys), checked
         # The only tags that differ SPELL their argument rather than read rows from it: a data dump
         # (the same family as `|json_script` / `|pprint`, which print each model as its `str()`).
         assert set(differing) <= DUMP_TAGS, differing
