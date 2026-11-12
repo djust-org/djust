@@ -243,7 +243,7 @@ from django.core.management import call_command
 call_command("migrate", run_syncdb=True, verbosity=0)
 from django.test import Client
 html = Client().get("/").content.decode()
-print("<!DOCTYPE html>" in html, 'data-tp-select="pack"' in html, "--background" in html, "dj-app-shell__main" in html)
+print("<!DOCTYPE html>" in html, 'data-tp-select="pack"' in html, "--background" in html, '<header class="site-header">' in html)
 """
 
 
@@ -282,18 +282,22 @@ def test_bare_requirements_floor_has_no_extra(tmp_path):
     )
 
 
-def test_default_scaffold_installs_components_and_uses_app_shell(tmp_path):
+def test_default_scaffold_installs_components_without_linking_the_catalog_css(tmp_path):
+    """#4003: djust.components stays installed (the theme gallery uses it), but
+    the starter base template uses plain markup on the theme pack's tokens and
+    the settings state that theme_head does not link the catalog stylesheet."""
     project = generator.generate_project("child", target_dir=str(tmp_path), auto_setup=False)
     settings = (project / "child/settings.py").read_text()
     base = (project / "child/templates/child/base.html").read_text()
     assert settings.index('"djust.theming"') < settings.index('"djust.components"')
-    assert base.splitlines()[0] == "{% load live_tags theme_tags djust_components %}"
+    assert '"theme": {"component_catalog_css": False}' in settings
+    assert base.splitlines()[0] == "{% load live_tags theme_tags %}"
     for tag in ("app_shell", "app_header", "app_content"):
-        assert "{% " + tag + " %}" in base
+        assert "{% " + tag + " %}" not in base
     assert (
-        base.index("{% app_content %}")
+        base.index('<main class="wrap stack">')
         < base.index("{% block content %}")
-        < base.index("{% endapp_content %}")
+        < base.index("</main>")
     )
     agents = (project / "AGENTS.md").read_text()
     for cmd in (
@@ -305,6 +309,7 @@ def test_default_scaffold_installs_components_and_uses_app_shell(tmp_path):
         assert cmd in agents
     check = _check(project, "child")
     assert check.returncode == 0, check.stdout + check.stderr
+    assert "djust_theming.W004" not in check.stdout + check.stderr
 
 
 def test_bare_scaffold_suppresses_i002(tmp_path):

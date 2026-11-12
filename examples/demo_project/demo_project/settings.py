@@ -146,6 +146,9 @@ CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
 LIVEVIEW_CONFIG = {
     "use_websocket": True,  # Use HTTP-only mode (disable WebSocket)
     "debug_vdom": False,  # Enable detailed VDOM patch logging
+    # No page here renders a component-catalog tag, so {% theme_head %} need not
+    # link djust_components/components.css (djust_theming.W004, #4003).
+    "theme": {"component_catalog_css": False},
 }
 # Re-check a login_required / permission_required view's authority on every event.
 # Absent by default (the key must not exist, so tests can set it themselves);

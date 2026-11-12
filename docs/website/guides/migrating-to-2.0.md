@@ -651,6 +651,24 @@ To open or close from your own handler, set the state:
 - **A model or QuerySet that cannot be serialized for the template is an
   error.** It used to be serialized again a slower way.
 
+### Defaults that changed
+
+Nothing raises for these; the page looks or behaves differently until you
+state the old value.
+
+- **`{% theme_head %}` no longer links the component catalog's stylesheet.**
+  With `djust.components` installed it used to link
+  `djust_components/components.css` (about 330 KB) on every page. Pages that
+  render catalog tags (`{% modal %}`, `{% data_table %}`, `{% app_shell %}`,
+  ...) now render them unstyled unless the project sets
+  `LIVEVIEW_CONFIG["theme"]["component_catalog_css"] = True`, or the page
+  passes `{% theme_head component_catalog=True %}`. The theme pack's own
+  component CSS (`.card`, `.btn`, `.input`, ...) is linked as before. System
+  check `djust_theming.W004` reports a project that installs
+  `djust.components` without stating the setting; set it to `False` once you
+  know no page needs the file
+  ([#4003](https://github.com/djust-org/djust/issues/4003)).
+
 ## 4. Still to be removed before the final release
 
 These still work on the 2.0 development line. Each is to be removed, or made

@@ -104,6 +104,7 @@ def build_theme_head_context(
     loading_class: bool = True,
     manager: "ThemeManager | None" = None,
     nonce: str | None = None,
+    component_catalog: bool | None = None,
 ) -> dict[str, Any]:
     """Build the full context dict consumed by ``djust_theming/theme_head.html``.
 
@@ -131,6 +132,11 @@ def build_theme_head_context(
         nonce: CSP nonce for the inline ``<script>`` and ``<style>`` blocks.
             ``None`` takes ``request.csp_nonce`` (django-csp) when there is
             one; an explicit value, including ``""`` for none, wins over it.
+        component_catalog: Link ``djust_components/components.css``. ``None``
+            follows ``LIVEVIEW_CONFIG["theme"]["component_catalog_css"]``
+            (off by default since 2.0, #4003); ``True`` or ``False`` decides
+            for this page. Either way the link needs ``djust.components``
+            installed.
 
     Returns:
         A dict with keys: ``loading_class``, ``css_block``,
@@ -214,18 +220,26 @@ def build_theme_head_context(
         component_css_block = f"<style data-djust-components{nonce_attr}>{component_css}</style>"
         include_component_link = False
 
-    # #1624: auto-include djust-components's components.css when the app is
-    # installed. Layout rules for {% code_block %}, {% card %}, {% dj_button %}
-    # spinners and other component tags live there. Detection is defensive —
-    # apps.is_installed() raises if the app registry isn't populated (e.g.
-    # before Django setup), so the call is wrapped in try/except and falls
-    # back to no link.
-    try:
-        from django.apps import apps as django_apps
+    # #1624 linked djust-components's components.css whenever the app was
+    # installed. Since 2.0 (#4003) the link is opt-in: the file is about 330 KB
+    # and only pages that render catalog tags need it, so a project states
+    # ``LIVEVIEW_CONFIG["theme"]["component_catalog_css"] = True``, or a page
+    # passes ``component_catalog=True`` (the catalogue and gallery pages do).
+    # The app must still be installed: without it the static file is not
+    # served. Detection is defensive — apps.is_installed() raises if the app
+    # registry isn't populated (e.g. before Django setup), so the call is
+    # wrapped in try/except and falls back to no link.
+    wants_catalog = (
+        config.get("component_catalog_css") if component_catalog is None else component_catalog
+    )
+    include_components_app_link = False
+    if wants_catalog is True:
+        try:
+            from django.apps import apps as django_apps
 
-        include_components_app_link = django_apps.is_installed("djust.components")
-    except Exception:  # noqa: BLE001 — defensive: never break theme_head
-        include_components_app_link = False
+            include_components_app_link = django_apps.is_installed("djust.components")
+        except Exception:  # noqa: BLE001 — defensive: never break theme_head
+            include_components_app_link = False
 
     # Resolve text direction
     direction = get_direction()
@@ -311,6 +325,7 @@ def theme_head(
     include_js: bool = True,
     link_css: bool = False,
     nonce: str | None = None,
+    component_catalog: bool | None = None,
 ) -> SafeString:
     """
     Render theme CSS and anti-FOUC script in the <head>.
@@ -320,6 +335,7 @@ def theme_head(
         {% theme_head include_js=False %}
         {% theme_head link_css=True %}
         {% theme_head nonce=request.csp_nonce %}
+        {% theme_head component_catalog=True %}
 
     Content-Security-Policy: the anti-flash ``<script>`` and the inline
     ``<style>`` blocks carry ``nonce="..."`` when a nonce is available, so a
@@ -336,6 +352,9 @@ def theme_head(
     - Anti-flash script (runs before page render to set correct theme)
     - Theme CSS (either inline <style> or <link> tag)
     - Component CSS (``components.css`` via <link> tag)
+    - The component catalog's ``djust_components/components.css``, only when
+      the project opts in with ``LIVEVIEW_CONFIG["theme"]["component_catalog_css"]
+      = True`` or the page passes ``component_catalog=True`` (#4003)
     - Optionally, the theme.js script tag
 
     The component CSS file contains styles for all template-tag components
@@ -348,7 +367,11 @@ def theme_head(
     """
     request = context.get("request")
     head_ctx = build_theme_head_context(
-        request, include_js=include_js, link_css=link_css, nonce=nonce
+        request,
+        include_js=include_js,
+        link_css=link_css,
+        nonce=nonce,
+        component_catalog=component_catalog,
     )
     html = render_to_string("djust_theming/theme_head.html", head_ctx)
     return mark_safe(html)

@@ -827,6 +827,11 @@ INSTALLED_APPS = [
 <link rel="stylesheet" href="{% static 'djust_components/components.css' %}">
 ```
 
+With `{% theme_head %}` in the base template, set
+`LIVEVIEW_CONFIG = {"theme": {"component_catalog_css": True}}` instead of
+writing the `<link>` yourself: `theme_head` then links the same file with a
+cache-busting version.
+
 ### Usage
 
 ```html
@@ -888,7 +893,8 @@ INSTALLED_APPS = [
 
 These tags render BEM class names, styled in
 `djust_components/components.css` (the file the `<link>` above loads, and the
-one `{% theme_head %}` links whenever `djust.components` is installed). The
+one `{% theme_head %}` links when `LIVEVIEW_CONFIG["theme"]["component_catalog_css"]`
+is `True`; off by default since 2.0, #4003). The
 rules are on the active theme's tokens, so the components follow light and
 dark mode. The status colour goes on the fill, border, dot or bar, and every
 label stays on `--foreground`, so no label's contrast depends on a status hue.
