@@ -186,6 +186,7 @@ class MyDemoView(LiveView):
 
         context['back'] = BackButton().render()
 
+        context["count"] = self.count
         return context
 ```
 

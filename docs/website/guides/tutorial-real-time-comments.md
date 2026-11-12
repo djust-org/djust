@@ -122,6 +122,9 @@ class CommentThreadView(LiveView):
         self.post_id = post_id
         self.comments = self._fetch_comments()
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "comments": self.comments}
+
     def _fetch_comments(self):
         qs = (
             Comment.objects
@@ -288,6 +291,9 @@ class CommentThreadView(LiveView):
         self.post_id = post_id
         self.comments = self._fetch_comments()
         self.listen("myapp_comment")  # subscribe to the channel @notify_on_save emits
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "comments": self.comments}
 
     def handle_info(self, message):
         """Fires when any process NOTIFY's the channel we listen to."""

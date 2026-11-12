@@ -24,12 +24,14 @@ Use in a LiveView:
 
 ```python
 class MyView(LiveView):
-    def mount(self, request, **kwargs):
-        self.status_dot = StatusDot(color="green")
-
     def get_context_data(self, **kwargs):
-        return {"status_dot": self.status_dot}
+        return {**super().get_context_data(**kwargs), "status_dot": StatusDot(color="green")}
 ```
+
+Build the component in `get_context_data()`, or keep it on a private attribute
+(`self._status_dot`) and hand it over there. A component assigned to a public
+attribute (`self.status_dot = StatusDot(...)`) is refused at the first render
+with an `ExposureConfigurationError`.
 
 In the template: `{{ status_dot }}` — calls `__str__()` → `render()`, which
 marks the markup safe, so no `|safe` is needed on any render path (an earlier
@@ -46,11 +48,14 @@ re-render carries it:
 ```python
 class MyView(LiveView):
     def mount(self, request, **kwargs):
-        self.rating = Rating(value=4, max_stars=5)
+        self._rating = Rating(value=4, max_stars=5)
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "rating": self._rating}
 
     @event_handler()
     def set_rating(self, value, **kwargs):
-        self.rating.value = value
+        self._rating.value = value
 ```
 
 `value` arrives as an `int`: every shipped component emits its values typed
@@ -71,11 +76,14 @@ the same word an HTML form uses:
 ```python
 class ReviewView(LiveView):
     def mount(self, request, **kwargs):
-        self.ratings = [Rating(name=f"row-{row.pk}", value=row.stars) for row in rows]
+        self._ratings = [Rating(name=f"row-{row.pk}", value=row.stars) for row in rows]
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "ratings": self._ratings}
 
     @event_handler()
     def set_rating(self, value, name=None, **kwargs):
-        for rating in self.ratings:
+        for rating in self._ratings:
             if rating.name == name:
                 rating.value = value
 ```

@@ -39,6 +39,11 @@ class ProductListView(LiveView):
         self.page = 1
         self.products = []
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(category=self.category, page=self.page, products=self.products)
+        return context
+
     def handle_params(self, params, uri):
         """Called when URL params change (live_patch or browser back/forward)."""
         self.category = params.get("category", "all")
@@ -132,6 +137,11 @@ class ListView(LiveView):
     def mount(self, request, **kwargs):
         self.category = "all"
         self.page = 1
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(category=self.category, page=self.page)
+        return context
 
     def handle_params(self, params, uri):
         self.category = params["category"]
@@ -709,6 +719,11 @@ class SearchView(LiveView):  # navigation is built in — no NavigationMixin nee
         self.sort = "relevance"
         self.results = []
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(query=self.query, results=self.results, sort=self.sort)
+        return context
+
     def handle_params(self, params, uri):
         self.query = params.get("q", "")
         self.sort = params.get("sort", "relevance")
@@ -835,6 +850,9 @@ class DashboardView(LiveView):  # navigation is built in — no NavigationMixin 
 
     def mount(self, request, **kwargs):
         self.active_tab = "overview"
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "active_tab": self.active_tab}
 
     def handle_params(self, params, uri):
         tab = params.get("tab", "overview")

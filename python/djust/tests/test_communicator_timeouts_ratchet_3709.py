@@ -810,7 +810,7 @@ def uncovered_counts() -> Dict[str, int]:
 UNCOVERED_BASELINE: Dict[str, int] = {
     "absence_raises": 2,
     "variable_timeouts": 52,
-    "wait_for_short": 107,
+    "wait_for_short": 104,
 }
 
 

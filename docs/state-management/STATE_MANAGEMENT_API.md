@@ -259,6 +259,11 @@ class SearchView(LiveView):
         self.results = []
         self.result_count = 0
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(result_count=self.result_count, query=self.query, results=self.results)
+        return context
+
     @debounce(wait=0.5)  # Wait 500ms after user stops typing
     def on_search(self, value: str = "", **kwargs):
         """
@@ -341,6 +346,9 @@ class ScrollTrackerView(LiveView):
 
     def mount(self, request):
         self.scroll_y = 0
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "scroll_y": self.scroll_y}
 
     @throttle(interval=0.1)  # Max 10 updates per second
     def on_scroll(self, scroll_y: int = 0, **kwargs):
@@ -475,6 +483,9 @@ class DashboardView(LiveView):
 
     def mount(self, request):
         self.temperature = 72
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "temperature": self.temperature}
 
     @client_state(keys=["temperature"])  # Publish to state bus
     @debounce(wait=0.5)
@@ -621,6 +632,11 @@ class AutocompleteView(LiveView):
     def mount(self, request):
         self.query = ""
         self.results = []
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(results=self.results, query=self.query)
+        return context
 
     @cache(ttl=300)           # Cache for 5 minutes
     @debounce(wait=0.3)       # Debounce requests
@@ -795,6 +811,11 @@ class CommentFormView(DraftModeMixin, LiveView):
         self.comment_text = ""
         self.author_name = ""
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(comment_text=self.comment_text, author_name=self.author_name)
+        return context
+
     def save_comment(self, comment_text: str = "", author_name: str = "", **kwargs):
         """Save comment and clear draft"""
         Comment.objects.create(
@@ -878,6 +899,11 @@ class ArticleEditorView(DraftModeMixin, LiveView):
         self.article_id = article_id
         self.title = ""
         self.content = ""
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(content=self.content, title=self.title)
+        return context
 
     def get_draft_key(self) -> str:
         """Include article ID in draft key"""

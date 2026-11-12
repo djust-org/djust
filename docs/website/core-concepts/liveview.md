@@ -13,9 +13,12 @@ class MyView(LiveView):
     template_name = "myapp/my_view.html"
 
     def mount(self, request, **kwargs):
-        """Initialize state. Public attributes reach the template automatically."""
+        """Initialize state. get_context_data() below hands it to the template."""
         self.count = 0
         self.items = []
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count, "items": self.items}
 
     @event_handler()
     def increment(self, **kwargs):
@@ -80,19 +83,22 @@ def handle_info(self, message):
 
 ## State Management
 
-State lives on `self`. Any public attribute (`self.count`) is:
+State lives on `self`. An attribute (`self.count`) stays on the view for as long as the connection does, so the next event handler finds it. By itself it goes nowhere else ([explicit exposure](../state/explicit-exposure.md)):
 
-- Included in the template context
-- Preserved across WebSocket events
-- Re-rendered when changed
-
-Private attributes (prefixed with `_`) are kept out of the template context and never sent to the client. Those set in `mount()` are still saved with the view's server-side state when they are JSON-serializable (models are stored as refs). Other values, such as QuerySets, are dropped on restore, so re-derive them rather than caching them in `_` attributes:
+- The template gets a value when `get_context_data()` supplies it. A name nothing supplies renders empty, with no error.
+- A value survives a reconnect when it is declared with `state(..., persist="server")`. Anything else is set again by `mount()`.
+- The browser gets a raw value only for `state(..., client=True)` fields.
 
 ```python
 def mount(self, request, **kwargs):
-    self._db_items = Item.objects.all()  # private — not in the template, not restored
-    self.count = self._db_items.count()  # public — available in template
+    self._db_items = Item.objects.all()  # stays on the server
+    self.count = self._db_items.count()
+
+def get_context_data(self, **kwargs):
+    return {**super().get_context_data(**kwargs), "count": self.count}
 ```
+
+A leading underscore is a naming convention for internal values. It does not change what the template sees: no attribute reaches it unless `get_context_data()` hands it over.
 
 ## Inline Templates
 
@@ -104,6 +110,9 @@ class HelloView(LiveView):
 
     def mount(self, request, **kwargs):
         self.name = "World"
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "name": self.name}
 ```
 
 ## URL Configuration

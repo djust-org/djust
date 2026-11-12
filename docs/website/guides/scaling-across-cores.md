@@ -41,6 +41,9 @@ class RoomView(LiveView):
         self.room = room
         self.push_scope = room
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "room": self.room}
+
 push_to_view("games.views.RoomView", handler="handle_refresh", scope=room)
 ```
 

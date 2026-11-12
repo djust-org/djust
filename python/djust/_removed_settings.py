@@ -61,6 +61,54 @@ REMOVED_VIEW_ATTRIBUTES: dict[str, str] = {
 }
 
 
+#: Instance attributes 2.0 stopped reading, which a handler assigns rather than a
+#: class declares. Each is a property on the view whose setter refuses a truthy
+#: value at the assignment (:func:`removed_instance_attribute`), so every
+#: transport refuses it the same way; without it, a WebSocket turn dropped the
+#: work silently while the HTTP fallback still ran it (#4031).
+REMOVED_INSTANCE_ATTRIBUTES: dict[str, str] = {
+    "_async_pending": (
+        "the single-task queue's readers were removed in #3515 (#3500); "
+        "queue the work with self.start_async(fn, *args, **kwargs) or decorate "
+        "the handler with @background"
+    ),
+}
+
+
+def removed_instance_attribute(name: str) -> property:
+    """A property that refuses a truthy assignment to the removed ``name``.
+
+    Reading it gives ``None``. Assigning ``None`` or another falsy value is
+    allowed, since it queues nothing (the same rule as
+    :data:`REMOVED_VIEW_ATTRIBUTES`).
+    """
+    replacement = REMOVED_INSTANCE_ATTRIBUTES[name]
+
+    def read(self: Any) -> None:
+        return None
+
+    def refuse(self: Any, value: Any) -> None:
+        if value:
+            import logging
+
+            from django.core.exceptions import ImproperlyConfigured
+
+            cls = type(self)
+            message = "%s.%s assigns self.%s, which was removed in djust 2.0: %s." % (
+                cls.__module__,
+                cls.__qualname__,
+                name,
+                replacement,
+            )
+            # An explicit-exposure view's handler failure is logged without its
+            # message (ADR-038), so the refusal is logged here too. It names
+            # only the class and the attribute, never the assigned value.
+            logging.getLogger("djust").error("%s", message)
+            raise ImproperlyConfigured(message)
+
+    return property(read, refuse, doc="Removed in djust 2.0; see REMOVED_INSTANCE_ATTRIBUTES.")
+
+
 def reject_removed_view_attributes(view: Any) -> None:
     """Raise ``ImproperlyConfigured`` if a view turns on a removed attribute.
 

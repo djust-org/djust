@@ -584,7 +584,7 @@ Every replacement works on 1.3.x, so make the change there.
 | `djust.rust_components`, and `<RustButton/>`-style tags in templates | `djust.components.ui.Button` and the other `djust.components.ui` components |
 | `StreamingMixin.stream_insert(self, ...)` and `StreamingMixin.stream_delete(self, ...)` (the async pair) | `await self.astream_insert(...)` and `await self.astream_delete(...)`. `self.stream_insert` and `self.stream_delete` are the synchronous collection streams. |
 | `djust.sse.DjustSSEEventView` and the `sse/<session_id>/event/` route | `DjustSSEMessageView` at `sse/<session_id>/message/`, which the bundled client already uses |
-| `self._async_pending = (fn, args, kwargs)` in a handler | `self.start_async(fn, *args, **kwargs)`. **This one fails silently:** over a WebSocket the work never runs and nothing is logged ([#4031](https://github.com/djust-org/djust/issues/4031)). Search your code for `_async_pending`. |
+| `self._async_pending = (fn, args, kwargs)` in a handler | `self.start_async(fn, *args, **kwargs)`, or `@background` on the handler. Assigning the tuple raises `ImproperlyConfigured` when the handler runs, on every transport ([#4031](https://github.com/djust-org/djust/issues/4031)); search your code for `_async_pending` to find them before then. |
 | `use_actors = True` | Remove the attribute. See [What does not survive](#5-what-does-not-survive). |
 
 A component mixin becomes a class attribute. This replaces

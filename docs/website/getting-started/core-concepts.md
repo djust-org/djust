@@ -34,13 +34,11 @@ def mount(self, request, **kwargs):
 
 ### `get_context_data()`
 
-Called **before every render** — both the first HTTP render and every WebSocket update. Return the template context:
+Called **before every render** — both the first HTTP render and every WebSocket update. Return the template context. The template gets what this returns and nothing else:
 
 ```python
 def get_context_data(self, **kwargs):
-    # Assign private state to public context variables
-    self.items = self._items
-    return {"items": self.items, "query": self.query}
+    return {**super().get_context_data(**kwargs), "items": self._items, "query": self.query}
 ```
 
 ### Event handlers
@@ -55,24 +53,24 @@ def do_search(self, value: str = "", **kwargs):
     # No need to call render — djust does it automatically
 ```
 
-## State: Public vs Private
+## State: What Reaches the Template
 
-djust uses a naming convention to control what gets serialized:
+An attribute you set on `self` stays on the server. It is there for your handlers on the next event, and it does not reach the template, the session or the browser unless you say so ([explicit exposure](../state/explicit-exposure.md), the default since djust 2.0):
 
-| Prefix     | Example       | Behavior                                                      |
-| ---------- | ------------- | ------------------------------------------------------------- |
-| No prefix  | `self.count`  | **Public** — included in template context, serialized for JIT |
-| `_` prefix | `self._items` | **Private** — internal state, not serialized                  |
+| You write | What it does |
+| --- | --- |
+| `self.count = 0` | Keeps a value on the view. `{{ count }}` renders empty until `get_context_data()` supplies it |
+| `get_context_data()` returns `"count": self.count` | Puts `count` in the template |
+| `count = state(0, persist="server")` | Also restores the value after a reconnect |
 
-Use private vars for QuerySets and expensive objects. Assign them to public vars in `get_context_data()`:
+A leading underscore (`self._items`) is a naming convention for internal values; it is not what keeps them out of the template. Hand a QuerySet to the template as it is, and djust serializes the fields the template reads:
 
 ```python
 def _refresh(self):
-    self._items = Item.objects.filter(active=True)  # private QuerySet
+    self._items = Item.objects.filter(active=True)
 
 def get_context_data(self, **kwargs):
-    self.items = self._items  # public — JIT-evaluated in Rust
-    return super().get_context_data(**kwargs)
+    return {**super().get_context_data(**kwargs), "items": self._items}
 ```
 
 ## The Template Engine

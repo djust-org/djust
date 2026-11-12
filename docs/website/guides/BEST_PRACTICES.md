@@ -48,7 +48,7 @@ A practical guide to building reactive LiveView applications with djust.
 
 ### Declare reactive state with `state()`
 
-Use the `state()` descriptor to declare reactive properties at the class level. State is automatically included in the template context and triggers re-renders when changed.
+Use the `state()` descriptor to declare reactive properties at the class level. A change to one triggers a re-render. The template still gets a value only from `get_context_data()`: declaring it, or setting it on `self`, does not put it there ([explicit exposure](../state/explicit-exposure.md)).
 
 ```python
 from djust import LiveView, state
@@ -63,22 +63,33 @@ class DashboardView(LiveView):
 
     def mount(self, request, **kwargs):
         self.services = get_all_statuses()
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            services=self.services,
+            selected_id=self.selected_id,
+            search_query=self.search_query,
+        )
+        return context
 ```
 
 Avoid initializing state only inside `mount()` — declaring it at the class level makes the view's state self-documenting and ensures consistent defaults.
 
-### Public vs. private variables
+### What the template sees
 
-djust follows a naming convention for what gets exposed to templates:
+A view publishes nothing by itself. `self.items` and `self._items` both stay on the server; the template gets what `get_context_data()` returns:
 
-- **Public** (`self.items`) — automatically available in template context
-- **Private** (`self._items`) — internal state, hidden from templates
+```python
+def get_context_data(self, **kwargs):
+    return {**super().get_context_data(**kwargs), "items": self._items}
+```
 
-Use private variables for intermediate data (QuerySets, caches) and only expose what the template needs.
+The leading underscore is a naming convention for intermediate data (QuerySets, caches). Hand over only what the template needs. A name the template reads and nothing supplies renders empty, with no error.
 
 ### State Serialization Rules
 
-**Critical**: LiveView state must be JSON-serializable because it's sent over WebSockets and persisted between events. Storing non-serializable objects causes mysterious errors.
+**Critical**: state that is persisted must be JSON-serializable. Under explicit exposure, the default, that means the fields you declare with `state(..., persist="server")` or `persist="client"`, and they take JSON primitives only (strings, numbers, booleans, `None`, lists and dicts of them); see [Declaring state](../state/explicit-exposure.md#declaring-state). The tables below were written for the legacy policy, where every public attribute was saved between events, and still describe a view that states `exposure_policy = "legacy"`.
 
 #### What's Serializable
 
@@ -89,7 +100,7 @@ These types are safe to store in state:
 | Primitives | `str`, `int`, `float`, `bool`, `None` | ✓ Always safe |
 | Collections | `list`, `dict`, `tuple`, `set` | ✓ Safe if contents are serializable |
 | Django models | `User`, `Product`, etc. | ✓ Serialized via JIT (Rust-backed) |
-| Django QuerySets | `Product.objects.filter(...)` | ✓ Use private → public pattern |
+| Django QuerySets | `Product.objects.filter(...)` | ✓ Hand to the template in `get_context_data()` |
 | Date/time | `datetime`, `date`, `time` | ✓ Auto-converted to ISO strings |
 | UUID | `uuid.UUID` | ✓ Auto-converted to string |
 | Decimal | `decimal.Decimal` | ✓ Auto-converted to string |
@@ -208,7 +219,6 @@ class ProductListView(LiveView):
 
         products = products.order_by(self.sort_by)
 
-        # CRITICAL: Store in private variable
         self._products = products
 
     @event_handler
@@ -219,25 +229,30 @@ class ProductListView(LiveView):
         self._refresh_products()
 
     def get_context_data(self, **kwargs):
-        """Phase 4: Move private data to public for JIT serialization."""
-        self.products = self._products
+        """Phase 4: Hand the template what it reads (the QuerySet is JIT-serialized)."""
         context = super().get_context_data(**kwargs)
+        context["products"] = self._products
+        context["search_query"] = self.search_query
         return context
 ```
 
-### Why the private → public pattern?
+### Why hand over the QuerySet itself?
 
-Assigning a QuerySet to a public variable inside `get_context_data()` lets djust's Rust JIT serializer handle the conversion. The serialization path is unmeasured — the figure previously quoted here was carried over from template-rendering claims, which measure roughly 7-11x on filter-heavy templates (README Performance).
+Putting the QuerySet in the context that `get_context_data()` returns lets djust's Rust JIT serializer handle the conversion. The serialization path is unmeasured — the figure previously quoted here was carried over from template-rendering claims, which measure roughly 7-11x on filter-heavy templates (README Performance).
 
 ```python
 # GOOD: Let Rust JIT serialize
 def get_context_data(self, **kwargs):
-    self.products = self._products       # Private → public
-    return super().get_context_data(**kwargs)  # Triggers JIT
+    return {**super().get_context_data(**kwargs), "products": self._products}
 
-# BAD: Bypasses JIT
+# BAD: Renders empty, nothing supplies `products`
 def mount(self, request, **kwargs):
-    self.products = Product.objects.all()  # Direct public assignment
+    self.products = Product.objects.all()
+
+# BAD: The 1.x idiom publishes nothing now
+def get_context_data(self, **kwargs):
+    self.products = self._products
+    return super().get_context_data(**kwargs)
 
 # BAD: Disables JIT
 def _refresh(self):
@@ -396,6 +411,7 @@ class MyView(LiveView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+        ctx["search_query"] = self.search_query
         if self.search_query:
             ctx["results"] = search_items(self.search_query)
         return ctx
@@ -427,7 +443,7 @@ class MyView(LiveView):
 
 ## Computed Properties
 
-Use `@computed` for values derived from state. They're available in templates as properties — no `()` needed.
+Use `@computed` for values derived from state. Read one as an attribute (`self.active_count`, no `()`), and hand it to the template in `get_context_data()` like any other value.
 
 ```python
 from djust import computed, state
@@ -443,6 +459,13 @@ class DashboardView(LiveView):
     def percentage_active(self):
         total = len(self.services)
         return (self.active_count / total * 100) if total else 0
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["services"] = self.services
+        context["active_count"] = self.active_count
+        context["percentage_active"] = self.percentage_active
+        return context
 ```
 
 ```html
@@ -507,7 +530,7 @@ push_to_view("myapp.views.DashboardView", state={"services": get_all_statuses()}
 
 ### 1. JIT Serialization (most important)
 
-Always use the private → public pattern for QuerySets. See [The LiveView Lifecycle](#the-liveview-lifecycle) above.
+Always hand QuerySets to the template as QuerySets, in `get_context_data()`. See [The LiveView Lifecycle](#the-liveview-lifecycle) above.
 
 ### 2. Keyed lists with `data-key`
 
@@ -546,6 +569,9 @@ class ChatView(LiveView):
 
     def mount(self, request, **kwargs):
         self.messages = Message.objects.all()[:50]
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "messages": self.messages}
 
     @event_handler
     def send_message(self, content="", **kwargs):
@@ -927,6 +953,11 @@ class MyView(LiveView):
     show_modal = state(default=False)
     modal_data = state(default={})
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(show_modal=self.show_modal, modal_data=self.modal_data)
+        return context
+
     @event_handler
     def open_modal(self, item_id="", **kwargs):
         self.modal_data = get_item_data(item_id)
@@ -954,6 +985,9 @@ class MyView(LiveView):
 ```python
 class MyView(LiveView):
     active_tab = state(default="overview")
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "active_tab": self.active_tab}
 
     @event_handler
     def switch_tab(self, tab_name="", **kwargs):
@@ -1012,6 +1046,9 @@ System check `djust.T010` will warn if you use `dj-click` with `data-tab` attrib
 ```python
 class MyView(LiveView):
     toast_message = state(default="")
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "toast_message": self.toast_message}
 
     @event_handler
     def save_item(self, **kwargs):

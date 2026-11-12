@@ -423,6 +423,9 @@ class MyView(PresenceMixin, LiveView):
         self.track_presence()  # Only needed for live browser sessions
         self._seed()
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "items": self.items}
+
     def api_mount(self, request):
         self._seed()  # Skip the presence tracking
 

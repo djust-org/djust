@@ -510,16 +510,16 @@ async def test_uncalled_partial_does_not_hide_websocket_root_or_events(tmp_path)
         try:
             connected, _ = await comm.connect()
             assert connected
-            await comm.receive_json_from(timeout=5)
+            await comm.receive_json_from()
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}.PartialRootSocketView", "url": "/"}
             )
-            mount = await comm.receive_json_from(timeout=5)
+            mount = await comm.receive_json_from()
             assert mount.get("type") == "mount", mount
             assert "LEGITIMATE" in str(mount) and "HIDDEN" not in str(mount)
             assert not events
             await comm.send_json_to({"type": "event", "event": "change", "params": {}, "ref": 1})
-            reply = await comm.receive_json_from(timeout=5)
+            reply = await comm.receive_json_from()
             assert reply.get("type") not in {"error", "view_refused", "close"}, reply
             assert events == ["called"]
         finally:

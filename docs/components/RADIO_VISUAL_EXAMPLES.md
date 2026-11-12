@@ -234,6 +234,7 @@ class SettingsView(LiveView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['theme_radio'] = self.theme_radio
+        context["saved_theme"] = self.saved_theme
         return context
 
     @event_handler()
