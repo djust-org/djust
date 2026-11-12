@@ -4170,9 +4170,10 @@ fn record_item_key_filter(
         .is_some_and(|c| c.is_alphabetic() || c == '_')
     {
         // `dictsort:key` names its field at render time (#3910). No static
-        // pass can say which, so each item is asked for WHOLE: the row the
-        // JIT builds is the full row plus whatever else the template reads.
-        record_marked_read(head, WHOLE_ROW_MARK, variables);
+        // pass can say which, so the VARIABLE is filed on the list and the
+        // JIT, which renders with the context in hand, resolves it to the one
+        // field the sort reads.
+        record_marked_read(head, &format!("{WHOLE_ROW_MARK}{arg}"), variables);
     }
 }
 
@@ -4211,9 +4212,10 @@ const ITEM_WHOLE_MARK: char = '\u{3}';
 /// The value at a path is ITERATED (`{% for %}`, `{% regroup %}`). A whole
 /// read of the same path is then the list, not a row (#3911).
 const ITERATED_MARK: char = '\u{4}';
+const ITERATED_MARK_STR: &str = "\u{4}";
 
-/// Each item of the iterable at a path is needed as a whole ROW: a sort key
-/// only known at render time (`dictsort:key`, #3910).
+/// Each item of the iterable at a path is sorted by a key only known at render
+/// time (`dictsort:key`, #3910). Followed by the context VARIABLE that names it.
 const WHOLE_ROW_MARK: char = '\u{5}';
 
 /// Every mark this extractor files in the path channel; none is a path.
@@ -4236,9 +4238,11 @@ pub const ROW_TEXT_PATH: &str = "__str__";
 /// describe its items (#3911). The Python JIT decides, by the value's type.
 pub const VALUE_TEXT_PATH: &str = "__djust_text__";
 
-/// The path asking for an item's WHOLE row beside the fields the template
-/// names (#3910). Only filed at a root; the Python JIT answers it.
-pub const WHOLE_ROW_PATH: &str = "*";
+/// The prefix of a path naming a sort key held in a context VARIABLE
+/// (`*key` for `dictsort:key`, #3910). Only filed at a root, beside field
+/// reads. The Python JIT resolves the variable from the context it renders
+/// with and serializes the one field it names, as `dictsort:'<value>'` would.
+pub const VARIABLE_KEY_PREFIX: &str = "*";
 
 fn is_marked(path: &str) -> bool {
     path.contains(PATH_MARKS)
@@ -4271,7 +4275,7 @@ fn merge_without_whole_reads(
 /// [`record_item_key_read`] files a key there. A literal head files nothing.
 fn record_marked_read(
     head: &str,
-    mark: char,
+    mark: &str,
     variables: &mut std::collections::HashMap<String, Vec<String>>,
 ) {
     let head = crate::filter_lexer::split_pipes(head)
@@ -4296,7 +4300,7 @@ fn record_marked_read(
 }
 
 fn record_iterated(head: &str, variables: &mut std::collections::HashMap<String, Vec<String>>) {
-    record_marked_read(head, ITERATED_MARK, variables);
+    record_marked_read(head, ITERATED_MARK_STR, variables);
 }
 
 /// `(target, source)` of `{% regroup source by attr as target %}`.
@@ -4356,7 +4360,8 @@ fn transfer_regroup_reads(
 ///   `{{ user }}` beside `{{ user.pk }}`) becomes `P.__str__` on the same
 ///   condition, unless `P` is also iterated: then the whole read is of the
 ///   list (`{{ users|length }}`), not of a row.
-/// * [`WHOLE_ROW_MARK`] at the root beside field reads becomes `*`.
+/// * [`WHOLE_ROW_MARK`]`<variable>` at the root beside field reads becomes
+///   `*<variable>` ([`VARIABLE_KEY_PREFIX`]).
 /// * [`ITERATED_MARK`] only informs the rule above and is dropped.
 fn resolve_whole_reads(paths: &mut Vec<String>) {
     if !paths.iter().any(|path| is_marked(path)) {
@@ -4376,6 +4381,15 @@ fn resolve_whole_reads(paths: &mut Vec<String>) {
         .collect();
     let mut settled: Vec<String> = Vec::new();
     for path in &marked {
+        if let Some((prefix, variable)) = path.split_once(WHOLE_ROW_MARK) {
+            // Only at the root. Filed even when the rows are read whole: the
+            // JIT still has to keep a METHOD the variable names out of a whole
+            // row (#3919), which would otherwise sort by the called value.
+            if prefix.is_empty() && !variable.is_empty() {
+                settled.push(format!("{VARIABLE_KEY_PREFIX}{variable}"));
+            }
+            continue;
+        }
         let Some(mark) = path.chars().last() else {
             continue;
         };
@@ -4386,13 +4400,10 @@ fn resolve_whole_reads(paths: &mut Vec<String>) {
         let keep = match mark {
             ITEM_WHOLE_MARK => read_by_field(prefix),
             WHOLE_READ_MARK => !iterated.contains(prefix) && read_by_field(prefix),
-            WHOLE_ROW_MARK => prefix.is_empty() && read_by_field(prefix),
             _ => false,
         };
         if keep {
-            let public = if mark == WHOLE_ROW_MARK {
-                WHOLE_ROW_PATH
-            } else if mark == WHOLE_READ_MARK && prefix.is_empty() {
+            let public = if mark == WHOLE_READ_MARK && prefix.is_empty() {
                 // The ROOT read whole: the value itself when it is one model,
                 // the list when it is a list (`{{ rows|pprint }}`). Only the
                 // JIT knows which, so it gets its own name (#3911).
@@ -4431,7 +4442,7 @@ fn resolve_item_key_paths(paths: &mut Vec<String>) {
         .iter()
         .filter_map(|path| path.split_once(ITEM_KEY_MARK))
         .filter(|(list_path, _)| {
-            list_path.ends_with("all.")
+            (*list_path == "all." || list_path.ends_with(".all."))
                 || plain
                     .iter()
                     .any(|other| !is_marked(other) && other.starts_with(list_path))
@@ -4440,6 +4451,18 @@ fn resolve_item_key_paths(paths: &mut Vec<String>) {
         .collect();
     plain.extend(kept);
     *paths = plain;
+}
+
+/// [`extract_from_expression`] for a CONDITION: a condition tests a value; it
+/// does not print it, so a bare name in it is not a whole read (#3911).
+/// `{% if user %}{{ user.name }}` must not ask for `str(user)`.
+fn extract_from_condition(
+    expr: &str,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    let mut local = std::collections::HashMap::new();
+    extract_from_expression(expr, &mut local);
+    merge_without_whole_reads(local, variables);
 }
 
 /// Extract variable paths from an expression (like in if tags)
@@ -4457,18 +4480,6 @@ fn resolve_item_key_paths(paths: &mut Vec<String>) {
 ///
 /// **Impact**: Low - false positives don't break functionality
 /// **Fix**: Phase 2 will implement full expression grammar parsing
-/// [`extract_from_expression`] for a CONDITION: a condition tests a value; it
-/// does not print it, so a bare name in it is not a whole read (#3911).
-/// `{% if user %}{{ user.name }}` must not ask for `str(user)`.
-fn extract_from_condition(
-    expr: &str,
-    variables: &mut std::collections::HashMap<String, Vec<String>>,
-) {
-    let mut local = std::collections::HashMap::new();
-    extract_from_expression(expr, &mut local);
-    merge_without_whole_reads(local, variables);
-}
-
 fn extract_from_expression(
     expr: &str,
     variables: &mut std::collections::HashMap<String, Vec<String>>,

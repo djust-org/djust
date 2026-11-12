@@ -284,12 +284,17 @@ the rows of a nested list cross as their text, which carries no field (#3918).
 filed on the regroup's source (#3920).
 
 A bare argument (`dictsort:key`) is a context variable whose value is the field,
-which a static pass cannot know. The list is filed with `*`, "the whole row
-beside the fields named", and the Python JIT lays each row over the item's
-own non-relation columns, taken from the floored whole-row serialization
-(#3910). Nothing the model computes is added (no `get_*()` result, no
-`@property`), so a variable key naming a property, or a dotted path through a
-relation, still renders an empty loop. Only a top-level list gets `*`.
+which a static pass cannot know. The list is filed with `*key`, the variable's
+name, and the Python JIT resolves it from the context it renders with and adds
+the ONE column it names to the row (#3910); a key that changes between renders
+serializes its own column. The value is a key only when it names one of the
+model's own non-relation columns: a property, a `get_*()` method, a relation
+path, a private or numeric name resolves to no column and the loop renders
+empty. The serialization floor still decides whether the column ships, so a
+floored or `djust_exclude_fields` column also renders an empty loop where
+Django sorts. Only a top-level list gets `*key`; it is filed even when the rows
+are read whole, so that a method the variable names is kept out of the whole row
+(Django's `dictsort` cannot order bound methods and renders an empty loop).
 
 A key that is not a plain dotted path (an empty segment, a segment starting with
 `_`) is ignored, as Django refuses it. A dotted key is a path, resolved one part

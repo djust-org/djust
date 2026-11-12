@@ -4435,10 +4435,26 @@ fn compare_sort_values(a_val: &Value, b_val: &Value) -> std::cmp::Ordering {
             // catches the `TypeError` and returns `""` where this returns the
             // list unsorted, a divergence that predates this variant and is
             // not this fix's (#1079).
+            // A pair the engine has no comparison for asks Python's own `<`
+            // (a `UUID`, a lazy string), as `sorted()` does (#3919 review). A
+            // pair Python refuses never reaches here: `keys_are_orderable`
+            // turned the whole sort into Django's `""` first.
             (Value::Encoded(a_enc), Value::Encoded(b_enc)) => {
                 crate::renderer::encoded_partial_cmp(a_enc, b_enc)
+                    .or_else(|| a_enc.python_order(b_enc).and_then(|order| order.ok()))
                     .unwrap_or(std::cmp::Ordering::Equal)
             }
+            // A tuple or list key orders element by element, then by length,
+            // as Python's sequence comparison does.
+            (
+                Value::List(a_items) | Value::Tuple(a_items),
+                Value::List(b_items) | Value::Tuple(b_items),
+            ) => a_items
+                .iter()
+                .zip(b_items.iter())
+                .map(|(a, b)| compare_sort_values(a, b))
+                .find(|ordering| *ordering != std::cmp::Ordering::Equal)
+                .unwrap_or_else(|| a_items.len().cmp(&b_items.len())),
             // Any pair that is numeric on BOTH sides. Two deltas, not one:
             // a Decimal column used to sort as all-Equal, i.e. not at all
             // (#2214) — and so did a MIXED int/float column, since the arms
@@ -4459,6 +4475,24 @@ fn compare_sort_values(a_val: &Value, b_val: &Value) -> std::cmp::Ordering {
             },
         }
     }
+}
+
+/// Does Python's `a < b` raise for two sequences? It walks to the first pair of
+/// elements that are not equal and compares those; `None` equals `None`.
+fn sequence_comparison_raises(a: &[Value], b: &[Value]) -> bool {
+    for (x, y) in a.iter().zip(b.iter()) {
+        if matches!((x, y), (Value::None, Value::None)) {
+            continue;
+        }
+        let pair = [x.clone(), y.clone()];
+        if !keys_are_orderable(&pair) {
+            return true;
+        }
+        if compare_sort_values(x, y) != std::cmp::Ordering::Equal {
+            return false;
+        }
+    }
+    false
 }
 
 fn sort_number(value: &Value) -> Option<f64> {
@@ -4520,66 +4554,72 @@ fn dictsort_by_key(items: &[Value], key: &str, reverse: bool) -> Option<Vec<Valu
 ///
 /// Django's `dictsort` is `sorted(value, key=...)` inside `except (TypeError,
 /// AttributeError): return ""`, so keys Python cannot order render an EMPTY
-/// loop: `None` (a nullable column, `None < None` raises), a dict, a model, a
-/// bound method, or a column mixing text and numbers. djust ordered every such
-/// pair as Equal and returned the list unsorted (#3919, and the `None` column
-/// the #3911 sweep found). A comparison sort must compare at least one pair
-/// across two classes that cannot be compared, and every pair that involves a
-/// value that cannot be compared with itself, so with two or more keys the
-/// answer is the class rule below, whatever order the items come in. One key is
-/// never compared, as in Python.
+/// loop. Refused here are only the kinds Python really refuses: `None` beside
+/// any value (a nullable column, `None < None` raises), a dict, text beside a
+/// number, and a pair of carried objects for which Python's own `<` RAISES
+/// (two models, two managers, a `date` beside a `datetime`) (#3919, and the
+/// nullable column the #3911 sweep found). A method or manager key never gets
+/// here as a value: `live_attr` and the JIT refuse it earlier. A comparison
+/// sort compares at least one pair across two classes that cannot be compared,
+/// so with two or more keys the class rule is the answer whatever the item
+/// order; one key is never compared, as in Python.
 ///
-/// Sequences (`List`, `Tuple`, ...) and a deferred value keep the previous
-/// answer (orderable): Python compares them element by element, which this
-/// does not model.
+/// Anything the engine merely has no comparison for is NOT refused: a pair
+/// with no live object to ask keeps its previous answer (shown, in input
+/// order), so a key Django sorts is never turned from "rows shown" into
+/// "nothing shown".
 fn keys_are_orderable(keys: &[Value]) -> bool {
-    #[derive(PartialEq)]
-    enum Class {
-        Text,
-        Number,
-        Carried,
-        Other,
+    if keys.len() < 2 {
+        return true;
     }
-    fn class(value: &Value) -> Option<Class> {
-        match value {
-            Value::String(_) | Value::SafeString(_) => Some(Class::Text),
+    let mut text = false;
+    let mut number = false;
+    for key in keys {
+        match key {
+            Value::Missing | Value::None | Value::Object(_) | Value::DictView { .. } => {
+                return false
+            }
+            Value::String(_) | Value::SafeString(_) => text = true,
             Value::Bool(_)
             | Value::Integer(_)
             | Value::Float(_)
             | Value::Decimal(_)
-            | Value::BigInt(_) => Some(Class::Number),
-            Value::Encoded(_) => Some(Class::Carried),
-            Value::Missing | Value::None | Value::Object(_) | Value::DictView { .. } => None,
-            _ => Some(Class::Other),
+            | Value::BigInt(_) => number = true,
+            _ => {}
         }
     }
-    if keys.len() < 2 {
-        return true;
-    }
-    let mut classes = Vec::with_capacity(keys.len());
-    for key in keys {
-        match class(key) {
-            Some(c) => classes.push(c),
-            None => return false,
-        }
-    }
-    // Text beside a number raises. A carried object (a datetime, a lazy string)
-    // beside anything else is left as it was: which of those Python orders
-    // depends on the object, which this does not ask.
-    let text = classes.contains(&Class::Text);
-    let number = classes.contains(&Class::Number);
     if text && number {
         return false;
     }
-    // Two carried objects ask Python's own ordering (#2471's comparison): two
-    // models, two bound methods or two managers refuse it.
+    // Two sequences compare element by element and raise at the first pair of
+    // elements that differ and cannot be ordered (`(1, 'a') < (1, 2)`). Asked of
+    // every pair (of the first key against every other past 64 keys).
+    let sequences: Vec<&Vec<Value>> = keys
+        .iter()
+        .filter_map(|key| match key {
+            Value::List(items) | Value::Tuple(items) => Some(items),
+            _ => None,
+        })
+        .collect();
+    for (i, a) in sequences.iter().enumerate() {
+        let others = if sequences.len() <= 64 {
+            &sequences[i + 1..]
+        } else if i == 0 {
+            &sequences[1..]
+        } else {
+            break;
+        };
+        if others.iter().any(|b| sequence_comparison_raises(a, b)) {
+            return false;
+        }
+    }
     let mut carried = keys.iter().filter_map(|key| match key {
         Value::Encoded(e) => Some(e),
         _ => None,
     });
     if let Some(first) = carried.next() {
         for other in carried {
-            if crate::renderer::encoded_partial_cmp(first, other).is_none() {
+            if let Some(Err(())) = first.python_order(other) {
                 return false;
             }
         }

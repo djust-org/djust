@@ -12,8 +12,8 @@ them. The extractor could not say three things, and each was a wrong render:
   ``__djust_text__`` instead: the JIT makes it ``__str__`` for one model and drops it for a list
   (``{{ rows|pprint }}`` prints the list, not each row).
 * **"a field named at render time"** (#3910). ``dictsort:key`` names its field through a context
-  variable. The list is now filed with ``*`` (the whole row beside the named fields), which the
-  Python JIT answers with the floored whole-row serialization.
+  variable. The list is now filed with ``*key``; the Python JIT resolves ``key`` from the render's
+  context and adds the ONE column it names (floored, plain columns only).
 * **"a field read through ``{% regroup %}``'s ``.list``"** (#3920): those reads are moved onto
   the regroup's source.
 
@@ -51,8 +51,47 @@ from python.tests.test_queryset_all_traversal_3777 import (  # noqa: F401
     _django_render,
     _liveview_render,
     _raw_render,
-    world,
 )
+
+# ---------------------------------------------------------------------------------------------
+# The world: three users whose order differs from their pk order in EVERY sortable column,
+# so a sort that does nothing cannot agree with Django by accident.
+# ---------------------------------------------------------------------------------------------
+#: (username, email, first_name, is_active, date_joined day, groups) in creation (pk) order.
+PEOPLE = [
+    ("cara", "b@example.com", "Zed", True, 2, ("staff", "ops")),
+    ("abe", "c@example.com", "Amy", False, 3, ("staff",)),
+    ("bob", "a@example.com", "Mia", True, 1, ()),
+]
+
+
+@pytest.fixture
+def world(db):
+    import datetime
+
+    from django.utils import timezone
+
+    groups = {name: Group.objects.create(name=name) for name in ("staff", "ops")}
+    for username, email, first, active, day, member_of in PEOPLE:
+        user = User.objects.create(
+            username=username,
+            email=email,
+            first_name=first,
+            is_active=active,
+            date_joined=timezone.make_aware(datetime.datetime(2026, 1, day, 12, 0)),
+        )
+        user.groups.add(*(groups[name] for name in member_of))
+
+
+def _pk_order_is_not_any_sort_order() -> None:
+    """The fixture's own guard: for every column a test sorts by, the sorted order differs
+    from the pk order in both directions."""
+    rows = list(User.objects.order_by("pk").values("pk", "username", "email", "first_name"))
+    pks = [r["pk"] for r in rows]
+    for column in ("username", "email", "first_name"):
+        ordered = [r["pk"] for r in sorted(rows, key=lambda r: r[column])]
+        assert ordered != pks and ordered != pks[::-1], column
+
 
 ENTRIES = [
     pytest.param(_backend_render, id="backend"),
@@ -154,13 +193,13 @@ class TestTheExtractorSaysWhatTheRowNeeds:
             pytest.param(
                 "{% for u in users|dictsort:key %}{{ u.pk }}{% endfor %}",
                 "users",
-                ["*", "pk"],
-                id="variable-sort-key-asks-the-whole-row",
+                ["*key", "pk"],
+                id="variable-sort-key-names-its-variable",
             ),
             pytest.param(
                 "{% for u in users|dictsort:key %}{{ u }}{% endfor %}",
                 "users",
-                [],
+                ["*key"],
                 id="variable-sort-key-over-whole-rows",
             ),
             pytest.param(
@@ -189,6 +228,19 @@ class TestTheExtractorSaysWhatTheRowNeeds:
             "{% endfor %}{% endfor %}"
         )
         assert "*" not in " ".join(_paths(source)["users"])
+
+    def test_template_paths_keep_the_jit_markers_internal(self) -> None:
+        """``template_paths()`` is public (``serialize_for_template``, the unsupplied-name
+        diagnostic, ``djust_audit``): a whole read stays an empty list there (#3911/#3910)."""
+        from djust.mixins.jit import public_template_paths
+
+        source = (
+            "{{ card }}{{ card.title }}{% for u in users|dictsort:key %}{{ u }}{{ u.pk }}"
+            "{% endfor %}"
+        )
+        public = public_template_paths(_rust.extract_template_variables(source))
+        assert public["card"] == ["title"]
+        assert public["users"] == ["pk"]
 
     def test_item_key_only_reads(self) -> None:
         source = (
@@ -242,6 +294,7 @@ class TestRowsRenderLikeDjango:
     @pytest.mark.parametrize("render", ENTRIES)
     @pytest.mark.parametrize("name,source", ROW_CASES, ids=[c[0] for c in ROW_CASES])
     def test_rows(self, world, render, shape, name, source) -> None:
+        _pk_order_is_not_any_sort_order()
         context = {"users": _users(shape), "key": "username"}
         got, want = _agrees(render, source, context)
         assert got == want, (name, shape)
@@ -250,7 +303,7 @@ class TestRowsRenderLikeDjango:
     def test_a_single_model_read_whole_and_by_field(self, world, render) -> None:
         got, want = _agrees(render, "{{ user }}{{ user.pk }}", {"user": User.objects.first()})
         assert got == want
-        assert want.startswith("u0")
+        assert want.startswith("cara")
 
     @pytest.mark.parametrize("render", ENTRIES)
     def test_the_method_key_is_empty_as_in_django(self, world, render) -> None:
@@ -263,7 +316,7 @@ class TestRowsRenderLikeDjango:
         """Only a key NOTHING else reads is left out of the row; a printed method is kept."""
         source = "{% for u in users %}[{{ u.get_username }}]{% endfor %}"
         got, want = _agrees(render, source, {"users": _users("QuerySet")})
-        assert got == want == "[u0][u1][u2]"
+        assert got == want == "[cara][abe][bob]"
 
     @pytest.mark.parametrize("render", ENTRIES)
     def test_a_dotted_key_over_dict_rows(self, render) -> None:
@@ -360,10 +413,103 @@ class TestAParentTemplatesReadsAreReads:
 
 
 # ---------------------------------------------------------------------------------------------
+# Keys the engine has no comparison of its own for: Python's ordering decides (#3919 review)
+# ---------------------------------------------------------------------------------------------
+def _key_kinds() -> list:
+    import datetime
+    import uuid
+    from decimal import Decimal
+
+    from django.utils.translation import gettext_lazy
+
+    u = [uuid.UUID(int=n) for n in (7, 3, 9)]
+    day = datetime.date(2026, 1, 2)
+    moment = datetime.datetime(2026, 1, 1, 12, 0)
+    return [
+        pytest.param([u[0], u[1], u[2]], id="uuid"),
+        pytest.param([gettext_lazy("pear"), gettext_lazy("apple"), gettext_lazy("fig")], id="lazy"),
+        pytest.param([Decimal("2.5"), 1.25, Decimal("3")], id="decimal-beside-float"),
+        pytest.param([day, moment, day], id="date-beside-datetime"),
+        pytest.param(
+            [datetime.date(2026, 3, 1), datetime.date(2026, 1, 1), datetime.date(2026, 2, 1)],
+            id="dates",
+        ),
+        pytest.param([(2, "b"), (1, "z"), (2, "a")], id="tuples"),
+        pytest.param([[2, 1], [1], [2]], id="lists"),
+        pytest.param([(1, "a"), (1, 2)], id="tuples-python-cannot-order"),
+    ]
+
+
+class TestKeysTheEngineHasNoComparisonFor:
+    """A sort over values the engine has no comparison of its own for asks Python's, as
+    ``sorted()`` does: shown and sorted where Django sorts, empty only where Python raises."""
+
+    @pytest.mark.parametrize("render", ENTRIES)
+    @pytest.mark.parametrize("keys", _key_kinds())
+    def test_the_sort_agrees_with_django(self, render, keys) -> None:
+        rows = [{"pk": i + 1, "k": k} for i, k in enumerate(keys)]
+        for name in ("dictsort", "dictsortreversed"):
+            source = "{% for r in rows|" + name + ":'k' %}{{ r.pk }},{% endfor %}"
+            got = _outcome(lambda: _clean(render(source, {"rows": rows})))
+            want = _outcome(lambda: _django_render(source, {"rows": rows}))
+            assert got == want, (name, keys)
+
+
+# ---------------------------------------------------------------------------------------------
+# A variable sort key carries ONE column (#3910 review)
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.django_db
+class TestAVariableKeyCarriesOneColumn:
+    SOURCE = "{% for u in users|dictsort:key %}{{ u.pk }},{% endfor %}"
+
+    def _backend_rows(self, key: str) -> list:
+        from djust.template import DjustTemplateBackend
+
+        backend = DjustTemplateBackend(
+            params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}
+        )
+        template = backend.from_string(self.SOURCE)
+        return template._jit_serialize_queryset(User.objects.order_by("pk"), "users", {"key": key})
+
+    def test_the_row_holds_the_key_column_and_what_the_template_reads(self, world) -> None:
+        rows = self._backend_rows("email")
+        assert {frozenset(row) for row in rows} == {frozenset({"pk", "email"})}
+
+    @pytest.mark.parametrize(
+        "key",
+        ["get_full_name", "groups", "password", "_state", "username.nope", "3", ""],
+    )
+    def test_a_key_that_is_not_a_plain_column_adds_nothing(self, world, key) -> None:
+        """A method, a manager, a floored column, a private or dotted or numeric name: no
+        column is added, and the sort renders the empty loop (the fail-closed side)."""
+        rows = self._backend_rows(key)
+        assert {frozenset(row) for row in rows} == {frozenset({"pk"})}
+
+    @pytest.mark.parametrize("render", ENTRIES)
+    @pytest.mark.parametrize("shape", SHAPES)
+    def test_a_key_that_changes_between_renders_re_serializes(self, world, render, shape) -> None:
+        for key in ("username", "email", "first_name", "username"):
+            context = {"users": _users(shape), "key": key}
+            got, want = _agrees(render, self.SOURCE, context)
+            assert got == want, key
+
+    @pytest.mark.parametrize("render", [_backend_render, _liveview_render])
+    def test_a_floored_column_renders_empty_where_django_sorts(self, world, render) -> None:
+        """The documented difference: the serialization floor keeps ``password`` off the
+        row, so the sort finds no key; Django sorts by the hash."""
+        context = {"users": _users("QuerySet"), "key": "password"}
+        got, want = _agrees(render, self.SOURCE, context)
+        assert got == "" and want.count(",") == 3
+
+
+# ---------------------------------------------------------------------------------------------
 # A sweep over key shapes x row reads, every entry, every shape
 # ---------------------------------------------------------------------------------------------
 KEYS = [
     "'username'",
+    "'email'",
+    "'first_name'",
+    "'date_joined'",
     "'pk'",
     "'is_active'",
     "'last_login'",
@@ -372,6 +518,8 @@ KEYS = [
     "'nope'",
     "'username.nope'",
     "key",
+    "key2",
+    "method_key",
     "missing_var",
 ]
 BODIES = [
@@ -390,7 +538,12 @@ class TestKeyShapeSweep:
         mismatches = []
         for shape, key, body in itertools.product(SHAPES, KEYS, BODIES):
             source = "{% for u in users|dictsort:" + key + " %}" + body + "{% endfor %}"
-            context = {"users": _users(shape), "key": "username"}
+            context = {
+                "users": _users(shape),
+                "key": "username",
+                "key2": "email",
+                "method_key": "get_full_name",
+            }
             got = _outcome(lambda: _clean(render(source, dict(context))))
             want = _outcome(lambda: _django_render(source, dict(context)))
             if got != want:

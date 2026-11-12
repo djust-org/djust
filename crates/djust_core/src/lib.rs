@@ -1472,6 +1472,33 @@ impl Encoded {
         }
         Some((a.hi, a.lo).cmp(&(b.hi, b.lo)))
     }
+
+    /// Python's own `<` between the two live objects, as `sorted()` asks it: `dictsort` over
+    /// keys the engine has no comparison for (a `UUID`, a lazy string, a `date` beside a
+    /// `datetime`) (#3919 review).
+    ///
+    /// * `None`: either side has no live object to ask, so nothing is known; the caller keeps
+    ///   its previous answer.
+    /// * `Some(Err(()))`: Python raised (`TypeError` for a pair it cannot order: two models,
+    ///   two managers, a `date` beside a `datetime`). Django's `dictsort` then renders `""`.
+    /// * `Some(Ok(ordering))`: `Less` when `self < other`, `Greater` when `other < self`,
+    ///   `Equal` otherwise.
+    pub fn python_order(
+        &self,
+        other: &Encoded,
+    ) -> Option<std::result::Result<std::cmp::Ordering, ()>> {
+        let (a, b) = (self.live.as_ref()?, other.live.as_ref()?);
+        Some(Python::attach(|py| {
+            let (a, b) = (a.bind(py), b.bind(py));
+            if a.lt(b).map_err(|_| ())? {
+                return Ok(std::cmp::Ordering::Less);
+            }
+            if b.lt(a).map_err(|_| ())? {
+                return Ok(std::cmp::Ordering::Greater);
+            }
+            Ok(std::cmp::Ordering::Equal)
+        }))
+    }
 }
 
 /// Untagged in human-readable formats, with ONE exception (#2214).

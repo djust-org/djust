@@ -817,14 +817,10 @@ class TestOneComparisonChokepoint:
 
     #: file -> CALLS of the wrapper, definition excluded. The three sinks:
     #: `values_equal` (through `encoded_equal`), `try_compare`, and
-    #: `compare_sort_values`; plus `keys_are_orderable`, which asks the same
-    #: comparison whether `dictsort` may order two carried keys at all (#3919),
-    #: covered by `test_jit_row_shape_differential_3911.py` (`manager-key`,
-    #: `TestKeyShapeSweep`).
+    #: `compare_sort_values`.
     EXPECTED_WRAPPER_CALLERS = {
         "crates/djust_templates/src/renderer.rs": 2,  # encoded_equal, try_compare
-        # compare_sort_values, keys_are_orderable
-        "crates/djust_templates/src/filters.rs": 2,
+        "crates/djust_templates/src/filters.rs": 1,  # compare_sort_values
     }
 
     def _calls(self) -> dict[str, int]:

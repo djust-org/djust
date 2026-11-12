@@ -218,12 +218,12 @@ class TestExtraction:
         ]
 
     # -- a key that is not a literal field name ---------------------------------------------
-    def test_a_variable_key_asks_for_the_whole_row(self) -> None:
+    def test_a_variable_key_names_the_variable_for_the_jit(self) -> None:
         """``dictsort:key`` takes its field from the context at render time. A static pass cannot
-        know it: the variable is filed, no field is invented, and the list asks for the whole
-        row (``*``) beside the fields it reads (#3910)."""
+        know it: the variable is filed, no field is invented, and the list carries ``*key`` so
+        the JIT resolves the variable and adds that one column (#3910)."""
         paths = _paths("{% for u in users|dictsort:key %}{{ u.pk }}{% endfor %}")
-        assert paths["users"] == ["*", "pk"]
+        assert paths["users"] == ["*key", "pk"]
         assert paths["key"] == []
 
     @pytest.mark.parametrize(
