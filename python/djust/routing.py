@@ -104,15 +104,84 @@ class DjustOriginValidator:
         return await self.application(scope, receive, send)
 
 
+class _AnonymousVisitor:
+    """The anonymous user of a stack with no authentication.
+
+    Used only when ``django.contrib.auth`` is not installed (its
+    ``AnonymousUser`` cannot be imported then). It answers what djust and
+    template code ask an anonymous user, and grants nothing.
+    """
+
+    id = None
+    pk = None
+    username = ""
+    is_active = False
+    is_staff = False
+    is_superuser = False
+    is_authenticated = False
+    is_anonymous = True
+
+    def __str__(self) -> str:
+        return "AnonymousUser"
+
+    def get_username(self) -> str:
+        return ""
+
+    def has_perm(self, perm: Any, obj: Any = None) -> bool:
+        return False
+
+    def has_perms(self, perm_list: Any, obj: Any = None) -> bool:
+        return False
+
+    def has_module_perms(self, module: Any) -> bool:
+        return False
+
+
+def _anonymous_user() -> Any:
+    from django.apps import apps
+
+    if apps.is_installed("django.contrib.auth"):
+        from django.contrib.auth.models import AnonymousUser
+
+        return AnonymousUser()
+    return _AnonymousVisitor()
+
+
+class _AnonymousUserMiddleware:
+    """Mark a connection that no authentication middleware handled as anonymous.
+
+    :func:`DjustMiddlewareStack` authenticates nobody, so every visitor behind
+    it is anonymous. Stating that in the scope gives a view the same
+    ``request.user`` it gets over HTTP for a signed-out visitor, and gives an
+    explicit-exposure mount the principal it binds its state to (it refuses a
+    request with no ``user`` at all). It never signs anyone in: a ``user``
+    already in the scope is left alone, and a missing one becomes anonymous.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> Any:
+        if "user" not in scope:
+            scope = dict(scope, user=_anonymous_user())
+        return await self.inner(scope, receive, send)
+
+
 def DjustMiddlewareStack(inner: Any, *, validate_origin: bool = True) -> Any:
     """
     ASGI middleware stack for djust that doesn't require django.contrib.auth.
 
     Use this instead of ``channels.auth.AuthMiddlewareStack`` when your app
     doesn't need authentication. It wraps the inner application with session
-    middleware (so ``request.session`` works, but ``request.user`` is not
-    populated) and, by default, with :class:`DjustOriginValidator` to prevent
-    Cross-Site WebSocket Hijacking (CSWSH, #653).
+    middleware (so ``request.session`` works) and, by default, with
+    :class:`DjustOriginValidator` to prevent Cross-Site WebSocket Hijacking
+    (CSWSH, #653).
+
+    Nobody is signed in on this stack, and it says so: ``request.user`` is an
+    anonymous user (Django's ``AnonymousUser`` when ``django.contrib.auth`` is
+    installed, an equivalent stand-in otherwise). A view with
+    ``login_required`` or ``permission_required`` is refused behind it, as
+    before. A ``user`` an outer middleware already put in the scope is kept.
 
     Args:
         inner: The ASGI application to wrap (typically a ``URLRouter``).
@@ -142,7 +211,7 @@ def DjustMiddlewareStack(inner: Any, *, validate_origin: bool = True) -> Any:
     """
     from channels.sessions import SessionMiddlewareStack
 
-    stack = SessionMiddlewareStack(inner)
+    stack = SessionMiddlewareStack(_AnonymousUserMiddleware(inner))
     if validate_origin:
         stack = DjustOriginValidator(stack)
     return stack

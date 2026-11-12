@@ -42,7 +42,7 @@ from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 from djust._class_snapshot import namespace as _class_namespace
 from djust._exposure import ProviderContract, uses_legacy_exposure
-from djust._exposure_providers import provide_context
+from djust._exposure_providers import provide_context, require_mixin_before_view
 from djust.components.utils import format_cell, interpolate_color_gradient
 from djust.decorators import event_handler
 
@@ -480,6 +480,10 @@ class DataTableMixin:
 
     _djust_context_providers = (_data_table_provider,)
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        require_mixin_before_view(cls, DataTableMixin)
+
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """Render the mixin's ``table_*`` names for a view with explicit exposure.
 
@@ -488,8 +492,9 @@ class DataTableMixin:
         provides the names it publishes: its class-level ``table_*``
         configuration and the state ``init_table_state()`` and the handlers
         assign. A name that is not set yet (before ``init_table_state()``) is
-        left out, and so is a callable (``table_row_class_map`` may be one),
-        as the walk left them out. Render-only: nothing here is persisted or
+        left out, and so is a callable (``table_row_class_map`` may be one)
+        and a class-level value that is not plain data, as the walk left them
+        out. Render-only: nothing here is persisted or
         sent to the browser as data. ``table_model`` and ``table_queryset``
         are never rendered.
         """
@@ -502,10 +507,18 @@ class DataTableMixin:
         )
         if uses_legacy_exposure(self):
             return context
+        from djust.mixins.context import _is_json_serializable
+
         missing = _TABLE_UNSET
+        assigned = self.__dict__
         for name in sorted(_TABLE_CONTEXT_NAMES):
             value = getattr(self, name, missing)
             if value is missing or callable(value):
+                continue
+            # The walk rendered a class-level value only when it was plain
+            # data (#694): a column definition holding an object, or a set,
+            # stayed out of the template. Same rule here.
+            if name not in assigned and not _is_json_serializable(value):
                 continue
             provide_context(self, context, _DATA_TABLE_PROVIDER, name, value)
         return context

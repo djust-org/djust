@@ -33,10 +33,11 @@ from django.contrib.auth.models import AnonymousUser, Group
 from django.test import Client, RequestFactory
 from django.urls import include, path
 
-from djust import LiveView
+from djust import LiveView, event_handler
 from djust.admin_ext import AdminPage, AdminPlugin, DjustAdminSite, DjustModelAdmin
 from djust.auth.admin_views import OAuthProvidersView, SocialAccountsView
 from djust.components.ttyd.terminal import TtydTerminalView
+from djust.decorators import state
 from djust.live_view import is_protected_http_entry
 from djust.tests.test_admin_page_render import _Socket, _session_cookie
 
@@ -68,15 +69,21 @@ EXPLICIT = {
     "components/gallery/live_views.py:NavGalleryView",
     "components/gallery/live_views.py:OverlayGalleryView",
     "components/gallery/live_views.py:TypographyGalleryView",
-    "components/ttyd/terminal.py:TtydTerminalView",
     "theming/gallery/live_views.py:ComponentsCategoryView",
     "theming/gallery/live_views.py:ComponentsDetailView",
     "theming/gallery/live_views.py:ComponentsIndexView",
 }
 
-#: Shipped views still on the legacy policy, each with what it relies on that
-#: explicit exposure does not offer yet. Not a place for "not converted yet".
+#: Shipped views pinned to the legacy policy (``exposure_policy = "legacy"`` in
+#: the class body, so a changed default does not convert them), each with what
+#: it relies on that explicit exposure does not offer yet. Not a place for
+#: "not converted yet".
 LEGACY = {
+    "components/ttyd/terminal.py:TtydTerminalView": (
+        "A documented base class. A subclass renders its own public attributes "
+        "(session_log in the docstring example) through the attribute walk, so making "
+        "the base explicit would empty existing subclasses' templates without an error."
+    ),
     "live_view.py:PersistentLiveView": (
         "It IS the legacy snapshot feature (enable_state_snapshot); the flag has no "
         "effect under explicit exposure and the class goes with it."
@@ -155,8 +162,12 @@ def _shipped_classes() -> dict[str, tuple[str, ast.ClassDef]]:
     return classes
 
 
-def _liveviews() -> dict[str, str]:
-    """``path:Class`` -> the policy the class statement resolves to."""
+def _liveviews() -> dict[str, str | None]:
+    """``path:Class`` -> the policy the class statement resolves to.
+
+    ``None`` when neither the class nor a base it names states one: the view
+    would take whatever ``LiveView``'s default is. No default is assumed here.
+    """
     classes = _shipped_classes()
 
     def resolve(name: str, seen: frozenset = frozenset()) -> tuple[bool, str | None]:
@@ -183,7 +194,7 @@ def _liveviews() -> dict[str, str]:
         is_view, policy = resolve(name)
         if is_view:
             for relative, _node in definitions:
-                found["%s:%s" % (relative, name)] = policy or "legacy"
+                found["%s:%s" % (relative, name)] = policy
     return found
 
 
@@ -202,8 +213,10 @@ def test_every_shipped_liveview_is_explicit_unless_it_is_listed_with_a_reason():
     policies = _liveviews()
     assert {key: policies[key] for key in EXPLICIT} == dict.fromkeys(EXPLICIT, "explicit")
     # The exception list cannot go stale either: a view that became explicit
-    # has to leave it.
+    # has to leave it. And each exception STATES "legacy": a view that merely
+    # inherits today's default would be converted by a changed default.
     assert {key: policies[key] for key in LEGACY} == dict.fromkeys(LEGACY, "legacy")
+    assert None not in policies.values(), "a shipped view states no policy"
     assert all(len(reason) > 30 for reason in LEGACY.values())
 
 
@@ -322,7 +335,14 @@ class _ProvidersPage(OAuthProvidersView):
 
 
 class _AccountsPage(SocialAccountsView):
-    template = "<div dj-root><h1>{{ title }}</h1><i>[{{ ordering }}]</i></div>"
+    template = (
+        "<div dj-root><h1>{{ title }}</h1><i>[{{ ordering }}]</i><b>({{ search_query }})</b></div>"
+    )
+    # A grant is not inherited (ADR-038): a subclass states its own.
+    search_query = state(default="", persist="server")
+    current_page = state(default=1, persist="server")
+    ordering = state(default="-date_joined", persist="server")
+    filter_provider = state(default="", persist="server")
 
 
 class _AuthPages(AdminPlugin):
@@ -335,6 +355,38 @@ class _AuthPages(AdminPlugin):
         ]
 
 
+class LoggingTerminal(TtydTerminalView):
+    """The docstring's subclass, as an application wrote it before this change."""
+
+    template = (
+        '<div dj-root><i data-rows="{{ rows }}">{{ ttyd_url }}</i>'
+        "<b>[{{ terminal_connected }}]</b><u>{{ session_log|length }}</u></div>"
+    )
+
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        self.session_log = []
+
+    def on_ttyd_connect(self, timestamp="", user_agent="", **kwargs):
+        super().on_ttyd_connect(timestamp=timestamp, user_agent=user_agent, **kwargs)
+        self.session_log.append("Connected at %s" % timestamp)
+
+    on_ttyd_connect = event_handler()(on_ttyd_connect)
+
+
+class ExplicitTerminal(LoggingTerminal):
+    """The docstring's explicit subclass: it lists what its own template reads."""
+
+    exposure_policy = "explicit"
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(
+            session_log=self.session_log,
+            terminal_connected=self.terminal_connected,
+            **kwargs,
+        )
+
+
 SITE = DjustAdminSite(name="explicit_views_admin")
 SITE.site_header = "Explicit-views administration"
 SITE.register(Group, GroupAdmin)
@@ -344,6 +396,8 @@ urlpatterns = [
     path("x-admin/", SITE.urls),
     path("theme/", include("djust.theming.urls")),
     path("ttyd/", TtydTerminalView.as_view()),
+    path("ttyd-logging/", LoggingTerminal.as_view()),
+    path("ttyd-explicit/", ExplicitTerminal.as_view()),
     path("routes/public-explicit/", PublicExplicitPage.as_view()),
     path("routes/public-legacy/", PublicLegacyPage.as_view()),
     path("routes/gated-explicit/", GatedExplicitPage.as_view()),
@@ -532,6 +586,168 @@ async def test_terminal_view_mounts_and_records_a_connection(site_urls):
         await ws.until("patch", "html_update", "noop")
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("name", ["LoggingTerminal", "ExplicitTerminal"])
+async def test_a_terminal_subclass_renders_its_own_attributes(site_urls, name):
+    """The base stays legacy, so an existing subclass is unchanged; an explicit
+    subclass gets the terminal's names from ``super()`` and lists its own."""
+    url = "/ttyd-logging/" if name == "LoggingTerminal" else "/ttyd-explicit/"
+    browser = await _visitor(url)
+    async with _Socket(_session_cookie(browser)) as ws:
+        mounted = await ws.mount(MODULE + "." + name, url)
+        html = mounted["html"]
+        assert 'data-rows="24"' in html and "ws://localhost:7681" in html, html
+        assert re.search(r"<b[^>]*>\[False\]</b>", html) and re.search(r"<u[^>]*>0</u>", html)
+        await ws.send(_event("on_ttyd_connect", timestamp="now"))
+        frame = await ws.until("patch", "html_update")
+    assert {"[True]", "1"} <= set(_text_patches(frame)), frame
+
+
+# --------------------------------------------------------------------------
+# A stack with no authentication: its visitors are anonymous
+# --------------------------------------------------------------------------
+
+
+class _StackSocket(_Socket):
+    """A socket behind ``DjustMiddlewareStack`` (session, origin check, no auth)."""
+
+    def __init__(self, cookie_header: str = ""):
+        from channels.routing import URLRouter
+        from channels.testing import WebsocketCommunicator
+
+        from djust.routing import DjustMiddlewareStack
+        from djust.websocket import LiveViewConsumer
+
+        headers = [(b"host", b"testserver"), (b"origin", b"http://testserver")]
+        if cookie_header:
+            headers.append((b"cookie", cookie_header.encode()))
+        app = DjustMiddlewareStack(URLRouter([path("ws/live/", LiveViewConsumer.as_asgi())]))
+        self.comm = WebsocketCommunicator(app, "/ws/live/", headers=headers)
+
+    async def answer(self, view, url):
+        await self.send({"type": "mount", "view": view, "url": url, "params": {}})
+        for _ in range(10):
+            frame = await self.comm.receive_json_from(timeout=10)
+            if frame.get("type") in ("mount", "error", "navigate", "permission_denied"):
+                return frame
+        raise AssertionError("no answer to the mount")
+
+
+class GatedLegacyPage(LiveView):
+    exposure_policy = "legacy"
+    login_required = True
+    template = "<div dj-root>gated</div>"
+
+
+class PermissionExplicitPage(LiveView):
+    exposure_policy = "explicit"
+    permission_required = "auth.view_group"
+    template = "<div dj-root>permission</div>"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "view, url",
+    [
+        (MODULE + ".PublicExplicitPage", "/routes/public-explicit/"),
+        (MODULE + ".PublicLegacyPage", "/routes/public-legacy/"),
+        ("djust.components.gallery.live_views.GalleryIndexView", GALLERY),
+        ("djust.theming.gallery.live_views.ComponentsIndexView", CATALOGUE),
+    ],
+)
+async def test_a_public_view_mounts_behind_the_stack_without_authentication(site_urls, view, url):
+    browser = await _visitor(url)
+    async with _StackSocket(_session_cookie(browser)) as ws:
+        frame = await ws.answer(view, url)
+    assert frame.get("type") == "mount", frame
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("name", ["GatedExplicitPage", "GatedLegacyPage", "PermissionExplicitPage"])
+async def test_a_gated_view_is_still_refused_behind_that_stack(site_urls, django_user_model, name):
+    """The stack signs nobody in, even a browser whose session is logged in."""
+    browser = await _staff_browser(django_user_model)
+    async with _StackSocket(_session_cookie(browser)) as ws:
+        frame = await ws.answer(MODULE + "." + name, "/routes/public-explicit/")
+    assert frame.get("type") != "mount", frame
+
+
+async def test_the_stack_marks_only_a_missing_user_as_anonymous(monkeypatch):
+    from django.apps import apps
+
+    from djust.routing import _AnonymousUserMiddleware, _AnonymousVisitor
+
+    seen = []
+
+    async def inner(scope, receive, send):
+        seen.append(scope)
+
+    middleware = _AnonymousUserMiddleware(inner)
+    someone = object()
+    original = {"type": "websocket"}
+    await middleware(original, None, None)
+    await middleware({"type": "websocket", "user": someone}, None, None)
+    assert isinstance(seen[0]["user"], AnonymousUser) and "user" not in original
+    assert seen[1]["user"] is someone
+    # Without django.contrib.auth its AnonymousUser cannot be imported.
+    installed = apps.is_installed
+    monkeypatch.setattr(
+        apps, "is_installed", lambda name: name != "django.contrib.auth" and installed(name)
+    )
+    await middleware({"type": "websocket"}, None, None)
+    visitor = seen[2]["user"]
+    assert type(visitor) is _AnonymousVisitor
+    assert visitor.is_authenticated is False and visitor.is_anonymous is True
+    assert not visitor.has_perm("auth.view_group") and not visitor.is_staff
+
+
+# --------------------------------------------------------------------------
+# Without a socket: a later request keeps what an earlier one set
+# --------------------------------------------------------------------------
+
+
+def _post_event(browser, url, event, **params):
+    response = browser.post(
+        url, data=json.dumps(params), content_type="application/json", HTTP_X_DJUST_EVENT=event
+    )
+    assert response.status_code == 200, response.content[:300]
+    return response.content.decode()
+
+
+@pytest.mark.django_db
+def test_the_catalogue_renders_without_a_user_or_a_server_side_session(site_urls):
+    """Why the public catalogue declares no persisted field.
+
+    A persisted field binds the page's state to a server-side session and to
+    ``request.user``, so the page would stop rendering for a project that has
+    neither. It has to keep rendering there.
+    """
+    from djust.theming.gallery.live_views import ComponentsIndexView
+
+    from django.contrib.sessions.backends.signed_cookies import SessionStore
+
+    request = RequestFactory().get(CATALOGUE)
+    request.session = SessionStore()  # a cookie session, and no request.user
+    response = ComponentsIndexView.as_view()(request)
+    assert response.status_code == 200
+    assert re.search(r"[1-9]\d* components across", response.content.decode())
+
+
+@pytest.mark.django_db
+def test_the_accounts_page_keeps_its_sort_across_http_fallback_requests(
+    site_urls, django_user_model
+):
+    pytest.importorskip("allauth.socialaccount")
+    django_user_model.objects.create_superuser("root", password="pw")
+    browser = Client()
+    browser.force_login(django_user_model.objects.get(username="root"))
+    url = ADMIN + "auth/accounts/"
+    assert browser.get(url).status_code == 200
+    assert "[provider]" in _post_event(browser, url, "sort_by", field="provider")
+    answer = _post_event(browser, url, "search", value="alice")
+    assert "[provider]" in answer and "(alice)" in answer
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     "url, event, params, expected",
@@ -690,3 +906,112 @@ async def test_the_generated_starter_view_runs_under_explicit_exposure():
     assert not transport.errors, transport.errors
     assert "Fourth item" in json.dumps(transport.sent)
     assert runtime.view_instance.get_state() == {}
+
+
+# The real generated project: its own templates, its own settings.
+
+_PROJECT_PROBE = """
+import io, json, os, django
+os.environ["DJANGO_SETTINGS_MODULE"] = "child.settings"
+django.setup()
+from django.conf import settings
+settings.ALLOWED_HOSTS = ["*"]
+from django.core.management import call_command
+call_command("migrate", run_syncdb=True, verbosity=0)
+
+from child.views import ChildView
+from djust.checks.templates import _get_context_data_is_too_dynamic
+
+out = io.StringIO()
+call_command("djust_typecheck", "--json", stdout=out)
+reports = json.loads(out.getvalue())["reports"]
+missing = sorted({m["name"] for r in reports for m in r.get("missing", [])})
+
+from django.test import Client
+client = Client()
+page = client.get("/")
+html = page.content.decode()
+answer = client.post(
+    "/",
+    data=json.dumps({"name": "Fourth item"}),
+    content_type="application/json",
+    HTTP_X_DJUST_EVENT="add_item",
+)
+said = client.post(
+    "/",
+    data=json.dumps({"message": "hello feed"}),
+    content_type="application/json",
+    HTTP_X_DJUST_EVENT="send_message",
+)
+print("PROBE_JSON", json.dumps({
+    "policy": ChildView.exposure_policy,
+    "stream_entry_rendered": "hello feed" in said.content.decode(),
+    "typecheck_missing": missing,
+    "t018_skips_the_view": _get_context_data_is_too_dynamic(ChildView),
+    "status": page.status_code,
+    "items_rendered": "First item" in html and "Third item" in html,
+    "stream_container": 'dj-stream="feed"' in html,
+    "presence_rendered": "0 users online" in html,
+    "event_status": answer.status_code,
+    "event_added": "Fourth item" in answer.content.decode(),
+}))
+"""
+
+
+def test_a_generated_project_renders_typechecks_and_answers_an_event(tmp_path):
+    """``djust new --with-presence --with-streaming``, run as generated.
+
+    The page is the scaffold's own template under explicit exposure, an event
+    arrives over the HTTP fallback, and the two static tools still read the
+    view: ``djust_typecheck`` finds the names ``get_context_data()`` supplies
+    (it reads a literal returned dict) and T018 does not skip the view.
+    """
+    import os
+    import subprocess
+    import sys
+
+    from djust.scaffolding import generator
+
+    project = generator.generate_project(
+        "child",
+        target_dir=str(tmp_path),
+        auto_setup=False,
+        with_presence=True,
+        with_streaming=True,
+    )
+    env = dict(os.environ, DJANGO_SETTINGS_MODULE="child.settings")
+    env["PYTHONPATH"] = os.pathsep.join([str(project), env.get("PYTHONPATH", "")])
+    probe = subprocess.run(
+        [sys.executable, "-c", _PROJECT_PROBE],
+        cwd=project,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    line = next((text for text in probe.stdout.splitlines() if text.startswith("PROBE_JSON")), None)
+    assert line is not None, probe.stdout + probe.stderr
+    result = json.loads(line.split(" ", 1)[1])
+    supplied = {
+        "items",
+        "search_query",
+        "total_count",
+        "done_count",
+        "theme_packs",
+        "theme_pack_count",
+        "djust_version",
+        "presence_list",
+        "presence_count",
+    }
+    assert supplied.isdisjoint(result.pop("typecheck_missing")), result
+    assert result == {
+        "policy": "explicit",
+        "t018_skips_the_view": False,
+        "status": 200,
+        "items_rendered": True,
+        "stream_container": True,
+        "stream_entry_rendered": True,
+        "presence_rendered": True,
+        "event_status": 200,
+        "event_added": True,
+    }

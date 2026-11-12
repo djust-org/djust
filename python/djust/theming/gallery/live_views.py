@@ -840,6 +840,12 @@ class ComponentsSidebarMixin:
             **catalogue_chrome(),
         }
 
+    # No ``state(persist="server")`` for the sidebar's inputs, on purpose. A
+    # persisted field makes every request of the page need a server-side
+    # session and a ``request.user`` (the state is bound to both), and these
+    # pages are public: they must render for a project with cookie sessions or
+    # without authentication middleware. The cost: without a WebSocket, a
+    # search or a collapsed group is not carried to the next request.
     def _init_sidebar(self, current_component: Optional[str] = None) -> None:
         #: What the sidebar actually renders. Kept as real state rather than a
         #: template-side filter so the server and the DOM cannot disagree.
@@ -1372,11 +1378,12 @@ class InteractiveDropdownCatalogueView(
     """The interactive DropdownMenu's catalogue page: the canonical example,
     served as-is inside the catalogue chrome (ADR-037 D2)."""
 
-    # Stays on the legacy policy with the example it serves
+    # Pinned to the legacy policy with the example it serves
     # (``DropdownMenuExample``; see the note in ``test_exposure_framework_views``):
     # an interactive component is addressed by a per-instance id, and only the
     # legacy HTTP fallback carries the component registry from one request to
     # the next, so an explicit view cannot answer the menu's event there yet.
+    exposure_policy = "legacy"
     template_name = "djust_theming/catalogue/interactive_detail.html"
     login_required = False
     component_name = "interactive_dropdown_menu"

@@ -534,8 +534,8 @@ class %(view_class)s(%(view_bases)s):
 
     def get_context_data(self, **kwargs):
         self._compute()
-        context = super().get_context_data(**kwargs)
-        context.update({
+        return {
+            **super().get_context_data(**kwargs),
             "items": self.filtered_items,
             "search_query": self.search_query,
             "total_count": self.total_count,
@@ -543,8 +543,7 @@ class %(view_class)s(%(view_bases)s):
             "theme_packs": quick_packs(),
             "theme_pack_count": len(get_all_theme_packs()),
             "djust_version": djust.__version__,
-%(extra_context)s        })
-        return context
+%(extra_context)s        }
 %(extra_methods)s"""
 
 # ---------------------------------------------------------------------------
@@ -577,7 +576,7 @@ class %(view_class)s(LiveView):
         self.pings += 1
 
     def get_context_data(self, **kwargs):
-        return super().get_context_data(pings=self.pings, **kwargs)
+        return {**super().get_context_data(**kwargs), "pings": self.pings}
 """
 
 BARE_BASE_HTML = """\
@@ -1194,10 +1193,9 @@ class %(view_class)s(LiveView):
 %(handler_methods)s
     def get_context_data(self, **kwargs):
         self._compute()
-        context = super().get_context_data(**kwargs)
-        context.update({
-%(context_body)s        })
-        return context
+        return {
+            **super().get_context_data(**kwargs),
+%(context_body)s        }
 """
 
 SCHEMA_MODELS_PY = """\

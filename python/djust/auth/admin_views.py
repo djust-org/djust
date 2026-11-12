@@ -259,10 +259,12 @@ class SocialAccountsView(AdminBaseMixin, LiveView):
     # Fields ``sort_by`` accepts (each optionally prefixed by ``-``).
     _SORTABLE_FIELDS = ("date_joined", "provider", "uid", "user__username", "user__email")
 
-    search_query = state(default="")
-    current_page = state(default=1)
-    ordering: StateProperty[str | None] = state(default="-date_joined")
-    filter_provider = state(default="")
+    # The list's inputs, kept on the server so a later request still has them
+    # when the page runs without a WebSocket (the legacy session save kept them).
+    search_query = state(default="", persist="server")
+    current_page = state(default=1, persist="server")
+    ordering: StateProperty[str | None] = state(default="-date_joined", persist="server")
+    filter_provider = state(default="", persist="server")
 
     def mount(self, request: HttpRequest, **kwargs: Any) -> None:
         self.request = request

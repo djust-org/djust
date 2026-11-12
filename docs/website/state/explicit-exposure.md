@@ -161,8 +161,16 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
   `table_queryset`), `FormSetHelpersMixin` (the formsets named in
   `formset_classes`) and `ThemeMixin` (`theme_preset`, `theme_mode`,
   `theme_resolved_mode` and the rendered theme values). List the mixin before
-  `LiveView`. Apart from `ThemeMixin`'s, these names are reserved for the mixin:
-  supplying one yourself in `get_context_data()` is a collision error.
+  `LiveView`; `DataTableMixin` and `FormSetHelpersMixin` refuse the other order
+  on an explicit view. Apart from `ThemeMixin`'s, these names are reserved for
+  the mixin: supplying one yourself in `get_context_data()` is a collision
+  error (declaring it, `online_count = state(0)`, is fine). A `formset_classes`
+  key that cannot be a template name (an underscore name, `streams`) is logged
+  and that formset is not rendered.
+- **WebSocket middleware.** An explicit mount binds to the page's session and
+  to the request's user. `AuthMiddlewareStack` and `DjustMiddlewareStack` both
+  provide them; behind the latter every visitor is anonymous. A consumer
+  routed with no session or user middleware is refused.
 - **Uploads.** `uploads` renders each entry's progress and a sanitized file
   name. The raw client file name and the writer's result are not included.
   Uploads in flight are not resumed after a reconnect; the client registers

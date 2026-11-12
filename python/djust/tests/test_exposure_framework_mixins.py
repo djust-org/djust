@@ -18,6 +18,7 @@ from django.forms import formset_factory
 from django.test import override_settings
 
 from djust import LiveView, event_handler
+from djust.decorators import state
 from djust._exposure import ExposureError, provider_owners
 from djust.components.mixins.data_table import DataTableMixin
 from djust.formsets import FormSetHelpersMixin
@@ -318,3 +319,127 @@ async def test_formset_provider_renders_only_declared_names():
     runtime, transport = await _mount(FormSetView)
     # A public attribute the mixin does not own is not rendered for it.
     assert ">[]</s>" in _mount_html(transport)
+
+
+# --------------------------------------------------------------------------
+# Review of #4034: the names a view declares or configures itself
+# --------------------------------------------------------------------------
+
+
+class DeclaredCountView(PresenceMixin, LiveView):
+    """``online_count`` declared with ``state()``: the value lives on the class."""
+
+    exposure_policy = "explicit"
+    presence_key = "explicit-framework-mixins-declared"
+    online_count = state(default=7)
+    template = "<div dj-root><i>[{{ online_count }}]</i><u>{{ n }}</u></div>"
+
+    def mount(self, request, **kwargs):
+        self.n = 0
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(n=self.n, **kwargs)
+
+    @event_handler()
+    def arrive(self, **kwargs):
+        self.n += 1
+        self.online_count = 9
+
+
+async def test_presence_provider_reads_a_declared_online_count():
+    runtime, transport = await _mount(DeclaredCountView)
+    assert ">[7]</i>" in _mount_html(transport), _mount_html(transport)
+    frames = await _event(runtime, transport, "arrive")
+    assert "[9]" in _texts(frames), transport.sent
+
+
+class DeclaredFormSetView(FormSetHelpersMixin, LiveView):
+    exposure_policy = "explicit"
+    formset_classes = {"addresses": AddressFormSet}
+    addresses = state(default=None)
+    template = "<div dj-root><i>rows={{ addresses.total_form_count }}</i></div>"
+
+    def mount(self, request, **kwargs):
+        self._formset_data = {}
+
+
+async def test_formset_provider_reads_a_declared_formset_name():
+    runtime, transport = await _mount(DeclaredFormSetView)
+    frames = await _event(runtime, transport, "add_row", formset="addresses")
+    assert "rows=1" in _texts(frames), transport.sent
+
+
+class AwkwardFormSetView(FormSetHelpersMixin, LiveView):
+    """Keys that cannot be provider keys: an underscore name and another provider's."""
+
+    exposure_policy = "explicit"
+    formset_classes = {
+        "addresses": AddressFormSet,
+        "_rows": AddressFormSet,
+        "streams": AddressFormSet,
+    }
+    template = "<div dj-root><i>rows={{ addresses.total_form_count }}</i></div>"
+
+    def mount(self, request, **kwargs):
+        self.addresses = AddressFormSet(prefix="addresses")
+        self._rows = AddressFormSet(prefix="_rows")
+        self._formset_data = {}
+
+
+@pytest.mark.parametrize("policy", POLICIES)
+async def test_an_unrenderable_formset_key_does_not_stop_the_view(monkeypatch, caplog, policy):
+    from djust import formsets
+
+    monkeypatch.setattr(AwkwardFormSetView, "exposure_policy", policy)
+    formsets._UNRENDERABLE_REPORTED.discard(AwkwardFormSetView)
+    with caplog.at_level("WARNING", logger="djust.formsets"):
+        runtime, transport = await _mount(AwkwardFormSetView)
+    html = _mount_html(transport)
+    # The view mounts and the usable formset renders; the others do not, as on
+    # a legacy view (an underscore name is never template context).
+    assert ">rows=0</i>" in html, html
+    context = await sync_to_async(runtime.view_instance.get_context_data)()
+    assert "_rows" not in context
+    reported = [r.getMessage() for r in caplog.records if "formset_classes" in r.getMessage()]
+    if policy == "explicit":
+        assert set(provider_owners(AwkwardFormSetView)) >= {"addresses"}
+        assert provider_owners(AwkwardFormSetView).get("streams") == "djust.streams"
+        assert len(reported) == 1 and "'_rows'" in reported[0] and "'streams'" in reported[0]
+    else:
+        assert reported == []
+
+
+class Formatter:
+    """Not plain data: the legacy walk left a class-level value holding one out."""
+
+    def __repr__(self):
+        return "FORMATTER_REPR"
+
+
+class ObjectColumnTableView(DataTableMixin, LiveView):
+    exposure_policy = "explicit"
+    table_columns = [{"key": "name", "fmt": Formatter()}]
+    table_export_formats = {"csv"}
+    template = (
+        "<div dj-root><i>[{{ table_columns }}]</i><b>[{{ table_export_formats }}]</b>"
+        "<u>{{ table_page_size }}</u></div>"
+    )
+
+
+@pytest.mark.parametrize("policy", POLICIES)
+async def test_data_table_provider_withholds_what_the_walk_withheld(monkeypatch, policy):
+    monkeypatch.setattr(ObjectColumnTableView, "exposure_policy", policy)
+    runtime, transport = await _mount(ObjectColumnTableView)
+    html = _mount_html(transport)
+    assert ">[]</i>" in html and ">[]</b>" in html, html
+    assert "FORMATTER_REPR" not in html and "csv" not in html
+    assert ">25</u>" in html
+
+
+def test_an_explicit_view_must_list_the_providing_mixin_first():
+    for mixin in (DataTableMixin, FormSetHelpersMixin):
+        with pytest.raises(TypeError, match="Put the mixin first"):
+            type("Wrong", (LiveView, mixin), {"exposure_policy": "explicit", "__module__": MODULE})
+        # A legacy view keeps working in either order: its walk renders the names.
+        type("LegacyOrder", (LiveView, mixin), {"exposure_policy": "legacy", "__module__": MODULE})
+        type("RightOrder", (mixin, LiveView), {"exposure_policy": "explicit", "__module__": MODULE})

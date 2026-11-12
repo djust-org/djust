@@ -2120,6 +2120,9 @@ class PersistentLiveView(LiveView):
 
     abstract = True
     enable_state_snapshot = True
+    # Stated, not inherited from the default: the snapshot this class turns on
+    # exists only under the legacy policy. A subclass may still set "explicit".
+    exposure_policy = "legacy"
 
 
 def _declares_interactive_collection(view_class: type) -> bool:
@@ -2166,7 +2169,9 @@ def live_view(
         def wrapper(request: Any, *args: Any, **kwargs: Any) -> Any:
             # Create a dynamic LiveView class
             class DynamicLiveView(LiveView):
-                pass
+                # The decorated function's returned locals are set as view
+                # attributes below and rendered by the attribute walk.
+                exposure_policy = "legacy"
 
             if template_name:
                 DynamicLiveView.template_name = template_name

@@ -279,13 +279,15 @@ class ModelListView(AdminBaseMixin, LiveView):
     Model list view with real-time search, filtering, and bulk actions.
     """
 
-    # Stays on the legacy policy for now (ADR-038 Step R, PR 0b): the page embeds
-    # the ModelAdmin's widget views with ``{% live_render %}``, and those are
-    # application classes that still default to legacy. An explicit root cannot
-    # hold a legacy child today: the HTTP GET's child save asks every
-    # registered child for its explicit binding
+    # Pinned to the legacy policy (ADR-038 Step R, PR 0b): the page embeds the
+    # ModelAdmin's widget views with ``{% live_render %}``, and those are
+    # application classes that may be legacy. An explicit root cannot hold a
+    # legacy child today: the HTTP GET's child save asks every registered
+    # child for its explicit binding
     # (``_exposure_child_persistence._capture_children``) and a legacy child
-    # has none. Convert together with the default flip.
+    # has none.
+    exposure_policy = "legacy"
+
     template_name = "djust_admin/model_list.html"
 
     # Reactive state
@@ -651,13 +653,15 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
     Model detail/edit view with real-time form validation.
     """
 
-    # Stays on the legacy policy for now (ADR-038 Step R, PR 0b): the page embeds
-    # the ModelAdmin's widget views with ``{% live_render %}``, and those are
-    # application classes that still default to legacy. An explicit root cannot
-    # hold a legacy child today: the HTTP GET's child save asks every
-    # registered child for its explicit binding
+    # Pinned to the legacy policy (ADR-038 Step R, PR 0b): the page embeds the
+    # ModelAdmin's widget views with ``{% live_render %}``, and those are
+    # application classes that may be legacy. An explicit root cannot hold a
+    # legacy child today: the HTTP GET's child save asks every registered
+    # child for its explicit binding
     # (``_exposure_child_persistence._capture_children``) and a legacy child
-    # has none. Convert together with the default flip.
+    # has none.
+    exposure_policy = "legacy"
+
     template_name = "djust_admin/model_detail.html"
 
     is_saving = state(default=False)

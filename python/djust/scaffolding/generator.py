@@ -438,8 +438,8 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     content += "\n"
     content += "    def get_context_data(self, **kwargs):\n"
     content += "        self._compute()\n"
-    content += "        context = super().get_context_data(**kwargs)\n"
-    content += "        context.update({\n"
+    content += "        return {\n"
+    content += "            **super().get_context_data(**kwargs),\n"
     content += '            "items": self.items,\n'
     content += '            "search_query": self.search_query,\n'
     content += '            "total_count": self.total_count,\n'
@@ -449,8 +449,7 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     content += '            "djust_version": djust.__version__,\n'
     if ctx["extra_context"]:
         content += ctx["extra_context"]
-    content += "        })\n"
-    content += "        return context\n"
+    content += "        }\n"
     if ctx["extra_methods"]:
         content += ctx["extra_methods"]
 

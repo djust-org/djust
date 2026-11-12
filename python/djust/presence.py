@@ -268,6 +268,8 @@ class PresenceManager:
 #: refreshes; the legacy attribute walk rendered it, and nothing else does.
 PRESENCE_PROVIDER = ProviderContract("djust.presence", rendered=frozenset({"online_count"}))
 
+_UNSET: Any = object()
+
 
 class PresenceMixin:
     """
@@ -383,10 +385,11 @@ class PresenceMixin:
 
         A legacy view is untouched: its attribute walk already renders the
         attribute. An explicit view renders nothing it is not given, so the
-        mixin provides the one name it publishes. It is provided only once
-        the mixin has set it (``track_presence`` or a presence change), which
-        is exactly when the walk rendered it. Render-only: it is neither
-        persisted nor sent to the browser as data.
+        mixin provides the one name it publishes. It is provided once the
+        view has it (the mixin sets it in ``track_presence`` and on a presence
+        change; a view may also declare it), which is when the walk rendered
+        it. Render-only: it is neither persisted nor sent to the browser as
+        data.
         """
         # PresenceMixin is mixed into a LiveView at runtime; the MRO supplies
         # get_context_data(). mypy only sees object here.
@@ -395,10 +398,12 @@ class PresenceMixin:
             if hasattr(super(), "get_context_data")
             else {}
         )
-        if not uses_legacy_exposure(self) and "online_count" in self.__dict__:
-            provide_context(
-                self, context, PRESENCE_PROVIDER.name, "online_count", self.__dict__["online_count"]
-            )
+        if not uses_legacy_exposure(self):
+            # ``getattr``, not ``__dict__``: a view may declare the name
+            # (``online_count = state(0)``), and that value lives on the class.
+            count = getattr(self, "online_count", _UNSET)
+            if count is not _UNSET:
+                provide_context(self, context, PRESENCE_PROVIDER.name, "online_count", count)
         return context
 
     def _presence_broadcast_is_scoped(self) -> bool:

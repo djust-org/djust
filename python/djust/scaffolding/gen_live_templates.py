@@ -83,14 +83,13 @@ class %(view_class)s(LiveView):
 
     def get_context_data(self, **kwargs):
         self._compute()
-        context = super().get_context_data(**kwargs)
-        context.update({
+        return {
+            **super().get_context_data(**kwargs),
             "items": self.items,
             "selected": self.selected,
             "search_query": self.search_query,
             "item_count": self.item_count,
-        })
-        return context
+        }
 """
 
 # ---------------------------------------------------------------------------
