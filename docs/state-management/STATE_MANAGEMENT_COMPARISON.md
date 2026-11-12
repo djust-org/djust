@@ -374,7 +374,7 @@ class Search extends Component
 ```python
 from djust import LiveView
 from djust.forms import FormMixin
-from djust.mixins import DraftModeMixin
+from djust.drafts import DraftModeMixin
 
 class ContactView(DraftModeMixin, FormMixin, LiveView):
     form_class = ContactForm

@@ -642,13 +642,9 @@ class LiveView(
         class CounterView(LiveView):
             template_name = 'counter.html'
 
-            def mount(self, request, **kwargs):
-                self.count = 0
-
-            def get_context_data(self, **kwargs):
-                # The template gets what is returned here, not the view's
-                # attributes (explicit exposure, the default).
-                return {**super().get_context_data(**kwargs), 'count': self.count}
+            # A declared state() field renders in the template; other
+            # attributes do not (explicit exposure, the default).
+            count = state(0)
 
             @event_handler()
             def increment(self):

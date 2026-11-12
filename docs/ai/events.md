@@ -13,24 +13,14 @@ policy (`@event_handler(parameter_policy="strict")`, or project-wide
 
 <!-- djust-example: ai-item-view scenario=strict-policy -->
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
 class ItemView(LiveView):
     template_name = "items/list.html"
-
-    def mount(self, request, **kwargs):
-        self.selected_id = 0
-        self.query = ""
-
-    def get_context_data(self, **kwargs):
-        # The template gets what is returned here, not the view's attributes.
-        return {
-            **super().get_context_data(**kwargs),
-            "selected_id": self.selected_id,
-            "query": self.query,
-        }
+    selected_id = state(0)
+    query = state("")
 
     @event_handler(parameter_policy="strict")
     def select_item(self, item_id: int, active: bool = False) -> None:

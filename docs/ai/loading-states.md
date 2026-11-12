@@ -30,22 +30,16 @@
 ## AsyncWorkMixin (Background Work)
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 # AsyncWorkMixin is already included in LiveView — just subclass LiveView.
 # (Inheriting it explicitly, e.g. `class MyView(AsyncWorkMixin, LiveView)`, raises
 #  TypeError: Cannot create a consistent method resolution.)
 class MyView(LiveView):
-    def mount(self, request, **kwargs):
-        self.loading = False
-        self.result = ""
-        self.error = ""
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(loading=self.loading, result=self.result, error=self.error)
-        return context
+    loading = state(False)
+    result = state("")
+    error = state("")
 
     @event_handler()
     def generate(self, **kwargs):
@@ -91,15 +85,8 @@ def _do_work(self):
 ```python
 class ReportView(LiveView):  # AsyncWorkMixin is built into LiveView
     template_name = "report.html"
-
-    def mount(self, request, **kwargs):
-        self.generating = False
-        self.report = ""
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(report=self.report, generating=self.generating)
-        return context
+    report = state("")
+    generating = state(False)
 
     @event_handler()
     def generate_report(self, **kwargs):

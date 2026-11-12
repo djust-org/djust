@@ -310,13 +310,16 @@ special form base class; `LiveViewForm` only added two helpers to Django's
 `form.get_field_value(name)`, read `form.cleaned_data` (or `form.data` before
 validation):
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before
+# Before (removed: raises ImportError)
 from djust.forms import LiveViewForm
 
 class ContactForm(LiveViewForm):
     name = forms.CharField()
+```
 
+```python
 # After
 from django import forms
 
@@ -396,15 +399,19 @@ classes, are gone from `djust.components` and `djust.components.mixins`
 Declare the matching descriptor on the view instead. It holds the state and
 registers its event handler; the template reads the state off the attribute.
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before
+# Before (removed: raises ImportError)
 from djust.components.mixins import TabsMixin
 
 class SettingsView(TabsMixin, LiveView):
     def mount(self, request, **kwargs):
         self.init_tabs("nav", active="general")
+```
 
+```python
 # After
+from djust import LiveView
 from djust.components.descriptors import Tabs
 
 class SettingsView(LiveView):
@@ -515,11 +522,14 @@ class-creation check cannot see (set on the instance, or assigned to the class
 later) raises the same error right after `mount()`, on every transport. Delete
 the attribute:
 
+<!-- doc-snippet-check: anti-pattern -->
 ```python
-# Before
+# Before (removed: raises ImproperlyConfigured)
 class Dashboard(LiveView):
     use_actors = True
+```
 
+```python
 # After
 class Dashboard(LiveView):
     ...

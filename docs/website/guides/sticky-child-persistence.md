@@ -148,7 +148,7 @@ A dashboard page embeds a sticky counter. Both classes opt in.
 
 ```python
 # myapp/views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
@@ -157,27 +157,17 @@ class CounterChild(LiveView):
     sticky_id = "page-counter"
     enable_state_snapshot = True          # child opts in
     template_name = "myapp/counter_child.html"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
+    count = state(0)
 
     @event_handler
     def increment(self, **kwargs):
         self.count += 1
 
-    def get_context_data(self, **kwargs):
-        return {"count": self.count}
-
 
 class DashboardView(LiveView):
     enable_state_snapshot = True          # parent opts in
     template_name = "myapp/dashboard.html"
-
-    def mount(self, request, **kwargs):
-        self.title = "Dashboard"
-
-    def get_context_data(self, **kwargs):
-        return {"title": self.title}
+    title = state("Dashboard")
 ```
 
 ```django

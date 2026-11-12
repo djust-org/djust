@@ -84,17 +84,15 @@ class MyView(LiveView):
         <h1>Counter: {{ counter }}</h1>
         {{ badge }}
     """
+    counter = state(0)
 
-    def mount(self, request):
-        self.counter = 0
-
-    def get_context_data(self):
+    def get_context_data(self, **kwargs):
         return {
-            'counter': self.counter,
-            'badge': BadgeComponent(
+            **super().get_context_data(**kwargs),
+            "badge": BadgeComponent(
                 text=str(self.counter),
                 variant='primary' if self.counter > 0 else 'secondary'
-            )
+            ),
         }
 ```
 

@@ -94,16 +94,6 @@ class ChatView(LiveView):
     error = state("")
 
     # At most one prompt every 10 s on average, with a burst of 3.
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(
-            prompt=self.prompt,
-            response=self.response,
-            streaming=self.streaming,
-            error=self.error,
-        )
-        return context
-
     @rate_limit(rate=0.1, burst=3)
     @action
     def submit(self, prompt: str = "", **kwargs):

@@ -1,8 +1,9 @@
 """Execute every documented LiveView / LiveComponent snippet, not just parse it.
 
 Extends ``tests/test_readme_snippets_execute.py`` from ``README.md`` to every
-fenced ``python`` block under ``docs/website/guides/*.md``, ``QUICKSTART.md``
-and ``docs/website/getting-started/*.md``. ``scripts/check-doc-snippets.py``
+fenced ``python`` block in ``QUICKSTART.md``, ``docs/website/*/*.md``,
+``docs/*.md``, ``docs/ai``, ``docs/state-management`` and ``docs/templates``
+(dated records excepted; ``docs/components`` waits on #4063). ``scripts/check-doc-snippets.py``
 AST-parses and import-resolves those blocks; it cannot catch a class attribute
 no mixin reads, a handler that touches state ``mount()`` never set, a state
 variable the inline template never renders, or a ``@event_handler`` that
@@ -21,7 +22,9 @@ test:
    inline template, so ``mount()`` / ``get_context_data()`` / the handlers
    still run;
 3. for every ``LiveComponent`` subclass, mounts it through
-   ``LiveComponentTestClient``, renders it and fires its handlers.
+   ``LiveComponentTestClient``, renders it and fires its handlers; a component
+   block with no template (a fragment showing one handler) runs on a stub
+   template, as a view does.
 
 Outcomes that are not doc defects are *not* failures and are recorded as
 such: a block importing the reader's own app or a library the test env lacks,
@@ -61,13 +64,27 @@ _CHECKER = REPO_ROOT / "scripts" / "check-doc-snippets.py"
 _EXPOSURE_CHECKER = REPO_ROOT / "scripts" / "check-doc-exposure.py"
 
 DOC_FILES: list[pathlib.Path] = sorted(
-    [
+    {
         *REPO_ROOT.glob("docs/website/guides/*.md"),
         REPO_ROOT / "QUICKSTART.md",
         *REPO_ROOT.glob("docs/website/getting-started/*.md"),
         *REPO_ROOT.glob("docs/website/getting-started*.md"),
-    ]
+        # #4055: the rest of the teaching material. ``docs/components`` is not
+        # here yet: its LiveComponent-in-mount() examples wait on #4063.
+        *REPO_ROOT.glob("docs/website/*/*.md"),
+        *REPO_ROOT.glob("docs/ai/*.md"),
+        *REPO_ROOT.glob("docs/state-management/*.md"),
+        *REPO_ROOT.glob("docs/templates/*.md"),
+        *REPO_ROOT.glob("docs/*.md"),
+    }
 )
+# Dated records of how a feature was built (``IMPLEMENTATION_PHASE2.md``,
+# ``*_SUMMARY.md``) describe the framework on their date and are not teaching
+# material: the same rule as ``_DATED_RECORD`` in scripts/check-doc-exposure.py.
+_DATED_RECORD = re.compile(
+    r"(IMPLEMENTATION_PHASE\d|_SUMMARY|_DESIGN|_REPORT|_IMPLEMENTATION|_VISION|_PLAN)\.md$"
+)
+DOC_FILES = [path for path in DOC_FILES if not _DATED_RECORD.search(path.name)]
 
 # Block key (``<path relative to repo>@<first 8 hex of the sha1 of the block's
 # code>``) -> reason it fails today. Each entry is a documented example a reader
@@ -648,6 +665,16 @@ def _run_component(cls: type, outcome: Outcome, block_classes: set[str]) -> None
     from djust.testing import LiveComponentTestClient
 
     name = cls.__name__
+    if not getattr(cls, "template", None) and not getattr(cls, "template_name", None):
+        # Same rule as a view (``_run_view``): a component block that shows
+        # only its Python side (a handler, ``update()``) is a fragment of a
+        # component the reader already has. Run it on a stub template.
+        cls = type(
+            name,
+            (cls,),
+            {"__module__": cls.__module__, "template": "<div>doc-snippet stub</div>"},
+        )
+        outcome.notes.append(f"{name}: no template declared (fragment); stub used")
     client = LiveComponentTestClient(cls)
     try:
         client.mount()

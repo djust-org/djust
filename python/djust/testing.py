@@ -607,8 +607,11 @@ class LiveViewTestClient:
         """
         Get current view state (public variables).
 
-        Returns only instance variables that don't start with underscore,
-        similar to what would be available in the template context.
+        Returns the view's public attributes: every name that does not start
+        with an underscore and is not a method or property. This is not the
+        template context. Under explicit exposure (the default) the template
+        gets the declared ``state()`` fields and what ``get_context_data()``
+        returns; read that with ``view_instance.get_context_data()``.
 
         Returns:
             Dict of variable names to values

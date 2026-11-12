@@ -210,14 +210,14 @@ for each control, use a Django form widget or custom markup that supplies
 Here's how the Radio component looks when integrated into a Django form:
 
 ```python
-from djust import LiveView, event_handler
+from djust import LiveView, event_handler, state
 from djust.components.ui import Radio
 
 class SettingsView(LiveView):
     template_name = 'settings.html'
+    saved_theme = state("")
 
     def mount(self, request):
-        self.saved_theme = ""
         self.theme_radio = Radio(
             name="theme",
             label="Theme Preference",
@@ -232,10 +232,7 @@ class SettingsView(LiveView):
         )
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['theme_radio'] = self.theme_radio
-        context["saved_theme"] = self.saved_theme
-        return context
+        return {**super().get_context_data(**kwargs), "theme_radio": self.theme_radio}
 
     @event_handler()
     def save_settings(self, theme: str = "", **kwargs):

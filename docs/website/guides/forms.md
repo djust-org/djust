@@ -14,17 +14,12 @@ djust handles forms over WebSocket. No page reloads, no JavaScript, no API layer
 ## The Simplest Form
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class TodoView(LiveView):
     template_name = 'todos.html'
-
-    def mount(self, request, **kwargs):
-        self.items = []
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "items": self.items}
+    items = state(default_factory=list)
 
     @event_handler()
     def add_item(self, title="", **kwargs):
@@ -490,13 +485,10 @@ class ReviewQueue(ModelFormMixin[Review], LiveView):
     form_class = ReviewForm
     object_optional = True          # nothing is open until one is picked
     object_recheck = "writes"       # optional, as above
+    open_id = state(None)
 
     def mount(self, request, **kwargs):
-        self.open_id = None
         super().mount(request, **kwargs)
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "open_id": self.open_id}
 
     def handle_params(self, params, uri):
         self.open_id = params.get("open")

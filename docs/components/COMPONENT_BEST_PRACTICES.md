@@ -24,13 +24,8 @@ class MyView(LiveView):
         <h1>{{ title }}</h1>
         <button dj-click="increment">{{ count }}</button>
     """
-
-    def mount(self, request):
-        self.title = "Counter"
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "title": self.title, "count": self.count}
+    title = state("Counter")
+    count = state(0)
 
     def increment(self):
         self.count += 1
@@ -119,7 +114,7 @@ template = """
     {% endif %}
 """
 
-def mount(self):
+def mount(self, request, **kwargs):
     self.show_alert = False
     self.message = ""
 
@@ -306,7 +301,7 @@ class DashboardView(LiveView):
         <DataListComponent id="list" :items="filtered_items" />
     """
 
-    def mount(self):
+    def mount(self, request, **kwargs):
         self.items = load_items()
         self.current_filter = "all"
 
@@ -339,7 +334,7 @@ Use computed properties for derived state that multiple components need:
 
 ```python
 class DashboardView(LiveView):
-    def mount(self):
+    def mount(self, request, **kwargs):
         self.users = User.objects.all()
         self.selected_id = None
 
@@ -522,7 +517,7 @@ class ParentView(LiveView):
 ```python
 # ❌ Bad: Parent doing everything
 class DashboardView(LiveView):
-    def mount(self):
+    def mount(self, request, **kwargs):
         self.users = User.objects.all()
         self.filtered_users = []
         self.sort_order = "name"

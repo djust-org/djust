@@ -394,18 +394,13 @@ Sign in through an ordinary HTTP request instead:
 - To keep a LiveView form for the UX, validate on the server and then hand the credentials to the real login view with a native form submit. Put `dj-submit` and `dj-trigger-action` on the form, with the login URL as its `action`. `dj-submit` sends the form's fields to the handler (a `dj-click` button outside the form would send none of them). When validation passes, the handler calls `self.trigger_submit(selector)` and the browser submits the form natively, which bypasses the djust submit handler for that final step. See [`dj-trigger-action`](declarative-ux-attrs.md#dj-trigger-action--selftrigger_submitselector--bridge-to-native-post).
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
 class SignInView(LiveView):
     template_name = "signin.html"
-
-    def mount(self, request, **kwargs):
-        self.error = ""
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "error": self.error}
+    error = state("")
 
     @event_handler
     def check(self, username="", **kwargs):

@@ -132,15 +132,11 @@ A tick runs on a WebSocket and on an SSE session. It yields to a turn in progres
 
 ```python
 import asyncio
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class JobView(LiveView):
-    def mount(self, request, **kwargs):
-        self.step = "queued"
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "step": self.step}
+    step = state("queued")
 
     @event_handler()
     async def start(self, **kwargs):

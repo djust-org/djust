@@ -198,18 +198,13 @@ Over SSE (Server-Sent Events), the browser's `EventSource` handles reconnection 
 ```
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class EditorView(LiveView):
     template_name = "editor.html"
-
-    def mount(self, request, **kwargs):
-        self.title = ""
-        self.body = ""
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "title": self.title, "body": self.body}
+    title = state("")
+    body = state("")
 
     @event_handler()
     def validate_title(self, value="", **kwargs):

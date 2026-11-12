@@ -441,14 +441,10 @@ The parent LiveView handles it:
 
 ```python
 class TodoView(LiveView):
-    def mount(self, request, **kwargs):
-        self.todos = [
-            {"id": 1, "text": "Buy milk", "completed": False},
-            {"id": 2, "text": "Write docs", "completed": True},
-        ]
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "todos": self.todos}
+    todos = state([
+        {"id": 1, "text": "Buy milk", "completed": False},
+        {"id": 2, "text": "Write docs", "completed": True},
+    ])
 
     def handle_component_event(self, component_id, event, data):
         if event == "todo_toggled":
@@ -964,24 +960,22 @@ connection (the target must be a LiveView; for any other page, render a
 normal link instead), or do anything else:
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from django.urls import reverse
 
 class ClaimsListView(LiveView):
     template_name = "claims/list.html"
+    columns = state([
+        {"key": "claim_number", "label": "Claim #"},
+        {"key": "status", "label": "Status"},
+    ])
 
     def mount(self, request, **kwargs):
         self.rows = list(Claim.objects.values("id", "claim_number", "status"))
-        self.columns = [
-            {"key": "claim_number", "label": "Claim #"},
-            {"key": "status", "label": "Status"},
-        ]
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(rows=self.rows, columns=self.columns)
-        return context
+        return {**super().get_context_data(**kwargs), "rows": self.rows}
 
     @event_handler()
     def open_claim(self, value: str = "", **kwargs):

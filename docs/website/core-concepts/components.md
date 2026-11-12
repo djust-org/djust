@@ -159,6 +159,9 @@ Send events from a LiveComponent to its parent LiveView:
 
 ```python
 class CounterWidget(LiveComponent):
+    def mount(self, count=0, **kwargs):
+        self.count = count
+
     @event_handler()
     def increment(self, **kwargs):
         self.count += 1

@@ -91,16 +91,16 @@ Let's start with a simple LiveView without any decorators.
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from .models import Product
 
 class ProductSearchView(LiveView):
     template_name = 'products/search.html'
+    query = state("")
 
     def mount(self, request, **kwargs):
         """Initialize state on first load."""
-        self.query = ""
         self.results = Product.objects.filter(in_stock=True)[:20]
 
     @event_handler  # Required: undecorated handlers are rejected by default
@@ -120,9 +120,9 @@ class ProductSearchView(LiveView):
     def get_context_data(self, **kwargs):
         """Return context for template rendering."""
         return {
-            'query': self.query,
-            'results': self.results,
-            'count': self.results.count()
+            **super().get_context_data(**kwargs),
+            "results": self.results,
+            "count": self.results.count(),
         }
 ```
 
@@ -214,15 +214,15 @@ Let's fix these issues step by step.
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, debounce  # ← Import decorator
 from .models import Product
 
 class ProductSearchView(LiveView):
     template_name = 'products/search.html'
+    query = state("")
 
     def mount(self, request, **kwargs):
-        self.query = ""
         self.results = Product.objects.filter(in_stock=True)[:20]
 
     @event_handler
@@ -242,9 +242,9 @@ class ProductSearchView(LiveView):
 
     def get_context_data(self, **kwargs):
         return {
-            'query': self.query,
-            'results': self.results,
-            'count': self.results.count()
+            **super().get_context_data(**kwargs),
+            "results": self.results,
+            "count": self.results.count(),
         }
 ```
 
@@ -297,15 +297,15 @@ You don't need it for this page anyway:
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, debounce, cache  # ← Import cache
 from .models import Product
 
 class ProductSearchView(LiveView):
     template_name = 'products/search.html'
+    query = state("")
 
     def mount(self, request, **kwargs):
-        self.query = ""
         self.results = Product.objects.filter(in_stock=True)[:20]
 
     @event_handler
@@ -326,9 +326,9 @@ class ProductSearchView(LiveView):
 
     def get_context_data(self, **kwargs):
         return {
-            'query': self.query,
-            'results': self.results,
-            'count': self.results.count()
+            **super().get_context_data(**kwargs),
+            "results": self.results,
+            "count": self.results.count(),
         }
 ```
 
@@ -484,7 +484,7 @@ User types "laptop"
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, debounce
 from .models import Product
 
@@ -497,10 +497,10 @@ class ProductSearchView(LiveView):
         ('books', 'Books'),
         ('clothing', 'Clothing'),
     ]
+    query = state("")
+    category = state("")
 
     def mount(self, request, **kwargs):
-        self.query = ""
-        self.category = ""
         self.results = Product.objects.filter(in_stock=True)[:20]
 
     def _run_search(self):
@@ -528,11 +528,10 @@ class ProductSearchView(LiveView):
 
     def get_context_data(self, **kwargs):
         return {
-            'query': self.query,
-            'category': self.category,
-            'categories': self.CATEGORIES,
-            'results': self.results,
-            'count': self.results.count()
+            **super().get_context_data(**kwargs),
+            "categories": self.CATEGORIES,
+            "results": self.results,
+            "count": self.results.count(),
         }
 ```
 
@@ -645,7 +644,7 @@ Here's the final, fully-featured Product Search view:
 
 ```python
 # views.py
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, debounce
 from .models import Product
 
@@ -666,12 +665,12 @@ class ProductSearchView(LiveView):
         ('home', 'Home & Garden'),
     ]
     SORTS = ('name', 'price', '-price')  # Allowlist: never pass raw input to order_by()
+    query = state("")
+    category = state("")
+    sort = state("name")
 
     def mount(self, request, **kwargs):
         """Initialize state."""
-        self.query = ""
-        self.category = ""
-        self.sort = "name"
         self.results = Product.objects.filter(in_stock=True).order_by(self.sort)[:20]
 
     def _run_search(self):
@@ -714,12 +713,10 @@ class ProductSearchView(LiveView):
     def get_context_data(self, **kwargs):
         """Return context for template."""
         return {
-            'query': self.query,
-            'category': self.category,
-            'sort': self.sort,
-            'categories': self.CATEGORIES,
-            'results': self.results,
-            'count': self.results.count()
+            **super().get_context_data(**kwargs),
+            "categories": self.CATEGORIES,
+            "results": self.results,
+            "count": self.results.count(),
         }
 ```
 

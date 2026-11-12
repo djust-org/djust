@@ -7,17 +7,12 @@ Phoenix 1.1 added this; djust's equivalent is `self.set_layout(path)`.
 ## Quick start
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class EditorView(LiveView):
     template_name = "editor/page.html"
-
-    def mount(self, request, **kwargs):
-        self.fullscreen = False
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "fullscreen": self.fullscreen}
+    fullscreen = state(False)
 
     @event_handler
     def enter_fullscreen(self, **kwargs):

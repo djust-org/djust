@@ -37,18 +37,13 @@ djust provides Phoenix-style flash messages for showing transient notifications 
 ### 2. Call `put_flash()` in Your View
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
 class ItemView(LiveView):
     template_name = "item.html"
-
-    def mount(self, request, **kwargs):
-        self.name = ""
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "name": self.name}
+    name = state("")
 
     @event_handler()
     def save(self, **kwargs):

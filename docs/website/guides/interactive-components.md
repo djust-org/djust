@@ -18,7 +18,7 @@ decorator:
 
 <!-- djust-example: project-menu scenario=project-menu -->
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.components.interactive import DropdownMenu
 
 
@@ -34,12 +34,7 @@ class ProjectView(LiveView):
             {"label": "Delete", "value": "delete", "disabled": True},
         ],
     )
-
-    def mount(self, request, **kwargs):
-        self.selected_action = ""
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "selected_action": self.selected_action}
+    selected_action = state("")
 
     @project_menu.on.selected
     def on_project_menu_selected(self, component: DropdownMenu, value: str) -> None:
@@ -107,7 +102,7 @@ menu never changes another menu, or another user's page.
 
 <!-- djust-example: toolbar scenario=toolbar -->
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.components.interactive import DropdownMenu
 
 
@@ -122,17 +117,8 @@ class ToolbarView(LiveView):
         label="Account",
         items=[{"label": "Settings", "value": "settings"}],
     )
-
-    def mount(self, request, **kwargs):
-        self.selected_action = ""
-        self.show_account_settings = False
-
-    def get_context_data(self, **kwargs):
-        return {
-            **super().get_context_data(**kwargs),
-            "selected_action": self.selected_action,
-            "show_account_settings": self.show_account_settings,
-        }
+    selected_action = state("")
+    show_account_settings = state(False)
 
     @project_menu.on.selected
     def on_project_menu_selected(self, component: DropdownMenu, value: str) -> None:
@@ -165,7 +151,7 @@ or setting it raises), but it can still *observe* the visibility:
 
 <!-- djust-example: help-menu scenario=help-observe -->
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.components.interactive import DropdownMenu
 
 
@@ -177,12 +163,7 @@ class HelpView(LiveView):
         items=[{"label": "Shortcuts", "value": "shortcuts"}],
         visibility="client",
     )
-
-    def mount(self, request, **kwargs):
-        self.help_opened = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "help_opened": self.help_opened}
+    help_opened = state(0)
 
     @help_menu.on.toggled
     def on_help_menu_toggled(self, component: DropdownMenu, open: bool) -> None:
@@ -216,24 +197,14 @@ row. Pass the record id to an ordinary view handler:
 <!-- djust-example: row-actions scenario=row-actions -->
 ```python
 from django.core.exceptions import PermissionDenied
-from djust import LiveView, event_handler
+from djust import LiveView, event_handler, state
 
 
 class RowActionsView(LiveView):
     template_name = "projects/row_actions.html"
-
-    def mount(self, request, **kwargs):
-        self.projects = [{"id": 42, "name": "Alpha"}, {"id": 87, "name": "Beta"}]
-        self.selected_project = 0
-        self.selected_action = ""
-
-    def get_context_data(self, **kwargs):
-        return {
-            **super().get_context_data(**kwargs),
-            "projects": self.projects,
-            "selected_project": self.selected_project,
-            "selected_action": self.selected_action,
-        }
+    projects = state([{"id": 42, "name": "Alpha"}, {"id": 87, "name": "Beta"}])
+    selected_project = state(0)
+    selected_action = state("")
 
     @event_handler()
     def project_action(self, project_id: int, action: str) -> None:
@@ -270,21 +241,18 @@ ordered `(key, DropdownMenu(...))` pairs:
 <!-- djust-example: project-list scenario=project-list -->
 ```python
 from django.core.exceptions import PermissionDenied
-from djust import LiveView
+from djust import LiveView, state
 from djust.components.interactive import DropdownMenu
 
 
 class ProjectListView(LiveView):
     template_name = "projects/list.html"
     row_menus = DropdownMenu.collection()
+    selected = state("")
 
     def mount(self, request, **kwargs):
         self.projects = [{"id": 42, "name": "Alpha"}, {"id": 87, "name": "Beta"}]
-        self.selected = ""
         self._sync_menus()
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "selected": self.selected}
 
     def _sync_menus(self):
         self.row_menus.sync(

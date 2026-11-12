@@ -190,13 +190,8 @@ class AdminView(LiveView):
     allowed_model_fields = ['search_query', 'filter_status']
 
     # These cannot be set via dj-model:
-    is_admin = False
-    user_role = "viewer"
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context.update(is_admin=self.is_admin, user_role=self.user_role)
-        return context
+    is_admin = state(False)
+    user_role = state("viewer")
 ```
 
 ## Example: Search-as-you-Type

@@ -73,10 +73,12 @@ class TodoList(LiveComponent):
         self.items = items or []
 
     @event_handler()
-    def toggle(self, id: str = "", **kwargs):
-        item = next(i for i in self.items if i['id'] == int(id))
+    def toggle(self, id: int = 0, **kwargs):
+        item = next((i for i in self.items if i['id'] == id), None)
+        if item is None:
+            return
         item['completed'] = not item['completed']
-        self.send_parent("todo_toggled", {"id": int(id)})
+        self.send_parent("todo_toggled", {"id": id})
 ```
 
 **Use for**: Forms, data tables, filters, tabs - anything with state and user interaction.
@@ -407,7 +409,7 @@ class FilterWidget(LiveComponent):
 ```python
 class ProductListView(LiveView):
     def mount(self, request):
-        self.products = self._load_products()
+        self.products = list(Product.objects.all())
         self.filter_widget = FilterWidget(
             items=self.products,
             categories=['Electronics', 'Books', 'Clothing']
@@ -486,18 +488,13 @@ class MyView(LiveView):
 ### 1. Start Simple, Upgrade When Needed
 
 ```python
-from djust import LiveView, LiveComponent, event_handler
+from djust import LiveView, LiveComponent, event_handler, state
 from djust.components.base import Component
 from django.utils.html import format_html
 # ✅ Start with inline template
 class SimpleView(LiveView):
-    template = '<button dj-click="increment">{{ count }}</button>'
-
-    def mount(self, request):
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count}
+    template = '<div dj-root><button dj-click="increment">{{ count }}</button></div>'
+    count = state(0)
 
     @event_handler()
     def increment(self):
