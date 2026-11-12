@@ -1336,8 +1336,10 @@ BEST_PRACTICES = {
         ),
         "wrong_examples": [
             "self.items = Item.objects.all()  # an attribute alone: {{ items }} renders empty",
-            "self.items = self._items; return super().get_context_data(**kwargs)"
-            "  # the 1.x idiom publishes nothing under explicit exposure",
+            (
+                "self.items = self._items; return super().get_context_data(**kwargs)"
+                + "  # the 1.x idiom publishes nothing under explicit exposure"
+            ),
             "self._items = list(Item.objects.all())  # never convert to list — disables JIT",
         ],
     },
