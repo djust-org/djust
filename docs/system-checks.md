@@ -963,7 +963,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
     handler does not accept (under the legacy policy, `dj-input`, `dj-change`
     and `dj-submit` always send `field` and `_target`); extra positional
     arguments; or two attributes that send the same name. Under the strict
-    policy, `data-*` attributes are not sent at all: use `dj-value-*`.
+    policy, `data-*` attributes are not sent at all: use `dj-value-*`. A
+    `data-*` attribute naming a declared parameter is reported whether the
+    parameter is required or has a default; with a default the handler would
+    otherwise run with it and no error (#4033). A `data-*` attribute that names
+    no declared parameter is not reported, even on a `**kwargs` handler, since
+    most are unrelated (`data-testid`, `data-bs-toggle`).
   - `T021`: a literal the handler's annotation rejects (`data-count="abc"` for
     `count: int`). Also an unknown wire hint, or one that does not fit the
     declared type (`dj-value-id:bool` for `id: int`), and a field name that is
