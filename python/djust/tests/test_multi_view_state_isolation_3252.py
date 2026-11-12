@@ -149,15 +149,17 @@ async def test_two_views_of_one_class_keep_their_own_persisted_state_across_a_re
 
 
 class Snap(LiveView):
-    """A legacy view that opts in to signed state snapshots."""
+    """A view whose ``n`` the browser holds in the signed client snapshot."""
 
-    exposure_policy = "legacy"
-    enable_state_snapshot = True
+    exposure_policy = "explicit"
     template = '<div dj-view="' + MOD + '.Snap" dj-id="0"><b>n={{ n }}</b></div>'
+    n = state(0, persist="client", client=True)
 
     def mount(self, request, **kwargs):
-        self.n = 0
         VIEWS[getattr(self, "_djust_slot_target", None)] = self
+
+    def get_context_data(self, **kwargs):
+        return {"n": self.n}
 
     @event_handler()
     def bump(self, **kwargs):

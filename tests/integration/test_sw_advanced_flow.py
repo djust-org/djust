@@ -4,20 +4,17 @@ End-to-end scenarios that exercise the full server-side flow without the
 Rust renderer round-trip or a real Channels runtime. Mirrors the pattern
 in ``test_sticky_redirect_flow.py``.
 
-Two scenarios:
+Scenario: multi-lazy mount flows as one ``mount_batch`` frame (client-driven,
+simulated by calling ``handle_mount_batch`` directly with a 2-view payload).
 
-1. Multi-lazy mount flows as one ``mount_batch`` frame (client-driven,
-   simulated by calling ``handle_mount_batch`` directly with a 2-view
-   payload).
-2. Back-navigation restores state: ``live_redirect_mount`` with a
-   ``state_snapshot`` payload restores public view state on an opt-in
-   view.
+Back-navigation state restore (the signed client snapshot of declared
+``persist="client"`` fields) is covered over a real WebSocket in
+``python/djust/tests/test_snapshot_persistence_after_removal.py``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -40,18 +37,6 @@ class _FlowCounter(LiveView):
 
     def get_context_data(self, **kwargs):
         return {"count": self.count}
-
-
-class _FlowSnapshotView(LiveView):
-    exposure_policy = "legacy"
-    enable_state_snapshot = True
-    template = "<div dj-root><span>n={{ n }}</span></div>"
-
-    def mount(self, request, **kwargs):
-        self.n = 0
-
-    def get_context_data(self, **kwargs):
-        return {"n": self.n}
 
 
 # ---------------------------------------------------------------------------
@@ -176,73 +161,3 @@ async def test_multi_lazy_mount_flows_as_batch(_allow_flow_module):
     assert len(batch["failed"]) == 0
     target_ids = {v["target_id"] for v in batch["views"]}
     assert target_ids == {"lazy-a", "lazy-b"}
-
-
-# ---------------------------------------------------------------------------
-# 2. Back-nav with state snapshot restores public state.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_back_nav_with_state_snapshot_restores_state(_allow_flow_module):
-    consumer = _FakeConsumer()
-
-    # Finding #4: the snapshot must now carry a server signature. The
-    # FakeConsumer has no session key (scope session is None), so we sign
-    # with session_key=None (anonymous binding). The signed blob is what the
-    # client echoes back verbatim as ``state_json``.
-    from djust.security import sign_snapshot
-
-    view_slug = "tests.integration.test_sw_advanced_flow._FlowSnapshotView"
-    signed = sign_snapshot(json.dumps({"n": 99}), view_slug, None)
-    snapshot = {
-        "view_slug": view_slug,
-        "state_json": signed,
-        "ts": 0,
-    }
-    data = {
-        "view": "tests.integration.test_sw_advanced_flow._FlowSnapshotView",
-        "params": {},
-        "url": "/",
-        "state_snapshot": snapshot,
-    }
-    # live_redirect_mount parses state_snapshot and forwards to handle_mount.
-    # The sticky-staging branch is a no-op (no old view_instance set).
-    await consumer.handle_live_redirect_mount(data)
-
-    # View instance restored n=99 from snapshot, NOT 0 from mount().
-    assert consumer.view_instance is not None
-    assert consumer.view_instance.n == 99
-
-    # Exactly one mount frame was sent.
-    mount_frames = [f for f in consumer.sent_frames if f.get("type") == "mount"]
-    assert len(mount_frames) == 1
-
-
-@pytest.mark.asyncio
-async def test_back_nav_with_forged_unsigned_snapshot_falls_back_to_mount(
-    _allow_flow_module,
-):
-    """Finding #4 (CWE-345 → CWE-915): a forged UNSIGNED snapshot must be
-    rejected — the view falls back to ``mount()`` (n=0), not the injected
-    value. Mirrors the round-trip test above with an unsigned payload."""
-    consumer = _FakeConsumer()
-
-    view_slug = "tests.integration.test_sw_advanced_flow._FlowSnapshotView"
-    forged = {
-        "view_slug": view_slug,
-        # Plain unsigned JSON — exactly what an attacker would forge.
-        "state_json": json.dumps({"n": 99}),
-        "ts": 0,
-    }
-    data = {
-        "view": view_slug,
-        "params": {},
-        "url": "/",
-        "state_snapshot": forged,
-    }
-    await consumer.handle_live_redirect_mount(data)
-
-    # Forged snapshot rejected at the signature gate → mount() ran → n=0.
-    assert consumer.view_instance is not None
-    assert consumer.view_instance.n == 0, "Forged unsigned snapshot was applied — state injection!"

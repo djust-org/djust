@@ -408,10 +408,9 @@ class TestCallSiteInventory:
         ("python/djust/mixins/request.py", "_post_turn_body"): 2,
         # ViewRuntime: the event spine's pre/post and noop-token, the deferred
         # twin, the bound-component route
-        ("python/djust/runtime.py", "_dispatch_component_event"): 3,
+        ("python/djust/runtime.py", "_dispatch_component_event"): 2,
         ("python/djust/runtime.py", "_dispatch_event_render"): 2,
         ("python/djust/runtime.py", "_dispatch_single_event_body"): 2,
-        ("python/djust/runtime.py", "_legacy_noop_snapshot"): 1,
         ("python/djust/runtime.py", "handler"): 1,
         # the SSE tick (``TestSseTick``): the pre/post pair of ``handle_tick``
         ("python/djust/runtime.py", "_tick_body"): 2,

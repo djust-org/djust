@@ -40,8 +40,8 @@ the set is pinned mechanically in `TestTheDecodeSiteInventory`.
 **The issue's read-side list was wrong in both directions**, which is why the
 grep matters: it names `mixins/rust_bridge.py`, which has no restore path at
 all, and omits three that do — `runtime.py`'s `_restore_snapshot` call (the
-signed back-navigation snapshot), `time_travel.py`'s replay restores, and
-`_restore_component_state`.
+legacy signed back-navigation snapshot, removed in 2.0), `time_travel.py`'s
+replay restores, and `_restore_component_state`.
 
 Every template assertion is a differential against real Django, and the curated
 matrix is paired with a randomized sweep (v1.1.1-2 retro: a table samples the
@@ -147,7 +147,7 @@ class TestTheRoundTripIsLossless:
         assert str(restored) == str(value)
 
     def test_the_snapshot_encoder_round_trips_losslessly_too(self) -> None:
-        """The signed snapshot uses the ENCODER adapter, not the normalizer."""
+        """The snapshot capture uses the ENCODER adapter, not the normalizer."""
         for value in (*MONEY, HUGE):
             wire = json.dumps({"p": value}, cls=StateRoundtripJSONEncoder)
             restored = decode_state_roundtrip(json.loads(wire))["p"]
@@ -665,65 +665,23 @@ class TestTheRealHTTPPostRoundTrip:
 
 
 @pytest.mark.django_db
-class TestTheSignedSnapshotRoundTrip:
-    """`live_view.py`'s capture, `runtime.py`'s restore. A DIFFERENT serializer
-    from the session (a bare `json.dumps` + HMAC, not Django's session
-    JSONSerializer) — the #1646 shape, so both need the treatment."""
+class TestTheSnapshotCapture:
+    """`live_view.py`'s capture (`_capture_snapshot_state`, read by time-travel
+    recording) goes through the ENCODER adapter, a different serializer from
+    the session's, so it needs the tag too (the #1646 shape)."""
 
-    def test_the_capture_tags_and_the_signed_blob_carries_it(self) -> None:
-        from djust.security import sign_snapshot, unsign_snapshot
-
+    def test_the_capture_tags_a_decimal_and_the_decode_restores_it(self) -> None:
         view = _PriceView()
         view.mount(_with_session(RequestFactory().get("/price-2252/")))
-        captured = view._capture_snapshot_state(strict=True)
+        captured = view._capture_snapshot_state()
         assert captured["price"] == {STATE_DECIMAL_TAG: "19.90"}
 
-        # The emit path verbatim (`runtime.py`'s state_snapshot_signed block):
-        # a bare json.dumps with NO encoder, which is why the tag must already
-        # be plain JSON by this point.
-        state_json = json.dumps(captured, sort_keys=True, separators=(",", ":"))
-        signed = sign_snapshot(state_json, "app.PriceView", "sess-2252")
-        raw = unsign_snapshot(signed, "app.PriceView", "sess-2252")
-        assert raw is not None
-
+        # Plain JSON by this point: a bare dumps with no encoder carries it.
+        raw = json.dumps(captured, sort_keys=True, separators=(",", ":"))
         restored = decode_state_roundtrip(json.loads(raw))
-        target = _PriceView()
-        target._restore_snapshot(restored)
-        assert isinstance(target.price, Decimal)
-        assert str(target.price) == "19.90"
-        assert target.huge == HUGE
-
-    def test_the_bare_dumps_would_refuse_an_untagged_decimal(self) -> None:
-        """The premise, run rather than assumed — this emit path has no
-        encoder at all, so it is a second reason the raw Decimal is impossible
-        here and not only in the session."""
-        with pytest.raises(TypeError):
-            json.dumps({"p": HUGE}, sort_keys=True, separators=(",", ":"))
-
-    def test_the_decode_happens_before_the_user_override_point(self) -> None:
-        """`_restore_snapshot` is a DOCUMENTED subclass-override hook. A user
-        override must not have to know the tag shape exists, so `runtime.py`
-        decodes at the CALLER. Pinned structurally, because the caller is deep
-        in an async mount."""
-        src = (_PKG / "runtime.py").read_text()
-        # The override is entered as a "lifecycle" step (#3637), so the call reads
-        # ``guarded_step(view_instance, "lifecycle", view_instance._restore_snapshot)``.
-        call = src.index('"lifecycle", view_instance._restore_snapshot')
-        block = src[src.rindex("_should_restore_snapshot", 0, call) : call]
-        assert "decode_state_roundtrip(state_dict)" in block, (
-            "runtime.py must decode BEFORE calling the user-overridable "
-            "_restore_snapshot — see the docstring on LiveView._restore_snapshot"
-        )
-        assert (
-            "decode_state_roundtrip"
-            not in (_PKG / "live_view.py")
-            .read_text()
-            .split("def _restore_snapshot")[1]
-            .split("def _should_restore_snapshot")[0]
-        ), (
-            "_restore_snapshot itself must stay decode-free: a subclass that "
-            "overrides it would skip an in-method decode"
-        )
+        assert isinstance(restored["price"], Decimal)
+        assert str(restored["price"]) == "19.90"
+        assert restored["huge"] == HUGE
 
 
 @pytest.mark.django_db

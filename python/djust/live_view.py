@@ -365,9 +365,7 @@ def _shadows_component_method(component: Any, key: str) -> bool:
 def restore_components_snapshot(view: Any, components_state: Any, *, source: str) -> bool:
     """Apply a ``__components__`` snapshot map to ``view``'s components.
 
-    ONE helper for both restore paths — time-travel (``time_travel.py``) and
-    the signed back-navigation snapshot (:meth:`LiveView._restore_snapshot`,
-    #2896) — so they cannot drift (#1646).
+    Used by the time-travel restore (``time_travel.py``, #2896).
 
     Each ``{component_id: {field: value}}`` entry goes only to a component the
     view already knows: one in ``view._components``, or a class-level component
@@ -454,24 +452,6 @@ def restore_components_snapshot(view: Any, components_state: Any, *, source: str
                 )
                 ok = False
     return ok
-
-
-class NonPersistableStateError(TypeError):
-    """A Django ``Model``/``QuerySet`` was found on PUBLIC LiveView state
-    during the client-signed persistence capture (``enable_state_snapshot``).
-
-    Raised (DEBUG only) by
-    :meth:`LiveView._reject_orm_value_in_state_persistence` instead of a
-    bare ``TypeError`` so the runtime's snapshot-emission fail-soft wrapper
-    (``runtime.py``, the #1788 "snapshot emission must never break mount"
-    posture) can distinguish this DELIBERATE developer-error report from an
-    unexpected emission failure and re-raise it: the whole point of the
-    guard is to fail the mount loudly in development, which a broad
-    ``except Exception`` would otherwise silently downgrade to a log line.
-
-    Production never sees this exception — the guard logs a warning and
-    skips the attribute instead.
-    """
 
 
 #: The wrappers :func:`_protect_http_entry` returns, by identity. A wrapper made
@@ -909,19 +889,11 @@ class LiveView(
     sticky: bool = False
     sticky_id: Optional[str] = None
 
-    # State snapshot (v0.6.0 — Service Worker advanced features).
+    # Legacy opt-in: save the view's public state to the session after each
+    # event and restore it, in lieu of ``mount()``, when the WebSocket
+    # reconnects. Legacy exposure policy only; an explicit view declares
+    # ``state(persist="server")`` fields instead.
     #
-    # Opt-in per-view flag that enables back-navigation state restoration
-    # via the client-side Service Worker state cache. When True and the
-    # client posts a ``state_snapshot`` payload alongside a
-    # ``live_redirect_mount`` (typically from a popstate event on the
-    # back button), the server restores public view attributes from the
-    # snapshot in lieu of calling ``mount()``. Use
-    # :meth:`_should_restore_snapshot` to reject stale snapshots based on
-    # auth context, request headers, or freshness.
-    #
-    # Security: snapshots are JSON only (no pickle). Restore happens
-    # AFTER auth checks and uses ``safe_setattr`` to block dunder keys.
     # Never opt in for views whose public attributes contain credentials
     # or PII — system check ``djust.C304`` warns on common PII naming
     # patterns (``password``, ``token``, ``secret``, ``api_key``, ``pii``).
@@ -1088,6 +1060,14 @@ class LiveView(
         from ._removed_settings import reject_removed_view_attributes
 
         reject_removed_view_attributes(cls)
+        # #4045: a plain component in an explicit view's class body is one
+        # object shared by every session. The mount path checks again
+        # (``_params_form._refuse_removed_configuration``).
+        from ._exposure_providers import class_level_plain_component_error
+
+        shared = class_level_plain_component_error(cls)
+        if shared is not None:
+            raise shared
 
         cls._component_subscriptions = compile_subscriptions(cls)
         _warn_legacy_exposure_policy(cls, at_class_statement=True)
@@ -1530,7 +1510,7 @@ class LiveView(
         caller (the WebSocket state restore, the HTTP POST restore, a lazy container and
         a sticky child's restore) reaches this method, so the step is entered here.
 
-        A guarded step, like ``_restore_snapshot``: a wrapper whose ``__exit__`` swallows
+        A guarded step: a wrapper whose ``__exit__`` swallows
         an exception would otherwise turn a failing restore into a silent PARTIAL one
         (the attributes before the failing key applied, the rest skipped). The failure
         propagates as ``PermissionDenied`` instead.
@@ -1581,83 +1561,22 @@ class LiveView(
                     user_keys.add(key)
 
     # ============================================================================
-    # STATE SNAPSHOT — v0.6.0 back-navigation restoration (opt-in)
+    # STATE SNAPSHOT
     # ============================================================================
 
-    @staticmethod
-    def _reject_orm_value_in_state_persistence(key: str, value: Any) -> bool:
-        """Guard for the back-navigation state-SIGNING path only (``strict=True``
-        callers of ``_capture_snapshot_state`` — currently just ``runtime.py``'s
-        ``state_snapshot_signed`` mount emission).
-
-        Unlike :meth:`_is_serializable` (used by the rendering JIT pipeline's
-        ``get_state()``, which intentionally lets Django ``Model``/``QuerySet``
-        values through — the JIT context builder knows how to render them),
-        this guard runs only for the CLIENT-SIGNED public-state persistence
-        path. There, ``DjangoJSONEncoder`` *also* knows how to serialize a
-        ``Model`` (via ``_serialize_model_safely``), so an ORM object silently
-        succeeds the ``json.dumps`` round-trip and comes back as a lossy,
-        disconnected ``dict`` on restore — not the model. A handler that later
-        calls a model method on it (``self.user.get_full_name()``) breaks with
-        a confusing ``AttributeError`` far from the actual mistake.
-
-        Deliberately NOT applied to non-strict callers (e.g. the dev-only
-        time-travel debug capture in ``time_travel.py``, which also calls
-        ``_capture_snapshot_state`` to record ``state_before``/``state_after``
-        for the replay ring buffer) — that path already accepts a lossy,
-        disconnected snapshot by design (see the round-trip comment below) and
-        raising there would break time-travel for any view holding ordinary
-        ORM state, which is not the bug this guard targets.
-
-        Returns True (and raises/warns) when ``value`` is a Django
-        ``Model``/``QuerySet`` — the caller should skip persisting ``key``.
-        Returns False for everything else, including when Django's ORM isn't
-        importable.
-
-        In DEBUG the raise is a :class:`NonPersistableStateError` (a
-        ``TypeError`` subclass) so the real mount-path caller's #1788
-        fail-soft wrapper (``runtime.py`` snapshot emission) re-raises it
-        instead of swallowing it — the DEBUG failure is loud end-to-end,
-        not just when this method is called directly.
-        """
-        try:
-            from django.db import models
-            from django.db.models import QuerySet
-        except ImportError:
-            return False  # Django ORM not available; nothing to guard against
-
-        if not isinstance(value, (models.Model, QuerySet)):
-            return False
-
-        from django.conf import settings
-
-        value_type = type(value).__name__
-        msg = (
-            f"Non-persistable value in LiveView state: '{key}' ({value_type}) "
-            f"can't survive state persistence (the enable_state_snapshot "
-            f"back-navigation round-trip) — Django ORM objects are re-fetched "
-            f"per-request, not carried across a client-signed snapshot. Store "
-            f"the pk and refetch in the handler instead, e.g. "
-            f"`self.{key}_id = {key}.pk` rather than `self.{key} = {key}`."
-        )
-        if getattr(settings, "DEBUG", False):
-            raise NonPersistableStateError(msg)
-        logger.warning(msg)
-        return True
-
-    def _capture_snapshot_state(self, *, strict: bool = False) -> Dict[str, Any]:
+    def _capture_snapshot_state(self) -> Dict[str, Any]:
         """Return a JSON-serializable snapshot of public view state.
 
         Explicit policy returns only declared ``persist="client"`` values,
-        detached and bounded regardless of ``strict``. It does not infer any
-        component state. The returned dict is not a signed restore capability;
-        explicit restoration must use the bound snapshot adapter.
+        detached and bounded. It does not infer any component state. The
+        returned dict is not a signed restore capability; explicit restoration
+        uses the bound snapshot adapter.
 
         Legacy policy filters out private (``_``-prefixed) attributes, framework-internal
         attrs enumerated in ``_FRAMEWORK_INTERNAL_ATTRS``, callables, and any
-        value that fails a ``DjangoJSONEncoder`` round-trip. Used by the
-        client to post a ``STATE_SNAPSHOT`` message to the service worker
-        when opt-in via :attr:`enable_state_snapshot` is True.
+        value that fails a ``DjangoJSONEncoder`` round-trip. Time-travel
+        recording uses it; the snapshot is lossy by design (a model comes
+        back as a disconnected dict).
 
         Component state (#1041, v0.9.0): when this view has registered
         :class:`~djust.components.LiveComponent` instances in
@@ -1667,38 +1586,12 @@ class LiveView(
         ``{component_id: {field: value}}`` nested dict. The reserved
         name keeps component snapshots out of the parent's flat state
         namespace and gives the time-travel debug panel a clean shape
-        to render per-component scrubbers. Descriptor-pattern
-        components are auto-registered via the framework's existing
-        descriptor-init machinery; once they live in
-        ``self._components`` they're captured the same way as legacy-
-        instantiated ones.
-
-        Legacy transport snapshot capture and time-travel use this raw helper.
-        Legacy restoration uses :meth:`_restore_snapshot` after transport validation.
-
-        Args:
-            strict: When True, reject (DEBUG: raise / prod: warn+skip) any
-                Django ``Model``/``QuerySet`` found on public state —
-                see :meth:`_reject_orm_value_in_state_persistence`. Only the
-                real back-navigation state-signing caller
-                (``runtime.py``'s ``state_snapshot_signed`` mount emission)
-                passes ``strict=True``; the dev-only time-travel debug
-                capture (``time_travel.py``) intentionally leaves this False
-                to preserve its existing lossy-snapshot-by-design behavior.
+        to render per-component scrubbers.
         """
         from ._exposure import explicit_state_projection, uses_legacy_exposure
 
         if not uses_legacy_exposure(self):
             return explicit_state_projection(self, "snapshot")
-
-        from .components.base import Component
-
-        if strict and _declares_interactive_collection(type(self)):
-            # ADR-034 C3 (D5): a keyed collection's membership comes from the
-            # view's current ``sync()``. A client-signed navigation snapshot
-            # would restore the membership it captured, resurrecting members
-            # removed since, so such a view is never signed: Back mounts fresh.
-            return {}
 
         result: Dict[str, Any] = {}
         for key, value in self.__dict__.items():
@@ -1708,24 +1601,6 @@ class LiveView(
                 continue
             if callable(value):
                 continue
-            if strict and self._reject_orm_value_in_state_persistence(key, value):
-                continue
-            if strict and isinstance(value, Component):
-                # ADR-033 D6: the same rule inside a component's state — a
-                # model in ``table.rows`` must not be dict-ified and restored
-                # as a dict (review 🟡6).
-                if any(
-                    self._reject_orm_value_in_state_persistence(f"{key}.{k}", v)
-                    or (
-                        isinstance(v, (list, tuple))
-                        and any(
-                            self._reject_orm_value_in_state_persistence(f"{key}.{k}[]", item)
-                            for item in v
-                        )
-                    )
-                    for k, v in value.state.items()
-                ):
-                    continue
             try:
                 # json.dumps serves as the serializability check; the
                 # accompanying json.loads round-trips to a *disconnected*
@@ -1733,11 +1608,7 @@ class LiveView(
                 # (e.g. ``self.items.append(...)``) do not retroactively
                 # rewrite this snapshot. Without the round-trip the
                 # time-travel state_before / state_after fields aliased
-                # the live view attrs — see Stage 11 Fix B. The v0.6.0
-                # back-navigation state snapshot benefits from this same
-                # fix: previously a mutable public attr captured here
-                # could be mutated before the snapshot was serialized
-                # and sent to the client.
+                # the live view attrs — see Stage 11 Fix B.
                 result[key] = json.loads(json.dumps(value, cls=StateRoundtripJSONEncoder))
             except (TypeError, ValueError, OverflowError):
                 # Skip non-serializable — matches _get_private_state pattern.
@@ -1747,16 +1618,6 @@ class LiveView(
         # contributes its own public-state dict under
         # ``__components__`` keyed by ``component_id``.
         components_state = self._capture_components_snapshot()
-        if strict:
-            from ._interactive_snapshots import SNAPSHOT_KEY, capture_bindings
-            from .components._interactive import DropdownMenu
-
-            bindings = capture_bindings(self)
-            if bindings is not None:
-                result[SNAPSHOT_KEY] = bindings
-                for component_id, component in self._components.items():
-                    if isinstance(component, DropdownMenu):
-                        components_state.pop(component_id, None)
         if components_state:
             result["__components__"] = components_state
         return result
@@ -1830,54 +1691,16 @@ class LiveView(
                 )
         return components_state
 
-    def _restore_snapshot(self, state: Dict[str, Any]) -> None:
-        """Apply a previously captured snapshot to this view.
-
-        Default implementation iterates the dict and calls ``safe_setattr``
-        for every key, refusing to set dunder attributes or anything that
-        fails the ``SAFE_ATTRIBUTE_PATTERN`` regex. Subclasses can override
-        to implement custom restoration logic (e.g. re-hydrating ORM
-        instances from pk, re-fetching cached data).
-
-        The state is the JSON-decoded payload from the client — treat it
-        as untrusted and never pass it to ``exec``/``eval`` or raw
-        ``setattr``.
-
-        Explicit policy rejects this legacy raw-dict hook. Its adapter validates
-        the full signed, identity-bound schema before returning assignable values.
-
-        Component state under ``__components__`` is applied to the view's
-        registered and class-declared components only
-        (:func:`restore_components_snapshot`, shared with time-travel).
-        """
-        from ._exposure import require_legacy_state_api
-
-        require_legacy_state_api(self)
-        from ._interactive_snapshots import SNAPSHOT_KEY, restore_bindings
-
-        if SNAPSHOT_KEY in state:
-            restore_bindings(self, state[SNAPSHOT_KEY])
-        # Component state rides under the reserved ``__components__`` key
-        # (``_capture_snapshot_state``); the flat loop below would drop it,
-        # since ``safe_setattr`` refuses dunder names (#2896).
-        components_state = state.get("__components__")
-        from ._state_restore import restore_public_state
-
-        # Never over a method of the class (a context key named like one).
-        restore_public_state(
-            self, {k: v for k, v in state.items() if k not in (SNAPSHOT_KEY, "__components__")}
-        )
-        if components_state:
-            restore_components_snapshot(self, components_state, source="state_snapshot")
-
     def _should_restore_snapshot(self, request: Any) -> bool:
-        """Return True to allow snapshot restoration for this request.
+        """Return True to allow the signed client snapshot to be restored.
 
-        Default implementation returns True — the class-level
-        :attr:`enable_state_snapshot` flag already gates opt-in. Override
-        to reject stale snapshots on permission changes, feature-flag
-        toggles, or time-based TTLs (e.g. refuse snapshots older than one
-        hour by inspecting a ``_snapshot_ts`` attr).
+        Asked on a mount that carries the browser's signed token for this
+        view's ``state(persist="client", client=True)`` fields (a
+        back-navigation or a reconnect). Returning False mounts without those
+        values, as if the browser had sent no token. Override to refuse on a
+        feature-flag change or a freshness rule of your own; the token's
+        signature, age and binding to the session, user, tenant and route are
+        checked separately.
 
         Runs AFTER Django auth / ``check_view_auth`` — a returning user
         whose permissions were revoked will already have been redirected
@@ -2219,17 +2042,6 @@ class PersistentLiveView(LiveView):
     # Stated, not inherited from the default: the snapshot this class turns on
     # exists only under the legacy policy. A subclass may still set "explicit".
     exposure_policy = "legacy"
-
-
-def _declares_interactive_collection(view_class: type) -> bool:
-    """Whether a view class declares an ADR-034 keyed interactive collection."""
-    from ._component_subscriptions import DECLARATIONS_ATTR
-
-    declarations = getattr(view_class, DECLARATIONS_ATTR, None) or {}
-    return any(
-        getattr(type(declaration), "_djust_component_collection", False)
-        for declaration in declarations.values()
-    )
 
 
 def live_view(

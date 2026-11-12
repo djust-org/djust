@@ -22,7 +22,7 @@ from django.template import Context, Template
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 from djust.tenants.mixin import TenantMixin
 
 pytestmark = [pytest.mark.django_db, pytest.mark.tenants]
@@ -67,12 +67,17 @@ class _TenantParent(TenantMixin, LiveView):
 
 
 class _TenantTokenView(TenantMixin, LiveView):
-    exposure_policy = "legacy"
-    enable_state_snapshot = True
+    """``secret`` is declared client state: the browser holds it, signed."""
+
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">[{{ secret }}]</div>'
+    secret = state("", persist="client", client=True)
 
     def mount(self, request, **kwargs):
         self.secret = "fresh-" + self.tenant.id
+
+    def get_context_data(self, **kwargs):
+        return {"secret": self.secret}
 
 
 @pytest.fixture(autouse=True)
@@ -181,18 +186,18 @@ async def _sse_mount(host: str, session: SessionStore, snapshot: str | None = No
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-async def test_sse_token_from_tenant_a_is_ignored_under_tenant_b():
-    from djust.security import sign_snapshot
-
+async def test_sse_token_from_tenant_a_is_ignored_under_tenant_b(monkeypatch):
     session = await sync_to_async(_new_session)()
-    # The token the framework would mint under tenant A, holding a state that
-    # a fresh mount cannot produce.
-    token = sign_snapshot(
-        json.dumps({"secret": "planted-in-acme"}),
-        f"{_MOD}._TenantTokenView",
-        session.session_key,
-        "tenant:acme",
-    )
+    # The token the framework mints under tenant A, holding a state that a
+    # fresh mount cannot produce.
+    with monkeypatch.context() as planted:
+        planted.setattr(
+            _TenantTokenView,
+            "mount",
+            lambda self, request, **kwargs: setattr(self, "secret", "planted-in-acme"),
+        )
+        token = (await _sse_mount("acme.example.com", session))["state_snapshot_signed"]
+    assert isinstance(token, str) and token
 
     own = await _sse_mount("acme.example.com", session, snapshot=token)
     assert "[planted-in-acme]" in own["html"], own["html"]  # tenant A restores it
