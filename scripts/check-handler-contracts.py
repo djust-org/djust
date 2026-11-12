@@ -18,6 +18,12 @@ ROOT = Path(__file__).resolve().parents[1]
 # the expected workflow; failing to add it will cause the linter to
 # surface a possible #1275-class (stale/typo'd emit default) mismatch.
 _APP_LEVEL_EVENTS = {
+    # {% carousel %}: no framework handler since CarouselMixin was removed
+    # (#4025). The Carousel descriptor handles carousel_go through Meta.event,
+    # which this scan of method names does not see; prev/next are the app's.
+    "carousel_go",
+    "carousel_next",
+    "carousel_prev",
     "clear_notifications",
     "copy_code",
     "date_next_month",
