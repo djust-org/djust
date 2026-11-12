@@ -250,7 +250,10 @@ not yours to change.
 4. Move everything the template reads into `get_context_data()`.
 5. Remove the `exposure_policy` line, then test your reconnect and
    back-navigation flows. A template name that nothing supplies renders empty,
-   so look at every page the view renders.
+   so look at every page the view renders. Two things point at such a name:
+   with `DEBUG = True` djust logs a warning (logger `djust.exposure`) the first
+   time a view renders a name its template reads and the view sets but does not
+   supply, and `python manage.py check` reports it as `djust.T027`.
 
 **Cost.** An explicit WebSocket event costs roughly twice a legacy one, because
 of the per-turn authorization and the state save. The measured numbers and

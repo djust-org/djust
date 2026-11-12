@@ -278,3 +278,210 @@ def test_a_policyless_owner_does_not_grant_an_explicit_views_failure(bystander, 
     assert PROTECTED_FAILURE in caplog.text
     assert not exception_details_allowed_for((bystander, _Explicit))
     assert not exception_details_allowed_for((_Explicit, bystander))
+
+
+def test_warnings_as_errors_fails_every_construction_not_only_the_first():
+    """Review of #4049: the class was recorded before the warning was raised,
+    so under ``-W error`` the first construction raised and later ones passed."""
+
+    class StatesItOnAMixin:  # a plain mixin: no class-statement warning of ours
+        exposure_policy = "legacy"
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        view_class = type("LateLegacy", (StatesItOnAMixin, LiveView), {})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        for _ in range(2):
+            with pytest.raises(DeprecationWarning, match=LEGACY_WARNING):
+                view_class()
+    # Once it has been raised as a warning, it is not raised again.
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        view_class()
+        view_class()
+    (warning,) = _legacy_warnings(record)
+    # It points at the code that constructed the view, not at djust.
+    assert os.path.basename(warning.filename) == os.path.basename(__file__)
+
+
+def test_warnings_as_errors_at_the_class_statement_fails_each_definition():
+    for _ in range(2):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with pytest.raises(DeprecationWarning, match=LEGACY_WARNING):
+                type("Stated", (LiveView,), {"exposure_policy": "legacy"})
+
+
+# ------------------------------------------------------------------ #
+# The silent-empty case has a signal: a DEBUG log line and djust.T027
+# ------------------------------------------------------------------ #
+
+UNSUPPLIED_LOGGER = "djust.exposure"
+
+
+class _OneXStyle(LiveView):
+    """A 1.x view: sets attributes, supplies nothing. States no policy."""
+
+    template = "<div dj-root>[{{ count }}][{% if flag %}on{% endif %}][{{ typo }}]</div>"
+    title = "Inventory"
+
+    def mount(self, request, **kwargs):
+        self.count = 7
+        self.flag = True
+        self._private = "PRIVATE_SENTINEL"
+        self.unread = "UNREAD_VALUE_SENTINEL"
+
+
+class _Supplies(_OneXStyle):
+    exposure_policy = "explicit"
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count, "flag": self.flag}
+
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+
+    class _OneXStyleLegacy(_OneXStyle):
+        exposure_policy = "legacy"
+
+
+def _get(view_class):
+    from djust.tests.test_exposure_runtime import make_request
+
+    response = view_class().get(make_request())
+    assert response.status_code == 200
+    return response.content.decode()
+
+
+def _unsupplied_records(caplog, view_class):
+    return [
+        record
+        for record in caplog.records
+        if record.name == UNSUPPLIED_LOGGER and view_class.__qualname__ in record.getMessage()
+    ]
+
+
+@pytest.fixture
+def fresh_reports():
+    from djust import _exposure_unsupplied
+
+    saved = dict(_exposure_unsupplied._REPORTED)
+    _exposure_unsupplied._REPORTED.clear()
+    yield
+    _exposure_unsupplied._REPORTED.clear()
+    _exposure_unsupplied._REPORTED.update(saved)
+
+
+@pytest.mark.django_db
+@override_settings(DEBUG=True)
+def test_debug_names_what_a_1x_style_view_renders_empty_once(caplog, fresh_reports):
+    with caplog.at_level(logging.WARNING, logger=UNSUPPLIED_LOGGER):
+        html = _get(_OneXStyle)
+        _get(_OneXStyle)  # a second render adds nothing
+    assert "[][<!--dj-if-->][]" in html  # the silent-empty render the warning is about
+    records = _unsupplied_records(caplog, _OneXStyle)
+    messages = [record.getMessage() for record in records]
+    # Once per name the template reads AND the view holds: not the typo
+    # (nothing holds it), not the attribute the template never reads.
+    assert sorted(m.split("{{ ")[1].split(" }}")[0] for m in messages) == ["count", "flag"]
+    for message in messages:
+        assert "get_context_data()" in message and "state()" in message
+        assert "https://docs.djust.org/guides/migrating-to-2.0/" in message
+    text = "\\n".join(messages)
+    # Names only, never values.
+    assert "7" not in text.replace("2.0", "")
+    assert "SENTINEL" not in text
+    # Parameterized, not pre-formatted (CodeQL js/py tainted-format; CLAUDE.md rule 4).
+    assert all(record.args for record in records)
+
+
+@pytest.mark.django_db
+@override_settings(DEBUG=True)
+def test_debug_is_quiet_for_a_view_that_supplies_and_for_a_legacy_view(caplog, fresh_reports):
+    with caplog.at_level(logging.WARNING, logger=UNSUPPLIED_LOGGER):
+        assert "[7][on][]" in _get(_Supplies)
+        assert "[7][on][]" in _get(_OneXStyleLegacy)
+    assert _unsupplied_records(caplog, _Supplies) == []
+    assert _unsupplied_records(caplog, _OneXStyleLegacy) == []
+
+
+@pytest.mark.django_db
+@override_settings(DEBUG=False)
+def test_with_debug_off_nothing_is_logged_and_the_template_is_not_inspected(
+    caplog, fresh_reports, monkeypatch
+):
+    def inspected(view, context):
+        raise AssertionError("the template was inspected with DEBUG off")
+
+    monkeypatch.setattr("djust._exposure_unsupplied.unsupplied_template_names", inspected)
+    with caplog.at_level(logging.DEBUG, logger=UNSUPPLIED_LOGGER):
+        assert "[][<!--dj-if-->][]" in _get(_OneXStyle)
+    assert [r for r in caplog.records if r.name == UNSUPPLIED_LOGGER] == []
+
+
+@pytest.mark.django_db
+@override_settings(DEBUG=True)
+def test_a_failing_diagnostic_does_not_break_the_render(caplog, fresh_reports, monkeypatch):
+    def broken(view, context):
+        raise RuntimeError("DIAGNOSTIC_SECRET_SENTINEL")
+
+    monkeypatch.setattr("djust._exposure_unsupplied.unsupplied_template_names", broken)
+    with caplog.at_level(logging.DEBUG, logger=UNSUPPLIED_LOGGER):
+        assert "[][<!--dj-if-->][]" in _get(_OneXStyle)
+    assert "SENTINEL" not in caplog.text
+
+
+def _t027(view_class):
+    from djust.checks.templates import check_unsupplied_template_names
+
+    label = "%s.%s" % (view_class.__module__, view_class.__qualname__)
+    return [
+        message
+        for message in check_unsupplied_template_names(None)
+        if message.msg.startswith(label + " ")
+    ]
+
+
+def test_t027_reports_the_names_a_1x_style_view_holds_but_does_not_supply():
+    messages = _t027(_OneXStyle)
+    assert {m.id for m in messages} == {"djust.T027"}
+    named = sorted(m.msg.split("reads '")[1].split("'")[0] for m in messages)
+    # ``title`` is a class value the template does not read; ``typo`` is T018's.
+    assert named == ["count", "flag"]
+    for message in messages:
+        assert "get_context_data()" in message.hint and "state()" in message.hint
+        assert message.fix_hint and "get_context_data()" in message.fix_hint
+        assert "SENTINEL" not in message.msg + message.hint
+
+
+def test_t027_is_quiet_for_a_supplying_view_a_legacy_view_and_when_suppressed(settings):
+    assert _t027(_Supplies) == []
+    assert _t027(_OneXStyleLegacy) == []
+    settings.DJUST_CONFIG = {"suppress_checks": ["T027"]}
+    assert _t027(_OneXStyle) == []
+
+
+def test_t027_skips_a_get_context_data_it_cannot_follow_and_honours_noqa():
+    class Dynamic(LiveView):
+        exposure_policy = "explicit"
+        template = "<div dj-root>{{ count }}</div>"
+
+        def mount(self, request, **kwargs):
+            self.count = 0
+
+        def get_context_data(self, **kwargs):
+            context = super().get_context_data(**kwargs)
+            context["count"] = self.count
+            return context
+
+    class Silenced(LiveView):
+        exposure_policy = "explicit"
+        template = "<div dj-root>{# djust_typecheck: noqa count #}{{ count }}</div>"
+
+        def mount(self, request, **kwargs):
+            self.count = 0
+
+    assert _t027(Dynamic) == []
+    assert _t027(Silenced) == []

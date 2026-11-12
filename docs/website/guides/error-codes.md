@@ -1403,6 +1403,57 @@ directories loads are compared, so a library only Django's own engine renders
 
 ---
 
+### T027: Template name held but not supplied (explicit exposure)
+
+**Severity**: Warning
+
+**What causes it**: A view under explicit exposure (the default since 2.0) has
+a template that reads a name the view holds as an attribute, and the view's
+`get_context_data()` does not return it. The name renders as empty string,
+with no error. A view written for djust 1.x looks like this:
+
+<!-- djust-example: skip -- the view T027 reports, shown as the cause -->
+<!-- doc-snippet-check: anti-pattern -->
+```python
+class CounterView(LiveView):
+    template = "<div dj-root>{{ count }}</div>"
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+```
+
+Message: "<view> -- the template reads 'count' at line 1 (<inline>) and the
+view holds it as an attribute, but nothing supplies it to the template: ..."
+
+**Fix**: Supply the name:
+
+<!-- djust-example: skip -- executed by tests/test_doc_snippets_execute.py -->
+```python
+from djust import LiveView
+
+
+class CounterView(LiveView):
+    template = "<div dj-root>{{ count }}</div>"
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count}
+```
+
+Declare it with `state()` as well if it must be persisted or sent to the
+browser ([explicit exposure](../state/explicit-exposure.md)). To keep the 1.x
+behaviour while you migrate, set `exposure_policy = "legacy"` on the view
+([Migrating to djust 2.0](migrating-to-2.0.md)). The check skips a view whose
+`get_context_data()` it cannot read statically and a template that uses
+`{% extends %}`; with `DEBUG = True` djust logs the same condition at render
+time for those too. Suppress with
+`DJUST_CONFIG = {"suppress_checks": ["T027"]}` or a
+`{# djust_typecheck: noqa count #}` template comment.
+
+---
+
 ## Code Quality (Q0xx)
 
 ### Q001: print() statement

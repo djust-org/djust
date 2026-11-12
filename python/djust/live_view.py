@@ -583,8 +583,13 @@ def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None
     The warning is about the class that *states* the policy, because that is
     the line to change: a subclass that inherits the statement adds no second
     warning. It is raised when the class is created, pointing at its ``class``
-    statement. A policy assigned to the class afterwards is caught the first
-    time a view of that class is constructed (``at_class_statement=False``).
+    statement. A policy assigned to the class afterwards, or stated on a plain
+    mixin (which has no ``__init_subclass__`` of ours), is caught the first
+    time a view of that class is constructed (``at_class_statement=False``),
+    and points at the code that constructed it.
+
+    .. deprecated:: 2.0
+       ``exposure_policy = "legacy"``. Removed in 2.0.0.
 
     A class shipped in djust that states ``"legacy"`` (``PersistentLiveView``,
     the admin change list, ...) does not warn, here or through a subclass:
@@ -595,7 +600,6 @@ def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None
     else:
         if cls in _LEGACY_POLICY_SEARCHED:
             return
-        _LEGACY_POLICY_SEARCHED.add(cls)
         owners = [base for base in cls.__mro__ if "exposure_policy" in base.__dict__][:1]
     for owner in owners:
         policy = owner.__dict__["exposure_policy"]
@@ -603,7 +607,6 @@ def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None
             continue
         if owner in _LEGACY_POLICY_WARNED or _is_framework_class(owner):
             continue
-        _LEGACY_POLICY_WARNED.add(owner)
         warn_deprecated(
             'exposure_policy = "legacy" (stated on %s.%s)'
             % (getattr(owner, "__module__", "?"), owner.__qualname__),
@@ -614,8 +617,16 @@ def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None
                 "supply template context in get_context_data(); see %s)"
                 % EXPLICIT_EXPOSURE_GUIDE_URL
             ),
-            stacklevel=class_statement_stacklevel() if at_class_statement else 2,
+            # Both walk out of djust's own frames: to the ``class`` statement,
+            # or to the code that constructed the view.
+            stacklevel=class_statement_stacklevel(),
         )
+        # Recorded only once the warning has been raised and returned. Under
+        # warnings-as-errors it raises instead, and then every construction
+        # (and a re-import of the module) fails, not just the first.
+        _LEGACY_POLICY_WARNED.add(owner)
+    if not at_class_statement:
+        _LEGACY_POLICY_SEARCHED.add(cls)
 
 
 class LiveView(
@@ -654,11 +665,22 @@ class LiveView(
             def mount(self, request, **kwargs):
                 self.count = 0
 
+            def get_context_data(self, **kwargs):
+                # The template gets what is returned here, not the view's
+                # attributes (explicit exposure, the default).
+                return {**super().get_context_data(**kwargs), 'count': self.count}
+
+            @event_handler()
             def increment(self):
                 self.count += 1
 
+            @event_handler()
             def decrement(self):
                 self.count -= 1
+
+    ``self.count`` stays on the server between events of one connection. To
+    keep it across a reconnect or send it to the browser as data, declare it
+    with ``state()`` (see the explicit exposure guide).
 
     Memory Optimization with temporary_assigns:
         For views with large collections (chat messages, feed items, etc.),

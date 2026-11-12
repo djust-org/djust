@@ -1263,6 +1263,43 @@ def _get_context_data_is_too_dynamic(cls: type) -> bool:
     return False
 
 
+def _static_template_source(cls: type) -> Optional[tuple[str, Optional[str], str]]:
+    """``(source, template_name, path)`` for a view's own template, or None.
+
+    Runtime precedence in ``TemplateMixin.get_template()``: inline
+    ``template`` wins over ``template_name`` (``getattr`` already resolves the
+    MRO). ``template_name`` is None for an inline template. A template that
+    cannot be resolved statically (missing file, loader error) is None: other
+    checks report a missing template.
+    """
+    template_attr = getattr(cls, "template", None)
+    template_name_attr = getattr(cls, "template_name", None)
+    if isinstance(template_attr, str) and template_attr:
+        return template_attr, None, ""
+    if isinstance(template_name_attr, str) and template_name_attr:
+        try:
+            from django.template.loader import get_template
+
+            tpl = get_template(template_name_attr)
+            origin = getattr(tpl, "origin", None)
+            origin_name = getattr(origin, "name", None) if origin else None
+            if origin_name:
+                with open(origin_name, "r", encoding="utf-8", errors="replace") as fh:
+                    return fh.read(), template_name_attr, origin_name
+        except Exception:  # noqa: BLE001 — not resolvable statically: skip, never guess
+            return None
+    return None
+
+
+def _is_application_view(cls: type) -> bool:
+    """A view the project wrote: not shipped in djust, not marked ``abstract``."""
+    module = getattr(cls, "__module__", "") or ""
+    if module.startswith("djust.") or module.startswith("djust_"):
+        if "test" not in module and "example" not in module:
+            return False
+    return cls.__dict__.get("abstract") is not True
+
+
 @register("djust")
 def check_undefined_template_vars(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """T018: Warn on template variable references that resolve nowhere."""
@@ -1303,38 +1340,10 @@ def check_undefined_template_vars(app_configs: Any, **kwargs: Any) -> list[Check
         if _get_context_data_is_too_dynamic(cls):
             continue
 
-        # Runtime precedence in TemplateMixin.get_template(): inline
-        # `self.template` wins over `self.template_name`. `getattr` already
-        # does MRO resolution, so no manual parent walk is needed here.
-        template_attr = getattr(cls, "template", None)
-        template_name_attr = getattr(cls, "template_name", None)
-
-        src: Optional[str] = None
-        template_name: Optional[str] = None
-        template_path = ""
-
-        if isinstance(template_attr, str) and template_attr:
-            src = template_attr
-        elif isinstance(template_name_attr, str) and template_name_attr:
-            template_name = template_name_attr
-            try:
-                from django.template.loader import get_template
-
-                tpl = get_template(template_name_attr)
-                origin = getattr(tpl, "origin", None)
-                origin_name = getattr(origin, "name", None) if origin else None
-                if origin_name:
-                    with open(origin_name, "r", encoding="utf-8", errors="replace") as fh:
-                        src = fh.read()
-                    template_path = origin_name
-            except Exception:
-                # Template not resolvable statically (missing file, loader
-                # error, etc.) — silently skip rather than risk a false
-                # positive. Other checks already cover missing templates.
-                src = None
-
-        if not src:
+        loaded = _static_template_source(cls)
+        if loaded is None:
             continue
+        src, template_name, template_path = loaded
 
         # Known limitation (see module-level comment above): skip
         # `{% extends %}` templates entirely for v1 — `{% block %}`
@@ -1712,6 +1721,117 @@ def _check_document_element_root(
                 line_number=lineno,
             )
         )
+
+
+# T027 — the explicit-exposure twin of T018. T018 counts a public attribute
+# (``self.count = 0``, a class value, a property) as template context, which
+# is true under the legacy policy only. Under explicit exposure (ADR-038, the
+# default since 2.0) the template gets what ``get_context_data()`` and the
+# framework's providers supply, so a view written for the attribute walk
+# renders those names empty, silently. This check names them.
+#
+# "Holds" comes from the exposure inventory's AST scan (the names the legacy
+# policy would have exported); "reads" and "supplies" come from the same
+# helpers T018 and ``djust_typecheck`` use. Same limits as T018: a view whose
+# ``get_context_data()`` cannot be followed statically and a template that
+# uses ``{% extends %}`` are skipped rather than guessed at.
+_T027_HELD_KINDS = frozenset({"instance", "state", "class_value", "property"})
+
+
+@register("djust")
+def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """T027: an explicit view's template reads a name the view holds but does not supply."""
+    errors: list[CheckMessage] = []
+    if _is_check_suppressed("djust.T027"):
+        return errors
+    try:
+        from djust._exposure_providers import registered_components
+        from djust._exposure_unsupplied import MIGRATION_GUIDE_URL
+        from djust.live_view import LiveView
+        from djust.management._exposure_inventory import inventory_view
+        from djust.management.commands.djust_typecheck import (
+            _extract_context_keys_from_ast,
+            _extract_referenced_names,
+            _extract_template_locals,
+            _template_noqa_names,
+        )
+    except ImportError:
+        return errors
+
+    discovered = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in sorted(
+        discovered,
+        key=lambda c: (getattr(c, "__module__", ""), getattr(c, "__qualname__", "")),
+    ):
+        if not _is_application_view(cls):
+            continue
+        policy = inspect.getattr_static(cls, "exposure_policy", None)
+        if type(policy) is not str or policy != "explicit":
+            continue
+        if _get_context_data_is_too_dynamic(cls):
+            continue
+        loaded = _static_template_source(cls)
+        if loaded is None:
+            continue
+        src, template_name, template_path = loaded
+        if "{% extends" in src or "{%extends" in src:
+            continue
+        cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        try:
+            held = {
+                entry["name"]
+                for entry in inventory_view(cls)["names"]
+                if entry.get("kind") in _T027_HELD_KINDS
+            }
+            supplied = (
+                _extract_context_keys_from_ast(cls, attributes=False)
+                | set(registered_components(cls))
+                | _extract_template_locals(src)
+            )
+            silenced = _template_noqa_names(src)
+            refs = _extract_referenced_names(src)
+        except Exception:  # noqa: BLE001 — a view this cannot read is skipped, not guessed at
+            logger.debug("T027: could not statically read %s", cls_label)
+            continue
+        if not template_path:
+            try:
+                template_path = inspect.getfile(cls)
+            except (OSError, TypeError):
+                template_path = ""
+        reported: set[str] = set()
+        for name, line in refs:
+            if name not in held or name in supplied or name in reported:
+                continue
+            if "*" in silenced or name in silenced:
+                continue
+            reported.add(name)
+            errors.append(
+                DjustWarning(
+                    "%s -- the template reads '%s' at line %d (%s) and the view holds it "
+                    "as an attribute, but nothing supplies it to the template: under "
+                    "explicit exposure it renders as empty string, with no error."
+                    % (cls_label, name, line, template_name or "<inline>"),
+                    hint=(
+                        "Explicit exposure is the default since djust 2.0: a template gets "
+                        "what get_context_data() returns, not the view's attributes. Return "
+                        "'%s' from %s.get_context_data(), and declare it with state() if it "
+                        "must be persisted or sent to the browser. To keep the 1.x behaviour "
+                        'while you migrate, set exposure_policy = "legacy" on the view. '
+                        "See %s. If the name is supplied in a way this check cannot follow, "
+                        "silence it with a `{# djust_typecheck: noqa %s #}` template comment "
+                        "or DJUST_CONFIG = {'suppress_checks': ['T027']}."
+                        % (name, cls_label, MIGRATION_GUIDE_URL, name)
+                    ),
+                    id="djust.T027",
+                    fix_hint=(
+                        'Add `"%s": self.%s` to the dict `%s.get_context_data()` returns.'
+                        % (name, name, cls_label)
+                    ),
+                    file_path=template_path,
+                    line_number=line if template_name else None,
+                )
+            )
+    return errors
 
 
 # T026 — a ``{% load %}`` tag's library labels. ``{% load a b %}`` and
