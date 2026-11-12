@@ -122,6 +122,28 @@ class LegacyGates(Gates):
     exposure_policy = "legacy"
 
 
+class PostMethodGated(LiveView):
+    """Public page whose own ``post()`` carries ``@method_decorator(login_required)``."""
+
+    exposure_policy = "explicit"
+    login_required = False
+    template = "<div dj-root><b>ran={{ ran }}</b></div>"
+
+    def mount(self, request, **kwargs):
+        self.ran = 0
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(ran=self.ran, **kwargs)
+
+    @method_decorator(django_login_required)
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
+    @event_handler()
+    def touch(self, **kwargs):
+        self.ran += 1
+
+
 @method_decorator(django_login_required, name="post")
 class PostGated(LiveView):
     """Public page whose ``post()`` (so every event) is for signed-in users."""
@@ -206,6 +228,7 @@ urlpatterns = [
     path("plain/", Plain.as_view()),
     path("gates/", Gates.as_view()),
     path("post-gated/", PostGated.as_view()),
+    path("post-method-gated/", PostMethodGated.as_view()),
     path("staff-object/", StaffObject.as_view()),
     path("hook-gated/", HookGated.as_view()),
     path("parent/", EmbeddingParent.as_view()),
@@ -466,16 +489,45 @@ async def test_a_permission_gated_handler_follows_the_stack(
         assert "ran=1" not in json.dumps(answered)
 
 
-@pytest.mark.parametrize("stack, granted", [("session-only", False), ("auth(djust)", True)])
-async def test_access_control_on_post_follows_the_stack(django_user_model, stack, granted):
+async def _touch(django_user_model, view, url, stack) -> bool:
+    """Whether a logged-in browser's ``touch`` event runs on ``view`` behind ``stack``."""
     browser = await _logged_in(django_user_model)
     async with _StackSocket(stack, _session_cookie(browser)) as ws:
-        mounted = await ws.answer(
-            _mount_frame(MODULE + ".PostGated", "/post-gated/"), *_MOUNT_ANSWERS
-        )
+        mounted = await ws.answer(_mount_frame(MODULE + "." + view, url), *_MOUNT_ANSWERS)
         assert mounted.get("type") == "mount", mounted
         answered = await ws.answer(_event("touch"), *_EVENT_ANSWERS)
-    assert ("ran=1" in json.dumps(answered)) is granted, answered
+    return "ran=1" in json.dumps(answered)
+
+
+_POST_GATED = [("PostGated", "/post-gated/"), ("PostMethodGated", "/post-method-gated/")]
+
+
+@pytest.mark.parametrize("view, url", _POST_GATED)
+@pytest.mark.parametrize("stack, granted", [("session-only", False), ("auth(djust)", True)])
+async def test_access_control_on_post_follows_the_stack(
+    django_user_model, view, url, stack, granted
+):
+    """``login_required`` on ``post()`` gates every event of a public page.
+
+    Behind a stack that authenticated nobody the event is refused although the
+    session is logged in; behind an auth stack it runs.
+    """
+    assert await _touch(django_user_model, view, url, stack) is granted
+
+
+@pytest.mark.parametrize("view, url", _POST_GATED)
+async def test_the_post_gate_is_what_refuses_that_event(django_user_model, monkeypatch, view, url):
+    """The gate-off of the test above, kept in the suite.
+
+    With the wrapper made the identity, the same event behind the session-only
+    stack is granted to the user read from the session. So the refusal above
+    comes from judging the request as the stack built it, not from anything
+    else on the path.
+    """
+    from djust.auth import core
+
+    monkeypatch.setattr(core, "request_as_the_stack_built_it", lambda request: request)
+    assert await _touch(django_user_model, view, url, "session-only") is True
 
 
 @pytest.mark.parametrize("stack, granted", [("session-only", False), ("auth(djust)", True)])
