@@ -855,64 +855,8 @@ def test_http_get_selects_by_query_parameter_after_handle_params():
 class QueueSnapshot(Queue):
     """Saved to the session between requests, so a socket can restore it."""
 
-    enable_state_snapshot = True
-
 
 urlpatterns.append(path("queue-snapshot/", QueueSnapshot.as_view()))
-
-
-@pytest.mark.asyncio
-@pytest.mark.django_db(transaction=True)
-async def test_a_restored_view_keeps_the_input_typed_for_the_selected_record():
-    """Restore applies saved state without ``mount()`` knowing the selection: the form state
-    that arrives with its input is the selected record's, and is not reset by the first check."""
-    from channels.testing import WebsocketCommunicator
-    from django.contrib.sessions.backends.db import SessionStore
-    from djust.websocket import LiveViewConsumer
-
-    alice, mine, _ = await sync_to_async(_world)()
-    session = await sync_to_async(SessionStore)()
-    await sync_to_async(session.create)()
-
-    def http(method, body=None):
-        url = "/queue-snapshot/?open=%s" % mine.pk
-        if method == "get":
-            request = RequestFactory().get(url)
-        else:
-            request = RequestFactory().post(
-                url, data=json.dumps(body), content_type="application/json"
-            )
-        request.user, request.session, request.tenant = alice, session, None
-        return QueueSnapshot.as_view()(request)
-
-    assert (await sync_to_async(http)("get")).status_code == 200
-    typed = {"event": "validate_field", "params": {"field": "name", "value": "Typed, unsaved"}}
-    assert (await sync_to_async(http)("post", typed)).status_code == 200
-    await sync_to_async(session.save)()
-
-    socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    socket.scope.update(session=session, user=alice, tenant=None)
-    assert (await socket.connect())[0]
-    await socket.receive_json_from()
-    try:
-        await socket.send_json_to(
-            {
-                "type": "mount",
-                "view": __name__ + ".QueueSnapshot",
-                "url": "/queue-snapshot/",
-                "params": {"open": str(mine.pk)},
-                "has_prerendered": True,
-            }
-        )
-        frame = await socket.receive_json_from()
-        assert frame["type"] == "mount", frame
-        # Submitting with nothing new binds what the restored form state holds, so the
-        # typed text reaching the record proves the first check did not reset it.
-        frames = await _event(socket, 1, "submit_form", {})
-        assert not _denied(frames), frames
-        assert await _name(mine) == "Typed, unsaved"
-    finally:
-        await socket.disconnect()
 
 
 async def _restore(view_class, url_path, user, session, selected, typed_for):

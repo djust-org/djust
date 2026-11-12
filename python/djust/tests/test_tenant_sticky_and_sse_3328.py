@@ -35,7 +35,6 @@ class _StickyChild(LiveView):
     exposure_policy = "legacy"
     sticky = True
     sticky_id = "counter"
-    enable_state_snapshot = True
     template = "<div>Counter: {{ count }}</div>"
 
     def mount(self, request, **kwargs):
@@ -47,7 +46,6 @@ class _StickyChild(LiveView):
 
 class _TenantParent(TenantMixin, LiveView):
     exposure_policy = "legacy"
-    enable_state_snapshot = True
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -124,47 +122,6 @@ def _render_parent(host: str, session: SessionStore) -> "_TenantParent":
     parent._djust_mount_request = request
     Template(parent.template).render(Context({"view": parent, "request": request}))
     return parent
-
-
-class TestStickyChildIsTenantBound:
-    def test_child_saved_under_tenant_a_is_not_restored_under_tenant_b(self):
-        session = _new_session()
-        # The HTTP fallback POST's sweep saves the sticky child under the
-        # tenant's own key.
-        post = _request("POST", "acme.example.com", session)
-        assert _TenantParent().post(post).status_code == 200
-        post.session.save()
-
-        keys = [k for k in SessionStore(session.session_key).keys() if "__sticky__" in k]
-        assert keys == ["liveview_tenant:acme:/tenant-sticky/__sticky__counter"], keys
-
-        stored = SessionStore(session.session_key)
-        stored[keys[0]] = {"count": 5}  # a non-default state, as after clicks
-        stored.save()
-
-        own = _render_parent("acme.example.com", SessionStore(session.session_key))
-        assert own._get_all_child_views()["counter"].count == 5, "tenant A restores its own"
-
-        other = _render_parent("globex.example.com", SessionStore(session.session_key))
-        assert other._get_all_child_views()["counter"].count == 0, (
-            "tenant B must mount the child fresh"
-        )
-
-    def test_unresolved_tenant_neither_saves_nor_restores_a_child(self):
-        class _Optional(_TenantParent):
-            tenant_required = False
-
-        session = _new_session()
-        session["liveview_/tenant-sticky/__sticky__counter"] = {"count": 9}
-        session.save()
-        request = _request("GET", "testserver", SessionStore(session.session_key))
-        parent = _Optional()
-        parent.request = request
-        parent._ensure_tenant(request)
-        parent.mount(request)
-        parent._djust_mount_request = request
-        Template(parent.template).render(Context({"view": parent, "request": request}))
-        assert parent._get_all_child_views()["counter"].count == 0
 
 
 async def _sse_mount(host: str, session: SessionStore, snapshot: str | None = None) -> dict:

@@ -266,9 +266,6 @@ MIXIN_TABLES = {
             ("live_render", "live_render: child %s.get_context_data raised; r"): (
                 "an explicit child raises a value-free ExposureError first"
             ),
-            ("live_render", "live_render: sticky restore for %r failed; mount"): (
-                "inside `if sticky_kwarg and not explicit_child`"
-            ),
         },
         {
             ("_resolve_css_class", "config.get_framework_class lookup failed: %s"): (

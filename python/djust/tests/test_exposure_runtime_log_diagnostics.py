@@ -315,9 +315,7 @@ async def test_full_html_signal_receiver_failure_is_value_free_for_explicit_view
 
 
 class PersistFailureView(LiveView):
-    exposure_policy = "legacy"
-    # Legacy views persist after an event only with snapshot opt-in.
-    enable_state_snapshot = True
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ count }}</div>"
     count = state(0, persist="server")
 
@@ -332,41 +330,28 @@ class PersistFailureView(LiveView):
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("debug", [False, True])
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
 async def test_post_event_state_save_failure_is_value_free_for_explicit_views(
-    monkeypatch, caplog, debug, policy
+    monkeypatch, caplog, debug
 ):
-    """``_persist_state_after_event`` logged a failed save with
-    ``logger.exception``. Explicit saves project declared ``persist="server"``
-    values and "storage exceptions propagate" (``_exposure_sessions``), so a
-    storage error can carry server-only data. The trigger is synthetic: the
-    store write raises after mount. A legacy view writes through the session's
-    item assignment (one sync hop since #3212). An explicit view, even with
-    ``enable_state_snapshot`` set, commits through ``commit_explicit_turn``
-    (#3211), so its failing write is the explicit save, and the turn is not
-    acknowledged."""
-    from django.contrib.sessions.backends.base import SessionBase
-
+    """Explicit saves project declared ``persist="server"`` values and
+    "storage exceptions propagate" (``_exposure_sessions``), so a storage
+    error can carry server-only data. The trigger is synthetic: the store
+    write raises after mount. The view commits through
+    ``commit_explicit_turn`` (#3211), so its failing write is the explicit
+    save, and the turn is not acknowledged. (A legacy view has no post-event
+    save: ``enable_state_snapshot`` was removed in 2.0.)"""
     from djust import _exposure_sessions
 
+    policy = "explicit"
     writes = []
-
-    def failing_setitem(self, key, value):
-        writes.append(key)
-        raise ValueError("SESSION_STORE_SENTINEL")
 
     def failing_explicit_save(view, request):
         writes.append("explicit")
         raise ValueError("SESSION_STORE_SENTINEL")
 
-    detail = (
-        "Failed to save LiveView state after runtime event"
-        if policy == "legacy"
-        else "Explicit state save failed; success frame withheld"
-    )
+    detail = "Explicit state save failed; success frame withheld"
 
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(PersistFailureView, "exposure_policy", policy)
     with override_settings(
         LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
@@ -380,19 +365,17 @@ async def test_post_event_state_save_failure_is_value_free_for_explicit_views(
                 {"type": "mount", "view": __name__ + ".PersistFailureView", "url": "/s/"}
             )
             await _drain(socket)
-            monkeypatch.setattr(SessionBase, "__setitem__", failing_setitem)
             monkeypatch.setattr(_exposure_sessions, "save_server_state", failing_explicit_save)
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
                 await socket.send_json_to({"type": "event", "event": "bump", "params": {}})
                 frames = await _drain(socket, caplog, _marker(policy, debug, detail))
             assert writes, "the post-event save never reached the store; vacuous"
-            if policy == "explicit":
-                assert writes == ["explicit"], writes
-                assert [f["type"] for f in frames] == ["error"], frames
-                if not debug:
-                    assert "SESSION_STORE_SENTINEL" not in json.dumps(frames)
-            if policy == "legacy" or debug:
+            assert writes == ["explicit"], writes
+            assert [f["type"] for f in frames] == ["error"], frames
+            if not debug:
+                assert "SESSION_STORE_SENTINEL" not in json.dumps(frames)
+            if debug:
                 assert "Traceback" in caplog.text
                 assert detail in caplog.text
                 assert "SESSION_STORE_SENTINEL" in caplog.text

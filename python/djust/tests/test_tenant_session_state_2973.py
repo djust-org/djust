@@ -6,12 +6,11 @@ no tenant, so one session on two tenants at the same URL restored one tenant's
 state into the other's view:
 
 - HTTP fallback POST: tenant B's event ran with tenant A's saved state (and
-  A's ``tenant`` context key through the ``tenant`` property setter);
-- WS/SSE reconnect with ``enable_state_snapshot = True``: tenant B's mount
-  frame rendered tenant A's state.
+  A's ``tenant`` context key through the ``tenant`` property setter).
 
-Both are driven here through the real transport code, same session, same URL,
-tenant resolved from the Host.
+It is driven here through the real transport code, same session, same URL,
+tenant resolved from the Host. (The WS/SSE reconnect restore of an
+``enable_state_snapshot`` view, the other path #2973 fixed, was removed in 2.0.)
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ from __future__ import annotations
 import json
 
 import pytest
-from asgiref.sync import sync_to_async
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory, override_settings
 
@@ -37,7 +35,6 @@ _SEEN: list = []
 
 class _SecretView(TenantMixin, LiveView):
     exposure_policy = "legacy"
-    enable_state_snapshot = True
     template = '<div dj-root dj-id="0">[{{ secret }}]</div>'
 
     def mount(self, request, **kwargs):
@@ -67,7 +64,6 @@ class _OptionalSecretView(_SecretView):
 
 class _PlainView(LiveView):
     exposure_policy = "legacy"
-    enable_state_snapshot = True
     template = '<div dj-root dj-id="0">[{{ secret }}]</div>'
 
     def mount(self, request, **kwargs):
@@ -169,72 +165,6 @@ class TestHttpFallbackPost:
 
 
 # --------------------------------------------------------------------------- #
-# WebSocket mount / reconnect
-# --------------------------------------------------------------------------- #
-async def _ws(view: str, host: str, session: SessionStore, *, event: str | None = None) -> str:
-    from channels.testing import WebsocketCommunicator
-    from djust.websocket import LiveViewConsumer
-
-    communicator = WebsocketCommunicator(
-        LiveViewConsumer.as_asgi(), "/ws/", headers=[(b"host", host.encode())]
-    )
-    communicator.scope["session"] = session
-    connected, _ = await communicator.connect()
-    assert connected
-    await communicator.receive_json_from()
-    await communicator.send_json_to({"type": "mount", "view": f"{__name__}.{view}", "url": _URL})
-    frame = None
-    for _ in range(6):
-        frame = await communicator.receive_json_from()
-        if frame.get("type") in ("mount", "error", "navigate"):
-            break
-    assert frame is not None and frame.get("type") == "mount", frame
-    if event:
-        await communicator.send_json_to({"type": "event", "event": event, "params": {}})
-        for _ in range(6):
-            reply = await communicator.receive_json_from()
-            if reply.get("type") in ("patch", "html_update", "diff", "noop", "error"):
-                break
-    await communicator.disconnect()
-    return frame.get("html") or ""
-
-
-class TestWebSocketReconnect:
-    @pytest.mark.asyncio
-    async def test_reconnect_on_tenant_b_does_not_render_tenant_a_state(self):
-        session = await sync_to_async(_new_session)()
-        await _ws("_SecretView", "acme.example.com", session, event="keep")
-
-        acme = await _ws("_SecretView", "acme.example.com", session)
-        assert "[secret-of-acme]" in acme, (
-            "precondition: tenant A's own reconnect restores its saved state; got " + acme
-        )
-
-        globex = await _ws("_SecretView", "globex.example.com", session)
-        assert "secret-of-acme" not in globex, globex
-        assert "[fresh-globex]" in globex, globex
-
-    @pytest.mark.asyncio
-    async def test_view_without_the_hook_still_restores_over_the_socket(self):
-        session = await sync_to_async(_new_session)()
-        await _ws("_PlainView", "acme.example.com", session, event="keep")
-        html = await _ws("_PlainView", "acme.example.com", session)
-        assert "[kept-plain]" in html, html
-
-    @pytest.mark.asyncio
-    async def test_unresolved_tenant_does_not_restore_a_shared_entry(self):
-        session = await sync_to_async(_new_session)()
-
-        def _plant():
-            session[f"liveview_{_URL}"] = {"secret": "shared"}
-            session.save()
-
-        await sync_to_async(_plant)()
-        html = await _ws("_OptionalSecretView", "testserver", session)
-        assert "shared" not in html, html
-
-
-# --------------------------------------------------------------------------- #
 # Structural pins: one place derives the key
 # --------------------------------------------------------------------------- #
 class TestKeyDerivationHasOneHome:
@@ -250,12 +180,11 @@ class TestKeyDerivationHasOneHome:
                 continue
             yield rel, path.read_text()
 
-    def test_session_keys_are_only_built_by_the_tenant_helper_and_sticky_helpers(self):
+    def test_session_keys_are_only_built_by_the_tenant_helper(self):
         """A new ``f"liveview_{...}"`` site would silently skip the tenant scope."""
         found = {rel for rel, src in self._sources() if 'f"liveview_{' in src}
         assert found == {
             "_tenant_state.py",  # session_view_key
-            "mixins/sticky.py",  # takes a path the caller already scoped
             "mixins/rust_bridge.py",  # state-backend view_key, then _saved_state_key
         }, found
 

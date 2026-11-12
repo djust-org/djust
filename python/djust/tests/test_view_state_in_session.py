@@ -41,7 +41,6 @@ class CounterView(LiveView):
     """Public, JSON private and non-JSON private state, all set in mount()."""
 
     exposure_policy = "legacy"
-    enable_state_snapshot = True  # the socket save is opt-in; prove it is still skipped
     template = '<div dj-root dj-id="0"><p>{{ count }}</p><p>{{ greeting }}</p></div>'
     mounts = 0
 
@@ -185,34 +184,27 @@ def _db_session():
 
 
 @pytest.mark.asyncio
-async def test_stateless_socket_turn_writes_and_reads_no_view_keys(generous_save_timeout):
-    with STATELESS:
+@pytest.mark.parametrize("stateless", [True, False])
+async def test_a_socket_turn_writes_and_reads_no_view_keys_in_either_mode(stateless):
+    """A legacy view keeps nothing of itself in the session over a socket: 2.0
+    removed the per-event save and the reconnect restore
+    (``enable_state_snapshot``), so the setting only governs the HTTP paths."""
+    import contextlib
+
+    with STATELESS if stateless else contextlib.nullcontext():
         session = await sync_to_async(_db_session)()
         await session.aset(f"liveview_{PATH}", {"count": 41, "greeting": "stale"})
+        await session.aset(f"liveview_{PATH}__private", {"_seen": [41], "_client": None})
         runtime, transport = await _socket_mount_and_event(session)
 
         view = runtime.view_instance
-        assert view._mounted_from_restore is False, "the saved key must not be read"
-        assert view.count == 1 and view.greeting == "hi"
+        assert view.count == 1 and view.greeting == "hi", "the saved key must not be read"
         assert not transport.errors, transport.errors
         assert transport.frames_of("patch", "html_update"), transport.sent
-        # Only the planted key; the turn wrote nothing (it would have been count=1).
+        # Only the planted keys; the turn wrote nothing (it would have been count=1).
         keys = await sync_to_async(_view_keys)(session)
-        assert keys == [f"liveview_{PATH}"]
+        assert sorted(keys) == [f"liveview_{PATH}", f"liveview_{PATH}__private"]
         assert (await session.aget(f"liveview_{PATH}"))["count"] == 41
-
-
-@pytest.mark.asyncio
-async def test_default_socket_turn_saves_and_restores(generous_save_timeout):
-    session = await sync_to_async(_db_session)()
-    await session.aset(f"liveview_{PATH}", {"count": 41, "greeting": "x"})
-    await session.aset(f"liveview_{PATH}__private", {"_seen": [41], "_client": None})
-    runtime, _transport = await _socket_mount_and_event(session)
-
-    view = runtime.view_instance
-    assert view._mounted_from_restore is True
-    assert view.count == 42
-    assert (await session.aget(f"liveview_{PATH}"))["count"] == 42
 
 
 # --------------------------------------------------------------------------- #

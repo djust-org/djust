@@ -69,7 +69,6 @@ class ScopedEdit(ModelFormMixin[Group], LiveView):
     model = Group
     form_class = GroupForm
     login_required = True
-    enable_state_snapshot = True
 
     def get_queryset(self):
         if FAIL.get("queryset"):
@@ -678,45 +677,6 @@ async def test_websocket_failing_callback_fails_closed(callback):
         finally:
             await socket.disconnect()
     assert await sync_to_async(lambda: Group.objects.get(pk=mine.pk).name)() == mine.name
-
-
-@pytest.mark.asyncio
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("draft", ["Draft name", ""])
-async def test_reconnect_keeps_unsaved_input_and_revalidates_it(draft):
-    """Typed input survives a reconnect (the per-event session save), but it is
-    validated again before anything is saved (D4)."""
-    user, mine, _ = await sync_to_async(_world)()
-    session = await sync_to_async(_session)()
-    url = "/edit/%s/" % mine.pk
-    await sync_to_async(_open)(ScopedEdit, user, mine.pk, session)
-    await sync_to_async(session.save)()
-    with _allow():
-        socket = await _connect(user, session)
-        try:
-            assert (await _mount(socket, "ScopedEdit", url, prerendered=True))["type"] == "mount"
-            frames = await _event(socket, 1, "validate_field", {"field": "name", "value": draft})
-            assert frames[-1]["type"] != "error", frames
-        finally:
-            await socket.disconnect()
-
-        EVENTS.clear()
-        socket = await _connect(user, session)
-        try:
-            frame = await _mount(socket, "ScopedEdit", url, prerendered=True)
-            assert frame["type"] == "mount", frame
-            frames = await _event(socket, 1, "submit_form", {})
-            text = json.dumps(frames)
-        finally:
-            await socket.disconnect()
-    saved = await sync_to_async(lambda: Group.objects.get(pk=mine.pk).name)()
-    if draft:
-        assert "Saved Draft name" in text, frames
-        assert saved == "Draft name"
-    else:
-        assert "This field is required." in text, frames
-        assert saved == mine.name
-        assert not any(event[0] == "form_valid" for event in EVENTS)
 
 
 @pytest.mark.asyncio

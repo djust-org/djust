@@ -50,13 +50,7 @@ Bucket definitions (per phase, per variant):
 4. ``state_ms`` — state serialization on the event path:
    ``_sync_state_to_rust`` wall time minus the ``get_context_data`` calls it
    made (normalise + change-detect + ``update_state``); ``jit_ms`` is
-   ``get_context_data`` (the JIT/eager serialization); ``persist_ms`` /
-   ``persist_calls`` are ``ViewRuntime._persist_state_after_event`` — the
-   per-event session save that normalises the public state with
-   ``state_roundtrip=True`` and writes it through the session backend,
-   including the ``get_context_data`` call the save itself makes (excluded
-   from ``jit_ms``). It runs only for a view with ``enable_state_snapshot``:
-   the ``snapshot`` variant. Every other variant reads 0 calls by design.
+   ``get_context_data`` (the JIT/eager serialization).
 5. ``parse_ms`` / ``diff_ms`` / ``ser_ms`` and ``fast`` — HTML parse + VDOM
    diff + serialization, tagged by which text fast path the differ reports
    (``RenderTiming::fast_path``: ``-`` mount, ``frag`` fragment, ``region``
@@ -315,11 +309,6 @@ class PhaseRow:
     # bucket 4
     sync_ms: float = 0.0
     jit_ms: float = 0.0
-    persist_ms: float = 0.0
-    #: ``_persist_state_after_event`` invocations in the phase: 1 per event
-    #: on the ``snapshot`` variant, 0 everywhere else (a presence count, so
-    #: the persist column cannot be dead without a test noticing — #1859).
-    persist_calls: int = 0
     # bucket 5
     parse_ms: float = 0.0
     diff_ms: float = 0.0
@@ -374,7 +363,6 @@ BUCKET_COLUMNS: Sequence[Tuple[str, str]] = (
     ("3 list_ms", "list_ms"),
     ("4 state", "state_ms"),
     ("4 jit", "jit_ms"),
-    ("4 persist", "persist_ms"),
     ("5 parse", "parse_ms"),
     ("5 diff", "diff_ms"),
     ("5 ser", "ser_ms"),
@@ -389,7 +377,6 @@ _NUMERIC = {
     "list_ms",
     "state_ms",
     "jit_ms",
-    "persist_ms",
     "parse_ms",
     "diff_ms",
     "ser_ms",
@@ -401,7 +388,6 @@ _COUNTS = {
     "proxy_xings",
     "py_xings",
     "queries",
-    "persist_calls",
     "render_xings",
     "renders",
 }

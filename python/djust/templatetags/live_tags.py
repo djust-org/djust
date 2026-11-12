@@ -2584,16 +2584,13 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     #     recovery, the sticky child is reset and the user's interactions are
     #     discarded — the #1813 data-loss bug.
     #
-    #     The two pre-existing escape hatches do NOT cover this:
-    #       * ``_sticky_preserved`` auto-reattach (above) only fires on a
-    #         live_redirect/navigation (the #1471 reconnect path);
-    #       * ``restore_sticky_child_state`` (below) is gated behind
-    #         ``enable_state_snapshot=True`` on BOTH parent + child and reads
-    #         from the session — inert in the default config.
+    #     The pre-existing escape hatch does NOT cover this:
+    #     ``_sticky_preserved`` auto-reattach (above) only fires on a
+    #     live_redirect/navigation (the #1471 reconnect path).
     #
-    #     This hatch is INDEPENDENT of those: it reuses the in-memory live
+    #     This hatch is INDEPENDENT of that one: it reuses the in-memory live
     #     instance the parent already holds. It composes with — does not bypass
-    #     — the others, because it only fires when the registry already has a
+    #     — it, because it only fires when the registry already has a
     #     live child for this ``sticky_id`` (i.e. on the SECOND and later
     #     renders of a long-lived WS parent). On the first render the registry
     #     is empty, so we fall through to the existing fresh-mount / restore
@@ -2696,17 +2693,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             "satisfy (login redirect: %s)" % (view_path, auth_redirect)
         )
 
-    # 4b. ADR-018 iter 18b — sticky-child state restore (Decisions 2 + 6).
-    #     A sticky child whose state was persisted by 18a's SAVE path has
-    #     that state restored here, BEFORE mount(), in lieu of mount()'s
-    #     state-init — mirroring the parent's own skip-mount()-on-saved-state
-    #     path at websocket.py:handle_mount. ``restore_sticky_child_state``
-    #     internally returns False (and the fresh mount() runs) when the
-    #     child is non-sticky, the both-opt-in gate fails, the session is
-    #     absent, or no saved state exists — so there is NO behavior change
-    #     for the unsaved / non-opted-in case. Wrapped in try/except: a
-    #     malformed session entry must fall through to a fresh mount(),
-    #     never break the parent's render.
+    # 4b. An explicit child's declared state is restored after its mount()
+    #     (below); a legacy child always mounts fresh.
     from .._exposure import ExposureError, uses_legacy_exposure
 
     explicit_child = not uses_legacy_exposure(child)
@@ -2739,47 +2727,11 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             type(child), parent, request, explicit_slot, explicit_mount_inputs
         )
 
-    restored = False
-    if sticky_kwarg and not explicit_child:
-        from ..mixins.sticky import restore_sticky_child_state
+    mount = getattr(child, "mount", None)
+    if callable(mount):
+        from .._view_hooks import call_hook_sync
 
-        try:
-            # ADR-018 iter 18c — path-derivation invariant. ``parent_path``
-            # (the 4th arg) MUST match the path used at SAVE time: the WS save
-            # uses ``_djust_mount_request.path`` (websocket.py), the HTTP save
-            # uses ``request.path`` (mixins/request.py). On all current
-            # transports the restore-time ``request.path`` and the save-time
-            # parent mount-request path coincide — the parent is re-mounted on
-            # the same URL it was saved on. If a future transport makes the
-            # restore-time request path differ from the parent's original
-            # mount path, this key derivation breaks SILENTLY: the restore
-            # looks under the wrong ``liveview_<path>__sticky__<id>`` key and
-            # falls through to a fresh ``mount()``. Keep save and restore
-            # path-derivation in lockstep.
-            from .._tenant_state import scoped_path
-
-            # The tenant scope is part of the key (#2973); None = skip.
-            sticky_path = scoped_path(parent, getattr(request, "path", "/"))
-            restored = (
-                restore_sticky_child_state(
-                    child, parent, getattr(request, "session", None), sticky_path
-                )
-                if sticky_path is not None
-                else False
-            )
-        except Exception:  # noqa: BLE001 — restore must never break render
-            logger.exception(
-                "live_render: sticky restore for %r failed; mounting fresh",
-                view_path,
-            )
-            restored = False
-
-    if not restored:
-        mount = getattr(child, "mount", None)
-        if callable(mount):
-            from .._view_hooks import call_hook_sync
-
-            call_hook_sync(mount, request, **kwargs)
+        call_hook_sync(mount, request, **kwargs)
     if sticky_kwarg:
         _record_sticky_mount_kwargs(child, kwargs)
 

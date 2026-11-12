@@ -89,21 +89,6 @@ class LegacyPlain(LiveView):
         self.n += 1
 
 
-class LegacyOptedIn(LiveView):
-    """A legacy view that still opts in to the session save and restore."""
-
-    exposure_policy = "legacy"
-    enable_state_snapshot = True
-    template = '<div dj-view="' + MOD + '.LegacyOptedIn" dj-id="0"><b>n={{ n }}</b></div>'
-
-    def mount(self, request, **kwargs):
-        self.n = 0
-
-    @event_handler()
-    def bump(self, **kwargs):
-        self.n += 1
-
-
 @pytest.fixture(autouse=True)
 def setup(monkeypatch):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
@@ -311,51 +296,6 @@ async def test_a_legacy_view_signs_nothing_and_mounts_fresh_on_reconnect():
             assert "n=0" in echoed["html"], (verb, echoed["html"])
     finally:
         await second.disconnect()
-
-
-async def _opted_in_after_two_bumps(key):
-    socket = await _connect(key)
-    try:
-        mounted = await _mount(socket, LegacyOptedIn)
-        assert TOKEN not in mounted and "n=0" in mounted["html"], mounted
-        await _bump(socket)
-        await _bump(socket)
-    finally:
-        await socket.disconnect()
-
-
-@pytest.mark.parametrize("verb", ["mount", "live_redirect_mount"])
-async def test_an_opted_in_legacy_view_still_restores_from_the_session(verb):
-    """This PR removes only the signed token. The session save and restore of
-    ``enable_state_snapshot`` stay (removed with the flag, row 4), so with the
-    default settings a reconnect or a Back still gets the latest state."""
-    key = await sync_to_async(_fresh_key)()
-    await _opted_in_after_two_bumps(key)
-
-    socket = await _connect(key)
-    try:
-        restored = await _mount(socket, LegacyOptedIn, verb=verb)
-        assert TOKEN not in restored, restored.keys()
-        assert "n=2" in restored["html"], restored["html"]
-    finally:
-        await socket.disconnect()
-
-
-@pytest.mark.parametrize("verb", ["mount", "live_redirect_mount"])
-async def test_an_opted_in_legacy_view_mounts_fresh_without_view_state_in_the_session(verb):
-    """With ``view_state_in_session`` off nothing is saved, and the signed
-    token that used to restore it instead is gone: the view mounts fresh."""
-    with override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False}):
-        key = await sync_to_async(_fresh_key)()
-        await _opted_in_after_two_bumps(key)
-
-        socket = await _connect(key)
-        try:
-            fresh = await _mount(socket, LegacyOptedIn, verb=verb)
-            assert TOKEN not in fresh, fresh.keys()
-            assert "n=0" in fresh["html"], fresh["html"]
-        finally:
-            await socket.disconnect()
 
 
 # --------------------------------------------------------------------------- #

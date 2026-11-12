@@ -373,31 +373,6 @@ async def test_a_streamed_fragment_render_runs_get_context_data_inside_the_wrapp
     assert SEEN["stream_context"] == ["render"], SEEN
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_a_sticky_childs_state_save_runs_get_context_data_inside_the_wrapper(probe):
-    from djust.mixins.sticky import save_sticky_child_state
-
-    class Child(LiveView):
-        exposure_policy = "legacy"
-        sticky_id = "c1"
-
-        def get_context_data(self, **kwargs):
-            note("sticky_context")
-            return {"n": 1}
-
-    class Sessionish:
-        async def aset(self, key, value):
-            pass
-
-        async def apop(self, key, default=None):
-            return default
-
-    await save_sticky_child_state(Child(), Sessionish(), "app.Parent")
-
-    assert SEEN["sticky_context"] == ["render"], SEEN
-
-
 def _gate(user):
     note("post_gate")
     return bool(getattr(user, "is_superuser", False))
@@ -479,22 +454,6 @@ async def test_the_async_check_permissions_path_runs_its_sync_hops_inside_the_wr
     assert steps() == ["auth", "auth"], steps()
 
 
-def test_the_http_sticky_state_save_runs_get_context_data_inside_the_wrapper(probe):
-    from djust.mixins.sticky import save_sticky_child_state_sync
-
-    class Child(LiveView):
-        exposure_policy = "legacy"
-        sticky_id = "c2"
-
-        def get_context_data(self, **kwargs):
-            note("sticky_sync_context")
-            return {"n": 1}
-
-    save_sticky_child_state_sync(Child(), {}, "app.Parent")
-
-    assert SEEN["sticky_sync_context"] == ["render"], SEEN
-
-
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_a_scoped_component_render_runs_component_render_inside_the_wrapper(
@@ -520,32 +479,6 @@ async def test_a_scoped_component_render_runs_component_render_inside_the_wrappe
 
     assert SEEN.get("component_render"), "the scoped path must have rendered the component"
     assert set(SEEN["component_render"]) == {"render"}, SEEN
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_a_session_restore_mount_replays_presence_inside_the_wrapper(probe, monkeypatch):
-    """The restore branch of the runtime mount replaces ``mount()``; it re-registers
-    presence (``get_presence_key`` is application code) in its own hop."""
-    from djust.tests import test_runtime_mount_state_restore_1913 as harness
-
-    def _restore_presence(self):
-        note("restore_presence")
-
-    monkeypatch.setattr(
-        harness._OptInSnapView, "_restore_presence", _restore_presence, raising=False
-    )
-    session = await sync_to_async(harness._make_db_session)()
-    await session.aset(f"liveview_{harness.PAGE_URL}", {"role": "admin", "n": 42})
-    await sync_to_async(session.save)()
-    runtime, _transport = harness._make_runtime(harness._make_request(session))
-
-    await harness._mount(
-        runtime, {"type": "mount", "view": harness.VIEW_PATH, "url": harness.PAGE_URL}
-    )
-
-    assert runtime.view_instance._mounted_from_restore is True
-    assert SEEN["restore_presence"] == ["hook"], SEEN
 
 
 @pytest.mark.django_db(transaction=True)

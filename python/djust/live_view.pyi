@@ -151,7 +151,3 @@ class LiveView(
         selector: str,
     ) -> None: ...
     async def push_state(self) -> None: ...
-
-class PersistentLiveView(LiveView):
-    abstract: bool
-    enable_state_snapshot: bool

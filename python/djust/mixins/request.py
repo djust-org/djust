@@ -1636,19 +1636,11 @@ class RequestMixin:
 
         The shape the socket transports use for a child's event: an
         ``embedded_update`` carrying the child's own HTML, which the client
-        morphs into the child's container. The child's state is persisted as
-        the socket persists it (a sticky child that opted in, under its stable
-        key), its side channels (flash, page metadata, navigation) are the
-        child's, and nothing of the page is rendered or saved: the event could
-        not have changed it.
+        morphs into the child's container. Its side channels (flash, page
+        metadata, navigation) are the child's, and nothing of the page is
+        rendered or saved: the event could not have changed it.
         """
         from ..websocket import render_embedded_child_html
-        from .sticky import (
-            save_sticky_child_state_sync,
-            sticky_child_should_persist,
-            warn_sticky_child_optin_skip,
-            write_sticky_index_and_prune_sync,
-        )
 
         response: Dict[str, Any] = {"type": "embedded_update", "view_id": view_id}
         navigation_frames: List[Dict[str, Any]] = []
@@ -1667,17 +1659,6 @@ class RequestMixin:
         if any(frame["action"] == "live_redirect" for frame in navigation_frames):
             # The event leaves the page: nothing is rendered or saved for it.
             return JsonResponse(response)
-
-        # Under the tenant scope the page's saved state lives under (#2973); a
-        # tenant view with no resolved tenant saves nothing.
-        from .._tenant_state import scoped_path
-
-        sticky_path = scoped_path(self, request.path)
-        if sticky_path is not None and sticky_child_should_persist(child, self):
-            save_sticky_child_state_sync(child, request.session, sticky_path)
-            write_sticky_index_and_prune_sync(self, request.session, sticky_path)
-        else:
-            warn_sticky_child_optin_skip(child, self)
 
         # The page tree's public parameter contracts travel with the update, as
         # with every other render answer (ADR-036): the child's owners are part
@@ -2323,55 +2304,6 @@ class RequestMixin:
                 from .._exposure_child_persistence import save_child_states
 
                 save_child_states(self, request)
-
-            # ADR-018 iter 18a — HTTP sticky-child state save (Decision 4,
-            # HTTP side). The POST path has no ``view_id`` routing — it
-            # always operates on ``self`` (the parent) — so this is a
-            # parent-driven sweep, not a child-routed save. It MUST run
-            # AFTER ``render_with_diff`` because ``{% live_render %}``
-            # registers children on ``self._child_views`` during the
-            # template render (verified: ``_child_views`` is empty before
-            # the render at line ~604, populated after it here). For each
-            # registered child satisfying the both-opt-in gate, persist
-            # its state under the stable sticky key; then write the GC
-            # ledger. Django saves the session at response time.
-            from .sticky import (
-                save_sticky_child_state_sync,
-                sticky_child_should_persist,
-                warn_sticky_child_optin_skip,
-                write_sticky_index_and_prune_sync,
-            )
-
-            from .sticky import sticky_ids_index_key as _sticky_index_key
-
-            _sticky_children = (
-                self._get_all_child_views() if hasattr(self, "_get_all_child_views") else {}
-            )
-            _sticky_to_save = [
-                child
-                for child in _sticky_children.values()
-                if sticky_child_should_persist(child, self)
-            ]
-            # ADR-018 iter 18c — for each registered child NOT in the save set,
-            # warn if it's the Decision-5 opt-in mismatch (child opted in,
-            # parent did not). The helper re-checks the misconfiguration, so
-            # children that simply don't opt in produce no warning.
-            for _child in _sticky_children.values():
-                if _child not in _sticky_to_save:
-                    warn_sticky_child_optin_skip(_child, self)
-            # Run the save + ledger sweep when there are children to save OR a
-            # stale ledger exists (so a parent whose last sticky child was
-            # removed still gets its orphans pruned). A parent that never had
-            # sticky children pays zero cost — no ledger key, empty sweep.
-            from .._tenant_state import scoped_path
-
-            _sticky_path = scoped_path(self, request.path)
-            if _sticky_path is not None and (
-                _sticky_to_save or _sticky_index_key(_sticky_path) in request.session
-            ):
-                for _child in _sticky_to_save:
-                    save_sticky_child_state_sync(_child, request.session, _sticky_path)
-                write_sticky_index_and_prune_sync(self, request.session, _sticky_path)
 
             import json as json_module
 

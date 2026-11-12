@@ -54,7 +54,6 @@ class RowsPage(LiveView):
         "<div dj-root>{% for row in rows.values %}<section>{{ row }}</section>{% endfor %}"
         "{{ fixed }}<p>{{ result }}</p><i>{{ calls }}</i></div>"
     )
-    enable_state_snapshot = True
     rows = DropdownMenu.collection()
     fixed = DropdownMenu(label="Fixed", items=[{"label": "F", "value": "f"}])
 
@@ -413,77 +412,3 @@ def test_member_state_and_membership_changes_render():
     view.rows.sync([("p-99", menu("Project 99", "details"))])
     html, patches, _ = view.render_with_diff(request)
     assert "Project 99" in html and "Project 42" not in html
-
-
-@pytest.mark.asyncio
-@pytest.mark.django_db(transaction=True)
-async def test_websocket_restore_uses_the_latest_membership_and_rotates_lifetimes():
-    """A reconnect restored from the session (mount skipped) brings back the
-    last server membership: a member removed after the page loaded stays gone,
-    and client members get a fresh observation lifetime."""
-    from asgiref.sync import sync_to_async
-    from channels.testing import WebsocketCommunicator
-    from django.test import override_settings
-
-    from djust.tests.test_exposure_runtime import make_request
-    from djust.websocket import LiveViewConsumer
-
-    ROWS["rows"] = default_rows() + [("p-c", menu("Client", "details", visibility="client"))]
-    initial = await sync_to_async(make_request)()
-    await sync_to_async(RowsPage().get)(initial)
-    saved = initial.session["liveview_%s_components" % initial.path]["rows"]["members"]
-    ids = {m["key"]: m["binding_id"] for m in saved}
-    old_lifetime = next(m for m in saved if m["key"] == "p-c")["observation"]["lifetime"]
-    response, _ = await sync_to_async(_post)(
-        initial, "select", {"component_id": ids["p-42"], "value": "remove"}
-    )
-    assert response.status_code == 200
-    await sync_to_async(initial.session.save)()
-
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=["djust.tests"], DJUST_TENANTS=None):
-        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-        socket.scope.update(session=initial.session, user=initial.user, tenant=None)
-        assert (await socket.connect())[0]
-        await socket.receive_json_from()
-        try:
-            await socket.send_json_to(
-                {
-                    "type": "mount",
-                    "view": __name__ + ".RowsPage",
-                    "url": initial.path,
-                    "has_prerendered": True,
-                }
-            )
-            frame = await socket.receive_json_from()
-            assert frame["type"] == "mount", frame
-            html = frame["html"]
-            assert ids["p-42"] not in html and "Project 42" not in html
-            assert ids["p-87"] in html and ids["p-c"] in html
-            assert old_lifetime not in html, "a restored client member rotates its lifetime"
-
-            await socket.send_json_to(
-                {
-                    "type": "event",
-                    "event": "select",
-                    "ref": 1,
-                    "params": {"component_id": ids["p-42"], "value": "details"},
-                }
-            )
-            refused = await socket.receive_json_from()
-            assert refused["type"] == "error", refused
-            await socket.send_json_to(
-                {
-                    "type": "event",
-                    "event": "select",
-                    "ref": 2,
-                    "params": {"component_id": ids["p-87"], "value": "details"},
-                }
-            )
-            frames = []
-            for _ in range(4):
-                frames.append(await socket.receive_json_from())
-                if frames[-1]["type"] in {"patch", "html_update", "noop", "error"}:
-                    break
-            assert "p-87:details" in json.dumps(frames), frames
-        finally:
-            await socket.disconnect()

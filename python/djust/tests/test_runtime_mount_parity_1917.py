@@ -87,7 +87,6 @@ class OptInSnapView(LiveView):
     """Opt-in snapshot view (Phase 3.1 state-restore parity)."""
 
     exposure_policy = "legacy"
-    enable_state_snapshot = True
     template = f'<div dj-root dj-view="{_ALLOWED}.OptInSnapView" dj-id="0">n={{{{ n }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -331,45 +330,6 @@ class TestRuntimeAuthBlockFinalize:
             assert closed["flag"] is False, (
                 "#291: finalize_mount_auth must NOT close the shared socket when "
                 "_mounting_in_batch=True"
-            )
-        finally:
-            await communicator.disconnect()
-
-
-# ===========================================================================
-# 5. State restore (Phase 3.1) still works through the wired path
-# ===========================================================================
-
-
-@pytest.mark.django_db
-@pytest.mark.asyncio
-class TestRuntimeStateRestoreParity:
-    async def test_opt_in_view_restores_saved_session_state_on_runtime_mount(self):
-        """An opt-in (enable_state_snapshot) view whose session carries saved
-        state restores it on a runtime mount — proving the Phase-3.1 restore path
-        survives the 3.3a hook wiring. Gate-off contrast: a DIFFERENT (fresh)
-        session has no saved state → n stays 0."""
-        communicator, consumer = await _connect_and_bootstrap_consumer(url="/snap-1917/")
-        try:
-            # Pre-seed the consumer's scope session with saved state for the view.
-            from django.contrib.sessions.backends.db import SessionStore
-
-            key = consumer.scope["session"].session_key
-
-            def _seed():
-                s = SessionStore(session_key=key)
-                s["liveview_/snap-1917/"] = {"n": 99}
-                s.save()
-
-            await sync_to_async(_seed)()
-
-            await _runtime_mount(consumer, f"{_ALLOWED}.OptInSnapView", url="/snap-1917/")
-            frames = await _drain(communicator, "mount")
-            mounts = [f for f in frames if f.get("type") == "mount"]
-            assert mounts, f"the opt-in view must mount; got {frames!r}"
-            assert "n=99" in mounts[0].get("html", ""), (
-                "Phase 3.1 restore: the saved session state (n=99) must be restored "
-                f"on the runtime mount; got {mounts[0]!r}"
             )
         finally:
             await communicator.disconnect()

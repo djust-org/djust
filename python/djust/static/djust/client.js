@@ -22064,8 +22064,8 @@ globalThis.djust.djTransitionGroup = {
 // cached state and stashes it on window.djust._pendingStateSnapshot so the
 // next outbound live_redirect_mount can include it.
 //
-// The server grants persistence: legacy enable_state_snapshot or staged explicit
-// persist="client" fields. The client echoes signed tokens, never infers grants.
+// The server grants persistence: declared persist="client", client=True
+// fields. The client echoes signed tokens, never infers grants.
 //
 // Non-invasive: this module only wires listeners and reads/writes one
 // globalThis slot. It never mutates the DOM or WebSocket directly.

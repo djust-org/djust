@@ -13,11 +13,9 @@ pin that, and that a tenant's saved state still round-trips through
 from __future__ import annotations
 
 import pytest
-from asgiref.sync import sync_to_async
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 
-from djust import LiveView
 from djust._session_merge import _OWN_PREFIXES, _watches, is_tracked, save_merged, track_session
 from djust._tenant_state import (
     refresh_other_views_state,
@@ -25,26 +23,11 @@ from djust._tenant_state import (
     session_view_key,
     state_scope,
 )
-from djust.decorators import event_handler
-from djust.tenants.mixin import TenantMixin
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.tenants]
 
 _URL = "/merge-tenant-binding/"
 _CONFIG = {"TENANT_RESOLVER": "subdomain"}
-
-
-class _SecretView(TenantMixin, LiveView):
-    exposure_policy = "legacy"
-    enable_state_snapshot = True
-    template = '<div dj-root dj-id="0">[{{ secret }}]</div>'
-
-    def mount(self, request, **kwargs):
-        self.secret = "fresh-" + self.tenant.id
-
-    @event_handler()
-    def keep(self, **kwargs):
-        self.secret = "secret-of-" + self.tenant.id
 
 
 @pytest.fixture(autouse=True)
@@ -77,41 +60,6 @@ def _elsewhere(key, **changes):
         else:
             other[name] = value
     other.save()
-
-
-async def _ws(host, session, *, event=None, between=None):
-    """Mount ``_SecretView`` over a real consumer, optionally run ``between``
-    (sync) after the mount and before the event, send ``event``; return the
-    mount html."""
-    from channels.testing import WebsocketCommunicator
-    from djust.websocket import LiveViewConsumer
-
-    communicator = WebsocketCommunicator(
-        LiveViewConsumer.as_asgi(), "/ws/", headers=[(b"host", host.encode())]
-    )
-    communicator.scope["session"] = session
-    connected, _ = await communicator.connect()
-    assert connected
-    await communicator.receive_json_from()
-    await communicator.send_json_to(
-        {"type": "mount", "view": f"{__name__}._SecretView", "url": _URL}
-    )
-    frame = None
-    for _ in range(6):
-        frame = await communicator.receive_json_from()
-        if frame.get("type") in ("mount", "error", "navigate"):
-            break
-    assert frame is not None and frame.get("type") == "mount", frame
-    if between is not None:
-        await sync_to_async(between)()
-    if event:
-        await communicator.send_json_to({"type": "event", "event": event, "params": {}})
-        for _ in range(6):
-            reply = await communicator.receive_json_from()
-            if reply.get("type") in ("patch", "html_update", "diff", "noop", "error"):
-                break
-    await communicator.disconnect()
-    return frame.get("html") or ""
 
 
 # --------------------------------------------------------------------------- #
@@ -163,57 +111,6 @@ def test_every_scoped_session_key_starts_with_an_own_prefix(name):
         assert _watches(name_, {"x": 1}) is False, name_
     # The scope goes after the prefix: it never turns the key into a foreign one.
     assert state_scope(view) is not None and not key.startswith(("tenant:", "slot:"))
-
-
-@pytest.mark.asyncio
-async def test_socket_writes_leave_only_own_keys_and_the_app_key_alone():
-    session = await sync_to_async(_new_session)()
-    await _ws("acme.example.com", session, event="keep")
-    stored = await sync_to_async(_stored)(session.session_key)
-    assert stored["idle_ts"] == "OLD"
-    djust_keys = [k for k in stored if not k.startswith("_auth") and k != "idle_ts"]
-    assert any(k == f"liveview_tenant:acme:{_URL}" for k in djust_keys), djust_keys
-    # No snapshot token or other foreign djust key lands in the session.
-    assert all(k.startswith(_OWN_PREFIXES) for k in djust_keys), djust_keys
-
-
-# --------------------------------------------------------------------------- #
-# 2. Tenant state round-trips through the merge; tenants stay apart
-# --------------------------------------------------------------------------- #
-@pytest.mark.asyncio
-async def test_tenant_state_and_a_concurrent_write_both_survive_an_event_and_a_reload():
-    session = await sync_to_async(_new_session)()
-    await _ws("globex.example.com", session, event="keep")  # tenant B saved first
-    key = session.session_key
-
-    session2 = SessionStore(key)  # a fresh connection loads the session now
-    await _ws(
-        "acme.example.com",
-        session2,
-        event="keep",
-        between=lambda: _elsewhere(key, cart="3 items", idle_ts="NEW"),
-    )
-
-    stored = await sync_to_async(_stored)(key)
-    assert stored["cart"] == "3 items" and stored["idle_ts"] == "NEW", stored
-    assert f"liveview_tenant:acme:{_URL}" in stored
-    assert f"liveview_tenant:globex:{_URL}" in stored  # tenant B's entry kept
-
-    # Reload: each tenant gets exactly its own state back, never the other's.
-    acme = await _ws("acme.example.com", SessionStore(key))
-    globex = await _ws("globex.example.com", SessionStore(key))
-    assert "[secret-of-acme]" in acme and "globex" not in acme, acme
-    assert "[secret-of-globex]" in globex and "acme" not in globex, globex
-
-
-@pytest.mark.asyncio
-async def test_a_third_tenant_cannot_read_either_saved_state_after_merged_saves():
-    session = await sync_to_async(_new_session)()
-    await _ws("acme.example.com", session, event="keep")
-    await _ws("globex.example.com", SessionStore(session.session_key), event="keep")
-    html = await _ws("initech.example.com", SessionStore(session.session_key))
-    assert "[fresh-initech]" in html, html
-    assert "secret-of" not in html, html
 
 
 # --------------------------------------------------------------------------- #

@@ -460,14 +460,11 @@ _WS_ONLY_MARKERS = {
     # handle_mount-still-inline pins + MockTransport / real-WebsocketCommunicator
     # hook tests). The remaining WS-only mount mechanisms stay pinned below.
     #
-    # ``state_snapshot_signed`` MOVED to ViewRuntime.dispatch_mount in ADR-022
-    # Iter 3 Phase 3.1 (#1913): the signed session-snapshot EMIT + restore are now
-    # transport-agnostic (LIVE for the SSE mount path, gated on
-    # ``enable_state_snapshot``). It remains on the WS path too (handle_mount,
-    # untouched until 3.3b), so it is no longer a WS-ONLY behavior — removed from
-    # this enumeration. The signed-snapshot HMAC caps are pinned by
-    # test_runtime_mount_state_restore_1913.py (runtime) +
-    # test_state_snapshot_signing.py (WS).
+    # ``state_snapshot_signed`` lives in ViewRuntime.dispatch_mount (ADR-022
+    # Iter 3 Phase 3.1, #1913): the signed client-snapshot EMIT + restore are
+    # transport-agnostic, so it is not a WS-ONLY behavior and is not in this
+    # enumeration. The token's checks are pinned by test_exposure_snapshots.py
+    # and test_snapshot_persistence_after_removal.py.
     # NOTE: ``tick_interval`` was removed from this enumeration in #1919 (it MOVED
     # into the runtime's WS ``on_view_mounted`` hook — see the block above).
     # ``_run_tick`` was never a marker here (it already appears in runtime.py
@@ -980,10 +977,9 @@ class TestEventSpineEnumeration:
 # Phase 3.0 GROWS ``ViewRuntime.dispatch_mount`` toward the WS ``handle_mount``
 # by adding the transport-agnostic shared MOUNT behaviors the runtime lacked:
 #
-#   1. ``_djust_mount_request`` / ``_djust_mount_kwargs`` stash (#1895) — the
-#      runtime's OWN per-event session-save fallback reads it.
+#   1. ``_djust_mount_request`` / ``_djust_mount_kwargs`` stash (#1895).
 #   2. ``_snapshot_user_private_attrs`` + ``_capture_dirty_baseline`` post-mount.
-#   3. ``has_prerendered`` → ``skip_html_for_resume`` machinery on the frame.
+#   3. (removed in 2.0: the ``has_prerendered`` resume that skipped the html.)
 #   4. ``optimistic_rules`` (DEP-002) + ``upload_configs`` on the mount frame.
 #   5. Mount-time ``_flush_push_events()`` + ``_dispatch_async_work(None)`` —
 #      ONLY those two (NOT ``_flush_all_pending``), pinned in
@@ -1028,13 +1024,11 @@ class TestMountStashAndBaselines:
     @override_settings(LIVEVIEW_ALLOWED_MODULES=["djust."])
     async def test_mount_stashes_request_and_kwargs(self):
         """#1895: ``dispatch_mount`` stashes the mount request + kwargs on the view
-        so the runtime's own per-event session-save fallback
-        (``_persist_state_after_event`` runtime.py:2030) can discover the save
-        session + ``liveview_{path}`` namespace on the converged event path.
+        for the code that needs, after the mount, the request a view was
+        mounted under.
 
         Gate-off (#1468): delete the ``view_instance._djust_mount_request = request``
-        stash from ``dispatch_mount`` → this FAILS (and the per-event save silently
-        degrades to the scope session, dropping the mount-request path namespace).
+        stash from ``dispatch_mount`` → this FAILS.
         """
         view = _MountStashView()
         runtime, transport = _runtime_with_view(view)

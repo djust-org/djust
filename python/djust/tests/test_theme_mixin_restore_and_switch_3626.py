@@ -1,4 +1,7 @@
-"""``ThemeMixin`` after the #3626 fix: a restored view, derived names, a theme switch.
+"""``ThemeMixin`` after the #3626 fix: derived names and a theme switch.
+
+(Its first finding, a view restored over the socket in lieu of ``mount()``, went
+with ``enable_state_snapshot`` in 2.0.)
 
 The first version of the fix supplied the four rendered values from
 ``_apply_context_processors`` only when ``mount()`` had run, dropped
@@ -35,14 +38,6 @@ pytestmark = [pytest.mark.theming, pytest.mark.django_db]
 PAGE_URL = "/feed/"
 HEAVY = ("theme_head", "theme_css", "theme_switcher", "theme_presets")
 
-# What the per-event session save of a mounted ThemeMixin view holds: the small
-# attributes the mixin still assigns, never the four rendered values.
-SAVED = {
-    "theme_preset": "default",
-    "theme_mode": "system",
-    "theme_resolved_mode": "light",
-}
-
 _ROOT = (
     '<div dj-root dj-id="0" dj-view="{path}">H[{{{{ theme_head|length }}}}] '
     "C[{{{{ theme_css|length }}}}] S[{{{{ theme_switcher|length }}}}] "
@@ -51,12 +46,11 @@ _ROOT = (
 )
 
 
-class Snapshotted(ThemeMixin, LiveView):
-    """Opts in to state restore, so a reconnect skips ``mount()``."""
+class Themed(ThemeMixin, LiveView):
+    """A legacy ``ThemeMixin`` view."""
 
     exposure_policy = "legacy"
-    enable_state_snapshot = True
-    template = _ROOT.format(path=__name__ + ".Snapshotted")
+    template = _ROOT.format(path=__name__ + ".Themed")
 
     def mount(self, request, **kwargs):
         super().mount(request, **kwargs)
@@ -67,8 +61,7 @@ class Snapshotted(ThemeMixin, LiveView):
         self.count += 1
 
 
-class Plain(Snapshotted):
-    enable_state_snapshot = False
+class Plain(Themed):
     template = _ROOT.format(path=__name__ + ".Plain")
 
 
@@ -89,11 +82,8 @@ def _numbers(text: str) -> dict[str, str]:
     return dict(re.findall(r"([HCSPNM])\[([^\]]*)\]", text))
 
 
-async def _runtime(view_class, saved_state=None):
+async def _runtime(view_class):
     session = await sync_to_async(_make_db_session)()
-    if saved_state is not None:
-        await session.aset(f"liveview_{PAGE_URL}", saved_state)
-        await sync_to_async(session.save)()
     request = _make_request(session)
     transport = MockTransport(request)
     return ViewRuntime(transport, scope=None), transport
@@ -119,35 +109,6 @@ def _expected(view):
         "N": str(len(view.theme_presets)),
         "M": view.theme_mode,
     }
-
-
-class TestAViewThatSkippedMount:
-    """Finding 1: a reconnect restores state in lieu of ``mount()``."""
-
-    @pytest.mark.asyncio
-    async def test_a_restored_view_renders_the_values_without_the_processor(self):
-        with _without_the_processor():
-            runtime, transport = await _runtime(Snapshotted, {**SAVED, "count": 3})
-            await _mount(runtime, Snapshotted)
-            view = runtime.view_instance
-            assert view._mounted_from_restore is True, "the saved state must restore, not mount()"
-            assert view._theme_manager is None, "the premise: mount() did not run"
-            html = transport.mount_frame["html"]
-            shown = _numbers(html)
-            assert int(shown["H"]) > 1000, f"empty theme_head on a restored view: {html[:300]}"
-            assert shown == _expected(view)
-            assert "n=3" in html
-
-    @pytest.mark.asyncio
-    async def test_a_restored_view_matches_a_freshly_mounted_one(self):
-        with _without_the_processor():
-            restored_rt, restored_tp = await _runtime(Snapshotted, {**SAVED, "count": 0})
-            await _mount(restored_rt, Snapshotted)
-            fresh_rt, fresh_tp = await _runtime(Plain)
-            await _mount(fresh_rt, Plain)
-            assert _numbers(restored_tp.mount_frame["html"]) == _numbers(
-                fresh_tp.mount_frame["html"]
-            )
 
 
 class TestTheDerivedNames:
