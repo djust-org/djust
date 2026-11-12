@@ -154,6 +154,15 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
   refused at class definition (at mount, for a form class chosen by
   `get_form_class()`). Such fields render empty and never reach storage,
   frames or debug output.
+- **Other mixins.** Each of these provides the names it publishes, render-only:
+  `PresenceMixin` (`online_count`), `TutorialMixin` (`tutorial_running`,
+  `tutorial_current_step`, `tutorial_total_steps`, `default_highlight_class`),
+  `DataTableMixin` (its `table_*` configuration and state, not `table_model` or
+  `table_queryset`), `FormSetHelpersMixin` (the formsets named in
+  `formset_classes`) and `ThemeMixin` (`theme_preset`, `theme_mode`,
+  `theme_resolved_mode` and the rendered theme values). List the mixin before
+  `LiveView`. Apart from `ThemeMixin`'s, these names are reserved for the mixin:
+  supplying one yourself in `get_context_data()` is a collision error.
 - **Uploads.** `uploads` renders each entry's progress and a sanitized file
   name. The raw client file name and the writer's result are not included.
   Uploads in flight are not resumed after a reconnect; the client registers
