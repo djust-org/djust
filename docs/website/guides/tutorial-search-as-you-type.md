@@ -158,6 +158,11 @@ class SearchView(LiveView):
     results = state(default_factory=list)
     error = state("")
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(query=self.query, results=self.results, error=self.error)
+        return context
+
     @event_handler
     def search(self, value: str = "", **kwargs):
         self.query = value

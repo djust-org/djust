@@ -138,6 +138,11 @@ class MyView:
         assert len(qs_issues) == 1
         assert "items" in qs_issues[0]["message"]
         assert "_items" in qs_issues[0]["fix"]
+        # The fix supplies the name from get_context_data(); the 1.x idiom
+        # (``self.items = self._items`` there) renders it empty under the
+        # default exposure policy (#4048).
+        assert "context['items'] = self._items" in qs_issues[0]["fix"]
+        assert "self.items = self._items" not in qs_issues[0]["fix"]
 
     def test_private_queryset_is_ok(self, mcp_server):
         code = """

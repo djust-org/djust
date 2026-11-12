@@ -47,6 +47,9 @@ class ItemView(LiveView):
     def mount(self, request, **kwargs):
         self.name = ""
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "name": self.name}
+
     @event_handler()
     def save(self, **kwargs):
         if not self.name:

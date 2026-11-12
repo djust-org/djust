@@ -224,9 +224,9 @@ def _refresh_items(self):
     self._items = self._get_filtered()
 
 def get_context_data(self, **kwargs):
-    self.items = self._items
     context = super().get_context_data(**kwargs)
-    context['count'] = len(self.items)
+    context["items"] = self._items
+    context['count'] = len(self._items)
     return context
 ```
 

@@ -32,6 +32,9 @@ class OrderDashboard(LiveView):
         self.orders = list(Order.objects.filter(status="pending"))
         self.listen("shop_order")
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "orders": self.orders}
+
     def handle_info(self, message):
         if message["type"] == "db_notify":
             self.orders = list(Order.objects.filter(status="pending"))
@@ -200,6 +203,9 @@ class OrderDashboard(LoginRequiredMixin, LiveView):
         self.listen("orders")
         self._refresh()
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "by_status": self.by_status}
+
     def handle_info(self, message):
         self._refresh()
 
@@ -223,6 +229,9 @@ class DocumentView(LiveView):
         self.listen("document")
         self.doc = Document.objects.get(pk=doc_id)
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "doc": self.doc}
+
     def handle_info(self, message):
         # The payload pk is a JSON number; URL kwargs are strings unless
         # the route uses <int:doc_id>, so compare as strings.
@@ -244,6 +253,9 @@ class CustomerOrderView(LiveView):
         self._order_id = order_id
         self.listen("orders")
         self.order = Order.objects.get(pk=order_id)
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "order": self.order}
 
     def handle_info(self, message):
         if str(message["payload"].get("pk")) == str(self._order_id):

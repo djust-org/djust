@@ -505,6 +505,11 @@ class AsyncWorkMixin:
                     self.assign_async("metrics", self._load_metrics)
                     self.assign_async("notifications", self._load_notifications)
 
+                def get_context_data(self, **kwargs):
+                    context = super().get_context_data(**kwargs)
+                    context.update(metrics=self.metrics, notifications=self.notifications)
+                    return context
+
                 def _load_metrics(self):
                     return expensive_query()
         """

@@ -107,6 +107,9 @@ class DashboardView(LiveView):
         # slow work here still delays Chunk 1. Put slow sections in a
         # {% live_render "..." lazy=True %} child to stream them in later.
         self.rows = fetch_rows()
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "rows": self.rows}
 ```
 
 That's it. No JS changes, no new template tags, no new URL routing —

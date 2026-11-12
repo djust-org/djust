@@ -235,6 +235,9 @@ class CartView(LiveView):
     def mount(self, request, **kwargs):
         self.items = list(request.user.cart_items.values('id', 'qty'))
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "items": self.items}
+
     def _restore_snapshot(self, state: dict) -> None:
         # state is the signed snapshot taken when the view mounted.
         # Trust nothing — re-validate any IDs against the database.

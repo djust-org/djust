@@ -771,8 +771,9 @@ LIFECYCLE_METHODS: List[Dict[str, Any]] = [
     {
         "name": "get_context_data",
         "signature": "def get_context_data(self, **kwargs) -> dict:",
-        "description": "Return dict of template context variables. By default, all public "
-        "(non-underscore) attributes are included automatically.",
+        "description": "Return dict of template context variables. The template gets what "
+        "this returns (plus what framework mixins provide) and nothing else: an attribute set "
+        "on self is not included by itself. Call super() and add each name the template reads.",
         "phase": "rendering",
         "required": False,
     },
@@ -1037,7 +1038,9 @@ DECORATORS: List[Dict[str, Any]] = [
         "name": "state()",
         "import": "from djust.decorators import state",
         "description": "Descriptor for reactive state. Cleaner than setting attributes in mount(). "
-        "Automatically included in context and triggers re-renders.",
+        "Triggers re-renders; persist='server' restores it after a reconnect and client=True "
+        "lets the raw value reach the browser. It does not put the name in the template: "
+        "get_context_data() does.",
         "params": {
             "default": "Any — default value for the state property",
         },
@@ -1048,8 +1051,9 @@ DECORATORS: List[Dict[str, Any]] = [
     {
         "name": "@computed",
         "import": "from djust.decorators import computed",
-        "description": "Computed property derived from state. Available in templates, "
-        "auto-recalculated when state changes.",
+        "description": "Computed property derived from state, read as self.<name> and "
+        "auto-recalculated when state changes. Supply it to the template in "
+        "get_context_data() like any other value.",
         "params": {},
         "usage": [
             "@computed\ndef count_doubled(self):\n    return self.count * 2",
@@ -1147,15 +1151,20 @@ OPTIONAL_MIXINS: List[Dict[str, Any]] = [
     },
 ]
 
-#: Public/private variable convention
+#: What reaches the template (the key keeps its 1.x name for consumers).
 CONVENTIONS = {
     "public_private": {
-        "description": "Variables starting with _ are private (not exposed to templates). "
-        "All other attributes are automatically included in template context via "
-        "get_context_data().",
+        "description": "Explicit exposure (the default since 2.0): no attribute on self "
+        "reaches the template by itself, with or without a leading underscore. "
+        "get_context_data() supplies each name the template reads; a name nothing supplies "
+        "renders empty, with no error. A leading underscore is a naming convention for "
+        "internal state.",
         "examples": {
-            "self.count": "Public — available as {{ count }} in template",
-            "self._internal_cache": "Private — not exposed to template",
+            "self.count = 0": "Server only — {{ count }} is empty until get_context_data() "
+            "returns 'count'",
+            "return {**super().get_context_data(**kwargs), 'count': self.count}": "Available "
+            "as {{ count }} in template",
+            "self._internal_cache": "Internal by convention — server only, like any attribute",
         },
     },
     "jit_serialization": {
@@ -1226,11 +1235,14 @@ BEST_PRACTICES = {
             "        qs = Item.objects.all()\n"
             "        if self.search:\n"
             "            qs = qs.filter(name__icontains=self.search)\n"
-            "        self._items = qs  # PRIVATE variable\n"
+            "        self._items = qs\n"
             "\n"
             "    def get_context_data(self, **kwargs):\n"
-            "        self.items = self._items  # PUBLIC = triggers Rust JIT\n"
-            "        return super().get_context_data(**kwargs)\n"
+            "        # The template gets what is added here, and nothing else.\n"
+            "        context = super().get_context_data(**kwargs)\n"
+            "        context.update(search=self.search, filter=self.filter)\n"
+            "        context['items'] = self._items  # QuerySet: Rust JIT serializes it\n"
+            "        return context\n"
             "\n"
             "    @event_handler()\n"
             "    @debounce(wait=0.5)\n"
@@ -1309,20 +1321,25 @@ BEST_PRACTICES = {
     },
     "jit_serialization": {
         "description": (
-            "QuerySets MUST be stored in private variables (self._items) and assigned "
-            "to public variables (self.items) only inside get_context_data(). This "
-            "enables Rust-based serialization (10-100x faster than Python)."
+            "Hand a QuerySet to the template as a QuerySet, from get_context_data(): "
+            "context['items'] = self._items. djust serializes the fields the template reads "
+            "in Rust. An attribute alone (self.items = ...) never reaches the template."
         ),
         "correct": (
             "def _refresh(self):\n"
-            "    self._items = Item.objects.filter(active=True)  # private\n"
+            "    self._items = Item.objects.filter(active=True)\n"
             "\n"
             "def get_context_data(self, **kwargs):\n"
-            "    self.items = self._items  # public <- private (JIT happens here)\n"
-            "    return super().get_context_data(**kwargs)"
+            "    context = super().get_context_data(**kwargs)\n"
+            "    context['items'] = self._items  # JIT happens here\n"
+            "    return context"
         ),
         "wrong_examples": [
-            "self.items = Item.objects.all()  # never assign QuerySet to public directly",
+            "self.items = Item.objects.all()  # an attribute alone: {{ items }} renders empty",
+            (
+                "self.items = self._items; return super().get_context_data(**kwargs)"
+                + "  # the 1.x idiom publishes nothing under explicit exposure"
+            ),
             "self._items = list(Item.objects.all())  # never convert to list — disables JIT",
         ],
     },
@@ -1419,7 +1436,7 @@ BEST_PRACTICES = {
                 "str, int, float, bool, None",
                 "list, dict, tuple (with serializable contents)",
                 "Django model instances (auto-serialized via JIT)",
-                "QuerySets (auto-serialized via Rust JIT — keep as private _var)",
+                "QuerySets (auto-serialized via Rust JIT when get_context_data() returns them)",
                 "datetime, date, time, Decimal, UUID (auto-coerced)",
             ],
             "not_serializable": [
@@ -1578,8 +1595,8 @@ BEST_PRACTICES = {
                 "the Rust JIT engine that is 10-100x faster."
             ),
             "solution": (
-                "Pass QuerySets directly. Store as self._items (private) in _refresh(), "
-                "assign to self.items (public) in get_context_data()."
+                "Pass QuerySets directly. Store as self._items in _refresh(), and add it "
+                "to the context in get_context_data(): context['items'] = self._items."
             ),
             "related_doc": "docs/guides/services.md",
         },

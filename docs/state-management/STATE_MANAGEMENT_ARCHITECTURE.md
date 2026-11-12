@@ -1364,6 +1364,12 @@ def test_metadata_injection():
     class TestView(LiveView):
         template = "<div>{{ count }}</div>"
 
+        def mount(self, request, **kwargs):
+            self.count = 0
+
+        def get_context_data(self, **kwargs):
+            return {**super().get_context_data(**kwargs), "count": self.count}
+
         @debounce(wait=0.5)
         def increment(self, **kwargs):
             self.count += 1

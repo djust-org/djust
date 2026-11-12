@@ -70,6 +70,19 @@ class NotesView(LiveView):
         self.status_choices = [("open", "Open"), ("closed", "Closed")]
         self.plan_choices = [("free", "Free"), ("pro", "Pro")]
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            query=self.query,
+            body=self.body,
+            status=self.status,
+            notifications_enabled=self.notifications_enabled,
+            plan=self.plan,
+            status_choices=self.status_choices,
+            plan_choices=self.plan_choices,
+        )
+        return context
+
     @event_handler()
     def search(self, value: str = "", **kwargs):
         self.query = value

@@ -16,6 +16,9 @@ class EditorView(LiveView):
     def mount(self, request, **kwargs):
         self.fullscreen = False
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "fullscreen": self.fullscreen}
+
     @event_handler
     def enter_fullscreen(self, **kwargs):
         self.fullscreen = True

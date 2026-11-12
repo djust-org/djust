@@ -157,7 +157,7 @@ These are **hard requirements** — violations are auto-rejected in PR review:
 
 ### LiveView
 ```python
-from djust import LiveView
+from djust import LiveView, event_handler
 
 class MyView(LiveView):
     template_name = 'my_template.html'
@@ -165,11 +165,13 @@ class MyView(LiveView):
     def mount(self, request, **kwargs):
         self.count = 0
 
-    def increment(self):
+    @event_handler
+    def increment(self, **kwargs):
         self.count += 1
 
     def get_context_data(self, **kwargs):
-        return {'count': self.count}
+        # The template gets what you hand it here, and nothing else.
+        return {**super().get_context_data(**kwargs), 'count': self.count}
 ```
 
 ### Event Handlers — always use `@event_handler`
@@ -182,9 +184,11 @@ def search(self, value: str = "", **kwargs):
     self.query = value
 ```
 
-### Public/Private variable convention
-- `_private` — internal state, not exposed to templates
-- `public` — auto-exposed to template context and JIT serialization
+### What reaches the template (explicit exposure, the default since 2.0)
+- An attribute set on `self` stays on the server, with or without an underscore. `self.count = 0` alone renders `{{ count }}` empty, with no error.
+- `get_context_data()` supplies each name the template reads (as above). Framework mixins supply their own (`form_errors`, `streams`, `uploads`).
+- `state(...)` (`from djust.decorators import state`) declares what is persisted (`persist="server"`) or sent raw to the browser (`client=True`); it does not put the name in the template either.
+- `_private` is a naming convention for internal state. `exposure_policy = "legacy"` restores the 1.x attribute walk and is deprecated. See `docs/website/state/explicit-exposure.md`.
 
 ### Background Work — `start_async()` and `@background`
 For long-running operations (API calls, AI generation, file processing), use `AsyncWorkMixin` (included in `LiveView` base) to flush loading state immediately and run work in background:

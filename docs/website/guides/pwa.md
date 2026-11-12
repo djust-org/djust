@@ -55,6 +55,9 @@ class MyView(OfflineMixin, LiveView):
         # No enable call: inheriting OfflineMixin is what enables offline mode.
         self.items = self.storage.get('items', [])
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "items": self.items}
+
     @event_handler()
     def add_item(self, name: str = "", **kwargs):
         created = self.create_offline('Item', {'name': name})
@@ -296,6 +299,9 @@ class TodoView(OfflineMixin, LiveView):
 
     def mount(self, request, **kwargs):
         self.todos = self.storage.get('todos', [])
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "todos": self.todos}
 
     @event_handler()
     def add_todo(self, text: str = "", **kwargs):

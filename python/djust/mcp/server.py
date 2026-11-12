@@ -1091,7 +1091,7 @@ def create_server() -> "FastMCP":
 
         Checks for common issues:
         - Missing @event_handler decorators on handler-like methods
-        - Public QuerySet attributes (should be _private)
+        - Public QuerySet attributes (keep in _private, supply in get_context_data)
         - Missing mount() method
         - Security issues (mark_safe with f-strings, etc.)
 
@@ -1267,7 +1267,7 @@ def create_server() -> "FastMCP":
 
         Checks for:
         - Service instance assignments (Issue #292)
-        - Public QuerySet attributes (should be private with _)
+        - Public QuerySet attributes (keep in _private, supply in get_context_data)
         - Missing @event_handler decorators on handler-like methods
 
         Returns JSON with detected issues and pattern suggestions.
@@ -1424,24 +1424,26 @@ def create_server() -> "FastMCP":
                                                 "severity": "warning",
                                                 "message": (
                                                     "Public QuerySet attribute 'self.%s': "
-                                                    "QuerySets should be stored in private "
-                                                    "variables (self._%s) and assigned to "
-                                                    "public in get_context_data()."
+                                                    "keep QuerySets in private variables "
+                                                    "(self._%s) and hand them to the template "
+                                                    "in get_context_data()."
                                                     % (attr_name, attr_name)
                                                 ),
                                                 "line": stmt.lineno,
                                                 "fix": (
-                                                    "Rename to self._%s and assign to "
-                                                    "self.%s in get_context_data():\n"
+                                                    "Rename to self._%s and add it to the "
+                                                    "context in get_context_data() (an "
+                                                    "attribute does not reach the template "
+                                                    "by itself):\n"
                                                     "\n"
                                                     "def _refresh(self):\n"
-                                                    "    self._%s = Model.objects.filter(...)  # private\n"
+                                                    "    self._%s = Model.objects.filter(...)\n"
                                                     "\n"
                                                     "def get_context_data(self, **kwargs):\n"
-                                                    "    self.%s = self._%s  # public (JIT here)\n"
-                                                    "    return super().get_context_data(**kwargs)"
+                                                    "    context = super().get_context_data(**kwargs)\n"
+                                                    "    context['%s'] = self._%s  # JIT here\n"
+                                                    "    return context"
                                                     % (
-                                                        attr_name,
                                                         attr_name,
                                                         attr_name,
                                                         attr_name,

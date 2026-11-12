@@ -208,6 +208,9 @@ class EditorView(LiveView):
         self.title = ""
         self.body = ""
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "title": self.title, "body": self.body}
+
     @event_handler()
     def validate_title(self, value="", **kwargs):
         self.title = value

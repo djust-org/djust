@@ -10,7 +10,7 @@ these references. The topic sections below are concise API examples.
 
 - [lifecycle.md](lifecycle.md) -- LiveView lifecycle: mount, refresh, render
 - [events.md](events.md) -- Event handlers, decorators, parameter conventions
-- [jit.md](jit.md) -- JIT serialization: private/public variable pattern
+- [jit.md](jit.md) -- JIT serialization: handing QuerySets to the template
 - [templates.md](templates.md) -- Template directives (dj-click, dj-model, etc.)
 - [security.md](security.md) -- Authorization and input validation patterns
 - [forms.md](forms.md) -- FormMixin and form handling

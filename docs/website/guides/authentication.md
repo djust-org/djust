@@ -24,6 +24,9 @@ class DashboardView(LiveView):
 
     def mount(self, request, **kwargs):
         self.metrics = get_metrics(request.user)
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "metrics": self.metrics}
 ```
 
 That's it. Unauthenticated users are automatically redirected to `settings.LOGIN_URL`.
@@ -47,6 +50,9 @@ class AdminView(LiveView):
 
     def mount(self, request, **kwargs):
         self.stats = get_admin_stats()
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "stats": self.stats}
 ```
 
 Multiple permissions (all required):
@@ -264,6 +270,9 @@ class LandingView(LiveView):
 
     def mount(self, request, **kwargs):
         self.features = get_public_features()
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "features": self.features}
 ```
 
 ## Handler-Level Permissions
@@ -394,6 +403,9 @@ class SignInView(LiveView):
 
     def mount(self, request, **kwargs):
         self.error = ""
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "error": self.error}
 
     @event_handler
     def check(self, username="", **kwargs):

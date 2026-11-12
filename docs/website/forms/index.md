@@ -18,6 +18,9 @@ class TodoView(LiveView):
     def mount(self, request, **kwargs):
         self.items = []
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "items": self.items}
+
     @event_handler()
     def add_item(self, title="", **kwargs):
         if title.strip():

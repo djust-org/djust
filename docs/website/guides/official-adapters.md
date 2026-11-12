@@ -148,6 +148,9 @@ class DashboardView(LiveView):
 
     def mount(self, request, **kwargs):
         self.refresh = JS.ext.chart_update(to="#sales")
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "refresh": self.refresh}
 ```
 
 ```html
