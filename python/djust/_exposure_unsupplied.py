@@ -1,11 +1,17 @@
 """DEBUG-only notice for a template name an explicit view holds but does not supply.
 
-Under explicit exposure (ADR-038, the default) a template gets what
-``get_context_data()`` and the framework's providers hand it. A view written
-for the attribute walk sets ``self.count`` in ``mount()`` and reads
-``{{ count }}`` in its template: that name now renders empty, and Django's
+Under explicit exposure (ADR-038, the default) a template gets the view's
+declared ``state()`` fields (#4050), what ``get_context_data()`` returns and
+what the framework's providers hand it. A view written for the attribute walk
+sets ``self.count`` in ``mount()`` without declaring it and reads
+``{{ count }}`` in its template: that name renders empty, and Django's
 template semantics make an unknown name silent. This module makes it audible
 while ``DEBUG`` is on.
+
+A declared field is supplied by the base ``get_context_data()``, so it is
+reported only when it still did not arrive: it was declared
+``state(render=False)``, or the view's ``get_context_data()`` returned a new
+dict without calling ``super().get_context_data()``.
 
 The check runs where the render path settles its context
 (``ContextMixin._context_for_render``). With ``DEBUG`` off it is one settings
@@ -59,6 +65,35 @@ def _held_by_view(view: Any, name: str) -> bool:
     return False
 
 
+def _declared_state(view: Any, name: str) -> Any:
+    """The ``state()`` descriptor the view's class declares for ``name``, or None."""
+    from inspect import getattr_static
+
+    from ._state import StateProperty
+
+    declaration = getattr_static(type(view), name, None)
+    return declaration if issubclass(type(declaration), StateProperty) else None
+
+
+def _advice(view: Any, name: str) -> str:
+    declaration = _declared_state(view, name)
+    if declaration is None:
+        return (
+            "Under explicit exposure (the default) declare it with state(), which "
+            "renders it, or return it from get_context_data()."
+        )
+    if declaration.render is False:
+        return (
+            "It is declared with state(render=False), which keeps it out of the "
+            "template; drop render=False or return it from get_context_data()."
+        )
+    return (
+        "It is declared with state(), which renders it, but get_context_data() "
+        "returned a dict without calling super().get_context_data(); build on "
+        "the super() result instead."
+    )
+
+
 def unsupplied_template_names(view: Any, context: Mapping[str, Any]) -> list[str]:
     """Names the view's template reads, the view holds, and ``context`` lacks."""
     paths = view.template_paths()
@@ -95,17 +130,71 @@ def warn_unsupplied_template_names(view: Any, context: Any) -> None:
             reported.add(name)
             logger.warning(
                 "%s.%s: the template reads {{ %s }} and the view sets %s, but nothing "
-                "supplies it to the template, so it renders empty. Under explicit "
-                "exposure (the default) return it from get_context_data(), and declare "
-                "it with state() if it must be persisted or sent to the browser. "
-                'To keep the 1.x behaviour for now, set exposure_policy = "legacy" on '
+                "supplies it to the template, so it renders empty. %s "
+                "Persisting it or sending it to the browser takes its own grant "
+                '(persist=, client=True). To keep the 1.x behaviour for now, set exposure_policy = "legacy" on '
                 "the view. See %s",
                 cls.__module__,
                 cls.__qualname__,
                 name,
                 name,
+                _advice(view, name),
                 MIGRATION_GUIDE_URL,
             )
     except Exception:  # noqa: BLE001 — never let the diagnostic break a render
         # No exception text: it can carry view values (ADR-038 D-a).
         logger.debug("Unsupplied-template-name check could not run")
+
+
+#: Context-processor names templates use for authorization decisions
+#: (``{% if user.is_staff %}``, ``{% if perms.app.change_x %}``). A declared
+#: ``state()`` field shadows a same-named context-processor value, as a
+#: ``get_context_data()`` key does; for most names (``messages``, ``debug``,
+#: ``LANGUAGE_CODE``) that is ordinary and allowed. For these two the shadow
+#: silently changes what every template the view renders, including base
+#: templates, believes about the current user, so djust.V027 and the DEBUG
+#: warning below flag it. Extend this set to flag another name.
+AUTHORIZATION_CONTEXT_NAMES = frozenset({"user", "perms"})
+
+#: Shadowed authorization names already reported, by view class.
+_SHADOW_REPORTED: "weakref.WeakKeyDictionary[type, set[str]]" = weakref.WeakKeyDictionary()
+
+
+def warn_shadowed_authorization_names(view: Any, names: Any) -> None:
+    """Log, once per view class and name, a declared field shadowing ``user``/``perms``.
+
+    ``names`` are the context-processor keys the view's own context already
+    held. Only names in :data:`AUTHORIZATION_CONTEXT_NAMES` that are declared
+    ``state()`` fields are reported. ``DEBUG`` only; names, never values;
+    never raises.
+    """
+    try:
+        from django.conf import settings
+
+        if getattr(settings, "DEBUG", False) is not True:
+            return
+        from .mixins.context import rendered_state_names
+
+        cls = type(view)
+        declared = set(rendered_state_names(cls))
+        reported = _SHADOW_REPORTED.get(cls)
+        if reported is None:
+            reported = _SHADOW_REPORTED[cls] = set()
+        for name in sorted(AUTHORIZATION_CONTEXT_NAMES.intersection(names)):
+            if name not in declared or name in reported:
+                continue
+            reported.add(name)
+            logger.warning(
+                "%s.%s: the declared state() field %s replaces the %s a context "
+                "processor supplies, in every template this view renders, including "
+                "base templates that test it for authorization. Rename the field "
+                "(for example selected_%s) or declare it with render=False. See "
+                "djust.V027.",
+                cls.__module__,
+                cls.__qualname__,
+                name,
+                name,
+                name,
+            )
+    except Exception:  # noqa: BLE001 — never let the diagnostic break a render
+        logger.debug("Shadowed-authorization-name check could not run")

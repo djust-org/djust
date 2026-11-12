@@ -1041,6 +1041,13 @@ class LiveView(
                         "state() exposure grants require exposure_policy='explicit'. "
                         "Legacy views cannot honor these grants."
                     )
+                # The legacy walk renders every public field, so it cannot
+                # honour render=False either (#4050).
+                if issubclass(type(declaration), StateProperty) and declaration.render is False:
+                    raise ExposureConfigurationError(
+                        "state(render=False) requires exposure_policy='explicit'. "
+                        "Legacy views render every public attribute."
+                    )
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)

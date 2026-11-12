@@ -832,6 +832,14 @@ A view that declares a `params_form` is also held to its `params_form_fallback`:
 
 On an explicit view the same declaration is refused when the class is created, with an `ExposureConfigurationError` that names the attribute and the working forms.
 
+### V027: declared `state()` field named `user` or `perms`
+
+**Severity**: Warning
+
+**What causes it**: An explicit view declares `user = state(...)` or `perms = state(...)`. A declared field is template context, and view context wins over Django's context processors, so the field replaces `request.user` or the permission proxy in every template the view renders, including base templates that test it for authorization. Message: "<class> declares state() field 'user', which replaces the 'user' Django's context processors supply ..."
+
+**Fix**: Rename the field (for example `selected_user`), or declare it `state(..., render=False)` if no template reads it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V027"]}`.
+
 ---
 
 ## Security Errors (S0xx)

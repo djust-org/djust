@@ -771,9 +771,10 @@ LIFECYCLE_METHODS: List[Dict[str, Any]] = [
     {
         "name": "get_context_data",
         "signature": "def get_context_data(self, **kwargs) -> dict:",
-        "description": "Return dict of template context variables. The template gets what "
-        "this returns (plus what framework mixins provide) and nothing else: an attribute set "
-        "on self is not included by itself. Call super() and add each name the template reads.",
+        "description": "Return dict of template context variables. The template gets the "
+        "view's declared state() fields, what this returns (which wins over a declared field "
+        "of the same name) and what framework mixins provide: any other attribute set on self "
+        "is not included by itself. Call super() and add each other name the template reads.",
         "phase": "rendering",
         "required": False,
     },
@@ -1038,11 +1039,16 @@ DECORATORS: List[Dict[str, Any]] = [
         "name": "state()",
         "import": "from djust.decorators import state",
         "description": "Descriptor for reactive state. Cleaner than setting attributes in mount(). "
-        "Triggers re-renders; persist='server' restores it after a reconnect and client=True "
-        "lets the raw value reach the browser. It does not put the name in the template: "
-        "get_context_data() does.",
+        "Rendered in the template context by default (no get_context_data() needed) and "
+        "triggers re-renders. Rendering is not a browser grant: the value reaches the "
+        "client state payload only with client=True, and survives a reconnect only with "
+        "persist=.",
         "params": {
             "default": "Any — default value for the state property",
+            "default_factory": "Callable — builds a fresh default per instance (lists, dicts)",
+            "persist": '"server" | "client" | None — persistence grant (explicit exposure)',
+            "client": "bool — permit raw browser exposure (explicit exposure)",
+            "render": "bool = True — False keeps the field out of the template context",
         },
         "usage": [
             "count = state(default=0)\nmessage = state(default='Hello')",
@@ -1154,12 +1160,13 @@ OPTIONAL_MIXINS: List[Dict[str, Any]] = [
 #: What reaches the template (the key keeps its 1.x name for consumers).
 CONVENTIONS = {
     "public_private": {
-        "description": "Explicit exposure (the default since 2.0): no attribute on self "
-        "reaches the template by itself, with or without a leading underscore. "
-        "get_context_data() supplies each name the template reads; a name nothing supplies "
-        "renders empty, with no error. A leading underscore is a naming convention for "
-        "internal state.",
+        "description": "Explicit exposure (the default since 2.0): a field declared with "
+        "state() renders in the template; no other attribute on self reaches it by itself, "
+        "with or without a leading underscore. get_context_data() supplies the other names "
+        "the template reads; a name nothing supplies renders empty, with no error. A leading "
+        "underscore is a naming convention for internal state.",
         "examples": {
+            "count = state(0)": "Declared — available as {{ count }} in template",
             "self.count = 0": "Server only — {{ count }} is empty until get_context_data() "
             "returns 'count'",
             "return {**super().get_context_data(**kwargs), 'count': self.count}": "Available "
@@ -1774,9 +1781,11 @@ def _extract_view_schema(cls: type, base_classes: list) -> Dict[str, Any]:
     class_name = cls.__qualname__
     full_path = "%s.%s" % (module, class_name)
 
-    # Template
-    template = getattr(cls, "template_name", None)
-    if template is None and getattr(cls, "template", None):
+    # Template. Only a string is a template: a view may shadow the name with
+    # something else (a state() descriptor), which is not one (#4050).
+    raw_template = getattr(cls, "template_name", None)
+    template: Any = raw_template if isinstance(raw_template, str) else None
+    if template is None and isinstance(getattr(cls, "template", None), str):
         template = "(inline)"
 
     # Mixins
@@ -1825,13 +1834,13 @@ def _extract_view_schema(cls: type, base_classes: list) -> Dict[str, Any]:
     auth = _extract_auth_info(cls)
 
     # Config
-    config = {}
+    config: Dict[str, Any] = {}
     tick = getattr(cls, "tick_interval", None)
-    if tick is not None:
+    if isinstance(tick, (int, float)) and not isinstance(tick, bool):
         config["tick_interval"] = tick
     temp = getattr(cls, "temporary_assigns", None)
-    if temp:
-        config["temporary_assigns"] = list(temp.keys()) if isinstance(temp, dict) else temp
+    if temp and isinstance(temp, (dict, list, tuple)):
+        config["temporary_assigns"] = list(temp.keys()) if isinstance(temp, dict) else list(temp)
 
     return {
         "class": full_path,
