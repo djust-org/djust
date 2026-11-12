@@ -1225,18 +1225,25 @@ def _get_context_data_reaches_base(cls: type) -> bool:
     dicts that never splat ``super().get_context_data(...)``. Meant for the
     views ``_get_context_data_is_too_dynamic`` accepts; anything else counts
     as reaching it, so a check never reports a field it cannot prove missing.
+
+    djust's own classes are read too: a user subclass of a shipped view whose
+    ``get_context_data()`` builds a new dict (the admin views) gets no
+    declared field. The walk stops at the base method itself.
     """
+    from djust.mixins.context import ContextMixin
+
+    base = ContextMixin.__dict__["get_context_data"]
     for klass in cls.__mro__:
         if klass is object:
             continue
         mod = getattr(klass, "__module__", "") or ""
-        if (mod.startswith("djust.") or mod.startswith("djust_")) and (
-            "test" not in mod and "example" not in mod
-        ):
+        if mod.startswith("django.") or mod == "builtins":
             continue
         method = klass.__dict__.get("get_context_data")
         if method is None:
             continue
+        if method is base:
+            return True
         try:
             tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
         except (OSError, TypeError, SyntaxError):

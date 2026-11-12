@@ -1230,6 +1230,10 @@ class ContextMixin:
         rendering ``{{ user }}`` / ``{{ perms }}`` / ``{{ messages }}``.
         """
         from .._exposure import ExposureError, uses_legacy_exposure
+        from .._exposure_unsupplied import (
+            AUTHORIZATION_CONTEXT_NAMES,
+            warn_shadowed_authorization_names,
+        )
 
         if not uses_legacy_exposure(self):
             policy = getattr(self, "exposure_policy", None)
@@ -1261,6 +1265,13 @@ class ContextMixin:
                         if key not in result:
                             result[key] = value
                             added.add(key)
+                    # #4050: a declared field shadowing user/perms is legal
+                    # but flagged (DEBUG only; djust.V026 statically).
+                    shadowed = AUTHORIZATION_CONTEXT_NAMES.intersection(supplied).intersection(
+                        context
+                    )
+                    if shadowed:
+                        warn_shadowed_authorization_names(self, shadowed)
             self._context_processor_keys = added
             return result
 

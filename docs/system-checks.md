@@ -55,6 +55,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V023 | LiveView | Error | A `params_form` the request path cannot use: not a form class, or a form whose `__init__` needs arguments beyond `data=`; or a `params_form_fallback` that is not `"initial"` or `"fields"` |
 | V024 | LiveView | Error | A `query_budget` nothing can enforce: an unknown key, a bool or negative number, a handler named in `events` that the view lacks or that is `async def` / `@background` |
 | V025 | LiveView | Warning | A class defines `get_http_status()` while `LIVEVIEW_CONFIG['http_status_of_state']` is configured: the override replaces the project-wide map |
+| V026 | LiveView | Warning | An explicit view declares a `state()` field named `user` or `perms` (without `render=False`): it replaces `request.user` / the permission proxy in every template the view renders |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -478,6 +479,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Fix**: delete the override and set `self.state` to a state the map names; or, for a real special case, have the override call `super().get_http_status()` first so the map still applies. It is a Warning because an override can be right (a status that is not a function of one state), and the check cannot see a `super()` call.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V025"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V025"]`
 - **False positives**: an override that calls `super().get_http_status()`
+
+### V026 — declared `state()` field named `user` or `perms`
+- **Severity**: Warning
+- **Method**: Runtime (class inspection; no view is constructed).
+- **What it detects**: an explicit view that declares `user = state(...)` or `perms = state(...)` without `render=False`. A declared field is template context (#4050), and view context wins over Django's context processors, so the field replaces `request.user` or the permission proxy in every template the view renders, including base templates that test it for authorization (`{% if user.is_staff %}`). Reported once, on the class that declares the field. Other context-processor names (`messages`, `debug`, `LANGUAGE_CODE`) are shadowed the same way and are not reported. Legacy views are not checked: their attribute walk shadowed these names in 1.x too. With `DEBUG = True`, djust also logs one warning per view class (logger `djust.exposure`) when it renders such a shadow.
+- **Fix**: rename the field (`selected_user`), or declare it `state(..., render=False)` if no template reads it.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V026"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V026"]`
 
 ---
 

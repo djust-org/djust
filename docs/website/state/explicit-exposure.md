@@ -55,9 +55,13 @@ the later one winning:
 1. Declared `state()` fields (not `state(render=False)`).
 2. `get_context_data()`: keyword arguments to `super().get_context_data()`, and
    keys set on its result.
-3. Django context processors fill only names nothing above supplied, so a
-   declared `user` field renders instead of `request.user`, as a `user` key from
-   `get_context_data()` would.
+3. Django context processors fill only names nothing above supplied.
+
+A declared field shadows a context-processor value of the same name, as a
+`get_context_data()` key does (`messages = state(default_factory=list)` is
+fine). `user` and `perms` are flagged, because templates use them for
+authorization: system check `djust.V026` and, with `DEBUG = True`, a warning
+on the `djust.exposure` logger.
 
 A name a framework provider owns (`online_count` on a `PresenceMixin` view, a
 formset name, `streams`, `csrf_token`) is rendered by its provider, never from
@@ -82,8 +86,9 @@ token = state("", persist="server", render=False)  # handlers only, never templa
 ```
 
 - Every declared field is template context unless it says `render=False`. Use
-  that for a value only handlers need, or a large one the template never reads,
-  so it is not synced to the renderer for nothing. A legacy view refuses
+  that for a value only handlers need. Declare a large field the template never
+  reads `render=False`: everything in the render context is fingerprinted for
+  change detection on every turn. A legacy view refuses
   `render=False`, because its attribute walk renders every public field.
 
 - `persist="server"` saves the field in a server-side session envelope, bound

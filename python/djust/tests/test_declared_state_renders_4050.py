@@ -564,3 +564,180 @@ async def test_an_event_forwards_only_the_changed_declared_field_to_rust():
     assert recorder.updates, "the event did not sync state to the renderer"
     sent = {key for update in recorder.updates for key in update}
     assert "count" in sent and "items" not in sent, recorder.updates
+
+
+# ------------------------------------------------------------------ #
+# A declared field the template does not print goes nowhere
+# ------------------------------------------------------------------ #
+
+UNPRINTED = "UNPRINTED_DECLARED_SENTINEL"
+
+
+class Unprinted(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root><p>[{{ count }}]</p></div>"
+    count = state(0, persist="server")
+    note = state(UNPRINTED)
+
+    @event_handler()
+    def increment(self, **kwargs):
+        self.count += 1
+        self.note = UNPRINTED + "-changed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_an_unprinted_declared_field_reaches_no_frame_session_or_state():
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SOCKET_SETTINGS):
+        request = await sync_to_async(make_request)()
+        socket, mount = await _connect(request, Unprinted)
+        try:
+            frames = [mount]
+            await socket.send_json_to({"type": "event", "event": "increment", "params": {}})
+            frames += await receive_until(socket, has_type("patch", "html_update"))
+            frames += await drain_extra(socket)
+        finally:
+            await socket.disconnect()
+    assert any("[1]" in json.dumps(f) for f in frames), frames
+    for frame in frames:
+        # Every field of every frame, the markup included.
+        assert UNPRINTED not in json.dumps(frame), frame
+    stored = await sync_to_async(lambda: SessionStore(request.session.session_key).load())()
+    assert UNPRINTED not in json.dumps(stored, default=str)
+
+
+@pytest.mark.django_db
+def test_an_unprinted_declared_field_is_render_context_but_not_client_state():
+    view = Unprinted()
+    view.request = make_request()
+    assert view.get_context_data()["note"] == UNPRINTED
+    assert view.get_state() == {}
+
+
+# ------------------------------------------------------------------ #
+# user / perms: djust.V026 and the DEBUG shadow warning
+# ------------------------------------------------------------------ #
+
+
+class DeclaresUser(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ user }}</div>"
+    user = state("SELECTED_USER")
+
+
+class DeclaresMessages(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ messages }}</div>"
+    messages = state(default_factory=list)
+
+
+class DeclaresUserHidden(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root></div>"
+    user = state("SELECTED_USER", render=False)
+    perms = state(None, render=False)
+
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+
+    class LegacyDeclaresUser(LiveView):
+        exposure_policy = "legacy"
+        template = "<div dj-root>{{ user }}</div>"
+        user = state("SELECTED_USER")
+
+
+class DeclaresPerms(DeclaresUser):
+    exposure_policy = "explicit"
+    perms = state(None)
+
+
+def _v026(view_class):
+    from djust.checks.components import check_declared_authorization_names
+
+    label = "%s.%s " % (view_class.__module__, view_class.__qualname__)
+    return [m for m in check_declared_authorization_names(None) if m.msg.startswith(label)]
+
+
+def test_v026_flags_a_declared_user_or_perms_field():
+    (message,) = _v026(DeclaresUser)
+    assert message.id == "djust.V026" and "'user'" in message.msg
+    assert "selected_user" in message.hint and "render=False" in message.fix_hint
+    # The inherited user is reported once, on the class that declares it.
+    assert [m.msg.split("'")[1] for m in _v026(DeclaresPerms)] == ["perms"]
+
+
+def test_v026_is_quiet_for_messages_render_false_and_legacy_views(settings):
+    assert _v026(DeclaresMessages) == []
+    assert _v026(DeclaresUserHidden) == []
+    assert _v026(LegacyDeclaresUser) == []
+    settings.DJUST_CONFIG = {"suppress_checks": ["V026"]}
+    assert _v026(DeclaresUser) == []
+
+
+def _apply_processors(view_class, supplied):
+    view = view_class()
+    view.request = make_request()
+    view._get_context_processors = lambda: []
+    view._get_resolved_processors = lambda paths: [lambda request: dict(supplied)]
+    return view._apply_context_processors(view.get_context_data(), view.request)
+
+
+@pytest.fixture
+def fresh_shadow_reports():
+    from djust import _exposure_unsupplied
+
+    saved = dict(_exposure_unsupplied._SHADOW_REPORTED)
+    _exposure_unsupplied._SHADOW_REPORTED.clear()
+    yield
+    _exposure_unsupplied._SHADOW_REPORTED.clear()
+    _exposure_unsupplied._SHADOW_REPORTED.update(saved)
+
+
+def _shadow_records(caplog):
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "djust.exposure" and "replaces the" in r.getMessage()
+    ]
+
+
+@pytest.mark.django_db
+@override_settings(DEBUG=True)
+def test_debug_warns_once_when_a_declared_field_shadows_user(caplog, fresh_shadow_reports):
+    supplied = {"user": "REQUEST_USER_SENTINEL", "messages": ["m"]}
+    with caplog.at_level(logging.WARNING, logger="djust.exposure"):
+        assert _apply_processors(DeclaresUser, supplied)["user"] == "SELECTED_USER"
+        _apply_processors(DeclaresUser, supplied)
+        _apply_processors(DeclaresMessages, supplied)
+    (message,) = _shadow_records(caplog)
+    assert "DeclaresUser" in message and "user" in message and "V026" in message
+    assert "SENTINEL" not in message and "SELECTED_USER" not in message
+
+
+@pytest.mark.django_db
+@override_settings(DEBUG=False)
+def test_no_shadow_warning_without_debug(caplog, fresh_shadow_reports):
+    with caplog.at_level(logging.WARNING, logger="djust.exposure"):
+        _apply_processors(DeclaresUser, {"user": "REQUEST_USER"})
+    assert _shadow_records(caplog) == []
+
+
+# ------------------------------------------------------------------ #
+# T027 reads djust's own get_context_data() overrides
+# ------------------------------------------------------------------ #
+
+
+def test_t027_base_reach_reads_a_shipped_views_override():
+    from djust.admin_ext.progress import BulkActionProgressWidget
+    from djust.checks.templates import _get_context_data_reaches_base
+
+    class Sub(BulkActionProgressWidget):
+        exposure_policy = "explicit"
+        extra = state(1)
+
+    # The shipped widget builds a new dict, so no declared field arrives.
+    assert _get_context_data_reaches_base(Sub) is False
+    assert _get_context_data_reaches_base(Counter) is True
+    assert _get_context_data_reaches_base(StaticSplat) is True
+    assert _get_context_data_reaches_base(DeclaredPresence) is True

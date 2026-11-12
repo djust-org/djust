@@ -144,3 +144,57 @@ def warn_unsupplied_template_names(view: Any, context: Any) -> None:
     except Exception:  # noqa: BLE001 — never let the diagnostic break a render
         # No exception text: it can carry view values (ADR-038 D-a).
         logger.debug("Unsupplied-template-name check could not run")
+
+
+#: Context-processor names templates use for authorization decisions
+#: (``{% if user.is_staff %}``, ``{% if perms.app.change_x %}``). A declared
+#: ``state()`` field shadows a same-named context-processor value, as a
+#: ``get_context_data()`` key does; for most names (``messages``, ``debug``,
+#: ``LANGUAGE_CODE``) that is ordinary and allowed. For these two the shadow
+#: silently changes what every template the view renders, including base
+#: templates, believes about the current user, so djust.V026 and the DEBUG
+#: warning below flag it. Extend this set to flag another name.
+AUTHORIZATION_CONTEXT_NAMES = frozenset({"user", "perms"})
+
+#: Shadowed authorization names already reported, by view class.
+_SHADOW_REPORTED: "weakref.WeakKeyDictionary[type, set[str]]" = weakref.WeakKeyDictionary()
+
+
+def warn_shadowed_authorization_names(view: Any, names: Any) -> None:
+    """Log, once per view class and name, a declared field shadowing ``user``/``perms``.
+
+    ``names`` are the context-processor keys the view's own context already
+    held. Only names in :data:`AUTHORIZATION_CONTEXT_NAMES` that are declared
+    ``state()`` fields are reported. ``DEBUG`` only; names, never values;
+    never raises.
+    """
+    try:
+        from django.conf import settings
+
+        if getattr(settings, "DEBUG", False) is not True:
+            return
+        from .mixins.context import rendered_state_names
+
+        cls = type(view)
+        declared = set(rendered_state_names(cls))
+        reported = _SHADOW_REPORTED.get(cls)
+        if reported is None:
+            reported = _SHADOW_REPORTED[cls] = set()
+        for name in sorted(AUTHORIZATION_CONTEXT_NAMES.intersection(names)):
+            if name not in declared or name in reported:
+                continue
+            reported.add(name)
+            logger.warning(
+                "%s.%s: the declared state() field %s replaces the %s a context "
+                "processor supplies, in every template this view renders, including "
+                "base templates that test it for authorization. Rename the field "
+                "(for example selected_%s) or declare it with render=False. See "
+                "djust.V026.",
+                cls.__module__,
+                cls.__qualname__,
+                name,
+                name,
+                name,
+            )
+    except Exception:  # noqa: BLE001 — never let the diagnostic break a render
+        logger.debug("Shadowed-authorization-name check could not run")
