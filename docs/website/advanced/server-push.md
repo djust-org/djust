@@ -115,6 +115,9 @@ class StockTickerView(LiveView):
     def mount(self, request, **kwargs):
         self.price = get_current_price()
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "price": self.price}
+
     def handle_tick(self):
         self.price = get_current_price()
 ```
@@ -135,6 +138,9 @@ from djust.decorators import event_handler
 class JobView(LiveView):
     def mount(self, request, **kwargs):
         self.step = "queued"
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "step": self.step}
 
     @event_handler()
     async def start(self, **kwargs):
@@ -204,6 +210,9 @@ class SharedNoteView(LiveView):
     def mount(self, request, **kwargs):
         self.content = Note.objects.get(pk=kwargs["pk"]).content
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "content": self.content}
+
     @event_handler
     def update_content(self, value: str = "", **kwargs):
         self.content = value
@@ -248,6 +257,10 @@ class RoomView(LiveView):
     def mount(self, request, room="lobby", **kwargs):
         self.room = room
         self.push_scope = room  # this session receives pushes for its room
+        self.players = load_players(room)
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "room": self.room, "players": self.players}
 
     def handle_refresh(self, **kwargs):
         self.players = load_players(self.room)

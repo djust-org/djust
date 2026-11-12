@@ -193,6 +193,11 @@ class RevenueDashboardView(LiveView):
     def mount(self, request, **kwargs):
         self._refresh()
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(points_json=self.points_json, selected_range=self.selected_range)
+        return context
+
     def _refresh(self):
         delta = RANGE_PRESETS[self.selected_range]
         cutoff = timezone.now() - delta

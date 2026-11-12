@@ -43,6 +43,9 @@ class CartView(LiveView):
         # shared by every instance.
         self.items = []
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "items": self.items}
+
     @computed("items", "tax_rate")
     def total(self):
         # Only recomputes when items or tax_rate changes.
@@ -103,6 +106,11 @@ class ProfileView(LiveView):
         self.first_name = request.user.first_name
         self.last_name = request.user.last_name
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(first_name=self.first_name, last_name=self.last_name)
+        return context
+
     @event_handler
     def save(self, **kwargs):
         user = self.request.user
@@ -154,6 +162,11 @@ class FormView(LiveView):
     def mount(self, request, **kwargs):
         self.email_id = self.unique_id("email")
         self.email_help_id = self.unique_id("email-help")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(email_id=self.email_id, email_help_id=self.email_help_id)
+        return context
 ```
 
 ```django

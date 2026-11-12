@@ -108,6 +108,15 @@ class ReportView(LiveView):
         self.report_html = ""
         self.error = ""
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            generating=self.generating,
+            report_html=self.report_html,
+            error=self.error,
+        )
+        return context
+
     @event_handler()
     def generate_report(self, **kwargs):
         self.generating = True        # Shows spinner immediately
@@ -213,6 +222,11 @@ class ContentView(LiveView):
         self.content = ""
         self.error = ""
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(generating=self.generating, error=self.error, content=self.content)
+        return context
+
     @event_handler
     @background
     def generate_content(self, prompt: str = "", **kwargs):
@@ -312,6 +326,9 @@ class RunView(LiveView):
     async def mount(self, request, run_id=None, **kwargs):
         self.events = []
         self.create_task(self._follow(run_id))
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "events": self.events}
 
     async def _follow(self, run_id):
         async for event in run_events(run_id):

@@ -46,6 +46,11 @@ class TabbedView(LiveView):
         self.profile_visible = True
         self.notes_visible = False
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(profile_visible=self.profile_visible, notes_visible=self.notes_visible)
+        return context
+
     @event_handler
     def switch_tab(self, tab: str = "", **kwargs):
         self.profile_visible = tab == "profile"

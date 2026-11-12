@@ -106,6 +106,7 @@ class AccountView(LiveView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["balance"] = f"{self.balance_cents / 100:.2f}"
+        context["last_event"] = self.last_event
         return context
 
     def handle_balance_changed(self, new_balance_cents: int = 0, description: str = "", **kwargs):

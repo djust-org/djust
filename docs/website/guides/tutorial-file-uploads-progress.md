@@ -114,6 +114,15 @@ class AvatarView(UploadMixin, LiveView):
             self.avatar_url = profile.avatar.url
             self.avatar_name = profile.avatar.name.rsplit("/", 1)[-1]
             self.avatar_size = profile.avatar.size
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            avatar_url=self.avatar_url,
+            avatar_name=self.avatar_name,
+            avatar_size=self.avatar_size,
+        )
+        return context
 ```
 
 `allow_upload(name, ...)` registers an upload slot keyed by `name`.

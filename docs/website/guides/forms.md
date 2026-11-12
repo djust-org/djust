@@ -23,6 +23,9 @@ class TodoView(LiveView):
     def mount(self, request, **kwargs):
         self.items = []
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "items": self.items}
+
     @event_handler()
     def add_item(self, title="", **kwargs):
         if title.strip():
@@ -492,6 +495,9 @@ class ReviewQueue(ModelFormMixin[Review], LiveView):
         self.open_id = None
         super().mount(request, **kwargs)
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "open_id": self.open_id}
+
     def handle_params(self, params, uri):
         self.open_id = params.get("open")
 
@@ -561,6 +567,9 @@ class OrderView(FormSetHelpersMixin, LiveView):
         self.order = get_object_or_404(Order, pk=pk, owner=request.user)
         self.items = ItemFormSet(prefix="items", **self.get_formset_kwargs("items"))
         self._formset_data = {}
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "order": self.order}
 ```
 
 Both events rebuild the formset from its bound data, so everything it was first

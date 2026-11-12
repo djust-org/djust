@@ -245,6 +245,9 @@ from djust.js import JS
 class Onboarding(LiveView):
     tour_running: bool = False
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "tour_running": self.tour_running}
+
     @event_handler
     @background
     async def start_tour(self, **kwargs):

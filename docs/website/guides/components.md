@@ -48,11 +48,8 @@ Use it in a LiveView:
 class DashboardView(LiveView):
     template_name = "dashboard.html"
 
-    def mount(self, request, **kwargs):
-        self.status = StatusDot("green")
-
     def get_context_data(self, **kwargs):
-        return {"status": self.status}
+        return {**super().get_context_data(**kwargs), "status": StatusDot("green")}
 ```
 
 In the template, `{{ status }}` calls `__str__()` which calls `render()`:
@@ -449,6 +446,9 @@ class TodoView(LiveView):
             {"id": 1, "text": "Buy milk", "completed": False},
             {"id": 2, "text": "Write docs", "completed": True},
         ]
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "todos": self.todos}
 
     def handle_component_event(self, component_id, event, data):
         if event == "todo_toggled":
@@ -977,6 +977,11 @@ class ClaimsListView(LiveView):
             {"key": "claim_number", "label": "Claim #"},
             {"key": "status", "label": "Status"},
         ]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(rows=self.rows, columns=self.columns)
+        return context
 
     @event_handler()
     def open_claim(self, value: str = "", **kwargs):
