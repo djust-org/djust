@@ -35,9 +35,11 @@
             <span class="text-sm text-gray-700">{{ current }} / {{ total }}</span>
             <span class="text-sm text-gray-500">{{ percent }}%</span>
         </div>
-        {# A native <progress>, not an inline width a strict CSP refuses (#3979). #}
-        <progress class="w-full h-3" value="{{ percent }}" max="100"
-                  aria-label="{% if action_label %}{{ action_label }}{% else %}Running action{% endif %}">{{ percent }}%</progress>
+        {# A native progress element: a width set in a style attribute is refused by a strict CSP (#3979). #}
+        <div class="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+            <progress class="w-full h-3 bg-indigo-600 transition-all" value="{{ percent }}" max="100"
+                      aria-label="{% if action_label %}{{ action_label }}{% else %}Running action{% endif %}">{{ percent }}%</progress>
+        </div>
 
         {% if message %}
         <p class="mt-3 text-sm text-gray-700">{{ message }}</p>
