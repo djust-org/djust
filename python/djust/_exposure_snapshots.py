@@ -7,6 +7,7 @@ https://docs.djangoproject.com/en/5.2/topics/signing/
 """
 
 import json
+import logging
 import time
 from typing import Any
 
@@ -15,13 +16,56 @@ from django.core import signing
 from ._exposure import ExposureContract, ExposureError, clone_json_state
 from ._exposure_sessions import StateBinding, request_binding
 
+logger = logging.getLogger(__name__)
+
 _SALT = "djust.explicit.client-snapshot.v1"
+
+#: Default lifetime of a signed client snapshot, in seconds.
+DEFAULT_MAX_AGE = 3600
+#: The longest lifetime :class:`ClientSnapshot` accepts.
+MAX_MAX_AGE = 86400
+
+_reported_max_ages: set[str] = set()
+
+
+def get_max_age() -> int:
+    """The snapshot lifetime in seconds, from ``DJUST_STATE_SNAPSHOT_MAX_AGE``.
+
+    The one reading of the setting: the codec that signs and verifies the
+    token and the service-worker metadata that tells the browser how long to
+    keep it use this value, so they cannot disagree. A whole number of
+    seconds from 1 to 86400 (an ``int``, or a string of digits as an
+    environment variable supplies) is used as given. A larger value is capped
+    at 86400; anything else falls back to :data:`DEFAULT_MAX_AGE`. Each
+    correction is logged once per value, and never raises: a misconfigured
+    lifetime must not break a mount.
+    """
+    from django.conf import settings
+
+    raw = getattr(settings, "DJUST_STATE_SNAPSHOT_MAX_AGE", DEFAULT_MAX_AGE)
+    value: int | None = None
+    if type(raw) is int:
+        value = raw
+    elif type(raw) is str and raw.strip().isascii() and raw.strip().isdigit():
+        value = int(raw.strip())
+    if value is not None and 0 < value <= MAX_MAX_AGE:
+        return value
+    used = MAX_MAX_AGE if value is not None and value > MAX_MAX_AGE else DEFAULT_MAX_AGE
+    shown = repr(raw)[:80]
+    if shown not in _reported_max_ages:
+        _reported_max_ages.add(shown)
+        logger.warning(
+            "DJUST_STATE_SNAPSHOT_MAX_AGE must be a whole number of seconds from 1 to %d "
+            "(got %s); using %d",
+            MAX_MAX_AGE,
+            shown,
+            used,
+        )
+    return used
 
 
 def snapshot_codec(view: Any, request: Any) -> "ClientSnapshot | None":
     """Build a codec from declarations and an authorized transport request."""
-    from django.conf import settings
-
     policy = getattr(view, "exposure_policy", None)
     if type(policy) is not str or policy != "explicit":
         raise ExposureError("Client snapshot requires explicit exposure policy")
@@ -34,7 +78,7 @@ def snapshot_codec(view: Any, request: Any) -> "ClientSnapshot | None":
     return ClientSnapshot(
         contract,
         request_binding(request),
-        max_age=getattr(settings, "DJUST_STATE_SNAPSHOT_MAX_AGE", 3600),
+        max_age=get_max_age(),
     )
 
 

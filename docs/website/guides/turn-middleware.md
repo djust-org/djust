@@ -201,7 +201,7 @@ def _as_caller(user_id):
   | `"tick"` | `handle_tick()` |
   | `"render"` | every call djust makes to `get_context_data()`, on every transport |
   | `"auth"` | an authorization decision that runs your code: `check_permissions()`, Django's access mixins and replayed `dispatch` decorators (`test_func`), `@permission_required` on a handler, and the object-permission check (`get_object()` + `has_object_permission()`) |
-  | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the snapshot overrides (`_should_restore_snapshot()`, `_restore_snapshot()`, `_capture_snapshot_state()`, including the per-event signed-snapshot refresh), the restore of private state (`_restore_private_state()`, which re-fetches private model references; a guarded step, so a wrapper that swallows a failure cannot leave a half-restored view), and a released view's teardown hooks **only when they run on a worker thread**; on the event loop they run with no step (see [Not wrapped](#not-wrapped)) |
+  | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the signed client snapshot's restore gate (`_should_restore_snapshot()`), the restore of private state (`_restore_private_state()`, which re-fetches private model references; a guarded step, so a wrapper that swallows a failure cannot leave a half-restored view), and a released view's teardown hooks **only when they run on a worker thread**; on the event loop they run with no step (see [Not wrapped](#not-wrapped)) |
 - `view` is the view or component whose code runs; `turn` is
   `djust.turns.current_turn()`, or `None` when the step runs outside a turn (a
   `start_async` callback runs between its start and result turns).
@@ -217,7 +217,7 @@ def _as_caller(user_id):
   exits cleanly. If the wrapper's `__exit__` swallows an exception that the check
   or an `on_mount` hook raised, djust raises `PermissionDenied` instead of
   treating the missing verdict as "allowed". The same guard covers the
-  `on_mount` chain, the `_restore_snapshot` override and `_restore_private_state`,
+  `on_mount` chain and `_restore_private_state`,
   because their outcome is a verdict too (a swallowed failure in the last would
   otherwise leave a silently half-restored view). The guard belongs to the step djust enters: a check that runs
   *inside* another step on the same thread (an `"auth"` check called from a
@@ -377,10 +377,12 @@ wrapper does for `get_context_data()`. Read the rows in `mount()`, a handler or
 `get_context_data()` (all steps) and hand the template the result, rather than
 letting a tag or a field evaluate a queryset.
 
-The snapshot-restore overrides are covered: `_should_restore_snapshot()`,
-`_restore_snapshot()` and `_capture_snapshot_state()` are `"lifecycle"` steps (the
-per-event refresh of the signed snapshot as well as the mount), and
-`handle_restore()` is a `"hook"` step. A `{% live_render lazy=True %}` child's
+The snapshot-restore gate is covered: `_should_restore_snapshot()` is a
+`"lifecycle"` step, and `handle_restore()` is a `"hook"` step. (The legacy
+signed snapshot, whose `_restore_snapshot()` and `_capture_snapshot_state()`
+overrides were `"lifecycle"` steps too, was removed in 2.0. Time-travel
+recording, a `DEBUG` tool, still calls `_capture_snapshot_state()`, and does
+so with no step open.) A `{% live_render lazy=True %}` child's
 `mount()` and `get_context_data()` are `"mount"` and `"render"` steps when its slot
 is filled. `PresenceMixin` entering its broadcast from
 async code (`track_presence()` under a running loop) is a `"hook"` step as well.

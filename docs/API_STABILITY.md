@@ -265,7 +265,7 @@ djust that states `"legacy"` does not warn. The value is accepted through the
 2.0 pre-releases and removed in `2.0.0`: 2.x has no legacy runtime (see
 [the 2.x direction](#the-14-bridge-and-2x-direction-2026-10-19)).
 
-System check `djust.V026` (Warning) also lists each application class that
+System check `djust.V027` (Warning) also lists each application class that
 states `"legacy"`, on every `manage.py check` and server start, with the views
 that inherit it and a pointer to `djust_exposure_inventory`; a warning raised
 at import time is easy to miss. djust's own classes are not reported.
@@ -579,6 +579,55 @@ handler; the one render sends both.
 
 These were not deprecated in 1.3.x: no warning preceded the removal, because
 the decorators had no behaviour a project could depend on.
+
+### The legacy signed snapshot → `state(..., persist="client", client=True)`
+
+A view that set `enable_state_snapshot = True` had every public attribute
+signed (`djust.security.sign_snapshot`) and sent to the browser on the mount
+frame and after each event. On back-navigation the browser echoed the token,
+and `LiveView._restore_snapshot()` applied it in place of `mount()`. djust
+`2.0.0` removed that snapshot: `djust.security.state_snapshot`
+(`sign_snapshot`, `unsign_snapshot`, `SNAPSHOT_SALT`),
+`LiveView._restore_snapshot()`, `NonPersistableStateError` and the `strict=`
+argument of `LiveView._capture_snapshot_state()`.
+
+Importing `sign_snapshot`, `unsign_snapshot` or `SNAPSHOT_SALT` from
+`djust.security` raises `ImportError` naming the replacement; so does reading
+one as an attribute, so `hasattr()` raises rather than returning `False` (an
+`AttributeError` from a module `__getattr__` would lose the message on
+`from ... import`). A view class that defines `_restore_snapshot()` is refused
+with `ImproperlyConfigured`, when the class is created and on the mount path. A legacy view no
+longer sends a token, and a token a 1.x server signed is refused.
+Back and a reconnect still restore an `enable_state_snapshot` view from the
+state saved in the session, which this release keeps. Where nothing is saved
+there (`LIVEVIEW_CONFIG['view_state_in_session'] = False`, no or an expired
+session, an unresolved tenant), the view now mounts fresh instead of restoring
+from the token.
+Declare what the browser may hold:
+
+```python
+# Before (1.3)
+class WizardView(LiveView):
+    enable_state_snapshot = True
+
+    def mount(self, request, **kwargs):
+        self.step = 1
+
+# After
+class WizardView(LiveView):
+    step = state(1, persist="client", client=True)
+
+    def get_context_data(self, **kwargs):
+        return {"step": self.step}
+```
+
+The token is still signed, bound and aged by the server; only its contents
+changed. `get_max_age` and `DEFAULT_MAX_AGE` stay importable from
+`djust.security`. `DJUST_STATE_SNAPSHOT_MAX_AGE` is now read in one place: a
+whole number of seconds from 1 to 86400 is used as given, a larger value is
+capped at 86400, and anything else falls back to 3600 with a warning.
+`LiveView._should_restore_snapshot()` remains the hook that can refuse a
+token.
 
 ## Template-Syntax Deprecations
 

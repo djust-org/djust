@@ -1,5 +1,6 @@
 """Signed explicit snapshots grant only declared client-persistence fields."""
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -120,10 +121,56 @@ def test_signature_overhead_counts_toward_wire_limit(codec):
         limited.capture(object.__new__(SnapshotView))
 
 
-def test_legacy_signature_cannot_be_replayed_as_explicit(codec):
-    from djust.security import sign_snapshot
+def _removed_legacy_token(state_json, slug, session_key):
+    """A token as djust 1.x signed it, which a browser may still hold."""
+    from django.core.signing import TimestampSigner
+    from django.utils.crypto import salted_hmac
 
-    assert (
-        codec.restore(sign_snapshot('{"saved":[90]}', codec.contract.owner, codec.binding.session))
-        is None
+    sid = salted_hmac("djust.state_snapshot.sid", session_key, algorithm="sha256").hexdigest()
+    envelope = json.dumps(
+        {"slug": slug, "sid": sid, "state": state_json, "tenant": ""},
+        sort_keys=True,
+        separators=(",", ":"),
     )
+    return TimestampSigner(salt="djust.state_snapshot").sign(envelope)
+
+
+def test_a_removed_legacy_token_cannot_be_replayed_as_explicit(codec):
+    token = _removed_legacy_token('{"saved":[90]}', codec.contract.owner, codec.binding.session)
+    assert codec.restore(token) is None
+
+
+@pytest.mark.parametrize(
+    "configured, expected",
+    [
+        (120, 120),
+        ("7200", 7200),  # an environment variable arrives as a string
+        (86400, 86400),
+        (86401, 86400),  # capped, not refused: the snapshot stays on
+        (10**9, 86400),
+        (0, 3600),
+        (-5, 3600),
+        (True, 3600),
+        (1.5, 3600),
+        ("soon", 3600),
+        (None, 3600),
+    ],
+)
+def test_one_lifetime_for_the_codec_and_the_service_worker(codec, settings, configured, expected):
+    """G4: the worker's lifetime and the codec's are the same validated value,
+    so a setting the codec would refuse cannot leave the browser caching a
+    token the server no longer issues."""
+    from types import SimpleNamespace
+
+    from djust._exposure_snapshots import get_max_age
+    from djust.security.service_worker import mount_frame_metadata
+
+    settings.DJUST_STATE_SNAPSHOT_MAX_AGE = configured
+    assert get_max_age() == expected
+    # The codec accepts what the one reading returns: it never raises here.
+    built = ClientSnapshot(codec.contract, codec.binding, max_age=get_max_age())
+    token = built.capture(object.__new__(SnapshotView))
+    meta = mount_frame_metadata(
+        object.__new__(SnapshotView), SimpleNamespace(session=None, user=None), token
+    )
+    assert meta["state_snapshot_max_age"] == expected

@@ -104,12 +104,6 @@ RUNTIME_LEGACY_GATED = {
     ("_settle_cancelled_async", "Runtime: error settling cancelled async task for"): (
         "inside `if uses_legacy_exposure(view)`"
     ),
-    ("_dispatch_mount_body", "state_snapshot _restore_snapshot failed for %s; "): (
-        "restore runs only when `opt_in and legacy_exposure`"
-    ),
-    ("_dispatch_mount_body", "Failed to emit state_snapshot_signed for %s; pro"): (
-        "a nonlegacy view reaches only the explicit branch, wrapped in its own value-free catch"
-    ),
 }
 
 RUNTIME_FRAMEWORK_ONLY = {
