@@ -88,7 +88,6 @@ function _restoreFormData(container, data) {
 
     // Every control of a group, not only the first one with the name.
     container.querySelectorAll('input, textarea, select').forEach(field => {
-        // eslint-disable-next-line security/detect-object-injection
         if (field.name && has(field.name)) _writeControl(field, data[field.name]);
     });
 
