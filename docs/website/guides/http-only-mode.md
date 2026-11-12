@@ -150,7 +150,7 @@ With `False`, djust neither writes nor reads those keys on any path:
 
 - The first GET renders the page and saves nothing of the view in the session.
 - Every page-POST fallback builds a fresh view, runs `mount()`, applies the event and renders. Nothing is restored from or saved to the session.
-- WebSocket and SSE turns save nothing of the view in the session, even for a view with `enable_state_snapshot = True`, and a mount never restores from it. The signed client `state_snapshot` that such a view sends back on reconnect is not stored in the session, so it still works.
+- WebSocket and SSE turns save nothing of the view in the session, even for a view with `enable_state_snapshot = True`, and a mount never restores from it. The signed client snapshot of an explicit view's `persist="client"` fields is not stored in the session, so it still works.
 
 The trade-off: state that lives only on the view resets on each fallback POST, because `mount()` runs again. A "load more" offset, a form draft or a selected tab that a handler set on `self` is back at its `mount()` value on the next POST. Keep such state somewhere `mount()` can read it again (the URL, the database), or use the WebSocket or SSE transport, where the one view instance stays alive between events.
 

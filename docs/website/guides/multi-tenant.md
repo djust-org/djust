@@ -350,17 +350,12 @@ tenant B saved.
   not from `self.tenant`, so a tenant you change in-process with
   `set_tenant()` is not part of it; resolve the tenant from the request
   (subdomain, path, header) for views that persist server fields.
-- **The signed `state_snapshot` token** the client holds (`enable_state_snapshot
-  = True`) is bound to the view, the session and the tenant. A token a
-  `TenantMixin` view minted under one tenant is refused by a mount under
-  another, even with the same session and the same view path, and that mount
-  runs `mount()` fresh. A tenant view that has resolved no tenant mints no token
-  and accepts none. A view without `TenantMixin` is not tenant-scoped; its
-  tokens are unchanged. An explicit-policy `persist="client"` envelope was
-  already bound to the request's tenant. The token is bound to the tenant that
-  is current when it is minted, so after `set_tenant()` the next token carries
-  the new tenant, while state the view loaded before the call carries over to
-  it.
+- **The signed token** the client holds for a view's `persist="client"`
+  fields is bound to the session, the user, the route and the request's
+  tenant. A token minted under one tenant is refused by a mount under another,
+  even with the same session and the same view path, and that mount keeps what
+  `mount()` set. (The legacy signed snapshot of `enable_state_snapshot` views,
+  which djust 1.3 bound to the tenant as well, was removed in 2.0.)
 
 **Upgrading to 1.3:** the keys for tenant views changed, so the saved view
 state those views held under the old keys is no longer found: a **one-time

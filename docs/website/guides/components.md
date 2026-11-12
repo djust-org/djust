@@ -334,7 +334,7 @@ What this gives you:
   this view's state (`view.nav.state` is the `State` itself), and it is
   registered in `view._components` on first access, so it is routed, captured
   in time-travel snapshots and saved/restored with the session like any other
-  component, including the signed back-navigation snapshot.
+  component.
 - **Handlers are ordinary `@event_handler` methods** on the component; inside
   one, `self.state` is the state of the view that received the event. Clicks
   inside the rendered markup carry the `component_id` automatically because

@@ -83,7 +83,10 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
   queued behind other sessions' work. System check `djust.C024` validates it.
 - **`DJUST_STATE_SNAPSHOT_MAX_AGE` / `DJUST_STATE_SNAPSHOT_ENABLED`.** The
   signed back-navigation snapshot's lifetime, and its master switch. The
-  service worker also expires stored snapshots after this age.
+  lifetime is a whole number of seconds from 1 to 86400, 3600 by default; a
+  larger value is capped at 86400 and anything else falls back to 3600, with
+  a warning in the log. The service worker expires stored snapshots after the
+  same age.
 - **Schema changes.** Set `exposure_schema_version = 2` on the view when you
   change its declared fields. Older envelopes are then rejected and the view
   mounts fresh. Define `migrate_state(self, old_version, values)` to translate
