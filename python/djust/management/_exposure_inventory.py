@@ -31,8 +31,8 @@ DESTINATIONS: dict[str, str] = {
     "render_cache": "the Rust view (with its render state) kept in the shared state backend",
     "session_state": "session key liveview_<path>: the context copy saved after HTTP GET/POST",
     "client_state": "get_state(): client/debug state and API assign diffs",
-    "snapshot": "_capture_snapshot_state(): signed browser snapshot "
-    "(enable_state_snapshot) and time-travel history",
+    "snapshot": "_capture_snapshot_state(): time-travel history (on 1.3.x also the "
+    "signed browser snapshot of an enable_state_snapshot view)",
     "private_session": "session key liveview_<path>__private: _get_private_state()",
 }
 

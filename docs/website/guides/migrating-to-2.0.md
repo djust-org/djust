@@ -579,7 +579,7 @@ Every replacement works on 1.3.x, so make the change there.
 | `djust.sse.DjustSSEEventView` and the `sse/<session_id>/event/` route | `DjustSSEMessageView` at `sse/<session_id>/message/`, which the bundled client already uses |
 | `self._async_pending = (fn, args, kwargs)` in a handler | `self.start_async(fn, *args, **kwargs)`. **This one fails silently:** over a WebSocket the work never runs and nothing is logged ([#4031](https://github.com/djust-org/djust/issues/4031)). Search your code for `_async_pending`. |
 | `use_actors = True` | Remove the attribute. See [What does not survive](#5-what-does-not-survive). |
-| `sign_snapshot`, `unsign_snapshot` and `SNAPSHOT_SALT` from `djust.security`, the `djust.security.state_snapshot` module, and the `LiveView._restore_snapshot()` override | `state(..., persist="client", client=True)` fields. djust signs and verifies their token itself (example below). Importing one of the three names raises `ImportError` with this advice; a `_restore_snapshot()` override is never called. |
+| `sign_snapshot`, `unsign_snapshot` and `SNAPSHOT_SALT` from `djust.security`, the `djust.security.state_snapshot` module, and the `LiveView._restore_snapshot()` override | `state(..., persist="client", client=True)` fields. djust signs and verifies their token itself (example below). Importing one of the three names raises `ImportError` with this advice, and so does reading it as an attribute: `hasattr(djust.security, "sign_snapshot")` raises instead of returning `False`, so a compatibility shim must catch `ImportError`. A class that defines `_restore_snapshot()` is refused with `ImproperlyConfigured`; move what it did after restoring into `handle_restore()`. |
 | `NonPersistableStateError`, and the `strict=` argument of `LiveView._capture_snapshot_state()` | Nothing. A client field has to be JSON, and a model or `Decimal` is refused when the token is built. |
 
 A component mixin becomes a class attribute. This replaces
@@ -630,8 +630,12 @@ class WizardView(LiveView):
         self.step += 1
 ```
 
-A token a 1.x server signed is refused, so the first Back after the upgrade
-mounts fresh. A legacy view no longer sends a token at all.
+A legacy view no longer sends a token at all, and a token a 1.x server signed
+is refused. Back and a reconnect still restore an `enable_state_snapshot` view from the
+state saved in the session, which this release keeps. Where nothing is saved
+there (`LIVEVIEW_CONFIG['view_state_in_session'] = False`, no or an expired
+session, an unresolved tenant), the view now mounts fresh instead of restoring
+from the token.
 
 The component registers its own event on the view, and `self.nav.active` is
 the current tab in your handlers. Each component has one event, so a template

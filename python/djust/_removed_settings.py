@@ -58,6 +58,15 @@ REMOVED_VIEW_ATTRIBUTES: dict[str, str] = {
         "the standard runtime, which already runs one turn at a time per connection. "
         "For work that should not block a turn, use start_async() or @background"
     ),
+    # A method, not a flag: the base class no longer defines it, so any value
+    # found on a view is an override the application wrote and djust would
+    # never call.
+    "_restore_snapshot": (
+        "the legacy signed back-navigation snapshot that called this override was "
+        "removed, so it would never run; delete it, declare the fields the browser "
+        'may hold with state(..., persist="client", client=True), and move what '
+        "the override did after restoring into handle_restore()"
+    ),
 }
 
 
@@ -109,8 +118,8 @@ def reject_removed_view_attributes(view: Any) -> None:
             from django.core.exceptions import ImproperlyConfigured
 
             raise ImproperlyConfigured(
-                "%s.%s sets %s, which was removed in djust 2.0: %s."
-                % (cls.__module__, cls.__qualname__, name, replacement)
+                "%s.%s sets %s, which was removed in djust 2.0: %s. See %s"
+                % (cls.__module__, cls.__qualname__, name, replacement, MIGRATION_GUIDE_URL)
             )
 
 

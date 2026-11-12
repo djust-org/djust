@@ -543,9 +543,18 @@ and `LiveView._restore_snapshot()` applied it in place of `mount()`. djust
 argument of `LiveView._capture_snapshot_state()`.
 
 Importing `sign_snapshot`, `unsign_snapshot` or `SNAPSHOT_SALT` from
-`djust.security` raises `ImportError` naming the replacement. A legacy view no
-longer sends a token, and a token a 1.x server signed is refused, so the first
-Back after the upgrade mounts fresh. Declare what the browser may hold:
+`djust.security` raises `ImportError` naming the replacement; so does reading
+one as an attribute, so `hasattr()` raises rather than returning `False` (an
+`AttributeError` from a module `__getattr__` would lose the message on
+`from ... import`). A view class that defines `_restore_snapshot()` is refused
+with `ImproperlyConfigured`, when the class is created and on the mount path. A legacy view no
+longer sends a token, and a token a 1.x server signed is refused.
+Back and a reconnect still restore an `enable_state_snapshot` view from the
+state saved in the session, which this release keeps. Where nothing is saved
+there (`LIVEVIEW_CONFIG['view_state_in_session'] = False`, no or an expired
+session, an unresolved tenant), the view now mounts fresh instead of restoring
+from the token.
+Declare what the browser may hold:
 
 ```python
 # Before (1.3)

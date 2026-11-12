@@ -4983,9 +4983,8 @@ class ViewRuntime(RuntimeTurnPort):
         waits for it, so it can never overwrite a newer one.
 
         Returns False when the save failed, was deferred or was dropped (#3247),
-        and True otherwise, including when there is no session to save into: a
-        skip-render noop refreshes the client's token only then (#3246), since
-        the token is then either backed by the session copy or the only source."""
+        and True otherwise, including when there is no session to save into.
+        (The legacy signed token this result used to gate was removed in 2.0.)"""
         outcome = await self._save_root_state(
             target_view, event_name, deadline=EVENT_STATE_SAVE_TIMEOUT_S
         )
