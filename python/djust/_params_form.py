@@ -451,17 +451,24 @@ def bind_params(view: Any, form_class: type, params: Any) -> BoundParams:
 
 
 def _refuse_removed_configuration(view: Any) -> None:
-    """Refuse a view that still turns on an attribute 2.0 removed (``use_actors``).
+    """Refuse a view that still turns on an attribute 2.0 removed (``use_actors``),
+    or an explicit view with a plain component in its class body (#4045).
 
     The class-creation check cannot see a value ``__init__`` or ``mount()`` set
     on the instance, one assigned to the class afterwards, or a class whose
     mixin's ``__init_subclass__`` skipped ``super()``. Every transport calls the
     params hook right after ``mount()``, so this is where they are refused.
     """
+    from ._exposure_providers import class_level_plain_component_error
     from .live_view import LiveView
 
     if isinstance(view, LiveView):
         reject_removed_view_attributes(view)
+        # #4045: the same holds for a plain component in an explicit view's
+        # class body (shared by every session), refused at class creation too.
+        shared = class_level_plain_component_error(view)
+        if shared is not None:
+            raise shared
 
 
 async def run_handle_params(view: Any, params: Any, uri: str) -> None:
