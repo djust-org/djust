@@ -55,6 +55,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V023 | LiveView | Error | A `params_form` the request path cannot use: not a form class, or a form whose `__init__` needs arguments beyond `data=`; or a `params_form_fallback` that is not `"initial"` or `"fields"` |
 | V024 | LiveView | Error | A `query_budget` nothing can enforce: an unknown key, a bool or negative number, a handler named in `events` that the view lacks or that is `async def` / `@background` |
 | V025 | LiveView | Warning | A class defines `get_http_status()` while `LIVEVIEW_CONFIG['http_status_of_state']` is configured: the override replaces the project-wide map |
+| V026 | LiveView | Warning | An application class states `exposure_policy = "legacy"`, which is deprecated and removed before 2.0.0 |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -480,6 +481,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Fix**: delete the override and set `self.state` to a state the map names; or, for a real special case, have the override call `super().get_http_status()` first so the map still applies. It is a Warning because an override can be right (a status that is not a function of one state), and the check cannot see a `super()` call.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V025"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V025"]`
 - **False positives**: an override that calls `super().get_http_status()`
+
+### V026 — a class states `exposure_policy = "legacy"`
+- **Severity**: Warning
+- **Method**: Runtime (class inspection; no view is constructed).
+- **What it detects**: an application class whose own body states `exposure_policy = "legacy"`, reported once for that class, wherever the views that use it inherit it from (a view, an abstract base or a mixin); the message names up to three of those views. Explicit exposure is the default since djust 2.0 and `"legacy"` is removed before 2.0.0. Stating it also raises a `DeprecationWarning` when the class is created, which most test runners and servers hide. djust's own classes (the legacy-pinned shipped views and djust's test modules) are not reported, and a subclass that states `"explicit"` is not either (#4047).
+- **Fix**: move the view to explicit exposure (declare persisted fields with `state()`, return template names from `get_context_data()`) and delete the line. `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](website/guides/migrating-to-2.0.md).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V026"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V026"]`
 
 ---
 

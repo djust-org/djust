@@ -265,8 +265,13 @@ djust that states `"legacy"` does not warn. The value is accepted through the
 2.0 pre-releases and removed in `2.0.0`: 2.x has no legacy runtime (see
 [the 2.x direction](#the-14-bridge-and-2x-direction-2026-10-19)).
 
-This warning is first raised on the 2.0 line. The 1.3.x releases do not raise
-it: there `"legacy"` is the default and stating it is not deprecated.
+System check `djust.V026` (Warning) also lists each application class that
+states `"legacy"`, on every `manage.py check` and server start, with the views
+that inherit it and a pointer to `djust_exposure_inventory`; a warning raised
+at import time is easy to miss. djust's own classes are not reported.
+
+This warning and the check are first raised on the 2.0 line. The 1.3.x releases
+raise neither: there `"legacy"` is the default and stating it is not deprecated.
 
 ---
 

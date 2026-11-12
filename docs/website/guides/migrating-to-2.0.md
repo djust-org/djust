@@ -684,7 +684,7 @@ the only behaviour, before 2.0.0 is released, so finish with them on 1.3.x:
 
 | Still present | Do this now |
 | --- | --- |
-| `exposure_policy = "legacy"`. It is no longer the default: a view has to state it, and stating it warns | Migrate every view that states it, or that you have not checked yet ([section 1](#1-move-each-view-to-explicit-exposure)) |
+| `exposure_policy = "legacy"`. It is no longer the default: a view has to state it, stating it warns, and system check `djust.V026` lists each class that does | Migrate every view that states it, or that you have not checked yet ([section 1](#1-move-each-view-to-explicit-exposure)) |
 | `event_parameter_policy = "legacy"`, the default, and `parameter_policy="legacy"` | Make every handler strict ([section 2](#2-make-event-handlers-strict)) |
 | `event_security` set to `"open"` or `"warn"` | Remove the setting (the default is `"strict"`) and put `@event_handler` on every method a template calls |
 | `enable_state_snapshot = True` and `PersistentLiveView` | `state(..., persist="server")` fields, and `persist="client", client=True` for back-navigation |

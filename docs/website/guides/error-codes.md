@@ -826,6 +826,14 @@ A view that declares a `params_form` is also held to its `params_form_fallback`:
 
 **Fix**: Delete the override and set `self.state` to a state the map names. For a real special case, call `super().get_http_status()` first so the map still applies. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V025"]}`.
 
+### V026: A class states `exposure_policy = "legacy"`
+
+**Severity**: Warning
+
+**What causes it**: an application class states `exposure_policy = "legacy"` in its own body. Explicit exposure is the default since djust 2.0 and `"legacy"` is removed before 2.0.0 ([#4047](https://github.com/djust-org/djust/issues/4047)). Reported once per stating class; the message names the views that inherit it. Message: '<class> states exposure_policy = "legacy", which is deprecated and is removed before djust 2.0.0: ...'
+
+**Fix**: Move the view to explicit exposure and delete the line; `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](migrating-to-2.0.md#1-move-each-view-to-explicit-exposure). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V026"]}`.
+
 ---
 
 ## Security Errors (S0xx)
