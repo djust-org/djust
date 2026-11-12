@@ -309,15 +309,17 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (DC, "otp_input"): S(
         1,
-        "uid is _stable_id(...): a constant prefix and a hex digest of the arguments; name, label and event conditional_escape'd; digits int() in 1..12",
-        (DC, 'uid = _stable_id("otp", name, digits, event, label, disabled)'),
+        "uid is _render_id(...): a constant prefix, a hex digest of the arguments and an integer occurrence suffix; name, label and event conditional_escape'd; digits int() in 1..12",
+        (DC, 'uid = _render_id("otp", name, digits, event, label, disabled)'),
+        (DC, 'return base if n == 1 else f"{base}-{n}"', "_render_id"),
         (DC, 'return f"{prefix}-{digest[:6]}"', "_stable_id"),
         (DC, "digits = max(1, min(12, digits))"),
     ),
     (DC, "tag_input"): S(
         1,
-        "uid is _stable_id(...): a constant prefix and a hex digest of the arguments; name, label, placeholder, event and each tag conditional_escape'd / attr_text'd",
-        (DC, 'uid = _stable_id("ti", name, event, placeholder, label, disabled)'),
+        "uid is _render_id(...): a constant prefix, a hex digest of the arguments and an integer occurrence suffix; name, label, placeholder, event and each tag conditional_escape'd / attr_text'd",
+        (DC, 'uid = _render_id("ti", name, event, placeholder, label, disabled)'),
+        (DC, 'return base if n == 1 else f"{base}-{n}"', "_render_id"),
         (DC, 'return f"{prefix}-{digest[:6]}"', "_stable_id"),
     ),
     (DC, "render_modal"): S(

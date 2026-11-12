@@ -359,6 +359,53 @@ class TestStableRenders:
         ctx = {"t": ["a", "b"]}
         assert _rust_render(src, ctx) == _rust_render(src, ctx) == _django(src, ctx)
 
+    @staticmethod
+    def _scoped(src: str, ctx: dict) -> str:
+        """One render as a LiveView / ``DjustTemplateBackend`` render does it: inside a render
+        scope, so the bridged nodes share the render's ``RenderContext``."""
+        with tl.library_render_scope():
+            return _rust_render(src, ctx)
+
+    @staticmethod
+    def _ids(html: str, attr: str = "id") -> list[str]:
+        return re.findall(r"\b" + attr + r'="([^"]*)"', html)
+
+    @pytest.mark.parametrize(
+        "one",
+        [
+            '{% tooltip text="Hint" %}<b>x</b>{% endtooltip %}',
+            '{% otp_input name="code" %}',
+            '{% tag_input name="skills" %}',
+        ],
+    )
+    def test_identical_calls_get_distinct_ids_that_survive_a_rerender_and_an_append(self, one):
+        """Both properties at once: unique within one render (the nth identical call gets ``-n``)
+        and the same on every render (no per-turn patch); appending a third identical call does
+        not move the first two ids (the count is per arguments, in the render's own context)."""
+        two, three = one * 2, one * 3
+        first = self._scoped(two, {})
+        ids = [i for i in self._ids(first) if not i.endswith("-suggestions")]
+        assert len(ids) == 2 and len(set(ids)) == 2, ids
+        assert ids[1] == ids[0] + "-2"
+        assert self._scoped(two, {}) == first
+        ids3 = [i for i in self._ids(self._scoped(three, {})) if not i.endswith("-suggestions")]
+        assert ids3[:2] == ids and ids3[2] == ids[0] + "-3"
+        # The Django engine numbers them the same way (its own render context).
+        assert _django(two, {}) == first
+
+    def test_a_different_call_in_between_does_not_move_the_ids(self):
+        a = '{% tooltip text="A" %}x{% endtooltip %}'
+        b = '{% tooltip text="B" %}y{% endtooltip %}'
+        plain = self._ids(self._scoped(a + a, {}))
+        mixed = self._ids(self._scoped(a + b + a, {}))
+        assert [mixed[0], mixed[2]] == plain
+
+    def test_aria_describedby_targets_resolve(self):
+        html = self._scoped('{% tooltip text="Hint" %}x{% endtooltip %}' * 3, {})
+        targets = self._ids(html, "aria-describedby")
+        assert len(targets) == 3 and len(set(targets)) == 3
+        assert set(targets) <= set(self._ids(html))
+
     def test_an_argument_change_is_a_small_patch_not_a_subtree(self):
         view = _rust.RustLiveView(
             '<div>{% dj_button label=l event="go" %}{% card title="T" %}<p>{{ l }}</p>{% endcard %}</div>'

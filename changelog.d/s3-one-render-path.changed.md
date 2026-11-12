@@ -15,8 +15,10 @@
   fallbacks are gone (`{% breadcrumb %}` reading `breadcrumb_items`, `{% stepper %}` reading
   `steps`, `{% autocomplete %}` / `{% dependent_select %}` reading `suggestions` / `options`,
   `dj_select options_var=`, `dj_radio current_value_var=`). `tooltip`, `otp_input` and
-  `tag_input` derive their default id from their arguments instead of drawing a new one per
-  render (a patch on every LiveView turn). The inclusion templates (`badge`, `avatar`,
+  `tag_input` derive their default id from their arguments plus the call's occurrence among
+  identical calls in the same render (`-2`, `-3`, counted in the render's own context), instead
+  of drawing a new one per render (a patch on every LiveView turn): stable across renders and
+  unique within one. The inclusion templates (`badge`, `avatar`,
   `progress`, `pagination`, `table`, `toast`) escape every caller value written into an attribute
   with `force_escape`, so a marked-safe value cannot leave it (#4009). The twin-drift issues
   (#3663, #3768, #3849, #3882, #3883) no longer apply to the bridged tags (reproductions in
