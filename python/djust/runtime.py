@@ -42,7 +42,6 @@ import contextlib
 import contextvars
 import hashlib
 import inspect
-import json
 import logging
 import os
 import re
@@ -3337,15 +3336,8 @@ class ViewRuntime(RuntimeTurnPort):
 
         try:
             view_instance.request = request
-            # _django_session_key (ADR-022 Iter 3 Phase 3.1): the signed
-            # state-snapshot HMAC binds ``sid`` to the Django session key (see
-            # below + python/djust/security/state_snapshot.py). WS handle_mount
-            # stamps this off the scope session (websocket.py:2294); the runtime
-            # path sources it from ``request.session`` so the runtime/SSE mount's
-            # ``unsign_snapshot`` / ``sign_snapshot`` calls validate + emit the
-            # SAME session binding (a snapshot signed under session S1 cannot
-            # restore under S2 on this path either). None/empty for anonymous —
-            # the envelope degrades to slug-only, matching WS.
+            # The Django session key the view mounted under; None/empty for an
+            # anonymous session.
             session_obj = getattr(request, "session", None)
             view_instance._django_session_key = (
                 getattr(session_obj, "session_key", None) if session_obj is not None else None
@@ -3448,18 +3440,14 @@ class ViewRuntime(RuntimeTurnPort):
             mount_kwargs.update(url_kwargs)
 
         # ---- State restoration (ADR-022 Iter 3 Phase 3.1) ----
-        # Ported from WS handle_mount (websocket.py:2403-2587), VERBATIM gates +
-        # caps. Two restore mechanisms run in lieu of calling mount(); each sets
-        # the ``_mounted_from_restore`` resume flag (the runtime analogue of WS's
-        # ``mounted`` / ``mounted_from_snapshot``) that the mount-frame
-        # construction below reads for ``skip_html_for_resume``.
+        # A legacy view that opts in is restored from its session-saved state
+        # in lieu of calling mount(); that sets the ``_mounted_from_restore``
+        # resume flag the mount-frame construction below reads for
+        # ``skip_html_for_resume``. An explicit view restores its declared
+        # state after mount() (further down).
         #
-        # GATE (#1552): BOTH mechanisms are gated on
-        # ``enable_state_snapshot = True``. Default views never restore — a fresh
-        # mount() runs unconditionally for them (parity with WS, which gated the
-        # saved_state read on the same flag to fix the #1466-clobbered-baseline
-        # regression). For SSE this is a no-op unless the view opts in AND a
-        # snapshot / saved-state is present in the request/frame.
+        # GATE (#1552): gated on ``enable_state_snapshot = True``. Default
+        # views never restore — a fresh mount() runs unconditionally for them.
         mounted_from_restore = False
 
         # (1) Session-saved-state restore (WS websocket.py:2424-2474). Reattaches
@@ -3468,9 +3456,8 @@ class ViewRuntime(RuntimeTurnPort):
         # plain reconnect. Gated on ``enable_state_snapshot`` (#1552).
         opt_in = getattr(view_instance, "enable_state_snapshot", False)
         legacy_exposure = uses_legacy_exposure(view_instance)
-        # Explicit server persistence is independent of client snapshot opt-in.
-        # Until the explicit signed-client adapter lands, never use either
-        # legacy snapshot restore mechanism for an explicit view.
+        # Explicit server persistence is independent of the legacy opt-in:
+        # never use the legacy session restore for an explicit view.
         opt_in = opt_in and legacy_exposure
         session = getattr(request, "session", None)
         from ._tenant_state import session_view_key
@@ -3479,8 +3466,7 @@ class ViewRuntime(RuntimeTurnPort):
         from .config import view_state_in_session
 
         view_key = session_view_key(view_instance, page_url)
-        # ``view_state_in_session=False``: no saved view state to read. The
-        # signed client snapshot below is not in the session and stays on.
+        # ``view_state_in_session=False``: no saved view state to read.
         if opt_in and view_state_in_session() and session is not None and view_key is not None:
             try:
                 saved_state = await session.aget(view_key, {})
@@ -3543,115 +3529,6 @@ class ViewRuntime(RuntimeTurnPort):
 
                 mounted_from_restore = True
 
-        # (2) Signed state_snapshot HMAC restore (WS websocket.py:2491-2587,
-        # SECURITY-BOUNDARY). Only fires when NOT already restored from the
-        # session above (WS gates this inside ``if not mounted:``). The client
-        # echoes back an OPAQUE server-signed blob; the caps + HMAC binding below
-        # are byte-identical to WS — see python/djust/security/state_snapshot.py.
-        if not mounted_from_restore:
-            from django.conf import settings
-
-            state_snapshot = data.get("state_snapshot")
-            # Fix #11 — operator-level master switch (WS websocket.py:2499).
-            state_master_on = getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
-            # A view beside the page view (#3252) takes no navigation snapshot:
-            # the client's token is the page view's, and mints none for it.
-            if state_master_on and state_snapshot and opt_in and not slot_target:
-                snapshot_slug = state_snapshot.get("view_slug", "")
-                if snapshot_slug == view_path:
-                    state_dict = None
-                    # Finding #4 (CWE-345 → CWE-915): verify signature + TTL +
-                    # identity (slug + session) BEFORE trusting any bytes. An
-                    # unsigned/forged/tampered/expired/cross-context snapshot
-                    # returns None and falls through to a normal mount().
-                    from .security import unsign_snapshot
-
-                    signed_blob = state_snapshot.get("state_json", "")
-                    session_key = getattr(view_instance, "_django_session_key", None)
-                    from ._tenant_state import snapshot_tenant_scope
-
-                    raw_state = unsign_snapshot(
-                        signed_blob,
-                        view_path,
-                        session_key,
-                        tenant_scope=snapshot_tenant_scope(view_instance),
-                    )
-                    if raw_state is None:
-                        # Rejected at the signature/identity/TTL gate.
-                        # unsign_snapshot already logged the reason.
-                        state_dict = None
-                    # Fix #6 — hard server-side size cap on the VERIFIED inner
-                    # snapshot JSON (64 KB; matches client clamp).
-                    elif len(raw_state) > 65536:
-                        logger.warning(
-                            "state_snapshot state_json too large "
-                            "(%d bytes > 64KB) for %s; ignoring",
-                            len(raw_state),
-                            sanitize_for_log(view_path),
-                        )
-                        state_dict = None
-                    else:
-                        try:
-                            state_dict = json.loads(raw_state)
-                        except (ValueError, TypeError):
-                            logger.warning(
-                                "state_snapshot malformed JSON for view %s; "
-                                "proceeding with fresh mount",
-                                sanitize_for_log(view_path),
-                            )
-                            state_dict = None
-                        # Fix #8 — enforce dict type after decode.
-                        if state_dict is not None and not isinstance(state_dict, dict):
-                            logger.warning(
-                                "state_snapshot state_json is not a dict (got %s) for %s; ignoring",
-                                type(state_dict).__name__,
-                                sanitize_for_log(view_path),
-                            )
-                            state_dict = None
-                        # Fix #7 — keyset DoS cap (256 keys).
-                        if state_dict is not None and len(state_dict) > 256:
-                            logger.warning(
-                                "state_snapshot keyset too large (%d keys > 256) for %s; ignoring",
-                                len(state_dict),
-                                sanitize_for_log(view_path),
-                            )
-                            state_dict = None
-                    from .sync_turn import guarded_step, sync_step
-
-                    # ``_should_restore_snapshot`` / ``_restore_snapshot`` are
-                    # documented subclass overrides that may read rows: a
-                    # ``"lifecycle"`` step each, like ``on_mount`` (#3637). A
-                    # wrapper that swallows an exception from the gate reads as
-                    # "no" (None) and the view mounts fresh; one that swallows
-                    # ``_restore_snapshot``'s is a ``PermissionDenied`` here,
-                    # which the handler below turns into a fresh mount.
-                    if state_dict is not None and await sync_to_async(
-                        sync_step(
-                            view_instance, "lifecycle", view_instance._should_restore_snapshot
-                        )
-                    )(request):
-                        # #2252: un-tag Decimals BEFORE handing the state to
-                        # ``_restore_snapshot``, which is a documented
-                        # subclass-override point — a user override must not
-                        # have to know about the tag shape.
-                        from .serialization import decode_state_roundtrip
-
-                        state_dict = decode_state_roundtrip(state_dict)
-                        try:
-                            await sync_to_async(
-                                guarded_step(
-                                    view_instance, "lifecycle", view_instance._restore_snapshot
-                                )
-                            )(state_dict)
-                            mounted_from_restore = True
-                        except Exception:  # noqa: BLE001
-                            logger.exception(
-                                "state_snapshot _restore_snapshot failed "
-                                "for %s; falling back to mount()",
-                                sanitize_for_log(view_path),
-                            )
-                            mounted_from_restore = False
-
         # Expose the resume flag for the mount-frame construction below
         # (skip_html_for_resume) — Phase 3.0 wired the read; this sets it.
         view_instance._mounted_from_restore = mounted_from_restore
@@ -3680,11 +3557,10 @@ class ViewRuntime(RuntimeTurnPort):
         # (``_FRAMEWORK_INTERNAL_ATTRS``, live_view.py:143) so it never leaks into a
         # saved snapshot.
         #
-        # Parallel-path (#1646): this ONE guard covers BOTH restore mechanisms —
-        # session-saved-state (~2104) and signed-snapshot HMAC (~2154) — because
-        # both funnel to ``mounted_from_restore`` here; and — since WS
-        # ``handle_mount`` is a thin shim to ``dispatch_mount`` (websocket.py:2209)
-        # — it covers WS + SSE + runtime. The HTTP GET path renders the full page
+        # Parallel-path (#1646): this guard covers the legacy session-saved-state
+        # restore (the explicit restore below sets the flag itself); and — since
+        # WS ``handle_mount`` is a thin shim to ``dispatch_mount``
+        # (websocket.py:2209) — it covers WS + SSE + runtime. The HTTP GET path renders the full page
         # and primes its baseline against the same served state (request.py:276-282,
         # no cross-event stale baseline); the HTTP POST fallback re-restores +
         # re-renders atomically in each stateless request — neither has a persistent
@@ -4065,56 +3941,18 @@ class ViewRuntime(RuntimeTurnPort):
         ):
             mount_msg["patches"] = locals()["render_patches"]
 
-        # state_snapshot_signed EMIT (ADR-022 Iter 3 Phase 3.1, WS
-        # websocket.py:2754-2792). When the view opts in (``enable_state_snapshot``)
-        # AND the master switch is on, ship the SIGNED public-state blob on the
-        # mount frame so the client can store it verbatim and echo it back on the
-        # next back-navigation (the restore path above verifies the HMAC + TTL +
-        # slug/sid binding). Non-opt-in views never have state shipped. The
-        # signature binds slug + session key (``_django_session_key``, stamped
-        # above), so a valid snapshot cannot be replayed across views or sessions.
-        # Wrapped so snapshot emission can NEVER break the mount (#1788 posture).
+        # state_snapshot_signed EMIT. An explicit view with ``persist="client"``
+        # fields ships their signed token on the mount frame; the client stores
+        # it verbatim and echoes it back on the next back-navigation, where the
+        # restore above verifies it. Every other explicit mount ships null,
+        # which clears a token the browser still holds. A legacy view ships
+        # nothing. Emission can never break the mount (#1788 posture).
         if not legacy_exposure:
-            # Clear stale browser state when capture is disabled or unavailable.
-            mount_msg["state_snapshot_signed"] = None
-        try:
             from django.conf import settings
 
-            state_master_on = getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
-            if (
-                state_master_on
-                and legacy_exposure
-                and getattr(view_instance, "enable_state_snapshot", False)
-            ):
-                snapshot_fn = getattr(view_instance, "_capture_snapshot_state", None)
-                if callable(snapshot_fn):
-                    # strict=True: this is the real client-signed persistence
-                    # path — reject (not silently dict-ify) any ORM object on
-                    # public state so a back-navigation restore can't hand a
-                    # handler a plain dict where it expects a Model. See
-                    # LiveView._reject_orm_value_in_state_persistence.
-                    public_state = await sync_to_async(_lifecycle_step(view_instance, snapshot_fn))(
-                        strict=True
-                    )
-                    if isinstance(public_state, dict) and public_state:
-                        from ._tenant_state import snapshot_tenant_scope
-                        from .security import sign_snapshot
-
-                        # Canonical serialization so the signed bytes are stable
-                        # (and match the inner JSON the restore path json.loads-es
-                        # after unsigning).
-                        state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
-                        session_key = getattr(view_instance, "_django_session_key", None)
-                        # #3328: bound to the tenant. A tenant view with no
-                        # resolved tenant (None) mints nothing and revokes the
-                        # client's cached token.
-                        tenant_scope = snapshot_tenant_scope(view_instance)
-                        mount_msg["state_snapshot_signed"] = (
-                            None
-                            if tenant_scope is None
-                            else sign_snapshot(state_json, view_path, session_key, tenant_scope)
-                        )
-            elif state_master_on and not legacy_exposure:
+            # Clear stale browser state when capture is disabled or unavailable.
+            mount_msg["state_snapshot_signed"] = None
+            if getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True):
                 from ._exposure_snapshots import snapshot_codec
 
                 try:
@@ -4124,27 +3962,11 @@ class ViewRuntime(RuntimeTurnPort):
                             view_instance
                         )
                 except Exception:
-                    # No repr/traceback or legacy fallback: descriptor factories
-                    # and codec failures can contain server-only values.
+                    # No repr or traceback: descriptor factories and codec
+                    # failures can contain server-only values.
                     logger.warning(
                         "Explicit client snapshot unavailable; cached snapshot invalidated"
                     )
-        except Exception as snapshot_exc:  # noqa: BLE001 — snapshot emission must never break mount
-            from .live_view import NonPersistableStateError
-
-            if isinstance(snapshot_exc, NonPersistableStateError):
-                # DELIBERATE DEBUG-only rejection from
-                # LiveView._reject_orm_value_in_state_persistence — the guard
-                # exists to fail the mount loudly in development, so it must
-                # NOT be downgraded to a log line by the fail-soft posture
-                # below (which remains for UNEXPECTED emission errors).
-                # Production never raises this (the guard warns + skips
-                # there), so this re-raise is DEBUG-only by construction.
-                raise
-            logger.exception(
-                "Failed to emit state_snapshot_signed for %s; proceeding without snapshot",
-                sanitize_for_log(view_path),
-            )
 
         # A view beside the page view (#3252) ships no navigation snapshot, not
         # even the null that clears one: the client keeps one token per view
@@ -4661,13 +4483,12 @@ class ViewRuntime(RuntimeTurnPort):
 
         target_view = self.view_instance
         legacy_target = uses_legacy_exposure(target_view)
-        legacy_saved = False
         if (
             target_view is self.view_instance
             and legacy_target
             and getattr(self.view_instance, "enable_state_snapshot", False)
         ):
-            legacy_saved = await self._persist_state_after_event(target_view, event_name)
+            await self._persist_state_after_event(target_view, event_name)
         elif target_view is self.view_instance and not legacy_target:
             # A failed explicit save withholds the success frame (E3); the
             # child tree is saved on the render/noop branches below.
@@ -4723,10 +4544,6 @@ class ViewRuntime(RuntimeTurnPort):
         if skip_render:
             if not await self._persist_explicit_children_after_event(view):
                 return
-            # A handler that changed state and asked for no render still moved
-            # the legacy view to a new state: refresh its token (#3246).
-            if not snapshot_fields:
-                snapshot_fields = await self._legacy_noop_snapshot(view, legacy_saved, pre_assigns)
             # (_skip_render was already consumed by _resolve_skip_render
             # above — it is the single owner of that reset, #2834.)
             # Legacy: drain ALL queued side-effects BEFORE the noop, matching the WS
@@ -4781,13 +4598,6 @@ class ViewRuntime(RuntimeTurnPort):
             # (websocket.py:4283-4294). Safe + no-op when no activities exist.
             await self._flush_deferred_activity_events()
             return
-
-        # #3098: a legacy opt-in view's signed back-navigation snapshot was
-        # issued only at mount, so Back restored mount-time state. Refresh it on
-        # a state-changing event, as explicit views do (a noop above changed
-        # nothing, so the token the client holds is still current).
-        if not snapshot_fields and view is self.view_instance and uses_legacy_exposure(view):
-            snapshot_fields = await self._legacy_event_snapshot(view)
 
         # Render — scoped to one bound component when that is all that
         # changed (ADR-032 D1/D5); ``_render_and_send`` checks the other gates.
@@ -4996,14 +4806,13 @@ class ViewRuntime(RuntimeTurnPort):
         from ._exposure import uses_legacy_exposure
 
         legacy = uses_legacy_exposure(view)
-        legacy_saved = False
         snapshot_fields: Dict[str, Any] = {}
         if not legacy:
             if not await self.commit_explicit_turn(view, source="event", children=False):
                 return
             snapshot_fields = await self._explicit_event_snapshot(view)
         elif getattr(view, "enable_state_snapshot", False):
-            legacy_saved = await self._persist_state_after_event(view, event_name)
+            await self._persist_state_after_event(view, event_name)
 
         # _resolve_skip_render owns the skip decision (#2834/#2847) — the same
         # resolution as dispatch_event / server_push / db_notify / tick. This
@@ -5030,8 +4839,6 @@ class ViewRuntime(RuntimeTurnPort):
         if skip_render:
             if not await self._persist_explicit_children_after_event(view):
                 return
-            if not snapshot_fields:
-                snapshot_fields = await self._legacy_noop_snapshot(view, legacy_saved, pre_assigns)
             # (_skip_render was already consumed by _resolve_skip_render —
             # it is the single owner of that reset, #2834/#2847.)
             self._flush_push_events()
@@ -5050,8 +4857,6 @@ class ViewRuntime(RuntimeTurnPort):
             self._dispatch_async_work(event_name, async_batch)
             return
 
-        if not snapshot_fields and legacy:
-            snapshot_fields = await self._legacy_event_snapshot(view)
         await self._render_and_send(
             event_name=event_name,
             has_async=has_async,
@@ -6006,13 +5811,6 @@ class ViewRuntime(RuntimeTurnPort):
             if isinstance(component, (BoundComponent, ComponentDeclaration))
             else None
         )
-        # Whether the turn changed a legacy opt-in root's state, for the
-        # skip-render noop's token (#3246). Kept apart from ``pre_assigns``,
-        # which also decides the scoped and noop branches below.
-        legacy_pre_assigns = pre_assigns
-        if legacy_pre_assigns is None and self._legacy_snapshot_root(view):
-            legacy_pre_assigns = _snapshot_assigns(view)
-
         try:
             try:
                 await _call_handler(handler, call_kwargs or None, positional_args=call_args)
@@ -6057,10 +5855,9 @@ class ViewRuntime(RuntimeTurnPort):
         # in (``enable_state_snapshot``) saves on EVERY component event too,
         # as the view route does on every event. The save used to run only for
         # a ``ComponentDeclaration``; a ``send_parent`` from any other
-        # component can change the view's state just the same, and on Back
-        # the session save wins over the signed token (``dispatch_mount``
-        # restores from the session first), so a save left one event behind
-        # restored the state from before the component event (#3237).
+        # component can change the view's state just the same, and a save
+        # left one event behind restored the state from before the component
+        # event (#3237).
         #
         # After the commit, every component frame carries the refreshed signed
         # client snapshot, as the view route's frames do: the commit moved the
@@ -6068,7 +5865,6 @@ class ViewRuntime(RuntimeTurnPort):
         # client's older token would restore them next to ``persist="client"``
         # fields from an earlier turn (#3231).
         snapshot_fields: Dict[str, Any] = {}
-        legacy_saved = False
         if view is self.view_instance:
             from ._exposure import uses_legacy_exposure
 
@@ -6077,7 +5873,7 @@ class ViewRuntime(RuntimeTurnPort):
                     return True
                 snapshot_fields = await self._explicit_event_snapshot(view)
             elif getattr(view, "enable_state_snapshot", False):
-                legacy_saved = await self._persist_state_after_event(view, event_name)
+                await self._persist_state_after_event(view, event_name)
 
         from ._async_batch import AsyncBatch
 
@@ -6091,12 +5887,6 @@ class ViewRuntime(RuntimeTurnPort):
         from .websocket import _resolve_skip_render
 
         if _resolve_skip_render(view):
-            # The handler may have changed state and asked for no render: a
-            # legacy view's token is refreshed then, as on the view route (#3246).
-            if not snapshot_fields:
-                snapshot_fields = await self._legacy_noop_snapshot(
-                    view, legacy_saved, legacy_pre_assigns
-                )
             await self._send_component_noop(event_name, event_ref, async_batch, snapshot_fields)
             return True
 
@@ -6113,17 +5903,6 @@ class ViewRuntime(RuntimeTurnPort):
             if not changed:
                 await self._send_component_noop(event_name, event_ref, async_batch, snapshot_fields)
                 return True
-
-        # #3237: a legacy opt-in view's signed back-navigation snapshot is
-        # refreshed on a component event that renders, as the view route
-        # refreshes it (#3098) and as explicit views' component frames carry
-        # theirs (#3231). The noops above changed nothing, so the token the
-        # client holds is still current there, as on the view route.
-        if not snapshot_fields and view is self.view_instance:
-            from ._exposure import uses_legacy_exposure
-
-            if uses_legacy_exposure(view):
-                snapshot_fields = await self._legacy_event_snapshot(view)
 
         if changed and _scoped_component_for(view, changed) is component:
             _scoped_start = time.perf_counter()
@@ -6855,61 +6634,6 @@ class ViewRuntime(RuntimeTurnPort):
             if event and rule and event not in rules:
                 rules[event] = rule
         return rules
-
-    def _legacy_snapshot_root(self, view: Any) -> bool:
-        """Whether ``view`` is the mounted legacy root that opted into snapshots."""
-        from ._exposure import uses_legacy_exposure
-
-        return (
-            view is self.view_instance
-            and uses_legacy_exposure(view)
-            and bool(getattr(view, "enable_state_snapshot", False))
-        )
-
-    async def _legacy_noop_snapshot(
-        self, view: Any, saved: bool, pre_assigns: Optional[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """The refreshed token for a legacy root's ``noop``, or ``{}`` (#3246).
-
-        A noop usually changed nothing, so the token the client holds is
-        current. A handler that changed state and set ``_skip_render`` did
-        change it, and without a refresh the client keeps the older token, so
-        Back or a reconnect restores the state from before the event whenever
-        the token is the source. Refreshed only when the state changed and the
-        session save did not fail (``saved``): after a failed, deferred or
-        dropped save the held token is the copy that matches storage, and it
-        must not be replaced. With no session at all the token is the only
-        source, so it is refreshed.
-        """
-        if not saved or not self._legacy_snapshot_root(view):
-            return {}
-        if pre_assigns is not None:
-            from .websocket import _snapshot_assigns
-
-            if _snapshot_assigns(view) == pre_assigns:
-                return {}
-        return await self._legacy_event_snapshot(view)
-
-    async def _legacy_event_snapshot(self, view: Any) -> Dict[str, Any]:
-        """The refreshed signed snapshot for a legacy opt-in root view (#3098).
-
-        Same gates, capture and signature as the mount emission
-        (``dispatch_mount``'s ``state_snapshot_signed``): the master switch,
-        ``enable_state_snapshot``, ``_capture_snapshot_state(strict=True)``,
-        and ``sign_snapshot`` bound to the view path and session key. Returns
-        ``{}`` for a view that does not opt in, so nothing is shipped. A
-        capture failure revokes the client's token (``None``) rather than
-        leaving an older state to be restored; it never breaks the event.
-        """
-        from .security.state_snapshot import legacy_snapshot_fields
-
-        if getattr(view, "_djust_slot_target", None):
-            return {}  # a view beside the page view mints none (#3252)
-        return await sync_to_async(legacy_snapshot_fields)(
-            view,
-            getattr(view, "_djust_mount_view_path", None),
-            getattr(view, "_django_session_key", None),
-        )
 
     async def _explicit_event_snapshot(self, view: Any) -> Dict[str, Any]:
         """Refresh only declared client persistence after an authorized turn.

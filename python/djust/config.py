@@ -320,8 +320,8 @@ class LiveViewConfig:
         # fallback POST and every WebSocket / SSE turn neither write nor read
         # those keys, so each fallback POST runs ``mount()`` again before it
         # applies the event, and a socket mount never restores from the
-        # session (the signed client ``state_snapshot`` of a view with
-        # ``enable_state_snapshot`` is not in the session and still works).
+        # session (the signed client snapshot of ``persist="client"`` fields
+        # is not in the session and still works).
         # State that only lives on the
         # view (a "load more" offset, a form draft) resets on each fallback
         # POST. Must be a bool (system check ``djust.C027``).

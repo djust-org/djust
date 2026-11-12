@@ -61,6 +61,42 @@ REMOVED_VIEW_ATTRIBUTES: dict[str, str] = {
 }
 
 
+#: Where each refusal sends the reader for the replacement.
+MIGRATION_GUIDE_URL = "https://docs.djust.org/guides/migrating-to-2.0/"
+
+_SIGNED_SNAPSHOT = (
+    "the legacy signed back-navigation snapshot was removed. Declare the fields "
+    'the browser may hold with state(..., persist="client", client=True); djust '
+    "signs and verifies their token itself"
+)
+
+#: Importable names 2.0 removed, by the module they were imported from. A module
+#: ``__getattr__`` passes its misses to :func:`refuse_removed_name`, so
+#: ``from djust.security import sign_snapshot`` names the replacement instead of
+#: failing with a bare "cannot import name".
+REMOVED_NAMES: dict[tuple[str, str], str] = {
+    ("djust.security", "sign_snapshot"): _SIGNED_SNAPSHOT,
+    ("djust.security", "unsign_snapshot"): _SIGNED_SNAPSHOT,
+    ("djust.security", "SNAPSHOT_SALT"): _SIGNED_SNAPSHOT,
+}
+
+
+def refuse_removed_name(module: str, name: str) -> None:
+    """Raise ``ImportError`` if ``module.name`` is a name djust 2.0 removed.
+
+    ``ImportError`` and not ``AttributeError``: the import system replaces an
+    ``AttributeError`` from a module ``__getattr__`` with its own "cannot
+    import name", which would drop the replacement this message names.
+    """
+    replacement = REMOVED_NAMES.get((module, name))
+    if replacement is not None:
+        raise ImportError(
+            "%s.%s was removed in djust 2.0: %s. See %s"
+            % (module, name, replacement, MIGRATION_GUIDE_URL),
+            name=module,
+        )
+
+
 def reject_removed_view_attributes(view: Any) -> None:
     """Raise ``ImproperlyConfigured`` if a view turns on a removed attribute.
 

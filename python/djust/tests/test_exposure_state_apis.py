@@ -46,9 +46,8 @@ def test_get_state_exports_only_client_grants_and_detaches_values(view, settings
     assert "_state_transient_value" not in view.__dict__
 
 
-@pytest.mark.parametrize("strict", [False, True])
-def test_snapshot_api_uses_only_snapshot_grants(view, strict):
-    exported = view._capture_snapshot_state(strict=strict)
+def test_snapshot_api_uses_only_snapshot_grants(view):
+    exported = view._capture_snapshot_state()
     assert exported == {"snapshot_value": {"page": 1}}
     exported["snapshot_value"]["page"] = 2
     assert view.snapshot_value == {"page": 1}
@@ -98,7 +97,7 @@ def test_legacy_private_and_component_exporters_reject_nonlegacy(view, method, p
         getattr(view, method)()
 
 
-@pytest.mark.parametrize("method", ["_restore_private_state", "_restore_snapshot"])
+@pytest.mark.parametrize("method", ["_restore_private_state"])
 @pytest.mark.parametrize("policy", ["explicit", "invalid", None])
 def test_raw_restore_is_rejected_before_reading_payload_or_assigning(view, method, policy):
     class HostilePayload(dict):
@@ -126,16 +125,8 @@ def test_legacy_direct_api_behavior_remains_available():
     assert legacy.get_state() == {"public_value": [1]}
     assert legacy._get_private_state() == {"_private_value": "private"}
     assert legacy._capture_snapshot_state() == {"public_value": [1]}
-    legacy._restore_snapshot({"public_value": [2]})
     legacy._restore_private_state({"_private_value": "restored"})
-    assert legacy.public_value == [2]
     assert legacy._private_value == "restored"
-
-
-def test_raw_snapshot_restore_cannot_accept_even_declared_values(view):
-    with pytest.raises(ExposureError):
-        view._restore_snapshot({"snapshot_value": {"page": 42}})
-    assert "_state_snapshot_value" not in view.__dict__
 
 
 def test_audio_private_restore_rejects_before_filtering_payload():

@@ -26,7 +26,6 @@ from typing import Any, Optional
 
 from django.utils.crypto import salted_hmac
 
-from .state_snapshot import get_max_age
 
 # Response header the worker checks before writing the shell cache.
 SW_CACHE_HEADER = "X-Djust-SW-Cache"
@@ -90,5 +89,7 @@ def mount_frame_metadata(view: Any, request: Any, snapshot_token: Any) -> dict[s
     if marker is not None:
         meta["sw_identity"] = marker
     if isinstance(snapshot_token, str) and snapshot_token:
+        from .._exposure_snapshots import get_max_age
+
         meta["state_snapshot_max_age"] = get_max_age()
     return meta
