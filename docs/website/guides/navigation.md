@@ -254,18 +254,17 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
   valid path for a field the URL supplied; that is `clean()`'s trust boundary, not the
   fallback's. For a kept field the URL left out or empty **that has an `initial`**, both paths
   apply the `initial` after `clean()`, so the copy does not get out through that field. It
-  can still get out through: a field with no `initial` (nothing is filled); a `clean()` that
-  also writes the field into `self.data` (the field then counts as supplied); and a
-  multi-select field (`MultipleChoiceField`, `CheckboxSelectMultiple`) the URL left out,
-  which both paths treat as supplied ([#3922](https://github.com/djust-org/djust/issues/3922)).
-- A kept field the URL left out that the fallback fills with its `initial` gets a **copy** of
-  a mutable `initial` (a list, a dict), so a `handle_params()` that mutates it does not
-  change the form class's default for later requests. That is not so everywhere: the valid
-  path, `params_form_fallback = "initial"`, and in `"fields"` mode a replaced field's
-  `initial` (and the plain initial values) hand over the object stored on the form class, so
-  a `handle_params()` that mutates a mutable `initial` there changes the default for later
-  requests ([#3926](https://github.com/djust-org/djust/issues/3926)). Copy it in
-  `handle_params()` before changing it.
+  can still get out through: a field with no `initial` (nothing is filled); and a `clean()`
+  that also writes the field into `self.data` (the field then counts as supplied). A
+  multi-select field (`MultipleChoiceField`, `CheckboxSelectMultiple`) the URL left out is
+  not supplied, as a checkbox is not, so it takes its `initial` too
+  ([#3922](https://github.com/djust-org/djust/issues/3922)); a URL cannot ask for "none
+  selected" over a non-empty `initial` (an empty list binds as absent).
+- Every `initial` handed to `handle_params()` is a **copy** of a mutable `initial` (a list,
+  a dict), on the valid path and in both fallback modes, so a `handle_params()` that mutates
+  it does not change the form class's default for later requests
+  ([#3926](https://github.com/djust-org/djust/issues/3926)). An `initial` that cannot be
+  deep-copied is handed over as it is.
 - A kept `ModelChoiceField` value is a deep copy of the instance the first pass produced: equal
   by primary key, not the same object.
   Anything else going wrong in the second call (a `None` comparison, a value that cannot be

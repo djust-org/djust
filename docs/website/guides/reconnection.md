@@ -148,7 +148,10 @@ project using the strict parameter policy (ADR-036).
 
 On reconnect, djust fires the `restore_state` handler with two dict arguments
 (they are not flattened into separate kwargs):
-- `_form_values`: the container's form field values, keyed by `name`
+- `_form_values`: the container's form field values, keyed by `name`. A group of
+  same-named checkboxes and a `<select multiple>` are a list of the checked or
+  selected values, a radio group is the checked radio's value, and a lone checkbox
+  is a boolean
 - `_data_attrs`: the container element's `data-*` attributes, keyed without the
   `data-` prefix (`dj-value-*` attributes are **not** collected)
 

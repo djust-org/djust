@@ -1009,6 +1009,22 @@
     transition: width 0.3s ease;
 }
 
+/* The fill's width: one class per whole percent, so no element carries `style="width:N%"`
+   (an inline style attribute is refused by a `style-src` without 'unsafe-inline', #3979).
+   Used by `{% theme_progress %}` as `<css_prefix>progress-w-N`: the prefix is applied here as to
+   every class in this file (`component_css_generator`). */
+.progress-w-0 { width: 0%; } .progress-w-1 { width: 1%; } .progress-w-2 { width: 2%; } .progress-w-3 { width: 3%; } .progress-w-4 { width: 4%; } .progress-w-5 { width: 5%; } .progress-w-6 { width: 6%; } .progress-w-7 { width: 7%; } .progress-w-8 { width: 8%; } .progress-w-9 { width: 9%; }
+.progress-w-10 { width: 10%; } .progress-w-11 { width: 11%; } .progress-w-12 { width: 12%; } .progress-w-13 { width: 13%; } .progress-w-14 { width: 14%; } .progress-w-15 { width: 15%; } .progress-w-16 { width: 16%; } .progress-w-17 { width: 17%; } .progress-w-18 { width: 18%; } .progress-w-19 { width: 19%; }
+.progress-w-20 { width: 20%; } .progress-w-21 { width: 21%; } .progress-w-22 { width: 22%; } .progress-w-23 { width: 23%; } .progress-w-24 { width: 24%; } .progress-w-25 { width: 25%; } .progress-w-26 { width: 26%; } .progress-w-27 { width: 27%; } .progress-w-28 { width: 28%; } .progress-w-29 { width: 29%; }
+.progress-w-30 { width: 30%; } .progress-w-31 { width: 31%; } .progress-w-32 { width: 32%; } .progress-w-33 { width: 33%; } .progress-w-34 { width: 34%; } .progress-w-35 { width: 35%; } .progress-w-36 { width: 36%; } .progress-w-37 { width: 37%; } .progress-w-38 { width: 38%; } .progress-w-39 { width: 39%; }
+.progress-w-40 { width: 40%; } .progress-w-41 { width: 41%; } .progress-w-42 { width: 42%; } .progress-w-43 { width: 43%; } .progress-w-44 { width: 44%; } .progress-w-45 { width: 45%; } .progress-w-46 { width: 46%; } .progress-w-47 { width: 47%; } .progress-w-48 { width: 48%; } .progress-w-49 { width: 49%; }
+.progress-w-50 { width: 50%; } .progress-w-51 { width: 51%; } .progress-w-52 { width: 52%; } .progress-w-53 { width: 53%; } .progress-w-54 { width: 54%; } .progress-w-55 { width: 55%; } .progress-w-56 { width: 56%; } .progress-w-57 { width: 57%; } .progress-w-58 { width: 58%; } .progress-w-59 { width: 59%; }
+.progress-w-60 { width: 60%; } .progress-w-61 { width: 61%; } .progress-w-62 { width: 62%; } .progress-w-63 { width: 63%; } .progress-w-64 { width: 64%; } .progress-w-65 { width: 65%; } .progress-w-66 { width: 66%; } .progress-w-67 { width: 67%; } .progress-w-68 { width: 68%; } .progress-w-69 { width: 69%; }
+.progress-w-70 { width: 70%; } .progress-w-71 { width: 71%; } .progress-w-72 { width: 72%; } .progress-w-73 { width: 73%; } .progress-w-74 { width: 74%; } .progress-w-75 { width: 75%; } .progress-w-76 { width: 76%; } .progress-w-77 { width: 77%; } .progress-w-78 { width: 78%; } .progress-w-79 { width: 79%; }
+.progress-w-80 { width: 80%; } .progress-w-81 { width: 81%; } .progress-w-82 { width: 82%; } .progress-w-83 { width: 83%; } .progress-w-84 { width: 84%; } .progress-w-85 { width: 85%; } .progress-w-86 { width: 86%; } .progress-w-87 { width: 87%; } .progress-w-88 { width: 88%; } .progress-w-89 { width: 89%; }
+.progress-w-90 { width: 90%; } .progress-w-91 { width: 91%; } .progress-w-92 { width: 92%; } .progress-w-93 { width: 93%; } .progress-w-94 { width: 94%; } .progress-w-95 { width: 95%; } .progress-w-96 { width: 96%; } .progress-w-97 { width: 97%; } .progress-w-98 { width: 98%; } .progress-w-99 { width: 99%; }
+.progress-w-100 { width: 100%; }
+
 .progress-indeterminate::after {
     content: '';
     position: absolute;

@@ -1,5 +1,30 @@
 
 // DraftManager for localStorage-based draft saving
+
+// Drafts saved before #3978 flattened a radio group to the LAST radio's value
+// (checked or not) and a checkbox group to one box's boolean, so those entries
+// do not say what was chosen. A draft without this format number drops them on
+// load; its other fields still restore.
+const DRAFT_FORMAT = 2;
+
+function _withoutLegacyGroups(data) {
+    if (!data || typeof data !== 'object') return data;
+    const kept = {};
+    const boxes = new Map();
+    const radios = new Set();
+    document.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(f => {
+        if (!f.name) return;
+        if (f.type === 'radio') radios.add(f.name);
+        else boxes.set(f.name, (boxes.get(f.name) || 0) + 1);
+    });
+    Object.keys(data).forEach(name => {
+        if (UNSAFE_KEYS.includes(name) || radios.has(name) || boxes.get(name) > 1) return;
+        // eslint-disable-next-line security/detect-object-injection
+        kept[name] = data[name];
+    });
+    return kept;
+}
+
 class DraftManager {
     constructor() {
         this.saveTimers = new Map();
@@ -21,7 +46,8 @@ class DraftManager {
             try {
                 const draftData = {
                     data,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    format: DRAFT_FORMAT
                 };
                 localStorage.setItem(`djust_draft_${draftKey}`, JSON.stringify(draftData));
 
@@ -51,6 +77,7 @@ class DraftManager {
                 djLog(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
             }
 
+            if (draftData.format !== DRAFT_FORMAT) return _withoutLegacyGroups(draftData.data);
             return draftData.data;
         } catch (error) {
             console.error(`[DraftMode] Failed to load draft ${draftKey}:`, error);
@@ -138,19 +165,13 @@ function _draftTargetFor(field) {
 }
 
 function _collectDraftData(scope) {
-    const draftData = {};
-    scope.querySelectorAll('[data-draft="true"]').forEach(f => {
-        // Prevent prototype pollution attacks. A file input has no value a
-        // draft could put back (setting one throws).
-        if (f.name && !UNSAFE_KEYS.includes(f.name) && f.type !== 'file') {
-            if (f.type === 'checkbox') {
-                draftData[f.name] = f.checked;
-            } else {
-                draftData[f.name] = f.value;
-            }
-        }
-    });
-    return draftData;
+    // A file input has no value a draft could put back (setting one throws).
+    // A checkbox group / <select multiple> is saved as a list and a radio group
+    // as the checked value, not flattened to one box (#3978); `_readControls`
+    // also refuses the prototype-polluting names.
+    return _readControls(
+        Array.from(scope.querySelectorAll('[data-draft="true"]')).filter(f => f.type !== 'file')
+    );
 }
 
 /**
@@ -229,11 +250,7 @@ function syncDraftFields(atInit) {
         const saved = savedByKey.get(draftKey);
         if (!saved || !Object.prototype.hasOwnProperty.call(saved, field.name)) return;
         if (!atInit && (_draftEdited.get(field) === field.name || field === document.activeElement)) return;
-        if (field.type === 'checkbox') {
-            field.checked = saved[field.name];
-        } else {
-            field.value = saved[field.name];
-        }
+        _writeControl(field, saved[field.name]);
     });
 }
 

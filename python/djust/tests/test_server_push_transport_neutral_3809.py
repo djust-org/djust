@@ -18,6 +18,7 @@ import threading
 import uuid
 
 import pytest
+from django import forms
 from asgiref.sync import async_to_sync, sync_to_async
 from channels.testing import WebsocketCommunicator
 from django.contrib.auth.models import AnonymousUser
@@ -26,6 +27,7 @@ from django.test import Client, override_settings
 from django.urls import path
 
 from djust import LiveView, event_handler
+from djust.wizard import WizardMixin
 from djust.decorators import push_handler, state
 from djust.config import config
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
@@ -115,6 +117,24 @@ class GuardedPage(LiveView):
     def trusted_update(self, who="", **kwargs):
         self.calls.append(who)
         self.got = who
+
+
+class _StepForm(forms.Form):
+    name = forms.CharField(required=False)
+
+
+class ResumeWizardPage(WizardMixin, LiveView):
+    """``resume_wizard`` resets the wizard's answers: server code only (#4011)."""
+
+    exposure_policy = "legacy"
+    template = "<div dj-root>{{ wizard_step_index }}</div>"
+    wizard_steps = [
+        {"name": "a", "title": "A", "form_class": _StepForm},
+        {"name": "b", "title": "B", "form_class": _StepForm},
+    ]
+
+    def get_wizard_step(self):
+        return 0
 
 
 class BoomPage(LiveView):
@@ -959,6 +979,42 @@ async def test_a_client_event_named_server_push_is_refused_over_a_websocket(mode
             await socket.disconnect()
     finally:
         config.set("event_security", previous)
+
+
+@pytest.mark.parametrize("mode", ["strict", "warn", "open"])
+async def test_a_client_event_named_resume_wizard_is_refused_over_a_websocket(mode):
+    """``WizardMixin.resume_wizard`` is public and undecorated: never a client event (#4011)."""
+    previous = config.get("event_security")
+    config.set("event_security", mode)
+    try:
+        socket, consumer = await _ws(MOD + "ResumeWizardPage")
+        try:
+            view = consumer.view_instance
+            view.wizard_step_index = 1
+            view.wizard_step_data = {"a": {"name": "typed"}}
+            await socket.send_json_to({"type": "event", "event": "resume_wizard", "params": {}})
+            await receive_until(socket, lambda fs: any(f.get("type") == "error" for f in fs))
+            assert view.wizard_step_index == 1
+            assert view.wizard_step_data == {"a": {"name": "typed"}}
+        finally:
+            await socket.disconnect()
+    finally:
+        config.set("event_security", previous)
+
+
+def test_resume_wizard_is_refused_by_name_and_by_function_in_every_mode():
+    from djust.websocket_utils import _check_event_security
+
+    view = ResumeWizardPage()
+    for mode in ("strict", "warn", "open"):
+        previous = config.get("event_security")
+        config.set("event_security", mode)
+        try:
+            assert _check_event_security(view.resume_wizard, view, "resume_wizard"), mode
+            view.innocent_name = view.resume_wizard  # an alias: same function, other name
+            assert _check_event_security(view.innocent_name, view, "innocent_name"), mode
+        finally:
+            config.set("event_security", previous)
 
 
 def test_the_push_method_is_refused_by_function_not_only_by_name():
