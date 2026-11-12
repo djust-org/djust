@@ -40,6 +40,11 @@ class ChatView(LiveView):
         self.messages = []
         self.is_streaming = False
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(is_streaming=self.is_streaming, messages=self.messages)
+        return context
+
     @event_handler()
     async def send_message(self, content="", **kwargs):
         self.messages.append({"role": "user", "content": content})
@@ -220,6 +225,15 @@ class AIChat(LiveView):  # streaming is built in — no StreamingMixin needed
         self.messages = []
         self.is_streaming = False
         self.stream_failed = False
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            is_streaming=self.is_streaming,
+            stream_failed=self.stream_failed,
+            messages=self.messages,
+        )
+        return context
 
     @event_handler()
     async def ask(self, content="", **kwargs):

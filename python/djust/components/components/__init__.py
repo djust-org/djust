@@ -9,19 +9,24 @@ Usage::
     from djust.components.components import Alert, StatCard, Tag, Toast, Progress, Spinner, Switch
 
     class MyView(LiveView):
-        def mount(self, **kwargs):
-            self.status_badge = Badge.status("running")
-            self.priority_badge = Badge.priority("P0")
-            self.agent_status = StatusDot("completed")
-            self.submit_btn = Button("Save", variant="primary", action="save")
-            self.info_card = Card(content="<p>Info</p>", variant="elevated")
-            self.notice = Alert.success("Saved!")
-            self.revenue = StatCard(label="Revenue", value="$12,345", trend="up")
-            self.tag = Tag("Python", variant="info")
-            self.toast = Toast.success("Done!")
-            self.progress = Progress(value=75)
-            self.loading = Spinner()
-            self.toggle = Switch(name="dark_mode", label="Dark mode")
+        def get_context_data(self, **kwargs):
+            # Build components here: the template gets what this returns. A
+            # component assigned to a public attribute (self.badge = Badge(...))
+            # is refused at render (ExposureConfigurationError).
+            context = super().get_context_data(**kwargs)
+            context["status_badge"] = Badge.status("running")
+            context["priority_badge"] = Badge.priority("P0")
+            context["agent_status"] = StatusDot("completed")
+            context["submit_btn"] = Button("Save", variant="primary", action="save")
+            context["info_card"] = Card(content="<p>Info</p>", variant="elevated")
+            context["notice"] = Alert.success("Saved!")
+            context["revenue"] = StatCard(label="Revenue", value="$12,345", trend="up")
+            context["tag"] = Tag("Python", variant="info")
+            context["toast"] = Toast.success("Done!")
+            context["progress"] = Progress(value=75)
+            context["loading"] = Spinner()
+            context["toggle"] = Switch(name="dark_mode", label="Dark mode")
+            return context
 
 In template::
 

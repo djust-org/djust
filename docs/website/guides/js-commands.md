@@ -36,6 +36,11 @@ class ModalView(LiveView):
     def mount(self, request, **kwargs):
         self.open_modal = JS.show("#modal").add_class("open", to="#overlay").focus("#modal-title")
         self.close_modal = JS.hide("#modal").remove_class("open", to="#overlay")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(open_modal=self.open_modal, close_modal=self.close_modal)
+        return context
 ```
 
 ```html

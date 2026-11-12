@@ -197,16 +197,16 @@ async def test_actual_websocket_mount_and_event_use_partial_root(tmp_path):
         try:
             connected, _ = await comm.connect()
             assert connected
-            await comm.receive_json_from(timeout=5)
+            await comm.receive_json_from()
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}.PartialRootSocketView", "url": "/"}
             )
-            mount = await comm.receive_json_from(timeout=5)
+            mount = await comm.receive_json_from()
             assert mount.get("type") == "mount", mount
             assert "first" in json.dumps(mount)
             assert "HEADER" not in json.dumps(mount) and "FOOTER" not in json.dumps(mount)
             await comm.send_json_to({"type": "event", "event": "change", "params": {}, "ref": 1})
-            frame = await comm.receive_json_from(timeout=5)
+            frame = await comm.receive_json_from()
             assert "second" in json.dumps(frame), frame
         finally:
             await comm.disconnect()
@@ -498,14 +498,14 @@ async def test_competing_forged_shell_root_rejects_websocket_mount(tmp_path):
         try:
             connected, _ = await comm.connect()
             assert connected
-            await comm.receive_json_from(timeout=5)
+            await comm.receive_json_from()
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}.ForgedRootSocketView", "url": "/"}
             )
-            mount = await comm.receive_json_from(timeout=5)
+            mount = await comm.receive_json_from()
             assert mount.get("type") != "mount", mount
             await comm.send_json_to({"type": "event", "event": "change", "params": {}, "ref": 1})
-            reply = await comm.receive_json_from(timeout=5)
+            reply = await comm.receive_json_from()
             assert reply.get("type") in {"error", "view_refused", "close"}, reply
             assert not events
         finally:
@@ -780,14 +780,14 @@ async def test_included_partial_root_cannot_precede_another_websocket_root(
         try:
             connected, _ = await comm.connect()
             assert connected
-            await comm.receive_json_from(timeout=5)
+            await comm.receive_json_from()
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}.IncludedRootsSocketView", "url": "/"}
             )
-            mount = await comm.receive_json_from(timeout=5)
+            mount = await comm.receive_json_from()
             assert mount.get("type") != "mount", mount
             await comm.send_json_to({"type": "event", "event": "change", "params": {}, "ref": 1})
-            reply = await comm.receive_json_from(timeout=5)
+            reply = await comm.receive_json_from()
             assert reply.get("type") in {"error", "view_refused", "close"}, reply
             assert not events
         finally:
@@ -940,11 +940,11 @@ async def test_websocket_cannot_update_field_from_forged_model_attribute(tmp_pat
         try:
             connected, _ = await comm.connect()
             assert connected
-            await comm.receive_json_from(timeout=5)
+            await comm.receive_json_from()
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}.ForgedModelSocketView", "url": "/"}
             )
-            mount = await comm.receive_json_from(timeout=5)
+            mount = await comm.receive_json_from()
             assert mount.get("type") == "mount", mount
             assert mounted and "is_admin" not in mounted[-1]._dj_model_fields
             await comm.send_json_to(
@@ -955,7 +955,7 @@ async def test_websocket_cannot_update_field_from_forged_model_attribute(tmp_pat
                     "ref": 1,
                 }
             )
-            await comm.receive_json_from(timeout=5)
+            await comm.receive_json_from()
             assert mounted[-1].is_admin is False
         finally:
             await comm.disconnect()
@@ -1382,18 +1382,18 @@ async def test_websocket_events_continue_after_conditional_partial_root_switch(t
         try:
             connected, _ = await comm.connect()
             assert connected
-            await comm.receive_json_from(timeout=5)
+            await comm.receive_json_from()
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}.SwitchingSocketView", "url": "/"}
             )
-            mount = await comm.receive_json_from(timeout=5)
+            mount = await comm.receive_json_from()
             assert mount.get("type") == "mount", mount
             assert "before" in json.dumps(mount)
             for ref, expected in ((1, "after"), (2, "final")):
                 await comm.send_json_to(
                     {"type": "event", "event": "advance", "params": {}, "ref": ref}
                 )
-                frame = await comm.receive_json_from(timeout=5)
+                frame = await comm.receive_json_from()
                 assert expected in json.dumps(frame), frame
         finally:
             await comm.disconnect()

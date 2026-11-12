@@ -150,10 +150,6 @@ def _take_queued_background_work(view: Any) -> List[Tuple[str, Any, Any, Any]]:
     if queued:
         tasks.extend((name, *entry) for name, entry in list(queued.items()))
         view._async_tasks = {}
-    legacy = getattr(view, "_async_pending", None)
-    if legacy:
-        view._async_pending = None
-        tasks.append(("_default", *legacy))
     return tasks
 
 
@@ -1935,7 +1931,6 @@ class RequestMixin:
                     # saved state below puts them back; running them again would
                     # only repeat the read.
                     self.__dict__.pop("_async_tasks", None)
-                    self.__dict__.pop("_async_pending", None)
                 restore_public_state(self, saved_state)
                 # Not over work that is about to run: the private bookkeeping a
                 # task closes over (``assign_async``'s generation counter) belongs

@@ -40,6 +40,12 @@ class MyView(LiveView):
     def mount(self, request, **kwargs):
         self.loading = False
         self.result = ""
+        self.error = ""
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(loading=self.loading, result=self.result, error=self.error)
+        return context
 
     @event_handler()
     def generate(self, **kwargs):
@@ -89,6 +95,11 @@ class ReportView(LiveView):  # AsyncWorkMixin is built into LiveView
     def mount(self, request, **kwargs):
         self.generating = False
         self.report = ""
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(report=self.report, generating=self.generating)
+        return context
 
     @event_handler()
     def generate_report(self, **kwargs):

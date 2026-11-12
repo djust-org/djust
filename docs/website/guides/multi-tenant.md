@@ -95,6 +95,11 @@ class DashboardView(TenantScopedMixin, LiveView):
         # self.tenant is automatically available
         self.users_count = self.get_tenant_queryset(User).count()
         self.projects = self.get_tenant_queryset(Project).order_by('-created_at')[:5]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(users_count=self.users_count, projects=self.projects)
+        return context
 ```
 
 ### 3. Tenant-Scoped Models
@@ -209,6 +214,9 @@ class ProjectListView(TenantScopedMixin, LiveView):
 
     def mount(self, request, **kwargs):
         self.projects = self.get_tenant_queryset()
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "projects": self.projects}
 
     def get_project(self, project_id):
         return self.get_tenant_object(project_id)

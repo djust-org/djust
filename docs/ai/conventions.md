@@ -49,7 +49,7 @@ Markdown; do not confuse them with redundant model serialization.
 
 ## Small examples to follow
 
-- [Lifecycle example](lifecycle.md): private queryset preparation and public assigns.
+- [Lifecycle example](lifecycle.md): queryset preparation and what `get_context_data()` hands to the template.
 - [FormMixin examples](forms.md): native form validation, rendering and save hooks.
 - [Event examples](events.md): input values, data attributes and debounce.
 - [Loading examples](loading-states.md): native feedback and background work.

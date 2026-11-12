@@ -253,6 +253,9 @@ class TenantDocumentView(TenantScopedMixin, LiveView):
     def mount(self, request, **kwargs):
         # Filtered by tenant_field (default "tenant_id")
         self.documents = self.get_tenant_queryset()
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "documents": self.documents}
 ```
 
 `TenantScopedMixin` does not filter querysets automatically, and it does not override `get_queryset()`. A plain `Document.objects.all()` returns every tenant's rows. Always go through `get_tenant_queryset()`, `get_tenant_object(pk)` and `create_for_tenant(**fields)`.
@@ -341,6 +344,9 @@ class ContactDetailView(LiveView):
 
     def mount(self, request, pk):
         self.contact = Contact.objects.get(pk=pk)
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "contact": self.contact}
 ```
 
 If `contact_detail.html` contains:
@@ -354,19 +360,22 @@ Then only `name` and `email` are serialized for the VDOM. Fields like `ssn`, `sa
 
 ## Private State
 
-Use the `_` prefix convention to keep state completely out of the template context:
+A view publishes nothing by itself ([explicit exposure](../state/explicit-exposure.md), the default since 2.0). An attribute reaches the template only when `get_context_data()` supplies it:
 
 ```python
 class DashboardView(LiveView):
     template_name = "dashboard.html"
 
     def mount(self, request):
-        self.metrics = calculate_metrics()       # Available in template
-        self._api_key = get_api_key()            # Hidden from context
-        self._internal_cache = {}                # Hidden from context
+        self.metrics = calculate_metrics()       # In the template: supplied below
+        self._api_key = get_api_key()            # Server only
+        self._internal_cache = {}                # Server only
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "metrics": self.metrics}
 ```
 
-`get_context_data()` automatically excludes attributes starting with `_`. These values exist only on the server, are never serialized, and cannot be reached through any client-side mechanism.
+What `get_context_data()` does not return is not rendered, whatever its name. `_api_key` would stay on the server without the underscore too; the prefix marks it as internal for the reader. Such values are not saved to the session or sent to the browser either: that takes a `state(..., persist=...)` or `state(..., client=True)` declaration. A view that states `exposure_policy = "legacy"` (deprecated) is different: it publishes every public attribute to the template and to saved state, and there the underscore is what keeps a value out.
 
 ## Content Security Policy (CSP) with nonces
 

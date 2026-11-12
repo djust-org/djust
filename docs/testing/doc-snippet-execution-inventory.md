@@ -16,6 +16,8 @@ Scope: every ```python block under `docs/website/guides/*.md`, `QUICKSTART.md` a
 
 A block is counted as passing when it has no inline template too: it is mounted on a stub `<div dj-root>` so `mount()`, `get_context_data()` and the handlers still run. 121 of the 126 passes used that stub; 5 rendered their own inline template.
 
+> **Update 2026-11-12 (#4048).** The run has one more check. Under explicit exposure, the default since 2.0, a public attribute a view sets does not reach its template unless `get_context_data()` supplies it, and the name renders empty with no error, so a block mounted on the stub template passed while teaching a blank page. `_check_exposure` now fails a block (`template name is not supplied`) when the view sets a public name, a template reads it (the view's inline template, else the nearest template fence in the document) and the mounted view's context does not contain it. A block that shows only handlers, with no `mount()` and no template, is not judged. `scripts/check-doc-exposure.py` applies the same rule statically to every Markdown file under `docs/` (dated records excepted), the top-level docs and the strings in `python/djust`, and `tests/unit/test_doc_exposure_check.py` runs it. With the guides converted, the same command gives 241 blocks: 144 pass, 96 not runnable in isolation, 1 deliberate failure.
+
 ### 1a. Failures
 
 > **Update 2026-11-11 (#3994).** Seven of the eight rows below are fixed in the guides and removed from `KNOWN_FAILURES`. The one that remains is the deliberate `error-overlay.md` example. The table is kept as the record of what the first run found.

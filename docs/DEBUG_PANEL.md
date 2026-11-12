@@ -378,12 +378,12 @@ Result: 52 patches, 8.2ms
 ```python
 def filter_items(self, value: str = ""):
     self.filter_value = value
-    self._refresh_items()  # Build in private variable
+    self._refresh_items()
 
 def get_context_data(self, **kwargs):
-    self.items = self._items  # Single assignment triggers JIT
     context = super().get_context_data(**kwargs)
-    context['count'] = len(self.items)
+    context["items"] = self._items
+    context['count'] = len(self._items)
     return context
 ```
 Result: 3 patches, 1.1ms

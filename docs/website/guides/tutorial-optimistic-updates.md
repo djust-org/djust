@@ -135,6 +135,9 @@ class TodoListView(LiveView):
     def mount(self, request, **kwargs):
         self._refresh()
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "todos": self.todos}
+
     def _refresh(self):
         self.todos = [
             {"id": t.id, "title": t.title, "done": t.done,

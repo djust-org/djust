@@ -99,6 +99,9 @@ class SliderView(LiveView):
     def mount(self, request):
         self.value = 50
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "value": self.value}
+
     @debounce(wait=0.5)
     @optimistic
     def update_value(self, value: int = 0, **kwargs):
@@ -290,6 +293,11 @@ class SearchView(LiveView):
         self.query = ""
         self.results = []
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(query=self.query, results=self.results)
+        return context
+
     @debounce(wait=0.5)  # That's it!
     def search(self, query: str = "", **kwargs):
         self.query = query
@@ -314,6 +322,9 @@ class SearchView(LiveView):
 class CounterView(LiveView):
     def mount(self, request):
         self.count = 0
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count}
 
     def increment(self, **kwargs):
         self.count += 1
@@ -377,6 +388,9 @@ class CounterView(LiveView):
     def mount(self, request):
         self.count = 0
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count}
+
     @optimistic  # Automatic optimistic updates!
     def increment(self, **kwargs):
         self.count += 1
@@ -400,6 +414,9 @@ class CounterView(LiveView):
 class DashboardView(LiveView):
     def mount(self, request):
         self.temperature = 72
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "temperature": self.temperature}
 
     def update_temperature(self, temperature: int = 0, **kwargs):
         self.temperature = max(0, min(120, temperature))
@@ -496,6 +513,9 @@ class DashboardView(LiveView):
     def mount(self, request):
         self.temperature = 72
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "temperature": self.temperature}
+
     @client_state(keys=["temperature"])  # Auto-publishes to state bus
     @debounce(wait=0.5)
     @optimistic
@@ -520,6 +540,9 @@ class DashboardView(LiveView):
 class CommentFormView(LiveView):
     def mount(self, request):
         self.comment_text = ""
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "comment_text": self.comment_text}
 
     def save_comment(self, comment_text: str = "", **kwargs):
         Comment.objects.create(text=comment_text, author=self.request.user)
@@ -587,6 +610,9 @@ class CommentFormView(DraftModeMixin, LiveView):
     def mount(self, request):
         self.comment_text = ""
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "comment_text": self.comment_text}
+
     def save_comment(self, comment_text: str = "", **kwargs):
         Comment.objects.create(text=comment_text, author=self.request.user)
         self.comment_text = ""  # Auto-clears draft
@@ -611,6 +637,11 @@ class AutocompleteView(LiveView):
     def mount(self, request):
         self.query = ""
         self.results = []
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(query=self.query, results=self.results)
+        return context
 
     def search(self, query: str = "", **kwargs):
         self.query = query
@@ -685,6 +716,11 @@ class AutocompleteView(LiveView):
     def mount(self, request):
         self.query = ""
         self.results = []
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(query=self.query, results=self.results)
+        return context
 
     @cache(ttl=300)      # Auto-caching with 5-min TTL
     @debounce(wait=0.3)
@@ -791,6 +827,11 @@ class ProductSearchView(LiveView):
         self.results = []
         self.filters = {"category": "", "min_price": 0}
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(query=self.query, results=self.results, filters=self.filters)
+        return context
+
     def search(self, query: str = "", **kwargs):
         self.query = query
         self.results = self._do_search()
@@ -882,6 +923,16 @@ class ProductSearchView(DraftModeMixin, LiveView):
         self.results = []
         self.category = ""
         self.min_price = 0
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            query=self.query,
+            results=self.results,
+            min_price=self.min_price,
+            category=self.category,
+        )
+        return context
 
     @cache(ttl=300)
     @debounce(wait=0.5)

@@ -1,22 +1,27 @@
 # JIT Serialization
 
-Rust-powered serialization (unmeasured; the previously quoted multiple was carried over from template-rendering claims). Requires the private/public variable pattern.
+Rust-powered serialization (unmeasured; the previously quoted multiple was carried over from template-rendering claims). Hand the QuerySet to the template in `get_context_data()`; do not convert it first.
 
 ```python
-# CORRECT: private -> public in get_context_data()
+# CORRECT: the QuerySet itself goes into the context
 def _refresh(self):
-    self._items = Item.objects.filter(active=True)  # PRIVATE (underscore)
+    self._items = Item.objects.filter(active=True)
 
 def get_context_data(self, **kwargs):
-    self.items = self._items  # PUBLIC <- PRIVATE (JIT triggers here)
     context = super().get_context_data(**kwargs)
+    context["items"] = self._items  # serialized here, for the fields the template reads
     return context
 ```
 
 ```python
-# WRONG: direct public assignment in mount
+# WRONG: an attribute alone, public or not
 def mount(self, request, **kwargs):
-    self.items = Item.objects.all()  # bypasses JIT!
+    self.items = Item.objects.all()  # never reaches the template: {{ items }} renders empty
+
+# WRONG: the 1.x idiom
+def get_context_data(self, **kwargs):
+    self.items = self._items  # publishes nothing under explicit exposure (the default)
+    return super().get_context_data(**kwargs)
 
 # WRONG: converting to list
 def _refresh(self):
@@ -30,9 +35,8 @@ def get_context_data(self, **kwargs):
 ```
 
 Rules:
-- Store QuerySets in `self._private` (underscore prefix = private)
-- Assign to `self.public` only in `get_context_data()`
-- Call `super().get_context_data(**kwargs)` to trigger Rust serialization
+- Keep QuerySets on the view (`self._items`); the underscore is a naming convention, not what hides them
+- Supply them in `get_context_data()`: `context["items"] = self._items` after `super().get_context_data(**kwargs)`
 - Never convert QuerySets to lists
 - Never manually serialize model fields
 - JIT auto-detects `select_related` needs from template field access

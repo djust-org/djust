@@ -179,6 +179,11 @@ class ChatView(LiveView):
         self.llm_output = ""
         self.streaming = False
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(llm_output=self.llm_output, streaming=self.streaming)
+        return context
+
     @event_handler
     def start(self, **kwargs):
         if self.streaming:
