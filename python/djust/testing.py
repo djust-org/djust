@@ -52,6 +52,7 @@ from uuid import uuid4
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Type
 
+from django.core.exceptions import PermissionDenied
 from django.test import RequestFactory
 
 
@@ -121,8 +122,13 @@ def _path_with_query(query_params: Any) -> str:
     return "/?" + text if text else "/"
 
 
-def _mount_and_apply_params(view: Any, request: Any, mount_kwargs: Dict[str, Any]) -> None:
-    """``mount()`` then the params hook, the order every transport runs them in.
+def _mount_and_apply_params(
+    view: Any,
+    request: Any,
+    mount_kwargs: Dict[str, Any],
+    route_kwargs: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Bind the route, ``mount()``, the params hook, the object check: the transports' order.
 
     The HTTP GET, the socket mount and the fallback POST all call
     ``handle_params`` right after ``mount()``, with an empty dict when the URL
@@ -130,12 +136,24 @@ def _mount_and_apply_params(view: Any, request: Any, mount_kwargs: Dict[str, Any
     through ``mixins.request._run_http_handle_params`` (what the GET calls) and
     so through the shared ``djust._params_form`` decision: a view that declares
     ``params_form`` gets its form here exactly as it does in production (#3706).
+
+    Before ``mount()`` a view that looks its object up from the route
+    (``ModelFormMixin``) is handed ``route_kwargs``, as every transport hands it
+    its own route's kwargs; after ``handle_params()`` the ADR-017 object check
+    runs, and a denial raises ``PermissionDenied`` here where a transport would
+    answer 403 or a ``permission_denied`` frame (#3977).
     """
     from ._view_hooks import call_hook_sync
+    from .auth.core import enforce_object_permission
     from .mixins.request import _run_http_handle_params
 
+    if route_kwargs is not None:
+        bind_route = getattr(view, "_djust_bind_route_kwargs", None)
+        if callable(bind_route):
+            bind_route(route_kwargs)
     call_hook_sync(view.mount, request, **mount_kwargs)
     _run_http_handle_params(view, request)
+    enforce_object_permission(view, request)
 
 
 class NoHandlerFoundError(Exception):
@@ -219,6 +237,7 @@ class LiveViewTestClient:
         via_websocket: bool = True,
         *,
         query_params: Any = None,
+        route_kwargs: Optional[Dict[str, Any]] = None,
         **params: Any,
     ) -> "LiveViewTestClient":
         """
@@ -255,7 +274,22 @@ class LiveViewTestClient:
                 ``handle_params(params, uri)`` exactly as the HTTP GET and the
                 socket mount do it, with an empty dict when this is omitted, and
                 through the same ``params_form`` decision (#3706).
+            route_kwargs: The kwargs the view's URL route resolves to
+                (``{"pk": 3}`` for ``groups/<int:pk>/edit/``). A view that
+                looks its object up from the route (``ModelFormMixin``) reads
+                them from there, never from ``**params``, so a routed edit
+                view is mounted with ``mount(route_kwargs={"pk": 3})``. They
+                are bound before ``mount()``, as the transports bind them; they
+                are not passed to ``mount()``.
             **params: Parameters to pass to mount() (like URL kwargs)
+
+        Raises:
+            PermissionDenied: the object-permission check (ADR-017) that every
+                transport runs after ``mount()`` and ``handle_params()`` denied
+                the view's object, as it does for a routed ``ModelFormMixin``
+                view mounted without ``route_kwargs`` (#3977). A transport
+                answers that with a 403 or a ``permission_denied`` frame; the
+                client is not marked mounted.
 
         Returns:
             self for method chaining
@@ -264,6 +298,7 @@ class LiveViewTestClient:
             client.mount(item_id=123, mode='edit')
             client.mount(via_websocket=False)  # HTTP-prerender branch only
             client.mount(query_params={"page": "2"})  # a params_form view
+            client.mount(route_kwargs={"pk": group.pk})  # a routed ModelFormMixin view
         """
         # Create the view instance
         self.view_instance = self.view_class()
@@ -308,7 +343,11 @@ class LiveViewTestClient:
             self.view_instance._initialize_temporary_assigns()
 
         # mount(), then handle_params() the way the transports do (#3706)
-        _mount_and_apply_params(self.view_instance, request, params)
+        try:
+            _mount_and_apply_params(self.view_instance, request, params, route_kwargs)
+        except PermissionDenied:
+            self._mounted = False
+            raise
 
         self._mounted = True
         self.events.append(
@@ -1148,7 +1187,7 @@ class LiveViewTestClient:
         client = LiveViewTestClient(view_cls, user=self.user)
         mount_params = dict(target.get("params") or {})
         mount_params.update(match.kwargs)
-        client.mount(**mount_params)
+        client.mount(route_kwargs=dict(match.kwargs), **mount_params)
         return client
 
     def assert_stream_insert(
@@ -1945,6 +1984,9 @@ class LiveViewSmokeTest:
             view_config = {
                 # DealDetailView: {"mount_params": {"object_id": 1}, "user": staff_user,
                 #                  "max_queries": 8},
+                # A view whose object comes from its route (ModelFormMixin) needs the
+                # route's kwargs, or the object check denies it at mount:
+                # EditDealView: {"route_kwargs": {"pk": 1}, "user": staff_user},
             }
 
     A view can also declare its own budget next to the code that spends it
@@ -1990,7 +2032,12 @@ class LiveViewSmokeTest:
         mount_params = config.get("mount_params", {})
 
         client = LiveViewTestClient(view_class, user=user)
-        client.mount(**mount_params)
+        # A view whose object comes from its route (ModelFormMixin) needs the route's
+        # kwargs, and the post-mount object check denies it otherwise (#3977).
+        if config.get("route_kwargs") is not None:
+            client.mount(route_kwargs=config["route_kwargs"], **mount_params)
+        else:
+            client.mount(**mount_params)
         return client
 
     def test_smoke_render(self) -> None:

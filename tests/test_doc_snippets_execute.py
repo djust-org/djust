@@ -96,7 +96,7 @@ _NO_ATTR_RE = re.compile(r"'(\w+)' object has no attribute '(\w+)'")
 _NETWORK_RE = re.compile(
     r"ConnectError|ConnectionError|nodename nor servname|Name or service not known|Errno 8\b"
 )
-_DENIED_RE = re.compile(r"^(Permission denied|Access denied)")
+_DENIED_RE = re.compile(r"^(?:PermissionDenied: )?(Permission denied|Access denied)")
 _TEMPLATE_MISSING_RE = re.compile(
     r"TemplateDoesNotExist|Template not found|template.*(?:not found|does not exist)",
     re.IGNORECASE,

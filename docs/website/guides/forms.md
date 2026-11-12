@@ -476,6 +476,20 @@ The trade: if access is revoked while the page is open, `validate_field` keeps
 working until the next event that is not read-only, which is denied. The
 default is `"every_event"`.
 
+Two limits of the unchanged test ([#3983](https://github.com/djust-org/djust/issues/3983)),
+both fail-safe (the event then gets the full check, so nothing is skipped; only the saving
+is lost):
+
+- **It copies the record.** The test deep-copies every value on the record when it is
+  authorized and again on each read-only event, so it costs about as much as copying the
+  record: a fraction of a millisecond for ordinary fields, but tens to hundreds of
+  milliseconds for a `JSONField` holding a hundred thousand items. For such a record the
+  copy can cost more than the query it saves; leave the view on `"every_event"`.
+- **A record loaded with `prefetch_related` is never reused.** The prefetched querysets are
+  part of the record and do not compare equal to a copy of themselves, so every
+  read-only event takes the full check. Load the record without `prefetch_related` in
+  `get_queryset()` (prefetch in `get_context_data()` instead) if you want the reuse.
+
 ### Selecting the record from the page, not the route
 
 A page that opens one record inside a larger view (a queue at `/reviews/`
