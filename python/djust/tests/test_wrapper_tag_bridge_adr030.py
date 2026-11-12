@@ -3,9 +3,10 @@
 The component library is the population the ADR measured: 57 raw
 body-consuming tags, of which the five without a native handler
 (``aspect_ratio``, ``callout``, ``scroll_area``, ``sticky_header``, ``tab``)
-are plain wrappers. Bridging the library here (the app is NOT installed in
-the test settings, so no native handler shadows a name) must route every
-wrapper through ``LibraryBlockTagHandler`` and refuse the rest by name.
+are plain wrappers. Bridging the library here through ``{% load %}`` (with the
+startup registration of ``djust.components.rust_handlers`` cleared first, so no
+registered handler shadows a name) must route every wrapper through
+``LibraryBlockTagHandler`` and refuse the rest by name.
 """
 
 from __future__ import annotations
@@ -22,9 +23,20 @@ FIVE = ("aspect_ratio", "callout", "scroll_area", "sticky_header", "tab")
 @pytest.fixture
 def bridged_components():
     """Bridge the component library, then unregister everything it added."""
-    from djust._rust import unregister_block_tag_handler, unregister_tag_handler
+    from djust._rust import (
+        unregister_block_tag_handler,
+        unregister_raw_block_tag_handler,
+        unregister_tag_handler,
+    )
+    from djust.components.rust_handlers import register_with_rust_engine
 
     library = import_library(COMPONENTS)
+    # Since 2.0 every component tag is registered at startup (one render path per tag), so
+    # ``{% load %}`` would find each name taken and refuse to bridge it: clear them first.
+    for name in library.tags:
+        unregister_tag_handler(name)
+        unregister_block_tag_handler(name)
+        unregister_raw_block_tag_handler(name)
     before = {
         name: dict(tl._engine_state(name, getattr(tl, name)))
         for name in ("_loaded", "_owned_tags", "_handlers", "_tag_owner", "_filter_owner")
@@ -42,6 +54,7 @@ def bridged_components():
         state.clear()
         state.update(snapshot)
     tl.reassert()
+    register_with_rust_engine()
 
 
 def _raw_body_tags(library):
@@ -71,8 +84,9 @@ def test_the_component_census_matches_adr_030():
     assert len(reasons) == 59
     assert all(reasons[name] is None for name in FIVE)
     assert "more than one body segment" in reasons["split_pane"]
-    # confirm_dialog_block renders its body only when open; it has its own
-    # Rust block handler, so the bridge refusing it costs nothing.
+    # confirm_dialog_block renders its body only when open; the startup registration
+    # (`rust_handlers.bridged_handler`) routes it as a wrapper all the same, and the
+    # parents that read their children take the raw-body route (`RAW_BODY_TAGS`).
     for parent in ("tabs", "accordion", "modal", "sidebar", "nav_menu", "confirm_dialog_block"):
         assert "does not render its body" in reasons[parent], parent
     # Renders its body under a pushed variable: the one shape that would

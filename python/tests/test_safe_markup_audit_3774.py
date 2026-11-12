@@ -456,24 +456,28 @@ class TestPayloadSweep:
         assert result["found"] == [], f"a payload became markup or a script URL: {result['found']}"
         # A sweep that renders almost nothing proves nothing: most of the tags must have rendered.
         assert result["rendered"] >= 0.85 * result["discovered"], result
-        # ... and the same for the Rust-native handlers (#3820), which are most of the new sinks.
-        assert result["handlers_discovered"] >= 150, result
+        # ... and the same for the Rust-native handlers (#3820). Since 2.0 only the kept native
+        # twins remain (``NATIVE_INLINE_HANDLERS`` / ``NATIVE_BLOCK_HANDLERS``).
+        from djust.components import rust_handlers as rh
+
+        kept = len(rh.NATIVE_INLINE_HANDLERS) + len(rh.NATIVE_BLOCK_HANDLERS)
+        assert result["handlers_discovered"] == kept, result
         assert result["handlers_rendered"] >= 0.85 * result["handlers_discovered"], result
 
     def test_the_sweep_reads_a_real_handler_with_the_payload(self):
-        from djust.components.rust_handlers import RibbonHandler
+        from djust.components.rust_handlers import AppShellHandler
 
         all_keys, numeric = sweepmod.keys()
         out = str(
-            sweepmod.render_handler(RibbonHandler(), False, "str", "markup", all_keys, numeric)
+            sweepmod.render_handler(AppShellHandler(), True, "str", "markup", all_keys, numeric)
         )
-        assert "dj-ribbon" in out and TAG in out and "&quot;onmouseover" in out
+        assert "dj-app-shell" in out and TAG in out and "&quot;onmouseover" in out
 
     def test_a_block_handler_is_given_the_body_the_engine_gives_it(self):
-        from djust.components.rust_handlers import CardHandler
+        from djust.components.rust_handlers import AppContentHandler
 
         all_keys, numeric = sweepmod.keys()
-        out = sweepmod.render_handler(CardHandler(), True, "str", "markup", all_keys, numeric)
+        out = sweepmod.render_handler(AppContentHandler(), True, "str", "markup", all_keys, numeric)
         assert out is not None and TAG in str(out)
 
     def test_the_sweep_reads_a_real_tag_with_the_payload(self):

@@ -1,11 +1,11 @@
-<div class="dj-progress dj-progress--{{ size }}">
+<div class="dj-progress dj-progress--{{ size|force_escape }}">
 {% if label or show_label %}
   <div class="dj-progress__header">
     {% if label %}<span class="dj-progress__label">{{ label }}</span>{% endif %}
     {% if show_label %}<span class="dj-progress__value">{{ value }}%</span>{% endif %}
   </div>
 {% endif %}
-  <div class="dj-progress__track" role="progressbar" aria-valuenow="{{ value }}" aria-valuemin="0" aria-valuemax="100"{% if label %} aria-label="{{ label }}"{% endif %}>
-    <div class="dj-progress__fill dj-progress__fill--{{ color }} dj-progress-w-{{ value }}"></div>
+  <div class="dj-progress__track" role="progressbar" aria-valuenow="{{ value }}" aria-valuemin="0" aria-valuemax="100"{% if label %} aria-label="{{ label|force_escape }}"{% endif %}>
+    <div class="dj-progress__fill dj-progress__fill--{{ color|force_escape }} dj-progress-w-{{ value }}"></div>
   </div>
 </div>

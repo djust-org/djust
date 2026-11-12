@@ -941,6 +941,7 @@ PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: 
 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+.map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
 .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
 DjangoRustError::TemplateError(format!(
 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))

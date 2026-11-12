@@ -237,7 +237,7 @@ class TestATagArgumentIsStillTheFlooredDict:
     ) -> None:
         """The differential over EVERY registered inline native tag: for each list-like argument
         name, a list of models and the list of their floored dicts render the same bytes (or raise
-        the same error). Derived from ``rust_handlers.INLINE_HANDLERS``, not listed by hand."""
+        the same error). Derived from ``rust_handlers.NATIVE_INLINE_HANDLERS``, not listed by hand."""
         from djust.components import rust_handlers
         from djust.serialization import normalize_django_value
 
@@ -246,7 +246,7 @@ class TestATagArgumentIsStillTheFlooredDict:
         keys = ["rows", "items", "options", "cards", "data", "entries", "steps", "tabs", "list"]
         checked = 0
         differing: dict[str, str] = {}
-        for name, _handler in rust_handlers.INLINE_HANDLERS:
+        for name, _handler in rust_handlers.NATIVE_INLINE_HANDLERS:
             for key in keys:
                 src = "{% " + name + " " + key + "=rows columns=cols %}"
                 outcomes = []

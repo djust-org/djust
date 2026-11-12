@@ -716,7 +716,9 @@ class TestTheEnumerationReachesTheMarkupBranchesToo:
             "`render_slot` is the handler whose unreached markup branch cost "
             f"#2421; if it is not here the vectors are wrong: {sorted(newly_reached)}"
         )
-        assert len(newly_reached) >= 3, sorted(newly_reached)
+        # Two since 2.0: most component tags render their own Django node (one render path per
+        # tag), so their hand-written native handlers are no longer in this registry.
+        assert len(newly_reached) >= 2, sorted(newly_reached)
 
     def test_the_only_unmarked_markup_return_is_the_named_limit(self, handlers) -> None:
         """The audit's assertion, on the branches arguments unlock.

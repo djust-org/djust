@@ -558,10 +558,19 @@ class TestRadioGroup:
             texts = {by_id[i].all_text() for i in group.attrs["aria-describedby"].split()}
             assert "Billed monthly" in texts
 
-    def test_it_is_registered_for_the_object_argument_bridge(self):
+    def test_it_renders_its_own_node_under_the_rust_engine(self):
+        from djust import _rust
         from djust.components import rust_handlers
+        from djust.template_libraries import LibraryTagHandler
 
-        assert "dj_radio_group" in rust_handlers.OBJECT_ARGUMENT_TAGS
+        rust_handlers.register_with_rust_engine()
+        assert _rust.has_tag_handler("dj_radio_group")
+        kind, handler = rust_handlers._bridged_handlers(
+            __import__(
+                "djust.components.templatetags.djust_components", fromlist=["register"]
+            ).register
+        )["dj_radio_group"]
+        assert kind == "tag" and isinstance(handler, LibraryTagHandler)
 
 
 class TestLiveInputRadio:

@@ -355,11 +355,9 @@ def _python_params(fn: Any, kind: str) -> tuple[list[tuple[str, str, str]], list
 def _rust_handler_keys() -> dict[str, list[str]]:
     from djust.components import rust_handlers as rh
 
-    handlers = {}
-    for name, handler in rh.INLINE_HANDLERS:
-        handlers[name] = handler
-    for name, _end, handler in rh.BLOCK_HANDLERS:
-        handlers[name] = handler
+    # Only the core layout tags keep a native handler; every other tag renders through the
+    # ``{% load %}`` bridge, i.e. the Python tag's own node (one render path per tag).
+    handlers = {name: handler for name, _end, handler in rh.NATIVE_BLOCK_HANDLERS}
     out = {}
     for name, h in handlers.items():
         keys, params = discover(type(h))
@@ -380,6 +378,14 @@ def inventory() -> dict[str, variants.TagInfo]:
             fn = library.tags[name]
             kind = tl._classify(fn)
             sig, keys = _python_params(fn, kind)
+            parent = variants.PARENT.get(name)
+            if parent is not None and parent in library.tags and kind not in variants.SIMPLE_KINDS:
+                # A child tag drawn by its parent (``sidebar_item`` inside ``sidebar``): the
+                # PARENT's node reads the child's arguments, so those are the child's keys.
+                # (Its native handler used to read them itself; since 2.0 the Rust engine
+                # renders the Python nodes, one render path per tag.)
+                parent_keys, parent_params = discover(library.tags[parent])
+                keys = sorted(set(keys) | parent_keys | parent_params)
             native = _native_kinds(name)
             infos[f"{label}:{name}"] = variants.TagInfo(
                 lib=label,

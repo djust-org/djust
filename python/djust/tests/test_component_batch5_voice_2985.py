@@ -50,7 +50,6 @@ def _paths(**kw) -> dict[str, str]:
             **{("custom_class" if k == "class" else k): v for k, v in kw.items()}
         ).render(),
         "tag": _tag("{% voice_input " + tag_args + " %}", **kw),
-        "handler": str(rh.VoiceInputHandler().render([f"{k}={k}" for k in kw], dict(kw))),
     }
 
 
@@ -109,7 +108,7 @@ class TestMarkup:
             {"continuous": True, "class": "extra", "lang": "fr-CA"},
         ):
             paths = _paths(**kw)
-            assert paths["class"] == paths["tag"] == paths["handler"], kw
+            assert paths["class"] == paths["tag"], kw
 
     def test_the_default_disclosure_names_the_vendor_and_limits_its_promise_to_the_component(self):
         text = _parse(VoiceInput().render()).text["dj-voice-input__disclosure"]

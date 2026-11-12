@@ -146,15 +146,18 @@ class TestParseArgsPutsTheTypeBack:
 
 class TestEveryHandlerAsksForTypedOperands:
     def test_each_inline_and_block_handler_is_wrapped_to_declare_it(self):
-        handlers = [h for _n, h in rust_handlers.INLINE_HANDLERS]
-        handlers += [h for _n, _e, h in rust_handlers.BLOCK_HANDLERS]
-        assert len(handlers) > 150, len(handlers)
+        handlers = [h for _n, h in rust_handlers.NATIVE_INLINE_HANDLERS]
+        handlers += [h for _n, _e, h in rust_handlers.NATIVE_BLOCK_HANDLERS]
+        assert len(handlers) >= 20, len(handlers)  # the kept native twins (2.0, one render path)
         for handler in handlers:
             wrapped = rust_handlers._with_typed_operands(handler)
             assert wrapped.TYPED_ARGS is True, type(handler).__name__
 
     def test_a_handler_that_declares_it_is_not_wrapped_twice(self):
-        viewer = dict(rust_handlers.INLINE_HANDLERS)["json_viewer"]
+        class Declares:
+            TYPED_ARGS = True
+
+        viewer = Declares()
         assert rust_handlers._with_typed_operands(viewer) is viewer
 
     def test_the_wrapper_forwards_what_the_engine_reads_off_a_handler(self):
@@ -242,10 +245,11 @@ class TestAListSlotKeepsWorking:
         ],
         ids=["ints", "strings", "dicts"],
     )
-    def test_a_tuple_renders_as_the_list_of_the_same_items(self, engines, src, items):
-        as_tuple = render(engines, "rust", src, {"v": items})
-        as_list = render(engines, "rust", src, {"v": list(items)})
-        assert as_tuple == as_list, f"\n  tuple {as_tuple}\n  list  {as_list}"
+    def test_a_tuple_renders_as_django_renders_it(self, engines, src, items):
+        """These tags render their Python node under the Rust engine (one render path per tag), so
+        a tuple is whatever the Python tag makes of it."""
+        rust = render(engines, "rust", src, {"v": items})
+        assert rust == render(engines, "django", src, {"v": items})
 
     def test_dependent_select_options_match_django_for_a_tuple(self, engines):
         """The cell the first version of this fix broke: Django renders the options, and a real
@@ -262,8 +266,8 @@ class TestAListSlotKeepsWorking:
         src = "{% load djust_components %}{% heatmap data=v x_labels=xl y_labels=yl %}"
         ctx = {"xl": ["a", "b"], "yl": ["c", "d"]}
         as_tuple = render(engines, "rust", src, {**ctx, "v": ((1, 2), (3, 4))})
+        assert as_tuple == render(engines, "django", src, {**ctx, "v": ((1, 2), (3, 4))})
         as_list = render(engines, "rust", src, {**ctx, "v": [[1, 2], [3, 4]]})
-        assert as_tuple == as_list
         assert as_list.count('class="dj-heatmap__cell"') == 4, as_list
 
     def test_a_tuple_inside_the_tuple_prints_as_python_prints_it(self, engines):
@@ -419,10 +423,6 @@ class TestTheNarrowAsk:
 
     def test_the_component_wrapper_asks_for_the_narrow_form(self):
         assert rust_handlers._TypedOperands.TYPED_ARGS_STANDINS_ONLY is True
-        viewer = dict(rust_handlers.INLINE_HANDLERS)["json_viewer"]
-        assert not getattr(viewer, "TYPED_ARGS_STANDINS_ONLY", False), (
-            "json_viewer needs every type"
-        )
 
 
 class TestTheReservedKeyOnTheBlockPath:

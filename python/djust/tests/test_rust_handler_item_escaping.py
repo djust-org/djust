@@ -1,10 +1,9 @@
 """Item content in ``{% masonry_grid %}`` and ``{% dashboard_grid %}`` panels, and
 ``{% audit_log %}`` column names, are escaped the same way on every render path:
-the component class, the Django template tag, the Rust-engine handler called
-directly, and the Rust template engine itself (``djust._rust.render_template``).
+the component class, the Django template tag, and the Rust template engine itself
+(``djust._rust.render_template``, which renders the tag's own node).
 
-The class and the tag ``conditional_escape`` these values; the Rust handlers
-must do the same.
+The class and the tag ``conditional_escape`` these values.
 """
 
 from __future__ import annotations
@@ -53,15 +52,6 @@ def _engine(source: str, **context: Any) -> str:
     return str(render_template(source, context))
 
 
-def _handler(name: str, args: list[str], context: dict, block: bool = False) -> str:
-    handlers = {n: h for n, h in rh.INLINE_HANDLERS}
-    handlers.update({n: h for n, _end, h in rh.BLOCK_HANDLERS})
-    handler = handlers[name]
-    if block:
-        return str(handler.render(args, "", context))
-    return str(handler.render(args, context))
-
-
 def _bodies(html: str, cls: str) -> list[str]:
     return re.findall(rf'<div class="{cls}">(.*?)</div>', html, re.S)
 
@@ -71,7 +61,6 @@ def _masonry(value: Any) -> dict[str, str]:
     return {
         "class": str(MasonryGrid(items=items).render()),
         "tag": _tag("{% masonry_grid items=items %}", items=items),
-        "handler": _handler("masonry_grid", ["items=items"], {"items": items}),
         "engine": _engine("{% masonry_grid items=items %}", items=items),
     }
 
@@ -81,7 +70,6 @@ def _dashboard(value: Any) -> dict[str, str]:
     outputs = {
         "class": str(DashboardGrid(panels=panels).render()),
         "tag": _tag("{% dashboard_grid panels=panels %}{% enddashboard_grid %}", panels=panels),
-        "handler": _handler("dashboard_grid", ["panels=panels"], {"panels": panels}, block=True),
     }
     engine = _engine("{% dashboard_grid panels=panels %}{% enddashboard_grid %}", panels=panels)
     # Some releases' engines pass no list arguments to block handlers; those
@@ -122,17 +110,15 @@ def test_dashboard_panel_content_is_escaped_on_every_path(value):
     assert bodies["class"] == [str(_tag("{{ v }}", v=value))]
 
 
-def test_marked_safe_content_is_kept_where_the_value_reaches_the_handler():
-    """conditional_escape semantics: a SafeString passed to the handler as an
-    object stays markup, as on the class and the tag."""
+def test_marked_safe_content_is_kept_where_the_value_reaches_the_tag():
+    """conditional_escape semantics: a SafeString passed to the tag as an
+    object stays markup, on the class, the tag and the Rust engine."""
     safe = mark_safe("<b>card</b>")
-    html = _handler("masonry_grid", ["items=items"], {"items": [{"content": safe}]})
+    html = _engine("{% masonry_grid items=items %}", items=[{"content": safe}])
     assert '<div class="dj-masonry__item"><b>card</b></div>' in html
-    html = _handler(
-        "dashboard_grid",
-        ["panels=panels"],
-        {"panels": [{"id": "p", "title": "T", "content": safe}]},
-        block=True,
+    html = _engine(
+        "{% dashboard_grid panels=panels %}{% enddashboard_grid %}",
+        panels=[{"id": "p", "title": "T", "content": safe}],
     )
     assert '<div class="dj-dashboard-grid__panel-body"><b>card</b></div>' in html
     assert "<b>card</b>" in str(MasonryGrid(items=[{"content": safe}]).render())
@@ -160,7 +146,6 @@ def test_file_dropzone_name_is_escaped_on_every_path(value):
     outputs = {
         "class": str(FileDropzone(name=value).render()),
         "tag": _tag("{% file_dropzone name=n %}", n=value),
-        "handler": _handler("file_dropzone", ["name=n"], {"n": value}),
         "engine": _engine("{% file_dropzone name=n %}", n=value),
     }
     for path, html in outputs.items():
@@ -175,7 +160,6 @@ def test_meter_segment_values_are_escaped_on_every_path(value):
     renders = {
         "class": lambda: str(Meter(segments=segments).render()),
         "tag": lambda: _tag("{% meter segments=segments %}", segments=segments),
-        "handler": lambda: _handler("meter", ["segments=segments"], {"segments": segments}),
         "engine": lambda: _engine("{% meter segments=segments %}", segments=segments),
     }
     rendered = []
@@ -186,7 +170,7 @@ def test_meter_segment_values_are_escaped_on_every_path(value):
             continue  # this path refuses a non-numeric value outright
         rendered.append(path)
         assert not _is_raw(html), (path, html)
-    assert "handler" in rendered
+    assert "engine" in rendered
 
 
 @pytest.mark.parametrize(
@@ -204,7 +188,6 @@ def test_rich_text_editor_value_is_cleaned_on_every_path(value):
     outputs = {
         "class": str(RichTextEditor(value=value).render()),
         "tag": _tag("{% rich_text_editor value=v %}", v=value),
-        "handler": _handler("rich_text_editor", ["value=v"], {"v": value}),
         "engine": _engine("{% rich_text_editor value=v %}", v=value),
     }
     for path, html in outputs.items():
@@ -240,11 +223,6 @@ def test_audit_log_column_names_are_escaped_on_every_path(value):
     outputs = {
         "class": str(AuditLog(entries=entries, columns=columns).render()),
         "tag": _tag(source, entries=entries, columns=columns),
-        "handler": _handler(
-            "audit_log",
-            ["entries=entries", "columns=columns"],
-            {"entries": entries, "columns": columns},
-        ),
         "engine": _engine(source, entries=entries, columns=columns),
     }
     expected = [

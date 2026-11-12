@@ -1119,8 +1119,13 @@ def test_collect_raw_source_is_the_one_collector_for_verbatim_and_raw_blocks():
     parser, tests = whole.split("\n#[cfg(test)]\n", 1)
     assert "collect_raw_source" in tests, "the test-module split landed in the wrong place"
     assert parser.count("fn collect_raw_source(") == 1
+    # One collector: `collect_raw_source` is `collect_nested_raw_source` without nesting (the
+    # raw-block arm counts a nested pair of the same tag, #3878).
+    assert parser.count("fn collect_nested_raw_source(") == 1
+    assert "collect_nested_raw_source(tokens, start, None, end_names, unclosed_error)" in parser
     # Two production callers: the `verbatim` arm and the raw-block arm.
-    assert len(re.findall(r"= collect_raw_source\(", parser)) == 2
+    assert len(re.findall(r"= collect_raw_source\(", parser)) == 1
+    assert len(re.findall(r"= collect_nested_raw_source\(", parser)) == 1
     # The raw-block check sits BEFORE the block-handler dispatch in the
     # fallthrough arm: the body must reach Django un-rendered.
     raw = parser.index("raw_block_handler_exists(tag_name)")

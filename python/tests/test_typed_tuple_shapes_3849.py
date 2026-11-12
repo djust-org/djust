@@ -139,14 +139,18 @@ class TestEveryShapeRendersAsDjangoPrintsIt:
         out = render_backend(engines, GATE, {"v": P(1, 2)})
         assert "P(x=1, y=2)" in out and "(1, 2) Approve" not in out, out
 
-    def test_a_spelled_subclass_is_recorded_not_fixed(self, engines):
-        """The engine keeps no tuple class (``Value::Tuple``), so a ``__repr__`` override is lost.
-        Django prints the override. Pinned so a change to either side is looked at."""
+    def test_a_spelled_subclass_reaches_the_tag_as_itself_through_the_backend(self, engines):
+        """Through ``DjustTemplateBackend`` the tag's own node is handed the operand from the raw
+        context (one render path per tag), so a ``__repr__`` override prints as Django prints it.
+        As LiveView STATE the value is normalised before it reaches the engine, which keeps no
+        tuple class (``Value::Tuple``): recorded, not fixed."""
         value = Spelled((1, 2))
         assert "Spelled(1, 2)" in render_django(engines, GATE, {"v": value})
-        for route in ROUTES.values():
-            out = route(engines, GATE, {"v": value})
-            assert "Spelled" not in out and "(1, 2)" in out, out
+        assert render_backend(engines, GATE, {"v": value}) == render_django(
+            engines, GATE, {"v": value}
+        )
+        out = render_live(engines, GATE, {"v": value})
+        assert "Spelled" not in out and "(1, 2)" in out, out
 
 
 #: The seven cells the review named: a namedtuple in a CSS-length slot used to flip from the

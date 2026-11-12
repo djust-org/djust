@@ -3,9 +3,18 @@
 import pytest
 from django.template import Context, Variable
 
+from djust import _rust
+
 from djust.components.components.markdown_editor import MarkdownEditor
 from djust.components.templatetags._dev_tools import MarkdownEditorNode
-from djust.components.rust_handlers import MarkdownEditorHandler
+
+
+def _rust_tag(source: str, context: dict) -> str:
+    """The tag through the Rust engine (which renders the tag's own node)."""
+    from djust.components.rust_handlers import register_with_rust_engine
+
+    register_with_rust_engine()
+    return str(_rust.render_template(source, context))
 
 
 @pytest.mark.parametrize(
@@ -19,7 +28,7 @@ def test_editor_preview_uses_sanitized_markdown_in_all_renderers(source):
                 Context({"source": source})
             )
         ),
-        str(MarkdownEditorHandler().render(['name="body"', "value=source"], {"source": source})),
+        _rust_tag('{% markdown_editor name="body" value=source %}', {"source": source}),
     ]
     for output in outputs:
         preview = output.split('aria-label="Preview">', 1)[1].split("</div>", 1)[0]
@@ -39,7 +48,7 @@ def test_visual_mode_declares_a_stable_controls_host_in_every_renderer():
     outputs = [
         str(MarkdownEditor(name="body", value="Hello", mode="visual")),
         str(MarkdownEditorNode({"name": "body", "mode": "visual"}).render(Context())),
-        str(MarkdownEditorHandler().render(['name="body"', 'mode="visual"'], {})),
+        _rust_tag('{% markdown_editor name="body" mode="visual" %}', {}),
     ]
     for output in outputs:
         assert 'data-mode="visual"' in output
