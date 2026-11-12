@@ -104,11 +104,13 @@ class ItemListView(LiveView):
             qs = qs.filter(name__icontains=self.search)
         if self.filter != "all":
             qs = qs.filter(status=self.filter)
-        self._items = qs  # PRIVATE variable (underscore prefix)
+        self._items = qs
 
     def get_context_data(self, **kwargs):
-        self.items = self._items  # PUBLIC = triggers Rust JIT serialization
+        # The template gets what is added here, and nothing else.
         context = super().get_context_data(**kwargs)
+        context.update(search=self.search, filter=self.filter)
+        context["items"] = self._items  # a QuerySet: serialized for the template (JIT)
         return context
 
     @event_handler()
@@ -201,20 +203,24 @@ def on_scroll(self, position: int = 0, **kwargs):
 
 ## JIT Serialization (Critical Pattern)
 
-QuerySets MUST be stored in private variables (`self._items`) and assigned to public variables (`self.items`) only inside `get_context_data()`. This enables Rust-based serialization (faster than the Python path; unmeasured).
+An attribute set on `self` does not reach the template by itself (explicit exposure, the default since 2.0): `get_context_data()` supplies every name the template reads. Hand a QuerySet over as it is; djust serializes the fields the template reads in Rust (faster than the Python path; unmeasured).
 
 ```python
 # CORRECT
 def _refresh(self):
-    self._items = Item.objects.filter(active=True)  # private
+    self._items = Item.objects.filter(active=True)
 
 def get_context_data(self, **kwargs):
-    self.items = self._items  # public <- private (JIT happens here)
-    return super().get_context_data(**kwargs)
+    return {**super().get_context_data(**kwargs), "items": self._items}
 
-# WRONG - bypasses JIT
+# WRONG - renders empty: nothing supplies `items`
 def mount(self, request, **kwargs):
-    self.items = Item.objects.all()  # never assign QuerySet to public directly
+    self.items = Item.objects.all()
+
+# WRONG - the 1.x idiom publishes nothing now
+def get_context_data(self, **kwargs):
+    self.items = self._items
+    return super().get_context_data(**kwargs)
 
 # WRONG - disables JIT
 def _refresh(self):

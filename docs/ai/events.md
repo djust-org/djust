@@ -24,6 +24,11 @@ class ItemView(LiveView):
         self.selected_id = 0
         self.query = ""
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(query=self.query, selected_id=self.selected_id)
+        return context
+
     @event_handler(parameter_policy="strict")
     def select_item(self, item_id: int, active: bool = False) -> None:
         self.selected_id = item_id  # still authorize the record before using it

@@ -13,15 +13,21 @@ When a LiveView renders a template, it needs to serialize Django model instances
 3. **N+1 queries** - Missing select_related/prefetch_related optimizations
 4. **Performance issues** - Slow Python-based serialization instead of fast Rust serialization
 
-## The Solution: Private/Public Variable Pattern
+## The Solution: Build, Then Hand Over
 
 The JIT pattern uses a two-phase approach:
 
-### Phase 1: Build QuerySet (Private Variable)
-Store the QuerySet in a **private instance variable** (prefixed with `_`) while building/filtering it. This prevents premature JIT serialization.
+### Phase 1: Build the QuerySet
+Keep the QuerySet on the view (`self._items`) while building and filtering it. Do not convert it to a list.
 
-### Phase 2: Expose for Serialization (Public Variable)
-In `get_context_data()`, assign the private variable to a **public instance variable** just before calling `super().get_context_data()`. This triggers optimized Rust-based JIT serialization.
+### Phase 2: Hand it to the template
+In `get_context_data()`, call `super().get_context_data()` and add the QuerySet to the context it returns (`context["items"] = self._items`). djust serializes it there, in Rust, for the fields the template reads.
+
+> **Changed in djust 2.0.** Before 2.0 this page taught assigning the QuerySet to a public
+> attribute (`self.items = self._items`) and letting `super().get_context_data()` pick it up.
+> A view no longer publishes its attributes
+> ([explicit exposure](website/state/explicit-exposure.md) is the default), so that
+> assignment renders `{{ items }}` empty, with no error. The context is the only way in.
 
 ## Implementation Pattern
 
@@ -57,29 +63,25 @@ class MyListView(BaseViewWithNavbar):
         # Apply sorting
         items = items.order_by('-created_at')
 
-        # IMPORTANT: Store in PRIVATE variable to prevent premature JIT serialization
+        # Keep the QuerySet on the view; get_context_data() hands it over
         self._items = items
 
     def get_context_data(self, **kwargs):
         """Add context for template rendering"""
-        # STEP 1: Assign private QuerySet to public variable for JIT serialization
-        # JIT will automatically:
+        # STEP 1: Call parent
+        context = super().get_context_data(**kwargs)
+
+        # STEP 2: Add the QuerySet itself. JIT will automatically:
         # - Extract ALL field paths used in template
         # - Apply optimal select_related/prefetch_related
         # - Serialize using fast Rust code (faster than the Python path; this
         #   subsystem has no published measurement — see #TBD)
-        # - Auto-generate count variables (e.g., items_count)
-        self.items = self._items
+        context['items'] = self._items
 
-        # STEP 2: Call parent - triggers JIT serialization
-        context = super().get_context_data(**kwargs)
-
-        # STEP 3: Add non-model context (won't be JIT serialized)
+        # STEP 3: Add the plain state the template reads
         context.update({
-            # NOTE: Don't add 'items' here - parent already serialized it!
             'search_query': self.search_query,
             'filter_status': self.filter_status,
-            # Parent auto-generates 'items_count' from len(items)
         })
 
         return context
@@ -120,7 +122,6 @@ class PropertyListView(BaseViewWithNavbar):
         elif self.sort_by == "rent_high":
             properties = properties.order_by('-monthly_rent')
 
-        # Store in private variable
         self._properties = properties
 
     @event_handler()
@@ -131,14 +132,11 @@ class PropertyListView(BaseViewWithNavbar):
         self._refresh_properties()
 
     def get_context_data(self, **kwargs):
-        """Expose for JIT serialization"""
-        # Assign to public variable
-        self.properties = self._properties
-
-        # Parent handles JIT serialization
+        """Hand the QuerySet to the template (JIT serialization)"""
         context = super().get_context_data(**kwargs)
+        context['properties'] = self._properties
 
-        # Add non-model context
+        # Plain state the template reads
         context.update({
             'search_query': self.search_query,
             'filter_status': self.filter_status,
@@ -180,15 +178,11 @@ class MaintenanceListView(BaseViewWithNavbar):
             ).order_by('priority_order', '-created_at')
 
         # IMPORTANT: Keep as QuerySet, don't convert to list!
-        # Store in private variable
         self._requests = requests
 
     def get_context_data(self, **kwargs):
-        # Assign to public variable for JIT serialization
-        self.requests = self._requests
-
-        # Parent serializes with Rust
         context = super().get_context_data(**kwargs)
+        context['requests'] = self._requests  # serialized with Rust
 
         # Count statistics (using Django aggregation)
         all_requests = MaintenanceRequest.objects.all()
@@ -230,7 +224,7 @@ JIT detects `_djust_annotations` on the model class and adds them to the query a
 
 ## How JIT Serialization Works
 
-When you assign a QuerySet to a public instance variable and call `super().get_context_data()`:
+When `get_context_data()` returns a QuerySet in the context:
 
 1. **Template Analysis**: JIT analyzes the template (including `{% include %}` directives) to extract all field access paths
    - Example: `{{ request.property.name }}` → extracts `property.name`
@@ -251,25 +245,24 @@ When you assign a QuerySet to a public instance variable and call `super().get_c
    - Automatic type conversion and JSON formatting
    - Falls back to Python codegen for `@property` attributes that Rust can't access
 
-4. **Auto-Generated Variables**: JIT creates convenience variables
-   - `items_count` automatically created from `len(items)`
-   - Avoids redundant `COUNT(*)` queries
+There is no auto-generated `items_count` under explicit exposure: use `{{ items|length }}`
+in the template, or add a count to the context yourself.
 
 ## Common Mistakes to Avoid
 
-### ❌ Mistake 1: Assigning Directly to Public Variable
+### ❌ Mistake 1: Expecting an Attribute to Reach the Template
 
 ```python
 def _refresh_items(self):
-    items = MyModel.objects.all()
-    self.items = items  # WRONG: May trigger premature serialization
+    self.items = MyModel.objects.all()  # WRONG: nothing supplies `items`; it renders empty
 ```
 
-**Fix**: Use private variable:
+**Fix**: Add it to the context:
 ```python
-def _refresh_items(self):
-    items = MyModel.objects.all()
-    self._items = items  # CORRECT: Prevents premature serialization
+def get_context_data(self, **kwargs):
+    context = super().get_context_data(**kwargs)
+    context["items"] = self._items  # CORRECT
+    return context
 ```
 
 ### ❌ Mistake 2: Converting QuerySet to List
@@ -299,48 +292,33 @@ def _refresh_items(self):
     self._items = items
 ```
 
-### ❌ Mistake 3: Adding QuerySet to Context Dict
+### ❌ Mistake 3: Serializing the QuerySet Yourself
 
 ```python
 def get_context_data(self, **kwargs):
-    self.items = self._items
     context = super().get_context_data(**kwargs)
-    context.update({
-        'items': self.items,  # WRONG: Overrides JIT serialization
-    })
+    context["items"] = [{"id": i.id, "name": i.name} for i in self._items]  # WRONG: manual serialization
     return context
 ```
 
-**Fix**: Let parent handle serialization:
+**Fix**: Hand over the QuerySet:
 ```python
 def get_context_data(self, **kwargs):
-    self.items = self._items
     context = super().get_context_data(**kwargs)
-    # CORRECT: Don't add 'items' to context
-    context.update({
-        'search_query': self.search_query,  # Only non-model context
-    })
+    context["items"] = self._items  # CORRECT
+    context["search_query"] = self.search_query
     return context
 ```
 
-### ❌ Mistake 4: Forgetting to Assign to Public Variable
+### ❌ Mistake 4: The 1.x Idiom
 
 ```python
 def get_context_data(self, **kwargs):
-    # WRONG: Forgot to assign self.items = self._items
-    context = super().get_context_data(**kwargs)
-    context.update({'items': self._items})  # Manual serialization (slow!)
-    return context
+    self.items = self._items  # WRONG since 2.0: publishes nothing, {{ items }} is empty
+    return super().get_context_data(**kwargs)
 ```
 
-**Fix**: Assign to public variable first:
-```python
-def get_context_data(self, **kwargs):
-    self.items = self._items  # CORRECT: Triggers JIT serialization
-    context = super().get_context_data(**kwargs)
-    # Don't add 'items' to context - parent already did it
-    return context
-```
+**Fix**: as above, `context["items"] = self._items`.
 
 ## Performance Benefits
 
@@ -371,13 +349,11 @@ properties and tenants:
 
 When refactoring a view to use JIT pattern:
 
-- [ ] Store QuerySet in **private variable** (`self._items`) in refresh method
+- [ ] Keep the QuerySet on the view (`self._items`) in the refresh method
 - [ ] Keep QuerySet as QuerySet (don't convert to list with `sorted()`, `list()`, etc.)
 - [ ] Use Django's `order_by()` for sorting, not Python's `sorted()`
-- [ ] Assign to **public variable** (`self.items = self._items`) in `get_context_data()`
-- [ ] Call `super().get_context_data()` to trigger JIT serialization
-- [ ] Don't add QuerySet to context dict (parent already did it)
-- [ ] Only add non-model context to context dict
+- [ ] Call `super().get_context_data()`, then add the QuerySet to the context (`context["items"] = self._items`)
+- [ ] Add every other name the template reads to the context too
 - [ ] Verify JIT is working with the `djust.mixins.jit` logger at `DEBUG` (see below)
 
 ## Debugging JIT Serialization
