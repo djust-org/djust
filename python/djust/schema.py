@@ -1781,9 +1781,11 @@ def _extract_view_schema(cls: type, base_classes: list) -> Dict[str, Any]:
     class_name = cls.__qualname__
     full_path = "%s.%s" % (module, class_name)
 
-    # Template
-    template = getattr(cls, "template_name", None)
-    if template is None and getattr(cls, "template", None):
+    # Template. Only a string is a template: a view may shadow the name with
+    # something else (a state() descriptor), which is not one (#4050).
+    raw_template = getattr(cls, "template_name", None)
+    template: Any = raw_template if isinstance(raw_template, str) else None
+    if template is None and isinstance(getattr(cls, "template", None), str):
         template = "(inline)"
 
     # Mixins
@@ -1832,13 +1834,13 @@ def _extract_view_schema(cls: type, base_classes: list) -> Dict[str, Any]:
     auth = _extract_auth_info(cls)
 
     # Config
-    config = {}
+    config: Dict[str, Any] = {}
     tick = getattr(cls, "tick_interval", None)
-    if tick is not None:
+    if isinstance(tick, (int, float)) and not isinstance(tick, bool):
         config["tick_interval"] = tick
     temp = getattr(cls, "temporary_assigns", None)
-    if temp:
-        config["temporary_assigns"] = list(temp.keys()) if isinstance(temp, dict) else temp
+    if temp and isinstance(temp, (dict, list, tuple)):
+        config["temporary_assigns"] = list(temp.keys()) if isinstance(temp, dict) else list(temp)
 
     return {
         "class": full_path,

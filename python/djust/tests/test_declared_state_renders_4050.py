@@ -113,15 +113,33 @@ class Child(Parent):
     c = state("child-c")
 
 
-class Reserved(LiveView):
-    exposure_policy = "explicit"
-    template = "<div dj-root>[{{ user }}]</div>"
-    request = state("REQUEST_FIELD")
-    view = state("VIEW_FIELD")
-    kwargs = state("KWARGS_FIELD")
-    template_name = state("TEMPLATE_NAME_FIELD")
-    streams = state("STREAMS_FIELD")
-    user = state("DECLARED_USER")
+@pytest.fixture
+def reserved_view():
+    """A view declaring framework-reserved names, built per test.
+
+    Not module level: management commands and system checks enumerate every
+    loaded LiveView subclass, and this one must not leak into their runs.
+    """
+    import gc
+
+    cls = type(
+        "Reserved",
+        (LiveView,),
+        {
+            "__module__": __name__,
+            "exposure_policy": "explicit",
+            "template": "<div dj-root>[{{ user }}]</div>",
+            "request": state("REQUEST_FIELD"),
+            "view": state("VIEW_FIELD"),
+            "kwargs": state("KWARGS_FIELD"),
+            "template_name": state("TEMPLATE_NAME_FIELD"),
+            "streams": state("STREAMS_FIELD"),
+            "user": state("DECLARED_USER"),
+        },
+    )
+    yield cls
+    del cls
+    gc.collect()
 
 
 class DeclaredPresence(PresenceMixin, LiveView):
@@ -276,25 +294,44 @@ def test_parent_and_child_declarations_resolve_by_the_nearest_declaration():
 
 
 @pytest.mark.django_db
-def test_reserved_names_never_render_through_a_declaration():
-    names = rendered_state_names(Reserved)
+def test_reserved_names_never_render_through_a_declaration(reserved_view):
+    names = rendered_state_names(reserved_view)
     # request, view, kwargs and template_name are framework names the state
     # contract refuses; streams belongs to the streams provider.
     assert names == ("user",)
-    context = _context(Reserved)
+    context = _context(reserved_view)
     assert set(context) == {"user"}, context
     for value in ("REQUEST_FIELD", "VIEW_FIELD", "KWARGS_FIELD", "TEMPLATE_NAME_FIELD"):
         assert value not in json.dumps(context, default=str)
+    del context
+
+
+def test_introspection_reports_a_view_that_shadows_template_name(reserved_view):
+    """Enumerators read template_name/template only when they are strings.
+
+    A state() field named template_name used to reach djust_ai/djust_audit
+    JSON output as a StateProperty and crash the encoder.
+    """
+    from djust.live_view import LiveView as Base
+    from djust.management.commands.djust_audit import _audit_class
+    from djust.schema import _extract_view_schema
+
+    schema = _extract_view_schema(reserved_view, [Base])
+    audit = _audit_class(reserved_view, "LiveView", verbose=True, base_classes=[Base])
+    json.dumps(schema)
+    json.dumps(audit)
+    assert schema["template"] == "(inline)"
+    assert audit["template"] == "(inline)"
 
 
 @pytest.mark.django_db
 def test_a_declared_field_wins_over_a_context_processor_as_view_context_does(rf):
-    view = Reserved()
+    view = DeclaresUser()
     view.request = make_request()
     view._get_context_processors = lambda: []
     view._get_resolved_processors = lambda paths: [lambda request: {"user": "PROCESSOR_USER"}]
     rendered = view._apply_context_processors(view.get_context_data(), rf.get("/"))
-    assert rendered["user"] == "DECLARED_USER"
+    assert rendered["user"] == "SELECTED_USER"
 
 
 def test_a_provider_owned_name_is_rendered_by_its_provider_not_the_declaration():
