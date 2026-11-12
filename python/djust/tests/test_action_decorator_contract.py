@@ -19,6 +19,8 @@ normal re-render. Template sees ``{{ name.error }}`` populated.
 import logging
 
 from djust.decorators import action
+from djust import state as djust_state
+from django.test import override_settings
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +36,7 @@ class _MinimalActionHost:
     initialize it on demand — we exercise that path too.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def __init__(self):
         self._action_state = {}
@@ -91,6 +93,8 @@ class TestActionExceptionDoesNotPropagate:
         result = v.raises_value_error()
         assert result is None
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_exception_records_error_message(self):
         v = _ActionTestView()
         v.raises_value_error()
@@ -99,6 +103,17 @@ class TestActionExceptionDoesNotPropagate:
         assert state["error"] == "title required"
         assert state["result"] is None
 
+    @override_settings(DEBUG=False)
+    def test_exception_message_is_withheld_without_debug(self):
+        v = _ActionTestView()
+        v.raises_value_error()
+        state = v._action_state["raises_value_error"]
+        assert state["pending"] is False
+        assert state["error"] == "Action failed"
+        assert "title required" not in repr(state)
+
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_exception_with_empty_message_uses_class_name(self):
         v = _ActionTestView()
         v.raises_with_empty_message()
@@ -106,6 +121,8 @@ class TestActionExceptionDoesNotPropagate:
         # str(ValueError()) is the empty string; fallback is the class name.
         assert state["error"] == "ValueError"
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_runtime_error_also_swallowed(self):
         """All Exception subclasses surface via _action_state, not re-raise."""
         v = _ActionTestView()
@@ -128,6 +145,8 @@ class TestActionExceptionDoesNotPropagate:
                 "catch Exception, not BaseException"
             )
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_exception_is_logged(self, caplog):
         """Exception diagnostics must NOT be lost — logged at ERROR level
         (via ``logger.exception``)."""
@@ -175,7 +194,8 @@ class _ActionBackgroundHost:
     """Minimal host that provides both @action's _action_state and
     @background's start_async + handle_async_result."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    handle_async_result_calls = djust_state(default_factory=list)
 
     def __init__(self):
         self._action_state = {}
@@ -201,6 +221,8 @@ class TestActionBackgroundCombo:
     error parameter.
     """
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_action_background_raises_error_in_action_state_not_re_raised(self):
         from djust.decorators import action, background, event_handler
 
@@ -228,6 +250,8 @@ class TestActionBackgroundCombo:
         assert state["pending"] is False
         assert state["result"] is None
 
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_action_background_handle_async_result_receives_error_none(self):
         """When @action swallows the exception, the callback returns normally,
         so _run_async_work would call handle_async_result with error=None.

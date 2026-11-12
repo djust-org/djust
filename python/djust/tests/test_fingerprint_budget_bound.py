@@ -7,6 +7,7 @@ from djust.decorators import event_handler
 from djust.live_view import LiveView
 from djust.state_pass import fingerprint_and_convert
 from djust.websocket import _snapshot_assigns
+from djust import state
 
 
 def test_wide_container_fingerprint_is_bounded_and_fused_matches():
@@ -58,7 +59,8 @@ def test_computed_rechecks_truncated_dependencies():
 
 
 class LargeTailView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    rows = state()
     template = "<div dj-root><p>{{ rows.20004.0 }}</p></div>"
 
     def mount(self, request, **kwargs):
@@ -103,6 +105,7 @@ def test_fused_and_plain_fingerprints_agree_at_budget_boundary(budget):
     assert converted[1] == data
 
 
+# Stays legacy (split from the explicit migration): this test's subject is a legacy mechanism (see the legacy-subject worklist).
 def test_truncated_bookkeeping_stays_out_of_session_and_render_context():
     import json
 

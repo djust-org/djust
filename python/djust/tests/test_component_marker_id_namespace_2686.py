@@ -33,6 +33,8 @@ from djust.components.base import LiveComponent, _dj_if_id_namespace
 from djust.decorators import event_handler
 from djust.testing import LiveViewTestClient
 from djust.utils import clear_template_dirs_cache
+from djust import state
+from djust.tests._live_session import with_live_session
 
 pytestmark = [pytest.mark.django_db]
 
@@ -55,7 +57,9 @@ class Card2686(LiveComponent):
 
 
 class TwoCards2686(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    first = state()
+    second = state()
     template = (
         f'<div dj-root dj-view="{MOD}.TwoCards2686" dj-id="0">'
         "<div id='a'>{{ first }}</div><div id='b'>{{ second }}</div></div>"
@@ -213,7 +217,7 @@ def _ws_mount_html(cls_name: str) -> str:
         from djust.websocket import LiveViewConsumer
 
         comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-        connected, _ = await comm.connect()
+        connected, _ = await with_live_session(comm).connect()
         assert connected
         await comm.receive_json_from()
         try:

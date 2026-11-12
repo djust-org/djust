@@ -38,6 +38,7 @@ from djust import LiveView
 from djust.decorators import event_handler, state
 
 from ._ws_frames import drain_extra, receive_until
+from djust.tests._live_session import with_live_session
 
 pytestmark = pytest.mark.django_db
 
@@ -67,7 +68,11 @@ _TEMPLATE = (
 class ListView(LiveView):
     """The docstring's example, with the form the issue proposes."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    params_errors = state(default_factory=dict)  # rendered: explicit views declare it
+    category = state("all")
+    page = state(1)
+    note = state("")
     login_required = False
     params_form = ListParams
     template = _TEMPLATE
@@ -90,7 +95,8 @@ class ListView(LiveView):
 class RawListView(LiveView):
     """No ``params_form``: the raw dict, exactly as before."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    page = state("none")
     login_required = False
     template = "<div dj-root>{{ page }}</div>"
 
@@ -113,7 +119,7 @@ class NotFoundOnInvalid(ListView):
 class BadRequestOnInvalid(ListView):
     """A view may answer 400 and keep its own page."""
 
-    bad = False
+    bad = state(False)
 
     def handle_invalid_params(self, form, uri):
         INVALID_CALLS.append((form, uri))
@@ -143,7 +149,11 @@ class TagParams(forms.Form):
 
 
 class TagView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    params_errors = state(default_factory=dict)  # rendered: explicit views declare it
+    q = state("")
+    tag = state(default_factory=list)
+    when = state(0)
     login_required = False
     params_form = TagParams
     template = "<div dj-root>{{ q }}|{{ tag }}|{{ when }}|{{ params_errors }}</div>"
@@ -163,7 +173,11 @@ class TagView(LiveView):
 class AsyncListView(LiveView):
     """``handle_params`` may be ``async def``; the default fallback awaits it."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    params_errors = state(default_factory=dict)  # rendered: explicit views declare it
+    category = state("all")
+    page = state(1)
+    note = state("")
     login_required = False
     params_form = ListParams
     template = _TEMPLATE
@@ -213,7 +227,9 @@ class GroupParams(forms.Form):
 
 
 class GroupView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    params_errors = state(default_factory=dict)  # rendered: explicit views declare it
+    picked = state("none")
     login_required = False
     params_form = GroupParams
     template = "<div dj-root>{{ picked }}|{{ params_errors|length }}</div>"
@@ -235,7 +251,8 @@ class ExplodingParams(forms.Form):
 
 
 class ExplodingView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    params_errors = state(default_factory=dict)  # rendered: explicit views declare it
     login_required = False
     params_form = ExplodingParams
     template = "<div dj-root>never</div>"
@@ -250,7 +267,10 @@ class FlagParams(forms.Form):
 
 
 class FlagView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    params_errors = state(default_factory=dict)  # rendered: explicit views declare it
+    closed = state(None)
+    n = state(None)
     login_required = False
     params_form = FlagParams
     template = "<div dj-root>{{ closed }}|{{ n }}</div>"
@@ -274,7 +294,8 @@ class AsyncSuperView(AsyncListView):
 
 
 class BrokenDeclaration(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    params_errors = state(default_factory=dict)  # rendered: explicit views declare it
     login_required = False
     params_form = "not a form class"
     template = "<div dj-root>x</div>"
@@ -287,7 +308,9 @@ class CleanedNotInitial(forms.Form):
 
 
 class RequiredView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    params_errors = state(default_factory=dict)  # rendered: explicit views declare it
+    token = state("unset")
     login_required = False
     params_form = CleanedNotInitial
     template = "<div dj-root>{{ token }}|{{ params_errors.token.0 }}</div>"
@@ -493,7 +516,10 @@ class MultiKeyParams(forms.Form):
 
 
 class MultiKeyView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    params_errors = state(default_factory=dict)  # rendered: explicit views declare it
+    when = state(None)
+    day = state(None)
     login_required = False
     params_form = MultiKeyParams
     template = "<div dj-root>{{ when }}|{{ day }}</div>"
@@ -618,6 +644,8 @@ class TestWithoutParamsForm:
 
 
 class TestDeclarationAndExposure:
+    # The subject is the failure's message, which explicit views show only under DEBUG.
+    @override_settings(DEBUG=True)
     def test_a_params_form_that_is_not_a_form_class_is_refused_loudly(self):
         with pytest.raises(ImproperlyConfigured, match="params_form"):
             Client(raise_request_exception=True).get("/broken/")
@@ -694,7 +722,7 @@ async def _connect(view_name, *, params=None, url="/list/"):
     key = await sync_to_async(_create_session)()
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     communicator.scope["session"] = _ScopeSession(key)
-    connected, _ = await communicator.connect()
+    connected, _ = await with_live_session(communicator).connect()
     assert connected
     await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to(

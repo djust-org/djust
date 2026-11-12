@@ -19,6 +19,8 @@ from __future__ import annotations
 import sys
 
 import pytest
+from djust import state
+from djust.tests._live_session import with_live_session
 
 pytest.importorskip("channels")
 
@@ -56,7 +58,8 @@ _HANDLER_RAN = False
 class _LoginRequiredView(LiveView):
     """A login-gated view whose handler records execution."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     login_required = True
     template = (
         '<div dj-view="djust.tests.test_ws_auth_close_socket._LoginRequiredView" dj-id="0">x</div>'
@@ -87,7 +90,8 @@ class _PublicView(LiveView):
     contract and tells S005 the auth decision was made.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    ok = state(True)
     login_required = False
 
     template = (
@@ -117,7 +121,8 @@ class _ObjPermDeniedView(LiveView):
     ``_PublicView`` (this is a module-level subclass walked by S005).
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    loaded = state(True)
     login_required = False
 
     template = (
@@ -146,7 +151,7 @@ _OBJPERM_PATH = f"{__name__}._ObjPermDeniedView"
 
 
 async def _connect_and_mount(communicator):
-    connected, _ = await communicator.connect()
+    connected, _ = await with_live_session(communicator).connect()
     assert connected
     # Drain the initial connect/handshake frame if one is sent.
     await communicator.receive_json_from()
@@ -252,7 +257,7 @@ async def test_mount_batch_with_login_view_does_not_close_shared_socket():
     channel_layers.backends.clear()
 
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    connected, _ = await communicator.connect()
+    connected, _ = await with_live_session(communicator).connect()
     assert connected
     await communicator.receive_json_from()
     await communicator.send_json_to(
@@ -317,7 +322,7 @@ async def test_mount_batch_with_objperm_denied_view_does_not_close_shared_socket
     channel_layers.backends.clear()
 
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    connected, _ = await communicator.connect()
+    connected, _ = await with_live_session(communicator).connect()
     assert connected
     await communicator.receive_json_from()
     await communicator.send_json_to(
@@ -368,7 +373,7 @@ async def test_single_objperm_denied_mount_still_closes_socket():
     from djust.websocket import LiveViewConsumer
 
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    connected, _ = await communicator.connect()
+    connected, _ = await with_live_session(communicator).connect()
     assert connected
     await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": _OBJPERM_PATH})
@@ -394,7 +399,7 @@ async def test_auth_socket_is_not_subscribed_to_development_reload():
     channel_layers.backends.clear()
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     try:
-        connected, _ = await communicator.connect()
+        connected, _ = await with_live_session(communicator).connect()
         assert connected
         await communicator.receive_json_from()
         layer = get_channel_layer()

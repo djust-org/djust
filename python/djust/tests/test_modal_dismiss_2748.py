@@ -78,18 +78,19 @@ async def _connect_and_mount(view_path: str, url: str = "/modal/"):
 class ModalHostView(LiveView):
     """Parent hosting an open ``ModalComponent`` under ``component_id`` ``m1``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    # Explicit views render components declared in the class body; each view
+    # gets its own binding, whose component_id is the attribute name, so the
+    # attribute is named after the id the test's event carries.
+    m1 = ModalComponent(component_id="m1", title="Confirm", body="Sure?", show=True)
     template = (
         f'<div dj-root dj-view="{_MODULE}.ModalHostView" dj-id="0">'
         "<p>open={{ modal_open }}</p></div>"
     )
 
-    def mount(self, request, **kwargs):
-        self.modal = ModalComponent(component_id="m1", title="Confirm", body="Sure?", show=True)
-
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["modal_open"] = "yes" if self.modal.show_modal else "no"
+        ctx["modal_open"] = "yes" if self.m1.show_modal else "no"
         return ctx
 
 

@@ -98,32 +98,34 @@ async def _connect_and_mount(view_path: str, url: str = "/ui/"):
 
 
 class AlertHostView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    # Explicit views render components declared in the class body; each view
+    # gets its own binding, whose component_id is the attribute name, so the
+    # attribute is named after the id the test's event carries.
+    a1 = AlertComponent(component_id="a1", message="Saved", dismissible=True)
     template = (
         f'<div dj-root dj-view="{_MODULE}.AlertHostView" dj-id="0"><p>visible={{{{ v }}}}</p></div>'
     )
 
-    def mount(self, request, **kwargs):
-        self.alert = AlertComponent(component_id="a1", message="Saved", dismissible=True)
-
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["v"] = "yes" if self.alert.visible else "no"
+        ctx["v"] = "yes" if self.a1.visible else "no"
         return ctx
 
 
 class BadgeHostView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    # Explicit views render components declared in the class body; each view
+    # gets its own binding, whose component_id is the attribute name, so the
+    # attribute is named after the id the test's event carries.
+    b1 = BadgeComponent(component_id="b1", text="tag", dismissible=True)
     template = (
         f'<div dj-root dj-view="{_MODULE}.BadgeHostView" dj-id="0"><p>visible={{{{ v }}}}</p></div>'
     )
 
-    def mount(self, request, **kwargs):
-        self.badge = BadgeComponent(component_id="b1", text="tag", dismissible=True)
-
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["v"] = "yes" if self.badge.visible else "no"
+        ctx["v"] = "yes" if self.b1.visible else "no"
         return ctx
 
 

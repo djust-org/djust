@@ -22,6 +22,7 @@ import pytest
 
 from djust import audio
 from djust.audio import AudioMixin, Sound, SoundBank
+from djust._exposure_providers import new_render_context
 
 N_THREADS = 16
 
@@ -54,13 +55,14 @@ def slow_static(monkeypatch):
 
 
 class _Base:
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def __init__(self, **kwargs):
         pass
 
     def get_context_data(self, **kwargs):
-        return {}
+        # The framework's explicit render context, as LiveView supplies it.
+        return new_render_context(self)
 
 
 class _View(AudioMixin, _Base):
