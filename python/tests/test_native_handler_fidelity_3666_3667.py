@@ -1110,10 +1110,11 @@ class TestTypeDispatch:
         added (the 13 parameters of ``dj_radio_group`` and ``status_indicator``'s ``live``, over
         the same 15 types; re-measured, not estimated), plus the 45 cells #3962 added (the three
         parameters it gave ``dj_radio`` (``id``), ``rating`` (``name``) and ``toggle_group``
-        (``form_field``), over the same 15 types; re-measured, not estimated)."""
+        (``form_field``), over the same 15 types; re-measured, not estimated), plus the 15 cells
+        #4003 added (``theme_head``'s ``component_catalog``, over the same 15 types)."""
         residual = sum(sum(m.values()) for m in RESIDUAL_STANDIN_LOSS.values())
         assert residual < STANDIN_LOSS_BEFORE_3768
-        assert facts["typed_values"]["cells"] == 21390 + 135 + 15 * (13 + 1) + 15 * 3, (
+        assert facts["typed_values"]["cells"] == 21390 + 135 + 15 * (13 + 1) + 15 * 3 + 15, (
             "the cell grid changed: re-derive both counts"
         )
         measured = sum(

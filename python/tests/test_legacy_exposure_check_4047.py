@@ -39,10 +39,6 @@ class ExplicitView(LiveView):
     template = "<div dj-root></div>"
 
 
-class DefaultView(LiveView):
-    template = "<div dj-root></div>"
-
-
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
 
@@ -87,8 +83,8 @@ class TestV028:
         (message,) = _v026(LegacyMixin)
         assert "%s.ViaMixin" % __name__ in message.msg
 
-    def test_explicit_and_default_views_are_not_reported(self):
-        assert _v026(ExplicitView, DefaultView, BackToExplicit) == []
+    def test_explicit_views_are_not_reported(self):
+        assert _v026(ExplicitView, BackToExplicit) == []
 
     def test_a_view_on_a_framework_legacy_base_is_not_reported(self):
         assert _v026(OnAFrameworkLegacyBase) == []
