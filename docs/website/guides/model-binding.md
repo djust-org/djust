@@ -153,6 +153,7 @@ Debounce by N milliseconds. The update fires only after the user stops typing.
 | `<select>` | `el.value` (string) | |
 | `<select multiple>` | Array of selected values | |
 | `<input type="checkbox">` | `el.checked` (boolean) | Listens on `change` |
+| Several `<input type="checkbox">` with one `name`, all bound to the same field | Array of the checked boxes' values | One value for the group, like `<select multiple>` |
 | `<input type="radio">` | Value of checked radio | Groups by `name` attribute |
 | `<input type="number">` | String, coerced server-side | |
 | `<input type="range">` | String, coerced server-side | |
@@ -351,6 +352,22 @@ class FilterView(LiveView):
 
 <button dj-click="apply_filters">Apply</button>
 ```
+
+A group of checkboxes that share a `name` and are bound to the same field also
+binds to a list: the values of the checked boxes, sent whole on every change.
+As with `<select multiple>`, the template renders which boxes are ticked, so bind
+it to a list attribute and render `checked` from it:
+
+```html
+{% for tag in all_tags %}
+<label>
+    <input type="checkbox" name="selected_tags" value="{{ tag }}" dj-model="selected_tags"
+           {% if tag in selected_tags %}checked{% endif %}> {{ tag }}
+</label>
+{% endfor %}
+```
+
+A lone checkbox still binds a boolean.
 
 ## Combining with Event Handlers
 

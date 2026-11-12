@@ -138,19 +138,13 @@ function _draftTargetFor(field) {
 }
 
 function _collectDraftData(scope) {
-    const draftData = {};
-    scope.querySelectorAll('[data-draft="true"]').forEach(f => {
-        // Prevent prototype pollution attacks. A file input has no value a
-        // draft could put back (setting one throws).
-        if (f.name && !UNSAFE_KEYS.includes(f.name) && f.type !== 'file') {
-            if (f.type === 'checkbox') {
-                draftData[f.name] = f.checked;
-            } else {
-                draftData[f.name] = f.value;
-            }
-        }
-    });
-    return draftData;
+    // A file input has no value a draft could put back (setting one throws).
+    // A checkbox group / <select multiple> is saved as a list and a radio group
+    // as the checked value, not flattened to one box (#3978); `_readControls`
+    // also refuses the prototype-polluting names.
+    return _readControls(
+        Array.from(scope.querySelectorAll('[data-draft="true"]')).filter(f => f.type !== 'file')
+    );
 }
 
 /**
@@ -229,11 +223,7 @@ function syncDraftFields(atInit) {
         const saved = savedByKey.get(draftKey);
         if (!saved || !Object.prototype.hasOwnProperty.call(saved, field.name)) return;
         if (!atInit && (_draftEdited.get(field) === field.name || field === document.activeElement)) return;
-        if (field.type === 'checkbox') {
-            field.checked = saved[field.name];
-        } else {
-            field.value = saved[field.name];
-        }
+        _writeControl(field, saved[field.name]);
     });
 }
 

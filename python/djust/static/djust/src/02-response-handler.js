@@ -177,6 +177,19 @@ function formToReset(triggerElement, root) {
 
 window.djust.formToReset = formToReset;
 
+/** dj-lock: release every locked element (see `_lockElement`, 09-event-binding.js). */
+function _unlockLockedElements() {
+    document.querySelectorAll('[data-djust-locked]').forEach(el => {
+        el.removeAttribute('data-djust-locked');
+        if (el.tagName === 'BUTTON' || el.tagName === 'INPUT' ||
+            el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') {
+            el.disabled = false;
+        } else {
+            el.classList.remove('djust-locked');
+        }
+    });
+}
+
 async function handleServerResponse(data, eventName, triggerElement, transport = null) {
     try {
         // Handle cache storage (from @cache decorator)
@@ -254,6 +267,10 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 if (!el.hasAttribute('data-djust-was-disabled')) el.disabled = false;
                 el.removeAttribute('data-djust-was-disabled');
             });
+            // dj-lock: unlock BEFORE the patches too, so a control the response
+            // renders `disabled` (or a class it renders) stays as rendered;
+            // unlocking after them re-enabled it (#3975).
+            _unlockLockedElements();
         }
 
         // Clear optimistic state BEFORE applying changes
@@ -416,16 +433,7 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 globalLoadingManager.stopLoading(loadingEventName, triggerElement);
             }
 
-            // dj-lock: unlock all locked elements after server response
-            document.querySelectorAll('[data-djust-locked]').forEach(el => {
-                el.removeAttribute('data-djust-locked');
-                if (el.tagName === 'BUTTON' || el.tagName === 'INPUT' ||
-                    el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') {
-                    el.disabled = false;
-                } else {
-                    el.classList.remove('djust-locked');
-                }
-            });
+            // dj-lock: the unlock runs before the patches (above), not here (#3975).
         } else if (globalThis.djustDebug) {
             djLog('[LiveView] Keeping loading state — async work pending');
         }
