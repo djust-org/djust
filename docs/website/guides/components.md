@@ -63,6 +63,14 @@ In the template, `{{ status }}` calls `__str__()` which calls `render()`:
 </div>
 ```
 
+Create the component in `mount()`, as above, not in the class body. A plain
+component instance in the class body (`status = StatusDot("green")`) is created
+once, when the class is defined, and shared by every user of that view in the
+process: a handler that changes it (`self.status.color = "red"`) changes it for
+everyone. `manage.py check` warns about this (`djust.V026`). Class-level
+declarations with a `State` class (see [Class-level components](#class-level-components))
+are not affected: each view instance gets its own state.
+
 ### Performance Waterfall
 
 Every `Component` tries three rendering strategies in order:
