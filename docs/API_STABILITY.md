@@ -212,6 +212,12 @@ This is the core stability promise:
 The project owner settled this direction for the 1.4 → 2.0 transition. The
 SemVer rules above are unchanged by it.
 
+> **Amended 2026-11-11.** There will be no 1.4 release: the bridge described
+> below shipped in 1.3.x (every 2.0 removal warns "since 1.3"), `main` is the 2.0
+> line, and the 1.3 line takes security and serious fixes only. The rules in this
+> section still hold for 1.3.x: it keeps every import, default and `__all__`
+> name. The migration guide and checker are 2.0 work (#4022, #4023).
+
 - **1.4 keeps compatibility.** It keeps every existing import, every default,
   and the current `djust.__all__` and `djust.decorators.__all__`, so the
   star-import surface (`from djust import *`) is the same as 1.3's. 1.4 adds
