@@ -14,13 +14,12 @@ server side and re-introduce a different shape of #1610.
 
 Specifically:
 
-- On cold mount with `has_prerendered=True, mounted=False`, the mount
-  response MUST carry `html` and `has_ids=True` so the client's morph
-  branch (the fix) fires correctly.
-- The `skip_html_for_resume = mounted and has_prerendered` truth table
-  (the resume path) is already covered by
-  `test_ws_reconnect_state_1465.py:test_skip_html_for_resume_truth_table`
-  and is NOT duplicated here.
+- On a mount with `has_prerendered=True`, the mount response MUST carry
+  `html` and `has_ids=True` so the client's morph branch (the fix) fires
+  correctly.
+- The legacy resume that skipped the html (`skip_html_for_resume`, for a view
+  restored from the session) was removed in 2.0 with `enable_state_snapshot`:
+  the mount frame now always carries the html.
 """
 
 from __future__ import annotations
@@ -34,10 +33,10 @@ def test_cold_prerender_mount_response_carries_html_and_has_ids() -> None:
     in isolation and assert the cold-prerender case carries `html` AND
     `has_ids=True`.
 
-    Cold prerender = `has_prerendered=True, mounted=False`. The
-    `skip_html_for_resume` boolean is `mounted and has_prerendered`, so
-    cold prerender evaluates False — html flows. The `has_ids` flag is
-    set by checking `"dj-id=" in html` (mirrors the live code).
+    Cold prerender = `has_prerendered=True`. The mount frame carries the
+    freshly rendered html whatever the client already holds (2.0 removed the
+    legacy resume that skipped it). The `has_ids` flag is set by checking
+    `"dj-id=" in html` (mirrors the live code).
 
     This pins the WIRE SHAPE that the client's #1610 fix depends on:
     if the server stopped emitting `has_ids=True` on cold prerender,
@@ -45,10 +44,9 @@ def test_cold_prerender_mount_response_carries_html_and_has_ids() -> None:
     would never fire, and the bug would silently come back.
     """
 
-    def build_response(html: str | None, mounted: bool, has_prerendered: bool) -> dict[str, Any]:
+    def build_response(html: str | None, has_prerendered: bool) -> dict[str, Any]:
         response: dict[str, Any] = {"type": "mount", "version": 0}
-        skip_html_for_resume = mounted and has_prerendered
-        if html is not None and not skip_html_for_resume:
+        if html is not None:  # whatever ``has_prerendered`` says
             response["html"] = html
             response["has_ids"] = "dj-id=" in html
         return response
@@ -58,7 +56,6 @@ def test_cold_prerender_mount_response_carries_html_and_has_ids() -> None:
     # branch fires.
     r = build_response(
         '<div dj-view="myapp.HomeView" dj-id="0"><span>2 online</span></div>',
-        mounted=False,
         has_prerendered=True,
     )
     assert r["html"] == '<div dj-view="myapp.HomeView" dj-id="0"><span>2 online</span></div>'
@@ -76,7 +73,6 @@ def test_cold_prerender_mount_response_carries_html_and_has_ids() -> None:
     # short-circuits in this case.
     r = build_response(
         "<div><span>2 online</span></div>",
-        mounted=False,
         has_prerendered=True,
     )
     assert r["html"] == "<div><span>2 online</span></div>"
@@ -96,10 +92,9 @@ def test_cold_prerender_html_diverging_from_prerender_is_sent_to_client() -> Non
     This test pins the server side of that contract.
     """
 
-    def build_response(html: str | None, mounted: bool, has_prerendered: bool) -> dict[str, Any]:
+    def build_response(html: str | None, has_prerendered: bool) -> dict[str, Any]:
         response: dict[str, Any] = {"type": "mount", "version": 0}
-        skip_html_for_resume = mounted and has_prerendered
-        if html is not None and not skip_html_for_resume:
+        if html is not None:  # whatever ``has_prerendered`` says
             response["html"] = html
             response["has_ids"] = "dj-id=" in html
         return response
@@ -108,7 +103,7 @@ def test_cold_prerender_html_diverging_from_prerender_is_sent_to_client() -> Non
     # render). Server emits this as `html` in the mount response.
     ws_html = '<div dj-view="myapp.HomeView" dj-id="0"><span>2 online</span></div>'
 
-    r = build_response(ws_html, mounted=False, has_prerendered=True)
+    r = build_response(ws_html, has_prerendered=True)
     assert "html" in r, "Cold-prerender mount response must include WS-context html"
     assert "2 online" in r["html"], (
         "Server must send WS-context-resolved html, not the HTTP-prerender "
@@ -118,25 +113,16 @@ def test_cold_prerender_html_diverging_from_prerender_is_sent_to_client() -> Non
     assert r["has_ids"] is True
 
 
-def test_skip_html_logic_present_in_source() -> None:
-    """Source-text pin: the live mount source contains the skip-html conditional
-    shape that the truth-table tests above reproduce. Post-#1919 (THE MOUNT FLIP)
-    the WS mount routes through ``ViewRuntime.dispatch_mount`` (the bespoke
-    ``handle_mount`` body was deleted), where the runtime analogue is
-    ``legacy_exposure and bool(mounted_from_restore) and bool(has_prerendered)``
-    (``_mounted_from_restore`` is the runtime's ``mounted`` flag). Prevents the
-    in-test reproduction from drifting away from the production code.
-    """
+def test_the_mount_frame_always_carries_html_in_source() -> None:
+    """Source-text pin: the live mount source has the conditional shape the
+    tests above reproduce, so the in-test reproduction cannot drift away from
+    the production code. The WS mount routes through
+    ``ViewRuntime.dispatch_mount``."""
     import djust.runtime as rt_mod
 
     source = inspect.getsource(rt_mod.ViewRuntime._dispatch_mount_body)
-    # Explicit restore combines fresh server state with client state and must
-    # send HTML. The legacy-only optimization still follows the truth table.
-    assert "skip_html_for_resume = (" in source
-    assert "legacy_exposure and bool(mounted_from_restore) and bool(has_prerendered)" in " ".join(
-        source.split()
-    )
-    assert "if html is not None and not skip_html_for_resume:" in source
+    assert "skip_html_for_resume" not in source
+    assert "if html is not None:" in source
     # has_ids must be emitted on the cold-prerender path so the
     # client's #1610 morph branch can gate on it.
     assert 'mount_msg["has_ids"] = "dj-id=" in html' in source

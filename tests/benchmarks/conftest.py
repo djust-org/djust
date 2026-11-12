@@ -109,7 +109,7 @@ def pytest_terminal_summary(terminalreporter):
         "2 direct Rust-origin boundary crossings / proxy = transitive re-wraps inside them "
         "/ py_calls = serializer calls while Rust was not running | "
         "3 ORM queries / sql time / list() at mount | "
-        "4 state serialization (sync - jit) / jit = get_context_data / persist | "
+        "4 state serialization (sync - jit) / jit = get_context_data | "
         "5 parse + diff + serialize, fast = frag | region | full"
     )
     path = write_json_if_requested(PROFILE_ROWS)

@@ -338,10 +338,6 @@ async def _shutdown_closed_session(session: "SSESession") -> None:
                     sanitize_for_log(session.session_id),
                     _CLOSE_DISPATCH_WAIT_S,
                 )
-        # The latest state is stored before the view goes (#3248).
-        await session.runtime.finish_state_saves()
-        for slot in list(session._slots.values()):
-            await slot.runtime.finish_state_saves()
         session.shutdown()
     except Exception:  # noqa: BLE001 — view hooks are app code; values stay out of logs
         logger.warning(
@@ -485,9 +481,6 @@ class SSESession:
         # The views mounted beside the page view (#3252), by ``target_id``. Empty
         # for a page with no lazy views, which behaves exactly as before.
         self._slots: dict[str, Any] = {}
-        # Sticky once a second view was hosted: the saves of the views read one
-        # another's (``SSESessionTransport.hosts_other_views``).
-        self._hosted_several_views = False
         # The loop that serves the stream GET. With several event loops
         # (djust serve --loops N, #3128) a later event POST can arrive on
         # another loop; it hops here, because the queue, the locks and the
@@ -733,7 +726,6 @@ class SSESession:
             slot = SSESlot(self, target_id)
             slot.session._request = target_request
             self._slots[target_id] = slot
-            self._hosted_several_views = True
             # Nothing else holds the new view's locks: its events find the slot
             # but no view until the mount has finished, and are refused (before
             # per-view locks they waited behind the mount on the one session
@@ -764,11 +756,6 @@ class SSESession:
         if slot is None:
             return
         view = slot.view
-        try:
-            # The latest state is stored before the view goes (#3248).
-            await slot.runtime.finish_state_saves()
-        except Exception:  # noqa: BLE001 — teardown goes on; storage errors may carry values
-            logger.warning("SSE: finishing a released view's trailing save failed")
         slot.runtime.stop_server_work()
         slot.runtime.view_instance = None
         slot.session.view_instance = None
@@ -837,9 +824,6 @@ class SSESession:
                 # destination's own lazy containers hydrate again.
                 await self._release_all_slots(reason="view_navigation")
                 old_runtime, old_view = self.runtime, self.view_instance
-                # The latest state is stored before the old page goes (#3248):
-                # the new runtime's mount may restore from it.
-                await old_runtime.finish_state_saves()
                 old_runtime.stop_server_work()
                 old_runtime.view_instance = None
                 self.view_instance = None

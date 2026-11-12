@@ -12,7 +12,6 @@ from djust.components._interactive import DropdownMenu
 class MenuPage(LiveView):
     exposure_policy = "legacy"
     template = "<div dj-root>{{ menu }}{{ other }}<p>{{ result }}</p></div>"
-    enable_state_snapshot = True
     menu = DropdownMenu(
         label="Project",
         items=[
@@ -311,26 +310,6 @@ async def test_real_websocket_two_menus_and_unknown_target():
             assert frame["type"] == "error", frame
         finally:
             await socket.disconnect()
-
-        # Fresh backend-backed session and consumer, not the first view object.
-        resumed = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-        resumed.scope.update(
-            session=type(request.session)(session_key=request.session.session_key),
-            user=request.user,
-            tenant=None,
-        )
-        assert (await resumed.connect())[0]
-        await resumed.receive_json_from()
-        try:
-            await resumed.send_json_to(
-                {"type": "mount", "view": __name__ + ".MenuPage", "url": request.path}
-            )
-            frame = await resumed.receive_json_from()
-            assert frame["type"] == "mount", frame
-            assert "account:settings" in frame["html"], frame
-            assert re.findall('data-component-id="([^"]+)"', frame["html"]) == identities
-        finally:
-            await resumed.disconnect()
 
 
 @pytest.mark.parametrize(

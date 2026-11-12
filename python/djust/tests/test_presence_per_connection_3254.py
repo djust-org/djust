@@ -671,26 +671,6 @@ def test_untrack_removes_only_this_views_connection(mixin_backend):
     assert b._presence_connection_id in next(iter(mixin_backend._groups[Room.presence_key]))
 
 
-def test_a_restored_view_joins_under_a_fresh_connection(mixin_backend):
-    """The connection id in saved state belongs to the connection it was saved
-    from; another tab of the user may still hold it."""
-    live = _tab(ws="ws-live")
-    live.track_presence()
-
-    restored = _tab(ws="ws-restored")
-    restored._presence_tracked = True
-    restored._presence_user_id = "alice"
-    restored._presence_meta = {}
-    restored._presence_connection_id = live._presence_connection_id  # from saved state
-    restored._restore_presence()
-
-    assert restored._presence_connection_id != live._presence_connection_id
-    assert len(mixin_backend._groups[Room.presence_key]) == 2
-    restored.untrack_presence()
-    assert [p["id"] for p in live.list_presences()] == ["alice"]  # live tab untouched
-    assert Room.LEFT == []
-
-
 def test_a_view_with_no_connection_does_not_remove_anyone(mixin_backend):
     """State saved by a build without connection ids restores ``_presence_tracked``
     but joined nothing: untracking it must not remove the user's real tab."""

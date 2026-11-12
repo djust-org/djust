@@ -230,9 +230,7 @@ get a "▶ N comp" toggle that expands per-component ↶ restore buttons.
 - **Container mutations safely captured**: starting v0.6.1,
   `_capture_snapshot_state` deep-copies state via a JSON round-trip, so
   `self.items.append(...)` or `self.metrics["k"] = v` inside a handler
-  does not retroactively corrupt prior snapshots. Earlier v0.6.0
-  `enable_state_snapshot` users benefit from this fix too — the same
-  method backs both features.
+  does not retroactively corrupt prior snapshots.
 - **Per-frame size cap**: `time_travel_event` frames are capped at
   16 KiB (one quarter of the conventional 64 KiB WebSocket frame
   limit). Oversized snapshots (e.g. from a view with a 1000-row list)
@@ -247,8 +245,7 @@ get a "▶ N comp" toggle that expands per-component ↶ restore buttons.
 > state. If your view contains passwords, tokens, session IDs, SSNs,
 > credit card numbers, or similar sensitive fields, opt out — those
 > values will sit in memory in a dev-panel-readable form for the
-> lifetime of the process. This mirrors the guidance for
-> `enable_state_snapshot` and the v0.6.0 state-snapshot feature.
+> lifetime of the process.
 
 ### Async / background caveats
 

@@ -802,8 +802,6 @@ class TestRestoredEarlierStateIsCleaned:
         assert found == [
             "_lazy_containers.py",
             "mixins/request.py",
-            "mixins/sticky.py",
-            "runtime.py",
         ]
 
 

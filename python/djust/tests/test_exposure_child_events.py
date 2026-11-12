@@ -134,7 +134,6 @@ async def increment(runtime, mode="ok"):
 async def test_child_event_persists_with_fresh_request_without_snapshot_optin():
     runtime, transport, request = await mount()
     child = runtime.view_instance._get_child_view("menu")
-    assert not child.enable_state_snapshot
     await increment(runtime)
     assert child.count == 2
     assert not transport.errors, transport.errors

@@ -1441,18 +1441,13 @@ class UploadMixin:
     """
 
     _upload_manager: Optional[UploadManager] = None
-    # Issue #889: record each ``allow_upload()`` call as a JSON-
-    # serializable dict so the WS consumer's state-restoration path
-    # (which skips ``mount()``) can replay them and rebuild the
-    # ``UploadManager``. The live ``_upload_manager`` instance itself
-    # is not JSON-serializable and is silently dropped by
-    # ``_get_private_state()``; this replay list is.
+    # Issue #889: each ``allow_upload()`` call recorded as a JSON-
+    # serializable dict. Its replay (``_restore_upload_configs``) ran on
+    # the WebSocket session restore, which 2.0 removed with
+    # ``enable_state_snapshot``; the record is still saved with the
+    # private state, which goes with PR 5 of the exposure-flip plan.
     _upload_configs_saved: Optional[List[Dict[str, Any]]] = None
-    # Issue #892: version tag for saved config dicts. Bumped whenever
-    # the replay contract changes (new kwarg added/renamed/removed on
-    # ``allow_upload``). ``_restore_upload_configs`` uses this to
-    # decide how defensively to replay — unknown / older versions fall
-    # back to the "bare-minimum replay" path. See ADR-009.
+    # Issue #892: version tag for those saved config dicts. See ADR-009.
     _upload_configs_version: int = 1
     # ADR-038 E2-6: under the explicit policy, ``uploads`` is a registered,
     # render-only provider key (see ``_get_upload_context``). Legacy views
@@ -1560,85 +1555,6 @@ class UploadMixin:
             }
         )
         return cfg
-
-    def _restore_upload_configs(self) -> None:
-        """Replay the ``allow_upload()`` call list to rebuild the manager.
-
-        Called by the WebSocket consumer's state-restoration path (when
-        ``mount()`` is skipped because pre-rendered session state
-        exists). Without this, ``_upload_manager`` stays at the class-
-        default ``None`` and any upload request fails with "No uploads
-        configured for this view" (issue #889).
-
-        If any recorded call originally used a custom ``writer=``
-        class, log a warning at restoration time — the writer class
-        isn't session-round-trippable, so the restored config falls
-        back to the default buffered writer. Apps relying on custom
-        writers should arrange for a fresh-mount WS flow.
-
-        Schema-change defensive replay (issue #892): if a saved dict
-        contains kwargs the *current* ``allow_upload`` signature doesn't
-        recognize (djust upgrade between session save and WS connect),
-        or is missing a now-required kwarg, the per-dict ``**kwargs``
-        call raises ``TypeError``. We catch it, log a WARNING with the
-        slot + the mismatched keys, and fall back to
-        ``allow_upload(name)`` — bare-minimum replay — so uploads for
-        that slot still work, just without the custom config (extension
-        filter, size limit, etc.). Better than killing the whole
-        restoration and losing every other slot on the page. See
-        ADR-009 for the pattern.
-        """
-        saved = self._upload_configs_saved
-        if not saved:
-            return
-        # Reset first so the replayed ``allow_upload`` calls re-populate
-        # the list on this instance — keeps the bookkeeping consistent
-        # across subsequent round-trips.
-        self._upload_configs_saved = None
-        for cfg in saved:
-            # Strip bookkeeping-only keys before the ``**cfg`` splat —
-            # they're not ``allow_upload`` kwargs.
-            cfg.pop("_version", None)
-            had_writer = cfg.pop("_had_writer", False)
-            if had_writer:
-                logger.warning(
-                    "UploadMixin._restore_upload_configs: upload slot %r was "
-                    "originally configured with a custom writer= class, but "
-                    "writer classes are not session-serializable. Falling "
-                    "back to the default buffered writer. See issue #889 "
-                    "caveats.",
-                    cfg.get("name"),
-                )
-            try:
-                self.allow_upload(**cfg)
-            except TypeError as exc:
-                # Schema drift — djust version changed between save and
-                # restore. Fall back to a bare-minimum replay so the
-                # slot still works (issue #892).
-                slot_name = cfg.get("name")
-                logger.warning(
-                    "UploadMixin._restore_upload_configs: saved config for slot "
-                    "%r has kwargs incompatible with the current "
-                    "allow_upload() signature (%s) — falling back to "
-                    "allow_upload(%r) with defaults. See issue #892 / "
-                    "ADR-009.",
-                    slot_name,
-                    exc,
-                    slot_name,
-                )
-                if not slot_name:
-                    # Can't even recover a slot name — skip entirely,
-                    # don't want to crash the restore path.
-                    continue
-                try:
-                    self.allow_upload(slot_name)
-                except Exception as fallback_exc:  # noqa: BLE001
-                    logger.warning(
-                        "UploadMixin._restore_upload_configs: fallback "
-                        "allow_upload(%r) also failed: %s",
-                        slot_name,
-                        fallback_exc,
-                    )
 
     def consume_uploaded_entries(self, name: str) -> Generator[UploadEntry, None, None]:
         """

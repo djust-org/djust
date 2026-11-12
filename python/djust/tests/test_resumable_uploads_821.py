@@ -636,17 +636,3 @@ class TestAllowUploadResumableFlag:
         v.allow_upload("avatar", resumable=True)
         state = v._upload_manager.get_upload_state()
         assert state["avatar"]["config"]["resumable"] is True
-
-    def test_restore_replays_resumable_flag(self):
-        class V(UploadMixin):
-            pass
-
-        v = V()
-        v.allow_upload("avatar", resumable=True)
-        saved = json.loads(json.dumps(v._upload_configs_saved))
-
-        # Simulate session restoration on a new instance.
-        v2 = V()
-        v2._upload_configs_saved = saved
-        v2._restore_upload_configs()
-        assert v2._upload_manager._configs["avatar"].resumable is True

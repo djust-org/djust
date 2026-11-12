@@ -184,12 +184,12 @@ async def _open(view_name: str):
     assert (await socket.connect())[0]
     await socket.receive_json_from()
     await socket.send_json_to({"type": "mount", "view": f"{MODULE}.{view_name}", "url": "/x/"})
-    return socket, await socket.receive_json_from(timeout=5), request.session.session_key
+    return socket, await socket.receive_json_from(), request.session.session_key
 
 
 async def _event(socket, name: str, ref: int, **params: Any) -> list:
     await socket.send_json_to({"type": "event", "event": name, "params": params, "ref": ref})
-    frames = [await socket.receive_json_from(timeout=5)]
+    frames = [await socket.receive_json_from()]
     while not await socket.receive_nothing(timeout=0.3):
         frames.append(await socket.receive_json_from())
     return frames

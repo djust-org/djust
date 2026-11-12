@@ -23,7 +23,6 @@ MOD = __name__
 
 class DeferredLegacy(LiveView):
     exposure_policy = "legacy"
-    enable_state_snapshot = True
     template = "<div dj-root>count={{ count }} label={{ label }}</div>"
     _listen_channels = frozenset({"deferred_3253"})
 
@@ -93,7 +92,7 @@ async def sse_event(session, request, event, params):
 @pytest.mark.parametrize("transport", ["sse", "ws", "ws-notify"])
 @pytest.mark.parametrize("cls", [DeferredLegacy, DeferredExplicit])
 @pytest.mark.parametrize("quiet", [False, True])
-async def test_deferred_turn_is_saved_and_refreshes_declared_token(transport, cls, quiet):
+async def test_deferred_turn_saves_and_signs_declared_state_only(transport, cls, quiet):
     request = await sync_to_async(make_request)()
     session = socket = None
     try:
@@ -144,13 +143,11 @@ async def test_deferred_turn_is_saved_and_refreshes_declared_token(transport, cl
 
             stored = await sync_to_async(lambda: server_state_adapter(cls(), fresh).load())()
             assert stored["count"] == 1, frames
-        else:
-            stored = await sync_to_async(fresh.session.load)()
-            assert stored[f"liveview_{request.path}"]["count"] == 1, frames
-        if cls is DeferredExplicit:
             assert successes[-1].get(TOKEN), frames
         else:
-            # A legacy view holds no declared client state: nothing is signed.
+            # A legacy view keeps nothing: no state is saved and nothing is signed.
+            stored = await sync_to_async(fresh.session.load)()
+            assert f"liveview_{request.path}" not in stored, stored
             assert not any(TOKEN in f for f in frames), frames
     finally:
         if socket is not None:

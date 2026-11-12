@@ -588,7 +588,6 @@ class TestEveryOtherTypeIsUntouched:
 class _PriceView(LiveView):
     exposure_policy = "legacy"
     template = "<div dj-root><span>{{ price }}</span></div>"
-    enable_state_snapshot = True
 
     def mount(self, request, **kwargs):
         self.price = Decimal("19.90")
@@ -685,32 +684,6 @@ class TestTheSnapshotCapture:
 
 
 @pytest.mark.django_db
-class TestTheStickyChildRoundTrip:
-    """`mixins/sticky.py` — its own save/restore pair, its own session keys."""
-
-    def test_a_sticky_child_decimal_round_trips(self) -> None:
-        from djust.mixins.sticky import (
-            restore_sticky_child_state,
-            save_sticky_child_state_sync,
-        )
-
-        class _Child(_PriceView):
-            sticky_id = "prices"
-
-        parent = _PriceView()
-        child = _Child()
-        child.mount(_with_session(RequestFactory().get("/dash/")))
-        session: dict = {}
-        save_sticky_child_state_sync(child, session, "/dash/")
-
-        fresh = _Child()
-        assert restore_sticky_child_state(fresh, parent, session, "/dash/") is True
-        assert isinstance(fresh.price, Decimal)
-        assert str(fresh.price) == "19.90"
-        assert fresh.huge == HUGE
-
-
-@pytest.mark.django_db
 class TestTheComponentRoundTrip:
     """`mixins/components.py::_restore_component_state` — the shared decode
     point for its two callers (`mixins/request.py` POST, `runtime.py` mount)."""
@@ -797,8 +770,6 @@ EXPECTED_DECODE_SITES = {
     ("live_view.py", "_apply_private_state"),
     ("mixins/components.py", "_restore_component_state"),
     ("mixins/request.py", "_post_turn_body"),  # ADR-044: inside the POST turn
-    ("mixins/sticky.py", "restore_sticky_child_state"),
-    ("runtime.py", "_dispatch_mount_body"),  # ADR-044: inside the mount turn
     ("time_travel.py", "restore_snapshot"),
     ("time_travel.py", "restore_component_snapshot"),
     ("time_travel.py", "to_dict"),
@@ -865,6 +836,23 @@ def _explicit_child_json_assignments(tree):
     }
 
 
+def _explicit_root_json_assignments(tree):
+    """``runtime.py``'s one restore: declared fields from the explicit codecs,
+    which accept JSON primitives only and are never tagged."""
+    expected = (
+        ast.parse(
+            "safe_setattr(view_instance, key, value, allow_private=False, raise_on_blocked=True)"
+        )
+        .body[0]
+        .value
+    )
+    return {
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and ast.dump(node) == ast.dump(expected)
+    }
+
+
 class TestTheDecodeSiteInventory:
     def test_the_decode_sites_are_exactly_the_expected_set(self) -> None:
         """A SET, not a floor (#1125). A new restore path that forgets the
@@ -910,6 +898,20 @@ class TestTheDecodeSiteInventory:
                     and node.func.id == "safe_setattr"
                 }
                 if calls == _explicit_child_json_assignments(tree):
+                    continue
+            if rel == "runtime.py":
+                # The legacy session restore (which decoded) was removed in
+                # 2.0. What is left assigns the explicit codecs' JSON
+                # primitives; the same exemption, by exact call shape.
+                tree = ast.parse(src)
+                calls = {
+                    node
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "safe_setattr"
+                }
+                if calls and calls == _explicit_root_json_assignments(tree):
                     continue
             restoring.add(rel)
         decoding = {module for module, _ in _decode_call_sites()}

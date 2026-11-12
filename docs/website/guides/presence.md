@@ -224,7 +224,7 @@ and leaves under *other* presence keys.
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `online_count` *(v1.0.0rc12+)* | `int` | Number of active presences in the group. Auto-set by `track_presence`, `untrack_presence`, `_restore_presence`, and `_on_presence_change`. Use directly in templates: `{{ online_count }}`. |
+| `online_count` *(v1.0.0rc12+)* | `int` | Number of active presences in the group. Auto-set by `track_presence`, `untrack_presence` and `_on_presence_change`. Use directly in templates: `{{ online_count }}`. |
 
 ### Methods
 

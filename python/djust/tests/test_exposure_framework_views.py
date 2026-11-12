@@ -84,10 +84,6 @@ LEGACY = {
         "(session_log in the docstring example) through the attribute walk, so making "
         "the base explicit would empty existing subclasses' templates without an error."
     ),
-    "live_view.py:PersistentLiveView": (
-        "It IS the legacy snapshot feature (enable_state_snapshot); the flag has no "
-        "effect under explicit exposure and the class goes with it."
-    ),
     "live_view.py:DynamicLiveView": (
         "The class the function-based @live_view decorator builds per request. The "
         "decorated function returns its locals and they are set as view attributes "

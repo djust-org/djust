@@ -85,7 +85,6 @@ class StickyChild(_Receiver, LiveView):
     exposure_policy = "legacy"
     sticky = True
     sticky_id = "dock"
-    enable_state_snapshot = True
     template = '<div><p>dock <span id="r">{{ received }}</span></p></div>'
 
     def mount(self, request, **kwargs):
@@ -105,7 +104,6 @@ class ExplicitChild(LiveView):
 
 class Page(_Receiver, LiveView):
     exposure_policy = "legacy"
-    enable_state_snapshot = True
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + MOD + '.Page">'
@@ -275,18 +273,6 @@ def test_a_parent_event_still_runs_on_the_parent(session):
 
 
 @pytest.mark.django_db
-def test_a_sticky_child_that_opted_in_keeps_its_state_across_events(session):
-    """Persistence as the socket does it: under the sticky key, restored on the
-    next render."""
-    ids = _page(session)
-    assert "dock" in ids
-    first = json.loads(_post(session, {"view_id": "dock"}).content)
-    assert re.search(r'<span id="r"[^>]*>click</span>', first["html"])
-    second = json.loads(_post(session, {"view_id": "dock"}, event="got_away").content)
-    assert re.search(r'<span id="r"[^>]*>click away</span>', second["html"]), second["html"]
-
-
-@pytest.mark.django_db
 def test_a_child_that_did_not_opt_in_starts_fresh_each_request(session):
     """A non-sticky child's state is not persisted over HTTP: each request
     re-creates it, as every parent render always did."""
@@ -444,7 +430,6 @@ class ListPage(LiveView):
     """A for-loop of rows; the list is the page's saved state."""
 
     exposure_policy = "legacy"
-    enable_state_snapshot = True
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + MOD + '.ListPage">'

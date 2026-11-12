@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-# Regex matching common PII / credential naming patterns on snapshot-opt-in
-# views. Keep conservative — false positives (e.g. a benign ``token_count``
+# Regex matching common PII / credential naming patterns on declared client
+# fields. Keep conservative — false positives (e.g. a benign ``token_count``
 # counter) are easier for users to tolerate than silent misses on real
 # credentials leaking into the client-side state cache.
 _PII_NAME_PATTERN = re.compile(
@@ -40,11 +40,10 @@ _PII_NAME_PATTERN = re.compile(
 def check_service_worker_advanced(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Validate service-worker advanced-feature configuration (v0.6.0).
 
-    Covers the VDOM-cache TTL / max-entries ranges and the per-view
-    state-snapshot PII naming heuristic. These are configuration /
-    guardrail checks — none of them block startup; security-critical
-    state-snapshot behaviors (JSON-only, safe_setattr) are enforced at
-    runtime in the websocket handler regardless of check outcome.
+    Covers the VDOM-cache TTL / max-entries ranges and the PII naming
+    heuristic for declared client state (C304). These are configuration /
+    guardrail checks — none of them block startup; what a client snapshot
+    may hold and restore is enforced at runtime regardless of check outcome.
     """
     errors = []
     from django.conf import settings
@@ -122,8 +121,11 @@ def check_service_worker_advanced(app_configs: Any, **kwargs: Any) -> list[Check
             )
         )
 
-    # C304 — scan snapshot-opt-in views for attr names matching PII patterns.
+    # C304 — a declared field the browser receives should not look like a
+    # credential or personal data. Only ``state(..., client=True)`` fields
+    # reach the browser as data (``persist="client"`` needs ``client=True``).
     try:
+        from djust._exposure import ExposureContract
         from djust.live_view import LiveView
 
         for cls in _walk_subclasses(LiveView):
@@ -132,38 +134,39 @@ def check_service_worker_advanced(app_configs: Any, **kwargs: Any) -> list[Check
             if module.startswith("djust.") or module.startswith("djust_"):
                 if "test" not in module and "example" not in module:
                     continue
-            if not getattr(cls, "enable_state_snapshot", False):
+            try:
+                fields = ExposureContract.from_view_class(cls).fields
+            except Exception:  # noqa: BLE001 — declarations that do not compile are V-checks' report
                 continue
-            # Inspect both class-level attrs (defaults) and __init__ mount
-            # attrs are unreachable statically — C304 scans class vars plus
-            # any annotations the user declared.
-            suspect_names = []
-            for name in list(cls.__dict__.keys()) + list(
-                getattr(cls, "__annotations__", {}).keys()
-            ):
-                if name.startswith("_"):
-                    continue
-                if _PII_NAME_PATTERN.search(name):
-                    suspect_names.append(name)
-            if suspect_names:
+            suspects = [
+                "%s (%s)"
+                % (name, 'persist="client"' if exposure.persist == "client" else "client=True")
+                for name, exposure in sorted(fields.items())
+                if exposure.client and _PII_NAME_PATTERN.search(name)
+            ]
+            if suspects:
                 cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
                 errors.append(
                     DjustWarning(
-                        "%s: enable_state_snapshot=True with PII-like "
-                        "attribute names: %s" % (cls_label, ", ".join(sorted(set(suspect_names)))),
+                        "%s: state() fields the browser receives have PII-like "
+                        "names: %s" % (cls_label, ", ".join(suspects)),
                         hint=(
-                            "State snapshots are cached client-side by the "
-                            "Service Worker. Attributes matching "
+                            "The value of a client=True field is sent to the "
+                            'browser as data, and a persist="client" field is '
+                            "also kept in the signed snapshot the browser and "
+                            "the Service Worker store. The snapshot is signed, "
+                            "not encrypted. Names matching "
                             "password|token|secret|api_key|pii|ssn|"
                             "credit_card|bearer|private_key|auth_header|"
-                            "sensitive|credential would be stored in "
-                            "browser cache storage."
+                            "sensitive|credential suggest a value that should "
+                            "stay on the server."
                         ),
                         id="djust.C304",
                         fix_hint=(
-                            "Either rename the attributes, prefix them with "
-                            "'_' to exclude from snapshots, or disable "
-                            "enable_state_snapshot on this view."
+                            "Drop the client grant: declare the field with "
+                            'persist="server" to keep it across a reconnect, or '
+                            "with no grant. If the field holds nothing "
+                            "sensitive, rename it or suppress the check."
                         ),
                     )
                 )

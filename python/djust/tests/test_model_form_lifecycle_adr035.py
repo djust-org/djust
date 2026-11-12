@@ -71,10 +71,6 @@ class ExplicitEditGroupView(EditGroupView):
     exposure_policy = "explicit"
 
 
-class SnapshotEditGroupView(EditGroupView):
-    enable_state_snapshot = True
-
-
 class OtherView(LiveView):
     exposure_policy = "legacy"
     template = "<div dj-root></div>"
@@ -84,7 +80,6 @@ urlpatterns = [
     path("groups/<int:pk>/edit/", EditGroupView.as_view()),
     path("alias-groups/<int:pk>/edit/", AliasEditGroupView.as_view()),
     path("explicit-groups/<int:pk>/edit/", ExplicitEditGroupView.as_view()),
-    path("snapshot-groups/<int:pk>/edit/", SnapshotEditGroupView.as_view()),
     path("other/<int:pk>/", OtherView.as_view()),
     path("unrouted/", EditGroupView.as_view()),
 ]
@@ -93,7 +88,6 @@ ROUTES = {
     EditGroupView: "/groups/%s/edit/",
     AliasEditGroupView: "/alias-groups/%s/edit/",
     ExplicitEditGroupView: "/explicit-groups/%s/edit/",
-    SnapshotEditGroupView: "/snapshot-groups/%s/edit/",
 }
 
 DENIED = "Access denied for this object."
@@ -546,57 +540,6 @@ def test_mount_verdict_is_one_shot():
     view._djust_authorized_object = (request, view.object)
     check_object_permission(view, _request(alice, request.path))
     assert _order({"lookup"}) == ["lookup"] * 3
-
-
-@pytest.mark.asyncio
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("revoke", [False, True])
-async def test_websocket_restore_after_http_get_reauthorizes(revoke, monkeypatch):
-    """The WS mount restores the GET's saved state instead of calling mount();
-    the route still binds and the object is resolved and authorized again."""
-    from channels.testing import WebsocketCommunicator
-    from djust.websocket import LiveViewConsumer
-
-    alice, mine, _ = await sync_to_async(_world)()
-    request, response = await sync_to_async(_get)(SnapshotEditGroupView, alice, mine.pk)
-    assert response.status_code == 200
-    await sync_to_async(request.session.save)()
-    if revoke:
-        REVOKED.add(mine.pk)
-    EVENTS.clear()
-    mounted = []
-    original_mount = ModelFormMixin.mount
-
-    def recording_mount(self, *args, **kwargs):
-        mounted.append(True)
-        return original_mount(self, *args, **kwargs)
-
-    monkeypatch.setattr(ModelFormMixin, "mount", recording_mount)
-    with _allow():
-        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-        socket.scope.update(session=request.session, user=alice, tenant=None)
-        assert (await socket.connect())[0]
-        await socket.receive_json_from()
-        try:
-            await socket.send_json_to(
-                {
-                    "type": "mount",
-                    "view": __name__ + ".SnapshotEditGroupView",
-                    "url": request.path,
-                    "has_prerendered": True,
-                }
-            )
-            frame = await socket.receive_json_from()
-            if revoke:
-                assert frame["type"] == "error" and frame["error"] == DENIED, frame
-                return
-            assert frame["type"] == "mount", frame
-            assert mounted == [], "the restore path must not call mount()"
-            assert _order({"lookup"}) == ["lookup"], EVENTS
-            frames = await _ws_event(socket, 1, "submit_form", {"name": "Restored"})
-            assert "Saved Restored" in json.dumps(frames), frames
-        finally:
-            await socket.disconnect()
 
 
 class SelfForm(forms.ModelForm):

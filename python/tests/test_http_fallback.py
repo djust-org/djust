@@ -293,110 +293,46 @@ class TestHTTPOnlySessionState:
 
 @pytest.mark.django_db
 class TestWSMountSkip:
-    """Tests for skip-mount-on-prerender: WS consumer restores state from session
-    instead of re-running mount() when the client sends has_prerendered=true.
-    Covers the state restore logic in websocket.py._handle_connect().
+    """The WS mount beside the HTTP GET's saved state. (The WS consumer no
+    longer restores that state in lieu of ``mount()``: 2.0 removed
+    ``enable_state_snapshot``. What is left to pin is the session key the GET
+    writes and the order of the pre-mount sequence.)
     """
 
-    def _get_and_save_state(self):
-        """Do an HTTP GET, return the view + request with state in session."""
-        view = CounterView()
-        factory = RequestFactory()
-        get_request = factory.get("/counter/")
-        get_request = add_session_to_request(get_request)
-        view.get(get_request)
-        return view, get_request
-
     def test_session_key_format_uses_path(self):
-        """GET saves state under liveview_{path} (the HTTP format, shared with WS consumer)."""
-        _, get_request = self._get_and_save_state()
+        """GET saves state under liveview_{path}, where the HTTP POST fallback reads it."""
+        get_request = add_session_to_request(RequestFactory().get("/counter/"))
+        CounterView().get(get_request)
         assert "liveview_/counter/" in get_request.session, (
-            "Session key must use liveview_{path} format so WS consumer can find it"
+            "Session key must use liveview_{path} format so the POST fallback can find it"
         )
 
-    def test_ws_restore_sets_attributes_from_session(self):
-        """State saved during GET is restored onto a fresh view via safe_setattr."""
-        from djust.security import safe_setattr
+    def test_ensure_tenant_called_before_mount(self):
+        """The pre-mount auth+tenant sequence must run before ``mount()`` and
+        before any restore of declared state, so multi-tenant views have
+        ``self.tenant`` set by then.
 
-        _, get_request = self._get_and_save_state()
-        # Manually write a specific count into session (simulating a view with count=42)
-        get_request.session["liveview_/counter/"] = {"count": 42}
-        get_request.session.save()
-        saved_state = get_request.session.get("liveview_/counter/", {})
-        assert saved_state, "Precondition: state must be in session"
-
-        # Simulate what the WS consumer does: restore onto a fresh view instance
-        fresh_view = CounterView()
-        for key, value in saved_state.items():
-            safe_setattr(fresh_view, key, value, allow_private=False)
-
-        assert fresh_view.count == 42, "Restored view should have the count from session state"
-
-    def test_ws_restore_skips_private_attributes(self):
-        """safe_setattr with allow_private=False does not set underscore-prefixed keys."""
-        from djust.security import safe_setattr
-
-        view = CounterView()
-        view.count = 0
-        # Attempt to restore a private key (as if it were in session) — must be blocked
-        result = safe_setattr(view, "_internal", "injected", allow_private=False)
-        assert result is False, "safe_setattr must block private attributes"
-        assert not hasattr(view, "_internal")
-
-    def test_ws_mount_called_when_no_saved_state(self):
-        """When session has no saved state, mount() must run (mounted=False path)."""
-        from unittest.mock import patch
-
-        view = CounterView()
-        factory = RequestFactory()
-        get_request = factory.get("/counter/")
-        get_request = add_session_to_request(get_request)
-        # Do NOT call view.get() — session is empty
-
-        mount_called = []
-        original_mount = view.mount
-
-        def tracking_mount(request, **kwargs):
-            mount_called.append(True)
-            return original_mount(request, **kwargs)
-
-        with patch.object(view, "mount", side_effect=tracking_mount):
-            view.mount(get_request)
-
-        assert mount_called, "mount() must be called when no saved state exists"
-
-    def test_ensure_tenant_called_regardless_of_saved_state(self):
-        """The pre-mount auth+tenant sequence must run unconditionally (not only in
-        the not-restored path), so multi-tenant views have self.tenant set even when
-        state is restored from session.
-
-        Post-#1919 (THE MOUNT FLIP) the WS mount routes through
-        ``ViewRuntime.dispatch_mount`` (the bespoke ``handle_mount`` body was
-        deleted). The runtime runs the pre-mount sequence via ``_check_auth`` →
-        ``run_pre_mount_auth`` (which calls ``_ensure_tenant`` + the tenant bind)
-        BEFORE the ``if not mounted_from_restore:`` block — i.e. unconditionally
-        relative to state restore. Pin that structural invariant at its converged
-        home. Regression of #342 fix.
+        The WS mount routes through ``ViewRuntime.dispatch_mount``. The runtime
+        runs the pre-mount sequence via ``_check_auth`` → ``run_pre_mount_auth``
+        (which calls ``_ensure_tenant`` + the tenant bind) BEFORE the ``mount()``
+        call and the state restore that follows it. Pin that structural
+        invariant at its converged home. Regression of #342 fix.
         """
         import inspect
 
         from djust.runtime import ViewRuntime
 
         source = inspect.getsource(ViewRuntime._dispatch_mount_body)
-        # The runtime runs auth+tenant via _check_auth (→ run_pre_mount_auth →
-        # _ensure_tenant) before the state-restore / mount() decision.
         check_auth_pos = source.find("_check_auth(")
-        not_restored_pos = source.find("if not mounted_from_restore:")
+        mount_pos = source.find("await call_hook(view_instance.mount, request, **mount_kwargs)")
+        restore_pos = source.find("load_server_state)(view_instance, request)")
         assert check_auth_pos != -1, (
             "_check_auth (the pre-mount auth+tenant sequence) must exist in dispatch_mount"
         )
-        assert not_restored_pos != -1, (
-            "if not mounted_from_restore: block must exist in dispatch_mount"
-        )
-        assert check_auth_pos < not_restored_pos, (
-            "_check_auth (→ run_pre_mount_auth → _ensure_tenant) must run BEFORE the "
-            "`if not mounted_from_restore:` block so the tenant binds even when state "
-            "is restored from session. Regression of #342 fix."
+        assert mount_pos != -1 and restore_pos != -1, "mount() and the restore must exist"
+        assert check_auth_pos < mount_pos < restore_pos, (
+            "_check_auth (→ run_pre_mount_auth → _ensure_tenant) must run BEFORE mount() "
+            "and the state restore so the tenant is bound for both. Regression of #342 fix."
         )
 
 

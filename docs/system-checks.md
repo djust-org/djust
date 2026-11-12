@@ -41,6 +41,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V006 | LiveView | Warning | Service instance assigned in mount() of a legacy-exposure view — high-confidence subset of V008 |
 | V007 | LiveView | Retired | Retired in 1.3 (ADR-037): recommended `**kwargs` on every handler. Never emitted; the ID is not reused |
 | V008 | LiveView | Info | Non-primitive type assigned in mount() of a legacy-exposure view — broader, lower-confidence (skips V006 patterns) |
+| V011 | LiveView | Retired | Retired in 2.0 with `enable_state_snapshot`: a sticky child opted in to state snapshots and its parent did not. Never emitted; the ID is not reused |
 | V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
 | V013 | LiveView | Warning | HTTP-only setup()/dispatch()/get()/post() override or URLconf wrapper never runs on a WebSocket mount |
 | V014 | LiveView | Warning | Time-travel-enabled view has PII-looking model/form fields not in `time_travel_excluded_fields` |
@@ -381,6 +382,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Scope**: the same as V006: explicit-exposure views are skipped, because they never serialise a plain attribute (#4032)
 - **Suppression**: `# noqa: V008` inline on the assignment
 - **False positives**: Functions with primitive return-type annotations (e.g. `-> str`, `-> int`) are excluded since PR #398. Other functions returning serialisable types (e.g. dataclasses) may still trigger V008 — suppress with `# noqa: V008`
+
+### V011 — Retired
+- **Retired in**: 2.0 (`enable_state_snapshot` was removed)
+- **What it did**: warned when a view embedded as a sticky child set `enable_state_snapshot = True` and the parent that embedded it did not, so the child's state was not restored on a reconnect
+- **Why it was retired**: `enable_state_snapshot` no longer exists. A view that still sets it is refused with `ImproperlyConfigured`, when the class is created and again on the mount path. An explicit sticky child keeps its declared `state(..., persist="server")` fields with no opt-in on the parent
+- **Migration**: remove `"V011"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
 ### V012 — Sticky child declares its own `dj-view`
 - **Severity**: Warning

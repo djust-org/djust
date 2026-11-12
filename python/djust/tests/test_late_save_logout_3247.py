@@ -8,7 +8,7 @@ once in the store and is dropped with a debug line when the key is gone, or
 when the stored session names a different authenticated user.
 
 A key rotation made through the save's OWN session object stays a legitimate
-save: ``login()`` in a legacy handler calls ``cycle_key()`` on the very object
+save: ``login()`` in a handler calls ``cycle_key()`` on the very object
 the save writes, and the store then holds the pre-login copy (no user) under
 the new key. That save must land, or the login is never persisted.
 
@@ -230,23 +230,6 @@ def _hold_on_the_pool():
         GATE.wait(timeout=VALVE_S)
 
 
-class LegacyLate3247Page(LiveView):
-    exposure_policy = "legacy"
-    enable_state_snapshot = True
-    template = "<div dj-root><span>{{ count }}</span></div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        _hold_on_the_pool()  # the legacy save reads the context before writing
-        return super().get_context_data(count=self.count, **kwargs)
-
-    @event_handler()
-    def increment(self, **kwargs):
-        self.count += 1
-
-
 class ExplicitLate3247Page(LiveView):
     exposure_policy = "explicit"
     template = "<div dj-root><span>{{ count }}</span></div>"
@@ -263,30 +246,11 @@ class ExplicitLate3247Page(LiveView):
         self.count += 1
 
 
-#: The user ``SignIn3247Page.sign_in`` logs in.
-SIGN_IN = {}
-
-
-class SignIn3247Page(LegacyLate3247Page):
-    """A legacy page whose handler logs the user in on ``self.request``: on SSE
-    that is the mount request, whose session object the event save writes."""
-
-    @event_handler()
-    def sign_in(self, **kwargs):
-        user = get_user_model().objects.get(pk=SIGN_IN["pk"])
-        login(self.request, user, backend="django.contrib.auth.backends.ModelBackend")
-        self.count += 1
-
-
 urlpatterns = [
-    path("late-legacy/", LegacyLate3247Page.as_view()),
     path("late-explicit/", ExplicitLate3247Page.as_view()),
-    path("late-sign-in/", SignIn3247Page.as_view()),
 ]
 PAGES = {
-    "legacy": (f"{_MOD}.LegacyLate3247Page", "/late-legacy/"),
     "explicit": (f"{_MOD}.ExplicitLate3247Page", "/late-explicit/"),
-    "sign-in": (f"{_MOD}.SignIn3247Page", "/late-sign-in/"),
 }
 
 
@@ -368,12 +332,9 @@ async def _until(predicate, what, limit=VALVE_S):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
 @pytest.mark.parametrize("engine", BACKENDS)
-async def test_a_late_save_after_a_logout_writes_nothing(
-    engine, policy, staged, monkeypatch, caplog
-):
-    view_path, url = PAGES[policy]
+async def test_a_late_save_after_a_logout_writes_nothing(engine, staged, monkeypatch, caplog):
+    view_path, url = PAGES["explicit"]
     with override_settings(
         ROOT_URLCONF=_MOD,
         LIVEVIEW_ALLOWED_MODULES=[_MOD],
@@ -423,87 +384,8 @@ async def test_a_late_save_after_a_logout_writes_nothing(
 
 
 # --------------------------------------------------------------------------- #
-# The other pool write sites: the legacy root and sticky-child saves, driven
-# through the runtime inside a request's ``ThreadSensitiveContext``.
+# A turn that is still waiting when its pool save finds the session gone
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("site", ["root", "sticky"])
-async def test_a_legacy_runtime_save_on_the_pool_after_a_logout_writes_nothing(
-    site, monkeypatch, caplog
-):
-    from djust.tests.test_legacy_save_deadline_3212 import StickyChild, _setup
-
-    runtime, parent, key = await _setup()
-    await sync_to_async(lambda: _store(DB)(key).flush())()  # logout elsewhere
-    writes = _pool_writes(DB, monkeypatch)
-
-    with caplog.at_level(logging.DEBUG):
-        async with ThreadSensitiveContext():  # a request's executors: the pool
-            if site == "root":
-                assert await runtime._persist_state_after_event(parent, "increment") is False
-            else:
-                child = StickyChild()
-                child.clicks = 3
-                parent._register_child("side", child)
-                await runtime._persist_sticky_child_after_event(child, "click")
-    assert writes == [], writes
-    assert not await sync_to_async(_exists)(DB, key)
-    messages = [r.getMessage() for r in caplog.records]
-    assert any("Late state save dropped" in m for m in messages), messages
-    assert not [r for r in caplog.records if r.levelno >= logging.WARNING], messages
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("engine", BACKENDS)
-async def test_a_login_in_the_handler_racing_the_late_save_still_saves(engine, staged, monkeypatch):
-    """``login()`` rotates the save's own session (``cycle_key``) and stores the
-    pre-login copy under the new key. The late save must land there: it is the
-    only write that persists the login and the event's state."""
-    view_path, url = PAGES["sign-in"]
-    with override_settings(
-        ROOT_URLCONF=_MOD, LIVEVIEW_ALLOWED_MODULES=[_MOD], DEBUG=False, SESSION_ENGINE=engine
-    ):
-        user = await sync_to_async(get_user_model().objects.create_user)(
-            username="s%s" % uuid.uuid4().hex[:8]
-        )
-        SIGN_IN["pk"] = user.pk
-        old_key = (await sync_to_async(_persisted)(engine)).session_key
-        sid = str(uuid.uuid4())
-        get = await sync_to_async(_request)(
-            engine, "GET", f"/djust/sse/{sid}/", {"view": view_path, "_djust_url": url}, old_key
-        )
-        assert (await DjustSSEStreamView().get(get, session_id=sid)).status_code == 200
-        runtime = _sse_sessions[sid].runtime
-
-        ARMED.set()
-        post = await sync_to_async(_request)(
-            engine,
-            "POST",
-            f"/djust/sse/{sid}/message/",
-            {"type": "event", "event": "sign_in", "params": {}},
-            old_key,
-        )
-        async with ThreadSensitiveContext():
-            response = await DjustSSEMessageView().post(post, session_id=sid)
-        assert response.status_code == 200
-        assert HELD.is_set(), "the save never reached its pool thread; vacuous"
-        pending = runtime._explicit_save_pending
-        new_key = get.session.session_key
-        assert new_key != old_key, "precondition: login() rotated the save's session"
-
-        GATE.set()
-        await _until(pending.done, "the late save to finish")
-        assert pending.exception() is None, pending.exception()
-
-        def stored():
-            return _store(engine)(new_key).load()
-
-        data = await sync_to_async(stored)()
-        assert data.get(SESSION_KEY) == str(user.pk), "the login was never persisted"
-        assert data.get(f"liveview_{url}", {}).get("count") == 1, data
-        assert not await sync_to_async(_exists)(engine, old_key)
 
 
 @pytest.mark.asyncio
@@ -645,39 +527,6 @@ def test_a_cache_error_during_the_lookup_does_not_drop_the_save(engine, caplog):
         assert not _lookup_warnings(caplog)
 
 
-@pytest.mark.asyncio
-async def test_a_cache_blip_on_a_legacy_pool_save_keeps_the_save(monkeypatch, caplog):
-    """The runtime's legacy save on the pool, with the cache failing once, for
-    the lookup: the save lands and the failure is a warning, not a logout."""
-    from djust.tests.test_legacy_save_deadline_3212 import Counter
-
-    from djust.runtime import ViewRuntime
-    from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
-
-    with _FLAKY:
-        FlakyCache.failures = 0
-        key = (await sync_to_async(_persisted)(CACHE)).session_key
-        request = RequestFactory().get("/legacy-3212/")
-        request.session = _store(CACHE)(key)
-        await sync_to_async(request.session.get)("seed")  # loaded, as after mount
-        view = Counter()
-        view.count = 4
-        view._djust_mount_request = request
-        runtime = ViewRuntime(MockTransport())
-        runtime.view_instance = view
-
-        caplog.set_level(logging.DEBUG)
-        FlakyCache.failures = 1
-        async with ThreadSensitiveContext():
-            assert await runtime._persist_state_after_event(view, "increment") is True
-        FlakyCache.failures = 0
-        stored = await sync_to_async(lambda: _store(CACHE)(key).load())()
-    assert stored.get("liveview_/legacy-3212/") == {"count": 4}, stored
-    assert _lookup_warnings(caplog)
-    messages = [r.getMessage() for r in caplog.records]
-    assert not any("Late state save dropped" in m for m in messages), messages
-
-
 # --------------------------------------------------------------------------- #
 # Review Y3: the key is read when the save body starts, on the real save path
 # --------------------------------------------------------------------------- #
@@ -687,51 +536,6 @@ def _session_rows():
     from django.contrib.sessions.models import Session
 
     return Session.objects.count()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("site", ["root", "sticky"])
-async def test_an_unloaded_session_that_vanished_is_not_recreated_by_the_runtime_save(
-    site, monkeypatch
-):
-    """The save's session object has not been loaded when the save body starts.
-    The body's first write loads it, finds the row gone and resets the key to
-    ``None``; checked at write time, ``None`` reads as "never persisted" and
-    ``save()`` creates a new session. The key read at the start of the body
-    prevents that.
-
-    The stock runtime mount loads the session (its restore reads it), so this
-    is defence in depth for a session that reaches the save still lazy.
-    """
-    from djust.tests.test_legacy_save_deadline_3212 import Counter, StickyChild
-
-    from djust.runtime import ViewRuntime
-    from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
-
-    key = (await sync_to_async(_persisted)(DB)).session_key
-    request = RequestFactory().get("/legacy-3212/")
-    request.session = _store(DB)(key)  # lazy: never loaded
-    parent = Counter()
-    parent.count = 4
-    parent._djust_mount_request = request
-    runtime = ViewRuntime(MockTransport())
-    runtime.view_instance = parent
-
-    await sync_to_async(lambda: _store(DB)(key).flush())()  # logout elsewhere
-    rows = await sync_to_async(_session_rows)()
-    writes = _pool_writes(DB, monkeypatch)
-
-    async with ThreadSensitiveContext():
-        if site == "root":
-            assert await runtime._persist_state_after_event(parent, "increment") is False
-        else:
-            child = StickyChild()
-            child.clicks = 3
-            parent._register_child("side", child)
-            await runtime._persist_sticky_child_after_event(child, "click")
-    assert request.session.session_key is None, "precondition: the body's load reset the key"
-    assert writes == [], writes
-    assert await sync_to_async(_session_rows)() == rows, "the save created a new session"
 
 
 # --------------------------------------------------------------------------- #

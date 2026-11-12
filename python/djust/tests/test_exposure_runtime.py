@@ -153,7 +153,6 @@ async def test_event_persists_without_client_snapshot_opt_in_and_reconnect_resto
 async def test_explicit_mount_never_consumes_or_emits_legacy_signed_snapshots(staged, monkeypatch):
     from djust.tests.test_exposure_snapshots import _removed_legacy_token
 
-    monkeypatch.setattr(RuntimeView, "enable_state_snapshot", True)
     request = await sync_to_async(make_request)()
     slug = __name__ + ".RuntimeView"
     token = _removed_legacy_token(

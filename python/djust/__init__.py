@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     # types (PEP 562 alone types every lazy name as ``Any`` and reds the
     # ADR-023 strict-island gate, #1960). Never executed at runtime.
     from .async_result import AsyncResult
-    from .live_view import LiveView, PersistentLiveView, live_view
+    from .live_view import LiveView, live_view
     from .components.base import Component, LiveComponent
     from .components.assigns import Assign, AssignValidationError, Slot
     from .components.function_component import component, clear_components
@@ -106,7 +106,6 @@ except ImportError:
 _LAZY: dict[str, tuple[str, str]] = {
     "AsyncResult": ("djust.async_result", "AsyncResult"),
     "LiveView": ("djust.live_view", "LiveView"),
-    "PersistentLiveView": ("djust.live_view", "PersistentLiveView"),
     "live_view": ("djust.live_view", "live_view"),
     "Component": ("djust.components.base", "Component"),
     "LiveComponent": ("djust.components.base", "LiveComponent"),
@@ -166,6 +165,9 @@ def __getattr__(name: str):  # PEP 562
     try:
         module_name, attr = _LAZY[name]
     except KeyError:
+        from ._removed_settings import refuse_removed_name
+
+        refuse_removed_name("djust", name)
         raise AttributeError(f"module 'djust' has no attribute {name!r}") from None
     module = importlib.import_module(module_name)
     value = getattr(module, attr)
@@ -408,7 +410,6 @@ def enable_hot_reload():
 
 __all__ = [
     "LiveView",
-    "PersistentLiveView",
     "live_view",
     "AsyncResult",
     "Component",

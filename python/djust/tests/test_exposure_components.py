@@ -418,33 +418,22 @@ def test_private_or_registered_attributes_are_not_instance_assigned_components()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_component_state_is_transient_under_explicit(staged, monkeypatch, policy):
+async def test_component_state_is_transient_under_explicit(staged, monkeypatch):
     from djust._exposure_sessions import server_state_adapter
 
-    monkeypatch.setattr(ComponentPage, "exposure_policy", policy)
-    if policy == "legacy":
-        # The legacy per-event session save is opt-in.
-        monkeypatch.setattr(ComponentPage, "enable_state_snapshot", True)
+    monkeypatch.setattr(ComponentPage, "exposure_policy", "explicit")
     runtime, transport, request = await mount(ComponentPage)
     assert not transport.errors, transport.errors
     view = runtime.view_instance
     await event(runtime, "select", component_id=view.nav.component_id, value="PERSIST_SENTINEL")
-    if policy == "explicit":
-        # (A legacy State-less declaration is shared; do not mutate it here.)
-        await event(runtime, "bump", component_id="counter", value="COUNTER_SENTINEL")
+    await event(runtime, "bump", component_id="counter", value="COUNTER_SENTINEL")
     await event(runtime, "increment")
     assert not transport.errors, transport.errors
     assert runtime.view_instance.nav.active == "PERSIST_SENTINEL"
 
     session = await sync_to_async(type(request.session))(request.session.session_key)
     stored = json.dumps(await sync_to_async(session.load)(), default=str)
-    if policy == "legacy":
-        # Control: the legacy save path ran and wrote the component's state.
-        assert "PERSIST_SENTINEL" in stored
-        return
-
-    # Explicit: the declared field persisted; component state did not.
+    # The declared field persisted; component state did not.
     fresh = await sync_to_async(make_request)(request.session.session_key)
     adapter = await sync_to_async(server_state_adapter)(runtime.view_instance, fresh)
     assert await adapter.aload() == {"count": 1}

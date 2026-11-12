@@ -345,18 +345,32 @@ def test_the_mount_path_syncs_explicitly_between_init_and_its_first_render() -> 
 
 
 def test_the_snapshot_restore_twin_forces_a_full_html_render() -> None:
-    """The OTHER restore mechanism — session-snapshot / signed-snapshot
-    restore in ``dispatch_mount`` — forces the first post-restore render to
-    full HTML (#1977), and ``_force_full_html`` empties the change-detection
-    baseline so that render is a full sync too (#783). Pinned here so the two
-    restore twins (#1646) are named side by side."""
+    """The OTHER restore mechanism — the declared-state restore in
+    ``dispatch_mount`` (``state(persist="server")`` from the session and
+    ``persist="client"`` from the signed token) — forces the first
+    post-restore render to full HTML (#1977), and ``_force_full_html`` empties
+    the change-detection baseline so that render is a full sync too (#783).
+    Pinned here so the two restore twins (#1646) are named side by side. (2.0
+    removed the legacy session restore of ``enable_state_snapshot``; the
+    declared-state restore is the one left, and the flag must stay inside its
+    ``if restored is not None:`` branch, so only a restore mount sets it.)"""
     from djust import runtime
     from djust.mixins import rust_bridge
 
     mount_src = inspect.getsource(runtime.ViewRuntime._dispatch_mount_body)
-    assert re.search(
-        r"if mounted_from_restore:\s*\n\s*view_instance\._force_full_html = True", mount_src
-    ), "dispatch_mount must set _force_full_html on a restore mount"
+    lines = mount_src.splitlines()
+    [start] = [i for i, line in enumerate(lines) if line.strip() == "if restored is not None:"]
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    branch = []
+    for line in lines[start + 1 :]:
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        branch.append(line)
+    body = "\n".join(branch)
+    assert "safe_setattr(" in body, "the branch applies the restored values"
+    assert "view_instance._force_full_html = True" in body, (
+        "dispatch_mount must set _force_full_html on a restore mount"
+    )
 
     sync_src = inspect.getsource(rust_bridge.RustBridgeMixin._sync_state_to_rust)
     assert re.search(

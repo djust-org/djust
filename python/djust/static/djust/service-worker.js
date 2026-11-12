@@ -19,7 +19,7 @@
 //
 // 4. State snapshot cache (v0.6.0) — per-URL JSON snapshots of public
 //    LiveView state, posted on before-navigate and restored on popstate.
-//    Opt-in per-view via `enable_state_snapshot = True` on the server.
+//    Opt-in per field via `state(persist="client", client=True)` on the server.
 //    Entries older than the snapshot max age (the server's
 //    DJUST_STATE_SNAPSHOT_MAX_AGE, sent by the client on lookup; default
 //    3600s) are never returned and are deleted on read (ADR-038 D-n).

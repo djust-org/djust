@@ -363,10 +363,10 @@ still need pagination or virtualization.
   - A view that states `exposure_policy = "legacy"` (deprecated, see
     [explicit exposure](../state/explicit-exposure.md)) saves a server-owned
     menu's `open` and `selected` with the view's session state instead. They
-    then come back on every HTTP-fallback request, and on a reconnect or Back
-    navigation when the view sets `enable_state_snapshot = True`. A page with
-    a keyed collection is mounted fresh on Back, so `sync()` supplies the
-    current rows and a removed row cannot come back.
+    then come back on every HTTP-fallback request. A reconnect or Back
+    navigation mounts such a view fresh (2.0 removed `enable_state_snapshot`,
+    which restored them there), so `sync()` supplies the current rows and a
+    removed row cannot come back.
 - **Keyboard and focus.**
   - A server-owned menu's trigger and items are ordinary buttons: Tab to
     them, and press Enter or Space.

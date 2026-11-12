@@ -19,11 +19,8 @@ attributes; render-only values and keys an override adds are never saved.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import pathlib
-import uuid
-from typing import Any, Dict, List, Optional
 
 import pytest
 from django.contrib.auth.models import User
@@ -233,104 +230,13 @@ def test_legacy_unsaved_keys_without_a_recorded_render():
 # ---------------------------------------------------------------------------
 
 
-class _Transport:
-    def __init__(self):
-        self._session_id = str(uuid.uuid4())
-        self.sent: List[Dict[str, Any]] = []
-
-    @property
-    def session_id(self) -> str:
-        return self._session_id
-
-    @property
-    def client_ip(self) -> Optional[str]:
-        return None
-
-    async def send(self, data):
-        self.sent.append(data)
-
-    async def send_error(self, error, **kwargs):
-        self.sent.append({"type": "error", "error": error, **kwargs})
-
-    async def close(self, code=1000):
-        pass
-
-    def next_client_version(self, html, rust_version):
-        return rust_version
-
-    def build_request(self):
-        return None
-
-    def on_view_mounted(self, view_instance):
-        pass
-
-    async def on_event_recorded(self, view, snapshot):
-        pass
-
-    @contextlib.asynccontextmanager
-    async def event_context(self, view):
-        yield
-
-
-class _StashedRequest:
-    def __init__(self, session, path):
-        self.session = session
-        self.path = path
-
-
-class SocketRenderOnlyView(RenderOnlyView):
-    enable_state_snapshot = True
-
-
-class SocketOverrideAddsView(OverrideAddsView):
-    enable_state_snapshot = True
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "view_class, unsaved",
-    [
-        (SocketRenderOnlyView, ("owner", "people", "people_count", "note")),
-        (SocketOverrideAddsView, ("people", "secret_note")),
-    ],
-)
-async def test_socket_turn_save_keeps_only_the_view_state(
-    generous_save_timeout, view_class, unsaved
-):
-    from asgiref.sync import sync_to_async
-    from django.contrib.sessions.backends.db import SessionStore
-
-    from djust.runtime import ViewRuntime
-
-    def setup():
-        User.objects.create(username="n35-ada", email="ada@example.com")
-        session = SessionStore()
-        session.create()
-        view = view_class()
-        view.mount(None)
-        view._djust_mount_request = _StashedRequest(session, "/ro/")
-        return session, view
-
-    session, view = await sync_to_async(setup)()
-    runtime = ViewRuntime(_Transport(), scope=None)
-    runtime.view_instance = view
-
-    await runtime.dispatch_event({"type": "event", "event": "bump", "params": {}, "ref": 1})
-
-    saved = await session.aget("liveview_/ro/")
-    assert saved is not None and saved["count"] == 2
-    for key in unsaved:
-        assert key not in saved
-    assert SECRET not in json.dumps(saved, default=str)
-
-
 def test_every_legacy_save_site_filters_through_legacy_unsaved_keys():
-    """One producer (#1646): the four legacy save sites use the same filter."""
+    """One producer (#1646): the legacy save sites use the same filter. The
+    runtime's per-event save, the fourth, was removed in 2.0."""
     package = pathlib.Path(__file__).resolve().parents[1]
     expected = {
         "mixins/request.py": 2,
-        "runtime.py": 1,
+        "runtime.py": 0,
         "_lazy_containers.py": 1,
     }
     for relative, count in expected.items():

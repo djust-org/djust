@@ -180,9 +180,12 @@ Read it this way:
   stops going once the view is explicit.
 - **`reconnect: fresh mount`** means the view runs `mount()` again when the
   socket reconnects, so nothing needs a persistence grant to behave as it does
-  now. A view that sets `enable_state_snapshot = True`, or subclasses
-  `PersistentLiveView`, reads `reconnect: restored (enable_state_snapshot)`
-  and gets `state(persist="server")` suggestions.
+  now. On 2.0 every view reads `fresh mount`, because nothing restores a
+  legacy view's state on a reconnect any more. The 1.3.x command reads
+  `reconnect: restored (enable_state_snapshot)` for a view that sets
+  `enable_state_snapshot = True` or subclasses `PersistentLiveView`, and
+  suggests `state(persist="server")` for its names: run it there first if you
+  have such views (see [Python names](#python-names)).
 - **The suggestion is a starting point, not a list to paste.** The command does
   not read your template, so it cannot tell which names the template uses, and
   it suggests `state(...)` for every instance attribute, including ones that
@@ -593,6 +596,9 @@ Every replacement works on 1.3.x, so make the change there.
 | `self._async_pending = (fn, args, kwargs)` in a handler | `self.start_async(fn, *args, **kwargs)`, or `@background` on the handler. Assigning the tuple raises `ImproperlyConfigured` when the handler runs, on every transport ([#4031](https://github.com/djust-org/djust/issues/4031)); search your code for `_async_pending` to find them before then. |
 | `use_actors = True` | Remove the attribute. See [What does not survive](#5-what-does-not-survive). |
 | `sign_snapshot`, `unsign_snapshot` and `SNAPSHOT_SALT` from `djust.security`, the `djust.security.state_snapshot` module, and the `LiveView._restore_snapshot()` override | `state(..., persist="client", client=True)` fields. djust signs and verifies their token itself (example below). Importing one of the three names raises `ImportError` with this advice, and so does reading it as an attribute: `hasattr(djust.security, "sign_snapshot")` raises instead of returning `False`, so a compatibility shim must catch `ImportError`. A class that defines `_restore_snapshot()` is refused with `ImproperlyConfigured`; move what it did after restoring into `handle_restore()`. |
+| `enable_state_snapshot = True`, on a view or a mixin | `state(..., persist="server")` on each field that must survive a reconnect, and `persist="client", client=True` for one the browser may hold across Back (example below). A view that still sets it is refused with `ImproperlyConfigured` when the class is created, or when it mounts if the value is set on the instance or later. `False` is accepted. |
+| `PersistentLiveView` (`djust.PersistentLiveView`, `djust.live_view.PersistentLiveView`) | `LiveView`, with the fields to keep declared as above. Importing it raises `ImportError` with this advice. |
+| System check `djust.V011` (sticky child and parent snapshot opt-in) | Remove it from `SILENCED_SYSTEM_CHECKS`; nothing reports it. `djust.C304` now warns about a `client=True` field with a credential-like name. |
 | `NonPersistableStateError`, and the `strict=` argument of `LiveView._capture_snapshot_state()` | Nothing. A client field has to be JSON, and a model or `Decimal` is refused when the token is built. |
 
 A component mixin becomes a class attribute. This replaces
@@ -644,11 +650,42 @@ class WizardView(LiveView):
 ```
 
 A legacy view no longer sends a token at all, and a token a 1.x server signed
-is refused. Back and a reconnect still restore an `enable_state_snapshot` view from the
-state saved in the session, which this release keeps. Where nothing is saved
-there (`LIVEVIEW_CONFIG['view_state_in_session'] = False`, no or an expired
-session, an unresolved tenant), the view now mounts fresh instead of restoring
-from the token.
+is refused. The session copy that `enable_state_snapshot` also restored from
+is gone too (below), so a legacy view mounts fresh on Back.
+The HTTP page-POST fallback still restores a legacy view's public and private state from the session between requests; that goes later in 2.0 (rows 5 and 6 of the exposure-flip plan).
+
+`enable_state_snapshot = True` (and `PersistentLiveView`, which set it) also
+saved every public attribute in the session after each socket event and put
+it back, instead of running `mount()`, when the socket reconnected. Sticky
+children of such a page were saved the same way. In 2.0 a reconnect runs
+`mount()` and then restores the declared `persist="server"` fields:
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler, state
+
+
+class CartView(LiveView):
+    # 1.3: class CartView(PersistentLiveView), with self.items = [] in mount()
+    exposure_policy = "explicit"
+    template = """<div dj-root>
+        <p>{{ items|length }} items</p>
+        <button dj-click="add" dj-value-sku="A1">Add</button>
+    </div>"""
+
+    items = state([], persist="server")
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["items"] = self.items
+        return context
+
+    @event_handler()
+    def add(self, sku: str = "", **kwargs):
+        self.items = [*self.items, sku]
+```
+
+Session state that 1.x saved for a page is not read on a reconnect. The HTTP page-POST fallback still restores a legacy view's public and private state from the session between requests; that goes later in 2.0 (rows 5 and 6 of the exposure-flip plan).
 
 The component registers its own event on the view, and `self.nav.active` is
 the current tab in your handlers. Each component has one event, so a template
@@ -713,7 +750,6 @@ the only behaviour, before 2.0.0 is released, so finish with them on 1.3.x:
 | `exposure_policy = "legacy"`. It is no longer the default: a view has to state it, and stating it warns | Migrate every view that states it, or that you have not checked yet ([section 1](#1-move-each-view-to-explicit-exposure)) |
 | `event_parameter_policy = "legacy"`, the default, and `parameter_policy="legacy"` | Make every handler strict ([section 2](#2-make-event-handlers-strict)) |
 | `event_security` set to `"open"` or `"warn"` | Remove the setting (the default is `"strict"`) and put `@event_handler` on every method a template calls |
-| `enable_state_snapshot = True` and `PersistentLiveView`. They still save a legacy view's public state in the session and restore it on a reconnect; the signed copy they sent to the browser is [already removed](#python-names) | `state(..., persist="server")` fields, and `persist="client", client=True` for back-navigation |
 | Time travel that restores a past state | Nothing to change in code; see below |
 
 ## 5. What does not survive
@@ -725,9 +761,9 @@ looking for a replacement.
   only over WebSocket and cannot run under explicit exposure. Remove the
   attribute; the view then runs like any other LiveView.
 - **`enable_state_snapshot` and `PersistentLiveView`.** These saved every
-  public attribute, and in 1.x the browser held a signed, readable copy (that
-  copy is already gone on the 2.0 line). 2.0 has no way to save a view's
-  whole state. Declare the fields worth keeping with
+  public attribute in the session, and in 1.x the browser held a signed,
+  readable copy. Both are removed. 2.0 has no way to save a view's whole
+  state. Declare the fields worth keeping with
   `state(..., persist=...)`, and rebuild the rest in `mount()` and
   `handle_restore()`.
 - **Time travel that changes the view.** Jumping back to a past state and

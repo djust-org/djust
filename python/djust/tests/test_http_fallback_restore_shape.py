@@ -215,8 +215,8 @@ def test_every_context_restore_site_goes_through_the_helper():
     root = Path(djust.__file__).parent
     sites = {
         "mixins/request.py": 2,  # post(): restore, and again after the rebuild mount
-        "runtime.py": 1,  # socket session restore
-        "mixins/sticky.py": 1,  # sticky child
+        "runtime.py": 0,  # the socket session restore was removed in 2.0
+        "mixins/sticky.py": 0,  # the sticky child restore was removed in 2.0
         "_lazy_containers.py": 1,  # lazily mounted child
         "live_view.py": 0,  # the legacy signed snapshot restore was removed in 2.0
     }

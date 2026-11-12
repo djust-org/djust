@@ -67,6 +67,12 @@ REMOVED_VIEW_ATTRIBUTES: dict[str, str] = {
         'may hold with state(..., persist="client", client=True), and move what '
         "the override did after restoring into handle_restore()"
     ),
+    "enable_state_snapshot": (
+        "saving a view's whole public state and restoring it on a reconnect was "
+        "removed; delete the attribute and declare the fields to keep with "
+        'state(..., persist="server") (and state(..., persist="client", client=True) '
+        "for what the browser may hold across Back)"
+    ),
 }
 
 
@@ -79,11 +85,19 @@ _SIGNED_SNAPSHOT = (
     "signs and verifies their token itself"
 )
 
+_PERSISTENT_LIVE_VIEW = (
+    "it set enable_state_snapshot, which saved a view's whole public state and "
+    "restored it on a reconnect. Subclass LiveView and declare the fields to keep "
+    'with state(..., persist="server")'
+)
+
 #: Importable names 2.0 removed, by the module they were imported from. A module
 #: ``__getattr__`` passes its misses to :func:`refuse_removed_name`, so
 #: ``from djust.security import sign_snapshot`` names the replacement instead of
 #: failing with a bare "cannot import name".
 REMOVED_NAMES: dict[tuple[str, str], str] = {
+    ("djust", "PersistentLiveView"): _PERSISTENT_LIVE_VIEW,
+    ("djust.live_view", "PersistentLiveView"): _PERSISTENT_LIVE_VIEW,
     ("djust.security", "sign_snapshot"): _SIGNED_SNAPSHOT,
     ("djust.security", "unsign_snapshot"): _SIGNED_SNAPSHOT,
     ("djust.security", "SNAPSHOT_SALT"): _SIGNED_SNAPSHOT,

@@ -36,14 +36,13 @@ VARIANTS = (
     "list_fk_nosel",
     "presenter_control",
     "presenter_reverse",
-    "snapshot",
 )
 PHASES = ("mount", "text_change", "attr_change", "row_text_change")
 
 #: The no-threshold pin. A comparison of any ``*_ms`` attribute — whatever the
 #: receiver expression (``row.total_ms``, ``phases["x"].total_ms``) — against
 #: anything but literal zero is a duration threshold. ``> 0`` / ``> 0.0`` is a
-#: PRESENCE check (the persist column on the snapshot variant) and is exempt.
+#: PRESENCE check and is exempt.
 #: The zero exemption lives INSIDE the lookahead (``(?!\s*0...)``) and the
 #: operator is pinned with ``(?!=)``: with ``\s*`` outside it, or ``=?`` free
 #: to give up its ``=``, the engine backtracks past the exemption and flags
@@ -261,7 +260,7 @@ class TestSummaryTable:
         payload = json.loads(out.read_text())
         assert len(payload["rows"]) == len(rows)
         assert len(payload["medians"]) == len(VARIANTS) * len(PHASES)
-        assert all("persist_calls" in m for m in payload["medians"])
+        assert all("render_xings" in m for m in payload["medians"])
 
     def test_json_dump_names_the_missing_directory(self, tmp_path):
         missing = tmp_path / "no_such_dir" / "t.json"
@@ -292,33 +291,25 @@ class TestBenchmarkModuleShape:
         caught = (
             'assert phases["x"].total_ms < 5',
             "assert row.render_ms <= budget",
-            "assert rows[0].persist_ms > 1.5",
+            "assert rows[0].state_ms > 1.5",
             "assert _by_phase(rows)['mount'].xing_ms<10",
             "assert r.sql_ms >= 0.5",
         )
         for src in caught:
             assert NO_THRESHOLD_RE.search(src), f"pin missed a threshold: {src!r}"
         exempt = (
-            "assert row.persist_ms > 0.0",
-            "assert row.persist_ms > 0",
-            "assert phases[event].persist_ms >= 0",
-            "assert row.persist_calls == 1",
+            "assert row.state_ms > 0.0",
+            "assert row.state_ms > 0",
+            "assert phases[event].state_ms >= 0",
+            "assert row.renders == 1",
             "assert row.xings == 0",
         )
         for src in exempt:
             assert not NO_THRESHOLD_RE.search(src), f"pin flagged a non-threshold: {src!r}"
 
-    def test_declares_the_seven_variants_and_three_events(self):
+    def test_declares_the_six_variants_and_three_events(self):
         src = BENCHMARK_MODULE.read_text()
         for variant in VARIANTS:
             assert f'"{variant}"' in src
         for event in PHASES[1:]:
             assert f'"{event}"' in src
-
-    def test_only_the_snapshot_variant_opts_into_state_persistence(self):
-        """The persist column is claimed non-zero for exactly one variant; the
-        opt-in must be spelled as a comparison with that variant's name, so a
-        second opted-in variant (or none) is visible in the source."""
-        src = BENCHMARK_MODULE.read_text()
-        assert 'SNAPSHOT_VARIANT = "snapshot"' in src
-        assert "enable_state_snapshot = variant == SNAPSHOT_VARIANT" in src

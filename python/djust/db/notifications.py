@@ -282,11 +282,11 @@ class PostgresNotifyListener:
         ``_conn`` / ``_task`` are bound to a dead loop and any later
         coroutine call fails ``_assert_same_loop``.
 
-        The WS state-restoration path uses this to safely recycle the
-        singleton before replaying ``_restore_listen_channels``: if the
-        old loop is gone, drop the reference so the next
-        ``ensure_listening`` call from the current loop creates a fresh
-        singleton bound to this loop.
+        If the old loop is gone, dropping the reference lets the next
+        ``ensure_listening`` call from the current loop create a fresh
+        singleton bound to this loop. (Its framework caller, the
+        ``_restore_listen_channels`` replay of the WebSocket session
+        restore, was removed in 2.0.)
 
         Unlike :meth:`reset_for_tests`, this is idempotent and makes NO
         attempt to gracefully cancel the stale task — the old loop is
