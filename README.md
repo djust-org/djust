@@ -18,7 +18,7 @@ JavaScript to write, no bundler, and no build step in your project.
 [![PyPI Downloads](https://img.shields.io/pypi/dm/djust.svg)](https://pypi.org/project/djust/)
 
 ```python
-from djust import LiveView, event_handler
+from djust import LiveView, event_handler, state
 
 class CounterView(LiveView):
     template = """
@@ -29,12 +29,8 @@ class CounterView(LiveView):
     </div>
     """
 
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        # The template gets what you hand it here, and nothing else.
-        return {**super().get_context_data(**kwargs), "count": self.count}
+    # Declared state renders in the template; other attributes do not.
+    count = state(0)
 
     @event_handler
     def increment(self):
@@ -108,16 +104,12 @@ application = ProtocolTypeRouter({
 
 ```python
 # myapp/views.py
-from djust import LiveView, event_handler
+from djust import LiveView, event_handler, state
 
 class CounterView(LiveView):
     template_name = "counter.html"
 
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "count": self.count}
+    count = state(0)
 
     @event_handler
     def increment(self):

@@ -5,7 +5,7 @@ ContextMixin - Context data management for LiveView.
 import itertools
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
 
 from django.db import models
 from django.test.signals import setting_changed
@@ -388,6 +388,51 @@ def _live_view_mro() -> frozenset:
 
         _LIVE_VIEW_MRO = frozenset(LiveView.__mro__)
     return _LIVE_VIEW_MRO
+
+
+def rendered_state_names(view_class: type) -> tuple:
+    """The declared ``state()`` fields an explicit view renders by default (#4050).
+
+    Computed once per class from the descriptor registry the class already
+    has (``live_view._descriptor_fields``), and cached on the class. Per
+    render the explicit base context then reads exactly these descriptors:
+    no attribute walk, no extra serialization. Left out, deterministically:
+
+    * a field declared with ``state(render=False)``;
+    * a name a registered context provider owns (``online_count`` on a
+      ``PresenceMixin`` view, a formset name): the provider renders it, as it
+      did before declared fields rendered, so the two never collide;
+    * a framework-reserved name (``view``, ``request``, ``kwargs``, the
+      ``LiveView`` namespace): the exposure contract refuses those as state
+      names, so they never become template context through a declaration;
+    * a name that is not a template identifier (an underscore name).
+    """
+    cached = view_class.__dict__.get("_djust_rendered_state_cache")
+    if cached is not None:
+        return cast(tuple, cached)
+    from inspect import getattr_static
+
+    from .._exposure import _NAME, _RESERVED_CONTEXT_KEYS, _UNSAFE_KEYS, provider_owners
+    from ..live_view import _FRAMEWORK_INTERNAL_ATTRS, LiveView, _descriptor_fields
+
+    reserved = set(_FRAMEWORK_INTERNAL_ATTRS) | _RESERVED_CONTEXT_KEYS | _UNSAFE_KEYS
+    reserved.add("streams")
+    for base in LiveView.__mro__:
+        reserved.update(_class_namespace(base))
+    owned = provider_owners(view_class)
+    names = []
+    for name, (kind, _slot) in _descriptor_fields(view_class).items():
+        if kind != "state" or name in reserved or name in owned or not _NAME.fullmatch(name):
+            continue
+        if getattr(getattr_static(view_class, name, None), "render", True) is False:
+            continue
+        names.append(name)
+    result = tuple(names)
+    try:
+        setattr(view_class, "_djust_rendered_state_cache", result)
+    except (AttributeError, TypeError):  # pragma: no cover — immutable class
+        logger.debug("rendered-state names not cached on %s", view_class.__name__)
+    return result
 
 
 class ContextMixin:
@@ -1007,6 +1052,15 @@ class ContextMixin:
                 context._provide(UPLOADS_PROVIDER.name, name, value)
 
         self._explicit_context_provider_keys = context.provider_keys()
+        # #4050: a declared state() field is template context by default. The
+        # names are a per-class registry (no attribute walk); provider-owned
+        # and reserved names are excluded there, so this never collides with
+        # a provider. Written before render-only values and kwargs, so a
+        # get_context_data() value of the same name wins. Rendering is not a
+        # browser grant: client state still comes from the client=True
+        # projection, never from this context.
+        for name in rendered_state_names(type(self)):
+            dict.__setitem__(context, name, getattr(self, name))
         # Explicit exposure saves declared server fields only, so the
         # render-only values are just more render context.
         render_only_items = self.get_render_only_context()
@@ -1176,6 +1230,10 @@ class ContextMixin:
         rendering ``{{ user }}`` / ``{{ perms }}`` / ``{{ messages }}``.
         """
         from .._exposure import ExposureError, uses_legacy_exposure
+        from .._exposure_unsupplied import (
+            AUTHORIZATION_CONTEXT_NAMES,
+            warn_shadowed_authorization_names,
+        )
 
         if not uses_legacy_exposure(self):
             policy = getattr(self, "exposure_policy", None)
@@ -1207,6 +1265,13 @@ class ContextMixin:
                         if key not in result:
                             result[key] = value
                             added.add(key)
+                    # #4050: a declared field shadowing user/perms is legal
+                    # but flagged (DEBUG only; djust.V027 statically).
+                    shadowed = AUTHORIZATION_CONTEXT_NAMES.intersection(supplied).intersection(
+                        context
+                    )
+                    if shadowed:
+                        warn_shadowed_authorization_names(self, shadowed)
             self._context_processor_keys = added
             return result
 
