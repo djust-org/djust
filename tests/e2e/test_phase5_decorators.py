@@ -19,6 +19,7 @@ from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
 from djust import LiveView
 from djust.decorators import cache, client_state, debounce
+from djust import state
 
 # Use pytest.mark.django_db for all tests that need Django
 pytestmark = pytest.mark.django_db
@@ -31,7 +32,8 @@ class TestCacheDecoratorE2E:
         """Test @cache decorator metadata appears in rendered HTML."""
 
         class SearchView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            results = state()
             template = """
             <html>
             <body>
@@ -70,7 +72,7 @@ class TestCacheDecoratorE2E:
         """Test @cache with multiple key parameters."""
 
         class SearchView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Search</div>"
 
             @cache(ttl=60, key_params=["query", "page", "filter"])
@@ -88,7 +90,7 @@ class TestCacheDecoratorE2E:
         """Test @cache combined with @debounce."""
 
         class SearchView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Search</div>"
 
             @debounce(wait=0.5)
@@ -113,7 +115,8 @@ class TestClientStateDecoratorE2E:
         """Test @client_state decorator metadata appears in rendered HTML."""
 
         class DashboardView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            filter = state()
             template = """
             <html>
             <body>
@@ -151,7 +154,7 @@ class TestClientStateDecoratorE2E:
         """Test @client_state with single key."""
 
         class SimpleView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Simple</div>"
 
             @client_state(keys=["temp"])
@@ -181,7 +184,8 @@ class TestLoadingAttributeE2E:
         """Test dj-loading.disable attribute renders correctly."""
 
         class SaveFormView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            saved = state()
             template = """
             <html>
             <body>
@@ -211,7 +215,7 @@ class TestLoadingAttributeE2E:
         """Test dj-loading.class attribute renders correctly."""
 
         class SaveFormView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = """
             <html>
             <body>
@@ -241,7 +245,7 @@ class TestLoadingAttributeE2E:
         """Test dj-loading.show and dj-loading.hide attributes render correctly."""
 
         class SaveFormView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = """
             <html>
             <body>
@@ -274,7 +278,7 @@ class TestLoadingAttributeE2E:
         """Test multiple dj-loading modifiers on same element."""
 
         class SaveFormView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = """
             <button dj-click="save" dj-loading.disable dj-loading.class="loading">
                 Save
@@ -307,7 +311,8 @@ class TestIntegrationScenarios:
         """Test realistic search view with caching and debouncing."""
 
         class ProductSearchView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            results = state(default_factory=list)
             template = """
             <html>
             <body>
@@ -348,7 +353,9 @@ class TestIntegrationScenarios:
         """Test dashboard with client state coordination."""
 
         class DashboardView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            filter = state()
+            sort = state()
             template = """
             <html>
             <body>
@@ -402,7 +409,7 @@ class TestMetadataJSONFormat:
         """Test that all Phase 5 decorators produce valid JSON."""
 
         class ComplexView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>Test</div>"
 
             @cache(ttl=60, key_params=["query"])

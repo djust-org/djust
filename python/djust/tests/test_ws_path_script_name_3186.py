@@ -24,6 +24,7 @@ from django.urls import clear_url_caches, path
 from djust import LiveView
 from djust.test_isolation import reset_static_state
 from djust.utils import clear_template_dirs_cache
+from djust import state
 
 _TEMPLATE = """{% load live_tags %}<!doctype html>
 <html><head>{% djust_client_config %}</head>
@@ -32,7 +33,8 @@ _TEMPLATE = """{% load live_tags %}<!doctype html>
 
 
 class PrefixedView3186(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    greeting = state("hi")
     template_name = "ws3186/page.html"
 
     def mount(self, request, **kwargs):

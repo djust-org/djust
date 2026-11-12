@@ -311,7 +311,7 @@ class TestGetHandlers:
                 }
                 attrs[name] = fn
 
-        cls = type("MockView", (LiveView,), {"exposure_policy": "legacy", **attrs})
+        cls = type("MockView", (LiveView,), {"exposure_policy": "explicit", **attrs})
         cls.template_name = "mock.html"
         return cls
 
@@ -358,7 +358,7 @@ class TestGetHandlers:
         cls = type(
             "SaveView",
             (LiveView,),
-            {"exposure_policy": "legacy", "save": save, "template_name": "t.html"},
+            {"exposure_policy": "explicit", "save": save, "template_name": "t.html"},
         )
         handlers = _get_handlers(cls)
         assert "save" in handlers
@@ -370,7 +370,7 @@ class TestGetHandlers:
         from djust.live_view import LiveView
 
         cls = type(
-            "EmptyView", (LiveView,), {"exposure_policy": "legacy", "template_name": "empty.html"}
+            "EmptyView", (LiveView,), {"exposure_policy": "explicit", "template_name": "empty.html"}
         )
         handlers = _get_handlers(cls)
         # Only inherited decorated handlers should appear, not plain methods
@@ -385,7 +385,7 @@ class TestGetHandlers:
         from djust.live_view import LiveView
 
         class StrictView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "t.html"
 
             @event_handler(parameter_policy="strict")

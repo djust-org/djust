@@ -443,7 +443,7 @@ def test_the_mixin_on_an_old_contract_backend_behaves_as_it_always_did(installed
     seen = []
 
     class Room(PresenceMixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         presence_key = ROOM
 
         def get_presence_user_id(self):
@@ -603,7 +603,7 @@ def test_the_builtins_and_a_plain_old_contract_backend_are_classified(installed)
 
 
 class Room(PresenceMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     presence_key = "mixin3254"
     JOINED: list = []
     LEFT: list = []
@@ -772,7 +772,7 @@ class SpyBackend(InMemoryPresenceBackend):
 
 
 class WsRoom(PresenceMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     presence_key = WS_ROOM
     template = '<div dj-root dj-view="' + MOD + '.WsRoom"><b>{{ online_count }}</b></div>'
 
@@ -798,12 +798,12 @@ class OtherRoom(WsRoom):
 
 
 class Plain(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.Plain">plain</div>'
 
 
 class Broken(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.Broken">x</div>'
 
     def mount(self, request, **kwargs):

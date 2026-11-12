@@ -131,7 +131,7 @@ async def test_hvr_non_liveview_file_triggers_template_reload():
     from djust.websocket import LiveViewConsumer
 
     class TemplateView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div>x</div>"
 
     consumer = LiveViewConsumer()

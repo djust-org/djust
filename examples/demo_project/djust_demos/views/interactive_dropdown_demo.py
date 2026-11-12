@@ -21,13 +21,18 @@ quiet observer itself changing state.
 from djust import LiveView
 from djust.components.interactive import DropdownMenu
 from djust.decorators import event_handler
+from djust import state
 
 #: Observer calls, per process. The quiet observer must not change view state.
 OBSERVED: list = []
 
 
 class InteractiveDropdownView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    result = state("none")
+    calls = state(0)
+    live_open = state("unknown")
+    observed_count = state(0)
     template_name = "demos/interactive_dropdown.html"
 
     project_menu = DropdownMenu(

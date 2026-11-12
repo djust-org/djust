@@ -79,7 +79,7 @@ def _get(template_name: str) -> str:
         "V3294_" + template_name.split(".")[0],
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "template_name": template_name,
             "login_required": False,
             "mount": lambda self, request, **kwargs: setattr(self, "n", 1),

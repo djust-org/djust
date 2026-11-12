@@ -26,13 +26,15 @@ from djust.push import view_group_name
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import drain_extra, receive_until
+from djust import state
 
 SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 RAN = []
 
 
 class WorkView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = "<div dj-root><span>{{ count }}</span></div>"
     _listen_channels = frozenset({"turn_work_2955"})
 
@@ -76,7 +78,8 @@ class FailingWorkPushView(LiveView):
     """No ``handle_async_result``: the failed work must still produce the
     ``source="async"`` frame (consumer twin of the #2963 runtime change)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = "<div dj-root><span>{{ count }}</span></div>"
 
     def mount(self, request, **kwargs):

@@ -25,7 +25,7 @@ class _Lists:
 
 
 class ClashingView(_Lists, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
     def mount(self, request, **kwargs):
@@ -38,7 +38,7 @@ class ClashingView(_Lists, LiveView):
 
 
 class CleanView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
     def mount(self, request, **kwargs):

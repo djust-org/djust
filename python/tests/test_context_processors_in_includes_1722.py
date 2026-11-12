@@ -24,6 +24,7 @@ from unittest.mock import Mock
 
 from django.test import RequestFactory, override_settings
 from django.utils.safestring import mark_safe
+from djust import state
 
 try:
     from djust import LiveView, RustLiveView
@@ -52,7 +53,9 @@ class IncludeView(LiveView):
     """dj-root template includes a partial that uses a context-processor var
     AND a plain view attr (the discriminator)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
+    nav_items = state("home|about")
     template_name = "_1722_page.html"
 
     def mount(self, request, **kwargs):

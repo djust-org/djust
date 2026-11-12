@@ -11,6 +11,7 @@ from djust import LiveView
 from djust.decorators import event_handler
 from djust.decorators import permission_required as require_permission
 from djust.testing import LiveViewTestClient
+from djust import state
 
 
 class _User:
@@ -28,7 +29,8 @@ class _User:
 
 
 class GatedView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = "<div dj-root>{{ count }}</div>"
 
     def mount(self, request, **kwargs):
@@ -45,7 +47,9 @@ class GatedView(LiveView):
 
 
 class ObjectGatedView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
+    allowed = state(True)
     template = "<div dj-root>{{ count }}</div>"
 
     def mount(self, request, **kwargs):

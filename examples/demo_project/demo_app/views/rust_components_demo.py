@@ -8,6 +8,7 @@ components are instantiated in Python code and have state/behavior.
 from djust import LiveView
 from djust.components.layout import NavbarComponent, NavItem, TabsComponent, TabItem
 from djust.components.ui import DropdownComponent, DropdownItem
+from djust import state
 
 
 class RustComponentsDemo(LiveView):
@@ -22,7 +23,33 @@ class RustComponentsDemo(LiveView):
     - Framework comparison (Bootstrap5, Tailwind, Plain)
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    dropdown_message = state("")
+    counter = state(0)
+    selected_option = state("opt1")
+    selected_country = state("United States")
+    variant_selections = state(default_factory=lambda: {
+            'primary': None,
+            'success': None,
+            'warning': None,
+            'danger': None
+        })
+    selected_location = state("Canada")
+    basic_dropdown = state()
+    dropdown_primary = state()
+    dropdown_success = state()
+    dropdown_warning = state()
+    dropdown_danger = state()
+    dropdown_small = state()
+    dropdown_medium = state()
+    dropdown_large = state()
+    dropdown_selected = state()
+    dropdown_disabled = state()
+    basic_tabs = state()
+    pills_tabs = state()
+    underline_tabs = state()
+    vertical_tabs = state()
+    interactive_tabs = state()
     template_name = 'demos/rust_components.html'
 
     def get_context_data(self, **kwargs):

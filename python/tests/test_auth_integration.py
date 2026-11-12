@@ -45,7 +45,7 @@ class TestMountAuthIntegration:
         from djust.live_view import LiveView
 
         class ProtectedView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "protected.html"
             login_required = True
 
@@ -61,7 +61,7 @@ class TestMountAuthIntegration:
         from djust.live_view import LiveView
 
         class ProtectedView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "protected.html"
             login_required = True
 
@@ -75,7 +75,7 @@ class TestMountAuthIntegration:
         from djust.live_view import LiveView
 
         class AdminView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "admin.html"
             login_required = True
             permission_required = "admin.access_dashboard"
@@ -90,7 +90,7 @@ class TestMountAuthIntegration:
         from djust.live_view import LiveView
 
         class AdminView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "admin.html"
             login_required = True
             permission_required = "admin.access_dashboard"
@@ -116,7 +116,7 @@ class TestHandlerPermissionIntegration:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
 
             @permission_required("myapp.delete_item")
@@ -147,7 +147,7 @@ class TestHandlerPermissionIntegration:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
 
             @permission_required("myapp.delete_item")
@@ -177,7 +177,7 @@ class TestHandlerPermissionIntegration:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
 
             @event_handler()

@@ -11,10 +11,12 @@ from django.http import HttpResponse
 from django.urls import path
 
 from djust import LiveView
+from djust import state
 
 
 class RedirectSourceView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    where = state("source")
     template = (
         '<div dj-root dj-view="tests.redirect_mount_test_urls.RedirectSourceView">source</div>'
     )
@@ -24,7 +26,8 @@ class RedirectSourceView(LiveView):
 
 
 class RedirectTargetView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    where = state("target")
     template = (
         '<div dj-root dj-view="tests.redirect_mount_test_urls.RedirectTargetView">target</div>'
     )

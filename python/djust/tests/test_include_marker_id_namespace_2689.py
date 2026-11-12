@@ -36,6 +36,7 @@ from djust import LiveView
 from djust.decorators import event_handler
 from djust.testing import LiveViewTestClient
 from djust.utils import clear_template_dirs_cache
+from djust import state
 
 pytestmark = [pytest.mark.django_db]
 
@@ -45,7 +46,9 @@ _MARKER = re.compile(r'<!--dj-if id="(if-[0-9A-Za-z_-]+)"-->(.*?)<!--/dj-if-->',
 
 
 class TwoIncludes2689(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    a = state(False)
+    b = state(False)
     template_name = "inc_2689/page.html"
 
     def mount(self, request: Any, **kwargs: Any) -> None:
@@ -68,7 +71,10 @@ class NestedIncludes2689(LiveView):
     still collide.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    a = state(False)
+    b = state(False)
+    c = state(False)
     template_name = "inc_2689/outer.html"
 
     def mount(self, request: Any, **kwargs: Any) -> None:
@@ -88,7 +94,9 @@ class OnlyIncludes2689(LiveView):
     (#2519), the loop path (#1832) and the component namespace (#2686).
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    a = state(False)
+    b = state(False)
     template_name = "inc_2689/only.html"
 
     def mount(self, request: Any, **kwargs: Any) -> None:
@@ -110,7 +118,9 @@ class ExtendsIncludes2689(LiveView):
     ``{% extends %}`` page does not lose the suffix altogether.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    a = state(False)
+    b = state(False)
     template_name = "inc_2689/child.html"
 
     def mount(self, request: Any, **kwargs: Any) -> None:
@@ -132,7 +142,9 @@ class IncludedExtender2689(LiveView):
     ``site_id`` keeps them apart.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    a = state(False)
+    b = state(False)
     template_name = "inc_2689/host.html"
 
     def mount(self, request: Any, **kwargs: Any) -> None:
@@ -146,7 +158,8 @@ class IncludedExtender2689(LiveView):
 class IncludeInLoop2689(LiveView):
     """``{% include %}`` inside ``{% for %}`` — the two suffix axes composed."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    rows = state(default_factory=lambda: [False, False, False])
     template_name = "inc_2689/loop.html"
 
     def mount(self, request: Any, **kwargs: Any) -> None:

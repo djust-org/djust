@@ -72,7 +72,7 @@ class _StreamingView(LiveView):
     without a wrapper are a documented single-chunk edge case.)
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><p>hello streaming</p></div>"
     streaming_render = True
 
@@ -80,7 +80,7 @@ class _StreamingView(LiveView):
 class _NonStreamingView(LiveView):
     """Default LiveView (streaming_render left at False)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><p>hello non-streaming</p></div>"
 
 

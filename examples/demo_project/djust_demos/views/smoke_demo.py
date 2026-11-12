@@ -27,12 +27,14 @@ dj-root (see CLAUDE.md CSP-strict defaults + #1848).
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 
 class BrowserSmokeView(LiveView):
     """Minimal mounting LiveView for the browser-smoke canary."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    clicks = state(0)
     template_name = "demos/browser_smoke.html"
 
     def mount(self, request, **kwargs):

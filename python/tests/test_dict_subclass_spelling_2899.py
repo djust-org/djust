@@ -19,6 +19,7 @@ from typing import Any, Dict
 import django
 import pytest
 from django.conf import settings
+from djust import state
 
 if not settings.configured:
     settings.configure(
@@ -176,7 +177,11 @@ def test_normalize_keeps_a_self_spelling_subclass_for_the_render_path():
 
 
 class Page(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    box = state()
+    od = state()
+    nested = state()
+    ts = state()
     template = (
         '<div dj-root dj-id="0">[{{ box }}][{{ box.a }}][{{ od }}][{{ od.b }}]'
         "[{{ request.GET }}][{{ request.GET.q }}][{{ ts }}][{{ ts.active }}]"

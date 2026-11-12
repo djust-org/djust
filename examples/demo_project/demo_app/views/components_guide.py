@@ -7,6 +7,7 @@ This page itself is a LiveView that demonstrates the concepts it teaches!
 
 from djust import LiveView
 from djust.components.layout import NavbarComponent, NavItem
+from djust import state
 
 
 class ComponentsGuideView(LiveView):
@@ -20,7 +21,8 @@ class ComponentsGuideView(LiveView):
     - The badge updates when the counter changes!
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    demo_count = state(0)
     template_name = 'components-guide.html'
 
     def mount(self, request, **kwargs):

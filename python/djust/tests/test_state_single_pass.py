@@ -41,6 +41,7 @@ from djust.change_detection import deep_fingerprint
 from djust.mixins import rust_bridge
 from djust.mixins.rust_bridge import _collect_safe_keys
 from djust.serialization import normalize_django_value
+from djust import state as djust_state
 
 SEED = 3578
 CORPUS_SIZE = 4000
@@ -320,7 +321,15 @@ def _make_view():
     from djust import LiveView
 
     class _Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        title = djust_state("t")
+        banner = djust_state()
+        picked = djust_state(0)
+        rows = djust_state()
+        meta = djust_state()
+        pair = djust_state()
+        uid = djust_state()
+        odd = djust_state()
         template = (
             "<div dj-root><h1>{{ title }}</h1>{{ banner }}"
             "{% for r in rows %}<p class='{{ r.cls }}'>{{ r.id }} {{ r.name }} {{ r.html }}"

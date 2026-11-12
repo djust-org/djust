@@ -8,6 +8,7 @@ Related: GitHub Issue #77
 """
 
 import pytest
+from djust import state
 
 
 @pytest.fixture
@@ -51,7 +52,9 @@ class TestLiveViewInclude:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            site_name = state("Test Site")
+            content = state("Hello World")
             template = """
             <div dj-root>
                 {% include "_header.html" %}
@@ -76,7 +79,9 @@ class TestLiveViewInclude:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            site_name = state("My Site")
+            year = state(2024)
             template = """
             <div dj-root>
                 {% include "_header.html" %}
@@ -222,7 +227,7 @@ class TestUnsupportedTagWarning:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = """
             <div dj-root>
                 {% zzz_not_a_tag %}content

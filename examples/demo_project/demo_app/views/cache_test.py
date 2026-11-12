@@ -4,6 +4,7 @@ Cache Test - automated testing for @cache decorator
 
 from djust import LiveView
 from djust.decorators import cache, debounce, event_handler
+from djust import state
 
 
 class CacheTestView(LiveView):
@@ -18,7 +19,15 @@ class CacheTestView(LiveView):
     - Cache key generation works with key_params
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    query = state("")
+    server_calls = state(0)
+    total_searches = state(0)
+    test_results = state(default_factory=list)
+    tests_run = state(0)
+    tests_passed = state(0)
+    tests_failed = state(0)
+    all_tests_passed = state(False)
     template_name = 'tests/cache_test.html'
 
     def mount(self, request):

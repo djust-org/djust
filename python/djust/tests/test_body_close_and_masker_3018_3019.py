@@ -21,7 +21,7 @@ from djust.tests._growth import assert_scales_linearly
 
 
 class _View(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>x</div>"
 
     @debounce(wait=0.5)

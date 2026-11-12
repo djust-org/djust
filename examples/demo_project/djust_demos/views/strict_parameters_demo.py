@@ -9,10 +9,13 @@ carries ``data-*`` attributes.
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 
 class StrictParametersView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    result = state("none")
+    calls = state(0)
     template_name = "demos/strict_parameters.html"
 
     def mount(self, request, **kwargs):

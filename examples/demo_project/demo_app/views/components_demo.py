@@ -10,6 +10,7 @@ This demonstrates:
 
 from djust import LiveView
 from djust.components.ui import Badge, Button
+from djust import state
 
 
 class ComponentsDemoView(LiveView):
@@ -23,7 +24,40 @@ class ComponentsDemoView(LiveView):
     - Automatic Rust optimization if available
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    badge_primary = state()
+    badge_secondary = state()
+    badge_success = state()
+    badge_danger = state()
+    badge_warning = state()
+    badge_info = state()
+    badge_pill_primary = state()
+    badge_pill_success = state()
+    badge_pill_danger = state()
+    badge_sm = state()
+    badge_md = state()
+    badge_lg = state()
+    btn_primary = state()
+    btn_secondary = state()
+    btn_success = state()
+    btn_danger = state()
+    btn_warning = state()
+    btn_info = state()
+    btn_outline_primary = state()
+    btn_outline_success = state()
+    btn_outline_danger = state()
+    btn_sm = state()
+    btn_md = state()
+    btn_lg = state()
+    btn_disabled = state()
+    badge_count = state()
+    badge_count_ms = state()
+    badge_count_hybrid = state()
+    badge_count_hybrid_ms = state()
+    badge_count_python = state()
+    badge_count_python_ms = state()
+    many_badges = state()
+    count = state(0)
     template = """
     <!DOCTYPE html>
     <html lang="en">

@@ -33,6 +33,7 @@ from .test_theming_lazy_context_3028 import (
     PROCESSOR,
     _clear_template_caches,
 )
+from djust import state
 
 pytestmark = [pytest.mark.theming, pytest.mark.django_db]
 
@@ -66,7 +67,8 @@ def _presets():
 
 
 class HttpUsed(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = (
         "<html><head>{{ theme_head }}</head><body><div dj-root>{{ theme_switcher }}|"
         "{{ theme_panel }}|{{ count }}|{% if theme_mode_toggle %}T{% endif %}|"
@@ -82,7 +84,8 @@ class HttpUsed(LiveView):
 
 
 class HttpUnused(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = "<html><body><div dj-root>C{{ count }}</div></body></html>"
 
     def mount(self, request, **kwargs):
@@ -94,7 +97,8 @@ class HttpUnused(LiveView):
 
 
 class StreamUsed(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     streaming_render = True
     template = (
         "<html><head>{{ theme_head }}</head><body><div dj-root>"
@@ -106,7 +110,8 @@ class StreamUsed(LiveView):
 
 
 class StreamUnused(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     streaming_render = True
     template = "<html><body><div dj-root>n{{ count }}</div></body></html>"
 
@@ -230,7 +235,8 @@ class TestStreamingAget:
 
 
 class WsUsed(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = (
         '<div dj-view="djust.tests.test_theming_lazy_paths_3028.WsUsed" dj-id="0">'
         "[{{ theme_head }}]|[{{ theme_switcher }}]|[{{ theme_panel }}]|{{ count }}"
@@ -246,7 +252,8 @@ class WsUsed(LiveView):
 
 
 class WsUnused(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = (
         '<div dj-view="djust.tests.test_theming_lazy_paths_3028.WsUnused" dj-id="0">'
         "C{{ count }}</div>"

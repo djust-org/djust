@@ -22,12 +22,14 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust.presence import PresenceManager, PresenceMixin
+from djust import state
 
 _MOD = "djust.tests.test_realtime_v121_6"
 
 
 class RoomView(PresenceMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    online = state(0)
     template = "<div dj-root><p>{{ online }}</p></div>"
     presence_key = "room_2968"
 
@@ -40,7 +42,7 @@ class RoomView(PresenceMixin, LiveView):
 
 
 class PlainView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><p>plain</p></div>"
 
     def mount(self, request: Any, **kwargs: Any) -> None:

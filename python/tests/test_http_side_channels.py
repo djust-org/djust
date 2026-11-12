@@ -13,12 +13,14 @@ from django.test import RequestFactory
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
 
 
 class FlashView(LiveView):
     """View that uses put_flash in an event handler."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    message = state("Hello")
     template = "<div dj-root><span>{{ message }}</span></div>"
 
     def mount(self, request, **kwargs):

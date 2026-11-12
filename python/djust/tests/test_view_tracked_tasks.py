@@ -72,7 +72,7 @@ class _ExplicitFollower(LiveView):
 
 
 class _Other(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>other</span></div>"
 
 

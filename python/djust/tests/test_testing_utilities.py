@@ -11,6 +11,7 @@ import pytest
 from djust.decorators import event_handler
 from djust.live_view import LiveView
 from djust.testing import LiveViewTestClient
+from djust import state
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -20,7 +21,7 @@ from djust.testing import LiveViewTestClient
 
 def test_assert_push_event_matches_by_name():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler
         def save(self, **kwargs):
@@ -33,7 +34,7 @@ def test_assert_push_event_matches_by_name():
 
 def test_assert_push_event_matches_payload_subset():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler
         def save(self, **kwargs):
@@ -47,7 +48,7 @@ def test_assert_push_event_matches_payload_subset():
 
 def test_assert_push_event_fails_on_wrong_name():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler
         def save(self, **kwargs):
@@ -61,7 +62,7 @@ def test_assert_push_event_fails_on_wrong_name():
 
 def test_assert_push_event_fails_on_payload_mismatch():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler
         def save(self, **kwargs):
@@ -80,7 +81,7 @@ def test_assert_push_event_fails_on_payload_mismatch():
 
 def test_assert_patch_matches_path():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler
         def filter(self, **kwargs):
@@ -93,7 +94,7 @@ def test_assert_patch_matches_path():
 
 def test_assert_patch_matches_params_subset():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler
         def filter(self, **kwargs):
@@ -106,7 +107,7 @@ def test_assert_patch_matches_params_subset():
 
 def test_assert_patch_fails_when_redirect_queued_instead():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler
         def go(self, **kwargs):
@@ -125,7 +126,7 @@ def test_assert_patch_fails_when_redirect_queued_instead():
 
 def test_assert_redirect_matches_path():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler
         def save_and_exit(self, **kwargs):
@@ -138,7 +139,7 @@ def test_assert_redirect_matches_path():
 
 def test_assert_redirect_fails_on_wrong_path():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler
         def go(self, **kwargs):
@@ -157,7 +158,7 @@ def test_assert_redirect_fails_on_wrong_path():
 
 def test_render_async_no_pending_tasks_is_noop():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler
         def nop(self, **kwargs):
@@ -170,8 +171,8 @@ def test_render_async_no_pending_tasks_is_noop():
 
 def test_render_async_runs_pending_sync_callback():
     class V(LiveView):
-        exposure_policy = "legacy"
-        value = 0
+        exposure_policy = "explicit"
+        value = state(0)
 
         def mount(self, request=None, **kwargs):
             self.value = 0
@@ -198,7 +199,7 @@ def test_render_async_drains_so_recursive_tasks_are_not_auto_rerun():
     tracker = {"runs": 0}
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request=None, **kwargs):
             pass
@@ -228,7 +229,7 @@ def test_render_async_invokes_handle_async_result_on_success():
     calls = []
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request=None, **kwargs):
             pass
@@ -255,7 +256,7 @@ def test_render_async_invokes_handle_async_result_on_error_and_reraises():
     calls = []
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request=None, **kwargs):
             pass
@@ -282,8 +283,8 @@ def test_render_async_without_handle_async_result_works_unchanged():
     """View that doesn't define handle_async_result still gets its callbacks run."""
 
     class V(LiveView):
-        exposure_policy = "legacy"
-        count = 0
+        exposure_policy = "explicit"
+        count = state(0)
 
         def mount(self, request=None, **kwargs):
             self.count = 0
@@ -312,7 +313,7 @@ def test_follow_redirect_refuses_when_multiple_redirects_queued():
     almost always a bug; the test should surface the ambiguity explicitly."""
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request=None, **kwargs):
             pass
@@ -335,7 +336,7 @@ def test_follow_redirect_refuses_when_multiple_redirects_queued():
 
 def test_assert_stream_insert_matches_by_name():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request=None, **kwargs):
             self.stream("msgs", [])
@@ -351,7 +352,7 @@ def test_assert_stream_insert_matches_by_name():
 
 def test_assert_stream_insert_matches_dict_subset():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request=None, **kwargs):
             self.stream("msgs", [])
@@ -367,7 +368,7 @@ def test_assert_stream_insert_matches_dict_subset():
 
 def test_assert_stream_insert_fails_on_wrong_stream():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request=None, **kwargs):
             self.stream("msgs", [])
@@ -389,8 +390,8 @@ def test_assert_stream_insert_fails_on_wrong_stream():
 
 def test_trigger_info_invokes_handle_info():
     class V(LiveView):
-        exposure_policy = "legacy"
-        notifications = 0
+        exposure_policy = "explicit"
+        notifications = state(0)
 
         def mount(self, request=None, **kwargs):
             self.notifications = 0
@@ -406,7 +407,7 @@ def test_trigger_info_invokes_handle_info():
 
 def test_trigger_info_records_event_with_duration():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request=None, **kwargs):
             pass
@@ -427,7 +428,7 @@ def test_trigger_info_noop_default_is_callable():
     trigger_info on a view that hasn't overridden it just returns success."""
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request=None, **kwargs):
             pass
@@ -439,7 +440,7 @@ def test_trigger_info_noop_default_is_callable():
 
 def test_trigger_info_captures_handler_exception():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request=None, **kwargs):
             pass
@@ -460,7 +461,7 @@ def test_trigger_info_captures_handler_exception():
 
 def test_assertions_require_mount():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
     c = LiveViewTestClient(V)  # not mounted
     for method, args in [
@@ -483,7 +484,7 @@ def test_assertions_require_mount():
 
 def test_combined_push_event_patch_and_stream():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request=None, **kwargs):
             self.stream("items", [])

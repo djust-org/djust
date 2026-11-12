@@ -5,6 +5,7 @@ Optimistic Counter Demo - demonstrates @optimistic with error handling
 from djust import LiveView
 from djust.decorators import optimistic
 import time
+from djust import state
 
 
 class OptimisticCounterView(LiveView):
@@ -18,7 +19,9 @@ class OptimisticCounterView(LiveView):
     - Shake animation on error
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(5)
+    error = state(None)
     template = """
     <!DOCTYPE html>
     <html>

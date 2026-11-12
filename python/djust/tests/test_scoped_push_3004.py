@@ -23,6 +23,7 @@ from djust.push import (
     view_group_name,
     view_push_scopes,
 )
+from djust import state
 
 pytest.importorskip("channels")
 
@@ -32,7 +33,10 @@ VIEW = f"{__name__}._RoomView"
 
 
 class _RoomView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    room = state()
+    pings = state(0)
+    tag = state("")
     template = (
         '<div dj-root dj-view="djust.tests.test_scoped_push_3004._RoomView">'
         "{{ room }}:{{ pings }}:{{ tag }}</div>"
@@ -59,7 +63,7 @@ class _RoomView(LiveView):
 
 
 class _OtherView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="djust.tests.test_scoped_push_3004._OtherView">other</div>'
 
     def mount(self, request, **kwargs):
@@ -69,7 +73,10 @@ class _OtherView(LiveView):
 class _TickView(LiveView):
     """Moves itself from room t1 to t2 on its first tick."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    room = state()
+    pings = state(0)
+    tag = state("")
     template = '<div dj-root dj-view="djust.tests.test_scoped_push_3004._TickView">{{ room }}:{{ pings }}:{{ tag }}</div>'
     tick_interval = 50
 
@@ -94,7 +101,9 @@ class _TickView(LiveView):
 class _InfoView(LiveView):
     """Moves to the room a db_notify payload names (``handle_info``)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    room = state()
+    pings = state(0)
     template = '<div dj-root dj-view="djust.tests.test_scoped_push_3004._InfoView">{{ room }}:{{ pings }}</div>'
 
     def mount(self, request, **kwargs):
@@ -112,7 +121,7 @@ class _InfoView(LiveView):
 
 
 class _BadScopeView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="djust.tests.test_scoped_push_3004._BadScopeView">x</div>'
 
     def mount(self, request, **kwargs):

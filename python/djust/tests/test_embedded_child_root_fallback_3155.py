@@ -28,7 +28,7 @@ _MODULE = "djust.tests.test_embedded_child_root_fallback_3155"
 
 
 class Widget3155(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<p class="widget-body">Change summary</p>'
 
     def mount(self, request, **kwargs):
@@ -38,7 +38,7 @@ class Widget3155(LiveView):
 class RootedWidget3155(LiveView):
     """A child whose own template declares a ``dj-root``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root><p class="widget-body">Rooted child</p></div>'
 
     def mount(self, request, **kwargs):
@@ -92,7 +92,7 @@ def _render_page(rf, child: str) -> str:
         "Page3155",
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "template_name": "page_3155.html",
             "mount": lambda self, request, **kw: None,
         },

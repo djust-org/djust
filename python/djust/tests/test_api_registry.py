@@ -27,7 +27,7 @@ def _clean_registry():
 
 def test_explicit_api_name_wins_over_derivation():
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "myapp.inventory"
 
         @event_handler(expose_api=True)
@@ -39,7 +39,7 @@ def test_explicit_api_name_wins_over_derivation():
 
 def test_derived_slug_uses_app_label_and_class_name():
     class AnotherView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler(expose_api=True)
         def noop(self, **kwargs):
@@ -52,14 +52,14 @@ def test_derived_slug_uses_app_label_and_class_name():
 
 def test_has_exposed_handler_detects_flag():
     class Exposed(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler(expose_api=True)
         def go(self, **kwargs):
             return 1
 
     class Hidden(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler
         def go(self, **kwargs):
@@ -71,7 +71,7 @@ def test_has_exposed_handler_detects_flag():
 
 def test_duplicate_slug_raises():
     class A(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "dup"
 
         @event_handler(expose_api=True)
@@ -79,7 +79,7 @@ def test_duplicate_slug_raises():
             return 1
 
     class B(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "dup"
 
         @event_handler(expose_api=True)
@@ -92,7 +92,7 @@ def test_duplicate_slug_raises():
 
 def test_resolve_returns_none_for_unknown_slug():
     class Solo(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "registry.solo"
 
         @event_handler(expose_api=True)
@@ -105,10 +105,10 @@ def test_resolve_returns_none_for_unknown_slug():
 
 def test_register_api_view_duplicate_raises():
     class X(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
     class Y(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
     register_api_view("registry.explicit", X)
     # Same slug, same class — idempotent.
@@ -119,7 +119,7 @@ def test_register_api_view_duplicate_raises():
 
 def test_iter_exposed_handlers_yields_expected_tuple():
     class ExposedView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "registry.exposed"
 
         @event_handler(expose_api=True)
@@ -141,7 +141,7 @@ def test_iter_exposed_handlers_yields_expected_tuple():
 
 def test_registry_only_contains_views_with_exposed_handlers():
     class OnlyInternal(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "registry.internal"
 
         @event_handler

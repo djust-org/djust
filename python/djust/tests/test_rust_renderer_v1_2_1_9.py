@@ -23,6 +23,7 @@ from django.test import RequestFactory, override_settings
 from djust import LiveView
 from djust.forms import FormMixin
 from djust.utils import clear_template_dirs_cache
+from djust import state
 
 
 class _TemplateDir:
@@ -148,7 +149,7 @@ def _rust_and_django(body: str, context: dict):
 
 
 class _FormView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = _NameForm
     template = "<div dj-root></div>"
 
@@ -190,7 +191,9 @@ def test_dj_activity_registers_on_the_view_during_a_rust_render():
     active-parent-view thread-local, as ``{% live_render %}`` does."""
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        show = state(False)
+        n = state(1)
         template = (
             "{% load live_tags %}<div dj-root>"
             '{% dj_activity "panel" visible=show %}<p>{{ n }}</p>{% enddj_activity %}</div>'
@@ -241,7 +244,7 @@ def test_form_tags_and_filters_work_in_a_real_root_liveview():
     so the tags and filters fall back to the view being rendered."""
 
     class V(FormMixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         form_class = _NameForm
         template = (
             "{% load live_tags %}<div dj-root>"

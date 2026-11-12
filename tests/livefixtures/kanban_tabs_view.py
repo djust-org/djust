@@ -15,6 +15,7 @@ fixtures consumed by ``tests/js/vdom_client_faithful_diff.test.js``.
 """
 
 from djust import LiveView
+from djust import state
 
 # One {% if active_tab == N %} block per tab. Tab 3 (KANBAN_TAB) renders a
 # keyed kanban; the others render a trivial element-bearing block so every
@@ -108,7 +109,12 @@ def _initial_columns():
 class KanbanTabsView(LiveView):
     """8-tab dashboard, tab 3 = keyed kanban. State: ``active_tab``, ``columns``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    active_tab = state()
+    columns = state()
+    detail = state(True)
+    extra = state(True)
+    deep = state(True)
     template = '<div class="tabs-content">' + _TAB_BLOCKS + "</div>"
 
     def mount(self, request, active_tab=0):

@@ -30,6 +30,7 @@ from djust import LiveView
 from djust.template_tags import TagHandler
 from djust.template_tags.markdown import MarkdownTagHandler
 from djust.testing import LiveViewTestClient
+from djust import state
 
 
 class _Probe(TagHandler):
@@ -111,7 +112,8 @@ class TestMarkdownHandlerResolvedSource:
 
 def _render(template, ctx_blocks):
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
+        blocks = state()
 
         def mount(self, request, **kwargs):
             self.blocks = ctx_blocks

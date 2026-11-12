@@ -17,10 +17,12 @@ from django.http import HttpResponse
 from django.urls import include, path
 
 from djust import LiveView
+from djust import state
 
 
 class DashboardView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    where = state("dashboard")
     template = '<div dj-root dj-view="tests.route_map_test_urls.DashboardView">dash</div>'
 
     def mount(self, request, **kwargs):
@@ -28,7 +30,8 @@ class DashboardView(LiveView):
 
 
 class ItemDetailView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    item_id = state()
     template = '<div dj-root dj-view="tests.route_map_test_urls.ItemDetailView">item</div>'
 
     def mount(self, request, **kwargs):
@@ -36,7 +39,8 @@ class ItemDetailView(LiveView):
 
 
 class ProtectedView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    where = state("protected")
     template = '<div dj-root dj-view="tests.route_map_test_urls.ProtectedView">secret</div>'
 
     def mount(self, request, **kwargs):
@@ -44,7 +48,8 @@ class ProtectedView(LiveView):
 
 
 class NestedView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    where = state("nested")
     template = '<div dj-root dj-view="tests.route_map_test_urls.NestedView">nested</div>'
 
     def mount(self, request, **kwargs):

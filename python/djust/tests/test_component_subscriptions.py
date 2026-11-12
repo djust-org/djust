@@ -34,7 +34,7 @@ def selected(source):
 
 def test_subscriptions_compile_on_liveview_class_without_instantiating():
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = declaration()
 
         @selected(menu)
@@ -56,7 +56,7 @@ def test_subscriptions_compile_on_liveview_class_without_instantiating():
 
 def test_two_components_and_async_callback_preserve_symbols():
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = declaration()
         other = declaration()
 
@@ -74,7 +74,7 @@ def test_two_components_and_async_callback_preserve_symbols():
 
 def test_inherited_callback_override_is_revalidated_and_template_guarded():
     class Parent(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = declaration()
 
         @selected(menu)
@@ -96,7 +96,7 @@ def test_inherited_callback_override_is_revalidated_and_template_guarded():
 
 def test_duplicate_pair_rejected_but_redecorated_override_allowed():
     class Parent(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = declaration()
 
         @selected(menu)
@@ -122,24 +122,24 @@ def test_alias_and_unrelated_reuse_rejected():
     with pytest.raises((TypeError, RuntimeError), match="aliased|__set_name__"):
 
         class Alias(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             first = source
             second = source
 
     class Owner(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = declaration()
 
     with pytest.raises((TypeError, RuntimeError), match="reused|__set_name__"):
 
         class Foreign(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             menu = Owner.menu
 
     with pytest.raises(TypeError, match="ForeignCallback.*foreign"):
 
         class ForeignCallback(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             @selected(Owner.menu)
             def callback(self, component: Menu, value: str) -> None:
@@ -148,7 +148,7 @@ def test_alias_and_unrelated_reuse_rejected():
 
 def test_replacing_declaration_revalidates_output_and_source():
     class Parent(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = declaration()
 
         @selected(menu)
@@ -198,7 +198,7 @@ def test_subscription_rejected_by_transport_even_in_permissive_mode(mode, monkey
     from djust.config import config
 
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = declaration()
 
         @selected(menu)
@@ -214,7 +214,7 @@ def test_subscription_rejected_by_transport_even_in_permissive_mode(mode, monkey
 @pytest.mark.parametrize("kind", ["staticmethod", "classmethod", "property", "none"])
 def test_non_instance_method_replacement_rejected(kind):
     class Parent(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = declaration()
 
         @selected(menu)
@@ -251,7 +251,7 @@ def test_untyped_callback_gets_actionable_class_time_error():
     with pytest.raises(TypeError, match="Untyped.menu.selected.*callback.*value: str"):
 
         class Untyped(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             menu = declaration()
 
             @selected(menu)
@@ -266,7 +266,7 @@ async def test_shared_dispatch_security_rejects_subscription_before_invocation(m
     from djust.config import config
 
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = declaration()
 
         @selected(menu)
@@ -287,7 +287,7 @@ def test_actual_http_fallback_rejects_direct_callback():
     from djust.tests.test_exposure_runtime import make_request
 
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root>subscription safety</div>"
         menu = declaration()
 
@@ -330,7 +330,9 @@ def test_invalid_signatures_fail_at_class_construction(signature):
     callback = selected(source)(namespace["callback"])
     with pytest.raises(TypeError, match="Bad.menu.selected.*callback"):
         type(
-            "Bad", (LiveView,), {"exposure_policy": "legacy", "menu": source, "callback": callback}
+            "Bad",
+            (LiveView,),
+            {"exposure_policy": "explicit", "menu": source, "callback": callback},
         )
 
 
@@ -340,7 +342,7 @@ def test_class_inspection_does_not_execute_properties_or_descriptors():
             raise AssertionError("Class compiler must not evaluate descriptors")
 
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         trap = Bomb()
         menu = declaration()
 
@@ -353,7 +355,7 @@ def test_class_inspection_does_not_execute_properties_or_descriptors():
 
 def test_multilevel_override_and_declaration_replacement_retain_subscription():
     class Parent(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = declaration()
 
         @selected(menu)
@@ -403,7 +405,7 @@ def test_contract_collections_are_immutable():
 
 def test_invalid_class_does_not_partially_stamp_valid_overrides():
     class Parent(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = declaration()
 
         @selected(menu)
@@ -436,7 +438,7 @@ def test_failed_annotation_resolution_is_redacted():
         type(
             "Bad",
             (LiveView,),
-            {"exposure_policy": "legacy", "menu": source, "callback": selected(source)(callback)},
+            {"exposure_policy": "explicit", "menu": source, "callback": selected(source)(callback)},
         )
     assert "SECRET_UNRESOLVED" not in str(error.value)
     assert "Bad.menu.selected callback callback" in str(error.value)

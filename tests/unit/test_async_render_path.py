@@ -38,7 +38,7 @@ from djust.http_streaming import (
 
 
 class _StreamingFixtureView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "<!DOCTYPE html><html><head><title>t</title></head>"
         "<body><div dj-root><p>hello</p></div></body></html>"
@@ -47,7 +47,7 @@ class _StreamingFixtureView(LiveView):
 
 
 class _NonStreamingFixtureView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><p>hi</p></div>"
     streaming_render = False
 
@@ -341,7 +341,7 @@ class TestAget:
         ``aget()``."""
 
         class _AuthBlockedView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
             streaming_render = True
             login_required = True  # triggers the auth redirect

@@ -24,6 +24,7 @@ from djust.config import config as djust_config
 from djust import multiloop
 from djust.decorators import event_handler
 from djust.push import push_to_view
+from djust import state
 
 pytest.importorskip("channels")
 
@@ -35,7 +36,10 @@ _SEEN_LOCK = threading.Lock()
 
 
 class _RoomView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    tag = state()
+    room = state()
+    count = state(0)
     template = f'<div dj-root dj-view="{MOD}._RoomView">{{{{ tag }}}}:{{{{ count }}}}</div>'
 
     def mount(self, request, **kwargs):

@@ -24,6 +24,7 @@ from djust.utils import clear_template_dirs_cache
 from djust.components.base import LiveComponent
 from djust.decorators import event_handler
 from djust.testing import LiveViewTestClient
+from djust import state
 
 # The id is `if-<source-hash>-<ordinal>` plus, since #2686, a trailing
 # `-<component-instance-namespace>` on the component path. Match the whole
@@ -43,7 +44,8 @@ class Card(LiveComponent):
 
 
 class Parent(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    card = state()
     template = "<div dj-root>{{ card }}</div>"
 
     def mount(self, request, **kwargs):

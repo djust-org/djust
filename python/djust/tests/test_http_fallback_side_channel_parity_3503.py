@@ -28,6 +28,7 @@ from django.test import RequestFactory, override_settings
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.mixins import layout as layout_mixin
+from djust import state
 
 STATELESS = override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False})
 PATH = "/channels/"
@@ -37,7 +38,8 @@ RAN: list = []
 
 
 class EverythingView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    message = state("start")
     template = "<div dj-root dj-id='0'><p>{{ message }}</p></div>"
 
     def mount(self, request, **kwargs):

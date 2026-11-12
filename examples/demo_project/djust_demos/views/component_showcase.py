@@ -18,12 +18,59 @@ from djust.components.ui import (
     # Data Components
     Table,
 )
+from djust import state
 
 
 class ComponentShowcaseView(LiveView):
     """Interactive showcase of all djust components."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    counter = state(0)
+    switch_enabled = state(True)
+    slider_value = state(50)
+    selected_radio = state("medium")
+    alert_success = state()
+    alert_warning = state()
+    alert_danger = state()
+    avatar_image = state()
+    avatar_initials = state()
+    badge_primary = state()
+    badge_success = state()
+    badge_danger = state()
+    button_primary = state()
+    button_outline = state()
+    button_lg = state()
+    card_simple = state()
+    spinner_border = state()
+    spinner_grow = state()
+    progress_75 = state()
+    progress_animated = state()
+    tooltip_example = state()
+    toast_success = state()
+    divider_simple = state()
+    divider_text = state()
+    icon_star = state()
+    icon_check = state()
+    input_text = state()
+    input_email = state()
+    select_country = state()
+    checkbox_terms = state()
+    checkbox_newsletter = state()
+    textarea_bio = state()
+    radio_size = state()
+    switch_notifications = state()
+    range_volume = state()
+    modal_example = state()
+    tabs_example = state()
+    accordion_example = state()
+    offcanvas_example = state()
+    breadcrumb_example = state()
+    pagination_example = state()
+    dropdown_example = state()
+    navbar_example = state()
+    button_group_example = state()
+    list_group_example = state()
+    table_example = state()
     template_name = 'demos/component_showcase.html'
 
     def mount(self, request):

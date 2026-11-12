@@ -13,10 +13,12 @@ from django.test import Client
 from django.urls import path
 
 from djust import LiveView
+from djust import state
 
 
 class _MaybeMissing(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    found = state()
     template = "<div dj-root>{% if found %}found{% else %}No document at this ID{% endif %}</div>"
 
     def mount(self, request, doc_id: str = "", **kwargs):
@@ -27,7 +29,7 @@ class _MaybeMissing(LiveView):
 
 
 class _Plain(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>plain</div>"
 
 
