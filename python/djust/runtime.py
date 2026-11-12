@@ -3351,6 +3351,37 @@ def _public_decorator_metadata(view_instance: Any) -> List[Tuple[str, Dict[str, 
 _BACKLOG_POLL_S = 0.05
 
 
+def _derive_missing_principal(request: Any) -> None:
+    """Give an explicit mount the principal its events will have.
+
+    A socket request has a ``user`` only when the ASGI stack put one in the
+    scope. Behind a session-only stack (``DjustMiddlewareStack``) it has none,
+    and an explicit mount binds its state to the request's user, so it could
+    not mount at all. Every explicit event already reads its user from the
+    session (``_exposure_auth.fresh_socket_request``), so the mount reads it
+    the same way: mount and event then name the same principal, which the
+    event check requires.
+
+    Called after the pre-mount auth sequence has passed with the request as
+    the stack built it, so which views that stack admits is unchanged: a
+    ``login_required`` or ``permission_required`` view is still refused there.
+    A ``user`` the stack supplied is never replaced, and a legacy view is
+    never given one. Without ``django.contrib.auth`` there is nothing to read
+    and the binding's own refusal stands.
+    """
+    if getattr(request, "user", None) is not None:
+        return
+    from django.apps import apps
+
+    if not apps.is_installed("django.contrib.auth"):
+        return
+    if getattr(request, "session", None) is None:
+        return
+    from django.contrib.auth import get_user
+
+    request.user = get_user(request)
+
+
 class ViewRuntime(RuntimeTurnPort):
     """Wire-blind runtime for a single mounted LiveView session.
 
@@ -3813,6 +3844,9 @@ class ViewRuntime(RuntimeTurnPort):
             # _check_auth already pushed the appropriate frame.
             self.view_instance = None
             return
+
+        if not uses_legacy_exposure(view_instance):
+            await sync_to_async(_derive_missing_principal)(request)
 
         # ---- on_mount hooks (after auth, before mount) ----
         # Ported from WS handle_mount (websocket.py:2383-2401), placed at the

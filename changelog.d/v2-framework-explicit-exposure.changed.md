@@ -38,11 +38,12 @@
   `djust_gen_live` generate views with `exposure_policy = "explicit"` whose
   `get_context_data()` returns a literal dict that spreads `super()`'s context.
 
-  `DjustMiddlewareStack` now puts an anonymous user in the scope when no outer middleware
-  supplied one. It still signs nobody in (a `login_required` or `permission_required` view is
-  refused behind it, as before), and `request.user` is now an anonymous user there instead
-  of being absent. An explicit mount binds its state to the request's user, so without this
-  a public explicit view could not mount behind that stack.
+  Behind a session-only WebSocket stack (`DjustMiddlewareStack`), a view with explicit
+  exposure now mounts. Such a request has no `user`, and an explicit mount binds its state to
+  one, so it used to be refused. The mount now reads the user from the session, as each
+  explicit event already does, after the usual access check has run on the request as the
+  stack built it: a `login_required` or `permission_required` view is still refused behind
+  that stack, and a legacy view still gets no `request.user` there.
 
   The set of shipped LiveView classes and each one's policy is pinned in
   `python/djust/tests/test_exposure_framework_views.py`; the mixins are covered in

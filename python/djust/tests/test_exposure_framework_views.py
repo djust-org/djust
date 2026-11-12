@@ -604,101 +604,169 @@ async def test_a_terminal_subclass_renders_its_own_attributes(site_urls, name):
 
 
 # --------------------------------------------------------------------------
-# A stack with no authentication: its visitors are anonymous
+# Which principal a view sees, per ASGI stack, at mount and at an event
 # --------------------------------------------------------------------------
 
 
+def _who(request) -> str:
+    user = getattr(request, "user", None)
+    if user is None:
+        return "none"
+    return user.get_username() if user.is_authenticated else "anonymous"
+
+
+class WhoExplicitPage(LiveView):
+    """Renders the principal ``mount()`` saw and the one the last event saw."""
+
+    exposure_policy = "explicit"
+    login_required = False
+    template = "<div dj-root><i>mount={{ mount_who }}</i><b>event={{ event_who }}</b></div>"
+
+    def mount(self, request, **kwargs):
+        self.mount_who = _who(request)
+        self.event_who = "-"
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(
+            mount_who=self.mount_who, event_who=self.event_who, **kwargs
+        )
+
+    @event_handler()
+    def ask(self, **kwargs):
+        self.event_who = _who(self.request)
+
+
+class WhoLegacyPage(WhoExplicitPage):
+    exposure_policy = "legacy"
+
+
+class WhoGatedExplicitPage(WhoExplicitPage):
+    login_required = True
+
+
+class WhoGatedLegacyPage(WhoLegacyPage):
+    login_required = True
+
+
+def _stack(name: str):
+    from channels.auth import AuthMiddlewareStack
+    from channels.routing import URLRouter
+
+    from djust.routing import DjustMiddlewareStack
+    from djust.websocket import LiveViewConsumer
+
+    router = URLRouter([path("ws/live/", LiveViewConsumer.as_asgi())])
+    return {
+        "session-only": lambda: DjustMiddlewareStack(router),
+        "djust(auth)": lambda: DjustMiddlewareStack(AuthMiddlewareStack(router)),
+        "auth(djust)": lambda: AuthMiddlewareStack(DjustMiddlewareStack(router)),
+    }[name]()
+
+
 class _StackSocket(_Socket):
-    """A socket behind ``DjustMiddlewareStack`` (session, origin check, no auth)."""
+    """A socket behind one of the documented ASGI stacks, origin check on."""
 
-    def __init__(self, cookie_header: str = ""):
-        from channels.routing import URLRouter
+    def __init__(self, stack: str, cookie_header: str = ""):
         from channels.testing import WebsocketCommunicator
-
-        from djust.routing import DjustMiddlewareStack
-        from djust.websocket import LiveViewConsumer
 
         headers = [(b"host", b"testserver"), (b"origin", b"http://testserver")]
         if cookie_header:
             headers.append((b"cookie", cookie_header.encode()))
-        app = DjustMiddlewareStack(URLRouter([path("ws/live/", LiveViewConsumer.as_asgi())]))
-        self.comm = WebsocketCommunicator(app, "/ws/live/", headers=headers)
+        self.comm = WebsocketCommunicator(_stack(stack), "/ws/live/", headers=headers)
 
-    async def answer(self, view, url):
-        await self.send({"type": "mount", "view": view, "url": url, "params": {}})
+    async def answer(self, frame, *types):
+        await self.send(frame)
         for _ in range(10):
-            frame = await self.comm.receive_json_from(timeout=10)
-            if frame.get("type") in ("mount", "error", "navigate", "permission_denied"):
-                return frame
-        raise AssertionError("no answer to the mount")
+            received = await self.comm.receive_json_from(timeout=10)
+            if received.get("type") in types:
+                return received
+        raise AssertionError("no %s frame" % (types,))
 
 
-class GatedLegacyPage(LiveView):
-    exposure_policy = "legacy"
-    login_required = True
-    template = "<div dj-root>gated</div>"
+_MOUNT_ANSWERS = ("mount", "error", "navigate", "permission_denied")
+_EVENT_ANSWERS = ("patch", "html_update", "noop", "error", "permission_denied", "navigate")
+
+#: (stack, the browser's session is logged in) -> the principal a PUBLIC view
+#: sees at mount and at an event, and whether a ``login_required`` view mounts.
+#: The legacy column is ``main``'s behaviour and must not move. "none" is a
+#: request with no ``user`` attribute at all.
+_PRINCIPALS = {
+    ("session-only", False): {"explicit": "anonymous", "legacy": "none", "gated": False},
+    ("session-only", True): {"explicit": "root", "legacy": "none", "gated": False},
+    ("djust(auth)", True): {"explicit": "root", "legacy": "root", "gated": True},
+    ("auth(djust)", True): {"explicit": "root", "legacy": "root", "gated": True},
+}
 
 
-class PermissionExplicitPage(LiveView):
-    exposure_policy = "explicit"
-    permission_required = "auth.view_group"
-    template = "<div dj-root>permission</div>"
+async def _browser(django_user_model, logged_in: bool) -> Client:
+    if logged_in:
+        return await _staff_browser(django_user_model)
+    return await _visitor("/routes/public-explicit/")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("stack, logged_in", sorted(_PRINCIPALS))
+async def test_a_public_view_has_one_principal_for_mount_and_event(
+    site_urls, django_user_model, stack, logged_in, policy
+):
+    expected = _PRINCIPALS[(stack, logged_in)][policy]
+    view = MODULE + (".WhoExplicitPage" if policy == "explicit" else ".WhoLegacyPage")
+    browser = await _browser(django_user_model, logged_in)
+    async with _StackSocket(stack, _session_cookie(browser)) as ws:
+        mounted = await ws.answer(
+            {"type": "mount", "view": view, "url": "/routes/public-explicit/", "params": {}},
+            *_MOUNT_ANSWERS,
+        )
+        assert mounted.get("type") == "mount", mounted
+        assert ">mount=%s</i>" % expected in mounted["html"], mounted["html"]
+        answered = await ws.answer(_event("ask"), *_EVENT_ANSWERS)
+    # The event is accepted, and its request names the principal the mount did.
+    assert answered.get("type") == "patch", answered
+    assert _text_patches(answered) == ["event=%s" % expected], answered
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("stack, logged_in", sorted(_PRINCIPALS))
+async def test_a_login_required_view_is_admitted_exactly_where_it_was(
+    site_urls, django_user_model, stack, logged_in, policy
+):
+    admitted = _PRINCIPALS[(stack, logged_in)]["gated"]
+    view = MODULE + (".WhoGatedExplicitPage" if policy == "explicit" else ".WhoGatedLegacyPage")
+    browser = await _browser(django_user_model, logged_in)
+    async with _StackSocket(stack, _session_cookie(browser)) as ws:
+        mounted = await ws.answer(
+            {"type": "mount", "view": view, "url": "/routes/public-explicit/", "params": {}},
+            *_MOUNT_ANSWERS,
+        )
+        if not admitted:
+            # A stack that authenticates nobody admits no gated view, even for
+            # a browser whose session is logged in.
+            assert mounted.get("type") != "mount", mounted
+            return
+        assert mounted.get("type") == "mount" and ">mount=root</i>" in mounted["html"], mounted
+        answered = await ws.answer(_event("ask"), *_EVENT_ANSWERS)
+    assert _text_patches(answered) == ["event=root"], answered
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "view, url",
     [
-        (MODULE + ".PublicExplicitPage", "/routes/public-explicit/"),
-        (MODULE + ".PublicLegacyPage", "/routes/public-legacy/"),
         ("djust.components.gallery.live_views.GalleryIndexView", GALLERY),
         ("djust.theming.gallery.live_views.ComponentsIndexView", CATALOGUE),
     ],
 )
-async def test_a_public_view_mounts_behind_the_stack_without_authentication(site_urls, view, url):
+async def test_a_shipped_public_page_works_behind_the_session_only_stack(site_urls, view, url):
     browser = await _visitor(url)
-    async with _StackSocket(_session_cookie(browser)) as ws:
-        frame = await ws.answer(view, url)
-    assert frame.get("type") == "mount", frame
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("name", ["GatedExplicitPage", "GatedLegacyPage", "PermissionExplicitPage"])
-async def test_a_gated_view_is_still_refused_behind_that_stack(site_urls, django_user_model, name):
-    """The stack signs nobody in, even a browser whose session is logged in."""
-    browser = await _staff_browser(django_user_model)
-    async with _StackSocket(_session_cookie(browser)) as ws:
-        frame = await ws.answer(MODULE + "." + name, "/routes/public-explicit/")
-    assert frame.get("type") != "mount", frame
-
-
-async def test_the_stack_marks_only_a_missing_user_as_anonymous(monkeypatch):
-    from django.apps import apps
-
-    from djust.routing import _AnonymousUserMiddleware, _AnonymousVisitor
-
-    seen = []
-
-    async def inner(scope, receive, send):
-        seen.append(scope)
-
-    middleware = _AnonymousUserMiddleware(inner)
-    someone = object()
-    original = {"type": "websocket"}
-    await middleware(original, None, None)
-    await middleware({"type": "websocket", "user": someone}, None, None)
-    assert isinstance(seen[0]["user"], AnonymousUser) and "user" not in original
-    assert seen[1]["user"] is someone
-    # Without django.contrib.auth its AnonymousUser cannot be imported.
-    installed = apps.is_installed
-    monkeypatch.setattr(
-        apps, "is_installed", lambda name: name != "django.contrib.auth" and installed(name)
-    )
-    await middleware({"type": "websocket"}, None, None)
-    visitor = seen[2]["user"]
-    assert type(visitor) is _AnonymousVisitor
-    assert visitor.is_authenticated is False and visitor.is_anonymous is True
-    assert not visitor.has_perm("auth.view_group") and not visitor.is_staff
+    async with _StackSocket("session-only", _session_cookie(browser)) as ws:
+        mounted = await ws.answer(
+            {"type": "mount", "view": view, "url": url, "params": {}}, *_MOUNT_ANSWERS
+        )
+        assert mounted.get("type") == "mount", mounted
+        answered = await ws.answer(_event("search", value="accordion"), *_EVENT_ANSWERS)
+    assert answered.get("type") in ("patch", "html_update"), answered
 
 
 # --------------------------------------------------------------------------

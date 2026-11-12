@@ -168,9 +168,12 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
   key that cannot be a template name (an underscore name, `streams`) is logged
   and that formset is not rendered.
 - **WebSocket middleware.** An explicit mount binds to the page's session and
-  to the request's user. `AuthMiddlewareStack` and `DjustMiddlewareStack` both
-  provide them; behind the latter every visitor is anonymous. A consumer
-  routed with no session or user middleware is refused.
+  to the request's user. Behind `AuthMiddlewareStack` the user is the one the
+  stack authenticated. Behind the session-only `DjustMiddlewareStack` the
+  request has no user: a `login_required` view is refused there, and a view
+  that passes the access check reads its user from the session
+  (`django.contrib.auth.get_user`), at mount and at every event. A consumer
+  routed with no session middleware is refused.
 - **Uploads.** `uploads` renders each entry's progress and a sanitized file
   name. The raw client file name and the writer's result are not included.
   Uploads in flight are not resumed after a reconnect; the client registers
