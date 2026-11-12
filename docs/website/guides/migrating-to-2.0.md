@@ -379,12 +379,18 @@ view must work without a socket, give every field its handlers change
 
 ### Other things explicit exposure refuses
 
-- **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare them
-  in the class body: `nav = Tabs(active="overview")`. The exception is a plain
-  component that a handler changes (`self.rating.value = value`): a class-body
-  one is a single object shared by every session, so keep it in a private
-  attribute (`self._rating = Rating(...)` in `mount()`) and hand it to the
-  template in `get_context_data()`.
+- **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare a
+  `LiveComponent` in the class body: `nav = Tabs(active="overview")`; each
+  view gets its own copy. A plain component (`Rating`, `Badge` and the other
+  `djust.components.components` classes) cannot go there: a class-body one is
+  a single object shared by every session, so it is refused. Declare it as a
+  field, `rating = state(default_factory=lambda: Rating(value=4))`, and hand it
+  to the template in `get_context_data()`, or build it in `get_context_data()`.
+  Do not give a component field `persist=`.
+- **A plain component in the class body** (`rating = Rating(...)`), for the
+  reason above. On a legacy view it is not refused, but `manage.py check`
+  warns about it (`djust.V026`), because a legacy view renders it to every
+  user.
 - **`{% live_render %}` with `lazy=`**, when the child view is explicit.
 - **Actors** (`use_actors = True`). See [What does not survive](#5-what-does-not-survive).
 - **A `state()` grant on a legacy view.** `state(0, persist="server")` on a
