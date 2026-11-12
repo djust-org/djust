@@ -2209,3 +2209,81 @@ def check_get_http_status_overrides(app_configs: Any, **kwargs: Any) -> list[Che
             )
         )
     return messages
+
+
+def _class_level_plain_components(view_class: type) -> list[tuple[type, str]]:
+    """``(owner, name)`` for each plain ``Component`` instance in ``view_class``'s class bodies.
+
+    Walks the MRO's class dictionaries, so a mixin or base counts and a name a
+    subclass redefines is the subclass's. Only class dictionaries are read: no
+    descriptor or property is evaluated. ``LiveComponent`` declarations are not
+    reported (they are not ``Component`` subclasses; their descriptor gives each
+    view instance its own state).
+    """
+    from djust._class_snapshot import namespace
+    from djust.components.base import Component
+
+    seen: set[str] = set()
+    found: list[tuple[type, str]] = []
+    for owner in view_class.__mro__:
+        for name, value in namespace(owner).items():
+            if type(name) is not str or name in seen:
+                continue
+            seen.add(name)
+            if issubclass(type(value), Component):
+                found.append((owner, name))
+    return found
+
+
+@register("djust")
+def check_shared_class_level_components(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V026 (Warning): a plain component instance in a view's class body (#4045).
+
+    A plain ``Component`` has no descriptor, so a class-body instance is created
+    once, when the class is defined, and ``self.<name>`` is that one object for
+    every user of the view in the process: a handler that changes it changes it
+    for everyone. Reported once per class body that declares it. Runtime
+    behaviour is unchanged; this only reports.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V026"):
+        return messages
+    try:
+        from djust.live_view import LiveView
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    owners: dict[tuple[type, str], None] = {}
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in candidates:
+        for owner, name in _class_level_plain_components(cls):
+            if not _is_framework_internal_class(owner):
+                owners[(owner, name)] = None
+
+    for owner, name in sorted(owners, key=lambda o: (o[0].__module__, o[0].__qualname__, o[1])):
+        label = "%s.%s" % (owner.__module__, owner.__qualname__)
+        kind = type(vars(owner)[name]).__name__
+        owner_file = ""
+        try:
+            owner_file = inspect.getfile(owner)
+        except (OSError, TypeError):
+            pass  # Source introspection may fail for built-in or C-extension classes
+        messages.append(
+            DjustWarning(
+                "%s declares the plain component %r in its class body. It is created once and "
+                "shared by every user of the view in this process: a handler that changes it "
+                "changes it for everyone." % (label, name),
+                hint=(
+                    "Create it in mount() (self.%s = %s(...)) so each view instance has its "
+                    "own. A component that no handler changes can stay. Suppress with "
+                    "DJUST_CONFIG = {'suppress_checks': ['V026']}." % (name, kind)
+                ),
+                id="djust.V026",
+                fix_hint=(
+                    "Move `%s = %s(...)` from the class body of `%s` into `mount()` as "
+                    "`self.%s = %s(...)`." % (name, kind, owner.__qualname__, name, kind)
+                ),
+                file_path=owner_file,
+            )
+        )
+    return messages
