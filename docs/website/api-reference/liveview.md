@@ -219,6 +219,9 @@ class ArticleView(AppView):
     def mount(self, request, slug="", **kwargs):
         self.article = find_article(slug)
         self.state = "ready" if self.article else "not_found"
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "article": self.article}
 ```
 
 `GET /articles/missing/` renders the view's own "not found" page and answers 404. `state_attribute` names the attribute that holds the state (`"state"` by default). Only a string state is looked up; anything else, or a name the map does not hold, answers 200. A view that overrides `get_http_status()` keeps its own answer.
@@ -557,12 +560,15 @@ class ProtectedView(LoginRequiredMixin, LiveView):
 
 ## State Conventions
 
-| Pattern       | Meaning                                   |
-| ------------- | ----------------------------------------- |
-| `self.count`  | Public — available in template context    |
-| `self._items` | Private — not serialized, not in template |
+| Pattern | Meaning |
+| --- | --- |
+| `self.count = 0` | Stays on the view, for your handlers. Not in the template, the session or the browser |
+| `get_context_data()` returns `"count": self.count` | In the template |
+| `count = state(0, persist="server")` | Restored after a reconnect |
+| `count = state(0, client=True)` | The raw value may reach the browser (`get_state()`, HTTP API `assigns`) |
+| `self._items` | A naming convention for internal values; the underscore is not what hides them |
 
-Private vars (underscore prefix) are useful for QuerySets and large objects that shouldn't be JIT-serialized.
+This is [explicit exposure](../state/explicit-exposure.md), the default since 2.0. A view that states `exposure_policy = "legacy"` (deprecated) publishes every public attribute to the template instead.
 
 ---
 

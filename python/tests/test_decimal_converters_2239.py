@@ -728,9 +728,9 @@ class TestBoundaryInventory:
         assert forwarded == {"serialization.py"}
 
     def test_the_snapshot_captures_use_the_roundtrip_encoder(self) -> None:
-        """The other half of the boundary: the signed snapshot round-trips
-        through json.dumps and is restored onto the view by `_restore_snapshot`,
-        so it takes the same rule as the session."""
+        """The other half of the boundary: a captured snapshot round-trips
+        through json.dumps and is applied back to a view (time-travel), so it
+        takes the same rule as the session."""
         src = (_PKG / "live_view.py").read_text()
         tree = ast.parse(src)
         by_function: dict[str, set[str]] = {}

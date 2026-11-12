@@ -138,6 +138,17 @@ class DashboardView(LiveView):
         # completed (or skipped past) the tour yet.
         self.show_tour_button = not progress.completed
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            show_tour_button=self.show_tour_button,
+            tour_active=self.tour_active,
+            tour_step=self.tour_step,
+            has_projects=self.has_projects,
+            tour_total=self.tour_total,
+        )
+        return context
+
     @event_handler
     def start_tour(self, **kwargs):
         self.tour_active = True

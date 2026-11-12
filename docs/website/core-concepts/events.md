@@ -669,6 +669,11 @@ class ItemSelectionView(LiveView):
         self.selected_id = 0
         self.active = False
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(selected_id=self.selected_id, active=self.active)
+        return context
+
     @event_handler(parameter_policy="strict")
     def select_item(self, item_id: int, active: bool = False) -> None:
         # A demonstration allowlist, not a substitute for database authorization.
@@ -702,6 +707,9 @@ class NoteView(LiveView):
     def mount(self, request, **kwargs):
         self.query = ""
         self.saved = {}
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "query": self.query, "saved": self.saved}
 
     @event_handler(parameter_policy="strict")
     def search(self, value: str) -> None:

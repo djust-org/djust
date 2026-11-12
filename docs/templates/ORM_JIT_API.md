@@ -37,6 +37,9 @@ class DashboardView(LiveView):
             status='active',
             end_date__lte=sixty_days_from_now
         ).order_by('end_date')[:5]
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "expiring_soon": self.expiring_soon}
 ```
 
 ### Step 2: Write Your Template (Natural Django)
@@ -103,6 +106,9 @@ class DashboardView(LiveView):
             status='active',
             end_date__lte=sixty_days_from_now
         ).order_by('end_date')[:5]
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "expiring_soon": self.expiring_soon}
 ```
 
 ### Debugging Templates
@@ -278,6 +284,9 @@ class DashboardView(LiveView):
             end_date__lte=sixty_days_from_now
         ).order_by('end_date')[:5]
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "expiring_soon": self.expiring_soon}
+
     # No get_context_data override needed!
 ```
 
@@ -387,6 +396,9 @@ class BlogListView(LiveView):
     def mount(self, request):
         # JIT auto-optimizes based on template
         self.posts = Post.objects.filter(published=True)[:20]
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "posts": self.posts}
 
     # No get_context_data override!
 ```
@@ -796,6 +808,9 @@ class DashboardView(LiveView):
     def mount(self, request):
         # JIT still works!
         self.expiring_soon = Lease.objects.expiring_soon()[:5]
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "expiring_soon": self.expiring_soon}
 ```
 
 ### Combining with select_related
@@ -807,6 +822,9 @@ class DashboardView(LiveView):
     def mount(self, request):
         # Manual select_related
         self.leases = Lease.objects.select_related('property')
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "leases": self.leases}
 
         # JIT detects template needs 'tenant__user' too
         # Final query: .select_related('property', 'tenant__user')
@@ -1128,6 +1146,9 @@ class DashboardView(LiveView):
         # Remove slice (can keep, but not required)
         self.leases = Lease.objects.filter(status='active')[:10]
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "leases": self.leases}
+
     # Remove get_context_data entirely!
 ```
 
@@ -1161,6 +1182,9 @@ You can migrate **one view at a time**:
 class DashboardView(LiveView):  # ✅ JIT
     def mount(self, request):
         self.leases = Lease.objects.all()
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "leases": self.leases}
 
 # Other views still use manual serialization
 class OldView(LiveView):  # ✅ Still works!

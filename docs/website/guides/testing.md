@@ -132,6 +132,9 @@ class DashboardView(LiveView):  # routed at /dashboard/
     def mount(self, request, welcome="", **kwargs):
         self.welcome = welcome
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "welcome": self.welcome}
+
 login_client = LiveViewTestClient(LoginView).mount()
 login_client.send_event("submit", email="a@b.com", password="x")
 dashboard_client = login_client.follow_redirect()
@@ -174,6 +177,9 @@ class OrdersView(LiveView):
     def mount(self, request, **kwargs):
         self.listen("orders")
         self.count = 0
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count}
 
     def handle_info(self, message):
         if message.get("type") == "db_notify":

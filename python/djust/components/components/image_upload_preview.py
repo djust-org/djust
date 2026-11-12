@@ -71,13 +71,16 @@ class ImageUploadPreview(Component):
                     max_entries=5,
                     max_file_size=5_000_000,
                 )
-                self.upload = ImageUploadPreview(
+                self._upload = ImageUploadPreview(
                     name="photos",
                     upload="photos",
                     max=5,
                     max_size=5_000_000,
                     event="photos_uploaded",
                 )
+
+            def get_context_data(self, **kwargs):
+                return {**super().get_context_data(**kwargs), "upload": self._upload}
 
             @event_handler()
             def photos_uploaded(self, count=0, **kwargs):

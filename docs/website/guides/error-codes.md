@@ -492,6 +492,9 @@ class MyView(LiveView):
 
     def mount(self, request, **kwargs):
         self.count = 0
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count}
 ```
 
 ---
@@ -536,6 +539,9 @@ from djust.decorators import event_handler
 class MyView(LiveView):
     def mount(self, request, **kwargs):
         self.sidebar_open = False
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "sidebar_open": self.sidebar_open}
 
     @event_handler()
     def toggle_sidebar(self, **kwargs):
@@ -820,13 +826,23 @@ A view that declares a `params_form` is also held to its `params_form_fallback`:
 
 **Fix**: Delete the override and set `self.state` to a state the map names. For a real special case, call `super().get_http_status()` first so the map still applies. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V025"]}`.
 
-### V026: declared `state()` field named `user` or `perms`
+### V026: plain component in a legacy view's class body
+
+**Severity**: Warning
+
+**What causes it**: A view with `exposure_policy = "legacy"` (or a mixin it inherits) declares a plain `Component` instance in its class body, such as `badge = Badge("new")`. A plain component has no descriptor, so it is one object shared by every session of the worker process, and a legacy view renders it. A handler that writes to it (`self.badge.label = request.user.email`) shows that value on every other user's next render and on every later page load. Message: "<class> declares the plain component '<name>' in its class body. It is one object shared by every session of the worker, ..."
+
+**Fix**: Create the component per view: assign `self._badge = Badge(...)` in `mount()` and return it from `get_context_data()`, or build it in `get_context_data()`. A component that no handler writes to can stay. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V026"]}`.
+
+On an explicit view the same declaration is refused when the class is created, with an `ExposureConfigurationError` that names the attribute and the working forms.
+
+### V027: declared `state()` field named `user` or `perms`
 
 **Severity**: Warning
 
 **What causes it**: An explicit view declares `user = state(...)` or `perms = state(...)`. A declared field is template context, and view context wins over Django's context processors, so the field replaces `request.user` or the permission proxy in every template the view renders, including base templates that test it for authorization. Message: "<class> declares state() field 'user', which replaces the 'user' Django's context processors supply ..."
 
-**Fix**: Rename the field (for example `selected_user`), or declare it `state(..., render=False)` if no template reads it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V026"]}`.
+**Fix**: Rename the field (for example `selected_user`), or declare it `state(..., render=False)` if no template reads it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V027"]}`.
 
 ---
 
@@ -1184,6 +1200,9 @@ In your LiveView, read the URL parameter in the `handle_params()` lifecycle hook
 class MyView(LiveView):
     def mount(self, request, **kwargs):
         self.current_view = "dashboard"
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "current_view": self.current_view}
 
     def handle_params(self, params, uri):
         # Called after mount and on every dj-patch / back-forward URL change
@@ -2707,6 +2726,9 @@ class ContactDetailView(LiveView):
         self.contact = Contact.objects.filter(
             owner=request.user
         ).get(pk=pk)
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "contact": self.contact}
 ```
 
 Or override `check_permissions()` with an explicit membership check and add `# djust: noqa X001` on the `.get()` call if the scoping is implicit (e.g. the tenant filter sits inside a helper manager).

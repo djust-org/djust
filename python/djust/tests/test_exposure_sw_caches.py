@@ -48,10 +48,6 @@ class LegacySWView(LiveView):
         self.count = 5
 
 
-class LegacySnapshotSWView(LegacySWView):
-    enable_state_snapshot = True
-
-
 @pytest.fixture
 def staged(monkeypatch):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
@@ -182,7 +178,16 @@ async def test_mount_frame_marks_explicit_ineligible_and_carries_identity(staged
     assert frame["state_snapshot_signed"]
     from djust.security import get_max_age
 
-    assert frame["state_snapshot_max_age"] == get_max_age()
+    assert frame["state_snapshot_max_age"] == get_max_age() == 3600
+    with override_settings(DJUST_STATE_SNAPSHOT_MAX_AGE=120):
+        short = await _mount_frame(ExplicitSWView, await sync_to_async(_mount_request)())
+    assert short["state_snapshot_signed"]
+    assert short["state_snapshot_max_age"] == 120
+    # G4: a lifetime the codec used to refuse no longer turns the snapshot off.
+    with override_settings(DJUST_STATE_SNAPSHOT_MAX_AGE=10**9):
+        capped = await _mount_frame(ExplicitSWView, await sync_to_async(_mount_request)())
+    assert capped["state_snapshot_signed"]
+    assert capped["state_snapshot_max_age"] == 86400
 
 
 @pytest.mark.asyncio
@@ -194,9 +199,4 @@ async def test_mount_frame_legacy_control_stays_cacheable(staged):
     assert "sw_cache" not in frame
     assert frame["sw_identity"] == identity_marker(request.session.session_key, request.user)
     assert "state_snapshot_max_age" not in frame  # no snapshot, no lifetime
-
-    with override_settings(DJUST_STATE_SNAPSHOT_MAX_AGE=120):
-        snap = await _mount_frame(LegacySnapshotSWView, await sync_to_async(_mount_request)())
-    assert snap["state_snapshot_signed"]
-    assert snap["state_snapshot_max_age"] == 120
-    assert "sw_cache" not in snap
+    assert "state_snapshot_signed" not in frame  # a legacy view signs nothing

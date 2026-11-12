@@ -130,16 +130,16 @@ async def test_named_partial_websocket_mount_and_event(debug, tmp_path):
         comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         try:
             assert (await comm.connect())[0]
-            await comm.receive_json_from(timeout=5)
+            await comm.receive_json_from()
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}.SocketNamedView", "url": "/"}
             )
-            mount = await comm.receive_json_from(timeout=5)
+            mount = await comm.receive_json_from()
             assert mount.get("type") == "mount", mount
             assert "FIRST:one" in json.dumps(mount) and "RELATIVE=one" in json.dumps(mount)
             assert "SIBLING" not in json.dumps(mount)
             await comm.send_json_to({"type": "event", "event": "change", "params": {}, "ref": 1})
-            event = await comm.receive_json_from(timeout=5)
+            event = await comm.receive_json_from()
             assert "two" in json.dumps(event)
         finally:
             await comm.disconnect()
@@ -965,17 +965,17 @@ async def test_dynamic_recursive_partial_websocket_fails_explicitly(tmp_path):
         comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         try:
             assert (await comm.connect())[0]
-            await comm.receive_json_from(timeout=5)
+            await comm.receive_json_from()
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}.DynamicPartialSocketView", "url": "/"}
             )
-            mount = await comm.receive_json_from(timeout=5)
+            mount = await comm.receive_json_from()
             assert mount.get("type") == "mount", mount
             assert "SAFE OK" in str(mount)
             await comm.send_json_to(
                 {"type": "event", "event": "select_recursive", "params": {}, "ref": 1}
             )
-            event = await comm.receive_json_from(timeout=5)
+            event = await comm.receive_json_from()
             assert event.get("type") == "error", event
             assert "[one]" not in str(event)
         finally:

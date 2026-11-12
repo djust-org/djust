@@ -461,7 +461,7 @@ class LegacyPendingView(BackgroundView):
     @event_handler()
     def legacy(self, **kwargs):
         self.status = "queued"
-        self._async_pending = (self._work, (), {})  # the single-task tuple
+        self._async_pending = (self._work, (), {})  # the removed 1.x tuple (#4031)
 
 
 class ParamsQueuedView(BackgroundView):
@@ -496,11 +496,18 @@ for _cls in (LegacyPendingView, ParamsQueuedView, AssignAsyncView):
 
 
 class TestOtherWaysToQueueWork:
-    def test_the_legacy_single_task_tuple_runs(self):
+    def test_the_legacy_single_task_tuple_is_refused(self, caplog):
+        """2.0 removed the 1.x tuple (#3515); the fallback refuses it as the
+        socket does, instead of running work the socket would drop (#4031)."""
         with STATELESS:
-            view, _, body = _post(LegacyPendingView, "legacy")
-        assert view.status == "done", body
-        assert LOG == [("result", "_default", "ok", None)]
+            view, response, body = _post(LegacyPendingView, "legacy")
+        assert response.status_code == 500, body
+        assert view.status != "done", body
+        assert LOG == []
+        assert any(
+            "_async_pending" in r.getMessage() and "start_async" in r.getMessage()
+            for r in caplog.records
+        ), caplog.text
 
     def test_work_handle_params_queued_runs_before_the_event(self):
         with STATELESS:

@@ -386,12 +386,18 @@ view must work without a socket, give every field its handlers change
 
 ### Other things explicit exposure refuses
 
-- **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare them
-  in the class body: `nav = Tabs(active="overview")`. The exception is a plain
-  component that a handler changes (`self.rating.value = value`): a class-body
-  one is a single object shared by every session, so keep it in a private
-  attribute (`self._rating = Rating(...)` in `mount()`) and hand it to the
-  template in `get_context_data()`.
+- **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare a
+  `LiveComponent` in the class body: `nav = Tabs(active="overview")`; each
+  view gets its own copy. A plain component (`Rating`, `Badge` and the other
+  `djust.components.components` classes) cannot go there: a class-body one is
+  a single object shared by every session, so it is refused. Declare it as a
+  field, `rating = state(default_factory=lambda: Rating(value=4))`, which
+  renders it, or build it in `get_context_data()`.
+  Do not give a component field `persist=`.
+- **A plain component in the class body** (`rating = Rating(...)`), for the
+  reason above. On a legacy view it is not refused, but `manage.py check`
+  warns about it (`djust.V026`), because a legacy view renders it to every
+  user.
 - **`{% live_render %}` with `lazy=`**, when the child view is explicit.
 - **Actors** (`use_actors = True`). See [What does not survive](#5-what-does-not-survive).
 - **A `state()` grant on a legacy view.** `state(0, persist="server")` on a
@@ -584,8 +590,10 @@ Every replacement works on 1.3.x, so make the change there.
 | `djust.rust_components`, and `<RustButton/>`-style tags in templates | `djust.components.ui.Button` and the other `djust.components.ui` components |
 | `StreamingMixin.stream_insert(self, ...)` and `StreamingMixin.stream_delete(self, ...)` (the async pair) | `await self.astream_insert(...)` and `await self.astream_delete(...)`. `self.stream_insert` and `self.stream_delete` are the synchronous collection streams. |
 | `djust.sse.DjustSSEEventView` and the `sse/<session_id>/event/` route | `DjustSSEMessageView` at `sse/<session_id>/message/`, which the bundled client already uses |
-| `self._async_pending = (fn, args, kwargs)` in a handler | `self.start_async(fn, *args, **kwargs)`. **This one fails silently:** over a WebSocket the work never runs and nothing is logged ([#4031](https://github.com/djust-org/djust/issues/4031)). Search your code for `_async_pending`. |
+| `self._async_pending = (fn, args, kwargs)` in a handler | `self.start_async(fn, *args, **kwargs)`, or `@background` on the handler. Assigning the tuple raises `ImproperlyConfigured` when the handler runs, on every transport ([#4031](https://github.com/djust-org/djust/issues/4031)); search your code for `_async_pending` to find them before then. |
 | `use_actors = True` | Remove the attribute. See [What does not survive](#5-what-does-not-survive). |
+| `sign_snapshot`, `unsign_snapshot` and `SNAPSHOT_SALT` from `djust.security`, the `djust.security.state_snapshot` module, and the `LiveView._restore_snapshot()` override | `state(..., persist="client", client=True)` fields. djust signs and verifies their token itself (example below). Importing one of the three names raises `ImportError` with this advice, and so does reading it as an attribute: `hasattr(djust.security, "sign_snapshot")` raises instead of returning `False`, so a compatibility shim must catch `ImportError`. A class that defines `_restore_snapshot()` is refused with `ImproperlyConfigured`; move what it did after restoring into `handle_restore()`. |
+| `NonPersistableStateError`, and the `strict=` argument of `LiveView._capture_snapshot_state()` | Nothing. A client field has to be JSON, and a model or `Decimal` is refused when the token is built. |
 
 A component mixin becomes a class attribute. This replaces
 `class DocsView(TabsMixin, LiveView)` with `self.init_tabs("nav", active="overview")`
@@ -604,6 +612,43 @@ class DocsView(LiveView):
 
     nav = Tabs(active="overview")
 ```
+
+The signed back-navigation snapshot is now built from declared fields only.
+In 1.3 a view that set `enable_state_snapshot = True` had every public
+attribute signed and sent to the browser, and restored through
+`_restore_snapshot()` when the user pressed Back. In 2.0 the browser holds
+only what the view declares:
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler, state
+
+
+class WizardView(LiveView):
+    template = """<div dj-root>
+        <p>Step {{ step }}</p>
+        <button dj-click="forward">Next</button>
+    </div>"""
+
+    # 1.3: enable_state_snapshot = True, and self.step = 1 in mount()
+    step = state(1, persist="client", client=True)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["step"] = self.step
+        return context
+
+    @event_handler()
+    def forward(self, **kwargs):
+        self.step += 1
+```
+
+A legacy view no longer sends a token at all, and a token a 1.x server signed
+is refused. Back and a reconnect still restore an `enable_state_snapshot` view from the
+state saved in the session, which this release keeps. Where nothing is saved
+there (`LIVEVIEW_CONFIG['view_state_in_session'] = False`, no or an expired
+session, an unresolved tenant), the view now mounts fresh instead of restoring
+from the token.
 
 The component registers its own event on the view, and `self.nav.active` is
 the current tab in your handlers. Each component has one event, so a template
@@ -668,7 +713,7 @@ the only behaviour, before 2.0.0 is released, so finish with them on 1.3.x:
 | `exposure_policy = "legacy"`. It is no longer the default: a view has to state it, and stating it warns | Migrate every view that states it, or that you have not checked yet ([section 1](#1-move-each-view-to-explicit-exposure)) |
 | `event_parameter_policy = "legacy"`, the default, and `parameter_policy="legacy"` | Make every handler strict ([section 2](#2-make-event-handlers-strict)) |
 | `event_security` set to `"open"` or `"warn"` | Remove the setting (the default is `"strict"`) and put `@event_handler` on every method a template calls |
-| `enable_state_snapshot = True` and `PersistentLiveView` | `state(..., persist="server")` fields, and `persist="client", client=True` for back-navigation |
+| `enable_state_snapshot = True` and `PersistentLiveView`. They still save a legacy view's public state in the session and restore it on a reconnect; the signed copy they sent to the browser is [already removed](#python-names) | `state(..., persist="server")` fields, and `persist="client", client=True` for back-navigation |
 | Time travel that restores a past state | Nothing to change in code; see below |
 
 ## 5. What does not survive
@@ -680,8 +725,9 @@ looking for a replacement.
   only over WebSocket and cannot run under explicit exposure. Remove the
   attribute; the view then runs like any other LiveView.
 - **`enable_state_snapshot` and `PersistentLiveView`.** These saved every
-  public attribute, and the browser held a signed, readable copy. 2.0 has no
-  way to save a view's whole state. Declare the fields worth keeping with
+  public attribute, and in 1.x the browser held a signed, readable copy (that
+  copy is already gone on the 2.0 line). 2.0 has no way to save a view's
+  whole state. Declare the fields worth keeping with
   `state(..., persist=...)`, and rebuild the rest in `mount()` and
   `handle_restore()`.
 - **Time travel that changes the view.** Jumping back to a past state and

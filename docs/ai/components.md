@@ -29,12 +29,15 @@ class StatusDot(Component):
 ### Usage in LiveView
 ```python
 class MyView(LiveView):
-    def mount(self, request, **kwargs):
-        self.badge = Badge("New", variant="success")
     def get_context_data(self, **kwargs):
-        return {"badge": self.badge}
+        return {**super().get_context_data(**kwargs), "badge": Badge("New", variant="success")}
 ```
 Template: `{{ badge }}` (calls `__str__` → `render()`)
+
+Build a stateless component in `get_context_data()`. Do not assign it to a public
+attribute (`self.badge = Badge(...)`): the view refuses to render
+(`ExposureConfigurationError`). A component a handler mutates lives on a private
+attribute (`self._rating = Rating(...)` in `mount()`) and is handed over the same way.
 
 ## LiveComponent
 

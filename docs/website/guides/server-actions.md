@@ -36,6 +36,9 @@ class TodoView(LiveView):
     def mount(self, request, **kwargs):
         self.todos = []
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "todos": self.todos}
+
     @action
     def create_todo(self, title: str = "", **kwargs):
         if not title:
@@ -189,6 +192,9 @@ handler:
 class TodoView(LiveView):
     def mount(self, request, **kwargs):
         self.todos = []
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "todos": self.todos}
 
     @action
     def create_todo(self, title: str = "", **kwargs):

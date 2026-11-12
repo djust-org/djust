@@ -359,14 +359,6 @@ def test_invalid_session_record_changes_nothing():
         assert [(m.key, m.component_id) for m in view.rows] == before
 
 
-def test_views_with_collections_are_never_signed_for_back_navigation():
-    view = mounted()
-    assert view._capture_snapshot_state(strict=True) == {}
-    # Debug capture (not signed) still sees member state.
-    debug = view._capture_snapshot_state()
-    assert set(debug["__components__"]) >= {m.component_id for m in view.rows}
-
-
 # --------------------------------------------------------------------------
 # Rendering in both engines and both policies; change detection.
 # --------------------------------------------------------------------------

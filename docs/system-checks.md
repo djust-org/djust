@@ -38,9 +38,9 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V003 | LiveView | Error | mount() has wrong signature |
 | V004 | LiveView | Info | Public method looks like event handler but missing @event_handler |
 | V005 | LiveView | Warning | Module not in LIVEVIEW_ALLOWED_MODULES |
-| V006 | LiveView | Warning | Service instance assigned in mount() — high-confidence subset of V008 |
+| V006 | LiveView | Warning | Service instance assigned in mount() of a legacy-exposure view — high-confidence subset of V008 |
 | V007 | LiveView | Retired | Retired in 1.3 (ADR-037): recommended `**kwargs` on every handler. Never emitted; the ID is not reused |
-| V008 | LiveView | Info | Non-primitive type assigned in mount() — broader, lower-confidence (skips V006 patterns) |
+| V008 | LiveView | Info | Non-primitive type assigned in mount() of a legacy-exposure view — broader, lower-confidence (skips V006 patterns) |
 | V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
 | V013 | LiveView | Warning | HTTP-only setup()/dispatch()/get()/post() override or URLconf wrapper never runs on a WebSocket mount |
 | V014 | LiveView | Warning | Time-travel-enabled view has PII-looking model/form fields not in `time_travel_excluded_fields` |
@@ -55,7 +55,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V023 | LiveView | Error | A `params_form` the request path cannot use: not a form class, or a form whose `__init__` needs arguments beyond `data=`; or a `params_form_fallback` that is not `"initial"` or `"fields"` |
 | V024 | LiveView | Error | A `query_budget` nothing can enforce: an unknown key, a bool or negative number, a handler named in `events` that the view lacks or that is `async def` / `@background` |
 | V025 | LiveView | Warning | A class defines `get_http_status()` while `LIVEVIEW_CONFIG['http_status_of_state']` is configured: the override replaces the project-wide map |
-| V026 | LiveView | Warning | An explicit view declares a `state()` field named `user` or `perms` (without `render=False`): it replaces `request.user` / the permission proxy in every template the view renders |
+| V026 | LiveView | Warning | A legacy view declares a plain component in its class body: one object shared by every session, rendered for every user |
+| V027 | LiveView | Warning | An explicit view declares a `state()` field named `user` or `perms` (without `render=False`): it replaces `request.user` / the permission proxy in every template the view renders |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -362,6 +363,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Method**: AST (inspects assignments in `mount()`)
 - **What it detects**: `self.X = SomeService()` pattern — service objects are not JSON-serialisable and cannot survive WebSocket reconnects. Matches class names containing "Service", "Client", "Session", "API", or "Connection" (case-insensitive)
 - **Relationship to V008**: V006 is the high-confidence subset of V008. Both detect non-serialisable state in `mount()`, but V006 fires at **Warning** level for well-known service patterns while V008 fires at **Info** level for everything else. They are deliberately non-overlapping — V008 skips any assignment already caught by V006
+- **Scope**: legacy-exposure views (`exposure_policy = "legacy"`) and classes that are not LiveViews. An explicit-exposure view never serialises a plain attribute (template context, the session, `get_state()` and snapshots read only declared state), so `self.service = PaymentService()` is fine there and V006 skips it. The policy is read from the imported class, so an inherited or default policy counts; a class that is not imported is skipped only when its own body says `exposure_policy = "explicit"` (#4032)
 - **Suppression**: `# noqa: V006` inline on the assignment
 - **False positives**: Objects whose class name contains "Service", "Client", "Session", "API", or "Connection" but are actually lightweight and serialisable
 
@@ -376,6 +378,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Method**: AST (inspects the RHS expression of assignments in `mount()`)
 - **What it detects**: `self.X = some_function()` where the assigned value appears to be non-primitive (not a literal int/str/bool/None/list/dict) and is not already caught by V006
 - **Relationship to V006**: V008 is the broader, lower-confidence counterpart to V006. V006 covers high-confidence service patterns at **Warning** level; V008 catches all remaining non-primitive assignments at **Info** level. V008 explicitly skips assignments matching V006's keyword patterns to avoid duplicate messages
+- **Scope**: the same as V006: explicit-exposure views are skipped, because they never serialise a plain attribute (#4032)
 - **Suppression**: `# noqa: V008` inline on the assignment
 - **False positives**: Functions with primitive return-type annotations (e.g. `-> str`, `-> int`) are excluded since PR #398. Other functions returning serialisable types (e.g. dataclasses) may still trigger V008 — suppress with `# noqa: V008`
 
@@ -480,12 +483,20 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V025"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V025"]`
 - **False positives**: an override that calls `super().get_http_status()`
 
-### V026 — declared `state()` field named `user` or `perms`
+### V026 — plain component in a legacy view's class body
+- **Severity**: Warning
+- **Method**: Runtime (class inspection; no view is constructed). Legacy views only (`exposure_policy = "legacy"`); an explicit view with the same declaration is refused when the class is created (`ExposureConfigurationError`).
+- **What it detects**: a plain `Component` instance (`badge = Badge("new")`, any of the `djust.components.components` classes) in the class body of a legacy view or of a mixin or base it inherits, reported once for the class whose body holds it. A plain component has no descriptor, so `self.badge` is that one class attribute in every session of the worker, and a legacy view renders it: a handler that writes to it (`self.badge.label = request.user.email`) changes every other user's next render and every later mount. A `LiveComponent` declaration is not reported; its descriptor gives each view its own copy. djust's own classes are not reported.
+- **Fix**: create the component per view: `self._badge = Badge(...)` in `mount()` and return it from `get_context_data()`, or build it in `get_context_data()` from the view's own state. Both also work after the view moves to explicit exposure.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V026"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V026"]`
+- **False positives**: a component no handler ever writes to (a fixed label). Sharing it is harmless; suppress, or move it anyway so that a later write cannot leak.
+
+### V027 — declared `state()` field named `user` or `perms`
 - **Severity**: Warning
 - **Method**: Runtime (class inspection; no view is constructed).
 - **What it detects**: an explicit view that declares `user = state(...)` or `perms = state(...)` without `render=False`. A declared field is template context (#4050), and view context wins over Django's context processors, so the field replaces `request.user` or the permission proxy in every template the view renders, including base templates that test it for authorization (`{% if user.is_staff %}`). Reported once, on the class that declares the field. Other context-processor names (`messages`, `debug`, `LANGUAGE_CODE`) are shadowed the same way and are not reported. Legacy views are not checked: their attribute walk shadowed these names in 1.x too. With `DEBUG = True`, djust also logs one warning per view class (logger `djust.exposure`) when it renders such a shadow.
 - **Fix**: rename the field (`selected_user`), or declare it `state(..., render=False)` if no template reads it.
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V026"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V026"]`
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V027"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V027"]`
 
 ---
 
@@ -971,7 +982,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
     handler does not accept (under the legacy policy, `dj-input`, `dj-change`
     and `dj-submit` always send `field` and `_target`); extra positional
     arguments; or two attributes that send the same name. Under the strict
-    policy, `data-*` attributes are not sent at all: use `dj-value-*`.
+    policy, `data-*` attributes are not sent at all: use `dj-value-*`. A
+    `data-*` attribute naming a declared parameter is reported whether the
+    parameter is required or has a default; with a default the handler would
+    otherwise run with it and no error (#4033). A `data-*` attribute that names
+    no declared parameter is not reported, even on a `**kwargs` handler, since
+    most are unrelated (`data-testid`, `data-bs-toggle`).
   - `T021`: a literal the handler's annotation rejects (`data-count="abc"` for
     `count: int`). Also an unknown wire hint, or one that does not fit the
     declared type (`dj-value-id:bool` for `id: int`), and a field name that is

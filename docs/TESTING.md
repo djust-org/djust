@@ -223,6 +223,9 @@ class TestCounterView:
             def mount(self, request, **kwargs):
                 self.count = 0
 
+            def get_context_data(self, **kwargs):
+                return {**super().get_context_data(**kwargs), "count": self.count}
+
         view = CounterView()
         response = view.get(get_request)
 
@@ -238,6 +241,9 @@ class TestCounterView:
 
             def mount(self, request, **kwargs):
                 self.count = 0
+
+            def get_context_data(self, **kwargs):
+                return {**super().get_context_data(**kwargs), "count": self.count}
 
             @event_handler
             def increment(self, **kwargs):
@@ -307,6 +313,9 @@ class TestLiveViewLifecycle:
 
             def mount(self, request, **kwargs):
                 self.todos = []
+
+            def get_context_data(self, **kwargs):
+                return {**super().get_context_data(**kwargs), "todos": self.todos}
 
         view = TodoView()
         view.get(get_request)
@@ -542,6 +551,9 @@ class TestVDOMPatching:
             def mount(self, request, **kwargs):
                 self.message = "Hello"
 
+            def get_context_data(self, **kwargs):
+                return {**super().get_context_data(**kwargs), "message": self.message}
+
         view = MessageView()
         view.get(get_request)
 
@@ -565,6 +577,9 @@ class TestVDOMPatching:
 
             def mount(self, request, **kwargs):
                 self.show = False
+
+            def get_context_data(self, **kwargs):
+                return {**super().get_context_data(**kwargs), "show": self.show}
 
         view = ToggleView()
         view.get(get_request)
@@ -762,6 +777,9 @@ def test_with_mocked_request(get_request):
                 import requests
                 response = requests.get('https://api.example.com')
                 self.data = response.json()['data']
+
+            def get_context_data(self, **kwargs):
+                return {**super().get_context_data(**kwargs), "data": self.data}
 
         view = APIView()
         view.get(get_request)

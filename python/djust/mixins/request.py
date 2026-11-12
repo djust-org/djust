@@ -150,10 +150,6 @@ def _take_queued_background_work(view: Any) -> List[Tuple[str, Any, Any, Any]]:
     if queued:
         tasks.extend((name, *entry) for name, entry in list(queued.items()))
         view._async_tasks = {}
-    legacy = getattr(view, "_async_pending", None)
-    if legacy:
-        view._async_pending = None
-        tasks.append(("_default", *legacy))
     return tasks
 
 
@@ -1935,7 +1931,6 @@ class RequestMixin:
                     # saved state below puts them back; running them again would
                     # only repeat the read.
                     self.__dict__.pop("_async_tasks", None)
-                    self.__dict__.pop("_async_pending", None)
                 restore_public_state(self, saved_state)
                 # Not over work that is about to run: the private bookkeeping a
                 # task closes over (``assign_async``'s generation counter) belongs
@@ -2256,35 +2251,8 @@ class RequestMixin:
 
                 save_server_state(self, request)
 
-            # Root-view identity and the current Django session bind HTTP
-            # fallback tokens exactly as on the WS/SSE event paths (#3253).
-            from ..security.state_snapshot import legacy_snapshot_fields
-
-            # POST can be the first request, or arrive after cookie expiry.
-            # Allocate its key before signing; SessionMiddleware otherwise
-            # creates a different binding after this response has been built.
-            if (
-                legacy_exposure
-                and getattr(self, "enable_state_snapshot", False)
-                and not request.session.session_key
-            ):
-                request.session.create()
-
-            view_module = getattr(type(self), "__module__", None)
-            view_path = (
-                f"{view_module}.{type(self).__name__}"
-                if isinstance(view_module, str) and view_module
-                else None
-            )
-            snapshot_fields = legacy_snapshot_fields(self, view_path, request.session.session_key)
-
-            # Signed-cookie sessions encode their contents in the identity;
-            # response middleware changes it after this token was captured.
-            # Revoke rather than cache a token that cannot pass session binding.
-            from django.contrib.sessions.backends.signed_cookies import SessionStore
-
-            if isinstance(request.session, SessionStore) and snapshot_fields:
-                snapshot_fields["state_snapshot_signed"] = None
+            # Fields every response of this turn carries besides its payload.
+            response_fields: Dict[str, Any] = {}
 
             if (
                 observation_before is not None
@@ -2292,7 +2260,7 @@ class RequestMixin:
                 and not getattr(self, "_force_full_html", False)
                 and not getattr(self, "_async_tasks", None)
             ):
-                noop_response = {"type": "noop", "event_name": event_name, **snapshot_fields}
+                noop_response = {"type": "noop", "event_name": event_name, **response_fields}
                 _inject_side_channels(noop_response)
                 return JsonResponse(noop_response)
 
@@ -2311,7 +2279,7 @@ class RequestMixin:
             from ..websocket import _resolve_skip_render
 
             if _resolve_skip_render(self):
-                skip_response: Dict[str, Any] = {"patches": [], **snapshot_fields}
+                skip_response: Dict[str, Any] = {"patches": [], **response_fields}
                 contract_fields = _http_parameter_contract_fields(self, request)
                 if contract_fields is None:
                     return _contract_error_response()
@@ -2332,7 +2300,7 @@ class RequestMixin:
                 cold_children = not getattr(self, "_explicit_child_vdom_tracking", False)
                 html, patches_json, version = render_view_with_diff(self, request)
                 if cold_children and getattr(self, "_explicit_child_vdom_tracking", False):
-                    snapshot_fields["owned_children"] = [
+                    response_fields["owned_children"] = [
                         [child._view_id, node_id]
                         for node_id, child in self._explicit_child_vdom_bindings.items()
                     ]
@@ -2436,7 +2404,7 @@ class RequestMixin:
                         "patches": patches,
                         "version": version,
                         **contract_fields,
-                        **snapshot_fields,
+                        **response_fields,
                     }
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
@@ -2449,7 +2417,7 @@ class RequestMixin:
                         "html": html,
                         "version": version,
                         **contract_fields,
-                        **snapshot_fields,
+                        **response_fields,
                     }
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
@@ -2461,7 +2429,7 @@ class RequestMixin:
                     "html": html,
                     "version": version,
                     **contract_fields,
-                    **snapshot_fields,
+                    **response_fields,
                 }
                 if cache_request_id:
                     response_data["cache_request_id"] = cache_request_id

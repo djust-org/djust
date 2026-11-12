@@ -87,7 +87,11 @@ Browser                    Server
 
 ### What the page-POST fallback keeps between events
 
-Every POST to the page URL builds a fresh view instance. A view on the default state policy gets its attributes back from the state the base `get_context_data()` built from its public attributes on the previous request, which djust saved in the session, and `mount()` is not called again once that saved state exists. An attribute that `get_context_data()` leaves out is therefore unset on the next POST, and a handler that reads it raises `AttributeError` (a 500), while the same event works over the WebSocket, where the one view instance stays alive.
+Every POST to the page URL builds a fresh view instance. What it gets back depends on the view's exposure policy.
+
+**The default, [explicit exposure](../state/explicit-exposure.md).** `mount()` runs on each POST and only the fields declared with `state(..., persist="server")` are restored. An attribute that is only set in `mount()` starts again from its `mount()` value on every POST, so declare what an event changes and the next event needs. The URL is read after those fields are restored, as on the socket, so a declared field `handle_params()` derives from the URL takes the URL's value on every POST: a handler's change to it that is not carried by a `live_patch()` does not survive to the next POST.
+
+**A view that states `exposure_policy = "legacy"`** (deprecated) keeps whole-view state in the session, and the rest of this section, up to the bullet list below, describes it. Such a view gets its attributes back from the state the base `get_context_data()` built from its public attributes on the previous request, which djust saved in the session, and `mount()` is not called again once that saved state exists. An attribute that `get_context_data()` leaves out is therefore unset on the next POST, and a handler that reads it raises `AttributeError` (a 500), while the same event works over the WebSocket, where the one view instance stays alive.
 
 What is not saved: the keys an override adds on top of `super().get_context_data()` (they are computed again on every render), and the values of [`get_render_only_context()`](../api-reference/liveview.md#get_render_only_context---dict). Put content that must not reach the session there.
 
@@ -97,13 +101,11 @@ So:
 - Read again in `handle_restore(request)` what the session does not hold (rows on a private attribute that is not JSON, content you keep out of the session). `mount()` never sees the restored state: it does not run when the saved state covers every private attribute, and runs *before* the saved state is put back when one could not be saved. `handle_restore()` runs after the restore and the object permission check, before the event handler.
 - Always call `super().get_context_data(**kwargs)` in an override, and add to its result rather than replacing it. See [`get_context_data`](../api-reference/liveview.md#get_context_datakwargs---dict).
 
-A view that declares [explicit exposure](../state/explicit-exposure.md) is rebuilt differently: `mount()` runs on each POST and only the declared server fields are restored. The URL is read after those fields are restored, as on the socket, so a declared field `handle_params()` derives from the URL takes the URL's value on every POST: a handler's change to it that is not carried by a `live_patch()` does not survive to the next POST.
-
 Whenever the fallback runs `mount()` it then runs `handle_params(params, uri)`, as the GET and the socket mount do, with the POST's own query string (the browser posts to `window.location.href`, so `?scope=mine` is on the request). A page that reads its URL there meets the event with the state the browser shows, and the answer is a diff against that page, not against `mount()`'s defaults. Over restored state it does not run: the saved state already holds what the previous request set. (One exception: the first POST after a GET, for a page whose `mount()` queued background work, see **What runs** below.)
 
 `start_async()` and `@background` work runs inside the request, before the answer is rendered, because the fallback has one response and no later frame to deliver a result. The handler's loading state is therefore never rendered on this transport: the one answer holds the result.
 
-- **What runs.** Work the handler queued, always. Work `mount()` or `handle_params()` queued (a page that loads its rows after its first render, `assign_async`) runs right before the handler, after every refusal (object permission, handler permission, `@rate_limit`, parameter validation), so a refused request starts none of it. It runs wherever the fallback runs `mount()` over a view with nothing restored (the `view_state_in_session: False` policy and [explicit exposure](../state/explicit-exposure.md)), and, on the default policy, on **the first POST after the GET**:
+- **What runs.** Work the handler queued, always. Work `mount()` or `handle_params()` queued (a page that loads its rows after its first render, `assign_async`) runs right before the handler, after every refusal (object permission, handler permission, `@rate_limit`, parameter validation), so a refused request starts none of it. It runs wherever the fallback runs `mount()` over a view with nothing restored (the `view_state_in_session: False` policy and [explicit exposure](../state/explicit-exposure.md)), and, on a legacy-policy view, on **the first POST after the GET**:
   - The GET renders the loading state and cannot run that work: the socket or SSE mount does, and the GET cannot tell whether this client will ever open one. So it saves the loading state and, beside it, a digest of what it saved (`<view key>__mount_work`). A view whose `mount()` queued nothing records nothing.
   - The first POST that finds the saved state unchanged runs `mount()` again, puts the saved state back on top (the page the browser shows is kept: a *public* attribute `mount()` picked for the GET is still the GET's. Private attributes are rebuilt by the second `mount()`, on purpose: restoring them over the queued work would reset bookkeeping the tasks close over, such as `assign_async`'s generation counter) and runs the queued work over it, before the handler. The loaded state is then saved, the marker is dropped, and the work is not repeated by the next POST.
   - State that another writer saved in between (a socket turn) changes the digest, and then nothing is run again. The marker only notices a *different* saved state: a socket turn that ran the queued work for its side effects only and saved an identical state leaves the marker valid, so a later fallback POST runs that work again. A POST that is refused (403, 429, 400), an event the view does not define and an [embedded child's](#embedded-views-over-the-http-fallback) event leave the load owed: the next admitted POST for the page runs it. Each of those POSTs (except a child's, which discards the page's work) still runs `mount()` and `handle_params()` again, every time, without consuming the marker. A POST that runs the work consumes it even if the work did not finish: when a [deadline](#what-the-page-post-fallback-keeps-between-events) expires during mount's work, the next POST does not retry the slow loader and the page stays on its loading state.
@@ -136,7 +138,7 @@ A `live_redirect()` or `live_patch()` that a handler queues is returned in the a
 
 ### Keeping view state out of the session
 
-By default a view on the default state policy keeps its state in the Django session between requests, under `liveview_<path>` and its `__private`, `__private_unsaved`, `_components` and `__mount_work` siblings (the last only for a page whose `mount()` queued background work, see [What runs](#what-the-page-post-fallback-keeps-between-events); it is not written on the stateless policy, as nothing is). A project that must keep `django_session` free of view content can turn that off with one setting:
+A view that states `exposure_policy = "legacy"` keeps its state in the Django session between requests, under `liveview_<path>` and its `__private`, `__private_unsaved`, `_components` and `__mount_work` siblings (the last only for a page whose `mount()` queued background work, see [What runs](#what-the-page-post-fallback-keeps-between-events); it is not written on the stateless policy, as nothing is). A project that must keep `django_session` free of view content can turn that off with one setting:
 
 ```python
 LIVEVIEW_CONFIG = {
@@ -150,7 +152,7 @@ With `False`, djust neither writes nor reads those keys on any path:
 
 - The first GET renders the page and saves nothing of the view in the session.
 - Every page-POST fallback builds a fresh view, runs `mount()`, applies the event and renders. Nothing is restored from or saved to the session.
-- WebSocket and SSE turns save nothing of the view in the session, even for a view with `enable_state_snapshot = True`, and a mount never restores from it. The signed client `state_snapshot` that such a view sends back on reconnect is not stored in the session, so it still works.
+- WebSocket and SSE turns save nothing of the view in the session, even for a view with `enable_state_snapshot = True`, and a mount never restores from it. The signed client snapshot of an explicit view's `persist="client"` fields is not stored in the session, so it still works.
 
 The trade-off: state that lives only on the view resets on each fallback POST, because `mount()` runs again. A "load more" offset, a form draft or a selected tab that a handler set on `self` is back at its `mount()` value on the next POST. Keep such state somewhere `mount()` can read it again (the URL, the database), or use the WebSocket or SSE transport, where the one view instance stays alive between events.
 
@@ -189,13 +191,16 @@ What carries over and what does not:
 ```python
 # views.py
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 
 class CounterView(LiveView):
     template_name = 'counter.html'
 
-    def mount(self, request, **kwargs):
-        self.count = 0
+    # Each POST builds a new view: a persisted field is what carries the count over.
+    count = state(0, persist="server")
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count}
 
     @event_handler
     def increment(self, **kwargs):

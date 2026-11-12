@@ -610,6 +610,9 @@ class OrderView(LiveView):
     def mount(self, request, **kwargs):
         self.status = ""
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "status": self.status}
+
     @event_handler()
     def save(self, **kwargs):
         self.status = "Order saved"

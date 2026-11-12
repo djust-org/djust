@@ -271,7 +271,6 @@ class TestOnlyKnownTemplateSourceBuildersExist:
         "websocket.py": "a child view's `get_template()` source",
         "management/commands/generate_sw.py": "the service-worker template, a string constant",
         "mcp/server.py": "template source an MCP caller asks to be checked (dev tool)",
-        "components/base.py": "a component's own template string",
         "theming/templatetags/theme_tags.py": "the preview template, a module constant",
         "components/gallery/views.py": "gallery example sources, module constants",
     }
