@@ -277,7 +277,6 @@ async def test_a_view_owns_its_own_keys_and_not_a_longer_path_s():
     own = "liveview_/app"
     for key in (
         own,
-        own + "__private",
         own + "_components",
         own + "__sticky_ids",
         own + "__sticky__dock",

@@ -136,7 +136,8 @@ class TestHttpFallbackPost:
         _post(_SecretView, "globex.example.com", session, "read")
 
         assert _SEEN == [
-            ("acme", "secret-of-acme", "private-of-acme"),
+            # Private attributes are not kept (2.0): mount() rebuilt this one.
+            ("acme", "secret-of-acme", "private-acme"),
             ("globex", "fresh-globex", "private-globex"),
         ], _SEEN
 

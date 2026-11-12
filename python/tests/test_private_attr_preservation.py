@@ -1,13 +1,12 @@
 """
-Tests for private (_-prefixed) attribute preservation across session save/restore.
+Tests for the private (_-prefixed) attribute capture helpers.
 
-Private attributes set in mount() or event handlers should survive:
-- HTTP POST state restoration (HTTP-only fallback mode)
-- WebSocket reconnect state restoration (pre-rendered path)
-
-Fixes: private attrs were silently lost because get_context_data() correctly
-excludes them from template context, but session save used get_context_data()
-output — so private attrs were never persisted.
+2.0 stopped keeping a legacy view's private attributes in the session (the
+page-POST fallback runs ``mount()`` again, which rebuilds them); the tests of
+that save and of the reconnect restore were removed with it. The helpers
+``_snapshot_user_private_attrs`` / ``_get_private_state`` /
+``_restore_private_state`` still back the legacy ``lazy=True`` child on the
+page-POST fallback (``_lazy_containers.py``) and go with that path.
 
 Fixes: #627, #611
 """
@@ -74,12 +73,13 @@ def _add_session(request):
 
 
 def _setup_view(view_cls):
-    """GET a view to populate session state, return (view, factory, request)."""
+    """Mount a view and record its private attribute names, as the lazy child does."""
     view = view_cls()
     factory = RequestFactory()
-    get_request = factory.get("/test/")
-    get_request = _add_session(get_request)
-    view.get(get_request)
+    get_request = _add_session(factory.get("/test/"))
+    view.request = get_request
+    view.mount(get_request)
+    view._snapshot_user_private_attrs()
     return view, factory, get_request
 
 
@@ -192,193 +192,42 @@ class TestPrivateStateHelpers:
 
 
 # ---------------------------------------------------------------------------
-# Tests: HTTP round-trip (GET saves, POST restores)
+# Tests: the page-POST fallback rebuilds private attributes with mount()
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db
-class TestHTTPPrivateAttrRoundTrip:
-    """Private attrs survive GET→POST session round-trip."""
+class TestHTTPPrivateAttrsRebuiltByMount:
+    """Nothing private is kept in the session; mount() rebuilds it per POST."""
 
-    def test_private_attrs_saved_to_session_on_get(self):
-        view, factory, get_request = _setup_view(PrivateAttrView)
-        view_key = "liveview_/test/"
-        private_key = f"{view_key}__private"
-        saved = get_request.session.get(private_key, {})
-        assert "_api_token" in saved
-        assert saved["_api_token"] == "secret-token-123"
+    def test_nothing_private_is_saved_on_get(self):
+        view = PrivateAttrView()
+        get_request = _add_session(RequestFactory().get("/test/"))
+        view.get(get_request)
+        assert not [k for k in get_request.session.keys() if k.endswith("__private")]
 
-    def test_private_attrs_restored_on_post(self):
-        """POST restores private attrs from session before running handler."""
-        view, factory, get_request = _setup_view(PrivateAttrView)
+    def test_private_attrs_available_to_the_handler_on_post(self):
+        view = PrivateAttrView()
+        factory = RequestFactory()
+        get_request = _add_session(factory.get("/test/"))
+        view.get(get_request)
 
-        # Create a fresh view (simulates new request — no in-memory state)
         fresh_view = PrivateAttrView()
-
         post_request = factory.post(
             "/test/",
             data='{"event":"do_work","params":{}}',
             content_type="application/json",
         )
         post_request.session = get_request.session
-
         response = fresh_view.post(post_request)
         assert response.status_code == 200
-
-        # After POST, the handler incremented _retry_count
+        # mount() ran again: the handler incremented a fresh counter.
         assert fresh_view._retry_count == 1
-        # _api_token was restored from session
         assert fresh_view._api_token == "secret-token-123"
-
-    def test_private_attrs_updated_in_session_after_post(self):
-        """POST saves updated private attrs back to session."""
-        view, factory, get_request = _setup_view(PrivateAttrView)
-
-        post_request = factory.post(
-            "/test/",
-            data='{"event":"do_work","params":{}}',
-            content_type="application/json",
-        )
-        post_request.session = get_request.session
-        view.post(post_request)
-
-        # Check session was updated
-        view_key = "liveview_/test/"
-        private_key = f"{view_key}__private"
-        saved = post_request.session.get(private_key, {})
-        assert saved["_retry_count"] == 1
-
-    def test_public_attrs_still_work(self):
-        """Verify public attrs aren't broken by the private attr changes."""
-        view, factory, get_request = _setup_view(PrivateAttrView)
-
-        fresh_view = PrivateAttrView()
-        post_request = factory.post(
-            "/test/",
-            data='{"event":"do_work","params":{}}',
-            content_type="application/json",
-        )
-        post_request.session = get_request.session
-        response = fresh_view.post(post_request)
-        assert response.status_code == 200
         assert fresh_view.visible == "working"
+        assert not [k for k in post_request.session.keys() if k.endswith("__private")]
 
-    def test_non_serializable_attrs_skipped_gracefully(self):
-        """Non-serializable private attrs don't break session save."""
-        view, factory, get_request = _setup_view(NonSerializablePrivateView)
-
-        view_key = "liveview_/test/"
-        private_key = f"{view_key}__private"
-        saved = get_request.session.get(private_key, {})
-
-        # _lock should NOT be in session (not serializable)
-        assert "_lock" not in saved
-        # _config SHOULD be there
-        assert "_config" in saved
-
-    def test_private_state_cleaned_when_empty(self):
-        """If all private attrs are removed, the session key is cleaned up."""
-        view, factory, get_request = _setup_view(PrivateAttrView)
-
-        # Remove private attrs from the live view
-        del view._api_token
-        del view._retry_count
-
-        post_request = factory.post(
-            "/test/",
-            data='{"event":"do_work","params":{}}',
-            content_type="application/json",
-        )
-        post_request.session = get_request.session
-
-        # Re-add them via POST handler (do_work sets _retry_count)
-        # But _api_token won't be there since it's not in session either...
-        # Actually, let's test the cleanup: use a view where handler removes attrs
-        fresh = PrivateAttrView()
-        fresh.post(post_request)
-        # _retry_count was restored (1 from do_work)
-        view_key = "liveview_/test/"
-        private_key = f"{view_key}__private"
-        saved = post_request.session.get(private_key, {})
-        # Should still have state since do_work increments _retry_count
-        assert "_retry_count" in saved
-
-
-# ---------------------------------------------------------------------------
-# Tests: WebSocket reconnect path (pre-rendered state restoration)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-class TestWSReconnectPrivateAttrRestoration:
-    """Private attrs survive the WebSocket reconnect path.
-
-    The WS ``has_prerendered`` branch restores public state from the session,
-    then must also read ``{view_key}__private`` and call
-    ``_restore_private_state()``.  These tests verify that path works correctly
-    by simulating the sequence the consumer performs.
-    """
-
-    def test_ws_reconnect_restores_private_attrs(self):
-        """Simulate the WS reconnect: GET populates session, then a fresh view
-        instance restores both public and private state from the session —
-        mirroring what ``websocket.py`` does in the ``has_prerendered`` branch.
-        """
-        # 1. Initial GET populates session (public + private state)
-        _view, _factory, get_request = _setup_view(PrivateAttrView)
-        view_key = "liveview_/test/"
-        private_key = f"{view_key}__private"
-
-        # Verify session has private state from GET
-        assert get_request.session.get(private_key)
-
-        # 2. Simulate WS reconnect: create fresh view instance (no mount)
+    def test_restore_of_an_empty_private_state_is_harmless(self):
         fresh_view = PrivateAttrView()
-
-        # Restore public state (what the WS consumer does first)
-        saved_state = get_request.session.get(view_key, {})
-        for key, value in saved_state.items():
-            if not key.startswith("_") and not callable(value):
-                setattr(fresh_view, key, value)
-
-        # Restore private state (the fix — WS consumer now does this too)
-        private_state = get_request.session.get(private_key, {})
-        if private_state:
-            fresh_view._restore_private_state(private_state)
-
-        # 3. Verify private attrs are restored
-        assert fresh_view._api_token == "secret-token-123"
-        assert fresh_view._retry_count == 0
-        # And public state too
-        assert fresh_view.visible == "hello"
-
-    def test_ws_reconnect_private_attrs_tracked_after_restore(self):
-        """After WS reconnect restore, private attrs should be in
-        ``_user_private_keys`` so they persist through subsequent save cycles.
-        """
-        _view, _factory, get_request = _setup_view(PrivateAttrView)
-        view_key = "liveview_/test/"
-        private_key = f"{view_key}__private"
-
-        fresh_view = PrivateAttrView()
-        private_state = get_request.session.get(private_key, {})
-        fresh_view._restore_private_state(private_state)
-
-        # Restored attrs must be tracked
-        assert "_api_token" in fresh_view._user_private_keys
-        assert "_retry_count" in fresh_view._user_private_keys
-
-        # And _get_private_state should return them for re-persistence
-        re_saved = fresh_view._get_private_state()
-        assert "_api_token" in re_saved
-        assert "_retry_count" in re_saved
-
-    def test_ws_reconnect_missing_private_key_is_harmless(self):
-        """If the session has no ``__private`` key (e.g. view had no private
-        attrs), the reconnect path should not error.
-        """
-        fresh_view = PrivateAttrView()
-        # Empty dict — same as session.get() returning default
         fresh_view._restore_private_state({})
-        # Should not have gained any spurious attrs
         assert fresh_view._get_private_state() == {}

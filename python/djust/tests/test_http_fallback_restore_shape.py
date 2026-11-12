@@ -149,38 +149,13 @@ def test_private_attributes_that_cannot_be_saved_are_rebuilt_by_mount():
 
     view, second = _post(ServiceView, initial, "bump")
     assert second.status_code == 200, second.content
-    # Public and serializable private state come from the session, not mount().
+    # Public state comes from the session; every private attribute comes from
+    # mount(), which runs on every POST (2.0 keeps no private attributes).
     assert view.count == 2
-    assert view._seen == [1, 2]
+    assert view._seen == [2]
     assert isinstance(view._client, _Client)
-
-
-class JsonOnlyView(LiveView):
-    exposure_policy = "legacy"
-    template = "<div dj-root><p>{{ count }}</p></div>"
-    mounts = 0
-
-    def mount(self, request, **kwargs):
-        type(self).mounts += 1
-        self.count = 0
-        self._seen = []
-
-    @event_handler()
-    def bump(self):
-        self.count += 1
-        self._seen.append(self.count)
-
-
-@pytest.mark.django_db
-def test_fallback_does_not_remount_when_private_state_was_saved_whole():
-    initial = _initial()
-    JsonOnlyView.mounts = 0
-    JsonOnlyView().get(initial)
-    for _ in range(2):
-        _view, response = _post(JsonOnlyView, initial, "bump")
-        assert response.status_code == 200, response.content
-    assert JsonOnlyView.mounts == 1
-    assert _view._seen == [1, 2]
+    assert ServiceView.mounts == 3
+    assert not [k for k in initial.session.keys() if k.endswith("__private")]
 
 
 def test_restore_helper_skips_methods_and_properties_keeps_data():

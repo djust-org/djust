@@ -154,11 +154,12 @@ class TestHandleParamsOnTheFallbackPost:
 
 
 class TestWhenStateWasRestored:
-    def test_a_restored_view_does_not_run_handle_params_again(self):
+    def test_the_restored_state_wins_over_handle_params(self):
         """Default policy: the saved state already holds what handle_params set.
 
-        The negative half of the rule "when no state was restored": running it
-        over restored state would overwrite what the previous event changed.
+        2.0 keeps no private attributes, so mount() and handle_params() run
+        again to rebuild them; the saved public state then goes back on top, so
+        what the previous event changed is not overwritten.
         """
         url = PATH + "?scope=mine"
         initial = _get_request(url)
@@ -170,7 +171,7 @@ class TestWhenStateWasRestored:
 
         assert response.status_code == 200, response.content
         assert view.note == "mine:a"
-        assert ScopedView.handle_params_calls == []
+        assert len(ScopedView.handle_params_calls) == 1
 
 
 class ExplicitScopedView(ScopedView):

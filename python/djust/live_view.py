@@ -1412,6 +1412,11 @@ class LiveView(
 
         Non-serializable values (locks, file handles, etc.) are silently skipped.
         This is a legacy-only API; explicit persistence uses a bound adapter.
+
+        2.0: the page-POST fallback and the socket no longer save private
+        attributes; the one remaining caller is the legacy ``lazy=True`` child
+        on the page-POST fallback (``_lazy_containers.py``), which goes with
+        that path (exposure-flip plan row 9).
         """
         from ._exposure import require_legacy_state_api
 
@@ -1460,35 +1465,14 @@ class LiveView(
                 continue
         return result
 
-    def _unsaved_private_keys(self, saved: Dict[str, Any]) -> List[str]:
-        """Tracked private attributes that ``saved`` (``_get_private_state()``) lacks.
-
-        Those the session could not hold: a non-JSON value or a stored callable.
-        The slots ``_get_private_state`` leaves to the public state on purpose
-        are not lost, so they are not listed.
-        """
-        user_keys: Set[str] = getattr(self, "_user_private_keys", set())
-        not_private = self._framework_storage_slots()
-        return sorted(
-            key
-            for key in user_keys
-            if key in self.__dict__
-            and key not in saved
-            and key not in _FRAMEWORK_INTERNAL_ATTRS
-            and not (
-                key in not_private
-                and not (key != "_reactive_state" and _holds_model(self.__dict__[key]))
-            )
-        )
-
     def _restore_private_state(self, private_state: Dict[str, Any]) -> None:
         """Restore legacy private attributes; explicit views require a bound adapter.
 
         A ``"lifecycle"`` step of the ``sync_turn_wrapper`` (#3646): a private model
         reference is re-fetched here (``decode_private_model_refs``, ``Model.objects.get``)
-        and a private attribute can be a property whose setter is application code. Every
-        caller (the WebSocket state restore, the HTTP POST restore, a lazy container and
-        a sticky child's restore) reaches this method, so the step is entered here.
+        and a private attribute can be a property whose setter is application code. Its
+        one remaining caller (2.0) is the legacy lazy container on the page-POST
+        fallback; the step is entered here.
 
         A guarded step: a wrapper whose ``__exit__`` swallows
         an exception would otherwise turn a failing restore into a silent PARTIAL one

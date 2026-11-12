@@ -52,7 +52,7 @@ from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler, is_push_only
 from ..hooks import run_on_mount_hooks
 from .._exposure import uses_legacy_exposure
-from .._tenant_state import MOUNT_WORK_SUFFIX, UNSAVED_PRIVATE_SUFFIX
+from .._tenant_state import MOUNT_WORK_SUFFIX
 from .._view_hooks import call_async_result_sync, call_hook_sync
 from .async_work import has_pending_async_work
 
@@ -421,26 +421,8 @@ def _run_http_background_work(view: Any, budget: Optional[_BackgroundBudget] = N
         )
 
 
-def _save_unsaved_private_keys(
-    view: Any, session: Any, view_key: Optional[str], private_state: Dict[str, Any]
-) -> None:
-    """Record which private attributes the session could not hold.
-
-    The HTTP fallback rebuilds the view from the session; when this list is not
-    empty it runs ``mount()`` so those attributes exist (see ``post()``).
-    """
-    if view_key is None:
-        return
-    unsaved = view._unsaved_private_keys(private_state)
-    key = f"{view_key}{UNSAVED_PRIVATE_SUFFIX}"
-    if unsaved:
-        session[key] = unsaved
-    else:
-        session.pop(key, None)
-
-
 def _saved_state_digest(session: Any, view_key: str) -> Optional[str]:
-    """A digest of the state ``session`` holds for ``view_key`` (state and private).
+    """A digest of the state ``session`` holds for ``view_key``.
 
     Canonicalized through one JSON round trip, so the value written during a
     request and the one the next request reads back from the session store
@@ -448,8 +430,7 @@ def _saved_state_digest(session: Any, view_key: str) -> Optional[str]:
     when the state cannot be digested, which records nothing.
     """
     try:
-        parts = [session.get(view_key), session.get(f"{view_key}__private")]
-        canonical = json.loads(json.dumps(parts, default=str))
+        canonical = json.loads(json.dumps(session.get(view_key), default=str))
         return hashlib.sha256(json.dumps(canonical, sort_keys=True).encode("utf-8")).hexdigest()
     except (TypeError, ValueError):
         return None
@@ -727,14 +708,6 @@ class RequestMixin:
 
         def _initialize_temporary_assigns(self) -> None: ...
 
-        def _get_private_state(self) -> Dict[str, Any]: ...
-
-        def _restore_private_state(self, private_state: Dict[str, Any]) -> None: ...
-
-        def _unsaved_private_keys(self, saved: Dict[str, Any]) -> List[str]: ...
-
-        def _snapshot_user_private_attrs(self) -> None: ...
-
         def _inject_client_script(self, html: str) -> str: ...
 
         def _get_all_child_views(self) -> Dict[str, Any]: ...
@@ -871,10 +844,6 @@ class RequestMixin:
         call_hook_sync(self.mount, request, **kwargs)
         t_mount = (time.perf_counter() - t0) * 1000
 
-        # Snapshot user-defined _private attrs (set in mount) before render
-        # cycle adds framework-internal attrs.
-        self._snapshot_user_private_attrs()
-
         # Call handle_params after mount (Phoenix parity).
         # The WebSocket path does this in websocket.py:1261-1266, but the
         # HTTP GET path was missing it. Without this, URL params like ?tab=X
@@ -976,15 +945,6 @@ class RequestMixin:
                 request.session[view_key] = normalize_django_value(
                     _session_state, state_roundtrip=True
                 )
-
-                # Legacy private/component persistence is separate from explicit
-                # declared server fields. Never let it run as an explicit fallback.
-                private_state = self._get_private_state()
-                if private_state:
-                    request.session[f"{view_key}__private"] = normalize_django_value(
-                        private_state, state_roundtrip=True
-                    )
-                _save_unsaved_private_keys(self, request.session, view_key, private_state)
                 # The GET never runs the work mount() / handle_params() queued (the
                 # socket or SSE mount does), and it cannot tell whether this client
                 # will ever open one. Record that the state above is a loading
@@ -1828,18 +1788,6 @@ class RequestMixin:
             # named like one would replace it on the instance).
             restore_public_state(self, saved_state)
 
-            # Restore user-defined _private attributes
-            private_state = request.session.get(f"{view_key}__private", {}) if session_state else {}
-            if private_state:
-                self._restore_private_state(private_state)
-            # Private attributes the session could not hold (not JSON: a service
-            # client, a stored callable) are rebuilt by mount() below.
-            unsaved_private = (
-                request.session.get(f"{view_key}{UNSAVED_PRIVATE_SUFFIX}")
-                if session_state
-                else None
-            )
-
             # ADR-035: bound after the restore so saved state cannot supply it.
             bind_route = getattr(self, "_djust_bind_route_kwargs", None)
             if callable(bind_route):
@@ -1883,21 +1831,18 @@ class RequestMixin:
                 mount_work_pending = True
             elif not saved_state:
                 call_hook_sync(self.mount, request, **kwargs)
-                self._snapshot_user_private_attrs()
                 # Nothing was restored, so the page's URL state is rebuilt the way
                 # the GET builds it: the event must meet the page the browser
                 # shows, and the render it answers with must not diff against
                 # mount()'s defaults (#3624).
                 _run_http_handle_params(self, request)
                 mount_work_pending = True
-            elif unsaved_private or mount_work_owed:
-                # The socket's instance kept every private attribute; this one
-                # is rebuilt from the session, which could not hold some of
-                # them. mount() rebuilds them, then the saved state goes back on
-                # top, so the handler sees the state the page had (the
+            else:
+                # Private attributes are not kept between requests (2.0), so
+                # mount() rebuilds them, then the saved public state goes back
+                # on top, so the handler sees the state the page had (the
                 # explicit-exposure branch above does the same).
                 call_hook_sync(self.mount, request, **kwargs)
-                self._snapshot_user_private_attrs()
                 # handle_params() may build private state from the URL too.
                 _run_http_handle_params(self, request)
                 if mount_work_owed:
@@ -1913,12 +1858,6 @@ class RequestMixin:
                     # only repeat the read.
                     self.__dict__.pop("_async_tasks", None)
                 restore_public_state(self, saved_state)
-                # Not over work that is about to run: the private bookkeeping a
-                # task closes over (``assign_async``'s generation counter) belongs
-                # to this ``mount()``, and the saved copy would mark the task
-                # superseded so its result was dropped (#3635).
-                if private_state and not mount_work_owed:
-                    self._restore_private_state(private_state)
                 if callable(bind_route):
                     bind_route(kwargs)
 
@@ -2193,20 +2132,7 @@ class RequestMixin:
                 _inject_side_channels(redirect_response)
                 return JsonResponse(redirect_response)
 
-            # Persist user-defined _private attributes BEFORE get_context_data()
-            # because get_context_data() sets render-cycle internals that we
-            # don't want to accidentally capture.
             if legacy_exposure:
-                if session_state:
-                    private_state = self._get_private_state()
-                    if private_state:
-                        request.session[f"{view_key}__private"] = normalize_django_value(
-                            private_state, state_roundtrip=True
-                        )
-                    else:
-                        request.session.pop(f"{view_key}__private", None)
-                    _save_unsaved_private_keys(self, request.session, view_key, private_state)
-
                 from ..sync_turn import run_sync_step
 
                 updated_context = run_sync_step(self, "render", self.get_context_data)

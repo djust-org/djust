@@ -248,15 +248,9 @@ class TestOnlyWhenTheSavedStateIsStillTheLoadingState:
         view, _, _ = _post(Loads, "select", initial)
         assert Loads.loads == 0
         assert view.data == "from-a-socket-turn"
-        assert Loads.mounts == 1, "mount() does not run over state that is no longer loading"
-
-    def test_a_change_to_private_state_alone_also_invalidates_the_marker(self):
-        initial = _get(Loads)
-        private = initial.session.get(STATE_KEY + "__private")
-        assert private, "the view keeps a private attribute the marker must cover"
-        initial.session[STATE_KEY + "__private"] = {**private, "_note": "changed-elsewhere"}
-        _post(Loads, "select", initial)
-        assert Loads.loads == 0
+        # mount() runs again (2.0 keeps no private attributes, so it rebuilds
+        # them), but the work it queued is not run over a loaded state.
+        assert Loads.mounts == 2
 
     def test_a_forged_marker_over_other_state_does_nothing(self):
         initial = _get(Loads)

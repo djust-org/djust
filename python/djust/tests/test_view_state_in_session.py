@@ -138,7 +138,7 @@ def test_default_keeps_saving_view_state_in_the_session():
     view, _ = _post(initial, "bump")
     assert view.count == 2  # restored from the session
     assert initial.session[f"liveview_{PATH}"]["count"] == 2
-    assert f"liveview_{PATH}__private" in _view_keys(initial.session)
+    assert f"liveview_{PATH}__private" not in _view_keys(initial.session)
 
 
 def test_djust_config_is_read_too():

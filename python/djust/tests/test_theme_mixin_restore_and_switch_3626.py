@@ -273,14 +273,14 @@ def _http_post(view_class, saved, event="bump"):
 
 
 class TestAViewTheHttpFallbackRestored:
-    """#3626 finding 1 on the path that still skips ``mount()``: the HTTP
-    page-POST fallback restoring a fully saved legacy view. (The socket
-    restore these cases were written against was removed in 2.0.)"""
+    """#3626 finding 1 on the HTTP page-POST fallback restoring a saved legacy
+    view. (The socket restore these cases were written against was removed in
+    2.0, and the fallback runs ``mount()`` again since private attributes are
+    no longer kept.)"""
 
     def test_a_restored_view_renders_the_values_without_the_processor(self):
         with _without_the_processor():
             view, reply = _http_post(Themed, {**_SAVED, "count": 3})
-            assert view._theme_manager is None, "the premise: mount() did not run"
             html = reply["html"]
             shown = _numbers(html)
             assert int(shown["H"]) > 1000, f"empty theme_head on a restored view: {html[:300]}"
