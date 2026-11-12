@@ -74,12 +74,15 @@ def _close_worker_connections():
     """Start from a known state: an earlier test may have left the worker thread's connection open.
 
     The scope under test closes only what was opened inside it, so a connection that is already
-    open would be reused and the count would not move (the merge-queue failure on #4015).
+    open would be reused and the count would not move (the merge-queue failures on #4015).
+
+    This goes through the helper's own closer on purpose. The test database is in-memory SQLite,
+    where Django's ``close()`` keeps the handle, so ``connections.close_all()`` leaves it open.
     """
     from asgiref.sync import SyncToAsync
-    from django.db import connections
+    from djust.tests._worker_database import _close_new
 
-    SyncToAsync.single_thread_executor.submit(connections.close_all).result()
+    SyncToAsync.single_thread_executor.submit(_close_new, {}).result()
 
 
 @pytest.mark.django_db(transaction=True)
