@@ -126,6 +126,11 @@ class ProductSearchView(LiveView):
         self.query = ""
         self.results = []
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(query=self.query, results=self.results)
+        return context
+
     @event_handler
     @debounce(wait=0.5)  # Wait 500ms after last keystroke
     def search(self, value: str = "", **kwargs):
@@ -192,6 +197,9 @@ class CounterView(LiveView):
 
     def mount(self, request):
         self.count = 0
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count}
 
     @event_handler
     def increment(self, **kwargs):
@@ -273,6 +281,11 @@ class BlogPostEditor(DraftModeMixin, LiveView):
         self.body = ""
         self.tags = ""
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(title=self.title, body=self.body, tags=self.tags)
+        return context
+
     @event_handler
     def publish_post(self, title: str = "", body: str = "", tags: str = "", **kwargs):
         BlogPost.objects.create(
@@ -352,6 +365,11 @@ class TemperatureDashboard(LiveView):
         self.celsius = 22.2
         self.kelvin = 295.4
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(temperature=self.temperature, celsius=self.celsius, kelvin=self.kelvin)
+        return context
+
     @event_handler
     @throttle(interval=0.1)  # At most ~10 updates/second while dragging
     def update_temperature(self, value: int = 0, **kwargs):
@@ -416,6 +434,11 @@ class LanguageAutocomplete(LiveView):
         self.query = ""
         self.results = []
         self.cache_hits = 0
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(query=self.query, results=self.results, cache_hits=self.cache_hits)
+        return context
 
     @event_handler
     @cache(ttl=600, key_params=["value"])  # Cache for 10 minutes, keyed on the text
@@ -498,6 +521,11 @@ class ColorSliderView(LiveView):
     def mount(self, request):
         self.hue = 180
         self.server_count = 0
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(hue=self.hue, server_count=self.server_count)
+        return context
 
     @event_handler
     @throttle(interval=0.1)  # At most one request per 100ms while dragging

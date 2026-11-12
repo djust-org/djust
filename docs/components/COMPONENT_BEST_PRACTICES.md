@@ -29,6 +29,9 @@ class MyView(LiveView):
         self.title = "Counter"
         self.count = 0
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "title": self.title, "count": self.count}
+
     def increment(self):
         self.count += 1
 

@@ -435,24 +435,23 @@ def create_item(self, name: str, price: float):
 
 ### Convention
 
-djust uses a naming convention to distinguish public and private instance variables:
+No attribute a view sets on `self` reaches the template by itself
+([explicit exposure](website/state/explicit-exposure.md), the default since
+djust 2.0). `get_context_data()` supplies each name the template reads:
 
-- **`_private`** - Not exposed to template context
-- **`public`** - Auto-exposed to template context
+- **`self.search_query = ""`** stays on the view, for your handlers
+- **`context["search_query"] = self.search_query`** in `get_context_data()` puts it in the template
+- **`_private`** is a naming convention for internal values such as QuerySets; it is not what keeps them out of the template
 
 ### Why This Matters
 
-The JIT Serialization Pattern (see `docs/JIT_SERIALIZATION_PATTERN.md`) relies on this convention:
+The JIT Serialization Pattern (see `docs/JIT_SERIALIZATION_PATTERN.md`) hands the QuerySet to the template the same way:
 
 ```python
 def mount(self, request):
-    # Private - internal state, not in template
-    self._properties = Property.objects.all()
-
-    # Public - auto-exposed to template
-    self.properties = None  # Set in get_context_data()
     self.search_query = ""
     self.filter_status = "all"
+    self._refresh_properties()
 
 def _refresh_properties(self):
     """Private helper method - build QuerySet"""
@@ -464,21 +463,21 @@ def _refresh_properties(self):
     if self.filter_status != "all":
         items = items.filter(status=self.filter_status)
 
-    self._properties = items  # Store in PRIVATE variable
+    self._properties = items
 
 def get_context_data(self, **kwargs):
-    """Expose for JIT serialization"""
-    self.properties = self._properties  # Assign to PUBLIC variable
-    context = super().get_context_data(**kwargs)  # Triggers Rust JIT
+    """The template gets what this returns, and nothing else."""
+    context = super().get_context_data(**kwargs)
+    context["properties"] = self._properties  # serialized by the Rust JIT
+    context["search_query"] = self.search_query
+    context["filter_status"] = self.filter_status
     return context
 ```
 
 ### Benefits
 
-1. **Clarity**: Easy to see what's exposed to templates
-2. **Performance**: JIT serialization only processes public variables
-3. **Debugging**: Debug panel only shows public variables
-4. **Safety**: Private state can't be accidentally accessed in templates
+1. **Clarity**: `get_context_data()` is the one place that says what the template sees
+2. **Safety**: a value you did not hand over cannot be rendered by accident
 
 ## Error Handling
 
