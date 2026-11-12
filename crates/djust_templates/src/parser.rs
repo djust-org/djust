@@ -2408,9 +2408,11 @@ fn parse_token_inner(
                     // `doesn't allow other block tags` error, which it can only
                     // do if the raw tokens arrive.
                     if let Some(end_tag) = crate::registry::raw_block_handler_exists(tag_name) {
-                        let (body, end_pos) = collect_raw_source(
+                        crate::registry::validate_raw_block_arguments(tag_name, args)?;
+                        let (body, end_pos) = collect_nested_raw_source(
                             tokens,
                             *i + 1,
+                            Some(tag_name.as_str()),
                             &[end_tag.as_str()],
                             format!("Unclosed raw-block tag, expected {{% {end_tag} %}}"),
                         )?;
@@ -2857,9 +2859,39 @@ fn collect_raw_source(
     end_names: &[&str],
     unclosed_error: String,
 ) -> Result<(String, usize)> {
+    collect_nested_raw_source(tokens, start, None, end_names, unclosed_error)
+}
+
+/// [`collect_raw_source`], stopping at the end tag that closes THIS tag when `open_name`
+/// is given, not at the first one. A raw-block tag's body may hold the same tag again
+/// (`{% accordion %}` inside an `{% accordion %}` body): Django's own
+/// `parser.parse(("endaccordion",))` keeps the inner pair in the body, because the inner
+/// tag compiles to a node that consumes its own end tag. Stopping at the first end tag
+/// handed Django half a body and left the outer end tag over as `Invalid block tag`
+/// (#3878). A tag that refuses nested block tags (`blocktranslate`) still sees the inner
+/// tag in its body and raises its own error, as it did when the body stopped there.
+fn collect_nested_raw_source(
+    tokens: &[Token],
+    start: usize,
+    open_name: Option<&str>,
+    end_names: &[&str],
+    unclosed_error: String,
+) -> Result<(String, usize)> {
     let mut content = String::new();
+    let mut depth = 0usize;
     let mut j = start;
     while j < tokens.len() {
+        if let (Token::Tag(name, args), Some(open)) = (&tokens[j], open_name) {
+            if name == open {
+                depth += 1;
+            } else if depth > 0 && end_names.contains(&name.as_str()) {
+                // The end tag of a nested pair: part of the body, not this tag's end.
+                depth -= 1;
+                push_raw_tag(&mut content, name, args);
+                j += 1;
+                continue;
+            }
+        }
         match &tokens[j] {
             Token::Tag(name, _) if end_names.contains(&name.as_str()) => {
                 return Ok((content, j));
@@ -2869,15 +2901,7 @@ fn collect_raw_source(
                 // Output the raw variable syntax
                 content.push_str(&format!("{{{{ {var} }}}}"));
             }
-            Token::Tag(name, args) => {
-                // Output the raw tag syntax
-                let args_str = if args.is_empty() {
-                    String::new()
-                } else {
-                    format!(" {}", args.join(" "))
-                };
-                content.push_str(&format!("{{% {name}{args_str} %}}"));
-            }
+            Token::Tag(name, args) => push_raw_tag(&mut content, name, args),
             Token::Comment(text) => {
                 // Re-emit the comment VERBATIM (#2558). A raw-block body is
                 // SOURCE for Django, and Django's `do_block_translate` refuses
@@ -2895,6 +2919,16 @@ fn collect_raw_source(
         j += 1;
     }
     Err(DjangoRustError::TemplateError(unclosed_error))
+}
+
+/// Output a tag token as raw tag syntax.
+fn push_raw_tag(content: &mut String, name: &str, args: &[String]) {
+    let args_str = if args.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", args.join(" "))
+    };
+    content.push_str(&format!("{{% {name}{args_str} %}}"));
 }
 
 /// Parse a custom block tag body until a matching end tag.
@@ -5133,6 +5167,39 @@ mod tests {
         );
         assert!(body.contains("{% block b %}"), "{body}");
         assert!(body.contains("{% endblock %}"), "{body}");
+    }
+
+    /// A raw-block body that holds the same tag again keeps the inner pair and stops at the
+    /// end tag that closes the OUTER tag (#3878), as Django's `parser.parse` does.
+    #[test]
+    fn raw_source_keeps_a_nested_pair_of_the_same_tag() {
+        let tokens = tokenize("a{% accordion x=1 %}b{% endaccordion %}c{% endaccordion %}tail")
+            .expect("tokenize failed");
+        let (body, end_pos) = collect_nested_raw_source(
+            &tokens,
+            0,
+            Some("accordion"),
+            &["endaccordion"],
+            "boom".to_string(),
+        )
+        .expect("collect failed");
+        assert_eq!(body, "a{% accordion x=1 %}b{% endaccordion %}c");
+        assert!(matches!(&tokens[end_pos], Token::Tag(name, _) if name == "endaccordion"));
+        assert!(matches!(&tokens[end_pos + 1], Token::Text(t) if t == "tail"));
+        // Without the opening name it is the old first-end-tag behaviour.
+        let (first, _) = collect_raw_source(&tokens, 0, &["endaccordion"], "boom".to_string())
+            .expect("collect failed");
+        assert_eq!(first, "a{% accordion x=1 %}b");
+        // An inner pair left open is still unclosed.
+        let open = tokenize("{% accordion %}x{% endaccordion %}").expect("tokenize failed");
+        assert!(collect_nested_raw_source(
+            &open,
+            0,
+            Some("accordion"),
+            &["endaccordion"],
+            "boom".to_string()
+        )
+        .is_err());
     }
 
     #[test]

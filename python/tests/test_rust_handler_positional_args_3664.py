@@ -124,10 +124,17 @@ def _native_names() -> dict[str, set[str]]:
     from djust.theming import rust_handlers as theme_handlers
 
     return {
-        "djust_components": {name for name, _ in component_handlers.INLINE_HANDLERS}
-        | {name for name, _end, _ in component_handlers.BLOCK_HANDLERS},
+        # Every tag: the Rust engine serves each one (through the ``{% load %}`` bridge, or
+        # natively for the core layout tags).
+        "djust_components": set(component_handlers._bridged_handlers(_components_library())),
         "theme_tags": set(theme_handlers._THEME_TAG_NAMES),
     }
+
+
+def _components_library() -> Any:
+    from djust.components.templatetags.djust_components import register
+
+    return register
 
 
 def _tags() -> list[dict[str, Any]]:
@@ -171,6 +178,8 @@ IDS = [f"{t['label']}:{t['name']}" for t in WITH_PARAMS]
 #: claim ``test_the_exemption_is_still_true`` re-proves, so it cannot outlive its reason.
 NO_OBSERVABLE_ARGUMENT = {
     "theme_framework_overrides": "renders nothing unless a CSS-framework theme pack is active",
+    "field_error": "takes a bound form field; none of the sweep's values is one",
+    "form_errors": "takes a form; none of the sweep's values is one",
 }
 
 #: Values to try, in order, for a parameter whose ``variants.token`` the Django tag rejects
@@ -391,10 +400,11 @@ class TestPositionalValuesAreValues:
     def test_as_var_is_not_a_positional_argument(self, engines):
         """``{% dj_tag "Py" as x %}`` takes ``as x`` first, as Django does; neither word
         is a positional argument (``as`` would be the ``variant``, ``x`` the
-        ``dismissible`` flag). The Rust handlers do not bind ``x`` (they render inline),
-        which is a separate, older difference; what is pinned is that the call is read
-        as ``{% dj_tag "Py" %}``."""
-        with_as = _render(engines, "rust", '{% load djust_components %}{% dj_tag "Py" as x %}')
+        ``dismissible`` flag). The Rust engine renders Django's own node (one render path
+        per tag), so ``as x`` binds ``x`` and prints nothing, as under Django."""
+        src = '{% load djust_components %}{% dj_tag "Py" as x %}{{ x }}'
+        with_as = _render(engines, "rust", src)
+        assert with_as == _render(engines, "django", src)
         without = _render(engines, "rust", '{% load djust_components %}{% dj_tag "Py" %}')
         assert with_as == without == ("ok", '<span class="tag tag-default">Py</span>')
 
@@ -448,7 +458,9 @@ class TestErrors:
     @pytest.mark.parametrize("tag", WITH_PARAMS, ids=lambda t: t["name"])
     def test_parameter_given_by_position_and_by_keyword(self, engines, tag):
         """Django notices this at the Python call, so it is a ``TypeError`` when the
-        node renders; djust refuses it when the template compiles, as a
+        node renders. A ``djust_components`` tag renders that same node under the Rust
+        engine (one render path per tag), so it is the same ``TypeError``; a native
+        ``theme_tags`` handler refuses it when the template compiles, as a
         ``TemplateSyntaxError`` carrying ``parse_bits``' own wording for a parameter
         given twice. Both refuse, and neither renders a value."""
         first = tag["params"][0]
@@ -459,6 +471,9 @@ class TestErrors:
         assert django[:2] == ("err", "TypeError"), django
         assert f"multiple values for argument '{first}'" in django[2]
         rust = _render(engines, "rust", src)
+        if tag["label"] == "djust_components":
+            assert rust == django
+            return
         assert rust[:2] == ("err", "TemplateSyntaxError"), rust
         assert rust[2] == f"'{tag['name']}' received multiple values for keyword argument '{first}'"
 

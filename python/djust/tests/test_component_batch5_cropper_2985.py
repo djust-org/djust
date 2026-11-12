@@ -50,7 +50,6 @@ def _paths(**kw) -> dict[str, str]:
             **{("custom_class" if k == "class" else k): v for k, v in kw.items()}
         ).render(),
         "tag": _tag("{% image_cropper " + tag_args + " %}", **kw),
-        "handler": str(rh.ImageCropperHandler().render([f"{k}={k}" for k in kw], dict(kw))),
     }
 
 
@@ -88,7 +87,7 @@ class TestMarkup:
             {"disabled": True, "class": "extra"},
         ):
             paths = _paths(**kw)
-            assert paths["class"] == paths["tag"] == paths["handler"], kw
+            assert paths["class"] == paths["tag"], kw
 
     def test_the_hook_finds_everything_it_needs(self):
         for path, markup in _paths(aspect_ratio="1/1").items():

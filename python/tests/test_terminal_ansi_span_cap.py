@@ -2,8 +2,8 @@
 
 Each open style is a nested ``<span>`` that stays open until a reset or the end
 of the line, so a short line (one ``ESC[1m`` is 4 bytes) could nest as deep as
-it was long. The conversion exists three times (the ``Terminal`` component, the
-inline handler, the ``{% terminal %}`` tag) and they must agree. Ordinary lines
+it was long. The conversion exists twice (the ``Terminal`` component and the
+``{% terminal %}`` tag, which the Rust engine renders too) and they must agree. Ordinary lines
 render byte for byte as before; only a line that keeps more than
 ``MAX_OPEN_SPANS`` styles open is cut.
 """
@@ -41,12 +41,10 @@ def html_depth(html: str) -> int:
 
 def _terminal_converters():
     from djust.components.components.terminal import Terminal
-    from djust.components.rust_handlers import TerminalHandler
     from djust.components.templatetags._dev_tools import TerminalNode
 
     return {
         "component": Terminal._ansi_to_html,
-        "handler": TerminalHandler._ansi_to_html,
         "tag": TerminalNode._ansi_to_html,
     }
 

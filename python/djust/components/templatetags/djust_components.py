@@ -6664,7 +6664,8 @@ class AppShellNode(template.Node):
         if sidebar_collapsed:
             cls += " dj-app-shell--sidebar-collapsed"
         if custom_class:
-            cls += f" {conditional_escape(custom_class)}"
+            # An attribute value is escaped whatever it is marked as (#4009, #3898).
+            cls += f" {attr_text(custom_class)}"
 
         # Find sub-nodes
         sidebar_nodes = [n for n in self.nodelist if isinstance(n, AppSidebarNode)]
@@ -6687,7 +6688,7 @@ class AppShellNode(template.Node):
             content_html = f'<main class="dj-app-shell__content">{main_content}</main>'
 
         return mark_safe(
-            f'<div class="{cls}" id="{conditional_escape(shell_id)}">'
+            f'<div class="{cls}" id="{attr_text(shell_id)}">'
             f"{sidebar_html}"
             f'<div class="dj-app-shell__main">'
             f"{header_html}{content_html}"
@@ -6750,7 +6751,10 @@ class ToolbarNode(template.Node):
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        toolbar_id = kw.get("id", f"toolbar-{uuid.uuid4().hex[:8]}")
+        # A constant default, not a random one: a LiveView re-renders the tag on every turn, and
+        # a new id each time is a patch each time (the native handler used "toolbar" for that
+        # reason; since 2.0 the Rust engine renders this node, one render path per tag).
+        toolbar_id = kw.get("id", "toolbar")
         custom_class = kw.get("class", "")
         size = kw.get("size", "md")
         variant = kw.get("variant", "default")
@@ -6894,15 +6898,15 @@ class FilterSearchNode(template.Node):
 def render_filter_bar(
     kw: Any, controls: Any, *, default_id: Any = None, extra_html: Any = ""
 ) -> SafeString:
-    """Markup for ``{% filter_bar %}``, shared by the Django tag and the native handler (#3669).
+    """Markup for ``{% filter_bar %}`` (#3669).
 
     ``kw`` is the bar's own resolved arguments; ``controls`` is a list of ``(kind, kwargs)``
     with ``kind`` one of ``select`` / ``date_range`` / ``search`` and ``kwargs`` the child
     tag's resolved arguments. The bar owns ``event`` and ``clear_event``: a child's own
-    ``event=`` is never read. ``default_id`` is the id used when the bar has none (the Django
-    tag draws a random one; the native handler passes a constant so a socket render does not
-    change it). ``extra_html`` is appended inside the controls row (the native handler keeps
-    whatever else the template put in the bar; the Django tag has none).
+    ``event=`` is never read. ``default_id`` is the id used when the bar has none (the tag passes
+    the constant ``filter-bar``, so a LiveView re-render does not change it; without one a random
+    id is drawn). ``extra_html`` is appended inside the controls row (no caller passes it since
+    the native handler was removed).
     """
     bar_id = kw.get(
         "id", default_id if default_id is not None else f"filter-bar-{uuid.uuid4().hex[:8]}"
@@ -7014,7 +7018,8 @@ class FilterBarNode(template.Node):
             for n in self.nodelist
             if type(n) in _FILTER_KINDS
         ]
-        return render_filter_bar(kw, controls)
+        # A constant default id (as the native handler had): see ``ToolbarNode``.
+        return render_filter_bar(kw, controls, default_id="filter-bar")
 
 
 @register.tag("filter_bar")

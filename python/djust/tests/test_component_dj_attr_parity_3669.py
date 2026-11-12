@@ -2,7 +2,7 @@
 
 ``{% dj_button %}`` and eleven more tags have two implementations: the Python tag (the first,
 HTTP render under the Django engine) and a native handler (every render after the socket opens).
-The native handler used to drop, rename or invent event attributes the Python tag emits. That is
+The native handler used to drop, rename or invent event attributes the Python tag emits (it is gone since 2.0). That is
 functional, not cosmetic: a click wired under one engine did nothing under the other.
 
 The Python tag is the reference (maintainer decision on #3669). Each case below renders the
@@ -10,28 +10,11 @@ same template through BOTH engines and compares the multiset of ``(element, dj-a
 value)`` triples. Only the ``dj-*`` attributes are compared: classes, text, ids and ARIA are
 the markup-parity issue (#3663) and are deliberately not asserted here.
 
-What is NOT compared, and why (each measured, none guessed):
-
-* ``tree_view`` / ``kanban_board`` differ ONLY when an operand is a ``SafeString``: the Python
-  tag keeps a marked-safe value verbatim in the attribute, the native handler is handed text
-  and escapes it. That is the escaping policy of every native handler (the ``escaping`` aspect
-  of ``scripts/template-library-parity-baseline.csv``), not event wiring, and the native side
-  is the safe one. ``test_a_marked_safe_operand_is_never_emitted_raw_by_the_native_handler``
-  pins that direction.
-* ``data_table``: the native handler also wires ~13 features the Python template never renders
-  (expand, export, reorder, ...). Removing them would delete working features from the live
-  render path, which is a product decision, not a parity fix (#3869); see
-  ``test_data_table_native_extras_only_add_attributes``. The Python template's own quirks
-  (empty cells for dict rows, ``sortable: False`` ignored) were #3870 and are fixed: the cells
-  are in ``test_component_arg_handling_3870_3871_3872.py`` and the unsortable column is a case
-  of ``DATA_TABLE`` below.
-* ``nav_item`` nested three levels deep: a block handler is handed already-rendered children
-  and cannot know its own depth (#3873, ``test_nav_item_three_levels_is_a_declined_case``).
-* ``filter_bar`` / ``nav_item``: what a template nests in a condition, inside another bar or
-  next to the controls is drawn natively and dropped by Django (#3878).
-* A block tag's argument naming an unresolved variable (#3871) and the whitespace of a resolved
-  argument (#3872) are fixed (``test_component_arg_handling_3870_3871_3872.py``). What remains of
-  #3872 is the string ``"0"``: see ``test_the_text_channel_cannot_tell_the_string_zero_from_zero``.
+Since 2.0 the Rust engine renders the Python tag's own node (one render path per tag), so the
+cases this file used to pin as declined differences (a marked-safe operand, the ``data_table``
+features only the native handler wired (#3869), ``nav_item`` three levels deep (#3873), what a
+template nests in a ``filter_bar`` / ``nav_item`` (#3878), the string ``"0"`` (#3872 / #3883))
+are pinned as equal on both engines.
 """
 
 from __future__ import annotations
@@ -362,7 +345,10 @@ def test_a_hostile_event_name_is_escaped_in_the_attribute_on_both_engines(src: s
         assert_strict_csp_safe(html)
 
 
-def test_a_marked_safe_operand_is_never_emitted_raw_by_the_native_handler() -> None:
+def test_a_marked_safe_operand_is_the_python_tags_on_both_engines() -> None:
+    """One render path per tag: the Rust engine renders the Python tag's own node, so a marked-safe
+    operand is treated as the Python tag treats it, on both engines (the attribute-escaping defect
+    that leaves is #4009, pinned in ``python/tests/test_marked_safe_attribute_sweep_4009.py``)."""
     from django.utils.safestring import mark_safe
 
     ctx = dict(CTX, ev=mark_safe("<b>safe</b>"))
@@ -371,7 +357,7 @@ def test_a_marked_safe_operand_is_never_emitted_raw_by_the_native_handler() -> N
         "{% kanban_board columns=cols add_card_event=ev %}",
         '{% dj_button label="L" event=ev %}',
     ):
-        assert "<b>safe</b>" not in _rust(src, ctx), src
+        assert dj_attrs(_rust(src, ctx)) == dj_attrs(_django(src, ctx)), src
 
 
 # --- the two declined parts, pinned so they cannot silently widen -------------------------------
@@ -392,25 +378,25 @@ _EXTRAS = [
 
 
 @pytest.mark.parametrize("flag", _EXTRAS)
-def test_data_table_native_extras_only_add_attributes(flag: str) -> None:
-    """The native table wires features the Python template never renders; it never LACKS one."""
+def test_data_table_renders_the_python_template_for_every_flag(flag: str) -> None:
+    """The native table wired features the Python template never renders (#3869, an open product
+    decision). One render path: the Rust engine renders the Python tag, so the flag wires
+    exactly what the template wires, on both engines."""
     src = "{% data_table rows=rows columns=tcols " + flag + " %}"
-    py, rs = dj_attrs(_django(src, CTX)), dj_attrs(_rust(src, CTX))
-    assert not (py - rs), f"native table lost a Python attribute: {_diff(py, rs)}"
-    assert rs - py, f"{flag} no longer differs; move it into DATA_TABLE and delete this entry"
+    assert dj_attrs(_django(src, CTX)) == dj_attrs(_rust(src, CTX))
 
 
-def test_nav_item_three_levels_is_a_declined_case() -> None:
+def test_nav_item_three_levels_is_drawn_as_django_draws_it() -> None:
+    """#3873: Python draws two levels and drops the third (including its dj-click); the native
+    handler was handed rendered children and drew "Deep". One render path: both drop it."""
     src = (
         '{% nav_menu %}{% nav_item label="Top" %}{% nav_item label="Mid" event="mid" %}'
         '{% nav_item label="Deep" event="deep" %}{% endnav_item %}{% endnav_item %}'
         "{% endnav_item %}{% endnav_menu %}"
     )
     py, rs = dj_attrs(_django(src, CTX)), dj_attrs(_rust(src, CTX))
-    # Python draws two levels and drops the third (including its dj-click); the native handler
-    # is handed rendered children and cannot know its depth, so it still draws "Deep".
     assert ("button", "dj-click", "deep") not in py
-    assert ("button", "dj-click", "deep") in rs
+    assert rs == py
 
 
 def test_a_preset_supplies_the_event_and_the_confirmation_on_both_engines() -> None:
@@ -520,22 +506,17 @@ def test_a_falsy_optional_event_wires_nothing(src: str) -> None:
             ], (shape, html)
 
 
-def test_the_text_channel_cannot_tell_the_string_zero_from_zero() -> None:
-    """Declined (#3872, engine level): the native engine hands a handler TEXT, and the string "0"
-    arrives as ``0`` (falsy; the number 0 must wire nothing, which ``FALSY`` pins). The Python tag
-    keeps the string. Pinned so the choice (the number wins) is visible.
-
-    A lone space USED to be here too (it was stripped); it is kept now, and both engines wire it."""
+def test_the_string_zero_is_a_string_on_both_engines() -> None:
+    """#3872 / #3883: the native engine handed a handler TEXT, and the string "0" arrived as the
+    number 0 (falsy). One render path: the Python tag keeps the string, on both engines."""
     for src, name in (
         ('{% dj_button label="L" confirm=v %}', "dj-confirm"),
         ('{% dj_button label="L" event=v %}', "dj-click"),
     ):
-        ctx = dict(CTX, v="0")
-        assert [x for x in dj_attrs(_django(src, ctx)) if x[1] == name], ("0", name)
-        assert not [x for x in dj_attrs(_rust(src, ctx)) if x[1] == name], ("0", name)
-        ctx = dict(CTX, v=" ")
-        assert dj_attrs(_django(src, ctx)) == dj_attrs(_rust(src, ctx)), (" ", name)
-        assert [x for x in dj_attrs(_rust(src, ctx)) if x[1] == name], (" ", name)
+        for value in ("0", " "):
+            ctx = dict(CTX, v=value)
+            assert dj_attrs(_django(src, ctx)) == dj_attrs(_rust(src, ctx)), (value, name)
+            assert [x for x in dj_attrs(_rust(src, ctx)) if x[1] == name], (value, name)
 
 
 # --- the filter bar: what a template nests inside it ---------------------------------------------
@@ -557,25 +538,24 @@ def test_nested_filter_bars_still_render() -> None:
     assert dj_attrs(py_html) <= dj_attrs(rs_html)
 
 
-def test_controls_a_template_wraps_in_a_condition_are_a_declined_case() -> None:
-    """Declined: Django's bar draws only the children that are DIRECT nodes of its body, so a
-    ``{% filter_search %}`` inside ``{% if %}`` / ``{% for %}`` is dropped there. The native bar
-    is handed the rendered body, where the condition has already run, and draws it (as on main).
-    The native side never lacks an attribute the Python side has."""
+def test_controls_a_template_wraps_in_a_condition_are_drawn_as_django_draws_them() -> None:
+    """#3878: Django's bar draws only the children that are DIRECT nodes of its body, so a
+    ``{% filter_search %}`` inside ``{% if %}`` is dropped there; the native bar was handed the
+    rendered body and drew it. One render path: the raw-body route hands Django the body."""
     src = (
-        '{% filter_bar %}{% filter_search name="a" %}'
+        '{% filter_bar id="f" %}{% filter_search name="a" %}'
         '{% if opts %}{% filter_search name="b" %}{% endif %}{% endfilter_bar %}'
     )
-    py, rs = dj_attrs(_django(src, CTX)), dj_attrs(_rust(src, CTX))
-    assert py < rs
-    assert 'name="b"' not in _django(src, CTX) and 'name="b"' in _rust(src, CTX)
+    assert _rust(src, CTX) == _django(src, CTX)
+    assert 'name="b"' not in _rust(src, CTX)
 
 
 def test_the_bar_keeps_a_constant_default_id_and_an_explicit_one() -> None:
-    """Gate-off: dropping ``default_id`` gave every socket render a new random id."""
+    """A LiveView re-renders the tag on every turn: a random default id would be a patch on every
+    turn, so the default is the constant ``filter-bar`` on both engines."""
     src = '{% filter_bar %}{% filter_search name="q" %}{% endfilter_bar %}'
     assert 'id="filter-bar"' in _rust(src, CTX)
-    assert _rust(src, CTX) == _rust(src, CTX)
+    assert _rust(src, CTX) == _rust(src, CTX) == _django(src, CTX)
     assert 'id="mine"' in _rust('{% filter_bar id="mine" %}{% endfilter_bar %}', CTX)
     assert 'id="mine"' in _django('{% filter_bar id="mine" %}{% endfilter_bar %}', CTX)
 
@@ -606,19 +586,17 @@ def test_the_pager_draws_the_pages_the_python_tag_does() -> None:
 # --- nav_item: what counts as a child item ----------------------------------------------------------
 
 
-def test_sub_items_a_template_wraps_in_a_condition_are_a_declined_case() -> None:
-    """Declined: Django counts only DIRECT child ``{% nav_item %}`` nodes, so an item whose only
-    sub-item is inside ``{% if %}`` stays a plain button there; the native item sees the rendered
-    body, finds a sub-item (its own ``<li>``) and becomes a dropdown without ``dj-click``. The
-    native item recognises its children by the markup its own handler draws, which a literal
-    ``<li class="dj-nav__item">`` in the body also matches (#3873)."""
+def test_sub_items_a_template_wraps_in_a_condition_are_counted_as_django_counts_them() -> None:
+    """#3878: Django counts only DIRECT child ``{% nav_item %}`` nodes, so an item whose only
+    sub-item is inside ``{% if %}`` stays a plain button; the native item saw the rendered body
+    and became a dropdown without ``dj-click``. One render path: a plain button on both."""
     src = (
         '{% nav_menu %}{% nav_item label="Menu" event="top" %}'
         '{% if opts %}{% nav_item label="Sub" event="s" %}{% endnav_item %}{% endif %}'
         "{% endnav_item %}{% endnav_menu %}"
     )
     assert ("button", "dj-click", "top") in dj_attrs(_django(src, CTX))
-    assert ("button", "dj-click", "top") not in dj_attrs(_rust(src, CTX))
+    assert dj_attrs(_rust(src, CTX)) == dj_attrs(_django(src, CTX))
 
 
 # --- the row-click value -----------------------------------------------------------------------------
@@ -632,8 +610,9 @@ def test_the_row_click_carries_the_rows_value_on_both_engines() -> None:
         assert re.findall(r'<tr[^>]*data-value="([^"]*)"', html) == ["1", "2"], html
 
 
-def test_the_native_bar_keeps_other_content_in_the_bar() -> None:
-    """As on main (Django drops it): gate-off, passing no ``extra_html`` survived the rest."""
-    src = '{% filter_bar %}<span class="stray">kept</span>{% filter_search name="q" %}{% endfilter_bar %}'
-    assert "kept" in _rust(src, CTX) and "kept" not in _django(src, CTX)
-    assert dj_attrs(_django(src, CTX)) == dj_attrs(_rust(src, CTX))
+def test_other_content_in_the_bar_is_dropped_on_both_engines() -> None:
+    """Django's bar draws its controls and drops anything else in its body; the native bar kept
+    it. One render path: dropped on both."""
+    src = '{% filter_bar id="f" %}<span class="stray">kept</span>{% filter_search name="q" %}{% endfilter_bar %}'
+    assert "kept" not in _rust(src, CTX)
+    assert _rust(src, CTX) == _django(src, CTX)

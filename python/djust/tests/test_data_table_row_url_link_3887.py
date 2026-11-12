@@ -17,21 +17,11 @@ body row its navigation attributes and its ``<a>`` elements (href, class, text),
 tags. Only the attributes and elements that are navigation are compared; classes, text of other
 cells, ids and ARIA are the markup-parity issue (#3663).
 
-What is NOT compared, and why (each measured, none guessed):
-
-* A ``mark_safe`` URL or ``link_class``: the Python tag honours it, the native handler is handed
-  text. That is the escaping policy of every native handler, and the native side is the safe one
-  (``test_a_marked_safe_url_is_kept_by_the_python_tag_and_neutralised_natively``). The Python side
-  of it is its own finding (#3894).
-* A row that is not a dict: the Python tag draws an empty row, the native handler omits it
-  (``test_a_row_that_is_not_a_dict_is_dropped_natively``). That is the row set, not navigation.
-* A callable nested inside a column dict (``{"link": fn}``): Django calls it while reading
-  ``col.link``; the native handler is handed the column serialised, so the callable is the text
-  ``<function ...>`` (``test_a_callable_inside_a_column_dict_is_not_reachable_natively``).
-* A link whose row value is ``None`` or missing is ``<a href="None">`` / ``<a href="">`` on BOTH
-  engines (copied, so they agree): a decision for the reference, not for this parity fix.
-
-The last three are #3895.
+Since 2.0 the Rust engine renders the Python tag's own node (one render path per tag), so the
+cases the native handler could not match (a ``mark_safe`` URL or ``link_class`` handed over as
+text, a row that is not a dict, a callable inside a column dict, #3894 / #3895) render the same on
+both engines and are pinned as such. A link whose row value is ``None`` or missing is still
+``<a href="None">`` / ``<a href="">``: a decision for the reference (#3895).
 """
 
 from __future__ import annotations
@@ -520,15 +510,15 @@ def test_a_callable_row_url_agrees_between_the_engines(member: str) -> None:
     assert nav(py)["scripts"] == nav(rs)["scripts"]
 
 
-def test_a_callable_inside_a_column_dict_is_not_reachable_natively() -> None:
-    """Declined, pinned: Django calls ``col.link`` (a callable in a column dict) while reading it;
-    the native handler gets the column serialised. A link that is computed belongs in the row."""
+def test_a_callable_inside_a_column_dict_is_called_on_both_engines() -> None:
+    """Django calls ``col.link`` (a callable in a column dict) while reading it. The native
+    handler got the column serialised (an empty href, #3895); the Rust engine now renders the
+    Python tag's own node (one render path per tag), so both engines call it."""
     cols = [{"key": "name", "label": "N", "link": lambda: "u"}, COLS[1]]
     py = view(_django("{% data_table rows=rows columns=cols %}", ctx(cols=cols)))
     rs = view(_rust("{% data_table rows=rows columns=cols %}", ctx(cols=cols)))
     assert [a["href"] for a in py.rows[0]["anchors"]] == ["/claims/1"]
-    # The serialised callable is the text ``<function ...>``: a key no row has, so an empty href.
-    assert [a["href"] for a in rs.rows[0]["anchors"]] == [""]
+    assert [a["href"] for a in rs.rows[0]["anchors"]] == ["/claims/1"]
 
 
 # --- the declined parts, pinned so they cannot silently widen ------------------------------------------
@@ -580,21 +570,18 @@ MARKED_PAYLOADS = [
 
 
 def _direct(rows: list, cols: list, args: tuple[str, ...] = ()) -> str:
-    """The handler called DIRECTLY, with the Python objects (a ``SafeString`` stays one): the
-    engine hands a handler text, so a marked-safe value only reaches it this way."""
-    from djust.components.rust_handlers import DataTableHandler
-
-    return str(
-        DataTableHandler().render(
-            ["rows=rows", "columns=cols", 'row_url="u"', *args], {"rows": rows, "cols": cols}
-        )
+    """The tag through the Rust engine with the Python objects: since the Rust engine renders
+    the Python tag's own node (one render path per tag), a ``SafeString`` reaches it as one."""
+    return _rust(
+        "{% data_table rows=rows columns=cols " + " ".join(('row_url="u"', *args)) + " %}",
+        {"rows": rows, "cols": cols},
     )
 
 
 @pytest.mark.parametrize("claim", sorted(CLAIMS))
 @pytest.mark.parametrize("payload", MARKED_PAYLOADS)
-def test_a_handler_called_directly_checks_a_marked_safe_row_url(claim: str, payload: str) -> None:
-    """Native neutralisation must not depend on the engine turning values into text (#3894)."""
+def test_the_tag_checks_a_marked_safe_row_url(claim: str, payload: str) -> None:
+    """Neutralisation must not depend on the engine turning values into text (#3894)."""
     rows = [{"id": 1, "name": "N", "age": 3, "u": CLAIMS[claim](payload)}]
     html = _direct(rows, LINKED)
     page = view(html)
@@ -607,7 +594,7 @@ def test_a_handler_called_directly_checks_a_marked_safe_row_url(claim: str, payl
 
 @pytest.mark.parametrize("claim", sorted(CLAIMS))
 @pytest.mark.parametrize("payload", MARKED_PAYLOADS[4:] + ["<b>x</b> a&b"])
-def test_a_marked_safe_link_class_stays_inside_the_class_attribute_natively(
+def test_a_marked_safe_link_class_stays_inside_the_class_attribute(
     claim: str, payload: str
 ) -> None:
     cols = [{"key": "name", "label": "N", "link": "u", "link_class": CLAIMS[claim](payload)}]
@@ -624,14 +611,14 @@ def test_a_marked_safe_link_class_stays_inside_the_class_attribute_natively(
         assert "<b>" not in html, html
 
 
-def test_a_row_that_is_not_a_dict_is_dropped_natively() -> None:
-    """Declined, pinned: the Python tag draws an empty row (``data-href=""``), the native handler
-    omits it. That is the row set (every native feature reads ``row.get``), not navigation."""
+def test_a_row_that_is_not_a_dict_is_an_empty_row_on_both_engines() -> None:
+    """The Python tag draws an empty row (``data-href=""``); the native handler omitted it
+    (#3895). One render path: both engines draw the Python tag's rows."""
     rows = [{"id": 1, "name": "N", "age": 3, "u": "/1"}, "not a dict", None]
     src = '{% data_table rows=rows columns=cols row_url="u" %}'
     py, rs = render_both(src, ctx(rows=rows, cols=LINKED))
     assert [r["attrs"]["data-href"] for r in view(py).rows] == ["/1", "", ""]
-    assert [r["attrs"]["data-href"] for r in view(rs).rows] == ["/1"]
+    assert [r["attrs"]["data-href"] for r in view(rs).rows] == ["/1", "", ""]
 
 
 def test_the_matrix_drives_both_features_and_every_variant_of_the_value() -> None:

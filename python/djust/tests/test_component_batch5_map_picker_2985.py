@@ -51,7 +51,6 @@ def _paths(**kw) -> dict[str, str]:
     return {
         "class": MapPicker(**args).render(),
         "tag": _tag("{% map_picker " + tag_args + " %}", **args),
-        "handler": str(rh.MapPickerHandler().render([f"{k}={k}" for k in args], dict(args))),
     }
 
 
@@ -100,7 +99,7 @@ class TestMarkup:
             {"attribution": HOSTILE, "attribution_url": "https://example.com/a?b=1&c=2"},
         ):
             paths = _paths(**kw)
-            assert paths["class"] == paths["tag"] == paths["handler"], kw
+            assert paths["class"] == paths["tag"], kw
 
     def test_default_is_openstreetmap_with_its_required_attribution(self):
         for path, markup in _paths().items():

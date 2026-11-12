@@ -33,7 +33,6 @@ Refs #3849, #3843, #3768, #1646, #1468.
 
 from __future__ import annotations
 
-import json
 import re
 import sys
 from collections import namedtuple
@@ -45,7 +44,6 @@ from django.template import Context, Engine
 from django.utils.html import escape
 
 from djust.components import rust_handlers
-from djust.template_tags import TYPED_ARGS_KEY
 
 COMPONENTS = "djust.components.templatetags.djust_components"
 P = namedtuple("P", "x y")
@@ -139,14 +137,18 @@ class TestEveryShapeRendersAsDjangoPrintsIt:
         out = render_backend(engines, GATE, {"v": P(1, 2)})
         assert "P(x=1, y=2)" in out and "(1, 2) Approve" not in out, out
 
-    def test_a_spelled_subclass_is_recorded_not_fixed(self, engines):
-        """The engine keeps no tuple class (``Value::Tuple``), so a ``__repr__`` override is lost.
-        Django prints the override. Pinned so a change to either side is looked at."""
+    def test_a_spelled_subclass_reaches_the_tag_as_itself_through_the_backend(self, engines):
+        """Through ``DjustTemplateBackend`` the tag's own node is handed the operand from the raw
+        context, so a ``__repr__`` override prints as Django prints it (one render path per tag).
+        As LiveView STATE the value is normalised before it reaches the engine, which keeps no
+        tuple class (``Value::Tuple``): recorded, not fixed."""
         value = Spelled((1, 2))
         assert "Spelled(1, 2)" in render_django(engines, GATE, {"v": value})
-        for route in ROUTES.values():
-            out = route(engines, GATE, {"v": value})
-            assert "Spelled" not in out and "(1, 2)" in out, out
+        assert render_backend(engines, GATE, {"v": value}) == render_django(
+            engines, GATE, {"v": value}
+        )
+        out = render_live(engines, GATE, {"v": value})
+        assert "Spelled" not in out and "(1, 2)" in out, out
 
 
 #: The seven cells the review named: a namedtuple in a CSS-length slot used to flip from the
@@ -227,38 +229,6 @@ class TestTheContextKeepsTheNamedtupleForEverythingElse:
 # _parse_args: the one reader
 
 
-class TestParseArgsReturnsAListThatPrintsLikeTheNamedtuple:
-    def parse(self, typed: Any, *args: str) -> dict[str, Any]:
-        return rust_handlers._parse_args(list(args), {TYPED_ARGS_KEY: {"k": typed}})
-
-    def test_a_namedtuple_is_a_list_that_prints_like_it(self):
-        value = self.parse(P(1, 2), "k=[1,2]")["k"]
-        assert isinstance(value, list), "a list slot (`isinstance(x, list)`) must keep accepting it"
-        assert not isinstance(value, tuple)
-        assert str(value) == repr(value) == repr(P(1, 2)) == "P(x=1, y=2)"
-        assert value == [1, 2]
-        assert json.dumps(value) == "[1, 2]"
-
-    @pytest.mark.parametrize("value", SHAPE_VALUES, ids=SHAPE_IDS)
-    def test_every_shape_prints_as_python_prints_it(self, value):
-        got = self.parse(value, "k=[]")["k"]
-        assert str(got) == repr(value)
-        assert isinstance(got, list)
-
-    def test_a_namedtuple_nested_in_a_tuple_is_a_list_too(self):
-        """``rows=(P(1, 2), P(3, 4))``: the handler reads each row with ``isinstance(row, list)``."""
-        got = self.parse((P(1, 2), P(3, 4)), "k=[]")["k"]
-        assert all(isinstance(row, list) and not isinstance(row, tuple) for row in got)
-        assert str(got) == repr((P(1, 2), P(3, 4)))
-
-    def test_a_deep_namedtuple_is_not_a_recursion_error(self):
-        deep: Any = P1(0)
-        for _ in range(3000):
-            deep = P1(deep)
-        got = self.parse(deep, "k=[]")["k"]
-        assert str(got).count("P1(") == 3001
-
-
 # --------------------------------------------------------------------------- #
 # Cost: counted work, never a duration
 
@@ -283,57 +253,6 @@ def _line_events_in(module_file: str, call) -> int:
     finally:
         sys.settrace(previous)
     return count
-
-
-class TestACostIsCountedNotTimed:
-    def test_the_text_of_a_recovered_operand_is_not_decoded(self, monkeypatch):
-        """The typed value replaces the operand, so decoding its JSON text builds a list that is
-        thrown away. A 100,000-element tuple's text must never reach ``json.loads``."""
-        big = tuple(range(100_000))
-        text = json.dumps(list(big))
-        seen: list[int] = []
-        real = rust_handlers._json.loads
-
-        def spy(s, *a, **kw):
-            seen.append(len(s))
-            return real(s, *a, **kw)
-
-        monkeypatch.setattr(rust_handlers._json, "loads", spy)
-        got = rust_handlers._parse_args(["rows=" + text, "n=[1]"], {TYPED_ARGS_KEY: {"rows": big}})
-        assert list(got["rows"]) == list(big)
-        assert got["n"] == [1], "an operand that is NOT recovered is still decoded"
-        assert seen == [3], f"only the small `n=[1]` may be decoded, saw lengths {seen}"
-
-    def test_the_key_order_of_the_arguments_is_kept(self):
-        """Skipping the decode must not move a recovered key: handlers iterate ``kw`` in order."""
-        got = rust_handlers._parse_args(["a=1", "t=[1]", "b=2"], {TYPED_ARGS_KEY: {"t": (1,)}})
-        assert list(got) == ["a", "t", "b"]
-
-    @pytest.mark.parametrize("size", [10, 20_000])
-    def test_a_flat_tuple_is_copied_without_a_python_loop_per_element(self, size):
-        """Executed source lines of ``rust_handlers`` while converting: the same for 10 elements
-        and for 20,000, because a flat tuple is one C-level copy (``list(value)``). A per-element
-        Python loop would make this grow with ``size``."""
-        value = tuple(range(size))
-        lines = _line_events_in(rust_handlers.__file__, lambda: rust_handlers._from_typed(value))
-        assert lines <= 12, f"{lines} source lines executed for {size} elements"
-
-    def test_the_count_does_not_depend_on_the_size(self):
-        small = _line_events_in(
-            rust_handlers.__file__, lambda: rust_handlers._from_typed(tuple(range(10)))
-        )
-        large = _line_events_in(
-            rust_handlers.__file__, lambda: rust_handlers._from_typed(tuple(range(20_000)))
-        )
-        assert small == large
-
-    def test_a_tuple_with_a_nested_tuple_is_still_converted_all_the_way_down(self):
-        """The fast path must not skip a nested tuple: the slow path is for exactly this."""
-        got = rust_handlers._from_typed((1, (2, (3, P(4, 5))), 6))
-        assert str(got) == repr((1, (2, (3, P(4, 5))), 6))
-        inner = got[1][1]
-        assert isinstance(got[1], list) and isinstance(inner, list)
-        assert isinstance(inner[1], list) and not isinstance(inner[1], tuple)
 
 
 class TestTheLiveViewStatePathIsRecordedNotChanged:

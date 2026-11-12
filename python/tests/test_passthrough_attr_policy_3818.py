@@ -620,13 +620,16 @@ class TestIcons:
         out = render_icon("check", aria_label='Close "x"', title="t")
         assert 'aria-label="Close &quot;x&quot;"' in out and 'title="t"' in out
 
-    def test_the_native_icon_handler_applies_the_same_policy(self):
-        from djust.components.rust_handlers import IconHandler
+    def test_the_rust_engine_applies_the_same_policy(self):
+        """The Rust engine renders ``{% icon %}``'s own node (one render path per tag)."""
+        from djust import _rust
+        from djust.components.rust_handlers import register_with_rust_engine
 
-        handler = IconHandler()
-        with pytest.raises(ValueError):
-            handler.render(["name=check", "onclick=x"], {})
-        assert 'aria-label="Close"' in handler.render(["name=check", "aria_label=Close"], {})
+        register_with_rust_engine()
+        with pytest.raises(Exception, match="onclick"):
+            _rust.render_template('{% icon name="check" onclick="x" %}', {})
+        out = _rust.render_template('{% icon name="check" aria_label="Close" %}', {})
+        assert 'aria-label="Close"' in out
 
 
 # ---------------------------------------------------------------------------

@@ -15,7 +15,6 @@ import re
 import pytest
 from django.template import Context, Template
 
-from djust.components import rust_handlers as rh
 from djust.components.components.image_lightbox import ImageLightbox
 from djust.components.components.modal import Modal
 from djust.components.components.tour import Tour
@@ -41,9 +40,6 @@ def _lightbox_paths() -> dict[str, str]:
     return {
         "class": ImageLightbox(images=IMAGES, open=True).render(),
         "tag": _tag("{% lightbox images=images open=True %}", images=IMAGES),
-        "handler": str(
-            rh.LightboxHandler().render(["images=images", "open=True"], {"images": IMAGES})
-        ),
     }
 
 
@@ -51,7 +47,6 @@ def _tour_paths() -> dict[str, str]:
     return {
         "class": Tour(steps=STEPS, active=0).render(),
         "tag": _tag("{% tour steps=steps active=0 %}", steps=STEPS),
-        "handler": str(rh.TourHandler().render(["steps=steps", "active=0"], {"steps": STEPS})),
     }
 
 
