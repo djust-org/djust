@@ -29,6 +29,8 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar
 
 from asgiref.sync import iscoroutinefunction, sync_to_async
 
+from .._removed_settings import removed_instance_attribute
+
 logger = logging.getLogger(__name__)
 
 _TaskT = TypeVar("_TaskT", bound="asyncio.Future[Any]")
@@ -191,6 +193,11 @@ class AsyncWorkMixin:
     #: stream closes, instead of letting it run to completion. An
     #: explicit-exposure root is always disposed with its work.
     cancel_async_on_disconnect: bool = False
+
+    #: The 1.x single-task queue, ``self._async_pending = (fn, args, kwargs)``.
+    #: 2.0 does not read it (#3515), so assigning it raises instead of the work
+    #: silently never running (#4031). Use :meth:`start_async`.
+    _async_pending = removed_instance_attribute("_async_pending")
 
     def start_async(
         self,
