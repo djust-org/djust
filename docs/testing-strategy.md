@@ -251,7 +251,7 @@ rotate through the population. The report header prints it, the summary lists ev
 `make test-sweeps SEED=<seed> CHANGED=<paths>` does the same for all three files.
 
 **The cost of sampling.** A defect at one unit that no change touches is caught before merge only
-if the draw lands on it. Per pull-request run (three Django cells, three draws): about 37% for a
+if the draw lands on it. Per pull-request run (three Django cells, three draws): about 54% for a
 payload-sweep unit, 51% for a data tag, 36% for an item parameter, 55% for an analysis mutant, 62%
 for a URL component class and 8% for one of the 165 component classes that are neither URL nor template classes. The nightly
 `main-health` suite catches it with certainty, so the worst case is a security regression found the

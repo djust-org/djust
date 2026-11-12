@@ -41,7 +41,8 @@ POPULATION_FLOORS = {
     "marked-safe/classes": 212,
     "marked-safe/tags": 18,
     "marked-safe/item-parameters": 43,
-    "payload-sweep/units": 434,
+    # 434 before 2.0 removed the Rust-native handlers that had a Python twin (train/2.0)
+    "payload-sweep/units": 275,
     "guard-fuzz/seeds": 3,
     "guard-fuzz/mutants": 26,
 }
