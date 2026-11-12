@@ -183,7 +183,7 @@ The ModelBindingMixin enforces these rules:
   with `DEBUG` off the walk runs once per template source and template
   directories, and with `DEBUG` on (hot reload) on every render
 - The blocked set is explicit, not a heuristic: `template_name`, `request`,
-  `session`, `kwargs`, `args`, `use_actors` and `temporary_assigns`
+  `session`, `kwargs`, `args` and `temporary_assigns`
 
 ```python
 class AdminView(LiveView):

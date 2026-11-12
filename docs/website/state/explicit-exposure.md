@@ -172,7 +172,6 @@ page = state(1, persist="client", client=True)   # restorable on back-navigation
 
 ## Not supported under explicit exposure
 
-- **Actors (`use_actors = True`).** Refused.
 - **`lazy=True` children.** Refused, with a template error.
 - **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare them
   at class level.

@@ -10,7 +10,7 @@ Registers checks with Django's check framework that also run via
 - Templates (T0xx) -- template file scanning
 - Code Quality (Q0xx) -- AST-based quality checks
 - Accessibility (Y0xx) -- template ARIA/WCAG scanning
-- Event parameters (V016-V018) -- ADR-036 strict handler contracts
+- Event parameters (V016, V018, V019) -- ADR-036 strict handler contracts
 - Event bindings (T019-T022, T023) -- ADR-037 template bindings against their owners
 - Serialization floor (T024) -- user fields a template reads that djust never serializes
 - Document-root placement (T025) -- dj-view / dj-root on <html>, <head> or <body>

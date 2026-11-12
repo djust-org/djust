@@ -155,7 +155,7 @@ class _StickyParentView(LiveView):
 
     Used to prove the WS-only sticky-child mount mechanics still work AFTER the
     pre-mount auth+tenant sequence converged onto run_pre_mount_auth (#1853 left
-    all sticky/snapshot/actor/render mechanics untouched)."""
+    all sticky/snapshot/render mechanics untouched)."""
 
     login_required = False
     template = (

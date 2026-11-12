@@ -11,7 +11,7 @@ Every test here drives a real channels ``WebsocketCommunicator`` against
 ``LiveViewConsumer.as_asgi()`` end-to-end (mount → event frame → assert on the
 response frame), so it exercises the WS event path — which is now the RUNTIME
 path. Five behaviors are pure-equivalent and stay green unchanged across the flip
-(time-travel, dj_activity, actor, ref echo, force_full_html) — that equivalence IS
+(time-travel, dj_activity, ref echo, force_full_html) — that equivalence IS
 the parity proof (#1466 / #1780 / #1468). The SIXTH (``component_id`` — see
 ``TestComponentIdRouting``) is the ONE intended behavioral change: the deleted
 bespoke path returned an ``error`` frame (it never re-rendered the parent — #1898),
@@ -230,26 +230,6 @@ class ActivityView(LiveView):
         return {"n": self.n, "opens": self.opens, "view": self}
 
 
-class ActorEventView(LiveView):
-    """View driven by the Rust actor system (``use_actors = True``)."""
-
-    use_actors = True
-    template = (
-        '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.ActorEventView" '
-        'dj-id="0">c={{ c }}</div>'
-    )
-
-    def mount(self, request, **kwargs):
-        self.c = 0
-
-    @event_handler()
-    def inc(self, **kwargs):
-        self.c += 1
-
-    def get_context_data(self, **kwargs):
-        return {"c": self.c}
-
-
 class RefView(LiveView):
     """Drives all three event-response handlers for the ref-echo test:
     a noop (no state change), a patch (text change), an html_update
@@ -341,7 +321,7 @@ class TestComponentIdRouting:
     **The load-bearing divergence the flip CLOSES.** Before Phase 2.3b, the
     bespoke ``_handle_event_inner`` ``component_id`` branch resolved + ran the
     component handler but NEVER re-rendered the parent: ``html`` stayed ``None``
-    (initialized at the top of the non-actor block, never reassigned in the
+    (initialized at the top of the event block, never reassigned in the
     component branch), so the html_update fallback stripped ``None`` and the path
     raised ``TypeError: expected string or bytes-like object, got 'NoneType'``,
     which ``handle_exception`` turned into an ``error`` frame (#1898 — the bespoke
@@ -590,65 +570,6 @@ class TestActivityDeferral:
             )
             assert resp.get("event_name") == "bump"
             assert "n=1" in str(resp), f"the ungated bump applies immediately; got {resp!r}"
-
-            await communicator.disconnect()
-
-
-# ===========================================================================
-# 4. actor-path events
-# ===========================================================================
-
-
-@pytest.mark.django_db
-@pytest.mark.asyncio
-class TestActorPathEvents:
-    async def test_actor_event_returns_render_frame(self):
-        """A view with ``use_actors = True`` mounts a Rust SessionActor over real
-        WS (sets ``actor_handle``); an event then routes through the actor block
-        (``actor_handle.event``) and returns a client-applicable render frame
-        (``patch`` or ``html_update``) stamped with the consumer-owned version
-        and the event name.
-
-        This is the highest-value test: the actor event path is currently
-        UNTESTED via the live consumer dispatch (the Phase-5 actor tests in
-        ``python/tests/test_actor_integration.py`` call ``handle.event``
-        directly, never the WS consumer). The flip must preserve it.
-        """
-        pytest.importorskip("channels")
-        # The Rust actor factory must be available in this build.
-        from djust._rust import create_session_actor  # noqa: F401
-
-        from django.test import override_settings
-
-        with override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED]):
-            communicator, mount_frame = await _connect_and_mount(f"{_ALLOWED}.ActorEventView")
-            # Mount went through the actor path (use_actors=True) — the consumer
-            # created a SessionActor; the mount frame is a normal mount frame.
-            assert mount_frame.get("type") == "mount"
-
-            await communicator.send_json_to(
-                {"type": "event", "event": "inc", "params": {}, "ref": 1}
-            )
-
-            # The actor event path emits a single render frame (a patch for this
-            # text-only diff). Drain to the first patch/html_update.
-            frames = await _drain_available(communicator, until=_RENDER)
-            render_frames = [f for f in frames if f.get("type") in ("patch", "html_update")]
-            assert render_frames, (
-                f"actor event must return a patch/html_update render frame; got {frames!r}"
-            )
-            frame = render_frames[0]
-            assert frame.get("type") in ("patch", "html_update"), (
-                f"actor event path must emit a render frame; got {frame!r}"
-            )
-            assert frame.get("event_name") == "inc", (
-                f"the actor render frame must carry the event_name; got {frame!r}"
-            )
-            # Consumer-owned wire version (#1788): mount baseline 1 → first event 2.
-            assert frame.get("version") == mount_frame.get("version") + 1, (
-                "actor event frame must advance the consumer wire version by 1; "
-                f"mount={mount_frame.get('version')!r}, event={frame.get('version')!r}"
-            )
 
             await communicator.disconnect()
 

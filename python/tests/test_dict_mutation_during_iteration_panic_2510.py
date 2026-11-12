@@ -32,7 +32,6 @@ not resolved and does not matter: the bug is reachable and confirmed at the
 Rust boundary directly, which is what these tests exercise).
 """
 
-import asyncio
 import functools
 from pathlib import Path
 
@@ -185,7 +184,7 @@ class TestTheGenuinePyDictArm:
 class _IndexTrigger:
     """A second flavor of reentrant mutation: `__index__` (invoked by
     `.extract::<i64>()`), rather than `__bool__`. The `fast_json_dumps` /
-    `serialize_models_fast` / actor-dispatch converters below check `i64`
+    `serialize_models_fast` converters below check `i64`
     before `bool`, so a `__bool__`-only trigger like `_LazyLike` would never
     reach them — this is the shape that actually exercises those paths.
     """
@@ -230,28 +229,6 @@ class TestStage11ReviewFoundThreeMoreSites:
         result = _rust.serialize_models_fast([d])
         assert '"other":"y"' in result
         assert '"x":42' in result
-
-    def test_the_actor_dispatch_path_does_not_panic(self):
-        """`use_actors` defaults to `False` (opt-in), so this path is not
-        the default request flow — still a real, reachable bug once
-        opted in, and the fix is the same shape."""
-        import asyncio
-
-        async def _run():
-            handle = await _rust.create_session_actor("test-2510-actor")
-            params: dict = {}
-            params["x"] = _IndexTrigger(params)
-            params["other"] = "y"
-            # A bogus view module is enough to exercise the params
-            # conversion; whether mount() itself succeeds or raises for an
-            # unrelated reason is not what this test is about.
-            try:
-                await handle.mount("bogus.module.NoSuchView", params)
-            except Exception:
-                pass
-            assert params.get("late") is True
-
-        asyncio.run(_run())
 
 
 class _MutOnStr:
@@ -468,96 +445,6 @@ class TestTheFourSitesNoTestReached:
         result = _rust.serialize_context({"outer": nested})
         assert result == {"outer": {"trigger": 42, "other": "y"}}
         assert nested.get("late") is True
-
-    def test_python_to_value_nested_dict_arm(self):
-        """`crates/djust_live/src/lib.rs` `python_to_value`, the `PyDict` arm
-        — reached through `SessionActorHandle.mount` params with a NESTED
-        dict value. The existing actor test mutates the top-level params
-        dict, which is `python_dict_to_hashmap`'s loop, not this one."""
-
-        async def _run():
-            nested: dict = {}
-            nested["trigger"] = _IndexTrigger(nested)
-            nested["other"] = "y"
-            handle = await _rust.create_session_actor("test-2510-nested-params")
-            try:
-                await handle.mount("test.View", {"nested": nested}, None)
-            finally:
-                await handle.shutdown()
-            assert nested.get("late") is True
-
-        asyncio.run(_run())
-
-    def test_view_actor_sync_state_from_python(self):
-        """`crates/djust_live/src/actors/view.rs`
-        `ViewActor::sync_state_from_python` — the loop over the Python
-        view's own `get_context_data()` result, run after every
-        `SessionActorHandle.event`."""
-
-        class View:
-            def __init__(self):
-                self.context = None
-
-            def poke(self, **kwargs):
-                pass
-
-            def get_context_data(self):
-                d: dict = {}
-                d["trigger"] = _IndexTrigger(d)
-                d["other"] = "y"
-                self.context = d
-                return d
-
-        async def _run():
-            handle = await _rust.create_session_actor("test-2510-view-sync")
-            view = View()
-            try:
-                await handle.mount("test.View", {}, view)
-                result = await handle.event("poke", {})
-            finally:
-                await handle.shutdown()
-            assert "version" in result
-            assert view.context.get("late") is True
-
-        asyncio.run(_run())
-
-    def test_component_actor_sync_state_from_python(self):
-        """`crates/djust_live/src/actors/component.rs`
-        `ComponentActor::sync_state_from_python` — the loop over the Python
-        component's own `get_context_data()` result, run after every
-        `SessionActorHandle.component_event`. The re-render after the sync
-        is asserted too, so the synced state is proven to be the snapshot's."""
-
-        class Component:
-            def __init__(self):
-                self.context = None
-
-            def poke(self, **kwargs):
-                pass
-
-            def get_context_data(self):
-                d: dict = {}
-                d["trigger"] = _IndexTrigger(d)
-                d["other"] = "y"
-                self.context = d
-                return d
-
-        async def _run():
-            handle = await _rust.create_session_actor("test-2510-component-sync")
-            component = Component()
-            try:
-                view = await handle.mount("test.View", {}, None)
-                view_id = view["view_id"]
-                await handle.create_component(
-                    view_id, "comp", "<div>[{{ other }}][{{ trigger }}]</div>", {}, component
-                )
-                html = await handle.component_event(view_id, "comp", "poke", {})
-            finally:
-                await handle.shutdown()
-            assert html == "<div>[y][42]</div>"
-            assert component.context.get("late") is True
-
-        asyncio.run(_run())
 
 
 class TestTheSnapshotRunsInsideGuardPanic:

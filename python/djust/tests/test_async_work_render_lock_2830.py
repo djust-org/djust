@@ -55,7 +55,6 @@ async def _make_consumer(view):
     consumer.scope = {"session": None}
     consumer.session_id = "s1"
     consumer.view_instance = view
-    consumer.use_actors = False
     consumer._view_path = f"djust.tests.x.{type(view).__name__}"
     rate_limiter = MagicMock()
     rate_limiter.check.return_value = True

@@ -30,7 +30,7 @@ Phase 4 implements a production-ready component system for djust, enabling devel
    - ComponentRegistry for registration
    - @register_component decorator
 
-2. **ComponentActor** (crates/djust_live/src/actors/component.rs)
+2. **ComponentActor** (`crates/djust_live/src/actors/component.rs`; the file was removed in 2.0 with the actor system)
    - Actor-based state management
    - Isolated component state
    - Message handling infrastructure

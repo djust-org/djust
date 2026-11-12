@@ -178,19 +178,7 @@ __all__ = [
     "LiveViewConsumer",
     "_check_event_security",
     "_ensure_handler_rate_limit",
-    # Optional PyO3 actor factory (None without the actor build); runtime.py
-    # imports it from here, and tests patch it here.
-    "create_session_actor",
 ]
-
-# Optional PyO3 actor surface (typed by _rust.pyi). When the compiled extension
-# lacks the actor build, the name falls back to None — annotate as Optional so
-# the import and the None fallback are type-compatible.
-create_session_actor: Optional[Callable[[str], Awaitable[Any]]]
-try:
-    from ._rust import create_session_actor  # noqa: F811
-except ImportError:
-    create_session_actor = None
 
 
 _IMMUTABLE_TYPES = (str, int, float, bool, type(None), bytes, tuple, frozenset)
@@ -775,11 +763,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.view_instance: Optional[Any] = None
-        # The handle is the optional PyO3 SessionActorHandle (absent without
-        # the actor build), so it is annotated as Any.
-        self.actor_handle: Any = None
         self.session_id: Optional[str] = None
-        self.use_actors = False  # Will be set based on view class
         self._view_group: Optional[str] = None
         self._presence_group: Optional[str] = None
         # Every presence group joined; a mount_batch can join several (#3202).
@@ -2629,13 +2613,6 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     pass  # Expected when cancelling a running tick task during disconnect
                 consumer._tick_task = None
 
-            # Clean up actor if using actors
-            if consumer.use_actors and consumer.actor_handle:
-                try:
-                    await consumer.actor_handle.shutdown()
-                except Exception as e:
-                    logger.warning("Error shutting down actor: %s", e)
-
         # Store the latest state before the view goes (#3248): a save that
         # slow storage deferred is written now, so a reconnect restores it.
         for consumer in consumers:
@@ -2670,7 +2647,6 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # Clean up session state (the live handles went with the views above)
         for consumer in consumers:
             consumer.view_instance = None
-            consumer.actor_handle = None
             # (#1919, Finding A) Also null the shared runtime's view so a later
             # re-mount on a reused consumer/runtime is never silently no-op'd by
             # ``dispatch_mount``'s ``if view_instance is not None`` idempotency guard.
@@ -2803,8 +2779,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             #     2.3b (#1907, THE FLIP). Phase 2.3a grew ``dispatch_event`` into a
             #     functional SUPERSET of the (now deleted) bespoke
             #     ``_handle_event_inner``: the ``event_context`` render-lock +
-            #     #1677 origin + PerformanceTracker/SQL observability, the actor
-            #     hook, ``view_id`` sticky-child + ``component_id`` LiveComponent
+            #     #1677 origin + PerformanceTracker/SQL observability,
+            #     ``view_id`` sticky-child + ``component_id`` LiveComponent
             #     routing, ``dj_activity`` gate + flush, time-travel recording +
             #     #1466 session state-save + ADR-018 sticky-child save, #1777
             #     reauth, #700 identity push-only auto-skip, patch compression,
@@ -2822,8 +2798,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             #     pre-mount auth+tenant sequence (``run_pre_mount_auth`` via
             #     ``_check_auth``), ``on_mount`` hooks, session/signed-snapshot
             #     state restore (#1466/#1552), post-mount object-permission
-            #     (ADR-017), ``handle_params``, the actor mount hook
-            #     (``dispatch_actor_mount``, #1915 Finding D), the no-arm mount
+            #     (ADR-017), ``handle_params``, the no-arm mount
             #     wire version (``next_mount_version``, Finding C), the sticky_hold
             #     pre-mount frame (``on_mount_render_ready``, Finding B residual),
             #     the auth verdict→close finalize (``finalize_mount_auth``, Finding
@@ -3121,7 +3096,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         bespoke handler (F22 view resolver, ``run_pre_mount_auth`` pre-mount
         auth+tenant sequence via ``_check_auth``, ``on_mount`` hooks, session +
         signed-snapshot state restore, post-mount object-permission, ``handle_params``,
-        actor mount + render, the no-arm mount wire version, the ``sticky_hold``
+        render, the no-arm mount wire version, the ``sticky_hold``
         pre-mount frame, the auth verdict→``close(4403)`` finalize, the WS
         post-mount channel-layer wiring + tick + flags, and the 2-queue mount-time
         drain), all wired through ``WSConsumerTransport`` hooks. Phase 3.3b adds
@@ -3151,7 +3126,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
           consumer→runtime; ``mount`` CREATES the view (runtime→consumer), so we
           read back ``self.view_instance = runtime.view_instance`` after dispatch.
           The WS post-mount consumer attrs (``_view_group`` / ``_tick_task`` /
-          ``use_actors`` / presence + db_notify groups / ``_sticky_preserved``)
+          presence + db_notify groups / ``_sticky_preserved``)
           are written onto the consumer by the ``on_view_mounted`` /
           ``on_mount_render_ready`` transport hooks during the runtime mount.
         * **(C) Mount wire version** — the ``next_mount_version`` hook stamps the
@@ -3570,7 +3545,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         :meth:`ViewRuntime.dispatch_event` into a functional SUPERSET of that
         bespoke handler (event spine, component/sticky/embedded routing,
         time-travel + #1466 state-save, ``event_context`` render-lock + origin +
-        observability, the actor hook, ``dj_activity`` gate + flush, #1777 reauth,
+        observability, ``dj_activity`` gate + flush, #1777 reauth,
         async dispatch, wire-version stamping), and Phase 2.3b adds ``"event"`` to
         :attr:`RUNTIME_OWNED_VERBS` so ``receive()`` now routes events through the
         single ``dispatch_message`` chokepoint (the #1646 convergence — one event
@@ -4349,7 +4324,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     #: ``event`` was added in ADR-022 Iter 2 Phase 2.3b (#1907, THE FLIP): the
     #: runtime ``dispatch_event`` is now a functional superset of the deleted
     #: bespoke ``_handle_event_inner`` (Phase 2.3a grew the event_context render
-    #: lock + origin + observability, the actor hook, the per-render
+    #: lock + origin + observability, the per-render
     #: ``on_render_emitted`` / ``on_handler_timing`` folds, time-travel, #1466
     #: state-save, ``dj_activity``, #1777 reauth), so every WS event now flows
     #: through the single chokepoint — the #1646 convergence.
@@ -4358,8 +4333,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     #: Phases 3.0-3.3a grew ``dispatch_mount`` into a functional superset of the
     #: deleted bespoke ``handle_mount`` body (F22 resolver, ``run_pre_mount_auth``
     #: pre-mount auth+tenant via ``_check_auth``, ``on_mount`` hooks, session +
-    #: signed-snapshot restore, post-mount object-perm, ``handle_params``, actor
-    #: mount, the no-arm mount wire version, the sticky_hold pre-mount frame, the
+    #: signed-snapshot restore, post-mount object-perm, ``handle_params``,
+    #: the no-arm mount wire version, the sticky_hold pre-mount frame, the
     #: auth verdict→close finalize, the WS post-mount channel-layer wiring + tick +
     #: flags, the 2-queue mount-time drain) via ``WSConsumerTransport`` hooks, so
     #: every WS mount now flows through the single chokepoint — the #1646 mount

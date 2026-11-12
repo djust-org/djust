@@ -434,6 +434,7 @@ This amendment records direction the project owner settled for 2.0. The decision
 - Declared reconnect and back-navigation state stays, with fresh authorization and explicit persistence and browser grants.
 - **Retained features are ported:** `lazy=True` children and resumable uploads move to explicit, shared-state, HTTP-compatible designs. Redacted, read-only debug history stays. Executable time-travel restore and replay are removed.
 - Actors (D-o) are removed in this order: a downstream `use_actors` inventory, the exposure changes, the Python actor integration, then the Rust actor crate.
+  - **Amended 2026-11-11.** On 2026-11-11 the owner chose to remove actors ahead of the default flip. Both removals were done in one PR (#4029): the Python integration and the Rust crate `crates/djust_live/src/actors/`. The I1/M2 usage inventory was not run beyond the survey in [2.0-exposure-flip.md](../plans/2.0-exposure-flip.md) §4.3.
 
 **What this changes in the text above.**
 

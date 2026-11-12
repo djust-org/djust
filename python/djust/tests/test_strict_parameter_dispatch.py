@@ -1,7 +1,6 @@
 """ADR-036 server policy and actual invocation regressions."""
 
 from datetime import date
-from decimal import Decimal
 import gc
 import json
 import weakref
@@ -30,11 +29,6 @@ class StrictTransportView(LiveView):
     @server_function(parameter_policy="strict", coerce_types=False)
     def double(self, value: int):
         return value * 2
-
-
-class StrictActorTransportView(StrictTransportView):
-    use_actors = True
-    api_name = "strict.actor.transport"
 
 
 def test_contract_cache_does_not_retain_owner_and_metadata_omits_defaults():
@@ -165,8 +159,7 @@ def test_actual_exposed_api_dispatch(server_rpc, valid):
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("actor_mode", [False, True])
-async def test_real_websocket_strict_positional_and_rejection(actor_mode):
+async def test_real_websocket_strict_positional_and_rejection():
     from asgiref.sync import sync_to_async
     from channels.testing import WebsocketCommunicator
     from django.test import override_settings
@@ -183,8 +176,7 @@ async def test_real_websocket_strict_positional_and_rejection(actor_mode):
             await socket.send_json_to(
                 {
                     "type": "mount",
-                    "view": __name__
-                    + (".StrictActorTransportView" if actor_mode else ".StrictTransportView"),
+                    "view": __name__ + ".StrictTransportView",
                     "url": request.path,
                 }
             )
@@ -211,9 +203,7 @@ async def test_real_websocket_strict_positional_and_rejection(actor_mode):
                     assert frame["type"] in ("patch", "update", "noop"), frame
                     assert "7:2026-09-21" in json.dumps(frame)
                     assert frame["parameter_contracts"] == contracts
-                    expected_view = __name__ + (
-                        ".StrictActorTransportView" if actor_mode else ".StrictTransportView"
-                    )
+                    expected_view = __name__ + ".StrictTransportView"
                     assert frame["parameter_contract_view"] == expected_view
                     await socket.send_json_to({"type": "request_html"})
                     recovery = await socket.receive_json_from()
@@ -449,66 +439,3 @@ async def test_routed_strict_invocations_and_malformed_args(monkeypatch, route):
                 {"type": "event", "event": name, "params": {**routing, **payload}}
             )
     assert calls == [(7, False)], transport.sent
-
-
-@pytest.mark.asyncio
-async def test_actual_component_actor_rejection_does_not_write_fallback_state():
-    from djust._rust import create_session_actor
-
-    class Component:
-        value = 0
-
-        def get_context_data(self):
-            return {"value": self.value}
-
-        @event_handler(parameter_policy="strict")
-        def choose(self, value: int):
-            self.value = value
-
-    component = Component()
-    actor = await create_session_actor("strict-component-actor")
-    try:
-        result = await actor.mount("tests.StrictComponentHost", {}, None)
-        view_id = result["view_id"]
-        await actor.create_component(
-            view_id, "choice", "<div>{{ value }}</div>", {"value": 0}, component
-        )
-        html = await actor.component_event(view_id, "choice", "choose", {"value": "7"})
-        assert component.value == 7
-        assert "7" in html
-        with pytest.raises(Exception, match="Invalid handler parameters"):
-            await actor.component_event(view_id, "choice", "choose", {"value": "SECRET_INVALID"})
-        assert component.value == 7
-        html = await actor.component_event(view_id, "choice", "choose", {"value": "8"})
-        assert "SECRET_INVALID" not in html
-        assert component.value == 8
-    finally:
-        await actor.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_actual_actor_preserves_strict_python_types_and_positional_values():
-    from djust._rust import create_session_actor
-
-    class View:
-        called = None
-
-        def get_context_data(self):
-            return {"ok": self.called is not None}
-
-        @event_handler(parameter_policy="strict")
-        def select(self, value: int, /, *, when: date, cost: Decimal):
-            self.called = (value, when, cost)
-
-    view = View()
-    actor = await create_session_actor("strict-parameter-core-actor")
-    try:
-        await actor.mount("tests.StrictParameterView", {"ok": False}, view)
-        await actor.event("select", {"_args": ["7"], "when": "2026-09-21", "cost": "1.25"})
-        assert view.called == (7, date(2026, 9, 21), Decimal("1.25"))
-        view.called = None
-        with pytest.raises(Exception):
-            await actor.event("select", {"_args": [True], "when": "2026-09-21", "cost": "1.25"})
-        assert view.called is None
-    finally:
-        await actor.shutdown()

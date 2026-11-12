@@ -1025,34 +1025,6 @@ mod tests {
                 "djust_live/src/lib.rs",
                 include_str!("../../djust_live/src/lib.rs"),
             ),
-            (
-                "djust_live/src/actors/view.rs",
-                include_str!("../../djust_live/src/actors/view.rs"),
-            ),
-            (
-                "djust_live/src/actors/supervisor.rs",
-                include_str!("../../djust_live/src/actors/supervisor.rs"),
-            ),
-            (
-                "djust_live/src/actors/session.rs",
-                include_str!("../../djust_live/src/actors/session.rs"),
-            ),
-            (
-                "djust_live/src/actors/mod.rs",
-                include_str!("../../djust_live/src/actors/mod.rs"),
-            ),
-            (
-                "djust_live/src/actors/messages.rs",
-                include_str!("../../djust_live/src/actors/messages.rs"),
-            ),
-            (
-                "djust_live/src/actors/error.rs",
-                include_str!("../../djust_live/src/actors/error.rs"),
-            ),
-            (
-                "djust_live/src/actors/component.rs",
-                include_str!("../../djust_live/src/actors/component.rs"),
-            ),
             ("registry.rs", include_str!("registry.rs")),
             (
                 "context.rs",

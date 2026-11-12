@@ -523,19 +523,18 @@ class TestErrorDisclosure:
         assert blocked == no_handler == not_decorated == component_no_handler == "Event rejected"
 
 
-class TestActorPathSecurity:
-    """Issue #106: Actor path must apply the same security checks as non-actor path."""
+class TestSharedEventSecurityChecks:
+    """Issue #106: the checks every dispatch path shares."""
 
-    def test_actor_path_blocks_unsafe_event_name(self):
+    def test_blocks_unsafe_event_name(self):
         """is_safe_event_name blocks dunder names regardless of path."""
         from djust.security.event_guard import is_safe_event_name
 
-        # These would bypass Python security if sent directly to actor
         assert is_safe_event_name("__class__") is False
         assert is_safe_event_name("__init__") is False
         assert is_safe_event_name("_private") is False
 
-    def test_actor_path_blocks_undecorated_handler(self):
+    def test_blocks_undecorated_handler(self):
         """_check_event_security blocks undecorated handlers in strict mode."""
         from unittest.mock import patch
 
@@ -554,8 +553,8 @@ class TestActorPathSecurity:
             assert result is not None
             assert "not decorated" in result
 
-    def test_actor_path_allows_decorated_handler(self):
-        """Decorated handlers pass security checks in actor path."""
+    def test_allows_decorated_handler(self):
+        """Decorated handlers pass the security checks."""
         from unittest.mock import patch
 
         from djust.decorators import event_handler

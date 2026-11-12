@@ -417,7 +417,7 @@ class TestWireVersionParity:
 # (marker substring → minimum occurrences expected in websocket.py today). Each
 # is a WS-only mount/event mechanism the runtime does not implement (ADR-022
 # "~16 WS-only behaviors": binary upload, presence, cursor, time-travel,
-# sticky-child preservation, signed-snapshot restore, actor channel-layer,
+# sticky-child preservation, signed-snapshot restore,
 # mount_batch, channels groups, ticks).
 _WS_ONLY_MARKERS = {
     "handle_mount_batch": 1,  # mount_batch multiplexer (no runtime equivalent)
@@ -440,9 +440,9 @@ _WS_ONLY_MARKERS = {
     # ``marker not in rt_src`` assertion trips → update this pin deliberately AND
     # note the move in ADR-022. This keeps the mount-side WS↔runtime delta VISIBLE
     # as the mount convergence proceeds.
-    # ``create_session_actor``, ``_find_sticky_slot_ids``, and ``register_view``
+    # ``_find_sticky_slot_ids`` and ``register_view``
     # gained DORMANT ``WSConsumerTransport`` mount-hook impls in ADR-022 Iter 3
-    # Phase 3.2 (#1915): ``dispatch_actor_mount`` (Finding D),
+    # Phase 3.2 (#1915):
     # ``on_mount_render_ready`` (Finding B sticky preservation), and
     # ``on_view_instantiated`` (Finding B back-refs) now reference these symbols in
     # runtime.py. The hooks are DORMANT — ``dispatch_mount`` does NOT call them yet

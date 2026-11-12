@@ -160,8 +160,6 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
             return self
         if not isinstance(obj, LiveView) or self._owner not in type(obj).__mro__:
             raise TypeError("Interactive components require their declaring LiveView owner")
-        if getattr(obj, "use_actors", False):
-            raise NotImplementedError("Interactive bindings are not yet supported by actor views")
         existing = obj._component_bindings.get(self._name)
         if existing is not None:
             if not isinstance(existing, type(self)) or existing._declaration is not self:
@@ -535,8 +533,6 @@ class DropdownMenuCollection(ComponentDeclaration):
             return self
         if not isinstance(obj, LiveView) or self._owner not in type(obj).__mro__:
             raise TypeError("Interactive collections require their declaring LiveView owner")
-        if getattr(obj, "use_actors", False):
-            raise NotImplementedError("Interactive bindings are not yet supported by actor views")
         existing = obj._component_bindings.get(self._name)
         if existing is not None:
             if not isinstance(existing, type(self)) or existing._declaration is not self:

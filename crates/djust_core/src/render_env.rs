@@ -8,12 +8,10 @@
 //! on, and that is correct for every entry that renders on the pushing
 //! thread.
 //!
-//! It is silently wrong for a render on a thread that never pushed: the
-//! `ViewActor` under `use_actors = True` renders on a tokio worker and reads
-//! every cell at its compiled default, so `TIME_ZONE`, the locale's number
-//! format — and, until ADR-027 Step 5 (#2628) deleted it, the
-//! ADR-027 kill-switch flag — were all ignored there (#2741, observed by
-//! the #2751 probe).
+//! It is silently wrong for a render on a thread that never pushed: that
+//! thread reads every cell at its compiled default, so `TIME_ZONE` and the
+//! locale's number format are ignored there (#2741; found on the actor
+//! system's tokio worker, which 2.0 removed).
 //!
 //! ADR-029's decision is to carry the environment the way `template_auto_call`
 //! is carried — as a field on the backend, applied by every render entry —

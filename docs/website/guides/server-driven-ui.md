@@ -363,7 +363,6 @@ This is exactly the state machine [`TutorialMixin`](tutorials.md) formalizes —
 ### Limitations
 
 - **Component events notify the parent view's waiters.** When a `LiveComponent` fires a handler, the parent `LiveView`'s waiters for that event name resolve too. The kwargs dict includes `component_id`, so a `predicate` can tell which component fired.
-- **Actor-mode views bypass the dispatch hook.** Views running under the experimental Rust actor system (`use_actors = True`) don't notify waiters yet. The non-actor path is the default and is fully supported.
 - **`wait_for_event` requires the handler to actually run server-side.** If the client fires an event that fails validation (missing params, auth error, etc.), the handler never executes and the waiter never resolves — only the timeout will unblock it.
 
 ## See also

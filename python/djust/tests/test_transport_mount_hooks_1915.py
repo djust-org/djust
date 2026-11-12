@@ -2,23 +2,20 @@
 
 Phase 3.2 DEFINES the 5 transport mount-hooks the Phase 3.3b WS-mount flip needs,
 exactly how Phase 2.3a defined the event hooks (``event_context`` /
-``on_event_recorded`` / ``dispatch_actor_event``) DORMANT before the event flip
+``on_event_recorded``) DORMANT before the event flip
 wired + routed them. ``dispatch_mount`` does NOT call these hooks yet (Phase 3.3a
 wires them), and the bespoke WS ``handle_mount`` keeps doing all of this inline
 (untouched until 3.3b). So this PR changes NO live behavior.
 
-The 5 hooks (on the ``Transport`` protocol + ``WSConsumerTransport`` real impl +
+The hooks (on the ``Transport`` protocol + ``WSConsumerTransport`` real impl +
 ``SSESessionTransport`` no-op/raw):
 
 1. ``on_view_instantiated(view)`` — WS: ``view._ws_consumer``
    (websocket.py:2128), ``register_view``
    observability (2161-2167), ``_websocket_host`` / ``_secure`` stash
    (2268-2270). SSE: no-op.
-2. ``uses_actors_for_mount(view) -> bool`` — WS:
-   ``use_actors and create_session_actor is not None`` (websocket.py:2213); SSE:
-   False. ``dispatch_actor_mount(view, data) -> result`` — WS:
-   ``create_session_actor`` + ``actor_handle.mount()`` → ``{html, version}``
-   (websocket.py:2213-2217 / 2665-2706), verbatim; SSE: raises.
+2. (The actor mount hooks ``uses_actors_for_mount`` / ``dispatch_actor_mount``
+   were removed with the actor system in 2.0.)
 3. ``next_mount_version(html) -> int`` — WS: ``consumer._next_version()`` (NO arm
    — distinct from ``next_client_version`` which arms; Finding C); SSE: raw Rust
    version (placeholder; raises until 3.3a wires it).
@@ -61,9 +58,7 @@ class _FakeView:
     _view_id = "top-1915"
     request = None
 
-    def __init__(self, *, use_actors: bool = False) -> None:
-        if use_actors:
-            self.use_actors = True
+    def __init__(self) -> None:
         self._register_calls: list = []
 
     def get_context_data(self, **kwargs):
@@ -71,20 +66,6 @@ class _FakeView:
 
     def _register_child(self, sticky_id, child):
         self._register_calls.append((sticky_id, child))
-
-
-class _FakeActorHandle:
-    """Stand-in for the Rust ``SessionActorHandle``; ``.mount`` returns a known
-    render result."""
-
-    def __init__(self) -> None:
-        self.session_id = "actor-sess-1915"
-        self.mount_calls: list = []
-        self.result = {"html": "<div>from-actor</div>", "version": 7}
-
-    async def mount(self, view_path, context_data, view, **kwargs):
-        self.mount_calls.append((view_path, dict(context_data)))
-        return self.result
 
 
 class _FakeConsumer:
@@ -98,8 +79,6 @@ class _FakeConsumer:
         self.channel_name = "chan.1915"
         self._client_ip = None
         self.scope = {}
-        self.use_actors = False
-        self.actor_handle = None
         self._mounting_in_batch = mounting_in_batch
         self._sticky_preserved: dict = {}
         self._sticky_auto_reattached: set = set()
@@ -168,69 +147,6 @@ def test_sse_on_view_instantiated_is_noop():
     # SSE must not stamp a consumer back-reference (there is none).
     assert transport.on_view_instantiated(view) is None
     assert not hasattr(view, "_ws_consumer")
-
-
-# --------------------------------------------------------------------------- #
-# Hook 2: uses_actors_for_mount + dispatch_actor_mount
-# --------------------------------------------------------------------------- #
-
-
-def test_ws_uses_actors_for_mount_true_for_actor_view():
-    consumer = _FakeConsumer()
-    transport = WSConsumerTransport(consumer)
-    view = _FakeView(use_actors=True)
-    # create_session_actor is available in this build (Rust extension loaded).
-    from djust.websocket import create_session_actor
-
-    expected = create_session_actor is not None
-    assert transport.uses_actors_for_mount(view) is expected
-    if expected:
-        assert transport.uses_actors_for_mount(view) is True
-
-
-def test_ws_uses_actors_for_mount_false_for_plain_view():
-    consumer = _FakeConsumer()
-    transport = WSConsumerTransport(consumer)
-    assert transport.uses_actors_for_mount(_FakeView(use_actors=False)) is False
-
-
-def test_sse_uses_actors_for_mount_always_false():
-    transport = SSESessionTransport(_FakeSession())
-    assert transport.uses_actors_for_mount(_FakeView(use_actors=True)) is False
-
-
-@pytest.mark.asyncio
-async def test_ws_dispatch_actor_mount_creates_actor_and_returns_result(monkeypatch):
-    consumer = _FakeConsumer()
-    transport = WSConsumerTransport(consumer)
-    view = _FakeView(use_actors=True)
-    actor = _FakeActorHandle()
-
-    async def _fake_create_session_actor(session_id):
-        return actor
-
-    # Patch the factory the WS hook imports from .websocket.
-    import djust.websocket as ws_mod
-
-    monkeypatch.setattr(ws_mod, "create_session_actor", _fake_create_session_actor)
-
-    result = await transport.dispatch_actor_mount(
-        view, {"view": "myapp.views.ActorView", "params": {}}
-    )
-
-    assert consumer.use_actors is True, "the hook must set consumer.use_actors"
-    assert consumer.actor_handle is actor, "the created actor must be stashed on the consumer"
-    assert actor.mount_calls == [("myapp.views.ActorView", {"c": 0})], (
-        "actor_handle.mount must run with (view_path, context_data)"
-    )
-    assert result == actor.result, "the hook must return the actor mount result {html, version}"
-
-
-@pytest.mark.asyncio
-async def test_sse_dispatch_actor_mount_raises_not_implemented():
-    transport = SSESessionTransport(_FakeSession())
-    with pytest.raises(NotImplementedError):
-        await transport.dispatch_actor_mount(_FakeView(), {"view": "x"})
 
 
 # --------------------------------------------------------------------------- #
@@ -404,13 +320,11 @@ def test_sse_mounting_in_batch_always_false():
 
 
 # --------------------------------------------------------------------------- #
-# Protocol + adapter surface (all 5 hooks present on Protocol + both adapters)
+# Protocol + adapter surface (every hook present on Protocol + both adapters)
 # --------------------------------------------------------------------------- #
 
 _MOUNT_HOOKS = (
     "on_view_instantiated",
-    "uses_actors_for_mount",
-    "dispatch_actor_mount",
     "next_mount_version",
     "on_mount_render_ready",
     "finalize_mount_auth",
@@ -433,11 +347,9 @@ def test_protocol_defaults_are_behavior_preserving():
         """A duck-typed transport that does NOT override the mount hooks — relies
         on the Protocol defaults via explicit delegation below."""
 
-    # The Protocol defaults: on_view_instantiated returns None; uses_actors_for_mount
-    # False; dispatch_actor_mount raises; next_mount_version raises; on_mount_render_ready
-    # returns html; finalize_mount_auth returns None; mounting_in_batch False.
+    # The Protocol defaults: on_view_instantiated returns None;
+    # next_mount_version raises; on_mount_render_ready returns html; finalize_mount_auth returns None; mounting_in_batch False.
     assert Transport.on_view_instantiated(Transport, _FakeView()) is None  # type: ignore[arg-type]
-    assert Transport.uses_actors_for_mount(Transport, _FakeView()) is False  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------- #
@@ -456,8 +368,6 @@ def _dispatch_mount_source() -> str:
     "hook",
     [
         "on_view_instantiated",
-        "uses_actors_for_mount",
-        "dispatch_actor_mount",
         "next_mount_version",
         "on_mount_render_ready",
     ],
@@ -504,32 +414,12 @@ def test_dispatch_mount_stamps_version_via_next_mount_version():
     raw render_with_diff version inline; and crucially NOT via the arming
     ``next_client_version`` the event path uses."""
     src = _dispatch_mount_source()
-    assert "render_with_diff" in src, "dispatch_mount still renders inline (non-actor branch)"
+    assert "render_with_diff" in src, "dispatch_mount still renders inline"
     assert "next_mount_version" in src, (
         "Finding C: the mount frame version now routes through next_mount_version (no-arm)"
     )
     assert "next_client_version" not in src, (
         "mount must NOT arm recovery via the event-path wire-version helper (Finding C)"
-    )
-
-
-def test_dispatch_mount_routes_actor_mount_not_refuses():
-    """Finding D WIRED proof (INVERTS the Phase-3.2 dormant pin): a WS actor view
-    is now ROUTED through ``dispatch_actor_mount`` (not refused). The SSE refusal
-    (``uses_actors_for_mount`` False) stays — the structured error envelope is
-    only emitted when the transport does NOT support actor mounts."""
-    src = _dispatch_mount_source()
-    assert "dispatch_actor_mount" in src, (
-        "dispatch_mount routes actor views through transport.dispatch_actor_mount"
-    )
-    assert "uses_actors_for_mount" in src, (
-        "the actor branch + the top gate consult transport.uses_actors_for_mount"
-    )
-    # The refusal envelope is preserved (SSE-only path), now gated on the
-    # transport NOT supporting actor mounts rather than unconditional.
-    assert "is not supported over SSE" in src, (
-        "the SSE actor refusal envelope stays (only reached when the transport "
-        "does not support actor mounts)"
     )
 
 
@@ -589,20 +479,6 @@ class CommPlainView(LiveView):
         return {"c": self.c}
 
 
-class CommActorView(LiveView):
-    """``use_actors=True`` view — uses_actors_for_mount must report True for the
-    consumer that mounted it."""
-
-    use_actors = True
-    template = f'<div dj-root dj-view="{_ALLOWED}.CommActorView" dj-id="0">c={{{{ c }}}}</div>'
-
-    def mount(self, request, **kwargs):
-        self.c = 0
-
-    def get_context_data(self, **kwargs):
-        return {"c": self.c}
-
-
 class _ScopeSession:
     def __init__(self, key):
         self.session_key = key
@@ -648,28 +524,6 @@ async def _connect_mount_and_get_consumer(view_path: str, url: str = "/mh-1915/"
     consumer = getattr(view, "_ws_consumer", None)
     assert consumer is not None, "the live consumer must be reachable via view._ws_consumer"
     return communicator, consumer, mount_frame
-
-
-@override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED])
-@pytest.mark.django_db
-@pytest.mark.asyncio
-async def test_real_ws_uses_actors_for_mount_true_for_actor_view():
-    communicator, consumer, _ = await _connect_mount_and_get_consumer(f"{_ALLOWED}.CommActorView")
-    try:
-        from djust.websocket import create_session_actor
-
-        transport = WSConsumerTransport(consumer)
-        # The actor view mounted in actor mode, so the live consumer has
-        # use_actors=True (+ an actor_handle when the Rust factory is present).
-        if create_session_actor is not None:
-            assert transport.uses_actors_for_mount(consumer.view_instance) is True, (
-                "uses_actors_for_mount must be True for a use_actors view's live consumer"
-            )
-        # A plain view object on the SAME consumer would not change the result
-        # (the gate keys on view.use_actors): a non-actor view → False.
-        assert transport.uses_actors_for_mount(_FakeView(use_actors=False)) is False
-    finally:
-        await communicator.disconnect()
 
 
 @override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED])

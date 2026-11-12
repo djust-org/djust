@@ -1075,8 +1075,6 @@ class TestDisconnectDrainsStickyPreserved:
                 self._db_notify_channels = None
                 self.view_instance = None  # no view to avoid presence/upload paths
                 self._tick_task = None
-                self.use_actors = False
-                self.actor_handle = None
                 self._sticky_preserved = {
                     "audio-player": _FakeStickyChild(),
                     "chat-widget": _FakeStickyChildB(),
@@ -1134,8 +1132,6 @@ class TestDisconnectDrainsStickyPreserved:
                 self._db_notify_channels = None
                 self.view_instance = None
                 self._tick_task = None
-                self.use_actors = False
-                self.actor_handle = None
                 self._sticky_preserved = {
                     "good": _GoodSticky(),
                     "bad": _BadSticky(),

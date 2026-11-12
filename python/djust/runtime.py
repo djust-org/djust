@@ -87,7 +87,6 @@ from .turns import Turn, current_turn, run_turn
 from .validation import (
     validate_handler_params,
     validated_call_arguments,
-    get_handler_parameter_policy,
 )
 from .websocket_utils import (
     _call_handler,
@@ -971,8 +970,8 @@ class Transport(Protocol):
         for introspection + limits) and the real query string. WS performs the
         WS-only post-mount channel-layer wiring (server-push view group,
         db_notify groups; the presence group is joined later, after mount(), by
-        ``on_mount_render_ready`` — #3202), the periodic ``_tick_task`` start, the
-        ``use_actors`` flag, and the real-scope path/query-string stamps (ADR-022
+        ``on_mount_render_ready`` — #3202), the periodic ``_tick_task`` start,
+        and the real-scope path/query-string stamps (ADR-022
         Iter 3 Phase 3.3b, Finding B residual). Async because the WS impl awaits
         ``channel_layer.group_add(...)``. Behavior-preserving extension hook — the
         runtime stays wire-blind (#1887, ADR-022 Iter 1 / #1919, ADR-022 Iter 3).
@@ -1015,10 +1014,7 @@ class Transport(Protocol):
           so adding it here would be a behavior change for SSE; kept WS-scoped.
 
         Best-effort by contract: implementations MUST swallow their own errors
-        (telemetry must never disturb the event turn). Called only on the
-        non-actor render path (the actor path goes through ``dispatch_actor_event``
-        which does not record per-handler timing on either the bespoke or the
-        runtime side).
+        (telemetry must never disturb the event turn).
         """
 
     def on_render_emitted(
@@ -1143,56 +1139,8 @@ class Transport(Protocol):
           (enter) and websocket.py:4311-4313 (exit).
         - SSE: holds the session render lock so event/background results cannot
           race with another POST replacing the page.
-
-        The WS actor-event hook also acquires this context before dispatching to
-        Rust, so actor results cannot race with these Python render producers.
         """
         return contextlib.nullcontext()
-
-    def uses_actors(self, view: Any) -> bool:
-        """Return whether this event turn must be handled by the actor system.
-
-        ADR-022 Iter 2 Phase 2.3a (#1901). WS routes a top-level event through
-        the per-session Rust actor whenever the consumer mounted in actor mode
-        (``use_actors=True`` + a created ``actor_handle``). This hook lets
-        ``dispatch_event`` select that actor path and preserve the actor's
-        server-side diff baseline.
-
-        - WS: ``consumer.use_actors and consumer.actor_handle is not None`` — the
-          exact precondition of the bespoke actor block (websocket.py:3282).
-        - SSE: ``False`` — SSE has no bidirectional actor channel and refuses
-          ``use_actors`` mounts outright (``dispatch_mount`` guard,
-          runtime.py:602), so the actor branch is never reachable on SSE.
-
-        Live for WS events since Phase 2.3b (#1907): ``dispatch_event`` checks
-        this hook before selecting the actor path. SSE still refuses actors.
-        """
-        return False
-
-    async def dispatch_actor_event(
-        self,
-        view: Any,
-        event_name: str,
-        params: Dict[str, Any],
-        *,
-        event_ref: Optional[int] = None,
-        cache_request_id: Optional[str] = None,
-    ) -> None:
-        """Run one event turn through the actor system + send the framed result.
-
-        Called by ``_dispatch_event_inner`` before its normal event context; the
-        WS implementation acquires that context itself when :meth:`uses_actors` is true and
-        the event is NOT routed to a sticky child (the WS
-        ``not is_embedded_child_target`` mutual exclusion, websocket.py:3280-3282).
-
-        - WS: serializes actor dispatch against the consumer's render producers —
-          time-travel record, shared security + param validation,
-          ``actor_handle.event()``, patch/HTML framing with the consumer-owned
-          wire version (#1788), error handling, and the deferred-activity flush.
-        - SSE: never called (``uses_actors`` is ``False``); raises
-          :class:`NotImplementedError` if invoked directly.
-        """
-        raise NotImplementedError("Actor events are WS-only; SSE refuses use_actors mounts.")
 
     async def explicit_event_request(self, view: Any) -> Any:
         """Return a fresh trusted event request; unsupported transports fail closed."""
@@ -1209,7 +1157,7 @@ class Transport(Protocol):
         this hook re-resolves the CURRENT principal and re-runs the view's auth
         check before the handler runs. Called by ``_dispatch_event_inner`` at the
         same point the WS bespoke handler does — after the view-mounted check,
-        BEFORE the actor branch and the normal handler path.
+        BEFORE the normal handler path.
 
         Returns ``True`` to allow the event to proceed, ``False`` to refuse it.
         On a ``False`` return the caller has ALREADY done nothing — it is the
@@ -1245,7 +1193,7 @@ class Transport(Protocol):
     # (#1919) routed WS mounts through it. ``LiveViewConsumer.RUNTIME_OWNED_VERBS``
     # includes "mount", and ``handle_mount`` delegates direct callers to the
     # same runtime path. WS implements consumer-specific behavior; SSE keeps
-    # its no-op / raw-version / actor-refusal behavior.
+    # its no-op / raw-version behavior.
     # ------------------------------------------------------------------ #
 
     def on_view_instantiated(self, view: Any) -> None:
@@ -1269,43 +1217,6 @@ class Transport(Protocol):
         Live in ``dispatch_mount`` since Phase 3.3a (#1917), including WS
         mounts since Phase 3.3b (#1919).
         """
-
-    def uses_actors_for_mount(self, view: Any) -> bool:
-        """Return whether this MOUNT must be driven through the actor system.
-
-        ADR-022 Iter 3 Phase 3.2 (#1915, Finding D). ``dispatch_mount`` uses
-        this hook to admit WS actor mounts and :meth:`dispatch_actor_mount`
-        to mount them through the actor system. SSE still returns ``False``,
-        so the runtime refuses ``use_actors`` mounts over SSE.
-
-        - WS: ``getattr(view, "use_actors", False) and create_session_actor is
-          not None`` — the exact precondition of the bespoke actor block
-          (websocket.py:2213).
-        - SSE: ``False`` — SSE has no bidirectional actor channel; the mount-time
-          refusal stays.
-
-        Wired in Phase 3.3a (#1917); live WS mounts use this gate since the
-        Phase 3.3b mount flip (#1919).
-        """
-        return False
-
-    async def dispatch_actor_mount(self, view: Any, data: Dict[str, Any]) -> Any:
-        """Mount a view through the actor system + return its ``{html, version}``.
-
-        ADR-022 Iter 3 Phase 3.2 (#1915, Finding D). Called by ``dispatch_mount``
-        (Phase 3.3a) when :meth:`uses_actors_for_mount` is true, OUTSIDE the
-        normal Rust render path. Returns the mount render result (an object /
-        dict carrying at least ``html`` and ``version``) so the runtime can build
-        the mount frame from the actor's authoritative render.
-
-        - WS: creates the per-session actor via ``create_session_actor``
-          (websocket.py:2213-2217) and runs ``actor_handle.mount(view_path,
-          context_data, view)`` → ``{html, version}`` (websocket.py:2665-2706),
-          verbatim.
-        - SSE: never called (``uses_actors_for_mount`` is ``False``); raises
-          :class:`NotImplementedError` if invoked directly.
-        """
-        raise NotImplementedError("Actor mounts are WS-only; SSE refuses use_actors mounts.")
 
     def next_mount_version(self, html: Optional[str], rust_version: int = 1) -> int:
         """Return the wire ``version`` to stamp on the MOUNT frame.
@@ -1573,12 +1484,7 @@ class WSConsumerTransport:
             ``listen()`` adds in mount() are joined later, by
             ``on_mount_render_ready`` (#2962);
           * periodic tick task start when the subclass overrides ``handle_tick``
-            (websocket.py:2202-2208);
-          * the ``use_actors`` flag off the view class (websocket.py:2211) so
-            ``disconnect``'s actor-cleanup guard (``if self.use_actors and
-            self.actor_handle``) reflects reality. The actor HANDLE is NOT created
-            here — ``dispatch_actor_mount`` (#1915, Finding D) creates it at the
-            render step, WS-verbatim, so a non-actor view never spins one up.
+            (websocket.py:2202-2208).
 
         Async because ``channel_layer.group_add`` is a coroutine. Mirrors the
         bespoke try/except envelope shape (a setup failure surfaces the same way
@@ -1642,11 +1548,6 @@ class WSConsumerTransport:
         # (websocket.py:2202-2208).
         view_class = type(view_instance)
         maybe_start_tick_task(consumer, view_class)
-
-        # Set the use_actors flag off the view class (websocket.py:2211) so
-        # disconnect's actor cleanup guard reflects reality. The actor HANDLE is
-        # created later by dispatch_actor_mount (#1915, Finding D), not here.
-        consumer.use_actors = getattr(view_class, "use_actors", False)
 
     async def _join_listen_channels(self, view: Any) -> None:
         """Join the ``djust_db_notify_<channel>`` group for every channel the
@@ -1932,7 +1833,7 @@ class WSConsumerTransport:
 
             # (1b) The per-event ``_debug`` panel payload (DEBUG + panel-active gated
             # inside the helper). Reuse the consumer's existing implementation so the
-            # runtime path and the still-bespoke tick/broadcast/async/actor paths share
+            # runtime path and the still-bespoke tick/broadcast/async paths share
             # ONE ``_debug`` shape (#1646). ``performance`` rides into ``_debug`` too,
             # matching the bespoke ``_attach_debug_payload(response, event_name, performance)``.
             attach = getattr(consumer, "_attach_debug_payload", None)
@@ -2026,235 +1927,6 @@ class WSConsumerTransport:
             consumer._processing_user_event = False
             consumer._render_lock.release()
 
-    def uses_actors(self, view: Any) -> bool:
-        """WS actor precondition — verbatim from the bespoke block (websocket.py:3282).
-
-        ``consumer.use_actors`` is set from the view class at mount
-        (websocket.py:2208) and ``consumer.actor_handle`` is the per-session Rust
-        actor created at mount (websocket.py:2213). Both must be truthy for the
-        actor path; a WS consumer in non-actor mode (or one where actor creation
-        was skipped) returns ``False`` and falls through to the normal render path.
-        """
-        consumer = self._consumer
-        return getattr(consumer, "use_actors", False) and consumer.actor_handle is not None
-
-    async def dispatch_actor_event(
-        self,
-        view: Any,
-        event_name: str,
-        params: Dict[str, Any],
-        *,
-        event_ref: Optional[int] = None,
-        cache_request_id: Optional[str] = None,
-    ) -> None:
-        """Serialize actor dispatch with Python render producers and recovery."""
-        consumer = self._consumer
-        cancelled = False
-        try:
-            async with self.event_context(view):
-                if consumer.view_instance is not view:
-                    await consumer.send_error(
-                        "Actor owner changed. Reload the page.", recoverable=False
-                    )
-                    return
-                await self._dispatch_actor_event_locked(
-                    view,
-                    event_name,
-                    params,
-                    event_ref=event_ref,
-                    cache_request_id=cache_request_id,
-                )
-        except asyncio.CancelledError:
-            cancelled = True
-            raise
-        finally:
-            # Deferred activity can dispatch another event: release the render
-            # lock before draining it, and never dispatch against a replaced owner.
-            if (
-                not cancelled
-                and consumer.view_instance is view
-                and hasattr(view, "_flush_deferred_activity_events")
-            ):
-                try:
-                    await view._flush_deferred_activity_events(consumer)
-                except Exception:
-                    logger.exception("dj_activity: deferred-event flush raised (actor path)")
-
-    async def _dispatch_actor_event_locked(
-        self,
-        view: Any,
-        event_name: str,
-        params: Dict[str, Any],
-        *,
-        event_ref: Optional[int] = None,
-        cache_request_id: Optional[str] = None,
-    ) -> None:
-        """Forward contracts captured inside the actor's serialized render.
-
-        Framing / version-stamping notes:
-        - The consumer OWNS the monotonic wire version (#1788); the actor's
-          ``result['version']`` is IGNORED for the wire — ``_send_update`` is
-          stamped with the consumer counter and arms recovery from the actor's
-          exact full HTML. The actor's internal version still drives its own
-          server-side diff baseline.
-        - ``cache_request_id`` is read (not popped) from ``params`` by the WS
-          bespoke caller; it is forwarded here so the ``@cache`` decorator's
-          client round-trip id rides the update frame.
-        - ``patches`` may arrive as a JSON STRING from Rust and is parsed via
-          ``fast_json_loads`` before send.
-        """
-        consumer = self._consumer
-
-        # Time-travel debugging (v0.6.1): capture state_before BEFORE the
-        # permission check so permission-denied events are also recorded
-        # (websocket.py:3284-3292).
-        from .time_travel import (
-            record_event_end as _tt_end,
-            record_event_start as _tt_start,
-        )
-
-        _tt_snapshot = _tt_start(view, event_name, params, event_ref)
-        _tt_error: Optional[str] = None
-        try:
-            logger.info("Handling event '%s' with actor system", event_name)
-
-            # Security checks (shared with non-actor paths) — run on the RESOLVED
-            # target. The actor branch only fires for the top-level view (the
-            # caller excludes sticky-child events), so ``view`` IS the top-level
-            # view here (websocket.py:3300-3305).
-            handler = await _validate_event_security(
-                consumer, event_name, view, consumer._rate_limiter
-            )
-            if handler is None:
-                _tt_error = "permission_denied"
-                return
-
-            # Validate parameters before sending to actor (websocket.py:3308-3323).
-            coerce = get_handler_coerce_setting(handler)
-            strict_params = (
-                dict(params) if get_handler_parameter_policy(handler) == "strict" else None
-            )
-            positional_args = params.pop("_args", []) if isinstance(params, dict) else []
-            validation = validate_handler_params(
-                handler, params, event_name, coerce=coerce, positional_args=positional_args
-            )
-            if not validation["valid"]:
-                logger.error("Parameter validation failed: %s", validation["error"])
-                _tt_error = "validation_failed"
-                await consumer.send_error(
-                    validation["error"],
-                    validation_details={
-                        "expected_params": validation["expected"],
-                        "provided_params": validation["provided"],
-                        "type_errors": validation["type_errors"],
-                    },
-                )
-                return
-
-            # Call actor event handler (will call Python handler internally)
-            # (websocket.py:3326).
-            if strict_params is not None:
-                params = strict_params
-            actor_task = asyncio.ensure_future(consumer.actor_handle.event(event_name, params))
-            try:
-                result = await asyncio.shield(actor_task)
-            except asyncio.CancelledError:
-                # The Rust mailbox operation survives cancellation of its Python
-                # waiter. Keep the lock until it settles, without sending a frame.
-                while not actor_task.done():
-                    try:
-                        await asyncio.shield(actor_task)
-                    except asyncio.CancelledError:
-                        continue
-                    except Exception:
-                        break
-                if not actor_task.cancelled():
-                    actor_task.exception()
-                raise
-            if consumer.view_instance is not view:
-                await consumer.send_error(
-                    "Actor owner changed. Reload the page.", recoverable=False
-                )
-                return
-
-            runtime = getattr(consumer, "_runtime", None)
-            active = getattr(runtime, "_parameter_contracts_active", False)
-            snapshot: Dict[str, Any] = {}
-            if "parameter_contracts" not in result and (
-                active or get_handler_parameter_policy(handler) == "strict"
-            ):
-                await consumer.send_error(
-                    "Actor render parameter contracts unavailable.", recoverable=False
-                )
-                return
-            manifest = result.get("parameter_contracts")
-            if manifest is not None or active:
-                path = getattr(runtime, "_parameter_contract_view", None)
-                if (
-                    runtime is None
-                    or getattr(runtime, "view_instance", None) is not view
-                    or not isinstance(path, str)
-                    or not path
-                    or not isinstance(result.get("recovery_html"), str)
-                ):
-                    await consumer.send_error(
-                        "Actor render parameter contracts unavailable.", recoverable=False
-                    )
-                    return
-                snapshot["parameter_contract_snapshot"] = {
-                    "parameter_contracts": manifest,
-                    "parameter_contract_view": path,
-                }
-                runtime._parameter_contracts_active = True
-
-            # Send patches if available, otherwise full HTML. Ignore the actor
-            # ``result['version']`` for the wire — the consumer owns the monotonic
-            # wire version (#1788). The actor's internal version still drives its
-            # diff-baselining server-side (websocket.py:3328-3353).
-            patches = result.get("patches")
-            html = result.get("html")
-
-            if patches:
-                if isinstance(patches, str):
-                    patches = fast_json_loads(patches)
-            else:
-                logger.info(
-                    "No patches from actor, sending full HTML update (length: %d). "
-                    "Run with DJUST_VDOM_TRACE=1 for detailed diff output.",
-                    len(html) if html else 0,
-                )
-
-            raw_html = result.get("recovery_html")
-            version = (
-                consumer._next_version_armed(raw_html)
-                if isinstance(raw_html, str)
-                else consumer._next_version()
-            )
-            await consumer._send_update(
-                patches=patches,
-                html=html,
-                version=version,  # consumer-owned (#1788)
-                cache_request_id=cache_request_id,
-                event_name=event_name,
-                **snapshot,
-            )
-
-        except Exception as e:
-            _tt_error = str(e)[:200]
-            view_class_name = view.__class__.__name__ if view else "Unknown"
-            response = handle_exception(
-                e,
-                error_type="event",
-                event_name=event_name,
-                view_class=view_class_name,
-                logger=logger,
-                log_message=f"Error in actor event handling for {view_class_name}.{sanitize_for_log(event_name)}()",
-            )
-            await consumer.send_json(response)
-        finally:
-            _tt_end(view, _tt_snapshot, error=_tt_error)
-            await consumer._maybe_push_tt_event(view, _tt_snapshot)
-
     async def recheck_event_auth(self, view: Any) -> bool:
         """WS per-event auth re-check — verbatim from websocket.py:3193-3222 (#1777).
 
@@ -2269,7 +1941,7 @@ class WSConsumerTransport:
         (#1907): ``LiveViewConsumer.RUNTIME_OWNED_VERBS`` routes ``event`` frames
         through ``dispatch_message`` → ``dispatch_event``; direct ``handle_event``
         calls also delegate to ``dispatch_event``. Its event body invokes this
-        hook for legacy-exposure views before actor routing or normal handler
+        hook for legacy-exposure views before normal handler
         dispatch. ``check_view_auth_lightweight`` delegates to ``check_view_auth``,
         including an overridden ``check_permissions(request)`` hook.
         """
@@ -2381,80 +2053,6 @@ class WSConsumerTransport:
         host, is_secure = validated_host_from_scope(scope)
         view._websocket_host = host
         view._websocket_secure = is_secure
-
-    def uses_actors_for_mount(self, view: Any) -> bool:
-        """Whether this WS mount must run through the actor system (#1915, Finding D).
-
-        Exact precondition of the bespoke actor block (websocket.py:2213):
-        the view opts into ``use_actors`` AND the Rust ``create_session_actor``
-        factory is available in this build.
-        """
-        from .websocket import create_session_actor
-
-        return getattr(view, "use_actors", False) and create_session_actor is not None
-
-    async def dispatch_actor_mount(self, view: Any, data: Dict[str, Any]) -> Any:
-        """Create the session actor + mount through it → ``{html, version}`` (#1915, Finding D).
-
-        Verbatim fold of the WS bespoke actor-mount path:
-
-          * create the per-session actor via ``create_session_actor(session_id)``
-            and stash it on the consumer as ``actor_handle`` (websocket.py:2213-2217);
-          * call ``actor_handle.mount(view_path, context_data, view)`` →
-            ``{html, version}`` (websocket.py:2665-2706).
-
-        Returns the actor mount ``result`` dict so the runtime stamps the mount
-        frame from the actor's authoritative render. ``data`` carries the mount
-        frame (for ``view`` path); the actor render reads the view's
-        ``get_context_data()`` exactly as the bespoke path does.
-        """
-        from .websocket import create_session_actor
-
-        consumer = self._consumer
-        view_path = data.get("view")
-        consumer.use_actors = True
-        logger.info("Creating SessionActor for %s", view_path)
-        if create_session_actor is None:  # pragma: no cover — actor build absent
-            # Reached only when the compiled extension lacks the actor surface;
-            # the actor mount path is gated upstream on actor availability, so
-            # this guard narrows the Optional and never fires in an actor mount.
-            raise RuntimeError("SessionActor support is not available in this build")
-        consumer.actor_handle = await create_session_actor(consumer.session_id)
-        logger.info("SessionActor created: %s", consumer.actor_handle.session_id)
-
-        # #2599: hand the actor the view's OWN template + dirs. Without them
-        # `ViewActor::new` builds an empty-template backend and the mount
-        # frame is `<html><head></head><body></body></html>`.
-        from .utils import get_template_dirs
-
-        get_template = getattr(view, "get_template", None)
-        from .sync_turn import sync_step as _sync_step
-
-        template = (
-            await sync_to_async(_sync_step(view, "render", get_template))()
-            if get_template is not None
-            else None
-        )
-        # ADR-029 (#2741): the actor path never runs `_sync_state_to_rust`,
-        # so nothing pushed the render environment for THIS mount. Push it on
-        # the calling thread — `SessionActorHandle.mount` captures the calling
-        # thread's cells onto the actor as per-view config, and converts
-        # `context_data` on that thread too — deliberately NOT inside
-        # `sync_to_async`, which would push on a worker the capture never sees.
-        from .render_env import apply_render_env
-
-        apply_render_env()
-        from .sync_turn import sync_step
-
-        context_data = await sync_to_async(sync_step(view, "render", view.get_context_data))()
-        result = await consumer.actor_handle.mount(
-            view_path,
-            context_data,
-            view,
-            template=template,
-            template_dirs=[str(d) for d in get_template_dirs()],
-        )
-        return result
 
     def next_mount_version(self, html: Optional[str], rust_version: int = 1) -> int:
         """Stamp the consumer-owned NO-ARM wire version for the mount frame (#1915, Finding C).
@@ -2878,29 +2476,6 @@ class SSESessionTransport:
         async with self._session._render_lock:
             yield
 
-    def uses_actors(self, view: Any) -> bool:
-        """SSE never uses actors (#1901).
-
-        SSE has no bidirectional channel for actor messages and the actor
-        channel-layer code lives in ``websocket.py``, which the runtime SSE path
-        doesn't traverse. ``dispatch_mount`` refuses a ``use_actors`` view over
-        SSE outright (runtime.py:602), so the actor branch is unreachable here.
-        Returning ``False`` keeps every SSE event on the normal render path.
-        """
-        return False
-
-    async def dispatch_actor_event(
-        self,
-        view: Any,
-        event_name: str,
-        params: Dict[str, Any],
-        *,
-        event_ref: Optional[int] = None,
-        cache_request_id: Optional[str] = None,
-    ) -> None:
-        """Never called on SSE (``uses_actors`` is ``False``) — guard with a raise."""
-        raise NotImplementedError("Actor events are WS-only; SSE refuses use_actors mounts.")
-
     async def recheck_event_auth(self, view: Any) -> bool:
         """SSE per-event auth re-check against the LIVE event-POST request (#1777).
 
@@ -2985,7 +2560,7 @@ class SSESessionTransport:
     # ------------------------------------------------------------------ #
     # Mount hooks (ADR-022 Iter 3 Phase 3.2, #1915; wired in Phase 3.3a, #1917)
     # SSE implementations: no-op / raw / refuse. SSE has no consumer to
-    # back-reference, no actor channel, no sticky/live_redirect surface, and
+    # back-reference, no sticky/live_redirect surface, and
     # no persistent socket to close — so these preserve SSE behaviour exactly.
     # ------------------------------------------------------------------ #
 
@@ -3012,18 +2587,6 @@ class SSESessionTransport:
     def hosts_other_views(self) -> bool:
         """Whether this session has hosted views besides one (#3252); sticky."""
         return bool(getattr(self._session, "_hosted_several_views", False))
-
-    def uses_actors_for_mount(self, view: Any) -> bool:
-        """SSE never mounts through actors (#1915, Finding D).
-
-        SSE has no bidirectional actor channel and ``dispatch_mount`` refuses a
-        ``use_actors`` view over SSE outright (runtime.py:1175). Returning
-        ``False`` keeps that refusal as the only SSE behaviour for actor views."""
-        return False
-
-    async def dispatch_actor_mount(self, view: Any, data: Dict[str, Any]) -> Any:
-        """Never called on SSE (``uses_actors_for_mount`` is ``False``) — guard with a raise."""
-        raise NotImplementedError("Actor mounts are WS-only; SSE refuses use_actors mounts.")
 
     def next_mount_version(self, html: Optional[str], rust_version: int = 1) -> int:
         """SSE stamps the raw Rust ``render_with_diff()`` version on its mount frame.
@@ -3642,18 +3205,6 @@ class ViewRuntime(RuntimeTurnPort):
                 self._instantiate_error_frame = None
             return
 
-        # Actor renderers retain their own context/state outside the explicit
-        # projections. Refuse before lifecycle/transport registration, not just
-        # on the first event. Do not close a shared mount_batch socket.
-        from ._exposure import uses_legacy_exposure
-
-        if getattr(view_instance, "use_actors", False) and not uses_legacy_exposure(view_instance):
-            self.view_instance = None
-            await self.transport.send_error(
-                "Explicit actor mounts are not yet supported", error_type="mount_error"
-            )
-            return
-
         from ._exposure_diagnostics import restrict_diagnostics
 
         restrict_diagnostics(view_instance)
@@ -3665,7 +3216,7 @@ class ViewRuntime(RuntimeTurnPort):
         # ADR-022 Iter 3 Phase 3.3a (#1917, Finding B). Wire the
         # ``on_view_instantiated`` hook at the SAME point the bespoke WS
         # ``handle_mount`` stamps its consumer back-refs (websocket.py:2128 ff):
-        # IMMEDIATELY after instantiation, BEFORE the actor branch / auth / mount /
+        # IMMEDIATELY after instantiation, BEFORE auth / mount /
         # render. WS: stamps ``_ws_consumer`` /
         # observability ``register_view`` / validated handshake host. SSE: no-op.
         # getattr-guarded so duck-typed test transport fakes that predate this
@@ -3673,29 +3224,6 @@ class ViewRuntime(RuntimeTurnPort):
         on_view_instantiated = getattr(self.transport, "on_view_instantiated", None)
         if on_view_instantiated is not None:
             on_view_instantiated(view_instance)
-
-        # ---- use_actors transport gate (#1240 / ADR-016; ADR-022 Iter 3 Phase
-        # 3.3a Finding D) ----
-        # Phase 3.3a wires ``uses_actors_for_mount`` so a WS actor view is no
-        # longer REFUSED — it is mounted through the actor system at the render
-        # step below (``dispatch_actor_mount``), WS-verbatim. SSE has no
-        # bidirectional actor channel (``uses_actors_for_mount`` → False), so an
-        # ``use_actors`` view over SSE still gets the structured refusal here
-        # rather than partially mounting and failing downstream with an opaque
-        # AttributeError. getattr-guarded; a transport without the hook (a bare
-        # test fake) falls back to the legacy unconditional refusal.
-        if getattr(view_instance, "use_actors", False):
-            uses_actors_for_mount = getattr(self.transport, "uses_actors_for_mount", None)
-            actor_mount_ok = (
-                uses_actors_for_mount(view_instance) if uses_actors_for_mount else False
-            )
-            if not actor_mount_ok:
-                await self.transport.send_error(
-                    "use_actors is not supported over SSE; mount over WebSocket instead",
-                    error_type="mount_error",
-                    view_class=view_path,
-                )
-                return
 
         self.view_instance = view_instance
 
@@ -3844,7 +3372,7 @@ class ViewRuntime(RuntimeTurnPort):
         # SSE stamps _sse_session_id / _sse_session + the real query string here so
         # the converged runtime mount preserves everything legacy _sse_mount_view
         # exposed. WS performs its post-mount channel-layer wiring (view/presence/
-        # db_notify group_add), tick-task start, use_actors flag, and real-scope
+        # db_notify group_add), tick-task start, and real-scope
         # path/query-string stamps (ADR-022 Iter 3 Phase 3.3b, Finding B residual).
         # Async (the WS impl awaits group_add). getattr-guarded + awaitable-guarded
         # so duck-typed test transport fakes that predate this Protocol method (or
@@ -4090,7 +3618,7 @@ class ViewRuntime(RuntimeTurnPort):
         # stale-baseline diff can ever reach the client.
         #
         # RENDER-TIMING (traced, load-bearing): the mount-time ``render_with_diff``
-        # (~line 2375 / for actor mounts the actor render) READS ``_force_full_html``
+        # (~line 2375) READS ``_force_full_html``
         # but never RESETS it — every reset lives in the transport-level EVENT /
         # url_change dispatch (``_render_and_send`` runtime.py:4093-4094,
         # ``dispatch_url_change`` runtime.py:3725-3726, and the WS twins
@@ -4327,90 +3855,48 @@ class ViewRuntime(RuntimeTurnPort):
             return
 
         # ---- Initial render ----
-        # ADR-022 Iter 3 Phase 3.3a (#1917, Finding D): a WS ``use_actors`` view
-        # renders through the actor system instead of the Rust render path, exactly
-        # as the bespoke ``handle_mount`` does (websocket.py:2691-2706 — actor mount
-        # runs AFTER auth + mount() + handle_params, using the fully-initialized
-        # view). ``uses_actors_for_mount`` already passed the top gate for this
-        # branch to be reachable (SSE returns False and was refused above).
         rust_version = 1
-        actor_mounted = False
         # The page root's own dj-poll attributes, for the mount frame.
         root_poll: Optional[Dict[str, str]] = None
         from .mixins.template import _root_poll_attrs
 
-        if getattr(view_instance, "use_actors", False):
-            uses_actors_for_mount = getattr(self.transport, "uses_actors_for_mount", None)
-            if uses_actors_for_mount and uses_actors_for_mount(view_instance):
-                try:
-                    result = await self.transport.dispatch_actor_mount(view_instance, data)
-                    # The actor render is authoritative for its BYTES, but it goes
-                    # through the same normalize + dj-root extraction as the
-                    # non-actor frame below (#2599 review): the client does
-                    # `container.innerHTML = html`, so a verbatim `<div dj-root>`
-                    # wrapper nested a second dj-root and put every patch one
-                    # level off. (Pre-#2599 the actor html was an empty document,
-                    # so the mismatch was invisible.)
-                    html = result["html"] if isinstance(result, dict) else result.get("html")
-                    rust_version = result.get("version", 1) if isinstance(result, dict) else 1
-                    if hasattr(view_instance, "_strip_comments_and_whitespace"):
-                        html = await sync_to_async(view_instance._strip_comments_and_whitespace)(
-                            html
-                        )
-                    if hasattr(view_instance, "_extract_liveview_content"):
-                        root_poll = _root_poll_attrs(html)
-                        html = await sync_to_async(view_instance._extract_liveview_content)(html)
-                    actor_mounted = True
-                except Exception as exc:
-                    response = handle_exception(
-                        exc,
-                        error_type="render",
-                        view_class=view_path,
-                        logger=logger,
-                        log_message=f"Error mounting {sanitize_for_log(view_path)} via actor",
-                        expose_details=_diagnostics_policy_allows(view_instance),
-                    )
-                    await self._fail_mount(view_instance, exc, response)
-                    return
+        try:
+            if hasattr(view_instance, "_initialize_rust_view"):
+                await sync_to_async(view_instance._initialize_rust_view)(request)
+            if hasattr(view_instance, "_sync_state_to_rust"):
+                await sync_to_async(view_instance._sync_state_to_rust)()
+            # ADR-019 LVN: capture patches (was discarded as ``_patches``) — for
+            # native renderers (NativeRenderer) ``html`` is empty and the wire
+            # payload is the patch list, shipped on the mount frame below so the
+            # native client can bootstrap its widget tree on connect.
+            from ._child_rendering import render_view_with_diff
 
-        if not actor_mounted:
-            try:
-                if hasattr(view_instance, "_initialize_rust_view"):
-                    await sync_to_async(view_instance._initialize_rust_view)(request)
-                if hasattr(view_instance, "_sync_state_to_rust"):
-                    await sync_to_async(view_instance._sync_state_to_rust)()
-                # ADR-019 LVN: capture patches (was discarded as ``_patches``) — for
-                # native renderers (NativeRenderer) ``html`` is empty and the wire
-                # payload is the patch list, shipped on the mount frame below so the
-                # native client can bootstrap its widget tree on connect.
-                from ._child_rendering import render_view_with_diff
-
-                if not uses_legacy_exposure(view_instance):
-                    # ADR-038 E3-6: the page shell stays in the browser across
-                    # a (re)connect, but this is a new root instance. Render the
-                    # full page once, as the HTTP GET does, so explicit
-                    # page-shell children are reconstructed from their stored
-                    # state and registered for routing.
-                    await sync_to_async(_reconstruct_explicit_page_shell)(view_instance, request)
-                html, render_patches, rust_version = await sync_to_async(render_view_with_diff)(
-                    view_instance
-                )
-                if hasattr(view_instance, "_strip_comments_and_whitespace"):
-                    html = await sync_to_async(view_instance._strip_comments_and_whitespace)(html)
-                if hasattr(view_instance, "_extract_liveview_content"):
-                    root_poll = _root_poll_attrs(html)
-                    html = await sync_to_async(view_instance._extract_liveview_content)(html)
-            except Exception as exc:
-                response = handle_exception(
-                    exc,
-                    error_type="render",
-                    view_class=view_path,
-                    logger=logger,
-                    log_message=f"Error rendering {sanitize_for_log(view_path)}",
-                    expose_details=_diagnostics_policy_allows(view_instance),
-                )
-                await self._fail_mount(view_instance, exc, response)
-                return
+            if not uses_legacy_exposure(view_instance):
+                # ADR-038 E3-6: the page shell stays in the browser across
+                # a (re)connect, but this is a new root instance. Render the
+                # full page once, as the HTTP GET does, so explicit
+                # page-shell children are reconstructed from their stored
+                # state and registered for routing.
+                await sync_to_async(_reconstruct_explicit_page_shell)(view_instance, request)
+            html, render_patches, rust_version = await sync_to_async(render_view_with_diff)(
+                view_instance
+            )
+            if hasattr(view_instance, "_strip_comments_and_whitespace"):
+                html = await sync_to_async(view_instance._strip_comments_and_whitespace)(html)
+            if hasattr(view_instance, "_extract_liveview_content"):
+                root_poll = _root_poll_attrs(html)
+                html = await sync_to_async(view_instance._extract_liveview_content)(html)
+        except Exception as exc:
+            response = handle_exception(
+                exc,
+                error_type="render",
+                view_class=view_path,
+                logger=logger,
+                log_message=f"Error rendering {sanitize_for_log(view_path)}",
+                expose_details=_diagnostics_policy_allows(view_instance),
+            )
+            await self._fail_mount(view_instance, exc, response)
+            return
 
         # #3036: a live_redirect mount records the destination page's
         # <title>; the WS consumer sends it when the view queued none.
@@ -4521,7 +4007,7 @@ class ViewRuntime(RuntimeTurnPort):
         # the wire payload is patches. Ship them in the mount frame so the native
         # client can bootstrap its widget tree on connect (the browser/HTML path
         # needs ``html`` only — patches arrive on subsequent updates). ``render_patches``
-        # was captured at the render call above; the actor branch does not set it, so
+        # was captured at the render call above; not every render branch sets it, so
         # read it via ``locals()`` and only attach when a non-HTML renderer is bound
         # and patches are present + non-empty.
         if getattr(view_instance, "_djust_renderer", None) is not None and locals().get(
@@ -4792,21 +4278,6 @@ class ViewRuntime(RuntimeTurnPort):
         render loops identically (the #560 guard). SSE holds its session lock. The
         view-mounted check runs OUTSIDE the context (we need a non-None view to
         borrow its lock — matching WS, which acquires only after the view exists).
-
-        The actor-event branch (Phase 2.3a, #1901) runs OUTSIDE this context,
-        matching WS where the actor block holds no render lock — so the actor
-        check is made here, BEFORE entering ``event_context``. The actor path
-        applies ONLY when the transport mounted in actor mode AND the event is
-        NOT routed to a sticky child (the WS ``not is_embedded_child_target``
-        mutual exclusion, websocket.py:3280-3282). Per #1467, ``component_id``
-        events do NOT reassign the target view, so — like the WS bespoke block,
-        which has no component handling in the actor branch — a ``component_id``
-        event on a ``use_actors`` view goes through the actor, not component
-        routing; only a ``view_id`` resolving to a different child excludes it.
-
-        Live for WS actor events since Phase 2.3b (#1907). WS reports the
-        consumer's actor mode through ``uses_actors``; SSE returns ``False``
-        and continues to refuse actor mounts.
         """
         if not self.view_instance:
             await self.transport.send_error("View not mounted. Please reload the page.")
@@ -4816,37 +4287,6 @@ class ViewRuntime(RuntimeTurnPort):
         # ``reauth`` built-in (ADR-044 D7): a failed re-check has already
         # answered, closed the transport and cleared ``view_instance``.
         from ._exposure import uses_legacy_exposure
-
-        uses_actors = getattr(self.transport, "uses_actors", None)
-        if (
-            uses_actors is not None
-            and uses_actors(self.view_instance)
-            and not self._event_routes_to_sticky_child(data)
-        ):
-            if not uses_legacy_exposure(self.view_instance):
-                self.view_instance = None
-                await self.transport.send_error("Explicit actor events are not yet supported")
-                await self.transport.close(code=4403)
-                return
-            # The transport owns actor event_context acquisition. Parse ref /
-            # cache id the same way the WS event
-            # handler does (websocket.py:3168-3172) so the framed actor result
-            # carries the same wire metadata.
-            params: Dict[str, Any] = dict(data.get("params") or {})
-            event_name = data.get("event")
-            raw_ref = data.get("ref")
-            event_ref: Optional[int] = int(raw_ref) if isinstance(raw_ref, (int, float)) else None
-            cache_request_id = params.get("_cacheRequestId")
-            await self.transport.dispatch_actor_event(
-                self.view_instance,
-                # frame-dynamic: forwarded verbatim like the WS bespoke actor block;
-                # the actor handler validates the name downstream
-                event_name,  # type: ignore[arg-type]
-                params,
-                event_ref=event_ref,
-                cache_request_id=cache_request_id,
-            )
-            return
 
         explicit_lock = (
             contextlib.nullcontext()
@@ -4879,24 +4319,6 @@ class ViewRuntime(RuntimeTurnPort):
             finally:
                 if self.view_instance is not None:
                     self.view_instance.__dict__.pop("_djust_event_request", None)
-
-    def _event_routes_to_sticky_child(self, data: Dict[str, Any]) -> bool:
-        """Return whether the event targets a sticky-child LiveView (not the top view).
-
-        Mirrors the WS ``is_embedded_child_target`` computation
-        (websocket.py:3229-3280) WITHOUT consuming ``view_id`` from ``params`` —
-        the downstream :meth:`_dispatch_sticky_child_event` (run inside
-        ``event_context`` on the non-actor path) still pops it. A ``view_id`` that
-        is absent, or equal to the top-level view's ``_view_id``, is NOT a child
-        target (the event is for the top view). Per #1467, ``component_id`` does
-        NOT route away from the top view, so it is intentionally NOT consulted
-        here — matching the WS actor block, which fires for ``component_id`` events.
-        """
-        params = data.get("params") or {}
-        view_id = params.get("view_id")
-        if not view_id:
-            return False
-        return bool(view_id != getattr(self.view_instance, "_view_id", None))
 
     @_runtime_diagnostic_scope
     async def _dispatch_event_render(self, data: Dict[str, Any]) -> None:
@@ -7233,7 +6655,7 @@ class ViewRuntime(RuntimeTurnPort):
         """Tell the transport that a mount it already set up has failed (#3027).
 
         ``on_view_mounted`` runs before ``mount()``: on WS it starts the view's
-        tick task. When ``mount()``, ``handle_params()``, the actor mount or the
+        tick task. When ``mount()``, ``handle_params()`` or the
         initial render then raises, the error frame goes out but the
         half-mounted view stays on the runtime (later frames on the socket
         still see it, unchanged here), and the tick kept calling
