@@ -190,6 +190,7 @@ Rust powers the core rendering engine:
 
 ## Migrating
 
+- **[Migrating to djust 2.0](guides/migrating-to-2.0.md)** — explicit state exposure, strict event parameters, and the names and settings 2.0 removes. Do the work one view at a time on 1.3.x, before installing 2.0.
 - **[Upgrading to djust 1.3](guides/upgrade-to-1.3.md)** — changes to check when moving from 1.2.x, with diagnostics and code fixes.
 - **[Upgrading to djust 1.0](guides/upgrade-to-1.0.md)** — what the 1.0 SemVer commitment means, the deprecated symbols, and the new accessibility checks. 1.0 is a consolidation release — no breaking changes from 0.9.7.
 - **[From standalone djust packages](guides/migration-from-standalone-packages.md)** — moving from `pip install djust-auth` / `djust-tenants` / `djust-theming` / `djust-components` / `djust-admin`? Replace with `djust[auth]` / `djust[tenants]` / etc. extras. Mechanical sed script + FAQ included. ([ADR-007](../adr/007-package-taxonomy-and-consolidation.md) Phase 4 — sunset as of v0.6.0.)

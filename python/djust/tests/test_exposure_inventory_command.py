@@ -102,10 +102,12 @@ class SnapshotFlagView(_ShapesMixin, LiveView):
 
 
 class PersistentBaseView(_ShapesMixin, PersistentLiveView):
+    exposure_policy = "legacy"
     pass
 
 
 class PersistentOptedOutView(_ShapesMixin, PersistentLiveView):
+    exposure_policy = "legacy"
     enable_state_snapshot = False
 
 
