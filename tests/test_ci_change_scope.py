@@ -363,6 +363,7 @@ def test_a_missing_or_unfetched_base_ref_runs_everything(repo, tmp_path, base_re
 GATED = [
     "rust-tests",
     "python-tests",
+    "python-tests-django6-only",
     "windows-ai-inventory",
     "javascript-tests",
     "javascript-coverage",

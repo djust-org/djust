@@ -204,12 +204,25 @@ minutes, the timeout only bounds it.
 
 | event | interpreters x Django x shards | tier (`-m`) | exhaustive sweeps |
 |---|---|---|---|
-| pull request | 3.12 x 5.2/6.0/6.1 x 4 (+ 3.14t smoke) | `not nightly and not slow` | sampled |
+| pull request | 3.12 x Django 5.2 x 4, + the Django-6-only job, + 3.14t smoke | `not nightly and not slow` | sampled |
 | merge queue | same as a pull request | `not nightly and not slow` | sampled |
 | push to `main` | same as a pull request | `not nightly` (slow tier included) | sampled |
-| nightly `main-health` (07:00 UTC) | serial suite on 3.12, plus `test.yml` called with the full matrix (3.12-3.15 x 3 Django x 4) | serial: everything; matrix: `not nightly` | serial: **every unit**; matrix: sampled |
+| nightly `main-health` (07:00 UTC) | serial suite on 3.12, plus `test.yml` called with the full matrix (3.12-3.15 x 5.2/6.0/6.1 x 4) | serial: everything; matrix: `not nightly` | serial: **every unit**; matrix: sampled |
 | manual `test.yml` dispatch | full matrix | `not nightly` | every unit (untick `full_sweeps` to sample) |
-| PR labelled `full-tests` | 3.12 x 3 Django x 4 | `not nightly` | every unit |
+| PR labelled `full-tests` | 3.12 x Django 5.2 x 4 + the Django-6-only job | `not nightly` | every unit |
+
+**One Django series before merge.** The shards run on Django 5.2 (the LTS, and what the dev
+environment uses). About two hundred tests exist only on Django 6 (template partials, the 6.1 CSP
+nonce tag, the 6.1 tag-registration checks) and skip on 5.2, so `python-tests (Django 6.1, skipped
+on 5.2)` runs them: each 5.2 shard writes the node id of every test it skipped
+(`tests/skip_ledger.py`: a skip marker, a module that skips itself at import, a fixture or a test
+body that skips, all alike; not an xfail, not a sweep case the sample left out), and that job runs
+exactly those on Django 6.1, after the shards. A new Django-6-only file needs no registration. It
+refuses to run with fewer than four shard lists or an empty one, and `test-summary` requires it.
+A test skipped there too was skipped on every cell; `-rs` lists it with its reason.
+`tests/test_skip_ledger_4074.py` pins the ledger and the wiring. The trade: a break that shows only
+on Django 6.0, and a 6.x-only break in a test that also runs (and passes) on 5.2, are found by the
+next nightly instead of before merge.
 
 **The slow tier** is derived: `tests/slow_tier.py` marks every test recorded over 1 s in
 `.test_durations` as `slow`. `@pytest.mark.pr_tier` keeps a slow test in the PR tier (a
