@@ -59,7 +59,15 @@ A piece is clean when it is:
   is (it is returned when ``k`` is missing);
 * a call to a function or method THIS FILE defines exactly once (``helper(x)``, ``self.helper(x)``),
   when every value it returns is clean, judged in its own scope where its parameters are raw: so the
-  verdict does not depend on the arguments.
+  verdict does not depend on the arguments. The exception (#3845) is a function NESTED in another
+  whose name is only ever the callee of a plain call in that function (not handed to ``map``,
+  returned or stored): every call site is in view, so its parameters hold what those calls pass (and
+  a default, where a call omits one). A method is not bound that way: a subclass anywhere can call it;
+* type facts of the standard library and the project (#3847): a ``date`` / ``datetime`` value's
+  ``isoformat()`` / ``weekday()`` / ``.year`` / ``(a - b).days`` (a ``date`` accepts ints only), the
+  elements (at any depth) of ``calendar.Calendar(...).monthdayscalendar(...)``, and
+  ``djust.components.utils.interpolate_color`` (pinned by a hostile-payload test), also when a class
+  aliases it as ``_f = staticmethod(interpolate_color)`` and calls ``self._f(...)``;
 
 FLOW (#3820). A name is judged by the bindings that REACH the use, not by every binding it has:
 ``width = kw.get("width", 400)`` then ``width = int(width)`` leaves ``f"{width}"`` clean, because the
@@ -76,7 +84,9 @@ NARROWING (#3820). On the branch where it holds, ``x in COLLECTION`` (a tuple / 
 ``frozenset`` of literals, a module or local name that only holds one, or a class attribute the class
 writes out), ``x == "a"`` and ``isinstance(x, int)`` (also ``float`` / ``bool``) make ``x`` a value the
 developer wrote or a number. ``not``, ``and``, ``or``, ``if`` / ``else``, a conditional expression and
-an early ``raise`` / ``return`` carry it to the right edge. ``assert`` narrows nothing (``python -O``
+an early ``raise`` / ``return`` carry it to the right edge. ``str(x) in COLLECTION`` narrows the
+EXPRESSION ``str(x)`` (not ``x``, which may be an object whose ``str()`` is in the table) for as long
+as ``x`` keeps its bindings, and only where every path into the use carries it (#3846). ``assert`` narrows nothing (``python -O``
 removes it), and a non-literal member, a collection that is mutated or reassigned anywhere in the
 file, or ``self.X = ...`` shadowing the class attribute turns it off.
 
@@ -174,6 +184,38 @@ WRAPPER_SINKS = frozenset({"_safe", "safe_html"})
 #: same hole. ``format_html_join(sep, format_string, args)`` takes it second (#3850).
 FORMAT_SINK_ARG = {"format_html": 0, "format_html_join": 1}
 FORMAT_SINKS = frozenset(FORMAT_SINK_ARG)
+#: Constructors of ``datetime.date`` / ``datetime.datetime`` values (#3847). ``date(...)`` accepts ints
+#: only (it raises on anything else), so what such a value prints through ``isoformat()`` and the
+#: numbers it yields (``weekday()``, ``.year``, ``(a - b).days``) are digits, ``-``, ``:``, ``T``,
+#: ``.`` and ``+``: never markup.
+DATE_ORIGINS = frozenset(
+    {
+        "datetime.date",
+        "datetime.date.today",
+        "datetime.date.fromordinal",
+        "datetime.datetime",
+        "datetime.datetime.now",
+        "datetime.datetime.utcnow",
+        "datetime.datetime.fromordinal",
+    }
+)
+DELTA_ORIGINS = frozenset({"datetime.timedelta"})
+#: Methods of a date value that return digits (``isoformat``) or an int.
+DATE_DIGIT_METHODS = frozenset({"isoformat", "weekday", "isoweekday", "toordinal"})
+#: Attributes of a date / timedelta value that are ints.
+DATE_DIGIT_ATTRS = frozenset({"year", "month", "day", "days", "seconds", "microseconds"})
+#: ``calendar.Calendar`` methods whose result is (nested) ints: every element, at any depth, is
+#: an int (#3847). Called on an instance of these classes.
+CALENDAR_CLASSES = frozenset(
+    {"calendar.Calendar", "calendar.TextCalendar", "calendar.HTMLCalendar"}
+)
+CALENDAR_DIGIT_METHODS = frozenset(
+    {"monthdayscalendar", "itermonthdays", "monthdays2calendar", "yeardayscalendar"}
+)
+#: Origins (in the project) whose result is clean for ANY argument; each is pinned by a
+#: hostile-payload test in ``python/tests/test_safe_markup_guard_3820.py`` (#3847).
+#: ``interpolate_color`` returns ``f"#{r:02x}{g:02x}{b:02x}"`` of ``int()``s, or raises.
+CLEAN_PROJECT_ORIGINS = frozenset({"djust.components.utils.interpolate_color"})
 #: Escapers with a ``quote`` switch (and its position): only clean when it is left on.
 QUOTE_ESCAPERS = {"html.escape": 1}
 #: Calls that apply their FIRST argument to the rest: ``map(mark_safe, items)``,
@@ -425,6 +467,16 @@ class _Foreign:
         self.scope = scope
 
 
+class _AnyOf:
+    """A parameter of a nested function bound from its call sites: it holds one of ``values``, each
+    judged in the scope of its call (or, for a default, of the ``def``) (#3845)."""
+
+    __slots__ = ("values",)
+
+    def __init__(self, values: list[_Foreign]) -> None:
+        self.values = values
+
+
 def _unwrap(value: object, owner: _Scope) -> tuple[object, _Scope]:
     if isinstance(value, _Foreign):
         return value.expr, value.scope
@@ -598,8 +650,11 @@ class _Module:
         self.reach: dict[int, tuple[_Scope, tuple[_Def, ...]]] = {}
         #: id(function node) -> the scope it opens (to judge a call to it by what it returns)
         self.scope_of: dict[int, _Scope] = {}
+        #: ids of ``str(x)`` calls that only run where ``str(x) in CONSTANT`` held (#3846)
+        self.narrowed_exprs: set[int] = set()
         self._build(self.tree, "<module>", None)
         self._closure_writes()
+        self._bind_nested_parameters()
         for scope in self.scopes:
             if isinstance(scope.node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 _Flow(self, scope).run()
@@ -945,6 +1000,22 @@ class _Module:
                     return found.pop()
             return None
         if isinstance(e, ast.Attribute):
+            # ``self._f`` of a class body ``_f = staticmethod(f)`` (#3847): the alias resolves to ``f``
+            if isinstance(e.value, ast.Name) and e.value.id in ("self", "cls"):
+                found = self.class_attribute(e, sc)
+                if found is not None and len(found[1]) == 1:
+                    value = found[1][0]
+                    if (
+                        isinstance(value, ast.Call)
+                        and isinstance(value.func, ast.Name)
+                        and value.func.id == "staticmethod"
+                        and found[0].find("staticmethod") is None
+                        and len(value.args) == 1
+                        and not value.keywords
+                        and isinstance(value.args[0], (ast.Name, ast.Attribute))
+                    ):
+                        return self.origin(value.args[0], found[0], depth + 1)
+                return None
             base = self.origin(e.value, sc, depth + 1)
             return None if base is None else f"{base}.{e.attr}"
         return None
@@ -1095,6 +1166,107 @@ class _Module:
             self.origin(d, parent) == "django.utils.html.html_safe" or _callee(d) == "html_safe"
             for d in parent.node.decorator_list
         )
+
+    def _bind_nested_parameters(self) -> None:
+        """A function NESTED in another, whose name is only ever the callee of a plain call in that
+        function, has every call site in view: its parameters hold what those calls pass (#3845).
+
+        Not for a method (a subclass anywhere can call it with anything), a name used any other way
+        (``map(_btn, xs)``, returned, stored, passed), a decorated function, a call with ``*args`` /
+        ``**kw``, or a ``*args`` / ``**kw`` parameter. A parameter a call omits holds its default.
+        """
+        for fscope in self.scopes:
+            fn = fscope.node
+            holder = fscope.parent
+            if (
+                not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                or fn.decorator_list
+                or holder is None
+                or not isinstance(holder.node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                or len(holder.def_nodes.get(fn.name, [])) != 1
+                or len(holder.assigns.get(fn.name, [])) != 1
+                or fn.name in holder.opaque
+                or fn.name in self.rebound_names
+                or self.dynamic_globals
+            ):
+                continue
+            calls = self._only_called(fn.name, holder)
+            if not calls:
+                continue
+            positional = [*fn.args.posonlyargs, *fn.args.args]
+            names = [a.arg for a in positional]
+            defaults: dict[str, ast.expr] = dict(
+                zip(names[len(names) - len(fn.args.defaults) :], fn.args.defaults)
+            )
+            for arg, default in zip(fn.args.kwonlyargs, fn.args.kw_defaults):
+                if default is not None:
+                    defaults[arg.arg] = default
+            bound: dict[str, list[_Foreign]] = {
+                a.arg: [] for a in [*positional, *fn.args.kwonlyargs]
+            }
+            ok = True
+            for call, call_scope in calls:
+                given: dict[str, ast.expr] = {}
+                if len(call.args) > len(positional):
+                    ok = False
+                    break
+                for param, value in zip(names, call.args):
+                    given[param] = value
+                for kw in call.keywords:
+                    if (
+                        kw.arg not in bound
+                        or kw.arg in given
+                        or kw.arg in names[: len(fn.args.posonlyargs)]
+                    ):
+                        ok = False
+                        break
+                    given[kw.arg] = kw.value
+                if not ok:
+                    break
+                for param in bound:
+                    if param in given:
+                        bound[param].append(_Foreign(given[param], call_scope))
+                    elif param in defaults:
+                        bound[param].append(_Foreign(defaults[param], holder))
+                    else:
+                        ok = False  # a call that would raise: nothing to learn from it
+                        break
+                if not ok:
+                    break
+            if not ok:
+                continue
+            for param, values in bound.items():
+                if fscope.params.get(param) is not RAW:
+                    continue  # the engine vouched for it already
+                value = _AnyOf(values)
+                fscope.params[param] = value
+                fscope.assigns[param] = [value if v is RAW else v for v in fscope.assigns[param]]
+
+    def _only_called(self, name: str, holder: _Scope) -> list[tuple[ast.Call, _Scope]] | None:
+        """Every use of ``name`` inside ``holder`` (nested scopes included), when each one is the
+        callee of a call without ``*args`` / ``**kw`` that resolves to ``holder``'s binding; else
+        ``None``."""
+        parents = {id(c): n for n in ast.walk(holder.node) for c in ast.iter_child_nodes(n)}
+        calls: list[tuple[ast.Call, _Scope]] = []
+        for node in ast.walk(holder.node):
+            if not (isinstance(node, ast.Name) and node.id == name):
+                continue
+            if not isinstance(node.ctx, ast.Load):
+                if node is not None and isinstance(node.ctx, (ast.Store, ast.Del)):
+                    return None  # rebound or deleted somewhere
+                continue
+            call = parents.get(id(node))
+            if not (isinstance(call, ast.Call) and call.func is node) or self._has_star(call):
+                return None
+            # the scope the call is evaluated in, and it must see ``holder``'s ``name``
+            owner = parents.get(id(call))
+            while owner is not None and id(owner) not in self.scope_of:
+                owner = parents.get(id(owner))
+            call_scope = self.scope_of.get(id(owner)) if owner is not None else holder
+            if call_scope is None or call_scope.find(name) is not holder:
+                return None
+            calls.append((call, call_scope))
+        return calls or None
 
     def _engine_parameters(self, node: ast.AST) -> set[str]:
         """The parameters of a block-handler ``render`` the engine passes as rendered markup."""
@@ -1566,7 +1738,11 @@ class _Module:
             return False
         if isinstance(e, _Foreign):
             return self.clean(e.expr, e.scope, depth + 1, seen)
+        if isinstance(e, _AnyOf):
+            return bool(e.values) and all(self.clean(v, sc, depth + 1, seen) for v in e.values)
         if isinstance(e, _ElementOf):
+            if self._deep_digits(e.iterable, sc):
+                return True  # ``for day in week`` of ``cal.monthdayscalendar(...)``: an int
             return self.elements_clean(e.iterable, sc, depth + 1, seen)
         if not isinstance(e, ast.expr):
             return False
@@ -1611,6 +1787,18 @@ class _Module:
                 return self.clean(e.value, sc, d, seen)
             return self.elements_clean(e.value, sc, d, seen)
         if isinstance(e, ast.Attribute):
+            # ``(end - start).days`` / ``current.year``: an int (#3847)
+            if e.attr in DATE_DIGIT_ATTRS and (
+                self._is_date(e.value, sc)
+                or self._is_delta(e.value, sc)
+                or (
+                    isinstance(e.value, ast.BinOp)
+                    and isinstance(e.value.op, ast.Sub)
+                    and self._is_date(e.value.left, sc)
+                    and self._is_date(e.value.right, sc)
+                )
+            ):
+                return True
             # ``uuid.uuid4().hex``: a fixed alphabet
             if (
                 e.attr == "hex"
@@ -1629,6 +1817,8 @@ class _Module:
                 return True
             return self._name_clean(e, sc, d, seen)
         if isinstance(e, ast.Call):
+            if id(e) in self.narrowed_exprs:
+                return True  # ``str(x)`` where ``str(x) in CONSTANT`` holds: a value from the table
             if _CTX_OK not in seen and (
                 self.origin(e.func, sc) in CONTEXT_SENSITIVE_ORIGINS
                 or self.origin(e.func, sc) in JSON_ESCAPERS
@@ -2121,6 +2311,15 @@ class _Module:
             return False  # ``html.escape(x, quote=False)`` leaves ``"`` / ``'`` as they are (#3850)
         if origin in CLEAN_ORIGINS or origin in SAFE_ALPHABET_ORIGINS:
             return True
+        if origin in CLEAN_PROJECT_ORIGINS:
+            return True
+        if (
+            isinstance(e.func, ast.Attribute)
+            and e.func.attr in DATE_DIGIT_METHODS
+            and not e.args
+            and self._is_date(e.func.value, sc)
+        ):
+            return True  # ``current.isoformat()`` / ``start.weekday()`` of a date value
         if origin in CLEAN_RECORD_ORIGINS:
             return True
         name = _callee(e.func)
@@ -2130,6 +2329,84 @@ class _Module:
         return (
             name in RENDER_CALLS
         )  # ``tmpl.render(...)``: by method name, see the module docstring
+
+    def _is_date(
+        self, e: object, sc: _Scope, depth: int = 0, seen: frozenset = frozenset()
+    ) -> bool:
+        """``e`` is a ``date`` / ``datetime`` value: a constructor of ``DATE_ORIGINS``, a date plus or
+        minus a ``timedelta``, or a name that only ever holds one (``+= timedelta(...)`` included)."""
+        if depth > 8 or not isinstance(e, ast.expr):
+            return False
+        d = depth + 1
+        if isinstance(e, ast.Call):
+            return self.origin(e.func, sc) in DATE_ORIGINS
+        if isinstance(e, ast.BinOp) and isinstance(e.op, (ast.Add, ast.Sub)):
+            return (self._is_date(e.left, sc, d, seen) and self._is_delta(e.right, sc)) or (
+                isinstance(e.op, ast.Add)
+                and self._is_delta(e.left, sc)
+                and self._is_date(e.right, sc, d, seen)
+            )
+        if isinstance(e, ast.Name):
+            owner = sc.find(e.id)
+            if owner is None or owner.contents.get(e.id):
+                return False
+            values, defs = self._bindings(e, e.id, owner, sc)
+            key = ("date", e.id, id(owner), defs)
+            if key in seen:
+                return True
+            seen = seen | {key}
+            return (
+                bool(values)
+                and all(self._is_date(v, owner, d, seen) for v in values)
+                and all(self._is_delta(p, owner) for p in owner.pieces.get(e.id, []))
+            )
+        return False
+
+    def _is_delta(self, e: object, sc: _Scope) -> bool:
+        return isinstance(e, ast.Call) and self.origin(e.func, sc) in DELTA_ORIGINS
+
+    def _calendar_digits(self, e: object, sc: _Scope) -> bool:
+        """``cal.monthdayscalendar(...)`` of a ``calendar.Calendar``: (nested) ints only (#3847)."""
+        if not (
+            isinstance(e, ast.Call)
+            and isinstance(e.func, ast.Attribute)
+            and e.func.attr in CALENDAR_DIGIT_METHODS
+        ):
+            return False
+        recv = e.func.value
+        if isinstance(recv, ast.Call):
+            return self.origin(recv.func, sc) in CALENDAR_CLASSES
+        if isinstance(recv, ast.Name):
+            owner = sc.find(recv.id)
+            if owner is None or owner.contents.get(recv.id) or owner.pieces.get(recv.id):
+                return False
+            values, _ = self._bindings(recv, recv.id, owner, sc)
+            return bool(values) and all(
+                isinstance(v, ast.Call) and self.origin(v.func, owner) in CALENDAR_CLASSES
+                for v in values
+            )
+        return False
+
+    def _deep_digits(self, e: object, sc: _Scope, depth: int = 0) -> bool:
+        """Every element of ``e``, at any depth, is an int: a calendar digit method's result, or an
+        element of one (``for week in weeks: for day in week``)."""
+        if depth > 8:
+            return False
+        if isinstance(e, _ElementOf):
+            return self._deep_digits(e.iterable, sc, depth + 1)
+        if self._calendar_digits(e, sc):
+            return True
+        if isinstance(e, ast.Name):
+            owner = sc.find(e.id)
+            if owner is None or owner.contents.get(e.id) or owner.pieces.get(e.id):
+                return False
+            values, _ = self._bindings(e, e.id, owner, sc)
+            return bool(values) and all(
+                self._deep_digits(v, owner, depth + 1)
+                or (isinstance(v, ast.List) and not v.elts)  # ``weeks = []`` in an ``except``
+                for v in values
+            )
+        return False
 
     @staticmethod
     def _quotes_escaped(call: ast.Call, position: int) -> bool:
@@ -2403,6 +2680,10 @@ class _Module:
     def elements_clean(self, e: object, sc: _Scope, depth: int, seen: frozenset) -> bool:
         if isinstance(e, _Foreign):
             return self.elements_clean(e.expr, e.scope, depth + 1, seen)
+        if isinstance(e, _AnyOf):
+            return bool(e.values) and all(
+                self.elements_clean(v, sc, depth + 1, seen) for v in e.values
+            )
         if depth > _DEPTH or e is RAW or isinstance(e, _ElementOf) or not isinstance(e, ast.expr):
             return False
         d = depth + 1
@@ -2481,6 +2762,8 @@ class _Module:
     def tainted(self, e: object, sc: _Scope, depth: int, seen: frozenset) -> bool:
         if isinstance(e, _Foreign):
             return self.tainted(e.expr, e.scope, depth + 1, seen)
+        if isinstance(e, _AnyOf):
+            return any(self.tainted(v, sc, depth + 1, seen) for v in e.values)
         if not isinstance(e, ast.expr):
             return False
         if depth > _DEPTH:
@@ -2614,6 +2897,11 @@ def _merge(*states: State | None) -> State | None:
     for state in live:
         for name, defs in state.items():
             out[name] = out[name] | defs if name in out else defs
+    # a narrowing FACT about an expression (``("str", x)``, #3846) holds after the join only if it
+    # holds, unchanged, on every path that reaches it
+    for key in [k for k in out if isinstance(k, tuple)]:
+        if not all(state.get(key) == out[key] for state in live):
+            del out[key]
     return out
 
 
@@ -2663,6 +2951,11 @@ class _Flow:
         self.loops: list[dict[str, list[State | None]]] = []
         self.uses: dict[int, tuple[str, set[_Def]]] = {}
         self.disabled: set[str] = set()
+        #: id(``str(x)`` call) -> ``x``, for each call evaluated where ``str(x) in CONST`` held
+        #: on every path (#3846)
+        self.narrowed_calls: dict[int, set[str]] = {}
+        #: whether a ``str(x)`` call was evaluated, somewhere, where the fact did NOT hold
+        self.unnarrowed_calls: set[int] = set()
 
     # -- driver ---------------------------------------------------------------------------
     def run(self) -> None:
@@ -2675,6 +2968,9 @@ class _Flow:
         for key, (name, defs) in self.uses.items():
             if name not in bad:
                 self.mod.reach[key] = (self.scope, tuple(defs))
+        for call_id, names in self.narrowed_calls.items():
+            if call_id not in self.unnarrowed_calls and not names & bad:
+                self.mod.narrowed_exprs.add(call_id)
 
     def _analyse(self) -> None:
         args = self.fn.args  # type: ignore[attr-defined]
@@ -2739,6 +3035,7 @@ class _Flow:
 
     def _note(self, state: State, name: str, d: _Def) -> None:
         state[name] = frozenset({d})
+        state.pop(("str", name), None)  # a rebound ``x`` ends what ``str(x) in T`` said
         for coll in self.collectors:
             coll.setdefault(name, set()).add(d)
 
@@ -2764,9 +3061,29 @@ class _Flow:
         if defs:
             self.uses.setdefault(id(node), (node.id, set()))[1].update(defs)
 
+    def _str_of_name(self, e: ast.AST) -> ast.Name | None:
+        """``x`` of ``str(x)`` (the builtin, one positional argument that is a name), else ``None``."""
+        if (
+            isinstance(e, ast.Call)
+            and isinstance(e.func, ast.Name)
+            and self.mod.origin(e.func, self.scope) == "str"
+            and len(e.args) == 1
+            and not e.keywords
+            and isinstance(e.args[0], ast.Name)
+        ):
+            return e.args[0]
+        return None
+
     def loads(self, e: ast.AST | None, state: State | None) -> None:
         if e is None or state is None:
             return
+        arg = self._str_of_name(e)
+        if arg is not None:
+            fact = state.get(("str", arg.id))
+            if fact is not None and fact == state.get(arg.id):
+                self.narrowed_calls.setdefault(id(e), set()).add(arg.id)
+            else:
+                self.unnarrowed_calls.add(id(e))
         if isinstance(e, ast.Name):
             if isinstance(e.ctx, ast.Load):
                 self._load(e, state)
@@ -2844,6 +3161,20 @@ class _Flow:
                 if self.mod.constant_set(right, self.scope):
                     held = self.narrow(state, left, test)
                     return (held, state) if isinstance(op, ast.In) else (state, held)
+            arg = self._str_of_name(left)
+            if (
+                isinstance(op, (ast.In, ast.NotIn))
+                and arg is not None
+                and arg.id in state
+                and arg.id not in self.disabled
+                and self.mod.constant_set(right, self.scope)
+            ):
+                # ``str(x) in TABLE``: the EXPRESSION ``str(x)`` is a value the developer wrote on
+                # this branch, as long as ``x`` keeps the bindings it has now (#3846). ``x`` itself
+                # is not narrowed: it may be an object whose ``str()`` is in the table.
+                held = dict(state)
+                held[("str", arg.id)] = state[arg.id]
+                return (held, state) if isinstance(op, ast.In) else (state, held)
             if isinstance(op, (ast.Eq, ast.NotEq)):
                 for name, other in ((left, right), (right, left)):
                     if isinstance(name, ast.Name) and isinstance(other, ast.Constant):

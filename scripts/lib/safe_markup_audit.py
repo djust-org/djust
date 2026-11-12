@@ -206,17 +206,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (CH, "cell_size = int(cell_size)"),
         (CH, "conditional_escape(str(lbl))"),
     ),
-    (CH, "CalendarHeatmapNode.render"): S(
-        1,
-        "year, cell_size, cell_gap int(); fills are the constant LEVELS; date_str is date.isoformat(); title conditional_escape'd",
-        (CH, "year = int(year)"),
-        (
-            CH,
-            'LEVELS = ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]',
-            "CalendarHeatmapNode",
-        ),
-        (CH, "date_str = current.isoformat()"),
-    ),
     (FM, "slider"): S(
         1,
         "min/max/step/value/value_end are int()'d; name, label, event and class conditional_escape'd",
@@ -266,13 +255,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (FM, 'safe_row[k] = conditional_escape(str(v)) if v is not None else ""'),
         (FM, "total_pages = int(total_pages)"),
     ),
-    (ADV, "CalendarViewNode.render"): S(
-        1,
-        "year, month, start_day int(); month and day names from calendar; event titles conditional_escape'd; event colours through safe_css_color",
-        (ADV, "year = int(year)"),
-        (ADV, "safe_css_color("),
-        (ADV, "e_month = conditional_escape(month_name)"),
-    ),
     (ADV, "OrgChartNode.render"): S(
         1,
         "the tree comes from _render_node, which conditional_escape's id, name and title and sends the avatar through url_attr",
@@ -289,18 +271,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         "the template text is conditional_escape'd FIRST; {{var}} tokens are \\w+ and are replaced by conditional_escape'd values inside <mark>; rows int()",
         (ADV, "preview_text = conditional_escape(str(tmpl))"),
         (ADV, "e_v = conditional_escape(v)"),
-    ),
-    (ADV, "RibbonNode.render"): S(
-        1,
-        "position is checked against the four corner names; the variant class is a constant from VARIANT_MAP; text and class conditional_escape'd",
-        (ADV, 'variant_cls = self.VARIANT_MAP.get(str(variant), "dj-ribbon--primary")'),
-        (ADV, 'classes.append(f"dj-ribbon--{pos}")'),
-    ),
-    (ADV, "AgentStepNode.render"): S(
-        1,
-        "status is checked against STATUS_ICONS' keys before it reaches the class; the icon is a constant entity; tool, duration and content conditional_escape'd",
-        (ADV, 'status = str(status) if str(status) in self.STATUS_ICONS else "pending"'),
-        (ADV, "STATUS_ICONS = {", "AgentStepNode"),
     ),
     (DC, "render_modal_description"): S(
         1,
@@ -348,12 +318,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
             "CollapsibleNode.render",
         ),
         (DC, "f'<span class=\"collapsible-label\">{conditional_escape(trigger)}</span>'"),
-    ),
-    (DC, "tree_view"): S(
-        1,
-        "node id attr_text'd (it lands only in an attribute, #3904) and label conditional_escape'd; depth is a number; event names conditional_escape'd",
-        (DC, 'nid = attr_text(node.get("id", ""))'),
-        (DC, "indent = depth * 1.25"),
     ),
     (DC, "render_context_menu"): S(
         1,
@@ -428,56 +392,35 @@ AUDITED: dict[tuple[str, str], Audit] = {
     # --- the Rust-native handlers (#3820): `_safe(...)` is a sink since the wrapper sinks, so
     # these are the handlers whose markup the guard still cannot prove. Every other handler
     # (about 90 call sites) is proved by the guard. ---
-    (RH, "AgentStepHandler.render"): S(
-        1,
-        "status is reset to 'pending' unless it is a key of the class's STATUS_ICONS table, so the class name and the icon (the table's constant entities) are fixed text; tool, duration, class and the content are conditional_escape'd before they are interpolated; same as AgentStepNode",
-        (RH, 'status = str(status) if str(status) in self.STATUS_ICONS else "pending"'),
-        (RH, "e_tool = conditional_escape(str(tool))"),
-        (RH, 'icon = self.STATUS_ICONS.get(status, "&#9711;")'),
-        (RH, "STATUS_ICONS = {", "AgentStepHandler"),
-    ),
     (RH, "_root_layout_html"): S(
         1,
         "the one renderer of the four core layout handlers (AppShell, AppSidebar, AppHeader, AppContent): it joins, in the order `_render_root_parts` lists them, byte slices of `content` and wrapper text. `content` is the block body the engine hands a handler as an already-rendered SafeString (registry.rs, call_block_handler_with_py_sidecar and call_core_root_layout, #2379; pinned by test_safe_markup_guard_3820.py), and a slice is cut where `_layout_body_part` put it: at the UTF-8 offsets of str positions, so no character is split. The wrapper text is constant markup, except AppShellHandler's opening tag, whose id and class are conditional_escape'd",
         (RH, "body = content.encode()"),
-        (RH, 'shell_id = conditional_escape(kw.get("id", "app-shell"))', "AppShellHandler._render_root_parts"),
-        (RH, 'custom_class = conditional_escape(kw.get("class", ""))', "AppShellHandler._render_root_parts"),
+        (
+            RH,
+            'shell_id = conditional_escape(kw.get("id", "app-shell"))',
+            "AppShellHandler._render_root_parts",
+        ),
+        (
+            RH,
+            'custom_class = conditional_escape(kw.get("class", ""))',
+            "AppShellHandler._render_root_parts",
+        ),
         (
             RH,
             'return (len(content[:start].encode()), len(content[:end].encode())), ""',
             "_layout_body_part",
         ),
     ),
-    (RH, "CalendarHeatmapHandler.render"): S(
+    (RH, "DataTableHandler.render"): S(
         1,
-        "year, cell size and gap int() (a failed int falls back to today's year / constants), so every coordinate is arithmetic on ints and on date calendar math; date_str is date.isoformat() of a date built from the int year; val is float(); the cell colour is _get_color(): a constant of LEVELS; month labels come from a constant list; the title is conditional_escape'd; same as CalendarHeatmapNode",
-        (RH, 'year = int(cast("str | int | float", year))'),
-        (RH, 'cell_size = int(cast("str | int | float", cell_size))'),
-        (RH, "date_str = current.isoformat()"),
-        (RH, "val = float(data.get(date_str, 0))"),
-        (RH, "color = self._get_color(val, max_val)"),
+        "everything the guard cannot see through is the row URL: _row_href(row, key) is str(url_attr(_row_text(row, key), honor_safe=False)) (the one URL rule every component uses, #3887/#3894), placed only inside the quoted data-href / href of a row or a link cell; the guard judges an escaper's output returned through a helper again where it lands and does not follow str() of it. The nested _dbtn(val, label) (density toggle) is proved since #3845 (its only call sites pass literals); the rest of the table (cells, toolbar, search, pagination, footer) is proved by the guard: every kw value is conditional_escape'd or int()-coerced where it is read, the footer aggregates are sum/min/max/round/len of float() values",
+        (RH, "return str(url_attr(_row_text(row, key), honor_safe=False))", "_row_href"),
         (
             RH,
-            'LEVELS = ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]',
-            "CalendarHeatmapHandler",
+            "row_attrs += f' data-href=\"{_row_href(row, row_url)}\" {_ROW_NAV_A11Y}'",
+            "DataTableHandler.render._render_row",
         ),
-    ),
-    (RH, "CalendarViewHandler.render"): S(
-        1,
-        "month, year and start_day int() (a failed int falls back to a constant); the month name is calendar.month_name[month], conditional_escape'd; the weeks come from calendar.Calendar.monthdayscalendar, so `day` is an int and date_str is digits (numeric format specs); event titles conditional_escape'd and event colours go through safe_css_color; same as CalendarViewNode",
-        (RH, 'month = int(cast("str | int | float", month))'),
-        (RH, "weeks = cal.monthdayscalendar(year, month)"),
-        (RH, 'date_str = f"{year}-{month:02d}-{day:02d}"'),
-        (RH, 'title = conditional_escape(str(ev.get("title", "")))'),
-        (RH, "e_month = conditional_escape(month_name)"),
-    ),
-    (RH, "DataTableHandler.render"): S(
-        2,
-        "everything the guard cannot see through is the nested _dbtn(val, label), whose only call sites pass the literals ('compact', 'comfortable', 'spacious') and their labels, and whose `density_event` was conditional_escape'd at the top; the rest of the table (cells, toolbar, search, pagination, footer) is proved by the guard: every kw value is conditional_escape'd or int()-coerced where it is read, the footer aggregates are sum/min/max/round/len of float() values",
-        (RH, 'density_event = conditional_escape(kw.get("density_event", "on_table_density"))'),
-        (RH, "f\"{_dbtn('compact', 'Compact')}\""),
-        (RH, "f\"{_dbtn('comfortable', 'Comfortable')}\""),
-        (RH, "f\"{_dbtn('spacious', 'Spacious')}\""),
         (RH, "vals.append(float(v))"),
         (RH, "agg_val = round(sum(vals) / len(vals), 2)"),
     ),
@@ -507,16 +450,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
             "FileTreeHandler._render_tree_node",
         ),
     ),
-    (RH, "HeatmapHandler.render"): S(
-        1,
-        "cell_size int(); every coordinate is arithmetic on it and on len() of the data; values are float(); cell colours come from interpolate_color (a #rrggbb string built from ints; it raises on a colour that is not hex); axis labels and title conditional_escape'd; same as HeatmapNode",
-        (RH, 'cell_size = int(cast("str | int | float", cell_size))'),
-        (RH, "val = float(v)"),
-        (RH, "color = self._interpolate_color(str(color_min), str(color_max), t)"),
-        (RH, "_interpolate_color = staticmethod(interpolate_color)", "HeatmapHandler"),
-        (UT, 'return f"#{r:02x}{g:02x}{b:02x}"', "interpolate_color"),
-        (RH, 'e_title = conditional_escape(str(title)) if title else "Heatmap"'),
-    ),
     (RH, "OrgChartHandler.render"): S(
         1,
         "the tree comes from _render_node, which conditional_escape's id, name and title, sends the avatar through url_attr and takes the already-escaped event (e_event here) from this method; same as OrgChartNode",
@@ -542,13 +475,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (RH, "preview_text = conditional_escape(str(tmpl))"),
         (RH, "e_v = conditional_escape(v)"),
         (RH, 'rows = int(cast("str | int | float", rows))'),
-    ),
-    (RH, "RibbonHandler.render"): S(
-        1,
-        "position is checked against the four corner names; the variant class is a constant from VARIANT_MAP; text and class conditional_escape'd; same as RibbonNode",
-        (RH, 'variant_cls = self.VARIANT_MAP.get(str(variant), "dj-ribbon--primary")'),
-        (RH, 'classes.append(f"dj-ribbon--{pos}")'),
-        (RH, "e_text = conditional_escape(str(text))"),
     ),
     (RH, "ToggleGroupHandler.render"): S(
         1,
