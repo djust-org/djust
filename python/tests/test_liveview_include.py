@@ -51,6 +51,7 @@ class TestLiveViewInclude:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template = """
             <div dj-root>
                 {% include "_header.html" %}
@@ -75,6 +76,7 @@ class TestLiveViewInclude:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template = """
             <div dj-root>
                 {% include "_header.html" %}
@@ -220,6 +222,7 @@ class TestUnsupportedTagWarning:
         from djust.live_view import LiveView
 
         class MyView(LiveView):
+            exposure_policy = "legacy"
             template = """
             <div dj-root>
                 {% zzz_not_a_tag %}content

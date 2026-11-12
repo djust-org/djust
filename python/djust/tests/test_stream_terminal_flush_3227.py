@@ -37,6 +37,7 @@ _TARGET = "[dj-stream='reply']"
 class _SettleView(LiveView):
     """The tutorial's shape: stream, settle once with ``stream_to``, then ``done``."""
 
+    exposure_policy = "legacy"
     template = (
         f'<div dj-view="{_MODULE}._SettleView" dj-id="0">'
         '<article dj-stream="reply" dj-update="ignore" dj-id="1"></article>'
@@ -175,6 +176,7 @@ class _Consumer:
 
 
 class _View(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root><article dj-stream="a"></article><article dj-stream="b"></article></div>'
     )

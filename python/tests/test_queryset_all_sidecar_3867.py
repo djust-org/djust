@@ -67,6 +67,8 @@ class TestTheKeptRowsAreOnlyWhatTheSidecarCanUse3867:
         thing = _Thing()
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.thing = thing
 
@@ -87,6 +89,8 @@ class TestTheKeptRowsAreOnlyWhatTheSidecarCanUse3867:
         read. Rows kept under any other name (``ghost``) are not handed to the engine."""
 
         class _V(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.users = _users()
 
@@ -110,6 +114,8 @@ class TestTheKeptRowsAreOnlyWhatTheSidecarCanUse3867:
 
         def kept(source: str, attr: str, value) -> dict:
             class _V(LiveView):
+                exposure_policy = "legacy"
+
                 def mount(self, request, **kwargs):
                     setattr(self, attr, value())
 

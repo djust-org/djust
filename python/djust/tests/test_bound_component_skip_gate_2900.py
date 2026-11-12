@@ -84,6 +84,7 @@ class Switch(LiveComponent):
 
 
 class ProbeView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-id="0"><p>{{ probe.active }}</p><i>{{ switch.on }}</i>'
         "<b>{{ label }}</b></div>"
@@ -148,6 +149,7 @@ class TestOneFingerprintRule:
                 items: list = []
 
         class MenuView(LiveView):
+            exposure_policy = "legacy"
             menu = Menu()
 
         view = MenuView()
@@ -170,6 +172,7 @@ class TestOneFingerprintRule:
             template = "<b>{{ rows|length }}</b>"
 
         class RowsView(LiveView):
+            exposure_policy = "legacy"
             template = '<div dj-root dj-id="0">{{ grid }}</div>'
             grid = Rows()
 
@@ -368,6 +371,7 @@ def test_shipped_descriptor_alias_changes_the_snapshot():
     """The eight shipped descriptors ride the same alias; one of them, run."""
 
     class TabsView(LiveView):
+        exposure_policy = "legacy"
         tabs = Tabs(active="one")
 
     view = TabsView()

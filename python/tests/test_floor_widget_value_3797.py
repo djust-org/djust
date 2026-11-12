@@ -567,6 +567,7 @@ class TestTheRealEntries:
         from djust.live_view import LiveView
 
         class V(LiveView):
+            exposure_policy = "legacy"
             template = self.SRC
 
             def mount(self, request, **kwargs):

@@ -343,6 +343,7 @@ def _make_view(variant: str) -> str:
     select = variant != "list_fk_nosel"
 
     class _V(LiveView):
+        exposure_policy = "legacy"
         template = _template(variant, cls_name)
         # The #1552 opt-in: only ``snapshot`` persists state after each event
         # (and emits the signed snapshot on mount). Every other variant's

@@ -40,6 +40,7 @@ def _example():
     sys.modules[module.__name__] = module
     exec(compile(code, "<adr034-rows>", "exec"), module.__dict__)
     view = module.RowActionsView
+    view.exposure_policy = "legacy"
     view.template_name = None
     view.template = "<div dj-root>" + html + "</div>"
     return view

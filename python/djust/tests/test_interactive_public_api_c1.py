@@ -21,6 +21,7 @@ CALLS: list = []
 
 
 class JumpPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ menu }}{{ other }}<p>{{ result }}</p></div>"
     time_travel_enabled = True
     menu = DropdownMenu(label="Project", items=[{"label": "Edit", "value": "edit"}])

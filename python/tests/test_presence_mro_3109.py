@@ -45,6 +45,7 @@ def test_the_documented_order_tracks_presence(mixin):
     src = textwrap.dedent(
         """
         class DocumentView(Mixin, LiveView):
+            exposure_policy = "legacy"
             presence_key = "document:{doc_id}"
             template = "<div></div>"
         """
@@ -69,7 +70,11 @@ def test_the_documented_order_tracks_presence(mixin):
 @pytest.mark.parametrize("mixin", [PresenceMixin, LiveCursorMixin])
 def test_the_reversed_order_fails_at_class_definition_with_the_reason(mixin):
     with pytest.raises(TypeError) as excinfo:
-        type("DocumentView", (LiveView, mixin), {"presence_key": "doc:1"})
+        type(
+            "DocumentView",
+            (LiveView, mixin),
+            {"exposure_policy": "legacy", "presence_key": "doc:1"},
+        )
     message = str(excinfo.value)
     assert "DocumentView" in message
     assert f"class DocumentView({mixin.__name__}, LiveView)" in message
@@ -77,6 +82,7 @@ def test_the_reversed_order_fails_at_class_definition_with_the_reason(mixin):
 
 def test_a_subclass_of_a_correctly_ordered_view_is_accepted():
     class Base(PresenceMixin, LiveView):
+        exposure_policy = "legacy"
         presence_key = "doc:1"
 
     class Child(Base):

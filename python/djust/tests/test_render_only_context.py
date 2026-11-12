@@ -75,6 +75,7 @@ def _post(view_class, get_request, event, path="/ro/"):
 class OverrideAddsView(LiveView):
     """N-31 / decision 185: an override adds a QuerySet and content."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="tests.OverrideAddsView">'
         "{{ count }} {{ secret_note }}"
@@ -99,6 +100,7 @@ class OverrideAddsView(LiveView):
 class RenderOnlyView(LiveView):
     """N-35: the public hook."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="tests.RenderOnlyView">'
         "{{ count }} {{ owner.username }} {{ note }}"
@@ -216,6 +218,7 @@ def test_legacy_unsaved_keys_without_a_recorded_render():
     from djust.mixins.context import legacy_unsaved_keys
 
     class NoSuper(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root>{{ a }}</div>"
 
         def get_context_data(self, **kwargs):

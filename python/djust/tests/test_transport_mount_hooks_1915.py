@@ -37,6 +37,7 @@ inline (unchanged).
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
 
 import pytest
 
@@ -217,7 +218,7 @@ async def test_ws_on_mount_render_ready_emits_sticky_hold(monkeypatch):
     transport = WSConsumerTransport(consumer)
     view = _FakeView()
 
-    child = object()
+    child = SimpleNamespace(exposure_policy="legacy")
     consumer._sticky_preserved = {"slot-a": child}
 
     # Make the rendered HTML "contain" the surviving slot id. The hook imports
@@ -470,6 +471,7 @@ _ALLOWED = "djust.tests.test_transport_mount_hooks_1915"
 
 
 class CommPlainView(LiveView):
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_ALLOWED}.CommPlainView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):

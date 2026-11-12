@@ -55,6 +55,7 @@ class Diagram(LiveView):
     """No handlers of its own; ``toggle`` stands in for a page shell's handler
     (an account menu), which an event can still reach."""
 
+    exposure_policy = "legacy"
     template = _root("Diagram", _BODY)
 
     def mount(self, request, **kwargs):
@@ -103,6 +104,7 @@ class StaticDiagramWithBadge(StaticDiagram):
 
 
 class SmallPage(LiveView):
+    exposure_policy = "legacy"
     template = _root("SmallPage", "<p>{{ n }}</p>")
 
     def mount(self, request, **kwargs):
@@ -463,6 +465,7 @@ class TestTheWebSocket:
 
 
 class Dock(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "dock"
     template = "<div>{% for n in items %}<span>{{ n }}</span>{% endfor %}</div>"
@@ -526,6 +529,7 @@ class ShapesPage(LiveView):
     an immutable (value equality), a container (structural fingerprint) and any
     other object (identity)."""
 
+    exposure_policy = "legacy"
     static_render = True
     template = _root(
         "ShapesPage",
@@ -550,6 +554,7 @@ class StaticAssignsPage(LiveView):
     """``static_assigns`` are sent once because the renderer retains them; a
     static view's renderer retains nothing."""
 
+    exposure_policy = "legacy"
     static_render = True
     static_assigns = ["diagram"]
     template = _root("StaticAssignsPage", _BODY)
@@ -581,6 +586,7 @@ class StaticTabsPage(LiveView):
     """A page with a bound component whose template is component-opaque: on a
     normal view this is exactly the shape the scoped-patch path takes."""
 
+    exposure_policy = "legacy"
     static_render = True
     template = _root("StaticTabsPage", '<h1>Page</h1>{{ nav }}<div id="d">{{ diagram }}</div>')
     nav = Tabs()
@@ -628,6 +634,7 @@ class ComputedTitlePage(LiveView):
     """The ``<title>`` reads ``heading``, which ``get_context_data`` computes: it is
     in the render's context, not an attribute of the view."""
 
+    exposure_policy = "legacy"
     template = _titled("ComputedTitlePage")
 
     def mount(self, request, **kwargs):
@@ -669,6 +676,7 @@ class TestTheNavigationTitleSurvivesTheRelease:
 class MessagesPage(LiveView):
     """``temporary_assigns`` empties ``messages`` after each render."""
 
+    exposure_policy = "legacy"
     temporary_assigns = {"messages": []}
     template = _root(
         "MessagesPage",

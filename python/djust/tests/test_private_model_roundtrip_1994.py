@@ -24,6 +24,8 @@ from djust.serialization import DjangoJSONEncoder, normalize_django_value
 
 
 class _WorkspaceView(LiveView):
+    exposure_policy = "legacy"
+
     def mount(self, request, **kwargs):  # _private attrs set directly in tests
         pass
 

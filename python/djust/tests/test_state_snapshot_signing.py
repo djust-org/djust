@@ -49,6 +49,7 @@ class _SignSnapView(LiveView):
     survives the signature gate would overwrite ``role`` with the snapshot's
     value (the injection vector)."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = (
         '<div dj-view="djust.tests.test_state_snapshot_signing._SignSnapView" '

@@ -49,6 +49,7 @@ ROWS = [Row(i, f"BODY{i}") for i in range(5)]
 
 
 class Feed(LiveView):
+    exposure_policy = "legacy"
     template = (
         f'<div dj-view="{MODULE}.Feed" dj-id="0"><div id="list" dj-stream="rows">'
         '{% for r in streams.rows %}<div id="rows-{{ r.id }}">{{ r.body }}</div>{% endfor %}'

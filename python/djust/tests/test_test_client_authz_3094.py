@@ -28,6 +28,7 @@ class _User:
 
 
 class GatedView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ count }}</div>"
 
     def mount(self, request, **kwargs):
@@ -44,6 +45,7 @@ class GatedView(LiveView):
 
 
 class ObjectGatedView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ count }}</div>"
 
     def mount(self, request, **kwargs):

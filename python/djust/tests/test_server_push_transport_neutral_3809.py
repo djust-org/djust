@@ -44,6 +44,7 @@ WRAPPED = []
 
 
 class PushPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><b id='n'>{{ n }}</b><i id='t'>{{ transport }}</i></div>"
 
     def mount(self, request, **kwargs):
@@ -100,6 +101,7 @@ class PushPage(LiveView):
 class GuardedPage(LiveView):
     """``trusted_update`` trusts its payload: only the server may call it (#3002)."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><b>{{ got }}</b></div>"
 
     def mount(self, request, **kwargs):
@@ -118,6 +120,7 @@ class GuardedPage(LiveView):
 class BoomPage(LiveView):
     """Renders fine until ``n == 2``."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root><b>{{ n }}</b></div>"
 
     def mount(self, request, **kwargs):
@@ -135,6 +138,7 @@ class BoomPage(LiveView):
 
 
 class AuthTickPage(LiveView):
+    exposure_policy = "legacy"
     login_required = True
     tick_interval = 10
     template = "<div dj-root><b>{{ ticks }}</b></div>"
@@ -154,6 +158,7 @@ class AuthPushPage(PushPage):
 
 
 class KickTickPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><b>{{ ticks }}</b></div>"
     tick_interval = 10
 
@@ -180,6 +185,7 @@ class OverridePage(GuardedPage):
 
 
 class LongTickPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>x</div>"
     tick_interval = 30000
 
@@ -188,6 +194,7 @@ class LongTickPage(LiveView):
 
 
 class TickPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><b id='t'>{{ ticks }}</b></div>"
     tick_interval = 10
 
@@ -212,6 +219,7 @@ class QuietTickPage(TickPage):
 class NoTickPage(LiveView):
     """Sets ``tick_interval`` but does not override ``handle_tick``."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>x</div>"
     tick_interval = 10
 

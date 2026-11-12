@@ -34,6 +34,7 @@ class _Presenter:
 
 
 class ShellView(LiveView):
+    exposure_policy = "legacy"
     template_name = "shell_2589/page.html"
 
     def mount(self, request, **kwargs):

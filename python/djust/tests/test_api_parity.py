@@ -53,6 +53,7 @@ def test_coercion_parity_int_from_string():
     """Same `str -> int` coercion runs for both transports."""
 
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "parity.coerce"
         value = 0
 
@@ -84,6 +85,7 @@ def test_signature_source_of_truth_is_decorator_metadata():
     """The OpenAPI schema and WS validation both read the same metadata."""
 
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "parity.sig"
 
         @event_handler(expose_api=True, description="Does a thing")
@@ -110,6 +112,7 @@ def test_handler_not_exposed_is_never_callable_via_http():
     """The WS consumer can call any @event_handler; HTTP must refuse without expose_api."""
 
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "parity.hidden"
 
         @event_handler  # Not expose_api=True
@@ -129,6 +132,7 @@ def test_permission_required_enforced_on_http_path():
     from djust.decorators import permission_required
 
     class V(LiveView):
+        exposure_policy = "legacy"
         api_name = "parity.perm"
 
         @event_handler(expose_api=True)

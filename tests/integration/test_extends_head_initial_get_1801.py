@@ -103,6 +103,7 @@ _INDEX_HTML = """\
 class ExtendsHeadView(LiveView):
     """A LiveView whose template ``{% extends %}`` a base with a full ``<head>``."""
 
+    exposure_policy = "legacy"
     template_name = "demo1801/index.html"
 
     def mount(self, request, **kwargs):

@@ -18,6 +18,7 @@ class IndexView(LiveView):
 
     A LiveView to demonstrate reactive navbar badges AND inline demos on the main page!
     """
+    exposure_policy = "legacy"
     template_name = 'index.html'
 
     def mount(self, request, **kwargs):
@@ -124,6 +125,7 @@ class NavbarBadgeDemo(LiveView):
     This is embedded in the homepage to demonstrate how navbar badges
     update in real-time when state changes.
     """
+    exposure_policy = "legacy"
     template = """
     <div class="p-4 bg-white rounded-lg border border-gray-200">
         <!-- Navbar with badge -->
@@ -1132,6 +1134,7 @@ class RegistrationFormView(FormMixin, LiveView):
     - Success/error messaging
     """
 
+    exposure_policy = "legacy"
     form_class = RegistrationForm
 
     template = """
@@ -1330,6 +1333,7 @@ class ContactFormView(FormMixin, LiveView):
     - Custom validation
     """
 
+    exposure_policy = "legacy"
     form_class = ContactForm
 
     template = """
@@ -1548,6 +1552,7 @@ class ProfileFormView(FormMixin, LiveView):
     - Field help text
     """
 
+    exposure_policy = "legacy"
     form_class = ProfileForm
 
     template = """

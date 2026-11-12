@@ -243,6 +243,7 @@ def _live_view(source: str, rows: list, directory: str) -> str:
         "ParityView",
         (LiveView,),
         {
+            "exposure_policy": "legacy",
             "template_name": name,
             "mount": lambda self, request, **kwargs: setattr(self, "rows", rows),
         },

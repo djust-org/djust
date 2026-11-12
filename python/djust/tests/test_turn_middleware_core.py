@@ -228,6 +228,7 @@ async def test_context_set_by_middleware_reaches_handler_sync_code_and_tasks():
 
 
 class _View:
+    exposure_policy = "legacy"
     login_required = True
 
 

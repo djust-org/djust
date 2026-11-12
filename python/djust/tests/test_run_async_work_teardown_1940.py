@@ -33,6 +33,8 @@ class _SpyView:
     stale view was never written to once teardown happened.
     """
 
+    exposure_policy = "legacy"
+
     def __init__(self, name):
         self.name = name
         self.writes = []

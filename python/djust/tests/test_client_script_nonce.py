@@ -17,6 +17,7 @@ PAGE = "<html><head></head><body><div dj-root></div></body></html>"
 
 
 class _View(LiveView):
+    exposure_policy = "legacy"
     template = "<div>x</div>"
 
 

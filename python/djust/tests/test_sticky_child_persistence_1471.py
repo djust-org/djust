@@ -63,6 +63,7 @@ class _StickyCounterChild(LiveView):
     exercise the ``__private`` save key (ADR-018 Decision 1).
     """
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "counter"
     enable_state_snapshot = True
@@ -86,6 +87,7 @@ class _StickyCounterChild(LiveView):
 class _SecondStickyChild(LiveView):
     """A second sticky child (distinct sticky_id) for the index-set test."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "ticker"
     enable_state_snapshot = True
@@ -107,6 +109,7 @@ class _NonStickyChild(LiveView):
     must never be persisted under a ``__sticky__`` key (ADR-018 Decision 1).
     """
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = "<div>Plain: {{ n }}</div>"
 
@@ -126,6 +129,7 @@ class _ChildOptInOnly(LiveView):
     NOT opt in, to exercise Decision 5's both-opt-in gate.
     """
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "counter"
     enable_state_snapshot = True
@@ -147,6 +151,7 @@ class _ChildNoOptIn(LiveView):
     parent to exercise the inverse of Decision 5's gate.
     """
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "counter"
     # NOTE: no ``enable_state_snapshot`` opt-in.
@@ -170,6 +175,7 @@ class _DashParent(LiveView):
     both-opt-in gate is satisfied.
     """
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = (
         "{% load live_tags %}"
@@ -196,6 +202,7 @@ class _DashParent(LiveView):
 class _TwoStickyParent(LiveView):
     """Parent embedding TWO sticky children — for the index-set test."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = (
         "{% load live_tags %}"
@@ -217,6 +224,7 @@ class _TwoStickyParent(LiveView):
 class _NonStickyEmbedParent(LiveView):
     """Parent embedding a NON-sticky child (no ``sticky=True``)."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = (
         "{% load live_tags %}"
@@ -236,6 +244,8 @@ class _ParentNoOptIn(LiveView):
     """Parent that does NOT opt into snapshot but embeds an opted-in sticky
     child — exercises Decision 5 (child-in / parent-out → not saved).
     """
+
+    exposure_policy = "legacy"
 
     # NOTE: no ``enable_state_snapshot`` opt-in.
     template = (
@@ -264,6 +274,7 @@ class _ParentChildNoOptIn(LiveView):
     exercises the inverse of Decision 5 (parent-in / child-out → not saved).
     """
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = (
         "{% load live_tags %}"
@@ -285,6 +296,7 @@ class _PlainParent(LiveView):
     zero-cost-when-unused property.
     """
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = "<div dj-root><h1>{{ title }}</h1></div>"
 

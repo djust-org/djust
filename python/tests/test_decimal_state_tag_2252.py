@@ -586,6 +586,7 @@ class TestEveryOtherTypeIsUntouched:
 
 
 class _PriceView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ price }}</span></div>"
     enable_state_snapshot = True
 

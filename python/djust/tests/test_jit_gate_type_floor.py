@@ -121,6 +121,8 @@ def _cells(var):
 
 
 class _Bump(LiveView):
+    exposure_policy = "legacy"
+
     @event_handler()
     def bump(self, **kwargs):
         self.n += 1

@@ -20,6 +20,7 @@ from djust import LiveView
 
 
 class _V(LiveView):
+    exposure_policy = "legacy"
     template = "<div>x</div>"
 
     def mount(self, request):

@@ -20,6 +20,7 @@ PAGE = "<html><head><title>T</title></head><body><h1>T</h1></body></html>"
 
 
 class _View(LiveView):
+    exposure_policy = "legacy"
     template_string = PAGE
     count = 0
 

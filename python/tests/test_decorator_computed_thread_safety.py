@@ -21,6 +21,8 @@ class TestComputedThreadSafety:
         errors = []
 
         class DashView(LiveView):
+            exposure_policy = "legacy"
+
             def update(self):
                 pass
 
@@ -71,6 +73,8 @@ class TestComputedThreadSafety:
         side_effect_count = 0
 
         class DashView(LiveView):
+            exposure_policy = "legacy"
+
             def update(self):
                 pass
 
@@ -116,6 +120,8 @@ class TestComputedThreadSafety:
         """The per-instance lock is created lazily on __dict__."""
 
         class DashView(LiveView):
+            exposure_policy = "legacy"
+
             def update(self):
                 pass
 

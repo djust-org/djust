@@ -45,7 +45,11 @@ def test_framework_config_defaults_are_not_template_context():
     cls = type(
         "Legacy2960",
         (_Mixin, LiveView),
-        {"template": "<div dj-root>{{ greeting }}</div>", "greeting": "hi"},
+        {
+            "exposure_policy": "legacy",
+            "template": "<div dj-root>{{ greeting }}</div>",
+            "greeting": "hi",
+        },
     )
     context = _context(cls)
     leaked = {
@@ -63,7 +67,12 @@ def test_user_declared_class_attributes_still_reach_the_context():
     cls = type(
         "Legacy2960b",
         (_Mixin, LiveView),
-        {"template": "<div dj-root>{{ greeting }}</div>", "greeting": "hi", "items": [1, 2]},
+        {
+            "exposure_policy": "legacy",
+            "template": "<div dj-root>{{ greeting }}</div>",
+            "greeting": "hi",
+            "items": [1, 2],
+        },
     )
     context = _context(cls)
     assert context["greeting"] == "hi"
@@ -72,7 +81,11 @@ def test_user_declared_class_attributes_still_reach_the_context():
 
 
 def test_a_user_subclass_chain_is_walked_to_the_framework_boundary():
-    base = type("Base2960", (LiveView,), {"section": "base", "template": "<div dj-root></div>"})
+    base = type(
+        "Base2960",
+        (LiveView,),
+        {"exposure_policy": "legacy", "section": "base", "template": "<div dj-root></div>"},
+    )
     child = type("Child2960", (base,), {"page": "child"})
     context = _context(child)
     assert context["section"] == "base"

@@ -32,10 +32,12 @@ def _page(title: str, body: str) -> str:
 
 
 class SourcePage(LiveView):
+    exposure_policy = "legacy"
     template = _page("Home", "<p>home</p>")
 
 
 class DocsPage(LiveView):
+    exposure_policy = "legacy"
     template = _page("Docs &amp; {{ section }}", "<p>docs</p>")
 
     def mount(self, request, **kwargs):
@@ -43,6 +45,7 @@ class DocsPage(LiveView):
 
 
 class OwnTitlePage(LiveView):
+    exposure_policy = "legacy"
     template = _page("Template title", "<p>own</p>")
 
     def mount(self, request, **kwargs):
@@ -50,6 +53,7 @@ class OwnTitlePage(LiveView):
 
 
 class NoHeadPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><svg><title>icon</title></svg></div>"
 
 

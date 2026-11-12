@@ -35,6 +35,7 @@ class Counter(LiveComponent):
 
 
 class StateFieldView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ count }} {{ label }}</div>"
 
     count = state(1)
@@ -44,6 +45,7 @@ class StateFieldView(LiveView):
 
 
 class ComponentView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ counter }}</div>"
 
     counter = Counter()
@@ -93,6 +95,7 @@ class TestDirtyStateFields2956:
 
     def test_private_state_field_stays_invisible(self):
         class V(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
             _hidden = state(0)
 
@@ -103,6 +106,7 @@ class TestDirtyStateFields2956:
 
     def test_static_assign_state_field_is_skipped(self):
         class V(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
             static_assigns = ["count"]
             count = state(0)
@@ -210,6 +214,7 @@ class TestSnapshotRestoresComponents2896:
                 self.n = 0
 
         class V(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{{ w }}</div>"
 
         dst = V()
@@ -238,6 +243,7 @@ def _session_request(method: str = "get", body: Any = None, session: Any = None)
 
 
 class LevelView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ level }}</div>"
 
     level = state(1)
@@ -305,6 +311,7 @@ class NameForm(forms.Form):
 
 
 class ResetInValidView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = NameForm
     template = "<div dj-root>{{ form_data.name }}</div>"
 
@@ -314,6 +321,7 @@ class ResetInValidView(FormMixin, LiveView):
 
 
 class PlainValidView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = NameForm
     template = "<div dj-root>{{ form_data.name }}</div>"
 
@@ -362,6 +370,7 @@ class TestReviewFollowUps:
         from django.contrib.auth.models import User
 
         class OwnerView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
             owner = state(None)
             label = state("x")
@@ -385,6 +394,7 @@ class TestReviewFollowUps:
             raise RuntimeError("evaluated")
 
         class LazyView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
             settings_obj = SimpleLazyObject(boom)
             count = state(0)

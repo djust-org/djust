@@ -27,6 +27,7 @@ from .test_runtime_state_save_tt_1894 import MockTransport
 
 
 class FailureView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>ready</div>"
     failure_stage = "mount"
     failure_policy = "explicit"

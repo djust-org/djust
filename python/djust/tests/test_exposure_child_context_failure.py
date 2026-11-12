@@ -21,6 +21,7 @@ CALLS = []
 
 
 class ChildParent(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
 
 

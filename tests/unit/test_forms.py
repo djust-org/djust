@@ -27,6 +27,7 @@ class TestForm(forms.Form):
 class TestFormView(FormMixin, LiveView):
     """Test view with FormMixin."""
 
+    exposure_policy = "legacy"
     form_class = TestForm
     template = """
     <div dj-root>
@@ -336,6 +337,7 @@ class TestFormWithInitialValues:
             email = forms.EmailField(initial="default@example.com")
 
         class ViewWithInitial(FormMixin, LiveView):
+            exposure_policy = "legacy"
             form_class = FormWithInitial
             template = "<div dj-root>{{ form_data.name }}</div>"
 
@@ -355,6 +357,7 @@ class TestFormWithInitialValues:
             email = forms.EmailField(initial="default@example.com")
 
         class ViewWithInitial(FormMixin, LiveView):
+            exposure_policy = "legacy"
             form_class = FormWithInitial
             template = "<div dj-root>{{ form_data.name }}</div>"
 
@@ -386,6 +389,7 @@ class FullTestForm(forms.Form):
 
 
 class FullTestFormView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = FullTestForm
     template = "<div dj-root>{{ form.as_live }}</div>"
 
@@ -544,6 +548,7 @@ class TestModelInstance:
             body = forms.CharField(widget=forms.Textarea, required=False)
 
         class EditView(FormMixin, LiveView):
+            exposure_policy = "legacy"
             form_class = SimpleEditForm
             template = "<div dj-root>{{ form_data.title }}</div>"
 
@@ -773,6 +778,7 @@ class TestModelPkSerialization:
                 label = "myapp.Thing"
 
         class PkView(FormMixin, LiveView):
+            exposure_policy = "legacy"
             form_class = TestForm
             template = "<div dj-root></div>"
             _model_instance = None

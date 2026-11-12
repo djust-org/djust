@@ -27,6 +27,7 @@ from djust import LiveView
 class _PlainView(LiveView):
     """Minimal LiveView with no user attrs assigned in mount()."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ value }}</div>"
 
     def mount(self, request, **kwargs):
@@ -37,6 +38,7 @@ class _ViewWithUserAttr(LiveView):
     """LiveView that ALSO sets a user-defined `value` to confirm the gate
     still excludes only framework attrs (regression-of-regression guard)."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ value }}</div>"
 
     def mount(self, request, **kwargs):

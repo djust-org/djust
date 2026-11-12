@@ -20,6 +20,7 @@ class TestJITShortCircuitNonDB:
         and _get_template_content is NOT called."""
 
         class PlainView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ greeting }} {{ count }}</div>"
             greeting = "hello"
             count = 42
@@ -42,6 +43,7 @@ class TestJITShortCircuitNonDB:
         """A list of plain dicts (not Models) should also skip JIT."""
 
         class DictListView(LiveView):
+            exposure_policy = "legacy"
             template = "<ul>{% for item in items %}<li>{{ item }}</li>{% endfor %}</ul>"
             items = [{"name": "a"}, {"name": "b"}]
 
@@ -70,6 +72,7 @@ class TestJITShortCircuitWithDB:
         qs = User.objects.none()
 
         class DBView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{% for u in users %}{{ u.username }}{% endfor %}</div>"
             users = qs
 
@@ -90,6 +93,7 @@ class TestJITShortCircuitWithDB:
         user = User(username="testuser", pk=1)
 
         class ModelView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ profile.username }}</div>"
 
         view = ModelView()
@@ -110,6 +114,7 @@ class TestJITShortCircuitWithDB:
         users_list = [User(username="a", pk=1), User(username="b", pk=2)]
 
         class ListModelView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{% for u in users %}{{ u.username }}{% endfor %}</div>"
 
         view = ListModelView()
@@ -130,6 +135,7 @@ class TestJITShortCircuitEdgeCases:
         """A view with no public attributes should short-circuit cleanly."""
 
         class EmptyView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>empty</div>"
 
         view = EmptyView()
@@ -148,6 +154,7 @@ class TestJITShortCircuitEdgeCases:
         """None, bool, float values should not trigger JIT."""
 
         class MixedView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{{ flag }} {{ rate }}</div>"
             flag = True
             rate = 3.14
@@ -169,6 +176,7 @@ class TestJITShortCircuitEdgeCases:
         """An empty list should not trigger JIT (no first element to check)."""
 
         class EmptyListView(LiveView):
+            exposure_policy = "legacy"
             template = "<div>{% for x in items %}{{ x }}{% endfor %}</div>"
             items = []
 

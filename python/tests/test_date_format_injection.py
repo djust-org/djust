@@ -23,6 +23,7 @@ def _mock_rust_view() -> Mock:
 class DateView(LiveView):
     """Minimal view for testing DATE_FORMAT injection."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ some_date|date }}</div>"
 
     def mount(self, request, **kwargs):
@@ -85,6 +86,7 @@ class TestDateFormatInjection:
         """If get_context_data already has DATE_FORMAT, don't override it."""
 
         class ExplicitDateView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{{ some_date|date }}</div>"
 
             def mount(self, request, **kwargs):

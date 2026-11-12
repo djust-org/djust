@@ -46,6 +46,7 @@ class GroupForm(forms.ModelForm):
 class _Recording(ModelFormMixin[Group], LiveView):
     """Records every lookup and permission check; ``REVOKED`` ids lose access."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root><h1>{{ object.name }}</h1><input name="name" '
         'value="{{ form_data.name }}"><i>{{ field_errors.name.0 }}</i>'
@@ -594,6 +595,7 @@ def test_a_bad_recheck_mode_is_a_configuration_error():
     with pytest.raises(ImproperlyConfigured, match="object_recheck"):
 
         class Bad(ModelFormMixin[Group], LiveView):
+            exposure_policy = "legacy"
             object_recheck = "sometimes"
 
 
@@ -602,6 +604,7 @@ def test_read_only_events_must_be_a_collection_of_names(value):
     with pytest.raises(ImproperlyConfigured, match="object_read_only_events"):
 
         class Bad(ModelFormMixin[Group], LiveView):
+            exposure_policy = "legacy"
             object_read_only_events = value
 
 
@@ -1034,6 +1037,7 @@ def test_a_listed_name_that_is_not_a_method_is_a_configuration_error():
     with pytest.raises(ImproperlyConfigured, match="not a method"):
 
         class Typo(ModelFormMixin[Group], LiveView):
+            exposure_policy = "legacy"
             object_read_only_events = frozenset({"no_such_handler"})
 
 
@@ -1052,6 +1056,7 @@ def test_the_fingerprint_sees_an_in_place_change_to_a_mutable_value():
 
 def test_a_lookup_that_raises_attribute_error_is_a_required_object():
     class Eager(ModelFormMixin[Group], LiveView):
+        exposure_policy = "legacy"
         object_optional = True
 
         def get_object_lookup(self):

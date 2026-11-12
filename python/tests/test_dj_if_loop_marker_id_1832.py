@@ -36,6 +36,7 @@ class _ToggleView(LiveView):
     triggered the P0 in production (a table whose class toggles).
     """
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="tests.ToggleView" dj-id="0">'
         '<table class="{{ tcls }}"><tbody>'

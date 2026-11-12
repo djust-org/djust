@@ -22,6 +22,7 @@ class RustComponentsDemo(LiveView):
     - Framework comparison (Bootstrap5, Tailwind, Plain)
     """
 
+    exposure_policy = "legacy"
     template_name = 'demos/rust_components.html'
 
     def get_context_data(self, **kwargs):

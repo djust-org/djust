@@ -32,6 +32,7 @@ _TEMPLATE = """{% load live_tags %}<!doctype html>
 
 
 class PrefixedView3186(LiveView):
+    exposure_policy = "legacy"
     template_name = "ws3186/page.html"
 
     def mount(self, request, **kwargs):

@@ -52,6 +52,7 @@ class _Consumer:
 
 
 class _View(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root><p dj-stream="a"></p><p id="b"></p></div>'
 
 

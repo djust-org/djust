@@ -37,6 +37,7 @@ RAN: list = []
 
 
 class EverythingView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root dj-id='0'><p>{{ message }}</p></div>"
 
     def mount(self, request, **kwargs):

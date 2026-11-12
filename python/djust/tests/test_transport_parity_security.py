@@ -423,6 +423,7 @@ class TestMountUrlTraversalParity:
 class _LoginRequiredView(LiveView):
     """A view that denies anonymous callers (login_required)."""
 
+    exposure_policy = "legacy"
     login_required = True
 
 
@@ -531,6 +532,8 @@ class TestViewAuthParity:
 class _ObjectDeniedView(LiveView):
     """Opts into the object-permission lifecycle and denies access."""
 
+    exposure_policy = "legacy"
+
     def get_object(self):
         return object()
 
@@ -539,6 +542,8 @@ class _ObjectDeniedView(LiveView):
 
 
 class _ObjectAllowedView(LiveView):
+    exposure_policy = "legacy"
+
     def get_object(self):
         return object()
 

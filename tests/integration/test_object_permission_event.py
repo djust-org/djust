@@ -52,6 +52,7 @@ class _StubDocument:
 
 
 class _DenyEventView(LiveView):
+    exposure_policy = "legacy"
     template = "<div>{{ value }}</div>"
 
     def mount(self, request, document_id: int = 0, **kwargs):
@@ -73,6 +74,7 @@ class _DenyEventView(LiveView):
 
 
 class _AllowEventView(LiveView):
+    exposure_policy = "legacy"
     template = "<div>{{ value }}</div>"
 
     def mount(self, request, document_id: int = 0, **kwargs):
@@ -93,6 +95,7 @@ class _AllowEventView(LiveView):
 
 
 class _NoOverrideEventView(LiveView):
+    exposure_policy = "legacy"
     template = "<div>{{ value }}</div>"
 
     def mount(self, request, **kwargs):
@@ -289,6 +292,7 @@ async def test_per_event_does_not_exist_treated_as_none(rf):
     from djust.auth.core import check_object_permission
 
     class _DNEView(LiveView):
+        exposure_policy = "legacy"
         template = "<div>x</div>"
 
         def mount(self, request, **kwargs):
@@ -372,6 +376,7 @@ async def test_per_event_fail_closed_on_developer_exception(rf):
     from djust.websocket_utils import _validate_event_security
 
     class _BuggyView(LiveView):
+        exposure_policy = "legacy"
         template = "<div>buggy</div>"
 
         def mount(self, request, **kwargs):
@@ -429,6 +434,7 @@ def test_embedded_child_view_uses_child_get_object(rf):
     from djust.auth.core import check_object_permission
 
     class _ParentView(LiveView):
+        exposure_policy = "legacy"
         template = "<div>parent</div>"
 
         def mount(self, request, **kwargs):
@@ -437,6 +443,7 @@ def test_embedded_child_view_uses_child_get_object(rf):
         # Parent has NO get_object override — should be no-op for parent.
 
     class _ChildView(LiveView):
+        exposure_policy = "legacy"
         template = "<div>child</div>"
 
         def mount(self, request, **kwargs):
@@ -552,6 +559,7 @@ async def test_per_event_sync_orm_get_object_does_not_raise_sync_only(rf):
     user = await sync_to_async(User.objects.create)(username="objperm-1638")
 
     class _SyncORMObjectView(LiveView):
+        exposure_policy = "legacy"
         template = "<div>{{ value }}</div>"
 
         def mount(self, request, **kwargs):

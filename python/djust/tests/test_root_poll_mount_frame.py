@@ -20,6 +20,7 @@ _MODULE = __name__
 
 
 class _PollingRootView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-poll="tick" dj-poll-interval="2000" title="a > b">'
         '<p dj-poll="inner">{{ n }}</p></div>'
@@ -34,6 +35,7 @@ class _PollingRootView(LiveView):
 
 
 class _PlainRootView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root><p dj-poll="inner">{{ n }}</p></div>'
 
     def mount(self, request, **kwargs):

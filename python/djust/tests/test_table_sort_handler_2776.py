@@ -149,6 +149,7 @@ def _render_under(component, framework: str) -> str:
 
 
 class TableHostView(LiveView):
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_MODULE}.TableHostView" dj-id="0"><p>order={{{{ order }}}}</p></div>'
 
     def mount(self, request, **kwargs):
@@ -163,6 +164,7 @@ class TableHostView(LiveView):
 
 
 class PaginationHostView(LiveView):
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{_MODULE}.PaginationHostView" dj-id="0"><p>page={{{{ p }}}}</p></div>'
 
     def mount(self, request, **kwargs):
@@ -175,6 +177,7 @@ class PaginationHostView(LiveView):
 
 
 class TabsHostView(LiveView):
+    exposure_policy = "legacy"
     template = (
         f'<div dj-root dj-view="{_MODULE}.TabsHostView" dj-id="0"><p>active={{{{ a }}}}</p></div>'
     )

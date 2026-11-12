@@ -169,6 +169,7 @@ from djust import LiveView  # noqa: E402
 
 
 class DataListView(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = """<div dj-view="test_jit_data_regressions.DataListView">
     {% for entry in entries %}<section>

@@ -125,6 +125,7 @@ def _template(name, body):
 
 
 class _Base(LiveView):
+    exposure_policy = "legacy"
     abstract = True
 
     def mount(self, request, **kwargs):
@@ -181,6 +182,7 @@ PostGatedWithComponent = _view(
 
 
 class _ChildView(LiveView):
+    exposure_policy = "legacy"
     template = "<div>child {{ count }}</div>"
 
     def mount(self, request, **kwargs):
@@ -197,6 +199,7 @@ class _ChildView(LiveView):
 
 @_superuser_only
 class _PostGatedParent(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">parent</div>'
 
     def mount(self, request, **kwargs):
@@ -1043,6 +1046,7 @@ def test_hot_view_replacement_forgets_the_url_map(tmp_path):
             from djust import LiveView
 
             class Reloaded(LiveView):
+                exposure_policy = "legacy"
                 template = "<div>x</div>"
             """
         )

@@ -49,6 +49,7 @@ from {mixins} import LabelMixin
 
 
 class PageView(LabelMixin, LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{{{ label }}}}</div>"
 
     def mount(self, request, **kwargs):

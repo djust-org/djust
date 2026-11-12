@@ -54,6 +54,8 @@ def slow_static(monkeypatch):
 
 
 class _Base:
+    exposure_policy = "legacy"
+
     def __init__(self, **kwargs):
         pass
 

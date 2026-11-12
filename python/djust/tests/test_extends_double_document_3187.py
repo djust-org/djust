@@ -70,6 +70,7 @@ def _child(explicit_view: bool) -> str:
 
 
 class SearchView3187(LiveView):
+    exposure_policy = "legacy"
     template_name = "docs_3187/search.html"
 
     def mount(self, request, **kwargs):

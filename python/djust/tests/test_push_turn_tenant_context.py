@@ -45,6 +45,7 @@ def _bound(where):
 
 
 class _RelayView(TenantMixin, LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="djust.tests.test_push_turn_tenant_context._RelayView">'
         "{{ room }}|{% for m in notes %}[{{ m }}]{% endfor %}</div>"

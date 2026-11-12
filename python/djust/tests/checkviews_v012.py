@@ -27,6 +27,7 @@ class StickyChildWithOwnDjView(LiveView):
     wrong and the child's events silently won't bind in the browser.
     """
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "v012_footgun"
     template = (
@@ -41,6 +42,7 @@ class StickyChildNoDjView(LiveView):
     The wrapper provides the binding. V012 must stay silent for this class.
     """
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "v012_correct"
     template = '<div class="widget"><button dj-click="dismiss">x</button></div>'
@@ -55,6 +57,7 @@ class StickyChildDjViewInComment(LiveView):
     strip comments before scanning so the example tag does NOT false-positive.
     """
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "v012_comment"
     template = (
@@ -73,6 +76,7 @@ class NonStickyViewWithDjView(LiveView):
     V012 must NOT flag this — the whole point of the check is to distinguish
     sticky children (must not declare dj-view) from page views (must)."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="djust.tests.checkviews_v012.NonStickyViewWithDjView">'
         "<button dj-click='go'>x</button></div>"

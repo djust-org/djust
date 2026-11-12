@@ -83,6 +83,7 @@ def _make_user(*, username="alice", pk=7):
 class _PublicOrmStateView(LiveView):
     """Opt-in snapshot view storing a Model instance on PUBLIC state."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template_name = "test.html"
 
@@ -119,6 +120,7 @@ class TestCaptureSnapshotStateRejectsOrmObjectsInDebug:
         from django.contrib.auth.models import User
 
         class QsView(LiveView):
+            exposure_policy = "legacy"
             enable_state_snapshot = True
             template_name = "test.html"
 
@@ -216,6 +218,7 @@ class _RealPathOrmView(LiveView):
     end-to-end (the JIT rendering path handles the Model fine — the bug lives
     exclusively in the persistence capture that follows the render)."""
 
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = '<div dj-root dj-id="0">{{ label }}</div>'
 

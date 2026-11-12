@@ -63,6 +63,7 @@ def test_opaque_cutoff_never_silently_drops_authored_bindings(tmp_path, partial,
         (tmp_path / "root.html").write_text(source)
 
         class View(LiveView):
+            exposure_policy = "legacy"
             template = '{% include "root.html" %}'
             name = "before"
 

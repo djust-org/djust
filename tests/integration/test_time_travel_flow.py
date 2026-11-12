@@ -23,6 +23,7 @@ from djust.websocket import LiveViewConsumer
 class _TTView(LiveView):
     """Minimal LiveView that opts into time travel."""
 
+    exposure_policy = "legacy"
     template = "<div>{{ count }}</div>"
     time_travel_enabled = True
 
@@ -333,6 +334,7 @@ async def test_permission_denied_view_handler_records_with_error():
 class _TwoComponentView(LiveView):
     """LiveView with a `_components` registry for component-jump tests."""
 
+    exposure_policy = "legacy"
     template = "<div>{{ total }}</div>"
     time_travel_enabled = True
 
@@ -514,6 +516,7 @@ async def test_handle_forward_replay_returns_new_branch_id():
     from djust.decorators import event_handler
 
     class _ReplayView(LiveView):
+        exposure_policy = "legacy"
         template = "<div>{{ count }}</div>"
         time_travel_enabled = True
 
@@ -579,6 +582,7 @@ async def test_handle_forward_replay_branches_on_tip_with_override_params():
     from djust.decorators import event_handler
 
     class _ReplayView(LiveView):
+        exposure_policy = "legacy"
         template = "<div>{{ count }}</div>"
         time_travel_enabled = True
 
@@ -631,6 +635,7 @@ async def test_handle_forward_replay_does_not_leak_branch_id_on_failure():
     """
 
     class _ViewWithoutHandler(LiveView):
+        exposure_policy = "legacy"
         template = "<div>{{ count }}</div>"
         time_travel_enabled = True
 

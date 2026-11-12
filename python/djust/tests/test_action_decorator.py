@@ -32,6 +32,8 @@ from djust.decorators import action, event_handler, is_action, is_event_handler
 class _FakeView:
     """Minimal stand-in for a LiveView — only what @action touches."""
 
+    exposure_policy = "legacy"
+
     def __init__(self):
         self._action_state: dict = {}
 
@@ -331,6 +333,7 @@ class TestContextInjection:
         from djust.mixins.context import ContextMixin
 
         class _ContextTestView(ContextMixin):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def __init__(self):
@@ -359,6 +362,7 @@ class TestContextInjection:
         from djust.mixins.context import ContextMixin
 
         class _NoActionView(ContextMixin):
+            exposure_policy = "legacy"
             template_name = "test.html"
 
             def __init__(self):

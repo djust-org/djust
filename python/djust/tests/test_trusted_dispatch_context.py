@@ -35,6 +35,7 @@ FORGED = {
 
 
 class DispatchView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ n }}</div>"
     api_name = "trusted.dispatch"
 
@@ -411,6 +412,7 @@ def test_output_payload_outside_the_strict_contract_never_reaches_the_callback()
     from djust.components._interactive import DropdownMenu
 
     class Page(LiveView):
+        exposure_policy = "legacy"
         menu = DropdownMenu(label="Menu", items=[{"label": "Edit", "value": "edit"}])
 
         @menu.on.selected

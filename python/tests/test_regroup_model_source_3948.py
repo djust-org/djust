@@ -47,7 +47,9 @@ def _lv(src: str, **state) -> str:
             setattr(self, name, value)
 
     view = type(
-        "RegroupView", (LiveView,), {"template": f"<div dj-root>{src}</div>", "mount": mount}
+        "RegroupView",
+        (LiveView,),
+        {"exposure_policy": "legacy", "template": f"<div dj-root>{src}</div>", "mount": mount},
     )
     client = LiveViewTestClient(view)
     client.mount()

@@ -27,11 +27,13 @@ from djust import LiveView
 
 
 class Nav(LiveView):
+    exposure_policy = "legacy"
     template_name = "floor/page.html"
     login_required = False
 
 
 class Inline(LiveView):
+    exposure_policy = "legacy"
     login_required = False
     template = '''<div dj-root>
 {% if request.user.is_staff %}admin{% endif %}
@@ -168,6 +170,7 @@ def test_a_derived_boolean_renders_where_the_floor_field_does_not(tmp_path):
     from djust import LiveView
 
     class Derived(LiveView):
+        exposure_policy = "legacy"
         template_name = "derived.html"
         login_required = False
 

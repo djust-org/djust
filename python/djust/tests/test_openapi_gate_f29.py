@@ -68,6 +68,7 @@ class TestOpenAPIGateF29:
         """
 
         class SecretView(LiveView):
+            exposure_policy = "legacy"
             api_name = "f29.secret"
 
             @event_handler(expose_api=True)

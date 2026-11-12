@@ -26,6 +26,7 @@ class TagsForm(forms.Form):
 
 
 class TagsView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = TagsForm
     saved = None
 
@@ -119,6 +120,8 @@ def test_the_pressed_button_is_an_ordinary_field_of_submit_form(policy):
 
 
 class DeclaredView(LiveView):
+    exposure_policy = "legacy"
+
     @event_handler(parameter_policy="strict")
     def save_list(self, tags: list[str]):
         return tags

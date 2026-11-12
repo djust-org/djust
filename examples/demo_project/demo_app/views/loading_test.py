@@ -22,6 +22,7 @@ class LoadingTestView(LiveView):
     - Multiple modifiers work together
     """
 
+    exposure_policy = "legacy"
     template_name = 'tests/loading_test.html'
 
     def mount(self, request):

@@ -45,6 +45,7 @@ _MODULE = __name__
 class _StreamStreamsView(LiveView):
     """Mirrors the FIXED demo: async handler that pushes each token via stream_to."""
 
+    exposure_policy = "legacy"
     template = (
         f'<div dj-view="{_MODULE}._StreamStreamsView" dj-id="0">'
         '<article dj-stream="md_stream" dj-update="ignore" dj-id="1">{{ llm_output }}</article>'
@@ -98,6 +99,7 @@ class _PlainMutationView(LiveView):
     arrives in the single end-of-callback render.
     """
 
+    exposure_policy = "legacy"
     template = (
         f'<div dj-view="{_MODULE}._PlainMutationView" dj-id="0">'
         '<article dj-id="1">{{ llm_output }}</article>'

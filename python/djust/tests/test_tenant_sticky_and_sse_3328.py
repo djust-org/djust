@@ -32,6 +32,7 @@ _MOD = __name__
 
 
 class _StickyChild(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "counter"
     enable_state_snapshot = True
@@ -45,6 +46,7 @@ class _StickyChild(LiveView):
 
 
 class _TenantParent(TenantMixin, LiveView):
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = (
         "{% load live_tags %}"
@@ -65,6 +67,7 @@ class _TenantParent(TenantMixin, LiveView):
 
 
 class _TenantTokenView(TenantMixin, LiveView):
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = '<div dj-root dj-id="0">[{{ secret }}]</div>'
 

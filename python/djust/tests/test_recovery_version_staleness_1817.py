@@ -56,6 +56,7 @@ class _TTRecoveryView(LiveView):
     ``clientVdomVersion``), so it MUST arm recovery (#1817).
     """
 
+    exposure_policy = "legacy"
     time_travel_enabled = True
 
     template = (

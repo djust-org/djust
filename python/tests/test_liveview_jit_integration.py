@@ -66,6 +66,7 @@ class TestLiveViewJITIntegration(TestCase):
         from djust.live_view import LiveView
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template = """
                 {% for lease in leases %}
                   {{ lease.property.name }}
@@ -101,6 +102,7 @@ class TestLiveViewJITIntegration(TestCase):
         from djust.live_view import LiveView
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template = """
                 {{ lease.property.name }}
                 {{ lease.tenant.user.email }}
@@ -124,6 +126,8 @@ class TestLiveViewJITIntegration(TestCase):
         from djust.live_view import LiveView
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
+
             # No template defined
 
             def mount(self, request):
@@ -143,6 +147,7 @@ class TestLiveViewJITIntegration(TestCase):
         from djust.live_view import LiveView
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template = """
                 <!-- lease not accessed -->
                 <div>Hello</div>
@@ -164,6 +169,7 @@ class TestLiveViewJITIntegration(TestCase):
         from djust.live_view import LiveView
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template = """
                 {% for lease in active_leases %}
                   {{ lease.property.name }}
@@ -204,6 +210,7 @@ class TestLiveViewJITIntegration(TestCase):
         from djust.live_view import LiveView
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template = """
                 {{ title }}
                 {{ count }}
@@ -234,6 +241,7 @@ class TestLiveViewJITIntegration(TestCase):
         from djust.live_view import LiveView
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template = """
                 {% for lease in leases %}
                   {{ lease.property.name }}
@@ -259,6 +267,7 @@ class TestLiveViewJITIntegration(TestCase):
         # For this test, we'll test the serializer's None handling directly
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template = """
                 {{ lease.property.name }}
                 {{ lease.tenant.user.email }}
@@ -318,6 +327,7 @@ class TestJITSerializationPerformance(TestCase):
         from djust.live_view import LiveView
 
         class TestView(LiveView):
+            exposure_policy = "legacy"
             template = """
                 {% for lease in leases %}
                   {{ lease.property.name }}
@@ -364,6 +374,7 @@ class TestJITSerializationGracefulFallback(TestCase):
         try:
 
             class TestView(LiveView):
+                exposure_policy = "legacy"
                 template = """{{ lease.property.name }}"""
 
                 def mount(self, request):

@@ -17,6 +17,7 @@ def test_a_view_that_sets_use_actors_is_refused_at_class_creation():
     with pytest.raises(ImproperlyConfigured) as refused:
 
         class ActorView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
             use_actors = True
 
@@ -36,11 +37,13 @@ def test_a_mixin_that_sets_use_actors_is_refused_where_it_meets_liveview():
     with pytest.raises(ImproperlyConfigured, match="use_actors"):
 
         class MixedView(ActorsMixin, LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
 
 
 def test_a_subclass_of_a_plain_view_can_still_turn_it_on_and_is_refused():
     class Base(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root></div>"
 
     with pytest.raises(ImproperlyConfigured, match="Child"):
@@ -51,10 +54,12 @@ def test_a_subclass_of_a_plain_view_can_still_turn_it_on_and_is_refused():
 
 def test_use_actors_false_and_an_ordinary_view_are_accepted():
     class Off(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root></div>"
         use_actors = False
 
     class Plain(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root></div>"
 
     assert Off() is not None and Plain() is not None
@@ -78,6 +83,8 @@ def test_the_attribute_and_the_extension_surface_are_gone():
 class InstanceAttributeView(LiveView):
     """Sets it on the instance, in ``mount()``."""
 
+    exposure_policy = "legacy"
+
     template = "<div dj-root>instance</div>"
 
     def mount(self, request, **kwargs):
@@ -86,6 +93,8 @@ class InstanceAttributeView(LiveView):
 
 class LateClassAttributeView(LiveView):
     """Plain when created; a test assigns the class attribute afterwards."""
+
+    exposure_policy = "legacy"
 
     template = "<div dj-root>late</div>"
 
@@ -96,11 +105,13 @@ class _SkipsSuper:
 
 
 class HiddenFromInitSubclassView(_SkipsSuper, LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>hidden</div>"
     use_actors = True
 
 
 class PlainMountedView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>plain</div>"
 
 

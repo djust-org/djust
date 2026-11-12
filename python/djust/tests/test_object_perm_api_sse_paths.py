@@ -61,6 +61,7 @@ class _DocAPIView(LiveView):
     *denied* object is the one a forbidden caller mounts unless overridden.
     """
 
+    exposure_policy = "legacy"
     template_name = None
     api_name = "objperm.doc"
     doc_id = 2  # default to the DENIED object so the gap is the default path
@@ -96,6 +97,7 @@ class _DocAPIView(LiveView):
 class _PublicAPIView(LiveView):
     """No custom get_object → object-perm lifecycle inactive (must stay no-op)."""
 
+    exposure_policy = "legacy"
     template_name = None
     api_name = "objperm.public"
 
@@ -234,6 +236,7 @@ def test_server_function_noop_for_non_object_scoped_view():
 # render-path test which overrides render_with_diff). The object-perm check must
 # fire BEFORE this render, so a denied object never reaches the renderer.
 class _DocSSEView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><main>{{ doc }}</main></div>"
 
     def __init__(self, *args, **kwargs):
@@ -255,6 +258,7 @@ class _DocSSEView(LiveView):
 
 
 class _PublicSSEView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>public</div>"
 
     def get_context_data(self, **kwargs):

@@ -175,6 +175,7 @@ def test_add_row_caps_at_max_num_when_set():
 
 
 class _View(FormSetHelpersMixin, LiveView):
+    exposure_policy = "legacy"
     formset_classes = {"addresses": AddressFormSet}
 
     def mount(self, request=None, **kwargs):
@@ -207,6 +208,7 @@ def test_mixin_raises_when_formset_data_not_initialized():
     """If mount() forgets to set self._formset_data, add/remove fail loud."""
 
     class NoInitView(FormSetHelpersMixin, LiveView):
+        exposure_policy = "legacy"
         formset_classes = {"addresses": AddressFormSet}
 
         def mount(self, request=None, **kwargs):

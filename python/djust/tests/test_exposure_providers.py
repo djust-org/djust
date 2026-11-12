@@ -229,7 +229,7 @@ def _page(*, component=False, act=False):
             return None
 
         namespace["save_item"] = action(save_item)
-    page = type("Page", (LiveView,), namespace)
+    page = type("Page", (LiveView,), {"exposure_policy": "legacy", **namespace})
     page.__qualname__ = "Page"
     return page
 

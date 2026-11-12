@@ -29,6 +29,7 @@ from djust.decorators import event_handler
 
 
 class CounterView(LiveView):
+    exposure_policy = "legacy"
     template_name = "counter/page.html"
 
     @event_handler
@@ -41,6 +42,7 @@ class CounterView(LiveView):
 
 
 class Unrelated(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
 """
 

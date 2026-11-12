@@ -18,6 +18,7 @@ class OptimisticCounterView(LiveView):
     - Shake animation on error
     """
 
+    exposure_policy = "legacy"
     template = """
     <!DOCTYPE html>
     <html>

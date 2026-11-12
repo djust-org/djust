@@ -14,6 +14,7 @@ from djust import LiveView
 
 
 class RedirectSourceView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="tests.redirect_mount_test_urls.RedirectSourceView">source</div>'
     )
@@ -23,6 +24,7 @@ class RedirectSourceView(LiveView):
 
 
 class RedirectTargetView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="tests.redirect_mount_test_urls.RedirectTargetView">target</div>'
     )

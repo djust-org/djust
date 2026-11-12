@@ -33,6 +33,7 @@ def write(directory, name, source):
 
 def view_class(name="page.html"):
     class PartialView(LiveView):
+        exposure_policy = "legacy"
         template_name = name
 
     return PartialView
@@ -178,6 +179,7 @@ async def test_actual_websocket_mount_and_event_use_partial_root(tmp_path):
     )
 
     class PartialRootSocketView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -236,6 +238,7 @@ def test_server_patches_apply_to_browser_parsed_http_page(tmp_path):
     from django.test import RequestFactory
 
     class BrowserPartialView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -314,6 +317,7 @@ def test_real_http_get_mounts_root_from_executed_partial(tmp_path):
     )
 
     class HTTPPartialView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -342,6 +346,7 @@ def test_http_and_websocket_mount_ids_match_for_partial_root(tmp_path):
     )
 
     class ParityPartialView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -353,6 +358,7 @@ def test_http_and_websocket_mount_ids_match_for_partial_root(tmp_path):
 
 def test_partial_root_tracks_dynamic_template_changes_and_binding_authority(tmp_path):
     class DynamicPartialView(LiveView):
+        exposure_policy = "legacy"
         which = "first"
         first = "first-value"
         second = "second-value"
@@ -401,6 +407,7 @@ def test_partial_root_restoration_respects_exposure_cache_isolation(
     monkeypatch.setattr("djust.state_backends.get_backend", lambda: backend)
 
     class LegacyPartialView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
         value = "default"
 
@@ -473,6 +480,7 @@ async def test_competing_forged_shell_root_rejects_websocket_mount(tmp_path):
     events = []
 
     class ForgedRootSocketView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -551,6 +559,7 @@ def test_postprocessed_wrapper_rejects_forged_root_and_lazy_slot(tmp_path, forge
     templates[0]["OPTIONS"] = {"context_processors": [f"{__name__}.wrapper_context_processor"]}
 
     class WrappedPartialView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
         wrapper_template = "wrapper.html"
 
@@ -583,6 +592,7 @@ def test_fragment_with_dynamic_include_and_no_root_keeps_rendering(tmp_path):
     write(tmp_path, "second.html", "<i>SECOND</i>")
 
     class DynamicIncludeFragment(LiveView):
+        exposure_policy = "legacy"
         template = "<section>{% include selected %}</section>"
 
     with override_settings(TEMPLATES=templates_for(tmp_path)):
@@ -618,6 +628,7 @@ def test_forged_wrapper_failure_does_not_advance_cached_baseline(tmp_path, monke
     monkeypatch.setattr("djust.state_backends.get_backend", lambda: backend)
 
     class CachedWrappedView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
         wrapper_template = "wrapper.html"
 
@@ -681,6 +692,7 @@ def test_named_partial_root_resolves_relative_include_for_http_and_ws(tmp_path):
     )
 
     class RelativePartialView(LiveView):
+        exposure_policy = "legacy"
         template_name = "widgets/page.html"
 
         def mount(self, request, **kwargs):
@@ -716,6 +728,7 @@ def test_included_partial_root_cannot_precede_another_http_root(tmp_path, dynami
     )
 
     class CompetingIncludedRoots(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -749,6 +762,7 @@ async def test_included_partial_root_cannot_precede_another_websocket_root(
     events = []
 
     class IncludedRootsSocketView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -833,6 +847,7 @@ def test_stateful_include_is_evaluated_once_for_http_and_cached_baseline(tmp_pat
     monkeypatch.setattr("djust.state_backends.get_backend", lambda: backend)
 
     class StatefulIncludeView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -908,6 +923,7 @@ async def test_websocket_cannot_update_field_from_forged_model_attribute(tmp_pat
     mounted = []
 
     class ForgedModelSocketView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -958,6 +974,7 @@ def test_partial_root_framework_state_is_not_application_private_state(tmp_path,
     )
 
     class LegacyRootView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
         value = "visible"
 
@@ -1017,6 +1034,7 @@ def test_http_dynamic_include_transitions_between_fragment_and_partial_root(tmp_
     mounted = []
 
     class DynamicIncludeView(LiveView):
+        exposure_policy = "legacy"
         template = "{% include selected %}"
 
         def mount(self, request, **kwargs):
@@ -1079,6 +1097,7 @@ def test_react_hydration_and_lazy_child_survive_partial_root_page_and_patch(tmp_
         pytest.skip("node and jsdom are needed for the client replay")
 
     class HydrationLazyChild(LiveView):
+        exposure_policy = "legacy"
         template = "<div><p>lazy child</p></div>"
 
     globals()["HydrationLazyChild"] = HydrationLazyChild
@@ -1093,6 +1112,7 @@ def test_react_hydration_and_lazy_child_survive_partial_root_page_and_patch(tmp_
     )
 
     class HydrationPartialView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -1155,6 +1175,7 @@ def test_partial_root_with_literal_angle_brackets_in_quoted_attribute(tmp_path):
     )
 
     class LiteralAngleRootView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -1182,6 +1203,7 @@ def test_named_partial_root_registers_lazy_child_from_relative_include(tmp_path)
     from django.test import RequestFactory
 
     class RelativeLazyChild(LiveView):
+        exposure_policy = "legacy"
         template = "<div><p>lazy child</p></div>"
 
     globals()["RelativeLazyChild"] = RelativeLazyChild
@@ -1198,6 +1220,7 @@ def test_named_partial_root_registers_lazy_child_from_relative_include(tmp_path)
     )
 
     class RelativeLazyPage(LiveView):
+        exposure_policy = "legacy"
         template_name = "widgets/page.html"
 
     request = RequestFactory().get("/")
@@ -1250,6 +1273,7 @@ def test_browser_events_survive_conditional_partial_root_tag_replacement(tmp_pat
     from djust.decorators import event_handler
 
     class SwitchingPartialView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -1338,6 +1362,7 @@ async def test_websocket_events_continue_after_conditional_partial_root_switch(t
     )
 
     class SwitchingSocketView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -1403,6 +1428,7 @@ def test_untrusted_comment_cannot_downgrade_authored_page_root_to_fragment(tmp_p
     write(tmp_path, "blank.html", "")
 
     class ConditionalRootPage(LiveView):
+        exposure_policy = "legacy"
         template = (
             "{{ a|safe }}<main dj-root>real</main>{{ b|safe }}"
             '<input dj-model="is_admin">{% include selected %}'
@@ -1423,6 +1449,7 @@ def test_ordinary_table_root_cannot_downgrade_to_sticky_view(tmp_path):
     write(tmp_path, "blank.html", "")
 
     class StickyAndTableView(LiveView):
+        exposure_policy = "legacy"
         template = (
             '<div dj-root dj-view="demo.Child" dj-sticky-root>STICKY_CHILD</div>'
             "<table dj-root><tbody><tr><td>{{ value }}</td></tr></tbody></table>"
@@ -1455,6 +1482,7 @@ def test_partial_body_root_mounts_and_updates_through_http_and_diff(tmp_path):
     )
 
     class PartialBodyView(LiveView):
+        exposure_policy = "legacy"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):

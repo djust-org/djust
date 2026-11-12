@@ -43,6 +43,7 @@ class TenantSocketView(LiveView):
 
 
 class LegacyTenantSocketView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ count }}</span></div>"
 
     def mount(self, request, **kwargs):

@@ -18,6 +18,7 @@ from djust.components.interactive import DropdownMenu
 
 
 class InteractiveNavView(LiveView):
+    exposure_policy = "legacy"
     template_name = "demos/interactive_nav.html"
     enable_state_snapshot = True
 

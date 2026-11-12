@@ -15,6 +15,7 @@ class ContactForm(forms.Form):
 
 
 class ContactView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = ContactForm
 
 
@@ -59,6 +60,8 @@ def test_initial_is_copied_and_used_by_form_and_reactive_state():
 
 def test_dynamic_form_class_does_not_require_class_attribute():
     class View(FormMixin, LiveView):
+        exposure_policy = "legacy"
+
         def get_form_class(self):
             return ContactForm
 

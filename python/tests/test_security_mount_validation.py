@@ -16,6 +16,7 @@ from djust.websocket import LiveViewConsumer
 class ValidView(LiveView):
     """A valid LiveView for testing."""
 
+    exposure_policy = "legacy"
     template_string = (
         '<div dj-view="python.tests.test_security_mount_validation.ValidView">Valid</div>'
     )

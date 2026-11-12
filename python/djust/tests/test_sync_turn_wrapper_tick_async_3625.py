@@ -111,6 +111,7 @@ def pool(request, monkeypatch):
 
 
 class ProbeView(LiveView):
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{MOD}.ProbeView"><b>{{{{ count }}}}</b> {{{{ note }}}}</div>'
     tick_interval = 30
 
@@ -580,6 +581,7 @@ def test_client_without_a_wrapper_behaves_as_before():
 
 
 class AsyncHookView(LiveView):
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{MOD}.AsyncHookView">{{{{ n }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -599,6 +601,7 @@ class AsyncHookView(LiveView):
 
 
 class AsyncResultView(LiveView):
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{MOD}.AsyncResultView">x</div>'
     tick_interval = 30
 

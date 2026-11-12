@@ -192,7 +192,9 @@ def _liveview(src: str, ctx: dict) -> str:
             setattr(self, name, value)
 
     view = type(
-        "CallableView", (LiveView,), {"template": f"<div dj-root>{src}</div>", "mount": mount}
+        "CallableView",
+        (LiveView,),
+        {"exposure_policy": "legacy", "template": f"<div dj-root>{src}</div>", "mount": mount},
     )
     client = LiveViewTestClient(view)
     client.mount()

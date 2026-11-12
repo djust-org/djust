@@ -73,6 +73,8 @@ class FakeRequest:
 class FakeView:
     """Fake view for testing mixins"""
 
+    exposure_policy = "legacy"
+
     def __init__(self, ws_session_id: str = "test_ws"):
         # Call parent __init__ methods if they exist
         if hasattr(super(), "__init__"):

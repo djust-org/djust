@@ -314,6 +314,8 @@ class _StubView:
     needs to expose `_time_travel_buffer`.
     """
 
+    exposure_policy = "legacy"
+
     def __init__(self, entries):
         self._time_travel_buffer = _StubBuffer(entries)
 

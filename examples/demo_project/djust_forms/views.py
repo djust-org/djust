@@ -29,6 +29,7 @@ class RegistrationFormView(FormMixin, LiveView):
     - Success/error messaging
     """
 
+    exposure_policy = "legacy"
     form_class = RegistrationForm
     template_name = "forms/registration.html"
 
@@ -59,6 +60,7 @@ class ContactFormView(FormMixin, LiveView):
     - Custom validation
     """
 
+    exposure_policy = "legacy"
     form_class = ContactForm
     template_name = "forms/contact.html"
 
@@ -89,6 +91,7 @@ class ProfileFormView(FormMixin, LiveView):
     - Field help text
     """
 
+    exposure_policy = "legacy"
     form_class = ProfileForm
     template_name = "forms/profile.html"
 
@@ -108,6 +111,7 @@ class SimpleContactFormView(FormMixin, LiveView):
 
     This demonstrates Django Forms integration with real-time validation.
     """
+    exposure_policy = "legacy"
     form_class = SimpleContactForm
     template_name = 'forms/simple.html'
 
@@ -133,6 +137,7 @@ class AutoContactFormView(FormMixin, LiveView):
     Demonstrates automatic form rendering by calling as_live() in Python
     and passing the HTML to the template context.
     """
+    exposure_policy = "legacy"
     form_class = SimpleContactForm
     template_name = 'forms/auto.html'
 
@@ -163,6 +168,7 @@ class AutoContactFormTailwindView(FormMixin, LiveView):
     """
     Auto-rendered contact form using Tailwind CSS framework.
     """
+    exposure_policy = "legacy"
     form_class = SimpleContactForm
     template_name = 'forms/auto_tailwind.html'
 
@@ -192,6 +198,7 @@ class AutoContactFormPlainView(FormMixin, LiveView):
     """
     Auto-rendered contact form using plain HTML (minimal styling).
     """
+    exposure_policy = "legacy"
     form_class = SimpleContactForm
     template_name = 'forms/auto_plain.html'
 
@@ -221,4 +228,5 @@ class AutoFormComparisonView(LiveView):
     """
     Framework comparison page showing all three CSS framework adapters.
     """
+    exposure_policy = "legacy"
     template_name = 'forms/auto_comparison.html'

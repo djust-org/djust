@@ -236,6 +236,8 @@ class _RuntimeRenderMixin:
 class _ObjectDeniedView(_RuntimeRenderMixin, LiveView):
     """Opts into the object-permission lifecycle and DENIES access."""
 
+    exposure_policy = "legacy"
+
     def get_object(self):
         return object()
 
@@ -251,6 +253,8 @@ class _ObjectDeniedView(_RuntimeRenderMixin, LiveView):
 
 class _ObjectAllowedView(_RuntimeRenderMixin, LiveView):
     """Opts in and ALLOWS access — the positive half (non-vacuous deny test)."""
+
+    exposure_policy = "legacy"
 
     def get_object(self):
         return object()
@@ -365,6 +369,8 @@ class TestDispatchMountObjectPermission:
 # Net 3 — wire-version parity on dispatch_url_change (#1858 pin).
 # --------------------------------------------------------------------------- #
 class _UrlChangeView(_RuntimeRenderMixin, LiveView):
+    exposure_policy = "legacy"
+
     def mount(self, request, **kwargs):
         pass
 
@@ -557,6 +563,8 @@ def _event_runtime_with_view(view):
 class _BumpView(_EventSpineMixin, LiveView):
     """A handler that changes public state (forces a render)."""
 
+    exposure_policy = "legacy"
+
     @event_handler()
     def bump(self, **kwargs):
         self.count += 1
@@ -565,6 +573,8 @@ class _BumpView(_EventSpineMixin, LiveView):
 class _NoChangeView(_EventSpineMixin, LiveView):
     """A handler that does NOT change state (auto-skip → noop)."""
 
+    exposure_policy = "legacy"
+
     @event_handler()
     def touch_nothing(self, **kwargs):
         pass
@@ -572,6 +582,8 @@ class _NoChangeView(_EventSpineMixin, LiveView):
 
 class _PushOnlyView(_EventSpineMixin, LiveView):
     """A handler that only pushes an event — #700 identity push-only skip → noop."""
+
+    exposure_policy = "legacy"
 
     @event_handler()
     def ping(self, **kwargs):
@@ -588,6 +600,8 @@ class _ForceHtmlView(_EventSpineMixin, LiveView):
     instead SET ``_force_full_html`` fresh, that assignment would itself trip the
     assigns snapshot and the auto-skip would never fire regardless of the guard.
     """
+
+    exposure_policy = "legacy"
 
     def mount(self, request, **kwargs):
         self.count = 0
@@ -723,6 +737,8 @@ class TestEventSpineForceFullHtml:
         from djust.runtime import ViewRuntime
 
         class _PatchForceView(_EventSpineMixin, LiveView):
+            exposure_policy = "legacy"
+
             def render_with_diff(self):
                 # A real patch list is available this render.
                 return ("<div>x</div>", [{"op": "noop"}], 1)
@@ -861,6 +877,8 @@ class TestEventSpineIdentityPushSkip:
         """
 
         class _InPlacePushView(_EventSpineMixin, LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self.count = 0
                 self.rows = [{"v": 1}]  # list-of-dict: fingerprinted by assigns
@@ -980,6 +998,8 @@ class TestEventSpineEnumeration:
 class _MountStashView(_RuntimeRenderMixin, LiveView):
     """Mounts cleanly; used to assert the post-mount stash + baselines."""
 
+    exposure_policy = "legacy"
+
     def mount(self, request, **kwargs):
         self.mounted = True
 
@@ -987,6 +1007,8 @@ class _MountStashView(_RuntimeRenderMixin, LiveView):
 class _MountPushAsyncView(_RuntimeRenderMixin, LiveView):
     """``mount()`` queues a push event AND schedules background work — the two
     queues the mount-time drain must flush (#1283 / #1280)."""
+
+    exposure_policy = "legacy"
 
     def mount(self, request, **kwargs):
         self.value = 0
@@ -1220,6 +1242,7 @@ class TestMountFrameOptimisticAndUpload:
                 optimistic_rule = {"action": "toggle_class", "class": "open"}
 
         class _OptView(_RuntimeRenderMixin, LiveView):
+            exposure_policy = "legacy"
             _component_descriptors = {"acc": _OptDescriptor()}
 
             def mount(self, request, **kwargs):
@@ -1260,6 +1283,8 @@ class TestMountFrameOptimisticAndUpload:
                 return {"avatar": {"config": {"max_size": 1024, "accept": "image/*"}}}
 
         class _UploadView(_RuntimeRenderMixin, LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self._upload_manager = _FakeUploadManager()
 

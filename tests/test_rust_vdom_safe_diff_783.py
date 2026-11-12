@@ -108,6 +108,7 @@ def _assert_produces_patch(html, patches_json, *, new_value, old_value=""):
 class _WizardLike(LiveView):
     """Base view that derives ``field_html`` from ``wizard_step_data``."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ field_html.first_name|safe }}</div>"
 
     def mount(self, request, **kwargs):
@@ -297,6 +298,7 @@ class TestSafeBlobDiffNestedInclude:
         """
 
         class InlineIfView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div dj-root>"
                 "{% for s in steps %}"
@@ -418,6 +420,7 @@ class TestPartialRenderCorrectness:
 
     def test_no_wrapper(self):
         class NoWrapperView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{{ x }}</div>"
 
             def mount(self, request, **kwargs):
@@ -430,6 +433,7 @@ class TestPartialRenderCorrectness:
 
     def test_if_wrapper(self):
         class IfView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{% if show %}{{ x }}{% endif %}</div>"
 
             def mount(self, request, **kwargs):
@@ -443,6 +447,7 @@ class TestPartialRenderCorrectness:
 
     def test_for_loop_over_dicts(self):
         class ForView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div dj-root>{% for i in items %}<span>{{ i.name }}</span>{% endfor %}</div>"
             )
@@ -457,6 +462,7 @@ class TestPartialRenderCorrectness:
 
     def test_with_wrapper(self):
         class WithView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root>{% with y=x %}<span>{{ y }}</span>{% endwith %}</div>"
 
             def mount(self, request, **kwargs):
@@ -507,6 +513,7 @@ class TestPartialRenderCorrectness:
         every span in the loop."""
 
         class InlineIfInForView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div dj-root>"
                 "{% for s in steps %}"
@@ -534,6 +541,7 @@ class TestPartialRenderCorrectness:
         regression guard for dep propagation through Spaceless nodes."""
 
         class SpacelessView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div dj-root>{% spaceless %}"
                 "<span>{{ x }}</span>"
@@ -556,6 +564,7 @@ class TestPartialRenderCorrectness:
         Regression guard for dep propagation across With node chains."""
 
         class NestedWithView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div dj-root>"
                 "{% with outer=x %}"
@@ -580,6 +589,7 @@ class TestPartialRenderCorrectness:
         must trigger a partial re-render of that block."""
 
         class StandaloneBlockView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div dj-root>{% block header %}<h1>{{ title }}</h1>{% endblock %}<p>body</p></div>"
             )
@@ -600,6 +610,7 @@ class TestPartialRenderCorrectness:
         real variable references."""
 
         class VerbatimView(LiveView):
+            exposure_policy = "legacy"
             template = (
                 "<div dj-root>"
                 "<pre>{% verbatim %}{{ not_a_var }}{% endverbatim %}</pre>"
@@ -621,6 +632,7 @@ class TestPartialRenderCorrectness:
         ``obj.field|filter|another``."""
 
         class FilterChainView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root><span>{{ user.name|lower|truncatechars:10 }}</span></div>"
 
             def mount(self, request, **kwargs):

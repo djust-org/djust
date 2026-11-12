@@ -20,6 +20,7 @@ from djust.decorators import event_handler
 
 
 class QuietPage(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ menu }}<p>{{ count }}</p></div>"
     menu = DropdownMenu(label="Menu", items=[{"label": "One", "value": "one"}], visibility="client")
 

@@ -50,6 +50,7 @@ class RecordingConsumer(LiveViewConsumer):
 
 
 class TickingView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ n }}</div>"
     tick_interval = 30
 

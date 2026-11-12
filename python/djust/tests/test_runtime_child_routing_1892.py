@@ -134,6 +134,7 @@ def _frame_types(transport: MockTransport) -> List[str]:
 class _StickyChildView(LiveView):
     """A sticky child whose ``bump`` handler mutates state and re-renders."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "child"
     template = "<div>count={{ count }}</div>"
@@ -153,6 +154,7 @@ class _BrokenChildView(LiveView):
     """A child whose template render raises with an attacker-controlled-shaped
     message so the embedded-error escape/DEBUG-gate can be exercised."""
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "broken"
 
@@ -173,6 +175,7 @@ class _BrokenChildView(LiveView):
 class _ParentView(LiveView):
     """A parent page that hosts both a sticky child and a LiveComponent."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0"><h1>parent={{ parent_count }}</h1></div>'
 
     def mount(self, request, **kwargs):

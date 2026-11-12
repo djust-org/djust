@@ -96,6 +96,7 @@ def _make_view_class(name: str, mount_body, ctx_body):
         name,
         (LiveView,),
         {
+            "exposure_policy": "legacy",
             "template_name": "child_1737.html",
             "mount": lambda self, request, **kwargs: mount_body(self),
             "get_context_data": lambda self, **kwargs: ctx_body(self),

@@ -37,6 +37,7 @@ TASKS: list = []
 
 
 class PinView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><span>{{ n }}</span></div>"
 
     def mount(self, request, **kwargs):

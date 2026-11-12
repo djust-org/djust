@@ -35,6 +35,7 @@ _CONFIG = {"TENANT_RESOLVER": "subdomain"}
 
 
 class _SecretView(TenantMixin, LiveView):
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = '<div dj-root dj-id="0">[{{ secret }}]</div>'
 

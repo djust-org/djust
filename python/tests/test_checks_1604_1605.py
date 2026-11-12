@@ -37,7 +37,7 @@ class TestV001SuppressViaDjustConfig:
         cls = type(
             "V001SuppressedView",
             (LiveView,),
-            {"__module__": "myapp.views"},
+            {"exposure_policy": "legacy", "__module__": "myapp.views"},
         )
         try:
             errors = _check_liveviews_errors()
@@ -57,7 +57,7 @@ class TestV001SuppressViaDjustConfig:
         cls = type(
             "V001NotSuppressedView",
             (LiveView,),
-            {"__module__": "myapp.views"},
+            {"exposure_policy": "legacy", "__module__": "myapp.views"},
         )
         try:
             errors = _check_liveviews_errors()
@@ -80,7 +80,7 @@ class TestV005SuppressViaDjustConfig:
         cls = type(
             "V005SuppressedView",
             (LiveView,),
-            {"__module__": "myapp.views", "template_name": "t.html"},
+            {"exposure_policy": "legacy", "__module__": "myapp.views", "template_name": "t.html"},
         )
         try:
             errors = _check_liveviews_errors()
@@ -100,7 +100,7 @@ class TestV005SuppressViaDjustConfig:
         cls = type(
             "V005NotSuppressedView",
             (LiveView,),
-            {"__module__": "myapp.views", "template_name": "t.html"},
+            {"exposure_policy": "legacy", "__module__": "myapp.views", "template_name": "t.html"},
         )
         try:
             errors = _check_liveviews_errors()
@@ -123,7 +123,7 @@ class TestAbstractOptOut:
         cls = type(
             "AbstractBaseV001",
             (LiveView,),
-            {"__module__": "myapp.views", "abstract": True},
+            {"exposure_policy": "legacy", "__module__": "myapp.views", "abstract": True},
         )
         try:
             errors = _check_liveviews_errors()
@@ -143,7 +143,12 @@ class TestAbstractOptOut:
         cls = type(
             "AbstractBaseV005",
             (LiveView,),
-            {"__module__": "myapp.views", "abstract": True, "template_name": "t.html"},
+            {
+                "exposure_policy": "legacy",
+                "__module__": "myapp.views",
+                "abstract": True,
+                "template_name": "t.html",
+            },
         )
         try:
             errors = _check_liveviews_errors()
@@ -166,7 +171,7 @@ class TestAbstractOptOut:
         base = type(
             "AbstractInheritBase",
             (LiveView,),
-            {"__module__": "myapp.views", "abstract": True},
+            {"exposure_policy": "legacy", "__module__": "myapp.views", "abstract": True},
         )
         # Subclass that does NOT set abstract — must be treated as concrete.
         concrete = type(
@@ -200,7 +205,7 @@ class TestAbstractOptOut:
         cls = type(
             "ExplicitlyNotAbstract",
             (LiveView,),
-            {"__module__": "myapp.views", "abstract": False},
+            {"exposure_policy": "legacy", "__module__": "myapp.views", "abstract": False},
         )
         try:
             errors = _check_liveviews_errors()

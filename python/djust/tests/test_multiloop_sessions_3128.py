@@ -35,6 +35,7 @@ _SEEN_LOCK = threading.Lock()
 
 
 class _RoomView(LiveView):
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{MOD}._RoomView">{{{{ tag }}}}:{{{{ count }}}}</div>'
 
     def mount(self, request, **kwargs):

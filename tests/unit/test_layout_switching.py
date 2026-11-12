@@ -168,6 +168,8 @@ async def test_flush_pending_layout_get_context_raises_prod_swallowed(monkeypatc
     from djust.websocket import LiveViewConsumer
 
     class _BrokenContext(LayoutMixin):
+        exposure_policy = "legacy"
+
         def get_context_data(self, **kwargs):
             raise AttributeError("missing_key")
 
@@ -193,6 +195,8 @@ async def test_flush_pending_layout_get_context_raises_debug_reraises(monkeypatc
     from djust.websocket import LiveViewConsumer
 
     class _BrokenContext(LayoutMixin):
+        exposure_policy = "legacy"
+
         def get_context_data(self, **kwargs):
             raise AttributeError("missing_key")
 

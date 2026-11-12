@@ -60,6 +60,7 @@ class GroupForm(forms.ModelForm):
 class ScopedEdit(ModelFormMixin[Group], LiveView):
     """Edit a group the user belongs to; REVOKED and FAIL are test levers."""
 
+    exposure_policy = "legacy"
     template = (
         "<div dj-root><h1>{{ object.name }}</h1>"
         '<input name="name" value="{{ form_data.name }}">'
@@ -127,6 +128,7 @@ class PermissionForm(forms.ModelForm):
 class PermissionEdit(ModelFormMixin[Permission], LiveView):
     """An FK relation; editable only for the test content type."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ object.codename }}</div>"
     form_class = PermissionForm
 
@@ -148,6 +150,7 @@ class UploadForm(forms.ModelForm):
 class UploadEdit(UploadMixin, ModelFormMixin[Group], LiveView):
     """Uploads reach the form through a get_form_kwargs override (D1)."""
 
+    exposure_policy = "legacy"
     template = "<div dj-root>{{ object.name }}</div>"
     model = Group
     form_class = UploadForm
@@ -186,6 +189,7 @@ class GroupNameForm(forms.ModelForm):
 class CreateGroup(FormMixin, LiveView):
     """Create forms keep using FormMixin: a ModelForm with no instance."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root><input name="name" value="{{ form_data.name }}"></div>'
     form_class = GroupNameForm
 
@@ -200,6 +204,7 @@ class ContactForm(forms.Form):
 class Contact(FormMixin, LiveView):
     """A form with no model at all acquires no lookup requirement (D5)."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root><input name="email" value="{{ form_data.email }}"></div>'
     form_class = ContactForm
 

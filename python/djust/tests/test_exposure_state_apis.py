@@ -112,8 +112,14 @@ def test_raw_restore_is_rejected_before_reading_payload_or_assigning(view, metho
     assert view.__dict__ == before
 
 
+class _LegacyLiveView(LiveView):
+    """A bare LiveView under the legacy policy, whatever the framework default is."""
+
+    exposure_policy = "legacy"
+
+
 def test_legacy_direct_api_behavior_remains_available():
-    legacy = object.__new__(LiveView)
+    legacy = object.__new__(_LegacyLiveView)
     legacy.public_value = [1]
     legacy._private_value = "private"
     legacy._user_private_keys = {"_private_value"}

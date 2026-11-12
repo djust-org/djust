@@ -49,6 +49,7 @@ def _record(view, what):
 
 
 class _LaneView(LiveView):
+    exposure_policy = "legacy"
     template = (
         '<div dj-root dj-view="djust.tests.test_worker_lanes._LaneView">{{ tag }}:{{ count }}</div>'
     )

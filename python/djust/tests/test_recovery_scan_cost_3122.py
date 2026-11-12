@@ -16,6 +16,7 @@ from djust import validation
 
 
 class LegacyView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root><form dj-auto-recover="restore"></form></div>'
 
     @event_handler()
@@ -24,6 +25,7 @@ class LegacyView(LiveView):
 
 
 class OneStrictHandlerView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root><form dj-auto-recover="restore"></form></div>'
 
     @event_handler()
@@ -38,6 +40,7 @@ class OneStrictHandlerView(LiveView):
 class ComputedTargetView(LiveView):
     """The template computes its target, so only the render names it (#3127)."""
 
+    exposure_policy = "legacy"
     template = '<div dj-root><form dj-auto-recover="{{ target }}"></form></div>'
 
     @event_handler()
@@ -52,6 +55,7 @@ class OneStrictHandlerComputedView(ComputedTargetView):
 
 
 class PlainView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
 
     @event_handler()

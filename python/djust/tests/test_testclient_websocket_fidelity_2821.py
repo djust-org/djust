@@ -25,6 +25,7 @@ from djust.testing import LiveViewTestClient
 class WsAwareView(LiveView):
     """The pattern the framework's own #1612 presence guard documents."""
 
+    exposure_policy = "legacy"
     template = "<div>branch={{ branch }}</div>"
 
     def mount(self, request, **kwargs):
@@ -131,6 +132,7 @@ class TestPresenceIdentityUnderTheClient:
         key = cls.KEY
 
         class PresenceView(PresenceMixin, LiveView):
+            exposure_policy = "legacy"
             template = "<div>x</div>"
             presence_key = key
             # Deliberately the default: presence_unique_per_connection = False

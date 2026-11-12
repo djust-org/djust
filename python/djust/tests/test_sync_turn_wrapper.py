@@ -68,6 +68,7 @@ def probe():
 
 
 class ProbeView(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-view="tests.ProbeView">{{ count }} {{ seen }}</div>'
 
     def mount(self, request, **kwargs):

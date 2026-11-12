@@ -38,6 +38,7 @@ class EditForm(forms.ModelForm):
 
 
 class EditView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = EditForm
     template = '<div dj-root><form dj-submit="submit_form">{{ form.as_live }}<button>go</button></form></div>'
 
@@ -55,6 +56,7 @@ class EditView(FormMixin, LiveView):
 
 
 class CreateView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = EditForm
     template = '<div dj-root><form dj-submit="submit_form">{{ form.as_live }}</form></div>'
 
@@ -228,6 +230,7 @@ class TestErrorsOfWithheldFields:
 
 
 class WsEditView(FormMixin, LiveView):
+    exposure_policy = "legacy"
     form_class = EditForm
     template = (
         f'<div dj-view="{__name__}.WsEditView" dj-id="0"><form dj-submit="submit_form">'
@@ -325,6 +328,8 @@ class TestWizardStep:
         from djust.wizard import WizardMixin
 
         class Stub:
+            exposure_policy = "legacy"
+
             def get_context_data(self, **kwargs):
                 return dict(kwargs)
 
@@ -364,6 +369,7 @@ class TestAdminFormView:
                 return form_class
 
         class View(AdminFormMixin, LiveView):
+            exposure_policy = "legacy"
             _model = User
             _model_admin = Admin()
 
@@ -426,6 +432,7 @@ class TestOtherWithheldShapes:
             name = forms.CharField(initial="n")
 
         class V(FormMixin, LiveView):
+            exposure_policy = "legacy"
             form_class = Plain
             template = "<div dj-root></div>"
 
@@ -443,6 +450,7 @@ class TestOtherWithheldShapes:
             pw = forms.CharField(widget=forms.PasswordInput(render_value=True), initial="hunter2")
 
         class V(FormMixin, LiveView):
+            exposure_policy = "legacy"
             form_class = Plain
             template = "<div dj-root></div>"
 
@@ -731,6 +739,7 @@ class TestRestoredEarlierStateIsCleaned:
         from djust._state_restore import restore_public_state
 
         class V(FormMixin, LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root></div>"
 
             def get_form_class(self):
@@ -1316,6 +1325,7 @@ class TestAFormRebuiltOverARowThatIsNotThere:
                 return EditForm
 
         class Add(AdminFormMixin, LiveView):
+            exposure_policy = "legacy"
             _model = User
             _model_admin = Admin()
 
@@ -1650,6 +1660,7 @@ class TestThePinnedClassLivesOnTheClassAndIsCollectable:
                 return form_class
 
         class View(AdminFormMixin, LiveView):
+            exposure_policy = "legacy"
             _model = User
             _model_admin = Admin()
 
@@ -1794,7 +1805,7 @@ def _messages(view):
 def _view_for_errors(form_class, **extra):
     attrs = {"form_class": form_class, "template": "<div dj-root></div>"}
     attrs.update(extra)
-    return type("ErrorsView", (FormMixin, LiveView), attrs)
+    return type("ErrorsView", (FormMixin, LiveView), {"exposure_policy": "legacy", **attrs})
 
 
 class TestOrdinaryMessagesAreKept:

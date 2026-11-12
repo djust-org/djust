@@ -41,6 +41,7 @@ def staged(monkeypatch, settings):
 
 
 class LegacyQueuedChild(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "legacy"
     template = "<div>Legacy={{ count }}</div>"
@@ -62,6 +63,7 @@ class LegacyQueuedChild(LiveView):
 
 
 class LegacyQueuedParent(LiveView):
+    exposure_policy = "legacy"
     template = (
         "<div dj-root>{% load live_tags %}{% live_render "
         f'"{__name__}.LegacyQueuedChild" sticky=True %}}</div>'

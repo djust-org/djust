@@ -28,6 +28,7 @@ pytest_plugins = [
     "tests.timing_report",  # #3715: each process reports its worst GC pause and stall
     "tests.db_row_isolation",  # #3782: rows another connection commits do not outlive their test
     "tests.short_param_ids",  # #3800: a 65 KB parametrize id hides the rest of a CI log from `gh`
+    "tests.exposure_policy_pin_guard",  # a test LiveView must name its exposure_policy (2.0 flip)
 ]
 
 

@@ -7,7 +7,7 @@ from djust.live_view import LiveView
 
 def test_trigger_submit_queues_push_event():
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     v = V()
     v.trigger_submit("#payment-form")
@@ -16,7 +16,7 @@ def test_trigger_submit_queues_push_event():
 
 def test_trigger_submit_passes_selector_verbatim():
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     v = V()
     v.trigger_submit('form[data-name="oauth"]')
@@ -27,7 +27,7 @@ def test_trigger_submit_passes_selector_verbatim():
 
 def test_multiple_trigger_submits_queue_independently():
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     v = V()
     v.trigger_submit("#first")
@@ -39,7 +39,7 @@ def test_multiple_trigger_submits_queue_independently():
 
 def test_trigger_submit_coexists_with_push_event():
     class V(LiveView):
-        pass
+        exposure_policy = "legacy"
 
     v = V()
     v.push_event("flash", {"message": "saving"})

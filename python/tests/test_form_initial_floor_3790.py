@@ -591,6 +591,7 @@ def _leak_template() -> str:
 
 
 class _EntryView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     username = "floor-user"
 

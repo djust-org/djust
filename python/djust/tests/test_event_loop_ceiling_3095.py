@@ -42,6 +42,7 @@ def _note(key):
 
 
 class _CeilingView(LiveView):
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{MOD}._CeilingView"><b>{{{{ count }}}}</b></div>'
 
     def mount(self, request, **kwargs):
@@ -59,6 +60,7 @@ class _CeilingView(LiveView):
 
 
 class _TickView(LiveView):
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{MOD}._TickView"><b>{{{{ count }}}}</b></div>'
     tick_interval = 30
 
@@ -280,6 +282,7 @@ async def test_permission_and_object_checks_still_hop_when_they_can_touch_the_db
     monkeypatch.setattr(wu, "sync_to_async", counting)
 
     class _Guarded(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root>x</div>"
 
         def get_object(self):
@@ -604,6 +607,7 @@ def test_mark_db_check_due_falls_back_when_the_executor_is_not_ours():
 class _AlternatingTickView(LiveView):
     """Skips the render on odd ticks and changes state on even ones."""
 
+    exposure_policy = "legacy"
     template = f'<div dj-root dj-view="{MOD}._AlternatingTickView"><b>{{{{ count }}}}</b></div>'
     tick_interval = 30
 
@@ -658,6 +662,7 @@ async def test_a_permission_required_handler_is_still_denied(rf):
     import djust.websocket_utils as wu
 
     class _Guarded(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root>x</div>"
 
         @permission_required("auth.change_user")

@@ -23,18 +23,22 @@ from djust.routing import _regex_route_path, _reset_route_map_cache, build_route
 
 
 class _Home(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>home</div>"
 
 
 class _Doc(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>doc</div>"
 
 
 class _Shadow(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>shadow</div>"
 
 
 class _NotFound(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root>404</div>"
 
 

@@ -18,6 +18,7 @@ from djust import LiveView
 class SafeNestedView(LiveView):
     """Test view with SafeString in various nested structures"""
 
+    exposure_policy = "legacy"
     template_name = None
     template = """
     <div dj-view>

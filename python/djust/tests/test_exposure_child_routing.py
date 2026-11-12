@@ -96,6 +96,7 @@ class AmbiguousRoot(LiveView):
 
 
 class LegacyLeaf(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "legacy-leaf"
     template = '<div><button dj-click="poke">x</button></div>'
@@ -106,6 +107,7 @@ class LegacyLeaf(LiveView):
 
 
 class LegacyMiddle(LiveView):
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "legacy-middle"
     template = (
@@ -118,6 +120,7 @@ class LegacyMiddle(LiveView):
 
 
 class LegacyRoot(LiveView):
+    exposure_policy = "legacy"
     template = (
         "<div dj-root>{% load live_tags %}"
         f'{{% live_render "{MODULE}.LegacyMiddle" sticky=True %}}</div>'

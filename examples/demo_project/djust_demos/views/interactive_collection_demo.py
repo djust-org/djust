@@ -34,6 +34,7 @@ def _row(key, name):
 
 
 class InteractiveCollectionView(LiveView):
+    exposure_policy = "legacy"
     template_name = "demos/interactive_collection.html"
     rows = DropdownMenu.collection()
 

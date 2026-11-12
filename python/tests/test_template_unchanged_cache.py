@@ -115,6 +115,8 @@ def test_liveview_property_reuses_text_region_on_unchanged_source():
     from djust import LiveView
 
     class DynamicView(LiveView):
+        exposure_policy = "legacy"
+
         @property
         def template(self):
             return TEMPLATE

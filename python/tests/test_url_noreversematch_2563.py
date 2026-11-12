@@ -234,6 +234,7 @@ class TestNeverSwallowed:
         from djust import LiveView
 
         class BrokenLinkView(LiveView):
+            exposure_policy = "legacy"
             template = "<div dj-root><a href=\"{% url 'nope' %}\">x</a></div>"
 
         request = RequestFactory().get("/")

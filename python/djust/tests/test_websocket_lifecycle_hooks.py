@@ -37,6 +37,7 @@ class _LifecycleHookMixin:
 
 
 class _HookView(_LifecycleHookMixin, LiveView):
+    exposure_policy = "legacy"
     template_name = None  # not rendering HTML in these tests
 
     def mount(self, request, **kwargs):
@@ -49,6 +50,7 @@ class _HookView(_LifecycleHookMixin, LiveView):
 class _NoHookView(LiveView):
     """View with no _ensure_tenant — should mount without error."""
 
+    exposure_policy = "legacy"
     template_name = None
 
     def get_context_data(self, **kwargs):

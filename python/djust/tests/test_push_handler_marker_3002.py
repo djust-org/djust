@@ -62,6 +62,7 @@ MODES = ["strict", "warn", "open"]
 
 
 class RoomView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root><b>{{ n }}</b></div>"
     login_required = False
 
@@ -123,6 +124,7 @@ class DeepView(OverrideView):
 
 
 class StaticView(LiveView):
+    exposure_policy = "legacy"
     template = "<div dj-root></div>"
     login_required = False
 
@@ -340,6 +342,8 @@ async def test_ws_debug_refusal_does_not_reveal_that_the_handler_exists():
 
 def test_debug_hints_never_suggest_a_push_handler():
     class Twin(LiveView):
+        exposure_policy = "legacy"
+
         @push_handler
         def _secret(self, **kwargs): ...
 
@@ -352,6 +356,8 @@ def test_debug_hints_never_suggest_a_push_handler():
         # Control: an ordinary private twin still is.
 
         class Ordinary(LiveView):
+            exposure_policy = "legacy"
+
             def _secret(self, **kwargs): ...
 
         assert "private" in _format_handler_not_found_error(Ordinary(), "secret")
@@ -527,6 +533,7 @@ def test_v004_does_not_flag_an_unmarked_override_of_a_marked_method():
     from djust.checks.components import check_liveviews
 
     class Base(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root></div>"
         login_required = False
 
@@ -619,6 +626,7 @@ def test_http_api_answers_unknown_handler_for_a_marked_handler():
     from djust.api.registry import register_api_view, reset_registry
 
     class ApiRoom(LiveView):
+        exposure_policy = "legacy"
         api_name = "push.room"
         login_required = False
 
@@ -657,6 +665,7 @@ def test_v004_skips_marked_handlers_of_any_name_but_keeps_flagging_the_rest():
     from djust.checks.components import check_liveviews
 
     class Checked(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root></div>"
         login_required = False
 
@@ -689,6 +698,7 @@ from djust.decorators import event_handler, push_handler
 
 
 class Bound(LiveView):
+    exposure_policy = "legacy"
     template = """<div dj-root>
 <button dj-click="refresh_room">a</button>
 <button dj-click="helper">b</button>
@@ -901,6 +911,8 @@ async def test_ws_override_is_refused_as_not_found_not_as_a_security_failure(cap
 
 def test_debug_hints_skip_overrides_of_push_handlers():
     class Base(LiveView):
+        exposure_policy = "legacy"
+
         @push_handler
         def _secret(self, **kwargs): ...
 
@@ -926,6 +938,7 @@ def test_http_api_refuses_an_unmarked_override_like_an_unknown_handler():
     from djust.api.registry import register_api_view, reset_registry
 
     class ApiBase(LiveView):
+        exposure_policy = "legacy"
         api_name = "push.base"
         login_required = False
 
@@ -1012,6 +1025,7 @@ async def test_time_travel_replay_refuses_an_event_handler_override_of_a_push_na
 
 def test_v021_sees_an_unmarked_definition_on_another_base_than_the_marker():
     class Marker(LiveView):
+        exposure_policy = "legacy"
         template = "<div dj-root></div>"
 
         @push_handler
@@ -1021,6 +1035,8 @@ def test_v021_sees_an_unmarked_definition_on_another_base_than_the_marker():
         def bar(self, **kwargs): ...
 
     class Eh(LiveView):
+        exposure_policy = "legacy"
+
         @event_handler
         def foo(self, **kwargs): ...
 

@@ -14,6 +14,7 @@ class HomeCounterDemo(LiveView):
     """
     Simple counter demo for homepage - showcases instant reactivity
     """
+    exposure_policy = "legacy"
     template = """
     <div class="text-center">
         <div class="display-1 fw-bold mb-3" style="color: #667eea;">{{ count }}</div>
@@ -51,6 +52,7 @@ class HomeSearchDemo(LiveView):
     """
     Live search/filter demo - showcases real-time filtering
     """
+    exposure_policy = "legacy"
     template = """
     <div>
         <input
@@ -106,6 +108,7 @@ class HomeLiveDataDemo(LiveView):
     """
     Live updating data table - showcases real-time data updates
     """
+    exposure_policy = "legacy"
     template = """
     <div>
         <div class="d-flex justify-content-between align-items-center mb-3">
@@ -193,6 +196,7 @@ class HomeTodoDemo(LiveView):
     """
     Simple todo list demo - showcases list manipulation
     """
+    exposure_policy = "legacy"
     template = """
     <div>
         <form dj-submit="add_todo" class="mb-3">

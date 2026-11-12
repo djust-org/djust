@@ -37,6 +37,7 @@ class OneField(forms.Form):
 
 
 class FourStepWizard(WizardMixin, LiveView):
+    exposure_policy = "legacy"
     wizard_steps = [{"name": n, "title": n, "form_class": OneField} for n in "abcd"]
     template = "<div dj-root></div>"
 
@@ -185,6 +186,7 @@ RowFormSet = formset_factory(RowForm, extra=0)
 
 
 class RowsView(FormSetHelpersMixin, LiveView):
+    exposure_policy = "legacy"
     formset_classes = {"rows": RowFormSet}
 
     def mount(self, request=None, **kwargs):

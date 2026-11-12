@@ -30,6 +30,8 @@ class _Block:
 
 def _render(template):
     class _V(LiveView):
+        exposure_policy = "legacy"
+
         def mount(self, request, **kwargs):
             self._block = _Block()
 
@@ -82,6 +84,8 @@ class TestNestedDictListResolve:
                 self.payload = {"items": "DICT-ITEMS-VALUE"}
 
         class _D(LiveView):
+            exposure_policy = "legacy"
+
             def mount(self, request, **kwargs):
                 self._w = _Wrap()
 
@@ -121,6 +125,7 @@ class TestFloorNotBypassedByItemAccess:
         u = User.objects.create_user(username="v", password="s3cret")
 
         class _V(LiveView):
+            exposure_policy = "legacy"
             template = "<div>[{{ member.password }}]</div>"
 
             def mount(self, request, **kwargs):

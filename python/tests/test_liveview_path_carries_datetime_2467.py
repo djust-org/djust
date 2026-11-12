@@ -136,6 +136,7 @@ class _BaseView(LiveView):
     suite over a real divergence.
     """
 
+    exposure_policy = "legacy"
     _value: object = None
 
     def mount(self, request, **kwargs):  # noqa: ANN001, ANN003, ANN201

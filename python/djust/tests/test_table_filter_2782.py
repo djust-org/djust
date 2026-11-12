@@ -206,6 +206,7 @@ class FilterableTableHostView(LiveView):
     """Renders the table plus ``vis=`` (visible row ids, in render order) and
     ``sel=`` (``selected_rows``) summaries for the assertions."""
 
+    exposure_policy = "legacy"
     template = (
         f'<div dj-root dj-view="{_MODULE}.FilterableTableHostView" dj-id="0">'
         "<p>vis={{ vis }}</p><p>sel={{ sel }}</p>{{ table.render }}</div>"

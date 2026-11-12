@@ -261,6 +261,7 @@ def _config_view_class():
     from djust.decorators import cache, debounce, event_handler, throttle
 
     class ConfigView(LiveView):
+        exposure_policy = "legacy"
         template = '<div dj-view="x.ConfigView" dj-id="0">{{ rows|length }}</div>'
         reads: list = []
 

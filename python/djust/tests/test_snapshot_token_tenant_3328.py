@@ -33,6 +33,7 @@ _CONFIG = {"TENANT_RESOLVER": "subdomain"}
 
 
 class _TenantView(TenantMixin, LiveView):
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = '<div dj-root dj-id="0">[{{ secret }}]</div>'
 
@@ -56,6 +57,7 @@ class _OptionalTenantView(_TenantView):
 
 
 class _PlainView(LiveView):
+    exposure_policy = "legacy"
     enable_state_snapshot = True
     template = '<div dj-root dj-id="0">[{{ secret }}]</div>'
 
@@ -293,6 +295,7 @@ class TestRenderOnlyKeysChainThroughTheMro:
         from djust.mixins.context import legacy_render_only_keys
 
         class _Edit(ModelFormMixin, TenantMixin, LiveView):
+            exposure_policy = "legacy"
             context_object_name = "project"
 
         view = _Edit()
@@ -306,6 +309,7 @@ class TestRenderOnlyKeysChainThroughTheMro:
         from djust.mixins.context import legacy_render_only_keys
 
         class _Edit(TenantMixin, ModelFormMixin, LiveView):
+            exposure_policy = "legacy"
             context_object_name = "project"
 
         view = _Edit()

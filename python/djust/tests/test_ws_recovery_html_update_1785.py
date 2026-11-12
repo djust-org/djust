@@ -31,6 +31,7 @@ from djust.decorators import event_handler
 class _WSForceFullView(LiveView):
     """Module-level view whose event forces the full-HTML (``html_update``) path."""
 
+    exposure_policy = "legacy"
     template = (
         '<div dj-view="djust.tests.test_ws_recovery_html_update_1785._WSForceFullView" '
         'dj-id="0">Count: {{ count }}</div>'

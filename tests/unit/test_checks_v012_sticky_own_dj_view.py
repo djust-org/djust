@@ -121,6 +121,7 @@ class TestV012StickyChildOwnDjView:
             "V012CanarySyntheticChild",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "djust.tests.checkviews_v012",
                 "sticky": True,
                 "sticky_id": "v012_canary",
@@ -155,6 +156,7 @@ class TestV012StickyChildOwnDjView:
             "V012GateWithDjView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "djust.tests.checkviews_v012",
                 "sticky": True,
                 "sticky_id": "v012_gate_on",
@@ -165,6 +167,7 @@ class TestV012StickyChildOwnDjView:
             "V012GateWithoutDjView",
             (LiveView,),
             {
+                "exposure_policy": "legacy",
                 "__module__": "djust.tests.checkviews_v012",
                 "sticky": True,
                 "sticky_id": "v012_gate_off",

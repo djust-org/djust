@@ -262,6 +262,7 @@ def test_the_mixin_captures_the_env_it_pushed():
     from djust.testing import LiveViewTestClient
 
     class V(LiveView):
+        exposure_policy = "legacy"
         template = "<div>{{ v }}</div>"
 
         def mount(self, request, **kwargs):

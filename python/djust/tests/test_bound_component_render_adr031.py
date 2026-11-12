@@ -115,6 +115,7 @@ class NoTemplate(LiveComponent):
 
 
 class Page(LiveView):
+    exposure_policy = "legacy"
     template = '<div dj-root dj-id="0">{{ nav }}|{{ nav.active }}|{{ plain }}</div>'
     nav = Tabs(active="overview")
     plain = NoTemplate()
@@ -302,6 +303,7 @@ class TestBoundComponentRenderRoundTrip:
                 self.state["rows"].append("x")
 
         class RowsPage(LiveView):
+            exposure_policy = "legacy"
             template = '<div dj-root dj-id="0">{{ grid }}</div>'
             grid = Rows()
 
@@ -338,6 +340,7 @@ class TestBoundComponentRenderRoundTrip:
             template = "<p>{{ active }}:{{ items|length }}</p>"
 
         class MenuPage(LiveView):
+            exposure_policy = "legacy"
             menu = Menu(items=["x", "y"])
 
         view = MenuPage()
@@ -363,6 +366,7 @@ class TestBoundComponentRenderRoundTrip:
             template_name = "bound_nav.html"
 
         class FilePage(LiveView):
+            exposure_policy = "legacy"
             nav = FileTabs()
 
         view = FilePage()
@@ -381,6 +385,7 @@ class TestBoundComponentRenderRoundTrip:
             template_name = "bound_child.html"
 
         class ExtPage(LiveView):
+            exposure_policy = "legacy"
             nav = ExtTabs()
 
         assert "<s>f!</s>" in str(ExtPage().nav)
@@ -393,6 +398,7 @@ class TestBoundComponentRenderRoundTrip:
                 active: str = "z"
 
         class InlinePage(LiveView):
+            exposure_policy = "legacy"
             nav = Bare(template="<q>{{ active }}</q>", active="k")
 
         view = InlinePage()
@@ -402,6 +408,7 @@ class TestBoundComponentRenderRoundTrip:
 
     def test_shipped_descriptor_without_template_is_unchanged(self):
         class ShippedPage(LiveView):
+            exposure_policy = "legacy"
             template = '<div dj-root dj-id="0">{{ tabs }}</div>'
             tabs = ShippedTabs(active="one")
 

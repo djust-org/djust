@@ -34,6 +34,7 @@ from djust import LiveView
 
 
 class _AsyncView(LiveView):
+    exposure_policy = "legacy"
     template = "<div>{{ n }}</div>"
 
     def mount(self, request, **kwargs):
@@ -112,6 +113,7 @@ class _ErrorAsyncView(LiveView):
     """The documented error-state pattern: a callback that raises, plus
     ``handle_async_result`` to render the error."""
 
+    exposure_policy = "legacy"
     template = "<div>{{ n }}</div>"
 
     def mount(self, request, **kwargs):

@@ -35,6 +35,7 @@ class AudioPlayerView(LiveView):
     attribute is the state that must survive the nav.
     """
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "audio-player"
     template_name = "sticky_demo/audio_player.html"
@@ -67,6 +68,7 @@ class NotificationCenterView(LiveView):
     or a pg_notify listener.
     """
 
+    exposure_policy = "legacy"
     sticky = True
     sticky_id = "notification-center"
     template_name = "sticky_demo/notification_center.html"
@@ -110,6 +112,7 @@ class NotificationCenterView(LiveView):
 class DashboardView(LiveView):
     """Dashboard — embeds BOTH stickies and shows some metrics."""
 
+    exposure_policy = "legacy"
     template_name = "sticky_demo/dashboard.html"
 
     def mount(self, request, **kwargs):
@@ -125,6 +128,7 @@ class DashboardView(LiveView):
 class SettingsView(LiveView):
     """Settings page — same stickies, different primary content."""
 
+    exposure_policy = "legacy"
     template_name = "sticky_demo/settings.html"
 
     def mount(self, request, **kwargs):
@@ -145,6 +149,7 @@ class ReportsView(LiveView):
     unmount-on-missing-slot path end-to-end.
     """
 
+    exposure_policy = "legacy"
     template_name = "sticky_demo/reports.html"
 
     def mount(self, request, **kwargs):
