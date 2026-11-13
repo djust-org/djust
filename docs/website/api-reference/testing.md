@@ -28,11 +28,17 @@ Initialize the view. Calls `mount()` on the LiveView, then `handle_params(params
 the order the HTTP GET and the socket mount run them in, with an empty dict when there is
 no query string. A view that declares `params_form` therefore gets its form here too. The
 default `via_websocket=True` mounts as the WebSocket path does; pass
-`via_websocket=False` to exercise the HTTP-prerender branch instead. No
-login or `check_permissions()` check runs here, but the object-permission check every
-transport runs after `mount()` and `handle_params()` does: a view whose `get_object()` /
-`has_object_permission()` denies raises `PermissionDenied` (a transport answers 403 or a
-`permission_denied` frame).
+`via_websocket=False` to exercise the HTTP-prerender branch instead.
+
+Before `mount()` it runs the pre-mount sequence every transport runs
+(`login_required`, `permission_required`, `check_permissions()` and the tenant
+resolve): a user the view refuses raises `PermissionDenied`, and an anonymous user on a
+`login_required` view raises `djust.testing.MountRedirect` (its `url` is the login URL;
+the HTTP GET answers a 302 there and the socket a `navigate` frame). In both cases
+`mount()` does not run. Pass `user=` to mount as a user the view admits. After `mount()`
+and `handle_params()` the object-permission check every transport runs follows: a view
+whose `get_object()` / `has_object_permission()` denies raises `PermissionDenied` (a
+transport answers 403 or a `permission_denied` frame).
 
 ```python
 client = LiveViewTestClient(MyView)
@@ -96,7 +102,7 @@ result = client.send_event("decide", verdict="go")
 assert result["code"] == "permission_denied"
 ```
 
-`mount()` does not check the view-level `login_required` or `permission_required`, and `@rate_limit` is not applied.
+`@rate_limit` is not applied.
 
 ---
 

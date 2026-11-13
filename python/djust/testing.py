@@ -122,7 +122,78 @@ def _path_with_query(query_params: Any) -> str:
     return "/?" + text if text else "/"
 
 
+class MountRedirect(Exception):
+    """Raised by :meth:`LiveViewTestClient.mount` when the view's pre-mount auth
+    sends the user to log in (#4073).
+
+    Every transport runs the same pre-mount sequence
+    (:func:`djust.auth.core.run_pre_mount_auth`) before ``mount()``. For an
+    anonymous user on a ``login_required`` (or ``permission_required``) view it
+    returns the login URL: the HTTP GET answers a 302 to it and the socket sends
+    a ``navigate`` frame, and the view is never mounted. The test client raises
+    this instead, with the URL as :attr:`url`, and does not mark the client
+    mounted. Pass ``user=`` to :class:`LiveViewTestClient` to mount as a user
+    the view admits.
+    """
+
+    def __init__(self, url: str) -> None:
+        super().__init__(f"pre-mount auth redirected to {url!r}; the view was not mounted")
+        self.url = url
+
+
+def _run_pre_mount_auth(view: Any, request: Any) -> None:
+    """The transports' pre-mount sequence, raising where they refuse (#4073).
+
+    Calls :func:`djust.auth.core.run_pre_mount_auth` (or its ``async`` twin for
+    a view whose ``check_permissions`` is ``async def``, as the runtime does).
+    ``PermissionDenied`` propagates; a redirect verdict raises
+    :class:`MountRedirect`.
+    """
+    from .auth.core import arun_pre_mount_auth, has_async_check_permissions, run_pre_mount_auth
+
+    if has_async_check_permissions(view):
+        from asgiref.sync import async_to_sync
+
+        redirect_url = async_to_sync(arun_pre_mount_auth)(view, request)
+    else:
+        redirect_url = run_pre_mount_auth(view, request)
+    if redirect_url:
+        raise MountRedirect(redirect_url)
+
+
+def _tenant_scope() -> Any:
+    """Restore the caller's current tenant after the mount, as the runtime does."""
+    import contextlib
+
+    try:
+        from .tenants.middleware import tenant_context
+    except Exception:  # noqa: BLE001 — tenants is optional
+        return contextlib.nullcontext()
+    from .tenants.middleware import get_current_tenant
+
+    return tenant_context(get_current_tenant())
+
+
 def _mount_and_apply_params(
+    view: Any,
+    request: Any,
+    mount_kwargs: Dict[str, Any],
+    route_kwargs: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Pre-mount auth, then the route, ``mount()``, the params hook and the object check.
+
+    The pre-mount sequence every transport runs (``run_pre_mount_auth``:
+    ``login_required``, ``permission_required``, ``check_permissions`` and the
+    tenant resolve/bind) runs first; a refusal raises ``PermissionDenied`` or
+    :class:`MountRedirect` and ``mount()`` never runs (#4073). The tenant it
+    binds is restored when the mount returns, as the runtime scopes it.
+    """
+    with _tenant_scope():
+        _run_pre_mount_auth(view, request)
+        _mount_and_apply_params_inner(view, request, mount_kwargs, route_kwargs)
+
+
+def _mount_and_apply_params_inner(
     view: Any,
     request: Any,
     mount_kwargs: Dict[str, Any],
@@ -285,7 +356,12 @@ class LiveViewTestClient:
             **params: Parameters to pass to mount() (like URL kwargs)
 
         Raises:
-            PermissionDenied: the object-permission check (ADR-017) that every
+            MountRedirect: the pre-mount auth every transport runs before
+                ``mount()`` sent the user to log in (an anonymous user on a
+                ``login_required`` view); ``mount()`` did not run (#4073).
+            PermissionDenied: the pre-mount auth refused the user
+                (``permission_required``, ``check_permissions``), or the
+                object-permission check (ADR-017) that every
                 transport runs after ``mount()`` and ``handle_params()`` denied
                 the view's object, as it does for a routed ``ModelFormMixin``
                 view mounted without ``route_kwargs`` (#3977). A transport
@@ -346,7 +422,7 @@ class LiveViewTestClient:
         # mount(), then handle_params() the way the transports do (#3706)
         try:
             _mount_and_apply_params(self.view_instance, request, params, route_kwargs)
-        except PermissionDenied:
+        except (PermissionDenied, MountRedirect):
             self._mounted = False
             raise
 
