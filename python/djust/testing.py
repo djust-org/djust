@@ -296,6 +296,20 @@ class NoHandlerFoundError(Exception):
     """
 
 
+class EventRejectedError(NoHandlerFoundError):
+    """Raised by :meth:`LiveViewTestClient.send_event` when the transports
+    refuse the event before any handler runs (#4096): an unsafe event name,
+    a method without ``@event_handler`` under the default strict
+    ``event_security``, a server-push or server-only method.
+
+    The check is the transports' own (``websocket_utils._check_event_security``),
+    so a test cannot pass for an event the browser cannot send. A subclass of
+    :class:`NoHandlerFoundError`: to a browser such a method does not exist
+    as an event. ``raise_on_missing=False`` returns the envelope instead, with
+    ``error`` set to the transports' answer and ``code="event_rejected"``.
+    """
+
+
 class LiveViewTestClient:
     """
     Test LiveViews without a browser or WebSocket connection.
@@ -546,7 +560,9 @@ class LiveViewTestClient:
                 no-op (#2823). Pass False to get the old
                 ``{"success": False, ...}`` envelope-return behavior, e.g.
                 for a test that deliberately probes the error-envelope
-                shape.
+                shape. The same applies to an event the transports refuse
+                before any handler runs, such as a method without
+                ``@event_handler`` (:class:`EventRejectedError`, #4096).
             **params: Parameters to pass to the handler
 
         Returns:
@@ -561,6 +577,10 @@ class LiveViewTestClient:
             RuntimeError: If view not mounted
             NoHandlerFoundError: If no handler is found for ``event_name``
                 and ``raise_on_missing`` is True (the default).
+            EventRejectedError: If the transports refuse the event (an
+                undecorated method under strict ``event_security``, a
+                server-push method, an unsafe name) and ``raise_on_missing``
+                is True.
 
         Example:
             result = client.send_event('search', query='test', page=1)
@@ -580,6 +600,23 @@ class LiveViewTestClient:
         self.last_event_queries = None
         # Capture state before
         state_before = self.get_state()
+
+        from .security.event_guard import is_safe_event_name
+        from .websocket_utils import _check_event_security, _safe_error
+
+        # The transports' checks, in the transports' order
+        # (``websocket_utils._validate_event_security``, #4096): the event name,
+        # the handler lookup, the event-security policy, then the handler's
+        # @rate_limit and the permission gates below.
+        if not is_safe_event_name(event_name):
+            return self._rejected(
+                event_name,
+                params,
+                state_before,
+                raise_on_missing,
+                detail="Blocked unsafe event name: %s" % event_name,
+                answer=_safe_error("Blocked unsafe event name: %s" % event_name),
+            )
 
         # Get the handler
         handler = getattr(self.view_instance, event_name, None)
@@ -602,6 +639,17 @@ class LiveViewTestClient:
                 "state_after": state_before,
                 "duration_ms": 0,
             }
+
+        security_error = _check_event_security(handler, self.view_instance, event_name)
+        if security_error:
+            return self._rejected(
+                event_name,
+                params,
+                state_before,
+                raise_on_missing,
+                detail=security_error,
+                answer=_safe_error(security_error),
+            )
 
         # The handler's @rate_limit, before the permission gates as in the
         # transports' _validate_event_security (#4085): the shared per-caller
@@ -664,9 +712,16 @@ class LiveViewTestClient:
 
         validation = validate_handler_params(handler, params, event_name)
         if not validation["valid"]:
+            # The transports' invalid-parameter answer: the error and its
+            # ``validation_details``. The handler did not run.
             return {
                 "success": False,
                 "error": validation["error"],
+                "validation_details": {
+                    "expected_params": validation["expected"],
+                    "provided_params": validation["provided"],
+                    "type_errors": validation["type_errors"],
+                },
                 "state_before": state_before,
                 "state_after": state_before,
                 "duration_ms": 0,
@@ -716,6 +771,44 @@ class LiveViewTestClient:
             "state_before": state_before,
             "state_after": state_after,
             "duration_ms": duration_ms,
+        }
+
+    def _rejected(
+        self,
+        event_name: str,
+        params: Dict[str, Any],
+        state_before: Dict[str, Any],
+        raise_on_missing: bool,
+        *,
+        detail: str,
+        answer: str,
+    ) -> Dict[str, Any]:
+        """An event the transports refuse before any handler runs (#4096).
+
+        ``answer`` is what the transports send (generic outside ``DEBUG``);
+        ``detail`` is the reason, which the exception carries.
+        """
+        self.events.append(
+            {
+                "type": "event",
+                "name": event_name,
+                "params": params,
+                "timestamp": time.time(),
+                "duration_ms": 0,
+                "error": answer,
+                "code": "event_rejected",
+            }
+        )
+        if raise_on_missing:
+            raise EventRejectedError(detail)
+        return {
+            "success": False,
+            "error": answer,
+            "detail": detail,
+            "code": "event_rejected",
+            "state_before": state_before,
+            "state_after": state_before,
+            "duration_ms": 0,
         }
 
     def send_push(
@@ -808,13 +901,24 @@ class LiveViewTestClient:
 
     def get_state(self) -> Dict[str, Any]:
         """
-        Get current view state (public variables).
+        Get the view's state: the values the view itself holds.
 
-        Returns the view's public attributes: every name that does not start
-        with an underscore and is not a method or property. This is not the
-        template context. Under explicit exposure (the default) the template
-        gets the declared ``state()`` fields and what ``get_context_data()``
-        returns; read that with ``view_instance.get_context_data()``.
+        Every public (non-underscore) attribute the view's own code defines
+        or sets: declared ``state()`` fields, attributes set in ``mount()`` or
+        a handler, and class attributes of the view's own classes. Names the
+        framework defines are not the view's state and are left out (#4096):
+        the attributes ``LiveView.__init__`` sets, the per-request and
+        configuration attributes change detection ignores (``request``,
+        ``exposure_policy``, ...), and the class attributes of djust's own
+        classes (``template``, ``login_required``, ...), even when the view
+        gives one its own value. This is the set of names change detection compares to
+        decide whether a turn renders (``websocket._snapshot_assigns``), with
+        declared fields under their own names.
+
+        This is not the template context. Under explicit exposure (the
+        default) the template gets the declared ``state()`` fields and what
+        ``get_context_data()`` returns; read that with
+        ``view_instance.get_context_data()``.
 
         Returns:
             Dict of variable names to values
@@ -822,19 +926,30 @@ class LiveViewTestClient:
         if not self.view_instance:
             return {}
 
+        from ._framework_code import is_djust_production_module
+        from .change_detection import CHANGE_DETECTION_IGNORED
+
+        view = self.view_instance
+        framework_names = set(CHANGE_DETECTION_IGNORED)
+        framework_names.update(getattr(view, "_framework_attrs", ()))
+        for klass in type(view).__mro__:
+            if klass is object or is_djust_production_module(
+                getattr(klass, "__module__", "") or ""
+            ):
+                framework_names.update(vars(klass))
+
         state = {}
-        for name in dir(self.view_instance):
-            # Skip private/magic attributes
-            if name.startswith("_"):
+        for name in dir(view):
+            if name.startswith("_") or name in framework_names:
                 continue
 
             # Skip methods and properties from the class
-            cls_attr = getattr(type(self.view_instance), name, None)
+            cls_attr = getattr(type(view), name, None)
             if callable(cls_attr) or isinstance(cls_attr, property):
                 continue
 
             try:
-                value = getattr(self.view_instance, name)
+                value = getattr(view, name)
                 # Skip callables (methods)
                 if callable(value):
                     continue
@@ -2564,8 +2679,16 @@ class LiveViewSmokeTest:
                         client = self._make_client(view_class)
                         result = client.send_event(handler_name, **fuzz_params)
 
-                        # Check if handler raised an exception (success=False with error)
-                        if not result["success"] and result.get("error"):
+                        # Check if handler raised an exception (success=False with
+                        # error). A refusal of the payload by parameter validation
+                        # (``validation_details``) is the transports' standard
+                        # invalid-parameter answer, given before the handler runs:
+                        # the input was handled, not a handler failure (#4093).
+                        if (
+                            not result["success"]
+                            and result.get("error")
+                            and "validation_details" not in result
+                        ):
                             failures.append(
                                 f"{view_name}.{handler_name} [{desc}]: {result['error']}"
                             )

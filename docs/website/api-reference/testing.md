@@ -83,7 +83,7 @@ result = client.send_event("delete_item", item_id=5)
 **Parameters:**
 
 - `event_name` (`str`) — The handler method name
-- `raise_on_missing` (`bool`) — If `True` (default), raise `NoHandlerFoundError` when no handler exists for `event_name`. Pass `False` to get a `{"success": False, ...}` result instead.
+- `raise_on_missing` (`bool`) — If `True` (default), raise `NoHandlerFoundError` when no handler exists for `event_name`, and `EventRejectedError` (a subclass) when the transports refuse the event before any handler runs: a method without `@event_handler` under the default strict `event_security`, a server-push or server-only method, a private name. Pass `False` to get a `{"success": False, ...}` result instead (`code="event_rejected"` for a refusal, with the transports' answer in `error` and the reason in `detail`).
 - `**params` — Event parameters passed to the handler
 
 **Returns:** a dict with the keys `success`, `error`, `state_before`, `state_after` and `duration_ms`. The handler's own return value is discarded.
@@ -135,7 +135,7 @@ assert "<li>" in html
 
 #### `get_state() -> dict`
 
-The current view state as a dictionary. Useful for assertions not covered by `assert_state()`:
+The current view state as a dictionary: the declared `state()` fields and the public attributes the view's own code sets (in `mount()`, a handler) or defines on its own classes. Names the framework defines are not the view's state and are left out: `request`, the attributes `LiveView.__init__` sets, and class attributes of djust's classes such as `template` or `login_required`. `state_before` and `state_after` in a `send_event()` result are this dictionary. Useful for assertions not covered by `assert_state()`:
 
 ```python
 state = client.get_state()

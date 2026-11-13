@@ -44,6 +44,7 @@ if not settings.configured:
     )
     django.setup()
 
+from djust.decorators import event_handler
 from djust.testing import (
     LiveViewTestClient,
     NoHandlerFoundError,
@@ -75,6 +76,7 @@ class MockLiveView:
         self.count = kwargs.get("initial_count", 0)
         self.items = kwargs.get("initial_items", [])
 
+    @event_handler
     def increment(self):
         """Increment counter."""
         self.count += 1
@@ -83,10 +85,12 @@ class MockLiveView:
         """Decrement counter."""
         self.count -= 1
 
+    @event_handler
     def add_item(self, item: str):
         """Add an item to the list."""
         self.items.append(item)
 
+    @event_handler
     def set_message(self, message: str = ""):
         """Set a message."""
         self.message = message

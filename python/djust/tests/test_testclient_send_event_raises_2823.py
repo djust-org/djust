@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import pytest
 
+from djust.decorators import event_handler
 from djust import LiveView
 from djust.testing import LiveViewTestClient, NoHandlerFoundError
 from djust import state
@@ -32,6 +33,7 @@ class SimpleView(LiveView):
     def mount(self, request, **kwargs):
         self.n = 0
 
+    @event_handler
     def bump(self, **kwargs):
         self.n += 1
 
@@ -85,6 +87,7 @@ def test_param_validation_failure_still_returns_envelope_unchanged():
         def mount(self, request, **kwargs):
             pass
 
+        @event_handler
         def set_count(self, count: int, **kwargs):
             self.count = count
 
