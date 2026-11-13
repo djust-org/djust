@@ -374,3 +374,188 @@ describe('a patch answer that cannot be applied', () => {
         } finally { page.close(); }
     });
 });
+
+// The shape says the tree is laid out as the render. These change WHICH
+// element sits where without changing the layout; a patch addressed by
+// position must not be applied to any of them. Over a socket each patch finds
+// its node by a generated id that travels with the element; this transport
+// has no such id, so the client numbers the elements each time the DOM is the
+// server's render and sends no token once one is new or out of order.
+describe('elements moved or replaced without changing the layout', () => {
+    const LISTS = '<!doctype html><html><head></head><body><div dj-root dj-view="app.View">'
+        + '<ul id="l"><li data-x="A">A</li><li data-x="B">B</li></ul>'
+        + '<ul id="m"><li data-x="C">C</li><li data-x="D">D</li></ul>'
+        + '<p class="same">same</p><p class="same">same</p>'
+        + '<button id="go" dj-click="bump">Go</button></div></body></html>';
+    const rootOf = (l, m) => '<div dj-root="">'
+        + `<ul id="l">${l.map(([x, text]) => `<li data-x="${x}">${text}</li>`).join('')}</ul>`
+        + `<ul id="m">${m.map(([x, text]) => `<li data-x="${x}">${text}</li>`).join('')}</ul>`
+        + '<p class="same">same</p><p class="same">same</p>'
+        + '<button dj-click="bump" id="go">Go</button></div>';
+    const M = [['C', 'C'], ['D', 'D']];
+
+    // A page whose token is the one the server would have put in it.
+    async function open() {
+        const page = await loadPage(LISTS);
+        const doc = page.win.document;
+        const meta = doc.createElement('meta');
+        meta.setAttribute('name', 'djust-render-digest');
+        meta.setAttribute('content', `d0.${page.shape()}`);
+        doc.head.appendChild(meta);
+        page.win.djust._installPageParameterContracts();
+        return page;
+    }
+    const rows = (page, id) => [...page.win.document.querySelectorAll(`#${id} li`)]
+        .map(li => [li.getAttribute('data-x'), li.textContent]);
+    // The server: the patches for the render it believes is shown when the
+    // request brings a token, the whole page of its state otherwise.
+    const serverWith = (patches, html) => (request) => request.token
+        ? {patches, render_digest: 'd1.0000000000000000'}
+        : {html, version: 1};
+    const send = (page, server) => page.send('bump', {}, server, page.win.document.getElementById('go'));
+
+    it('control: with nothing moved the token is sent and the patch lands on its row', async () => {
+        const page = await open();
+        try {
+            const request = await send(page, serverWith(
+                [{type: 'SetText', path: [0, 0, 0], text: 'A-updated'}], rootOf([['A', 'A-updated'], ['B', 'B']], M)));
+            expect(request.token).not.toBe(null);
+            expect(rows(page, 'l')).toEqual([['A', 'A-updated'], ['B', 'B']]);
+        } finally { page.close(); }
+    });
+
+    it('a script reorders two rows: the text meant for row A does not land on row B', async () => {
+        const page = await open();
+        try {
+            const list = page.win.document.getElementById('l');
+            list.insertBefore(list.children[1], list.children[0]); // B above A
+            const request = await send(page, serverWith(
+                [{type: 'SetText', path: [0, 0, 0], text: 'A-updated'}], rootOf([['A', 'A-updated'], ['B', 'B']], M)));
+            expect(request.token).toBe(null);
+            // Each row's id still goes with its own text.
+            expect(rows(page, 'l')).toEqual([['A', 'A-updated'], ['B', 'B']]);
+        } finally { page.close(); }
+    });
+
+    it('a script reorders two rows: removing row A does not remove row B', async () => {
+        const page = await open();
+        try {
+            const list = page.win.document.getElementById('l');
+            list.insertBefore(list.children[1], list.children[0]);
+            // The server deleted A: it believes B is what is left.
+            const request = await send(page, serverWith(
+                [{type: 'RemoveChild', path: [0], index: 0}], rootOf([['B', 'B']], M)));
+            expect(request.token).toBe(null);
+            expect(rows(page, 'l')).toEqual([['B', 'B']]);
+        } finally { page.close(); }
+    });
+
+    it('two identical siblings swapped', async () => {
+        const page = await open();
+        try {
+            const [first, second] = page.win.document.querySelectorAll('p.same');
+            first.parentNode.insertBefore(second, first);
+            expect((await send(page, serverWith([], rootOf([['A', 'A'], ['B', 'B']], M)))).token).toBe(null);
+        } finally { page.close(); }
+    });
+
+    it('a sibling replaced by a copy of itself', async () => {
+        const page = await open();
+        try {
+            const row = page.win.document.querySelector('#l li');
+            row.replaceWith(row.cloneNode(true));
+            expect((await send(page, serverWith([], rootOf([['A', 'A'], ['B', 'B']], M)))).token).toBe(null);
+        } finally { page.close(); }
+    });
+
+    it('rows exchanged between two parents of one layout', async () => {
+        const page = await open();
+        try {
+            const doc = page.win.document;
+            const b = doc.querySelector('#l li:nth-child(2)');
+            const c = doc.querySelector('#m li:nth-child(1)');
+            doc.getElementById('l').appendChild(c);
+            doc.getElementById('m').insertBefore(b, doc.getElementById('m').firstChild);
+            const request = await send(page, serverWith(
+                [{type: 'SetText', path: [1, 0, 0], text: 'C-updated'}],
+                rootOf([['A', 'A'], ['B', 'B']], [['C', 'C-updated'], ['D', 'D']])));
+            expect(request.token).toBe(null);
+            expect(rows(page, 'm')).toEqual([['C', 'C-updated'], ['D', 'D']]);
+        } finally { page.close(); }
+    });
+
+    it('rows the server\'s own answers insert and move are part of the render: the next token is sent', async () => {
+        const page = await open();
+        try {
+            // A whole page with a new row, then a patch answer adding another.
+            const first = await send(page, () => ({
+                html: rootOf([['A', 'A'], ['B', 'B'], ['E', 'E']], M), version: 1,
+                render_digest: `d1.${'x'.repeat(16)}`,
+            }));
+            expect(first.token).not.toBe(null);
+            // (Name the token of the page as it now is.)
+            const shape = page.shape();
+            await send(page, () => ({html: rootOf([['A', 'A'], ['B', 'B'], ['E', 'E']], M), version: 1,
+                render_digest: `d2.${shape}`}));
+            const third = await send(page, () => ({patches: [], render_digest: `d2.${shape}`}));
+            expect(third.token).toBe(`d2.${shape}`);
+        } finally { page.close(); }
+    });
+
+    it('the DOM is reordered while a View Transition holds the patches back: none is applied', async () => {
+        const page = await open();
+        try {
+            const {win} = page;
+            const doc = win.document;
+            doc.body.setAttribute('dj-view-transitions', '');
+            // As a browser does: the update callback runs in a later microtask.
+            doc.startViewTransition = (update) => {
+                const done = Promise.resolve().then(() => {
+                    // What another script does in between.
+                    const list = doc.getElementById('l');
+                    list.insertBefore(list.children[1], list.children[0]);
+                    update();
+                });
+                return {updateCallbackDone: done, finished: done, ready: done, skipTransition() {}};
+            };
+            const server = (request) => request.resync
+                ? {html: rootOf([['A', 'A-updated'], ['B', 'B']], M), version: 1}
+                : {patches: [{type: 'SetText', path: [0, 0, 0], text: 'A-updated'}],
+                    render_digest: 'd1.0000000000000000'};
+            const request = await send(page, server);
+            // The token was good when the request left ...
+            expect(request.token).not.toBe(null);
+            // ... and the patch was not applied to the row that had moved up.
+            expect(page.requests.map(r => r.resync)).toEqual([false, true]);
+            expect(rows(page, 'l')).toEqual([['A', 'A-updated'], ['B', 'B']]);
+            expect(page.reloads()).toBe(0);
+        } finally { page.close(); }
+    });
+});
+
+describe('a client cache hit', () => {
+    it('changes the DOM with no answer from the server: the token is forgotten', async () => {
+        const page = await loadPage(PAGE('d0'));
+        try {
+            const {win} = page;
+            win.djust.setCacheConfig({bump: {ttl: 60}});
+            const cached = (request) => ({
+                patches: [{type: 'SetText', path: [0, 0], text: 'cached'}],
+                cache_request_id: JSON.parse(request.body)._cacheRequestId,
+                render_digest: token('d1'),
+            });
+            const first = await bump(page, cached);
+            expect(first.token).toBe(token('d0'));
+            expect(shown(page)).toBe('cached');
+            win.document.getElementById('n').textContent = 'changed since';
+            // The same event again: answered from the cache, with no request.
+            await bump(page, () => { throw new Error('the cache should have answered'); });
+            expect(page.requests.length).toBe(1);
+            expect(shown(page)).toBe('cached');
+            // Text only, so the DOM's shape is the same; the token still must
+            // not be sent, because no server render stands behind this DOM.
+            const other = await page.send('other', {}, whole(5, 'd5'), win.document.getElementById('go'));
+            expect(other.token).toBe(null);
+        } finally { page.close(); }
+    });
+});

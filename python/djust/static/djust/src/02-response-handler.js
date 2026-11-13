@@ -303,7 +303,10 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             // ``handleStickyUpdate`` with a scoped ``rootEl``. No ambiguity
             // here — calling applyPatches(data.patches) with the default
             // null rootEl is correct for the root view.
-            const success = await applyPatches(data.patches);
+            // `_applyIf` is set by the page-POST fallback for a patch answer
+            // (11-event-handler.js): a function, so never from the wire.
+            const success = await applyPatches(data.patches, null,
+                typeof data._applyIf === 'function' ? data._applyIf : null);
             _isBroadcastUpdate = false;
 
             // For broadcast patches, sync textarea .value from .textContent.
@@ -322,7 +325,9 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 // Patches failed — likely due to {% if %} blocks shifting DOM structure.
                 // Request full HTML from server for DOM morphing (on-demand, not sent
                 // with every response to avoid bandwidth regression).
-                console.warn(
+                // (Not when the fallback withheld the patches because the DOM
+                // had changed: nothing failed, and the resync below is the plan.)
+                if (!data._applyIfRefused) console.warn(
                     '[LiveView] VDOM patches failed. This usually happens when {% if %} blocks ' +
                     'add/remove DOM elements, shifting sibling positions.\n' +
                     'Fix: Use style="display:none" toggling instead of {% if %} for elements:\n' +

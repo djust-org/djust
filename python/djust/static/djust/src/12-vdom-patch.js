@@ -1756,9 +1756,27 @@ function _shapeName(value) {
         c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 }
 
-/** The shape of `root`'s tree as 16 hex digits, or null if it cannot be computed. */
-function domShape(root) {
+// The shape says the tree is laid out as the server's render. It does not say
+// the same nodes sit in the same places: a script can swap two rows that have
+// one layout. So the elements are also numbered, in document order, each time
+// the DOM is the server's render (the page load, and after every answer of the
+// page-POST fallback is applied). While every element still carries a number
+// and the numbers still rise in document order, no element was moved, swapped,
+// replaced by a copy or put under another parent since then; removals keep
+// the order and change the shape instead. A position is trusted for a patch
+// only when both hold.
+const _syncedOrder = new WeakMap();
+
+/**
+ * The shape of `root`'s tree as 16 hex digits, or null if it cannot be computed.
+ *
+ * `mode` 'mark' also numbers the elements as the server's render. `mode`
+ * 'verify' also checks those numbers and returns null when an element is new
+ * or out of order.
+ */
+function domShape(root, mode = null) {
     if (!root) return null;
+    let order = 0, last = -1, inOrder = true;
     let crc = 0xFFFFFFFF, a = 1, b = 0;
     const put = (text) => {
         for (let i = 0; i < text.length; i++) {
@@ -1772,6 +1790,13 @@ function domShape(root) {
     const walk = (node) => {
         for (const child of getSignificantChildren(node)) {
             if (child.nodeType === Node.ELEMENT_NODE) {
+                if (mode === 'mark') {
+                    _syncedOrder.set(child, order++);
+                } else if (mode === 'verify') {
+                    const number = _syncedOrder.get(child);
+                    if (number === undefined || number <= last) inOrder = false;
+                    last = number;
+                }
                 const id = child.getAttribute('id');
                 const key = child.getAttribute('dj-key') || child.getAttribute('data-key');
                 put('<' + child.tagName.toLowerCase()
@@ -1788,6 +1813,7 @@ function domShape(root) {
     } catch (_e) {
         return null; // e.g. an id that is not valid UTF-16
     }
+    if (!inOrder) return null;
     const hex = (n) => (n >>> 0).toString(16).padStart(8, '0');
     return hex(crc ^ 0xFFFFFFFF) + hex((b << 16) | a);
 }
@@ -3368,17 +3394,21 @@ function _shouldUseViewTransition() {
  * to abandon the animation and return false so the caller can trigger
  * a full re-render fallback. ADR-013.
  */
-async function applyPatches(patches, rootEl = null) {
+async function applyPatches(patches, rootEl = null, applyIf = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
     // A frame for a view mounted beside the page view patches its container (#3252).
     if (!rootEl && _activeSlot) rootEl = _activeSlot.root;
+    // `applyIf` (#4108) is asked at the last moment, in the same synchronous
+    // step as the first mutation: under a View Transition that is the update
+    // callback, which runs later than this call. False applies nothing.
+    const apply = () => (applyIf && !applyIf() ? false : _applyPatchesInner(patches, rootEl));
 
     if (_shouldUseViewTransition()) {
         let innerResult = true;
         const transition = document.startViewTransition(() => {
-            innerResult = _applyPatchesInner(patches, rootEl);
+            innerResult = apply();
         });
         try {
             await transition.updateCallbackDone;
@@ -3390,7 +3420,7 @@ async function applyPatches(patches, rootEl = null) {
         return innerResult;
     }
 
-    return _applyPatchesInner(patches, rootEl);
+    return apply();
 }
 
 /**

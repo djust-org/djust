@@ -55,6 +55,19 @@ function _readPageRenderDigest() {
     const meta = document.querySelector(_RENDER_DIGEST_META);
     _setRenderToken(meta && meta.getAttribute('content'));
     _httpDigestMisses = _httpDigestHold = 0;
+    _markDomAsRendered();
+}
+
+// The DOM is the server's render now (the page as loaded, or an answer just
+// applied): number its elements, so a later move, swap or replacement shows.
+function _markDomAsRendered() {
+    if (_httpRenderDigest) domShape(getLiveViewRoot(), 'mark');
+}
+
+// Whether the DOM still is the render `shape` stands for: the same tree, made
+// of the same elements in the same order.
+function _domIsRender(shape) {
+    return domShape(getLiveViewRoot(), 'verify') === shape;
 }
 
 // The token this fallback request sends, if any: the digest, and the shape of
@@ -65,9 +78,10 @@ function _renderTokenToSend() {
         _httpDigestHold -= 1;
         return null;
     }
-    // The DOM is not laid out as the render the digest stands for: patches
-    // computed from that render would land on other nodes.
-    if (domShape(getLiveViewRoot()) !== _httpRenderShape) return null;
+    // The DOM is not the render the digest stands for (another layout, or
+    // elements moved or replaced): patches computed from that render would
+    // land on other nodes.
+    if (!_domIsRender(_httpRenderShape)) return null;
     return _httpRenderDigest + '.' + _httpRenderShape;
 }
 
@@ -126,6 +140,7 @@ async function _httpFallbackResync() {
         _noteRenderDigest(data, null);
         clientVdomVersion = null;
         await handleServerResponse(data, null, null, _localEventTransport);
+        _markDomAsRendered();
     } catch (_e) {
         window.location.reload();
     }
@@ -607,21 +622,17 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // (#2829) — the HTTP fallback dispatches straight into
         // handleServerResponse, so it needs its own call.
         _receiveHttpAnswer(data);
-        // A patch answer is addressed by path. If the DOM changed shape while
-        // the request was out, its patches are for another tree: apply none
-        // of them (the answer's side channels still go out) and resync.
-        const stalePatches = Array.isArray(data.patches) && data.patches.length > 0 &&
-            data.version === undefined && sentDigest !== null &&
-            domShape(getLiveViewRoot()) !== sentDigest.split('.')[1];
-        if (stalePatches) {
-            data.patches = [];
-            delete data.render_digest;
+        // A patch answer is addressed by path: it is applied only if, at the
+        // moment of the first mutation, the DOM still is the render this
+        // request named. Otherwise none of it is applied and the page is
+        // resynced (handleServerResponse's failed-patch branch).
+        if (sentDigest !== null && data.version === undefined &&
+                Array.isArray(data.patches) && data.patches.length > 0) {
+            const shape = sentDigest.split('.')[1];
+            data._applyIf = () => _domIsRender(shape) || !(data._applyIfRefused = true);
         }
         _noteRenderDigest(data, sentDigest);
-        if (stalePatches) {
-            await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
-            await _httpFallbackResync();
-        } else if (data.type === 'embedded_update') {
+        if (data.type === 'embedded_update') {
             // An embedded child's event: the server answers with the child's own
             // HTML, as the socket transports do (#3104).
             const filled = await handleEmbeddedResponse(data, _localEventTransport);
@@ -641,6 +652,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 clientVdomVersion = null;
             }
             await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
+            _markDomAsRendered();
         }
 
     } catch (error) {

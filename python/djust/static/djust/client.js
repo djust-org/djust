@@ -662,7 +662,10 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             // ``handleStickyUpdate`` with a scoped ``rootEl``. No ambiguity
             // here — calling applyPatches(data.patches) with the default
             // null rootEl is correct for the root view.
-            const success = await applyPatches(data.patches);
+            // `_applyIf` is set by the page-POST fallback for a patch answer
+            // (11-event-handler.js): a function, so never from the wire.
+            const success = await applyPatches(data.patches, null,
+                typeof data._applyIf === 'function' ? data._applyIf : null);
             _isBroadcastUpdate = false;
 
             // For broadcast patches, sync textarea .value from .textContent.
@@ -681,7 +684,9 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 // Patches failed — likely due to {% if %} blocks shifting DOM structure.
                 // Request full HTML from server for DOM morphing (on-demand, not sent
                 // with every response to avoid bandwidth regression).
-                console.warn(
+                // (Not when the fallback withheld the patches because the DOM
+                // had changed: nothing failed, and the resync below is the plan.)
+                if (!data._applyIfRefused) console.warn(
                     '[LiveView] VDOM patches failed. This usually happens when {% if %} blocks ' +
                     'add/remove DOM elements, shifting sibling positions.\n' +
                     'Fix: Use style="display:none" toggling instead of {% if %} for elements:\n' +
@@ -8563,6 +8568,19 @@ function _readPageRenderDigest() {
     const meta = document.querySelector(_RENDER_DIGEST_META);
     _setRenderToken(meta && meta.getAttribute('content'));
     _httpDigestMisses = _httpDigestHold = 0;
+    _markDomAsRendered();
+}
+
+// The DOM is the server's render now (the page as loaded, or an answer just
+// applied): number its elements, so a later move, swap or replacement shows.
+function _markDomAsRendered() {
+    if (_httpRenderDigest) domShape(getLiveViewRoot(), 'mark');
+}
+
+// Whether the DOM still is the render `shape` stands for: the same tree, made
+// of the same elements in the same order.
+function _domIsRender(shape) {
+    return domShape(getLiveViewRoot(), 'verify') === shape;
 }
 
 // The token this fallback request sends, if any: the digest, and the shape of
@@ -8573,9 +8591,10 @@ function _renderTokenToSend() {
         _httpDigestHold -= 1;
         return null;
     }
-    // The DOM is not laid out as the render the digest stands for: patches
-    // computed from that render would land on other nodes.
-    if (domShape(getLiveViewRoot()) !== _httpRenderShape) return null;
+    // The DOM is not the render the digest stands for (another layout, or
+    // elements moved or replaced): patches computed from that render would
+    // land on other nodes.
+    if (!_domIsRender(_httpRenderShape)) return null;
     return _httpRenderDigest + '.' + _httpRenderShape;
 }
 
@@ -8634,6 +8653,7 @@ async function _httpFallbackResync() {
         _noteRenderDigest(data, null);
         clientVdomVersion = null;
         await handleServerResponse(data, null, null, _localEventTransport);
+        _markDomAsRendered();
     } catch (_e) {
         window.location.reload();
     }
@@ -9115,21 +9135,17 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // (#2829) — the HTTP fallback dispatches straight into
         // handleServerResponse, so it needs its own call.
         _receiveHttpAnswer(data);
-        // A patch answer is addressed by path. If the DOM changed shape while
-        // the request was out, its patches are for another tree: apply none
-        // of them (the answer's side channels still go out) and resync.
-        const stalePatches = Array.isArray(data.patches) && data.patches.length > 0 &&
-            data.version === undefined && sentDigest !== null &&
-            domShape(getLiveViewRoot()) !== sentDigest.split('.')[1];
-        if (stalePatches) {
-            data.patches = [];
-            delete data.render_digest;
+        // A patch answer is addressed by path: it is applied only if, at the
+        // moment of the first mutation, the DOM still is the render this
+        // request named. Otherwise none of it is applied and the page is
+        // resynced (handleServerResponse's failed-patch branch).
+        if (sentDigest !== null && data.version === undefined &&
+                Array.isArray(data.patches) && data.patches.length > 0) {
+            const shape = sentDigest.split('.')[1];
+            data._applyIf = () => _domIsRender(shape) || !(data._applyIfRefused = true);
         }
         _noteRenderDigest(data, sentDigest);
-        if (stalePatches) {
-            await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
-            await _httpFallbackResync();
-        } else if (data.type === 'embedded_update') {
+        if (data.type === 'embedded_update') {
             // An embedded child's event: the server answers with the child's own
             // HTML, as the socket transports do (#3104).
             const filled = await handleEmbeddedResponse(data, _localEventTransport);
@@ -9149,6 +9165,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 clientVdomVersion = null;
             }
             await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
+            _markDomAsRendered();
         }
 
     } catch (error) {
@@ -10922,9 +10939,27 @@ function _shapeName(value) {
         c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 }
 
-/** The shape of `root`'s tree as 16 hex digits, or null if it cannot be computed. */
-function domShape(root) {
+// The shape says the tree is laid out as the server's render. It does not say
+// the same nodes sit in the same places: a script can swap two rows that have
+// one layout. So the elements are also numbered, in document order, each time
+// the DOM is the server's render (the page load, and after every answer of the
+// page-POST fallback is applied). While every element still carries a number
+// and the numbers still rise in document order, no element was moved, swapped,
+// replaced by a copy or put under another parent since then; removals keep
+// the order and change the shape instead. A position is trusted for a patch
+// only when both hold.
+const _syncedOrder = new WeakMap();
+
+/**
+ * The shape of `root`'s tree as 16 hex digits, or null if it cannot be computed.
+ *
+ * `mode` 'mark' also numbers the elements as the server's render. `mode`
+ * 'verify' also checks those numbers and returns null when an element is new
+ * or out of order.
+ */
+function domShape(root, mode = null) {
     if (!root) return null;
+    let order = 0, last = -1, inOrder = true;
     let crc = 0xFFFFFFFF, a = 1, b = 0;
     const put = (text) => {
         for (let i = 0; i < text.length; i++) {
@@ -10938,6 +10973,13 @@ function domShape(root) {
     const walk = (node) => {
         for (const child of getSignificantChildren(node)) {
             if (child.nodeType === Node.ELEMENT_NODE) {
+                if (mode === 'mark') {
+                    _syncedOrder.set(child, order++);
+                } else if (mode === 'verify') {
+                    const number = _syncedOrder.get(child);
+                    if (number === undefined || number <= last) inOrder = false;
+                    last = number;
+                }
                 const id = child.getAttribute('id');
                 const key = child.getAttribute('dj-key') || child.getAttribute('data-key');
                 put('<' + child.tagName.toLowerCase()
@@ -10954,6 +10996,7 @@ function domShape(root) {
     } catch (_e) {
         return null; // e.g. an id that is not valid UTF-16
     }
+    if (!inOrder) return null;
     const hex = (n) => (n >>> 0).toString(16).padStart(8, '0');
     return hex(crc ^ 0xFFFFFFFF) + hex((b << 16) | a);
 }
@@ -12534,17 +12577,21 @@ function _shouldUseViewTransition() {
  * to abandon the animation and return false so the caller can trigger
  * a full re-render fallback. ADR-013.
  */
-async function applyPatches(patches, rootEl = null) {
+async function applyPatches(patches, rootEl = null, applyIf = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
     // A frame for a view mounted beside the page view patches its container (#3252).
     if (!rootEl && _activeSlot) rootEl = _activeSlot.root;
+    // `applyIf` (#4108) is asked at the last moment, in the same synchronous
+    // step as the first mutation: under a View Transition that is the update
+    // callback, which runs later than this call. False applies nothing.
+    const apply = () => (applyIf && !applyIf() ? false : _applyPatchesInner(patches, rootEl));
 
     if (_shouldUseViewTransition()) {
         let innerResult = true;
         const transition = document.startViewTransition(() => {
-            innerResult = _applyPatchesInner(patches, rootEl);
+            innerResult = apply();
         });
         try {
             await transition.updateCallbackDone;
@@ -12556,7 +12603,7 @@ async function applyPatches(patches, rootEl = null) {
         return innerResult;
     }
 
-    return _applyPatchesInner(patches, rootEl);
+    return apply();
 }
 
 /**

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import pytest
 from django.contrib.sessions.backends.db import SessionStore
@@ -365,7 +366,12 @@ def test_void_and_raw_text_elements_and_whitespace_keeping_ones():
     )
     assert _shape("<textarea><b>not a tag</b></textarea>") == _shape("<textarea>t</textarea>")
     # Whitespace is a child inside <pre>, and not inside <p>.
-    assert _shape("<pre>\n</pre>") != _shape("<pre></pre>")
+    assert _shape("<pre> </pre>") != _shape("<pre></pre>")
+    # ... except the one newline the HTML parser drops after <pre>.
+    assert _shape("<pre>\n</pre>") == _shape("<pre></pre>")
+    assert _shape("<pre>\n\n</pre>") != _shape("<pre></pre>")
+    # A character reference is the character it names.
+    assert _shape("<p>&#10;<b>x</b></p>") == _shape("<p>\n<b>x</b></p>")
     assert _shape("<p>\n</p>") == _shape("<p></p>")
 
 
@@ -375,6 +381,26 @@ def test_names_are_written_as_the_client_writes_them():
     assert _shape('<p id="a&amp;b">x</p>') != _shape('<p id="a">x</p>')
     assert _shape('<p id="a&gt;&lt;p">x</p>') != _shape('<p id="a">x</p><p>x</p>')
     assert _render_digest._shape_name("a&amp;b c/é~!*'()") == "a%26b%20c%2F%C3%A9~%21%2A%27%28%29"
+
+
+VECTORS = json.loads(
+    (
+        Path(__file__).resolve().parents[3]
+        / "tests"
+        / "js"
+        / "fixtures"
+        / "dom_shape_vectors_4108.json"
+    ).read_text(encoding="utf-8")
+)["vectors"]
+
+
+@pytest.mark.parametrize("vector", VECTORS, ids=[vector["name"] for vector in VECTORS])
+def test_the_shape_of_each_shared_vector(vector):
+    """One spec, two implementations: ``tests/js/dom_shape_vectors_4108.test.js``
+    holds the client's ``domShape`` to the same file."""
+    assert _render_digest.dom_shape(vector["html"]) == vector["shape"]
+    assert vector["client"] in ("same", "differs")
+    assert (vector["client"] == "differs") == bool(vector.get("reason"))
 
 
 def test_markup_this_reader_cannot_follow_has_no_shape():

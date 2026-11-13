@@ -1,0 +1,280 @@
+{
+ "_about": "One spec, two implementations: python/djust/_render_digest.py dom_shape() and domShape() in static/djust/src/12-vdom-patch.js. `shape` is what the server computes for `html` (a rendered root). `client` says whether the browser, parsing the same markup, computes the same value. Where it `differs`, the browser's HTML parser builds another tree than the markup spells out; a page like that is answered with the whole page (the safe direction), never patched. Tested from both sides: python/djust/tests/test_render_digest_4108.py and tests/js/dom_shape_vectors_4108.test.js.",
+ "vectors": [
+  {
+   "name": "plain",
+   "html": "<div dj-root=\"\"><p id=\"a\">x</p> <span>y</span></div>",
+   "shape": "7594b67123a504f7",
+   "client": "same"
+  },
+  {
+   "name": "rows",
+   "html": "<div dj-root=\"\"><h1>Rows</h1><ul><li>a</li><li>b</li></ul></div>",
+   "shape": "13cf87c53f500669",
+   "client": "same"
+  },
+  {
+   "name": "keyed_rows",
+   "html": "<div dj-root=\"\"><ul><li data-key=\"1\">a</li><li data-key=\"2\">b</li></ul></div>",
+   "shape": "00b665de38c905c5",
+   "client": "same"
+  },
+  {
+   "name": "dj_key",
+   "html": "<div dj-root=\"\"><ul><li dj-key=\"k1\">a</li></ul></div>",
+   "shape": "05463d0f1ae703fb",
+   "client": "same"
+  },
+  {
+   "name": "void_elements",
+   "html": "<div dj-root=\"\"><input name=\"a\" /><br><img src=\"x\"><p>x</p></div>",
+   "shape": "4bd6636b4b96070e",
+   "client": "same"
+  },
+  {
+   "name": "nested",
+   "html": "<div dj-root=\"\"><main><section><p>a <b>b</b> c</p></section></main></div>",
+   "shape": "eb31f49c709a08b1",
+   "client": "same"
+  },
+  {
+   "name": "text_and_elements",
+   "html": "<div dj-root=\"\"><p>a<b>b</b>c<i>d</i></p></div>",
+   "shape": "490a5ca1200f047a",
+   "client": "same"
+  },
+  {
+   "name": "inline_space_kept",
+   "html": "<div dj-root=\"\"><b>A</b> <i>B</i></div>",
+   "shape": "e10e42ab0f6a031c",
+   "client": "same"
+  },
+  {
+   "name": "indentation_dropped",
+   "html": "<div dj-root=\"\"><ul>\n  <li>a</li>\n  <li>b</li>\n</ul></div>",
+   "shape": "a93e2ab6256404e2",
+   "client": "same"
+  },
+  {
+   "name": "plain_comment_dropped",
+   "html": "<div dj-root=\"\"><p>a</p><!-- note --><p>b</p></div>",
+   "shape": "b1b48e500c4c02bd",
+   "client": "same"
+  },
+  {
+   "name": "comment_split_text",
+   "html": "<div dj-root=\"\"><p>a<!-- note -->b</p></div>",
+   "shape": "100663d3057301d3",
+   "client": "same"
+  },
+  {
+   "name": "djif_marker",
+   "html": "<div dj-root=\"\"><!--dj-if id=\"if-1-0\"--><p>x</p><!--/dj-if--></div>",
+   "shape": "f6cac25f077f0225",
+   "client": "same"
+  },
+  {
+   "name": "djif_empty",
+   "html": "<div dj-root=\"\"><!--dj-if id=\"if-1-0\"--><!--/dj-if--></div>",
+   "shape": "dbb21a79012b00c7",
+   "client": "same"
+  },
+  {
+   "name": "attr_with_gt",
+   "html": "<div dj-root=\"\"><h1 title=\"a > b\">Rows</h1></div>",
+   "shape": "f3fa5388048a0188",
+   "client": "same"
+  },
+  {
+   "name": "template",
+   "html": "<div dj-root=\"\"><template><p>x</p></template><b>z</b></div>",
+   "shape": "71f80d3540750685",
+   "client": "same"
+  },
+  {
+   "name": "select_optgroup",
+   "html": "<div dj-root=\"\"><select><optgroup label=\"g\"><option>1</option></optgroup></select></div>",
+   "shape": "1e51648195720a7c",
+   "client": "same"
+  },
+  {
+   "name": "svg_selfclose",
+   "html": "<div dj-root=\"\"><svg><path d=\"M0\"/><circle r=\"1\"></circle></svg></div>",
+   "shape": "8f976d3a460f06de",
+   "client": "same"
+  },
+  {
+   "name": "uppercase_svg",
+   "html": "<div dj-root=\"\"><svg><foreignObject><p>x</p></foreignObject></svg></div>",
+   "shape": "6a8d99bb74300904",
+   "client": "same"
+  },
+  {
+   "name": "math",
+   "html": "<div dj-root=\"\"><math><mi>x</mi></math></div>",
+   "shape": "31dde501180503e9",
+   "client": "same"
+  },
+  {
+   "name": "nbsp",
+   "html": "<div dj-root=\"\"><p>&nbsp;<b>x</b></p></div>",
+   "shape": "ed39aaf20c7a02af",
+   "client": "same"
+  },
+  {
+   "name": "id_unicode",
+   "html": "<div dj-root=\"\"><p id=\"café\">x</p></div>",
+   "shape": "903328341e0803e6",
+   "client": "same"
+  },
+  {
+   "name": "id_entity",
+   "html": "<div dj-root=\"\"><p id=\"a&amp;b\">x</p></div>",
+   "shape": "a37f8df80f0d02d2",
+   "client": "same"
+  },
+  {
+   "name": "id_quote_entity",
+   "html": "<div dj-root=\"\"><p id=\"a&quot;b\">x</p></div>",
+   "shape": "2c1d1aaf0efd02ce",
+   "client": "same"
+  },
+  {
+   "name": "id_special_chars",
+   "html": "<div dj-root=\"\"><p id=\"a b/c!*'()~\">x</p></div>",
+   "shape": "48a7125e6ce90717",
+   "client": "same"
+  },
+  {
+   "name": "single_quoted_attr",
+   "html": "<div dj-root=\"\"><p id='q'>x</p></div>",
+   "shape": "562e255406a301f3",
+   "client": "same"
+  },
+  {
+   "name": "data_key_and_djkey",
+   "html": "<div dj-root=\"\"><li data-key=\"1\" dj-key=\"\">x</li></div>",
+   "shape": "2d34bc8608f90235",
+   "client": "same"
+  },
+  {
+   "name": "empty_id",
+   "html": "<div dj-root=\"\"><p id=\"\">x</p></div>",
+   "shape": "457a510c036a015f",
+   "client": "same"
+  },
+  {
+   "name": "li_text_between",
+   "html": "<div dj-root=\"\"><ul><li>a</li> <li>b</li></ul></div>",
+   "shape": "5d3ce1782b710556",
+   "client": "same"
+  },
+  {
+   "name": "script_with_markup",
+   "html": "<div dj-root=\"\"><script>if (a < b) { x = '<p>'; }</script><p>x</p></div>",
+   "shape": "54c271b922e304e2",
+   "client": "same"
+  },
+  {
+   "name": "textarea_with_markup",
+   "html": "<div dj-root=\"\"><textarea><b>not a tag</b></textarea></div>",
+   "shape": "48569f0c19fd044d",
+   "client": "same"
+  },
+  {
+   "name": "pre_text",
+   "html": "<div dj-root=\"\"><pre>line\n  two</pre></div>",
+   "shape": "3eb0463f07bb0236",
+   "client": "same"
+  },
+  {
+   "name": "code_whitespace",
+   "html": "<div dj-root=\"\"><code> </code></div>",
+   "shape": "17c745f60a0d028a",
+   "client": "same"
+  },
+  {
+   "name": "table_with_tbody",
+   "html": "<div dj-root=\"\"><table><tbody><tr><td>1</td></tr></tbody></table></div>",
+   "shape": "5fad7d1f672c0845",
+   "client": "same"
+  },
+  {
+   "name": "table_no_tbody",
+   "html": "<div dj-root=\"\"><table><tr><td>1</td></tr></table></div>",
+   "shape": "ad3cb67131db05a9",
+   "client": "differs",
+   "reason": "the browser's parser inserts <tbody>; the markup has none"
+  },
+  {
+   "name": "p_autoclose",
+   "html": "<div dj-root=\"\"><p>a<div>b</div></p></div>",
+   "shape": "bc70f83313e90390",
+   "client": "differs",
+   "reason": "the browser's parser closes <p> before <div> and adds an empty <p> for the stray end tag"
+  },
+  {
+   "name": "nested_form",
+   "html": "<div dj-root=\"\"><form><form><input></form></form></div>",
+   "shape": "eeb1460b47fa0707",
+   "client": "differs",
+   "reason": "the browser's parser drops a <form> nested in a <form>"
+  },
+  {
+   "name": "a_in_a",
+   "html": "<div dj-root=\"\"><a href=\"#\">1<a href=\"#\">2</a></a></div>",
+   "shape": "3e2592660c0d029f",
+   "client": "differs",
+   "reason": "the browser's parser closes an <a> before a nested <a>"
+  },
+  {
+   "name": "noscript",
+   "html": "<div dj-root=\"\"><noscript><p>x</p></noscript></div>",
+   "shape": "12c3fe362903054b",
+   "client": "differs",
+   "reason": "with scripting on, the browser's parser keeps <noscript> content as text, not elements"
+  },
+  {
+   "name": "pre_leading_nl",
+   "html": "<div dj-root=\"\"><pre>\n</pre></div>",
+   "shape": "47523c71054f01c2",
+   "client": "same"
+  },
+  {
+   "name": "pre_leading_nl_text",
+   "html": "<div dj-root=\"\"><pre>\nx</pre></div>",
+   "shape": "3eb0463f07bb0236",
+   "client": "same"
+  },
+  {
+   "name": "textarea_nl",
+   "html": "<div dj-root=\"\"><textarea>\n</textarea></div>",
+   "shape": "7dca9f31157a03d9",
+   "client": "same"
+  },
+  {
+   "name": "entity_newline",
+   "html": "<div dj-root=\"\"><p>&#10;<b>x</b></p></div>",
+   "shape": "df2fb1cc0915023b",
+   "client": "same"
+  },
+  {
+   "name": "entity_space2",
+   "html": "<div dj-root=\"\"><p>&#32;&#32;<b>x</b></p></div>",
+   "shape": "df2fb1cc0915023b",
+   "client": "same"
+  },
+  {
+   "name": "cr_only",
+   "html": "<div dj-root=\"\"><p>\r<b>x</b></p></div>",
+   "shape": "df2fb1cc0915023b",
+   "client": "same"
+  },
+  {
+   "name": "vtab",
+   "html": "<div dj-root=\"\"><p>\u000b<b>x</b></p></div>",
+   "shape": "ed39aaf20c7a02af",
+   "client": "same"
+  }
+ ]
+}

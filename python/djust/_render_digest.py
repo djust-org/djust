@@ -93,12 +93,14 @@ _TOKEN = re.compile(
     re.DOTALL,
 )
 _ATTR = {
-    name: re.compile(r'(?:^|\s)%s="([^"]*)"' % re.escape(name))
+    name: re.compile(r"""(?:^|\s)%s=(?:"([^"]*)"|'([^']*)')""" % re.escape(name))
     for name in ("id", "dj-key", "data-key")
 }
 _VOID = frozenset("area base br col embed hr img input link meta param source track wbr".split())
 #: Elements whose every text child counts (``isWhitespacePreserving`` in the client).
 _KEEPS_WHITESPACE = frozenset(("pre", "code", "textarea", "script", "style"))
+#: Elements after whose start tag the HTML parser drops one newline.
+_DROPS_FIRST_NEWLINE = frozenset(("pre", "textarea", "listing"))
 #: Elements whose content is text up to their own end tag.
 _RAW_TEXT = frozenset(("script", "style", "textarea", "title"))
 
@@ -198,6 +200,9 @@ def _is_dj_if_comment(text: str) -> bool:
 
 def _counts_as_text(text: str, keeps_whitespace: bool) -> bool:
     """``isSignificantChild`` in the client, for a text node."""
+    if "&" in text:
+        # The client sees the character, not the reference to it.
+        text = unescape(text)
     if not text:
         return False
     if keeps_whitespace or text == " ":
@@ -208,6 +213,14 @@ def _counts_as_text(text: str, keeps_whitespace: bool) -> bool:
 def _shape_name(value: str) -> str:
     """As the client writes it: ``encodeURIComponent``, plus ``! * ' ( )``."""
     return quote(unescape(value), safe="~")
+
+
+def _attr(attrs: str, name: str) -> str:
+    """The value of attribute ``name`` in a start tag's attribute text, or ``""``."""
+    found = _ATTR[name].search(attrs)
+    if not found:
+        return ""
+    return found.group(1) if found.group(1) is not None else found.group(2)
 
 
 def dom_shape(html: Any) -> str | None:
@@ -230,12 +243,17 @@ def dom_shape(html: Any) -> str | None:
     out: list[str] = []
     stack: list[str] = []
     position = 0
+    after_start_of = ""  # the tag whose start tag was the previous token
     while True:
         match = _TOKEN.search(html, position)
         if match is None:
             break
         text = html[position : match.start()]
         position = match.end()
+        if after_start_of in _DROPS_FIRST_NEWLINE and text.startswith("\n"):
+            # The HTML parser drops a newline right after <pre>.
+            text = text[1:]
+        after_start_of = ""
         if stack and _counts_as_text(text, stack[-1] in _KEEPS_WHITESPACE):
             out.append("t")
         comment = match.group("comment")
@@ -261,28 +279,32 @@ def dom_shape(html: Any) -> str | None:
             continue
         piece = "<" + tag
         # (The substring tests only spare most tags three regex searches.)
-        found = _ATTR["id"].search(attrs) if ' id="' in attrs else None
-        if found and found.group(1):
-            piece += "#" + _shape_name(found.group(1))
-        found = (
-            (_ATTR["dj-key"].search(attrs) or _ATTR["data-key"].search(attrs))
-            if 'key="' in attrs
-            else None
-        )
-        if found and found.group(1):
-            piece += "@" + _shape_name(found.group(1))
+        name = _attr(attrs, "id") if " id=" in attrs else ""
+        if name:
+            piece += "#" + _shape_name(name)
+        # The first of the two that is not empty, as the client reads them.
+        name = (_attr(attrs, "dj-key") or _attr(attrs, "data-key")) if "key=" in attrs else ""
+        if name:
+            piece += "@" + _shape_name(name)
         out.append(piece)
         if attrs.rstrip().endswith("/") or tag in _VOID:
             out.append(">")
             continue
         stack.append(tag)
+        after_start_of = tag
         if tag in _RAW_TEXT:
             end = re.compile(r"</%s\s*>" % re.escape(tag), re.IGNORECASE).search(html, position)
             if end is None:
                 return None
-            if _counts_as_text(html[position : end.start()], tag in _KEEPS_WHITESPACE):
+            raw = html[position : end.start()]
+            if tag in _DROPS_FIRST_NEWLINE and raw.startswith("\n"):
+                raw = raw[1:]
+            if tag == "textarea" and "&" in raw:
+                raw = unescape(raw)
+            if raw and (tag in _KEEPS_WHITESPACE or raw == " " or raw.strip(" \t\n\r\f")):
                 out.append("t")
             position = end.end()
+            after_start_of = ""
             stack.pop()
             out.append(">")
     if stack:
