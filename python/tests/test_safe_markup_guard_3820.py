@@ -2420,14 +2420,16 @@ class TestClassAttributesAndLocalHelpers:
             taint._Module._defaults = original
         assert flagged(source) == ["f"]
 
-    def test_the_helper_rule_does_not_change_what_an_unknown_call_marks(self):
-        """``mark_safe(helper(x))`` where helper builds a raw string stays an UNFLAGGED known miss
-        (test_safe_markup_guard_3766.KNOWN_MISSES): judging a call's result inside a larger string
-        is new; flagging the call itself would be a policy change, not this issue."""
+    def test_a_helper_that_builds_from_its_argument_is_judged_at_the_sink(self):
+        """``mark_safe(helper(x))`` where helper builds a raw string was an unflagged known miss until
+        #3864: a call handed to a sink is also judged with this call's arguments (which is what
+        catches ``mark_safe(tag(safe_url(x)))`` for a ``tag`` that puts its parameter in an unquoted
+        attribute). The same helper handed a literal stays clean."""
         source = (
             "def helper(x):\n    return f'<a {x}>'\ndef f(x):\n    return mark_safe(helper(x))\n"
         )
-        assert flagged(source) == []
+        assert flagged(source) == ["f"]
+        assert flagged(source.replace("helper(x))", "helper('k'))")) == []
 
 
 # ---------------------------------------------------------------------------

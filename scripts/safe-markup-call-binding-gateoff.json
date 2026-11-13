@@ -1,0 +1,182 @@
+{
+  "_comment": "Each mechanism of the call binding of the safe-markup guard (#3864, #3845) turned off in turn: every mutation must turn a real row red (the test that pins this list is deselected, since it fails for every mutation). Run: .venv/bin/python scripts/gate_off.py scripts/safe-markup-call-binding-gateoff.json",
+  "root": ".",
+  "command": [
+    "env",
+    "PYTHONDONTWRITEBYTECODE=1",
+    "{python}",
+    "-m",
+    "pytest",
+    "-q",
+    "-x",
+    "-p",
+    "no:cacheprovider",
+    "python/tests/test_safe_markup_guard_3864.py",
+    "python/tests/test_safe_markup_guard_3766.py",
+    "python/tests/test_safe_markup_guard_3848.py",
+    "-m",
+    "not slow",
+    "--deselect",
+    "python/tests/test_safe_markup_guard_3864.py::TestTheGateOffListApplies::test_every_mutation_text_still_applies"
+  ],
+  "deadline": 400,
+  "rss_mb": 4096,
+  "mutations": [
+    {
+      "label": "the sink's call is not judged with its arguments (the hook)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "if local is not None and self._returns_tainted(local, e, sc, d, seen):",
+      "new": "if False and local is not None and self._returns_tainted(local, e, sc, d, seen):"
+    },
+    {
+      "label": "a lambda bound once is not followed",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if len(bound) == 1 and isinstance(bound[0], ast.Lambda):",
+      "new": "            if False:"
+    },
+    {
+      "label": "a method of a fresh instance is not followed",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if not (\n            isinstance(func, ast.Attribute)\n            and isinstance(func.value, ast.Call)",
+      "new": "        if True or not (\n            isinstance(func, ast.Attribute)\n            and isinstance(func.value, ast.Call)"
+    },
+    {
+      "label": "a starred call is bound",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if id(fscope) in self._actuals or self._has_star(call):",
+      "new": "        if id(fscope) in self._actuals:"
+    },
+    {
+      "label": "a keyword the function does not take is ignored",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            elif kw.arg in by_keyword or a.kwarg is None:",
+      "new": "            elif kw.arg in by_keyword:"
+    },
+    {
+      "label": "a recursive call is bound again",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if id(fscope) in self._actuals or self._has_star(call):",
+      "new": "        if self._has_star(call):"
+    },
+    {
+      "label": "a call it cannot bind is judged under an outer binding",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            return self._unbound(fscope, judge)",
+      "new": "            return judge()"
+    },
+    {
+      "label": "an argument is not substituted for its parameter",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        return [bound[name] if v is entry else v for v in values]",
+      "new": "        return values"
+    },
+    {
+      "label": "hold levels do not see through a bound argument",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if isinstance(value, _Actual):  # a bound argument: what the caller passed",
+      "new": "        if False:"
+    },
+    {
+      "label": "alternatives do not see through a bound argument",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                for x, xsc in _actual_values(v):",
+      "new": "                for x, xsc in []:"
+    },
+    {
+      "label": "literal text does not see through a bound argument",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if len(values) == 1 and isinstance(values[0], _Actual):",
+      "new": "            if False:"
+    },
+    {
+      "label": "containers that outlive the call are judged under the binding",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if not self._actuals or self._fresh(owner, name):",
+      "new": "        if True:"
+    },
+    {
+      "label": "no container is fresh",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        return bool(values) and all(\n            isinstance(v, (ast.List,",
+      "new": "        return False and all(\n            isinstance(v, (ast.List,"
+    },
+    {
+      "label": "bindings in a branch the call rules out still reach a use",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                live = [x for x in hit[1] if self._feasible(owner, x)]",
+      "new": "                live = list(hit[1])"
+    },
+    {
+      "label": "a return in a branch the call rules out still counts",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            and (not bound or self._site_feasible(fscope, id(n), bound))",
+      "new": "            and True"
+    },
+    {
+      "label": "a literal argument decides no test",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if truth is not holds:",
+      "new": "            if False:"
+    },
+    {
+      "label": "a parameter the function rebinds decides a test",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            and len(fscope.assigns.get(p, [])) == 1",
+      "new": "            and True"
+    },
+    {
+      "label": "self is taken for the first argument of self.m(..)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        return 1 if isinstance(receiver, ast.Name) and receiver.id == \"self\" else 0",
+      "new": "        return 0"
+    },
+    {
+      "label": "a fresh instance's method takes no self",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if isinstance(receiver, ast.Call):\n            return 1",
+      "new": "        if isinstance(receiver, ast.Call):\n            return 0"
+    },
+    {
+      "label": "an argument the call leaves out takes no default",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                binding[param] = _Actual(defaults[param], holder)",
+      "new": "                return None"
+    },
+    {
+      "label": "literal text read through a binding is remembered",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    if self._actuals and not self._reads_a_binding(fscope)",
+      "new": "                    if self._actuals"
+    },
+    {
+      "label": "the escapers' order (pass B): a value escaper before the JSON escaper",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            (\"json*\", \"json\", \"sens*\", \"sens\")\n            if self.call_binding",
+      "new": "            (\"json*\", \"sens*\", \"json\", \"sens\")\n            if self.call_binding"
+    },
+    {
+      "label": "the depth bound is not carried into a helper's hold level (pass B)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                                r.value, fscope, origins, d if self.call_binding else 0\n",
+      "new": "                                r.value, fscope, origins, 0\n"
+    },
+    {
+      "label": "the union is pass B alone (review 3, a)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "    return sorted(set(first) | set(second), key=",
+      "new": "    return sorted(set(second), key="
+    },
+    {
+      "label": "pass A binds calls too, so its caches are written under a binding (review 3, b)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "    first = _Module(source, module, is_package, dynamic_bases).findings()",
+      "new": "    first = _Module(source, module, is_package, dynamic_bases, call_binding=True).findings()"
+    },
+    {
+      "label": "pass B is not run",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "    second = _Module(source, module, is_package, dynamic_bases, call_binding=True).findings()\n",
+      "new": "    second = []\n"
+    }
+  ]
+}
