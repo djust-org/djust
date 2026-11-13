@@ -39,6 +39,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from djust._removed_settings import REMOVED_TEMPLATE_TAGS
 from django.template import Context, Engine
 from django.template.library import import_library
 
@@ -522,6 +524,8 @@ class TestTagsWithoutPositionalParameters:
             name
             for name in sorted(_native_names()["djust_components"] & set(library.tags))
             if _classify(library.tags[name]) not in SIMPLE
+            # registered only to refuse itself (#4002): it takes no arguments at all
+            and name not in REMOVED_TEMPLATE_TAGS
         ]
         assert len(raw) >= 100, len(raw)
         for name in raw:

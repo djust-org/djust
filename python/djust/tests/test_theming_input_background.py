@@ -118,9 +118,7 @@ FIELD_FILL_RULES = (
     ".dj-dependent-select__control select",
     ".dj-currency-input__control",
     ".dj-filter-bar__select",
-    ".dj-mminput",
     ".dj-mentions__input",
-    ".dj-cron-input__input",
 )
 
 
@@ -157,14 +155,11 @@ FIELD_OUTLINE_RULES = (
     ".dj-dependent-select__control select",
     ".dj-currency-input__control",
     ".dj-filter-bar__select",
-    ".dj-mminput",
     ".dj-mentions__input",
     ".dj-md-textarea",
     ".dj-form-array__input",
     ".dj-import-wizard__field-select",
     ".dj-signature-pad__typed-input",
-    ".dj-prompt-editor__textarea",
-    ".dj-cron-input__input",
 )
 
 # The colour part of every ``border``/``border-color``/``border-<side>`` declaration.

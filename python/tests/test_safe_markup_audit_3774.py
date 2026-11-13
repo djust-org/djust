@@ -18,7 +18,7 @@ What each class proves:
   (#1468).
 * ``TestTheScanReadsTheRightFiles`` shows the scan reads a dirty file anywhere in the tree and skips
   tests and theming.
-* ``TestTheEscaperIsRecognisedByOrigin`` pins why ``_advanced`` / ``_charts`` / ``_forms`` import
+* ``TestTheEscaperIsRecognisedByOrigin`` pins why ``_charts`` / ``_forms`` import
   ``conditional_escape`` from ``django.utils.html``: the guard trusts an escaper by ORIGIN, so the
   same call through ``._registry`` re-flags every site it escapes.
 * ``TestPayloadSweep`` is the empirical backstop for "safe": every component tag AND every Rust-native
@@ -319,7 +319,7 @@ class TestTheEscaperIsRecognisedByOrigin:
         assert find_unsafe_markup(self.DIRECT) == []
         assert [f.function for f in find_unsafe_markup(self.REEXPORTED)] == ["f"]
 
-    @pytest.mark.parametrize("module", ["_advanced", "_charts", "_forms"])
+    @pytest.mark.parametrize("module", ["_charts", "_forms"])
     def test_the_tag_modules_import_the_escaper_from_django(self, module):
         text = (ROOT / f"python/djust/components/templatetags/{module}.py").read_text()
         assert "from django.utils.html import conditional_escape" in text
@@ -526,10 +526,11 @@ class TestPayloadSweep:
 
     def test_the_sweep_reads_a_real_tag_with_the_payload(self):
         all_keys, numeric = sweepmod.keys()
-        from djust.components.templatetags._advanced import RibbonNode
+        # (RibbonNode until #4002 removed it.)
+        from djust.components.templatetags.djust_components import CalloutNode
 
-        out = str(sweepmod.render_node(RibbonNode, "str", "markup", all_keys, numeric))
-        assert "dj-ribbon" in out and TAG in out and "&quot;onmouseover" in out
+        out = str(sweepmod.render_node(CalloutNode, "str", "markup", all_keys, numeric))
+        assert "dj-callout" in out and TAG in out and "&quot;onmouseover" in out
 
     def test_a_number_argument_gets_a_number_so_the_code_after_the_coercion_runs(self):
         # int(PAYLOAD) raising is why slider, number_stepper and others were never reached.
@@ -599,10 +600,11 @@ class TestEverySinkIsReached:
         assert 3 in lines and 4 not in lines
 
     def test_sink_groups_are_one_per_flagged_call(self):
-        # render_modal has two flagged sinks, OrgChartNode.render one: coverage is per sink.
-        # (RibbonNode.render was the one-sink example until #3846 proved it.)
+        # render_modal has two flagged sinks, render_icon one: coverage is per sink.
+        # (RibbonNode.render, then OrgChartNode.render, were the one-sink example until #3846
+        # proved the first and #4002 removed the second.)
         modal = audit.sink_groups((audit.DC, "render_modal"))
-        org = audit.sink_groups((audit.ADV, "OrgChartNode.render"))
+        org = audit.sink_groups(("python/djust/components/icons.py", "render_icon"))
         assert len(modal) == 2 and len(org) == 1
         assert not modal[0] & modal[1]
 

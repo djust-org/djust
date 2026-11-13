@@ -57,7 +57,6 @@ ROOT = Path(__file__).resolve().parents[2]
 PKG = "python/djust/"
 TT = PKG + "components/templatetags/"
 DC = TT + "djust_components.py"
-ADV = TT + "_advanced.py"
 CH = TT + "_charts.py"
 FM = TT + "_forms.py"
 UT = PKG + "components/utils.py"
@@ -250,23 +249,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (FM, 'safe_row[k] = conditional_escape(str(v)) if v is not None else ""'),
         (FM, "total_pages = int(total_pages)"),
     ),
-    (ADV, "OrgChartNode.render"): S(
-        1,
-        "the tree comes from _render_node, which conditional_escape's id, name and title and sends the avatar through url_attr",
-        (ADV, "tree_html = self._render_node(root_id, node_map, children, e_event)"),
-        (
-            ADV,
-            "def _render_node(self, nid: Any, node_map: Any, children: Any, e_event: Any) -> Any:",
-            "OrgChartNode._render_node",
-        ),
-        (ADV, 'src="{data_url_attr(avatar, image=True)}"', "OrgChartNode._render_node"),
-    ),
-    (ADV, "PromptEditorNode.render"): S(
-        1,
-        "the template text is conditional_escape'd FIRST; {{var}} tokens are \\w+ and are replaced by conditional_escape'd values inside <mark>; rows int()",
-        (ADV, "preview_text = conditional_escape(str(tmpl))"),
-        (ADV, "e_v = conditional_escape(v)"),
-    ),
     (DC, "render_modal_description"): S(
         1,
         "`content` is the rendered {% modal_description %} body (nodelist.render / the Rust block handler)",
@@ -381,12 +363,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         ),
         (DC, "f'href=\"{safe_url(href)}\">'", "SidebarNode._render_item"),
     ),
-    (DC, "FeedbackWidgetNode.render"): S(
-        1,
-        "mode is checked against VALID_MODES; the buttons are constants plus the conditional_escape'd event, an int star index and escaped emoji keys",
-        (DC, 'VALID_MODES = {"thumbs", "stars", "emoji"}', "FeedbackWidgetNode"),
-        (DC, "if mode not in self.VALID_MODES:"),
-    ),
     (DC, "render_dropdown_menu"): S(
         1,
         "label, event, class and align conditional_escape'd; items come from render_menu_item (labels escaped, href through url_attr); a block body is the rendered tag body",
@@ -436,17 +412,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (RH, 'label = conditional_escape(kw.get("label", ""))'),
         (DC, "value = max(0, min(100, int(value)))", "progress"),
     ),
-    (DT, "FileTreeNode.render"): S(
-        1,
-        "class, event and selected conditional_escape'd; the tree is _render_tree_node, which conditional_escape's name and type, takes its icons from class constants, and whose `depth` is an int at every call site (0 here, depth + 1 in the recursion)",
-        (DT, "e_class = conditional_escape(str(custom_class))"),
-        (
-            DT,
-            "nodes_html.append(self._render_tree_node(node, 0, event, show_icons, str(selected)))",
-        ),
-        (DT, "e_name = conditional_escape(name)", "FileTreeNode._render_tree_node"),
-        (DT, "e_event = conditional_escape(str(event))", "FileTreeNode._render_tree_node"),
-    ),
     (JS, "JSChain.__html__"): S(
         1,
         "the value is json.dumps(self.ops) through escape_json_for_script, which neutralises < > & and U+2028/9, so it cannot end an inline <script> element; it is NOT attribute-safe (the JSON's own quotes end a quoted value) and the docstring says so. Flagged since #3848 because the guard clears escape_json_for_script only for json.dumps output placed in script text, and cannot follow self.to_json(): JSChain carries a class decorator (@dataclass(frozen=True)), so the guard does not trust its methods or attributes (a dataclass field is a default the constructor replaces); __getattr__ is not the cause",
@@ -460,20 +425,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
 #: ``._registry`` (a re-export), and the guard trusts an escaper only by ITS ORIGIN
 #: (``django.utils.html``), never by spelling. They are no longer flagged, so they have no entry above.
 RESOURCED: dict[str, tuple[str, ...]] = {
-    "_advanced.py": (
-        "TourNode.render",
-        "GanttChartNode.render (2 sites)",
-        "DiffViewerNode.render (2 sites)",
-        "PivotTableNode.render",
-        "OrgChartNode.render",
-        "ComparisonTableNode.render",
-        "MasonryGridNode.render",
-        "CursorsOverlayNode.render",
-        "LiveIndicatorNode.render",
-        "CollabSelectionNode.render",
-        "ReactionsNode.render",
-        "CronInputNode.render",
-    ),
     "_charts.py": (
         "BarChartNode.render",
         "LineChartNode.render",

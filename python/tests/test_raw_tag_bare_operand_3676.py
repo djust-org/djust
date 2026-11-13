@@ -96,8 +96,11 @@ def _mechanism_names(source: str) -> set[str]:
 def _handlers() -> dict[str, Any]:
     """Every tag the Rust engine serves for the library (all of them since S3: the bridge
     renders each one's own node), by name -> its compile function."""
+    from djust._removed_settings import REMOVED_TEMPLATE_TAGS
+
     library = import_library(DOTTED)
-    return dict(library.tags)
+    # A tag 2.0 removed stays registered only to refuse itself (#4002): it reads no arguments.
+    return {name: f for name, f in library.tags.items() if name not in REMOVED_TEMPLATE_TAGS}
 
 
 def _raw_tags() -> list[dict[str, Any]]:

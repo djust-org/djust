@@ -117,11 +117,13 @@ class TestThumbnails:
 
         assert "dj-accordion" in component_thumbnail("accordion")
 
-    def test_a_component_that_opens_on_demand_stays_blank(self):
-        """A preview of a closed modal is a preview of nothing."""
+    def test_a_component_with_nothing_to_preview_stays_blank(self):
+        """A card for something that renders nothing on its own is blank, not a broken render.
+        (``tour`` was the example until #4002 removed it; ``server_event_toast`` is a mixin with
+        no standalone preview.)"""
         from djust.theming.templatetags.theme_tags import component_thumbnail
 
-        assert component_thumbnail("tour") == ""
+        assert component_thumbnail("server_event_toast") == ""
 
 
 # ---------------------------------------------------------------------------

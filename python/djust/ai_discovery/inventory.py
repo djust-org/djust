@@ -37,7 +37,7 @@ class BundledApp:
 BUNDLED_APPS: tuple[BundledApp, ...] = (
     BundledApp(
         "djust.components",
-        "~190 template-tag UI components (tables, forms, overlays, feedback)",
+        "~170 template-tag UI components (tables, forms, overlays, feedback)",
         "djust[components]",
         ("markdown", "nh3"),
     ),

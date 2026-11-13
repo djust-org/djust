@@ -1421,13 +1421,13 @@ class TestProjectEscapersAreTrustedByOrigin:
         assert flagged(case('safe_css_color(v, default="red")')) == []
 
     def test_a_record_builder_and_its_fields(self):
-        head = "from djust.components.components.image_upload_preview import upload_attrs\n"
+        head = "from djust.components.components.signature_pad import pad_extras\n"
         unpack = head + (
-            "def f(a):\n    root, zone, field = upload_attrs(a, 0, True)\n"
-            "    return mark_safe(f'<div{root}{zone}{field}>')\n"
+            "def f(a):\n    root, canvas, typed = pad_extras(a)\n"
+            "    return mark_safe(f'<div{root}{canvas}{typed}>')\n"
         )
         assert flagged(unpack) == []
-        assert flagged(unpack.replace(head, "from elsewhere import upload_attrs\n")) == ["f"]
+        assert flagged(unpack.replace(head, "from elsewhere import pad_extras\n")) == ["f"]
         attrs = (
             "from djust.components.components.signature_pad import pad_extras\n"
             "def f(a):\n    extras = pad_extras(a)\n    return mark_safe(f'<div{extras.root}>')\n"
@@ -1443,17 +1443,22 @@ class TestProjectEscapersAreTrustedByOrigin:
         )
         assert flagged(mixed) == ["f"]
 
-    def test_an_imported_constant_is_trusted_by_origin(self):
+    def test_an_imported_constant_is_trusted_by_origin(self, monkeypatch):
+        # No shipped module needs this today (its one user went with #4002's removals); the
+        # mechanism is pinned against a planted origin.
+        monkeypatch.setattr(
+            taint,
+            "CLEAN_NAME_ORIGINS",
+            frozenset({"djust.components.components.example.ITEMS_HTML"}),
+        )
         ok = (
-            "from djust.components.components.image_upload_preview import ITEMS_HTML\n"
+            "from djust.components.components.example import ITEMS_HTML\n"
             "def f(x):\n    return mark_safe(f'<div>{ITEMS_HTML}{x}</div>')\n"
         )
         assert flagged(ok) == ["f"]  # x is still raw
         only = ok.replace("{x}", "")
         assert flagged(only) == []
-        assert flagged(
-            only.replace("djust.components.components.image_upload_preview", "elsewhere")
-        ) == ["f"]
+        assert flagged(only.replace("djust.components.components.example", "elsewhere")) == ["f"]
 
     def test_every_trusted_origin_names_something_that_exists(self):
         """A rename must not leave a dead entry that trusts nothing, or a name that now means more."""
@@ -1631,25 +1636,8 @@ class TestTheTrustedHelpersKeepTheirContract:
 
     def test_the_extras_builders_escape_everything_they_were_given(self):
         from djust.components.components.image_cropper import cropper_extras
-        from djust.components.components.image_upload_preview import upload_attrs
-        from djust.components.components.map_picker import map_picker_attrs
         from djust.components.components.signature_pad import pad_extras
-        from djust.components.components.voice_input import voice_extras
 
-        root, zone, field = upload_attrs(PAYLOAD, PAYLOAD, True)
-        for frag in (root, zone, field):
-            assert sweep.injections(f"<div{frag}></div>") == [], frag
-        voice = voice_extras(PAYLOAD, PAYLOAD)
-        assert (
-            sweep.injections(
-                f"<div{voice.button_attrs}>{voice.wrap_open}{voice.disclosure}{voice.status}"
-                f"{voice.interim}{voice.wrap_close}</div>"
-            )
-            == []
-        )
-        assert (
-            sweep.injections(f"<div{map_picker_attrs(PAYLOAD, PAYLOAD, URL, PAYLOAD)}></div>") == []
-        )
         pad = pad_extras(PAYLOAD, PAYLOAD, PAYLOAD)
         assert (
             sweep.injections(
@@ -1672,17 +1660,6 @@ class TestTheTrustedHelpersKeepTheirContract:
             assert isinstance(cols, int)
             cells = clamp_cells(cols, 1, 1, 1, 1)
             assert all(isinstance(c, int) for c in cells)
-
-    def test_menu_attrs_prints_two_fixed_words(self):
-        from djust.components.components.markdown_editor import menu_attrs
-
-        for value in (PAYLOAD, None, True, False, 0, "yes"):
-            out = menu_attrs(value, value)
-            assert out in {
-                f' data-bubble-menu="{a}" data-floating-menu="{b}"'
-                for a in ("true", "false")
-                for b in ("true", "false")
-            }
 
     def test_render_markdown_neutralises_raw_markup_and_script_urls(self):
         pytest.importorskip("djust._rust")
@@ -2568,7 +2545,8 @@ class TestTheRealTree:
     def test_the_wrappers_are_scanned_in_every_file_that_calls_them(self, tree_scan):
         files = {path for (path, _fn) in tree_scan}
         assert any(f.endswith("rust_handlers.py") for f in files)
-        assert any(f.endswith("_dev_tools.py") for f in files)
+        # ``_dev_tools.py`` was the other file until #4002 removed the tags whose ``_safe`` calls
+        # the guard could not prove; its remaining call (``json_viewer``) is proven clean.
 
 
 class TestCleanProjectOrigins:

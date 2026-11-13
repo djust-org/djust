@@ -1,5 +1,5 @@
 /**
- * #2985 — SortableList, SortableGrid, JsonViewer and LogViewer answer their
+ * #2985 — SortableList, SortableGrid and JsonViewer answer their
  * dj-hook: the interactions their docstrings describe, and an app's own hook
  * of the same name still wins wherever it is registered.
  *
@@ -90,13 +90,6 @@ const JSON_VIEWER = () => {
         `<script type="application/json" class="dj-json-viewer__raw">${raw}</script></div>`;
 };
 
-const LOG_VIEWER = (attrs = ' data-stream-event="new_logs" data-auto-scroll="true" data-line-numbers="true" data-max-lines="4"') =>
-    `<div class="dj-log-viewer" dj-hook="LogViewer"${attrs} role="log" aria-live="polite">` +
-    '<div class="dj-log-viewer__body">' +
-    '<div class="dj-log-viewer__line dj-log-viewer__line--info"><span class="dj-log-viewer__num">1</span><span class="dj-log-viewer__text">12:00 INFO up</span></div>' +
-    '<div class="dj-log-viewer__line"><span class="dj-log-viewer__num">2</span><span class="dj-log-viewer__text">plain</span></div>' +
-    '</div></div>';
-
 // ---------------------------------------------------------------------------
 // An app's own hook always wins (the owner's "preserve custom hooks").
 // ---------------------------------------------------------------------------
@@ -105,7 +98,6 @@ const COMPONENTS = [
     { hook: 'SortableList', file: 'sortable-list.js', markup: SORTABLE_LIST(), probe: (el) => el.querySelector('li').hasAttribute('tabindex') },
     { hook: 'SortableGrid', file: 'sortable-grid.js', markup: SORTABLE_GRID(), probe: (el) => el.querySelector('div').hasAttribute('tabindex') },
     { hook: 'JsonViewer', file: 'json-viewer.js', markup: JSON_VIEWER(), probe: (el) => el.querySelector('.dj-json__toggle').hasAttribute('aria-label') },
-    { hook: 'LogViewer', file: 'log-viewer.js', markup: LOG_VIEWER(), probe: (el) => el.querySelector('.dj-log-viewer__body').hasAttribute('tabindex') },
 ];
 
 describe('the shipped hooks never replace an app hook (#2985)', () => {
@@ -672,265 +664,6 @@ describe('JsonViewer', () => {
     });
 });
 
-// ---------------------------------------------------------------------------
-// LogViewer
-// ---------------------------------------------------------------------------
-
-function scrollable(body, { scrollHeight = 1000, clientHeight = 100, scrollTop = 0 } = {}) {
-    let top = scrollTop;
-    Object.defineProperty(body, 'scrollHeight', { get: () => scrollHeight, configurable: true });
-    Object.defineProperty(body, 'clientHeight', { get: () => clientHeight, configurable: true });
-    Object.defineProperty(body, 'scrollTop', { get: () => top, set: (v) => { top = v; }, configurable: true });
-}
-
-describe('LogViewer', () => {
-    it('makes the scrolling body focusable and follows the newest line on mount', () => {
-        const env = createEnv(LOG_VIEWER());
-        scrollable(env.window.document.querySelector('.dj-log-viewer__body'));
-        env.window.eval(read('log-viewer.js'));
-        env.window.djust.mountHooks();
-        const body = env.window.document.querySelector('.dj-log-viewer__body');
-        expect(body.getAttribute('tabindex')).toBe('0');
-        expect(body.scrollTop).toBe(1000);
-    });
-
-    it('does not follow without data-auto-scroll', () => {
-        const env = createEnv(LOG_VIEWER(' data-stream-event="new_logs"'));
-        scrollable(env.window.document.querySelector('.dj-log-viewer__body'));
-        env.window.eval(read('log-viewer.js'));
-        env.window.djust.mountHooks();
-        expect(env.window.document.querySelector('.dj-log-viewer__body').scrollTop).toBe(0);
-    });
-
-    it('appends streamed lines with level classes and continuing numbers', () => {
-        const env = boot(LOG_VIEWER(' data-stream-event="new_logs" data-line-numbers="true"'), 'log-viewer.js');
-        env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['12:01 ERROR down', 'warning: x', 'plain'] });
-        const rows = env.$$('.dj-log-viewer__line');
-        expect(rows.map((r) => r.querySelector('.dj-log-viewer__num').textContent)).toEqual(['1', '2', '3', '4', '5']);
-        expect(rows[2].className).toBe('dj-log-viewer__line dj-log-viewer__line--error');
-        expect(rows[3].className).toBe('dj-log-viewer__line dj-log-viewer__line--warn');
-        expect(rows[3].querySelector('.dj-log-viewer__text').textContent).toBe('warning: x');
-    });
-
-    it('accepts a line, a list or a string, and ignores anything else', () => {
-        const env = boot(LOG_VIEWER(' data-stream-event="new_logs" data-line-numbers="true"'), 'log-viewer.js');
-        const n = () => env.$$('.dj-log-viewer__line').length;
-        env.window.djust.dispatchPushEventToHooks('new_logs', { line: 'one' });
-        env.window.djust.dispatchPushEventToHooks('new_logs', ['two', 'three']);
-        env.window.djust.dispatchPushEventToHooks('new_logs', 'four');
-        expect(n()).toBe(6);
-        env.window.djust.dispatchPushEventToHooks('new_logs', { nope: 1 });
-        env.window.djust.dispatchPushEventToHooks('new_logs', null);
-        env.window.djust.dispatchPushEventToHooks('new_logs', { lines: [] });
-        expect(n()).toBe(6);
-        env.window.djust.dispatchPushEventToHooks('other_event', { lines: ['x'] });
-        expect(n()).toBe(6);
-    });
-
-    it('streamed text is text, never markup', () => {
-        const env = boot(LOG_VIEWER(), 'log-viewer.js');
-        env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['<img src=x onerror=alert(1)> INFO'] });
-        expect(env.$('.dj-log-viewer__body img')).toBeNull();
-        expect(env.$$('.dj-log-viewer__text').pop().textContent).toBe('<img src=x onerror=alert(1)> INFO');
-    });
-
-    it('drops the oldest lines past data-max-lines and keeps numbering absolute', () => {
-        const env = boot(LOG_VIEWER(), 'log-viewer.js'); // max 4, 2 rendered
-        env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO a', 'INFO b', 'INFO c', 'INFO d'] });
-        const rows = env.$$('.dj-log-viewer__line');
-        expect(rows.map((r) => r.querySelector('.dj-log-viewer__text').textContent)).toEqual(['INFO a', 'INFO b', 'INFO c', 'INFO d']);
-        expect(rows[0].querySelector('.dj-log-viewer__num').textContent).toBe('3');
-    });
-
-    it('honours data-filter-level and data-line-numbers on streamed lines', () => {
-        const env = boot(
-            LOG_VIEWER(' data-stream-event="new_logs" data-filter-level="error"'), 'log-viewer.js');
-        env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO a', 'ERROR b', 'ERROR c'] });
-        const rows = env.$$('.dj-log-viewer__line');
-        expect(rows).toHaveLength(4); // the two rendered, then the two errors
-        expect(env.$$('.dj-log-viewer__num')).toHaveLength(0 + 2); // only the server-rendered ones carry numbers here
-        expect(rows.slice(2).map((r) => r.querySelector('.dj-log-viewer__text').textContent)).toEqual(['ERROR b', 'ERROR c']);
-    });
-
-    // The reader's position is tracked from scroll events (never measured per
-    // streamed line), and the follow is one scroll per animation frame.
-    const frame = (env) => new Promise((resolve) => env.window.requestAnimationFrame(() => resolve()));
-    const scrolled = (env, body, top) => {
-        // moving up is the reader: their wheel comes first (a drop with no input is a browser clamp)
-        if (top < body.scrollTop) body.dispatchEvent(new env.window.Event('wheel', { bubbles: true }));
-        body.scrollTop = top;
-        body.dispatchEvent(new env.window.Event('scroll'));
-    };
-
-    it('stays pinned to the bottom while the reader is at the bottom', async () => {
-        const env = createEnv(LOG_VIEWER());
-        const body = env.window.document.querySelector('.dj-log-viewer__body');
-        scrollable(body, { scrollTop: 900 }); // 900 + 100 >= 1000: at the bottom
-        env.window.eval(read('log-viewer.js'));
-        env.window.djust.mountHooks();
-        scrolled(env, body, 900);
-        env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO more'] });
-        await frame(env);
-        expect(body.scrollTop).toBe(1000);
-    });
-
-    it('stops following once the reader scrolls up, and resumes at the bottom', async () => {
-        const env = createEnv(LOG_VIEWER());
-        const body = env.window.document.querySelector('.dj-log-viewer__body');
-        scrollable(body);
-        env.window.eval(read('log-viewer.js'));
-        env.window.djust.mountHooks();
-        scrolled(env, body, 200); // reading history
-        env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO more'] });
-        await frame(env);
-        expect(body.scrollTop).toBe(200);
-        scrolled(env, body, 900); // back at the bottom
-        env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO more'] });
-        await frame(env);
-        expect(body.scrollTop).toBe(1000);
-    });
-
-    it('scrolls once per frame however many events arrived in it, and never measures per event', async () => {
-        const env = createEnv(LOG_VIEWER());
-        const body = env.window.document.querySelector('.dj-log-viewer__body');
-        scrollable(body, { scrollTop: 900 });
-        env.window.eval(read('log-viewer.js'));
-        env.window.djust.mountHooks();
-        scrolled(env, body, 900);
-        let reads = 0;
-        let writes = 0;
-        let top = 900;
-        Object.defineProperty(body, 'scrollHeight', { get: () => { reads += 1; return 1000; }, configurable: true });
-        Object.defineProperty(body, 'scrollTop', { get: () => top, set: (v) => { writes += 1; top = v; }, configurable: true });
-        for (let i = 0; i < 50; i++) {
-            env.window.djust.dispatchPushEventToHooks('new_logs', { line: 'INFO ' + i });
-        }
-        expect(reads).toBe(0);
-        expect(writes).toBe(0);
-        await frame(env);
-        expect(writes).toBe(1);
-        expect(top).toBe(1000);
-    });
-
-    it('follows a server re-render the same way, unless the reader scrolled up', () => {
-        const env = createEnv(LOG_VIEWER());
-        const body = env.window.document.querySelector('.dj-log-viewer__body');
-        scrollable(body);
-        env.window.eval(read('log-viewer.js'));
-        env.window.djust.mountHooks();
-
-        scrolled(env, body, 900); // at the bottom
-        env.window.djust.beforeUpdateHooks();
-        env.window.djust.updateHooks();
-        expect(body.scrollTop).toBe(1000);
-
-        scrolled(env, body, 100); // read up
-        env.window.djust.beforeUpdateHooks();
-        env.window.djust.updateHooks();
-        expect(body.scrollTop).toBe(100);
-    });
-
-    // The scroll event for the hook's own follow arrives a frame late, after
-    // more rows were appended; it must not read as the reader leaving (review 2).
-    it('keeps following a fast stream whose own scroll events arrive late', async () => {
-        const env = createEnv(LOG_VIEWER());
-        const body = env.window.document.querySelector('.dj-log-viewer__body');
-        let height = 1000;
-        let top = 900;
-        Object.defineProperty(body, 'scrollHeight', { get: () => height, configurable: true });
-        Object.defineProperty(body, 'clientHeight', { get: () => 100, configurable: true });
-        Object.defineProperty(body, 'scrollTop', { get: () => top, set: (v) => { top = v; }, configurable: true });
-        env.window.eval(read('log-viewer.js'));
-        env.window.djust.mountHooks();
-        scrolled(env, body, 900);
-        for (let round = 0; round < 20; round++) {
-            env.window.djust.dispatchPushEventToHooks('new_logs', { line: 'INFO ' + round });
-            await frame(env);
-            expect(top).toBe(height); // followed
-            height += 500; // more rows arrive before the scroll event of our own follow
-            body.dispatchEvent(new env.window.Event('scroll')); // late: top < the new bottom
-        }
-        env.window.djust.dispatchPushEventToHooks('new_logs', { line: 'INFO last' });
-        await frame(env);
-        expect(top).toBe(height);
-    });
-
-    it('a reader who scrolled up stays up while a long stream arrives, and resumes at the bottom', async () => {
-        const env = createEnv(LOG_VIEWER());
-        const body = env.window.document.querySelector('.dj-log-viewer__body');
-        let height = 1000;
-        let top = 900;
-        Object.defineProperty(body, 'scrollHeight', { get: () => height, configurable: true });
-        Object.defineProperty(body, 'clientHeight', { get: () => 100, configurable: true });
-        Object.defineProperty(body, 'scrollTop', { get: () => top, set: (v) => { top = v; }, configurable: true });
-        env.window.eval(read('log-viewer.js'));
-        env.window.djust.mountHooks();
-        scrolled(env, body, 900);
-        scrolled(env, body, 300); // up
-        for (let round = 0; round < 30; round++) {
-            env.window.djust.dispatchPushEventToHooks('new_logs', { line: 'INFO ' + round });
-            height += 500;
-            await frame(env);
-            expect(top).toBe(300);
-        }
-        scrolled(env, body, height - 100); // back to the bottom
-        env.window.djust.dispatchPushEventToHooks('new_logs', { line: 'INFO more' });
-        await frame(env);
-        expect(top).toBe(height);
-    });
-
-    it('a reader scrolling up in the same frame as an append is not pulled down', async () => {
-        const env = createEnv(LOG_VIEWER());
-        const body = env.window.document.querySelector('.dj-log-viewer__body');
-        scrollable(body, { scrollTop: 900 });
-        env.window.eval(read('log-viewer.js'));
-        env.window.djust.mountHooks();
-        scrolled(env, body, 900);
-        env.window.djust.dispatchPushEventToHooks('new_logs', { line: 'INFO a' }); // schedules a follow
-        scrolled(env, body, 200); // the reader scrolls up before the frame
-        await frame(env);
-        expect(body.scrollTop).toBe(200);
-    });
-
-    it('a patch that clamps scrollTop after the log shrank does not unpin', async () => {
-        const env = createEnv(LOG_VIEWER());
-        const body = env.window.document.querySelector('.dj-log-viewer__body');
-        let height = 1000;
-        let top = 900;
-        Object.defineProperty(body, 'scrollHeight', { get: () => height, configurable: true });
-        Object.defineProperty(body, 'clientHeight', { get: () => 100, configurable: true });
-        Object.defineProperty(body, 'scrollTop', { get: () => top, set: (v) => { top = v; }, configurable: true });
-        env.window.eval(read('log-viewer.js'));
-        env.window.djust.mountHooks();
-        scrolled(env, body, 900);
-        env.window.djust.beforeUpdateHooks();
-        height = 600; top = 500; // shrunk and clamped: bottom is 600
-        env.window.djust.updateHooks();
-        expect(top).toBe(600);
-        body.dispatchEvent(new env.window.Event('scroll')); // the clamp's scroll event
-        env.window.djust.dispatchPushEventToHooks('new_logs', { line: 'INFO x' });
-        height = 700;
-        await frame(env);
-        expect(top).toBe(700);
-    });
-
-    it('recounts from the re-rendered lines after a server update', () => {
-        const env = boot(LOG_VIEWER(), 'log-viewer.js');
-        env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO a'] }); // 3
-        env.$('.dj-log-viewer__body').innerHTML =
-            '<div class="dj-log-viewer__line"><span class="dj-log-viewer__num">10</span><span class="dj-log-viewer__text">x</span></div>';
-        env.window.djust.updateHooks();
-        env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO b'] });
-        expect(env.$$('.dj-log-viewer__num').map((n) => n.textContent)).toEqual(['10', '11']);
-    });
-
-    it('without a stream event it registers no listener', () => {
-        const env = boot(LOG_VIEWER(' data-auto-scroll="true"'), 'log-viewer.js');
-        env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO a'] });
-        expect(env.$$('.dj-log-viewer__line')).toHaveLength(2);
-    });
-});
-
 // A server patch, as the client applies it: beforeUpdate hooks, DOM change, updated hooks.
 function serverPatch(env, mutate) {
     env.window.djust.beforeUpdateHooks();
@@ -1066,36 +799,6 @@ describe('a repeated announcement is still announced', () => {
         expect(seen.map((m) => m.trim())).toEqual(Array(3).fill('JSON copied to the clipboard'));
         expect(seen[1]).not.toBe(seen[0]);
         expect(seen[2]).not.toBe(seen[1]);
-    });
-});
-
-describe('LogViewer: streaming does not rescan the rows it holds (review I2)', () => {
-    it('1,000 single-line events cost no per-event row query', () => {
-        const env = boot(LOG_VIEWER(' data-stream-event="new_logs" data-line-numbers="true"'), 'log-viewer.js');
-        const body = env.$('.dj-log-viewer__body');
-        let queries = 0;
-        const real = body.querySelectorAll.bind(body);
-        body.querySelectorAll = (...a) => { queries += 1; return real(...a); };
-        for (let i = 0; i < 1000; i++) {
-            env.window.djust.dispatchPushEventToHooks('new_logs', { line: 'INFO event ' + i });
-        }
-        expect(queries).toBe(0);
-        expect(env.$$('.dj-log-viewer__line')).toHaveLength(1002);
-        expect(env.$$('.dj-log-viewer__num').pop().textContent).toBe('1002');
-    });
-
-    it('max_lines trims from the front without querying, and the row count stays right', () => {
-        const env = boot(LOG_VIEWER(' data-stream-event="new_logs" data-max-lines="50"'), 'log-viewer.js');
-        const body = env.$('.dj-log-viewer__body');
-        let queries = 0;
-        const real = body.querySelectorAll.bind(body);
-        body.querySelectorAll = (...a) => { queries += 1; return real(...a); };
-        for (let i = 0; i < 400; i++) {
-            env.window.djust.dispatchPushEventToHooks('new_logs', { lines: ['INFO a ' + i, 'INFO b ' + i] });
-        }
-        expect(queries).toBe(0);
-        expect(env.$$('.dj-log-viewer__line')).toHaveLength(50);
-        expect(env.$$('.dj-log-viewer__text').pop().textContent).toBe('INFO b 399');
     });
 });
 
