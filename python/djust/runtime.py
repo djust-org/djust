@@ -6737,8 +6737,12 @@ class ViewRuntime(RuntimeTurnPort):
 
             from .mixins.rust_bridge import request_scoped_data_changed
 
+            # The producer runs inside ``sync_step`` below, with the processor check
+            # (#3996), so the sync-turn wrapper scopes both (the one-producer pin).
+            produce_context = view.get_context_data
+
             def changed_besides() -> Tuple[Dict[str, Any], Optional[str]]:
-                context = view.get_context_data()
+                context = produce_context()
                 reason = _context_changed_besides(view, context, name)
                 if reason is None:
                     # A context processor's value is not in ``context`` and is
