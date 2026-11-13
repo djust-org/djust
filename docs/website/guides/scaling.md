@@ -131,6 +131,64 @@ Planning figures, each from one setup:
 - about **0.4 MB per session** on CPython 3.12, one process per pod, with 125–250 MB per pod at its capacity;
 - **2.2–2.7 MB per session** on 3.14t with a pool of 8–12 threads on a shared dev machine, taken at the first load step rather than at steady state (one thread per session: 5.4 MB).
 
+### Memory per connected view
+
+Each open WebSocket keeps three things alive in its process: the consumer, the view object, and a Rust renderer that holds the last rendered tree (the diff baseline) and a copy of the state the template reads. So a process's memory grows with *open sockets × what one view holds*, and what one view holds grows with the page and with the state, not with traffic. A page with no interaction costs the same as a busy one.
+
+The model below is measured, not estimated. `python/djust/tests/test_view_memory.py` mounts each view over a real WebSocket, sends one event, and counts the bytes each owner then holds: a `sys.getsizeof` walk on the Python side and `RustLiveView.retained_bytes()` (capacities and `size_of`) on the Rust side. Those counts are the same on every machine. The same test fails when a number in this section is more than 10% from what it measures.
+
+**The formula** (djust 2.0, bytes one connected view holds after an event):
+
+```text
+view ≈ 37 KB + P × page_bytes + S × state_bytes
+```
+
+- `page_bytes` is the HTML of the view's `dj-root`.
+- `P` is **13.6** for ordinary page markup (about 25 DOM nodes per KB) and **28** for a dense table (about 60 nodes per KB). The tree costs per node, not per byte, so markup made of many small elements costs more per KB.
+- `state_bytes` is the size of the plain data the view holds and renders (lists and dicts of strings and numbers). `S` is **5.1**: the data itself, the Rust copy the template reads (about 3× the Python data), and one fingerprint of it for change detection. A row of five small fields is about 0.4 KB of state.
+
+Two shortcuts that follow from it:
+
+- a page of static markup with a few values: **37 KB + 13.6 × page_bytes**. A 50 KB page is about 0.76 MB per view;
+- a table whose rows are all in state: **about 5.0 KB per row**. 500 rows (a 56 KB page) is about 2.6 MB per view, 1,000 rows about 5.2 MB.
+
+<!-- view-memory: base_kb=37 static_page=13.6 table_page=28 state=5.1 row_kb=5.0 static_total=13.6 -->
+
+**Who holds it** (bytes, one view, after one event):
+
+| Owner | Counter | 50 KB static page | 1,000-row table (113 KB page) | 20 components | Form |
+|---|---:|---:|---:|---:|---:|
+| Rust: last rendered tree | 1,648 | 503,080 | 2,289,965 | 34,919 | 4,208 |
+| Rust: copy of the state | 1,810 | 1,810 | 1,207,514 | 8,547 | 4,447 |
+| Rust: text-node index | 217 | 67,167 | 403,889 | 5,015 | 294 |
+| Rust: last HTML, per-node HTML cache, loop cache, fragment map | 464 | 100,464 | 377,033 | 3,494 | 1,030 |
+| Python: the view's state | 10,837 | 10,721 | 397,463 | 27,544 | 17,763 |
+| Python: change-detection fingerprints | 1,310 | 1,310 | 369,968 | 9,762 | 3,698 |
+| Python: recovery HTML | 116 | 53,007 | 112,919 | 1,993 | 312 |
+| Python: view and consumer, everything else | 19,260 | 18,942 | 18,672 | 21,899 | 20,598 |
+| Rust: everything else | 3,605 | 3,605 | 3,605 | 5,843 | 3,605 |
+| **Total** | **39 KB** | **0.76 MB** | **5.2 MB** | **119 KB** | **56 KB** |
+
+Read it this way:
+
+- **The rendered tree is the largest owner on every page with real markup**: 10 bytes of memory per byte of static HTML, 20 for a table. Each node is a 192-byte struct plus its attribute table.
+- **The page's text is held three more times** as text: the last HTML, the per-node HTML cache and the recovery HTML.
+- **State is held about five times over**: once in Python, three times that in the Rust copy, and once as a fingerprint.
+- **Not per view**: the parsed template and the template's source text are one copy per template in the process, shared by every socket.
+
+These are counted bytes. What the allocator takes for them is higher: block rounding and free lists added about 15% for the Rust side in the one comparison made (`malloc` statistics on macOS arm64), and the Python heap matched `tracemalloc` within 1% plus about 17 KB per socket of event-loop and channel objects the walk does not attribute. Resident size also carries the per-thread heaps described above. Plan with the formula, then confirm with one load step on your own page.
+
+**What changed in 2.0.** Until 2.0 a view held two whole fingerprint trees of its containers (the dirty-tracking baseline and the last render's), each about three times the size of the rows, and its own copy of the template source. The 1,000-row table above was 7.3 MB, of which 2.5 MB was those two trees; a 50 KB static page was 0.81 MB. A fingerprint is now about a third the size, the two trees share their rows, and the source text is shared.
+
+**What you can do about it**
+
+- **Render less of the list.** Memory follows the rows in state and the nodes on the page. Paginate, or follow [Large lists](large-lists.md): streams and `temporary_assigns` keep the rows out of the view's state.
+- **Keep large data out of state.** Plain data the view holds and renders costs about five times its Python size. Hold an id and query on demand.
+- **Budget sockets per process from the formula.** At 0.76 MB a view, 1,000 open sockets of a 50 KB page are about 0.8 GB before the allocator's share; at 5 MB a view the same thousand need 5 GB, which is a reason to change the page, not the pod. `worker_threads` does not change this number: it sets how many turns run at once, not what a parked socket holds.
+- **A list over the fingerprint budget** (20,000 nodes, about 1,500 rows of five fields) holds no fingerprint at all and is re-sent to the renderer on every turn instead. It costs less memory and more CPU per event; the framework logs it once per view class.
+
+There is no built-in per-view memory limit or warning in 2.0. A view can report its own Rust side with `self._rust_view.retained_bytes()` if you want to sample it in your own metrics.
+
 **Size the container for the peak.** RSS levels off after load; it does not fall back, because the allocator keeps freed pages for reuse. Watch the state backend's entry count and the live heap, not RSS alone. On 3.14t:
 
 - every thread gets its own allocator heap, so bound your threads;

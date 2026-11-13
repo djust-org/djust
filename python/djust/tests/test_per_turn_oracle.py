@@ -746,6 +746,168 @@ STREAM_SCRIPT = [
 ]
 
 
+# --- what a socket holds between turns (#3998) ----------------------------------------
+
+
+class ScalarTypes(_Base):
+    """One slot whose value changes its TYPE: ``1``, ``True``, ``1.0``, ``"1"``.
+
+    The compact fingerprint keeps a ``str`` / ``int`` / ``None`` leaf as the
+    value itself. ``True == 1 == 1.0``, so the types that compare equal across
+    types must keep their tag, or a turn that swaps one for another renders
+    nothing.
+    """
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root>{% for v in items %}<b>{{ v }}</b>{% endfor %}"
+        "<i>{{ box.k }}</i>{% for k, v in keyed.items %}<u>{{ k }}={{ v }}</u>{% endfor %}</div>"
+    )
+    items = state(default_factory=list)
+    box = state(default_factory=dict)
+    keyed = state(default_factory=dict)
+
+    VALUES = {
+        "one": 1,
+        "true": True,
+        "float": 1.0,
+        "str": "1",
+        "none": None,
+        "zero": 0,
+        "false": False,
+        "empty": "",
+    }
+
+    def mount(self, request, **kwargs):
+        self.items = [1, "x"]
+        self.box = {"k": 1}
+        self.keyed = {1: "a"}
+
+    @event_handler()
+    def become(self, to: str = "one", **kwargs):
+        value = self.VALUES[to]
+        self.items[0] = value
+        self.box["k"] = value
+
+    @event_handler()
+    def rekey(self, to: str = "one", **kwargs):
+        self.keyed = {self.VALUES[to]: "a"}
+
+
+SCALAR_SCRIPT: List[Tuple[Any, ...]] = [
+    ("event", "become", {"to": name})
+    for name in ("true", "float", "one", "str", "none", "zero", "false", "empty", "one")
+] + [("event", "rekey", {"to": name}) for name in ("true", "float", "str", "one")]
+
+
+class Dirty(_Base):
+    """Dirty tracking beside a list changed in place, saved and changed back.
+
+    The dirty baseline and the last render's fingerprint of ``items`` are one
+    object while they are equal (#3998), so every way they come apart and back
+    together is a turn here: a row edited, the edit undone, ``mark_clean``, a
+    row appended and removed, an equal list assigned, and changes made by a
+    push and by ``handle_info`` between events.
+    """
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><p>{{ dirty }}</p><u>{% for f in changed %}{{ f }} {% endfor %}</u>"
+        "<i>{{ n }}</i>" + TABLE + "</div>"
+    )
+    items = state(default_factory=list)
+    n = state(0)
+    _listen_channels = frozenset({"per_turn_oracle"})
+
+    def mount(self, request, **kwargs):
+        self.items = rows(6)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Only the view's own two fields: ``changed_fields`` also lists
+        # ``request`` whenever the transport bound a new request object, and
+        # whether it did is not something two runs agree on.
+        changed = sorted(self.changed_fields & {"items", "n"})
+        context["dirty"] = bool(changed)
+        context["changed"] = changed
+        return context
+
+    @event_handler()
+    def touch(self, row: int = 0, **kwargs):
+        self.items[row]["name"] += "!"
+
+    @event_handler()
+    def undo(self, row: int = 0, **kwargs):
+        self.items[row]["name"] = self.items[row]["name"].rstrip("!")
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.n += 1
+
+    @event_handler()
+    def save(self, **kwargs):
+        self.mark_clean()
+
+    @event_handler()
+    def touch_and_save(self, row: int = 0, **kwargs):
+        # The baseline is taken BEFORE this turn's render: the fingerprint the
+        # last render left is of the rows as they were, and must not be it.
+        self.items[row]["name"] += "?"
+        self.mark_clean()
+
+    @event_handler()
+    def grow(self, **kwargs):
+        self.items.append({"id": 99, "name": "new", "qty": 1, "active": True, "tags": []})
+
+    @event_handler()
+    def shrink(self, **kwargs):
+        self.items.pop()
+
+    @event_handler()
+    def same_again(self, **kwargs):
+        self.items = [dict(row, tags=list(row["tags"])) for row in self.items]
+
+    @event_handler()
+    def head(self, **kwargs):
+        self.items.insert(0, {"id": 98, "name": "head", "qty": 2, "active": False, "tags": ["h"]})
+
+    def handle_info(self, message):
+        RAN.append("notify")
+        self.items[1]["qty"] = message["payload"]["qty"]
+
+    def handle_push(self, row=0, **kwargs):
+        RAN.append("push")
+        self.items[row]["tags"].append("pushed")
+
+
+DIRTY_SCRIPT = [
+    ("event", "bump"),
+    ("event", "touch"),
+    ("event", "bump"),
+    ("event", "undo"),
+    ("event", "touch", {"row": 3}),
+    ("event", "save"),
+    ("event", "bump"),
+    ("event", "undo", {"row": 3}),
+    ("notify", {"qty": 50}),
+    ("event", "bump"),
+    ("push", "handle_push", {"row": 2}),
+    ("event", "grow"),
+    ("event", "shrink"),
+    ("event", "same_again"),
+    ("event", "save"),
+    ("event", "head"),
+    ("event", "touch", {"row": 5}),
+    ("notify", {"qty": 51}),
+    ("event", "save"),
+    ("event", "bump"),
+    ("event", "touch_and_save", {"row": 1}),
+    ("event", "bump"),
+    ("event", "touch", {"row": 1}),
+    ("event", "touch_and_save", {"row": 4}),
+]
+
+
 # --- running a case -------------------------------------------------------------------
 
 Script = List[Tuple[Any, ...]]
@@ -772,6 +934,8 @@ WS_CASES: List[Tuple[str, type, Script]] = [
     ("processors", Processors, COUNTER_SCRIPT),
     ("form", FormView, FORM_SCRIPT),
     ("stream", StreamView, STREAM_SCRIPT),
+    ("scalar_types", ScalarTypes, SCALAR_SCRIPT),
+    ("dirty_tracking", Dirty, DIRTY_SCRIPT),
 ]
 
 
@@ -928,11 +1092,23 @@ async def test_websocket_frames_are_identical(monkeypatch, label, view_class, sc
     FRAMES_COMPARED.append(len(after) - 1)
 
 
+#: The cases each shortcut is also turned off alone on.
+ALONE_LABELS = (
+    "table",
+    "derived",
+    "processors",
+    "counter_client",
+    "lifecycle",
+    "tick",
+    "scalar_types",
+    "dirty_tracking",
+)
+ALONE_CASES = [case for case in WS_CASES if case[0] in ALONE_LABELS]
+
+
 @pytest.mark.parametrize("shortcut", sorted(_per_turn.ALL))
 @pytest.mark.parametrize(
-    "label,view_class,script",
-    [case for case in WS_CASES if case[0] in ("table", "derived", "processors", "counter_client")],
-    ids=["table", "derived", "processors", "counter_client"],
+    "label,view_class,script", ALONE_CASES, ids=[case[0] for case in ALONE_CASES]
 )
 async def test_each_shortcut_alone_changes_no_frame(
     monkeypatch, shortcut, label, view_class, script
@@ -1295,6 +1471,28 @@ def _break_plain_sub_ids(patch: Any) -> None:
     patch.setattr(rust_bridge, "_collect_sub_ids", lambda *args, **kwargs: None)
 
 
+def _break_compact_fingerprints(patch: Any) -> None:
+    from djust import change_detection, state_pass
+
+    # As if ``bool`` had been made a bare leaf like ``int``: True == 1.
+    wrong = change_detection._BARE | {bool, float}
+    patch.setattr(change_detection, "_BARE", wrong)
+    patch.setattr(state_pass, "_BARE", wrong)
+
+
+def _break_shared_fingerprints(patch: Any) -> None:
+    from djust.mixins import rust_bridge
+
+    # As if a stored fingerprint were reused without being equal: every key
+    # that has one reads as unchanged since the last sync.
+    def stale(fp: Any, held: Any, baseline_entry: Any) -> Any:
+        if held is not rust_bridge._MISSING:
+            return held, True
+        return fp, False
+
+    patch.setattr(rust_bridge, "_reuse_fingerprint", stale)
+
+
 SABOTAGE = {
     "contract_cache": (_break_contract_cache, _redeclared_run),
     "snapshot_single_hop": (
@@ -1310,6 +1508,11 @@ SABOTAGE = {
         lambda: run_ws(Processors, COUNTER_SCRIPT),
     ),
     "plain_sub_ids": (_break_plain_sub_ids, lambda: run_ws(Opaque, OPAQUE_SCRIPT)),
+    "compact_fingerprints": (
+        _break_compact_fingerprints,
+        lambda: run_ws(ScalarTypes, SCALAR_SCRIPT),
+    ),
+    "shared_fingerprints": (_break_shared_fingerprints, lambda: run_ws(Derived, DERIVED_SCRIPT)),
 }
 
 

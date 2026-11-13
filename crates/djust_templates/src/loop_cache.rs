@@ -245,6 +245,44 @@ impl LoopRenderCache {
         self.misses
     }
 
+    /// Heap bytes the cache holds between renders (#3998): the rendered
+    /// fragments and, with the `liveview` feature, the parsed subtrees. The
+    /// per-render manifest is counted too; it is empty between renders.
+    pub fn retained_bytes(&self) -> usize {
+        use djust_core::retained::table_bytes;
+        use std::mem::size_of;
+        let mut total = table_bytes(self.fragments.capacity(), size_of::<(u64, String)>())
+            + self.fragments.values().map(String::capacity).sum::<usize>()
+            + table_bytes(self.seen_this_render.capacity(), size_of::<u64>())
+            + table_bytes(
+                self.cacheable_verdict.capacity(),
+                size_of::<((usize, usize), bool)>(),
+            )
+            + self.manifest.capacity() * size_of::<ManifestEntry>()
+            + self
+                .manifest
+                .iter()
+                .map(|entry| entry.item_html.capacity())
+                .sum::<usize>();
+        #[cfg(feature = "liveview")]
+        {
+            total += table_bytes(
+                self.parsed.capacity(),
+                size_of::<(u64, Vec<djust_vdom::VNode>)>(),
+            ) + self
+                .parsed
+                .values()
+                .map(|roots| {
+                    roots
+                        .iter()
+                        .map(|root| root.retained_bytes().total())
+                        .sum::<usize>()
+                })
+                .sum::<usize>();
+        }
+        total
+    }
+
     /// Number of retained fragments (debug / tests).
     pub fn len(&self) -> usize {
         self.fragments.len()

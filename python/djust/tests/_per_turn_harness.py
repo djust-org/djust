@@ -40,6 +40,8 @@ class Counts(Counter):  # type: ignore[type-arg]
         super().__init__()
         self.sent: List[List[str]] = []
         self.changed: List[List[str]] = []
+        #: The view of the last event snapshot (what a socket holds, #3998).
+        self.view: Any = None
 
     def reset(self) -> None:
         self.clear()
@@ -104,6 +106,13 @@ def counting(monkeypatch: Any) -> Counts:
 
     # Whole-state snapshots (each walks every container on the view).
     spy(websocket, "_snapshot_assigns", "snapshot_assigns")
+    counted_snapshot = websocket._snapshot_assigns
+
+    def snapshot_of(view: Any, *args: Any, **kwargs: Any) -> Any:
+        counts.view = view
+        return counted_snapshot(view, *args, **kwargs)
+
+    monkeypatch.setattr(websocket, "_snapshot_assigns", snapshot_of)
     # The structural fingerprint, wherever it is taken.
     spy(change_detection, "deep_fingerprint", "fingerprint.other", walked=True)
     spy(websocket, "deep_fingerprint", "fingerprint.snapshot", walked=True)
@@ -267,6 +276,26 @@ async def event_frames(comm: Any, name: str, params: Any = None) -> List[Dict[st
     for frame in frames:
         frame.pop("ref", None)  # a per-call counter, not part of what is compared
     return frames
+
+
+def fingerprint_bytes(view: Any) -> int:
+    """Bytes of the fingerprint trees *view* holds between turns (#3998).
+
+    The dirty baseline and the last render's fingerprints, each object counted
+    once: a tree both hold is one tree. The state is walked first and not
+    counted, so its strings and numbers (a fingerprint's leaves ARE those
+    objects) are not charged to the trees.
+    """
+    from . import _view_memory
+
+    seen: set = set()
+    attrs = vars(view)
+    for name in _view_memory.state_names(view):
+        _view_memory.deep_bytes(attrs[name], seen, stop=(view,))
+    return sum(
+        _view_memory.deep_bytes(attrs.get(name), seen, stop=(view,))
+        for name in ("_dirty_baseline",) + _view_memory.FINGERPRINT_ATTRS
+    )
 
 
 @contextmanager
