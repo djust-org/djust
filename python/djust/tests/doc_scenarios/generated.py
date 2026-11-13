@@ -166,7 +166,11 @@ def scaffold_model_form_edit(example):
 
 @scenario("catalogue-dropdown")
 def catalogue_dropdown(example):
-    page = H.Page(H.load(example))
+    # One connection, as the guide's other interactive examples run
+    # (adr034.py): 2.0 keeps no component between page-POST fallback
+    # requests, so an interactive component is reachable only on the
+    # connection that rendered it (until #4046).
+    page = H.LivePage(H.load(example))
     project, alpha, beta = page.ids()
     # Each menu's choice reaches only its own callback.
     assert page.event("select", component_id=beta, value="details") == 200

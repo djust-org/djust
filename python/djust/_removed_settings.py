@@ -40,11 +40,17 @@ REMOVED_CONTEXT_PROCESSORS: dict[str, str] = {
     ),
 }
 
-#: ``LIVEVIEW_CONFIG`` / ``DJUST_CONFIG`` keys for kill switches 2.0 hard-wired on.
+#: ``LIVEVIEW_CONFIG`` / ``DJUST_CONFIG`` keys 2.0 removed: kill switches it
+#: hard-wired on, and switches for behaviour it removed.
 REMOVED_CONFIG_KEYS: dict[str, str] = {
     "template_auto_call": "Django's nullary auto-call in templates is always on",
     "virtual_keyed_ops": "keyed [dj-virtual] VDOM ops are always on",
     "django_value_repr": "{{ value }} always renders as Django's str() does",
+    "view_state_in_session": (
+        "no view state is kept in the Django session any more: a legacy-exposure "
+        "view is mounted again on every page-POST fallback request, and an explicit "
+        'view keeps exactly its state(..., persist="server") fields'
+    ),
 }
 
 #: View attributes 2.0 removed. A truthy value is refused when the class is

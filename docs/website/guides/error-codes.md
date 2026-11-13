@@ -348,13 +348,9 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
-### C027: Invalid view_state_in_session
+### C027: Invalid view_state_in_session (removed in 2.0)
 
-**Severity**: Error
-
-**What causes it**: `LIVEVIEW_CONFIG['view_state_in_session']` is set to something other than `True` or `False`, such as the string `"false"`. Only `False` turns the session copy of view state off, so with any other value djust keeps saving each view's state in the session.
-
-**Fix**: Set it to `False` (stateless) or `True`, or remove it. See [Keeping view state out of the session](http-only-mode.md#keeping-view-state-out-of-the-session). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C027"]}`.
+Retired in 2.0 with the `view_state_in_session` setting it validated: no view state is kept in the session any more, and the setting is refused at startup. Nothing reports C027; remove it from `suppress_checks` or `SILENCED_SYSTEM_CHECKS`. See [Nothing of the view is kept in the session](http-only-mode.md#nothing-of-the-view-is-kept-in-the-session).
 
 ---
 

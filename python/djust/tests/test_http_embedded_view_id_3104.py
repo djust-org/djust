@@ -178,14 +178,31 @@ def _page(session, view_class=Page, user=None):
     return list(dict.fromkeys(re.findall(r'data-djust-embedded="([^"]+)"', html)))
 
 
+_LAST_PAGE_ANSWER: dict = {}
+
+
 def _post(session, body, event="got_click", view_class=Page, user=None):
     response = view_class.as_view()(_request("post", session, body, event, user=user))
     session.save()
+    _LAST_PAGE_ANSWER.pop(session.session_key, None)
+    if response.status_code == 200:
+        data = json.loads(response.content)
+        if data.get("type") != "embedded_update" and "html" in data:
+            _LAST_PAGE_ANSWER[session.session_key] = data["html"]
     return response
 
 
 def _parent_received(session):
-    return session.get("liveview_" + PATH, {}).get("received", "").split()
+    """What the page's own handler recorded in the last POST's whole-page answer.
+
+    2.0 keeps no legacy view state in the session between requests, so the
+    page is mounted afresh on every POST and what a handler did is read from
+    the answer, not from a saved copy. ``[]``: the last POST rendered no page
+    (a child's answer, a refusal) or the page's handler recorded nothing.
+    """
+    html = _LAST_PAGE_ANSWER.get(session.session_key, "")
+    match = re.search(r'<span[^>]*\bid="page-r"[^>]*>([^<]*)</span>', html)
+    return match.group(1).split() if match else []
 
 
 def _html(response):
@@ -249,7 +266,7 @@ def test_an_event_for_an_embedded_child_runs_on_that_child(session, flat, which)
     assert data["view_id"] == child_id
     assert data["event_name"] == "got_click"
     assert re.search(r'<span id="r"[^>]*>click</span>', data["html"]), data["html"]
-    # The page never ran the child's handler, and nothing of it was saved.
+    # The page never ran the child's handler: the answer is the child's alone.
     assert _parent_received(session) == []
     follow = _post(session, {}, event="got_away")
     assert follow.status_code == 200
@@ -426,8 +443,21 @@ class Unstable:
     """A kwarg whose repr differs on every request (it carries an address)."""
 
 
+#: The rows ListPage lists. A stand-in for the database: 2.0 keeps no legacy
+#: view state between requests, so what one request changes is read back by
+#: the next one's mount() from here, as an app reads its rows.
+_ROWS: list = []
+
+
+@pytest.fixture(autouse=True)
+def _fresh_rows():
+    _ROWS[:] = [1, 2, 3]
+    yield
+    _ROWS[:] = []
+
+
 class ListPage(LiveView):
-    """A for-loop of rows; the list is the page's saved state."""
+    """A for-loop of rows, read from ``_ROWS`` on every mount."""
 
     exposure_policy = "legacy"
     template = (
@@ -440,15 +470,17 @@ class ListPage(LiveView):
     )
 
     def mount(self, request, **kwargs):
-        self.items = [1, 2, 3]
+        self.items = list(_ROWS)
 
     @event_handler
     def prepend(self, **kwargs):
-        self.items = [0] + list(self.items)
+        _ROWS[:] = [0] + _ROWS
+        self.items = list(_ROWS)
 
     @event_handler
     def drop_first(self, **kwargs):
-        self.items = list(self.items)[1:]
+        _ROWS[:] = _ROWS[1:]
+        self.items = list(_ROWS)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

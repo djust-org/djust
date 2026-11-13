@@ -216,18 +216,6 @@ class TestSnapshotPaths:
         view.mount(None)
         assert view.get_state()["rating"] is view.rating
 
-    def test_session_component_state_is_the_state_dict(self):
-        view = RatingView()
-        view.mount(None)
-        view.rating.value = 2
-        saved = view._extract_component_state(view.rating)
-        assert saved == view.rating.state
-        other = RatingView()
-        other.mount(None)
-        other._restore_component_state(other.rating, json.loads(json.dumps(saved)))
-        assert other.rating.state["value"] == 2
-        assert _full_stars(other.rating.render()) == 2
-
 
 class _ScopeSession:
     def __init__(self, key: str) -> None:

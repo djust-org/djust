@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 115 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 114 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -37,7 +37,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C024 | Config | Error | `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is not a number of seconds greater than 0 and at most 10 |
 | C025 | Config | Error | `DJUST_WS_PATH` is not a path starting with a single `/` (#3186) |
 | C026 | Config | Error | `LIVEVIEW_MIDDLEWARE` has an entry that is not an importable `async def mw(turn, next)` (ADR-044) |
-| C027 | Config | Error | `LIVEVIEW_CONFIG['view_state_in_session']` is not `True` or `False` |
+| C027 | Config | Retired | Retired in 2.0 with `view_state_in_session`: the setting was not `True` or `False`. Never emitted; the ID is not reused |
 | C028 | Config | Error | `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is not `None` or a number of seconds greater than 0 |
 | C029 | Config | Error | `LIVEVIEW_CONFIG['query_budget']` is not `None`, `"off"`, `"warn"` or `"error"` |
 | C301 | Config | Error | Invalid VDOM cache TTL |
@@ -276,12 +276,11 @@ console.log("debug info"); // noqa: Q003
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C026"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C026"]` (turns still fail at runtime)
 - **False positives**: None
 
-### C027 — Invalid `view_state_in_session`
-- **Severity**: Error
-- **Method**: Settings inspection
-- **What it detects**: `LIVEVIEW_CONFIG['view_state_in_session']` (or the same key in `DJUST_CONFIG`) is set to something other than a bool, such as `"false"`, `0` or `None`. Only `False` keeps view state out of the Django session; any other value keeps the default and saves each view's state there. See [Keeping view state out of the session](website/guides/http-only-mode.md#keeping-view-state-out-of-the-session).
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C027"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C027"]` (the runtime still keeps the default)
-- **False positives**: None
+### C027 — Retired
+- **Retired in**: 2.0 (`view_state_in_session` was removed)
+- **What it did**: reported a `LIVEVIEW_CONFIG['view_state_in_session']` (or `DJUST_CONFIG`) value that was not a bool
+- **Why it was retired**: no view state is kept in the session any more, so the setting has nothing to switch. A project that still sets it is refused with `ImproperlyConfigured` at startup. See [Nothing of the view is kept in the session](website/guides/http-only-mode.md#nothing-of-the-view-is-kept-in-the-session)
+- **Migration**: remove `"C027"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
 ### C028 — Invalid `http_fallback_background_timeout`
 - **Severity**: Error

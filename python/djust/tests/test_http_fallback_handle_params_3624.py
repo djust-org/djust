@@ -1,7 +1,7 @@
 """The stateless HTTP page-POST fallback runs ``handle_params()`` and background work.
 
-With ``view_state_in_session=False`` (and for any view the fallback rebuilds
-with ``mount()``) the POST builds a fresh view. The GET and the socket mount
+The POST builds a fresh view (2.0 keeps no legacy view state between
+requests). The GET and the socket mount
 call ``handle_params(params, uri)`` right after ``mount()``; the fallback did
 not, so a page that reads its URL there (filters, a scope, ``?tab=``) met the
 event with its defaults and rendered a different page from the one the browser
@@ -28,7 +28,7 @@ from djust.decorators import event_handler, state
 
 pytestmark = pytest.mark.django_db
 
-STATELESS = override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False})
+STATELESS = override_settings(LIVEVIEW_CONFIG={})
 PATH = "/scoped/"
 
 ROWS = {"all": ["a", "b", "c"], "mine": ["a"]}
@@ -153,26 +153,6 @@ class TestHandleParamsOnTheFallbackPost:
         assert view.note == "all:a,b,c"
 
 
-class TestWhenStateWasRestored:
-    def test_a_restored_view_does_not_run_handle_params_again(self):
-        """Default policy: the saved state already holds what handle_params set.
-
-        The negative half of the rule "when no state was restored": running it
-        over restored state would overwrite what the previous event changed.
-        """
-        url = PATH + "?scope=mine"
-        initial = _get_request(url)
-        ScopedView().get(initial)  # saves scope=mine in the session
-        ScopedView.handle_params_calls = []
-
-        view = ScopedView()
-        response = _post(initial, view, "archive", url=url)
-
-        assert response.status_code == 200, response.content
-        assert view.note == "mine:a"
-        assert ScopedView.handle_params_calls == []
-
-
 class ExplicitScopedView(ScopedView):
     exposure_policy = "explicit"
 
@@ -293,14 +273,3 @@ class TestMountRerunsWithSavedStateOnTop:
 
         assert response.status_code == 200, response.content
         assert view.note == "mine"
-
-    def test_the_saved_state_goes_back_on_top_of_mount(self):
-        url = PATH + "?scope=mine"
-        initial = _get_request(url)
-        PrivateFromUrl().get(initial)
-        _post(initial, PrivateFromUrl(), "bump", url=url)
-
-        view = PrivateFromUrl()
-        _post(initial, view, "bump", url=url)
-
-        assert view.count == 2, "mount() sets 0; the saved 1 must go back on top"

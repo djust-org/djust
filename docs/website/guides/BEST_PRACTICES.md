@@ -675,7 +675,10 @@ Use `dj-loading.*` attributes for zero-JS loading indicators:
 
 The `Large LiveView state detected ... (threshold: 100KB)` warning measures the
 whole snapshot the state backend stores for a view, not just the attributes you
-assign. The snapshot holds three things, and the warning prints each one's size:
+assign. (Since 2.0 no view's renderer is stored in the backend, so the warning
+only fires for a snapshot code stores there itself; what follows still
+describes what a view holds in memory per connection.) The snapshot holds three
+things, and the warning prints each one's size:
 
 | Part | What it is | Grows with |
 | --- | --- | --- |
@@ -746,8 +749,7 @@ backend's TTL). Use it when later renders are rare; do not use it for a page
 whose own handlers update it often, or one that relies on `temporary_assigns`
 or streams (they exist to send small updates, and a full render shows only what
 the view still holds; a view that sets both `static_render` and `temporary_assigns` logs a
-warning once per class, because its rows are gone after the first render). It is independent of `view_state_in_session`, which is
-about the session save, not this snapshot. Keeping stream rows out of the
+warning once per class, because its rows are gone after the first render). It is independent of the session. Keeping stream rows out of the
 snapshot of a view that *does* patch is a separate, open question (#3632).
 
 A view that mixes in `ThemeMixin` no longer adds the theme HTML to this

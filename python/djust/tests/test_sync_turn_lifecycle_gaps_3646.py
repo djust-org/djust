@@ -862,13 +862,16 @@ def test_the_guides_entries_per_request_for_a_page_get():
 
 
 def test_the_guides_entries_per_request_for_a_post_event():
+    # One ``render`` step: 2.0 removed the legacy session save, whose
+    # get_context_data() pass was the second ``render`` entry.
     fresh = _entered_by(SequencePage, _page_request("POST"))
-    assert fresh == ["auth", "mount", "handle_params", "auth", "event", "render", "render"]
+    assert fresh == ["auth", "mount", "handle_params", "auth", "event", "render"]
 
+    # A POST after a GET is the same fresh mount: nothing was kept.
     first = _page_request("GET")
     SequencePage.as_view()(first)
-    restored = _entered_by(SequencePage, _page_request("POST", session=first.session))
-    assert restored == ["auth", "lifecycle", "auth", "hook", "event", "render", "render"]
+    after_get = _entered_by(SequencePage, _page_request("POST", session=first.session))
+    assert after_get == fresh
 
 
 # --------------------------------------------------------------------------- #

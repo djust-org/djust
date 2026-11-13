@@ -11,20 +11,12 @@ has NEITHER a handle NOR attrs, and a raw render of that clone answers ``''``
 for ``{{ obj.cls_attr }}``.
 
 The movement-3 plan (prerequisite B) decided NOT to re-architect: no
-framework path renders a clone before a full sync. A clone is materialised in
-exactly one framework place — ``_initialize_rust_view``'s cache-HIT branch,
-behind ``if self._rust_view is None`` — on a Python view that has no
-change-detection baseline yet (``_prev_context_refs`` is absent), so the
-first ``_sync_state_to_rust`` pushes EVERY context key through
-``update_state`` and re-converts the value with a fresh handle before the
-first render. This file pins that contract in three layers:
+framework path renders a clone before a full sync. Until 2.0 a clone was
+materialised in exactly one framework place, ``_initialize_rust_view``'s
+legacy render-cache HIT branch; 2.0 removed that cache, so no framework code
+reads a backend clone at all (pinned below). This file pins:
 
-1. **Framework contract** (load-bearing): a real ``WebsocketCommunicator``
-   mount, then a second mount on the SAME session + URL (which is what makes
-   ``_initialize_rust_view`` take the cache HIT and materialise a clone),
-   asserting the class attribute renders, and
-   asserting the clone WAS materialised (a spy on ``InMemoryStateBackend.get``)
-   so the test cannot pass by never hitting the cache.
+1. **Framework contract**: no framework module reads a backend clone.
 2. **API-level contract** (the degraded bytes, pinned by name): a
    ``RustLiveView`` clone rendered WITHOUT a sync answers ``''`` for a
    handle-only lookup. Changing those bytes is a deliberate act.
@@ -53,7 +45,6 @@ import re
 
 import djust
 import pytest
-from asgiref.sync import sync_to_async
 from djust import LiveView
 from djust._rust import RustLiveView
 
@@ -123,61 +114,6 @@ async def _mount_once(session_key: str, url: str) -> dict:
     return frame
 
 
-@pytest.mark.asyncio
-async def test_second_mount_renders_the_class_attribute_from_a_backend_clone(monkeypatch) -> None:
-    """The load-bearing pin: the first render after a state-backend round
-    trip is preceded by a full sync, so the class attribute renders."""
-    pytest.importorskip("channels")
-    from django.contrib.sessions.backends.db import SessionStore
-    from django.test import override_settings
-    from djust.state_backends import memory as memory_mod
-    from djust.state_backends.registry import get_backend
-
-    backend = get_backend()
-    assert isinstance(backend, memory_mod.InMemoryStateBackend), (
-        f"this pin exercises the in-memory msgpack round trip; got {backend!r}"
-    )
-
-    # Spy on the clone reader: the second mount MUST take the cache HIT, or
-    # the test proves nothing about a restored clone.
-    hits: list[str] = []
-    real_get = memory_mod.InMemoryStateBackend.get
-
-    def spying_get(self, key):
-        result = real_get(self, key)
-        if result is not None:
-            hits.append(key)
-        return result
-
-    monkeypatch.setattr(memory_mod.InMemoryStateBackend, "get", spying_get)
-
-    def _create_session():
-        s = SessionStore()
-        s.create()
-        return s.session_key
-
-    session_key = await sync_to_async(_create_session)()
-    url = "/round-trip-2570/"
-
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-        first = await _mount_once(session_key, url)
-        assert SYNCED in (first.get("html") or ""), (
-            f"fresh mount must render the live object; got {first.get('html')!r}"
-        )
-        assert hits == [], "the first mount must be a cache MISS (no clone yet)"
-
-        second = await _mount_once(session_key, url)
-        assert len(hits) == 1, (
-            "the second mount on the same session + URL must take the cache HIT "
-            f"and materialise a msgpack clone; hits={hits!r}"
-        )
-        assert SYNCED in (second.get("html") or ""), (
-            "the first render after a state-backend round trip must be preceded "
-            "by a full sync that re-attaches the lazy handle (#2570); got "
-            f"{second.get('html')!r}"
-        )
-
-
 # --------------------------------------------------------------------------- #
 # 2. API-level contract — the DEGRADED bytes, pinned by name
 # --------------------------------------------------------------------------- #
@@ -244,26 +180,18 @@ def test_the_clone_reader_has_exactly_the_known_call_sites() -> None:
     }, f"clone-reader call sites drifted: {found!r}"
 
 
-def test_initialize_rust_view_is_the_only_consumer_of_a_backend_clone() -> None:
-    """The only framework reads of a backend entry are the two
-    ``backend.get(cache_key)`` lookups in ``_initialize_rust_view``,
-    and both sit behind ``if self._rust_view is None`` — a clone is only ever
-    attached to a view that has no Rust view (and so no sync baseline) yet."""
-    from djust.mixins import rust_bridge
-
+def test_no_framework_code_consumes_a_backend_clone() -> None:
+    """2.0 removed the legacy render cache, whose two ``backend.get(cache_key)``
+    lookups in ``_initialize_rust_view`` were the only framework reads of a
+    backend clone. A new reader must add itself here AND prove its consumer
+    syncs before rendering (#2570)."""
+    pattern = r"backend\.get\(cache_key\)|get_backend\(\)\.get\("
     consumers = {
-        rel: len(re.findall(r"backend\.get\(cache_key\)", src))
+        rel: len(re.findall(pattern, src))
         for rel, src in _framework_sources()
-        if "backend.get(cache_key)" in src
+        if re.search(pattern, src) and not rel.startswith("state_backends/")
     }
-    assert consumers == {"mixins/rust_bridge.py": 2}, f"drifted: {consumers!r}"
-
-    src = inspect.getsource(rust_bridge.RustBridgeMixin._initialize_rust_view)
-    guard = src.index("if self._rust_view is None:")
-    assert guard < src.index("backend.get(cache_key)"), (
-        "the cache lookup must be behind the `_rust_view is None` guard"
-    )
-    assert "self._rust_view = cached_view" in src
+    assert consumers == {}, f"drifted: {consumers!r}"
 
 
 def test_the_sync_skip_flag_is_only_set_by_the_sync_itself() -> None:

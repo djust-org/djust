@@ -17,10 +17,6 @@ from pathlib import Path
 
 import msgpack
 import pytest
-from asgiref.sync import sync_to_async
-from channels.testing import WebsocketCommunicator
-from django.contrib.sessions.backends.db import SessionStore
-from django.test import override_settings
 
 from djust import LiveView
 from djust.decorators import event_handler
@@ -111,57 +107,6 @@ def _parts(view) -> dict:
         "tree": parts["tree"],
         "keys": dict(parts["keys"]),
     }
-
-
-async def _mount_and_bump(view_class) -> list[dict]:
-    """Mount through the real consumer, send two events, and return what the backend
-    held after the mount and after each event (``refresh`` is the post-render store)."""
-    from unittest.mock import patch
-
-    from djust.websocket import LiveViewConsumer
-
-    from .test_ws_send_version_1788 import _receive_until
-
-    def make_key():
-        session = SessionStore()
-        session.create()
-        return session.session_key
-
-    key = await sync_to_async(make_key)()
-
-    class Session:
-        session_key = key
-
-    stored: list[dict] = []
-    real_refresh = InMemoryStateBackend.refresh
-
-    def recording_refresh(self, cache_key, view):
-        stored.append(_parts(view))
-        return real_refresh(self, cache_key, view)
-
-    communicator = WebsocketCommunicator(
-        LiveViewConsumer.as_asgi(),
-        "/ws/",
-        headers=[(b"host", b"testserver"), (b"origin", b"http://testserver")],
-    )
-    communicator.scope["session"] = Session()
-    with patch.object(InMemoryStateBackend, "refresh", recording_refresh):
-        with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
-            connected, _ = await communicator.connect()
-            assert connected
-            await communicator.receive_json_from()
-            await communicator.send_json_to(
-                {"type": "mount", "view": f"{MODULE}.{view_class.__name__}", "url": "/"}
-            )
-            await _receive_until(communicator, "mount")
-            for ref in (1, 2):
-                await communicator.send_json_to(
-                    {"type": "event", "event": "bump", "params": {}, "ref": ref}
-                )
-                await _receive_until(communicator, "patch")
-            await communicator.disconnect()
-    assert len(stored) >= 3, "the backend was not re-stored after the mount and each event"
-    return stored
 
 
 # --------------------------------------------------------------------------
@@ -266,40 +211,6 @@ class TestDescribeSnapshot:
 # --------------------------------------------------------------------------
 # What the warning says, and what each piece of advice does
 # --------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-class TestTheAdviceMatchesWhatReducesTheNumber:
-    async def test_the_four_approaches_in_the_issue_store_about_the_same(self):
-        """Reproduces the issue: a plain list, temporary_assigns, a stream and
-        get_render_only_context() all hold the rows after the mount."""
-        sizes = {}
-        for view_class in (PlainList, TemporaryAssigns, Streamed, RenderOnly):
-            sizes[view_class.__name__] = (await _mount_and_bump(view_class))[0]["total"]
-        plain = sizes["PlainList"]
-        for name, size in sizes.items():
-            assert abs(size - plain) < plain * 0.05, sizes
-
-    async def test_temporary_assigns_empties_the_state_copy_but_not_the_tree(self):
-        mounted, *after_events = await _mount_and_bump(TemporaryAssigns)
-        assert mounted["keys"]["rows"] > 10_000  # the rows were in the state at the mount
-        assert after_events[-1]["keys"]["rows"] < mounted["keys"]["rows"] * 0.05
-        assert after_events[-1]["state"] < mounted["state"] * 0.25
-        assert after_events[-1]["tree"] == mounted["tree"]  # the page is still what the tree says
-
-    async def test_a_stream_and_render_only_context_keep_the_rows_in_the_snapshot(self):
-        for view_class, key in ((Streamed, "streams"), (RenderOnly, "rows")):
-            mounted, *after_events = await _mount_and_bump(view_class)
-            assert mounted["keys"][key] > 10_000
-            assert after_events[-1]["keys"][key] >= mounted["keys"][key] * 0.95, view_class
-            assert after_events[-1]["tree"] == mounted["tree"], view_class
-
-    async def test_rendering_fewer_and_leaner_rows_is_what_shrinks_it(self):
-        full = (await _mount_and_bump(PlainList))[0]["total"]
-        few = (await _mount_and_bump(FewRows))[0]["total"]
-        lean = (await _mount_and_bump(LeanRows))[0]["total"]
-        assert few < full * 0.3, (few, full)
-        assert lean < full * 0.1, (lean, full)
 
 
 class TestTheWarningItself:

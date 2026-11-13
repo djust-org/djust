@@ -14,6 +14,7 @@ slice that changes it has to change this test.
 
 import asyncio
 import json
+import re
 import threading
 import uuid
 
@@ -428,8 +429,11 @@ def test_live_transport_is_none_on_the_http_render_and_a_fallback_post():
     # The fallback POST builds a fresh instance: nothing live is attached, and
     # the push it makes is a documented no-op that returns False (the handler
     # records 7 for False, 8 for a push that ran).
+    # 2.0 keeps no legacy renderer between requests, so the answer is the
+    # whole page rather than a patch.
     body = response.json()
-    assert '"text": "7"' in json.dumps(body) or "<b id='n'>7</b>" in json.dumps(body), body
+    assert "patches" not in body, body
+    assert re.search(r"<b[^>]*\bid=.n.[^>]*>7</b>", body["html"]), body
 
 
 async def test_live_transport_is_websocket_inside_mount():

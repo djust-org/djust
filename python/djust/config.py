@@ -312,20 +312,6 @@ class LiveViewConfig:
         # after a streak of low-hit renders (#3071; see
         # RustBridgeMixin._LOOP_CACHE_BYPASS_AFTER).
         "loop_render_cache_enabled": True,
-        # Whether a view on the legacy state policy keeps its state
-        # in the Django session between requests: the ``liveview_<path>`` key
-        # and its ``__private`` / ``__private_unsaved`` / ``_components``
-        # siblings. ``True`` (default) is the long-standing behaviour. ``False``
-        # makes djust stateless on that path: the first GET, every HTTP
-        # fallback POST and every WebSocket / SSE turn neither write nor read
-        # those keys, so each fallback POST runs ``mount()`` again before it
-        # applies the event, and a socket mount never restores from the
-        # session (the signed client snapshot of ``persist="client"`` fields
-        # is not in the session and still works).
-        # State that only lives on the
-        # view (a "load more" offset, a form draft) resets on each fallback
-        # POST. Must be a bool (system check ``djust.C027``).
-        "view_state_in_session": True,
         # Seconds one page-POST fallback request waits, in total, for the
         # ``start_async`` / ``@background`` work it runs before answering
         # (#3634). ``None`` (default) = no deadline: a task that does not return
@@ -912,21 +898,6 @@ def get_djust_config() -> Dict[str, Any]:
         return result
     except Exception:
         return {}
-
-
-def view_state_in_session() -> bool:
-    """Whether legacy view state is kept in the Django session.
-
-    The single reader of ``LIVEVIEW_CONFIG['view_state_in_session']`` (also
-    read from ``DJUST_CONFIG``). Only ``False`` turns it off; any other value
-    keeps the default, and system check ``djust.C027`` reports a value that is
-    not a bool. A config read that raises keeps the default.
-    """
-    try:
-        return get_config().get("view_state_in_session", True) is not False
-    except Exception:  # pragma: no cover - defensive
-        logger.debug("[djust] view_state_in_session read failed; keeping the default")
-        return True
 
 
 def valid_http_fallback_background_timeout(value: Any) -> bool:

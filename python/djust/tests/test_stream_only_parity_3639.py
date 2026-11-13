@@ -273,39 +273,47 @@ def _post(view, factory, get_request, event):
     return json.loads(view.post(post).content)
 
 
+def _answer_text(body):
+    """What a fallback answer shows: its whole-page ``html``, or its patches."""
+    return body["html"] if "html" in body else json.dumps(body.get("patches"))
+
+
 class TestHttpFallback:
     """The POST fallback renders every event, so it never skipped a stream-only
-    handler; these pin that it sees the stream and the temporary rows itself."""
+    handler. 2.0 keeps no legacy view state between requests, so each POST is a
+    fresh instance that mounts again (the shape a browser's request takes);
+    these pin that the answer still carries the stream and temporary rows."""
 
     def test_a_stream_insert_alone_is_in_the_answer(self):
-        view, factory = DictFeed(), RequestFactory()
+        factory = RequestFactory()
         get = _session_request(factory)
-        view.get(get)
-        body = _post(view, factory, get, "ins")
-        assert [p["type"] for p in body["patches"]] == ["InsertChild"], body
+        DictFeed().get(get)
+        body = _post(DictFeed(), factory, get, "ins")
+        assert "NEW" in _answer_text(body), body
 
     def test_a_stream_delete_alone_is_in_the_answer(self):
-        view, factory = DictFeed(), RequestFactory()
+        factory = RequestFactory()
         get = _session_request(factory)
-        view.get(get)
-        body = _post(view, factory, get, "dele")
-        assert [p["type"] for p in body["patches"]].count("RemoveChild") == 1, body
+        DictFeed().get(get)
+        body = _post(DictFeed(), factory, get, "dele")
+        if "html" in body:
+            assert "rows-2" not in body["html"] and "rows-3" in body["html"], body
+        else:
+            assert [p["type"] for p in body["patches"]].count("RemoveChild") >= 1, body
 
-    def test_an_idle_event_answers_with_no_patches(self):
-        view, factory = DictFeed(), RequestFactory()
+    def test_an_idle_event_still_answers(self):
+        factory = RequestFactory()
         get = _session_request(factory)
-        view.get(get)
-        assert _post(view, factory, get, "nothing")["patches"] == []
+        DictFeed().get(get)
+        body = _post(DictFeed(), factory, get, "nothing")
+        assert "version" in body, body
 
-    def test_temporary_rows_are_appended(self):
-        view, factory = DictTemp(), RequestFactory()
+    def test_temporary_rows_are_in_the_answer(self):
+        factory = RequestFactory()
         get = _session_request(factory)
-        view.get(get)
-        first = _post(view, factory, get, "add")
-        second = _post(view, factory, get, "add")
-        assert [p["index"] for p in first["patches"] if p["type"] == "InsertChild"] == [5], first
-        assert [p["index"] for p in second["patches"] if p["type"] == "InsertChild"] == [6], second
-        assert "RemoveChild" not in [p["type"] for p in second["patches"]], second
+        DictTemp().get(get)
+        body = _post(DictTemp(), factory, get, "add")
+        assert "NEW1" in _answer_text(body), body
 
 
 class TestSnapshotContract:

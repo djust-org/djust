@@ -158,7 +158,7 @@ async def test_deferred_turn_saves_and_signs_declared_state_only(transport, cls,
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("quiet", [False, True])
-def test_http_post_saves_a_legacy_turn_and_mints_no_token(quiet):
+def test_http_post_of_a_legacy_turn_mints_no_token_and_saves_nothing(quiet):
     request = make_request()
     response = DeferredLegacy.as_view()(request)
     assert response.status_code == 200
@@ -172,7 +172,8 @@ def test_http_post_saves_a_legacy_turn_and_mints_no_token(quiet):
     assert response.status_code == 200, response.content
     body = json.loads(response.content)
     assert TOKEN not in body, body
-    assert post.session[f"liveview_{request.path}"]["count"] == 1
+    # 2.0 keeps no legacy view state in the session between requests.
+    assert f"liveview_{request.path}" not in post.session
 
 
 @pytest.mark.asyncio

@@ -635,11 +635,11 @@ def _repoint_http_entries(class_pairs: List[Tuple[type, type]]) -> int:
 
 
 #: Per-class facts worked out from a view's template source, dropped when a
-#: template changes: the hash that keys the saved renderer, and the
-#: ``dj-update`` containers that accumulate rows (which also read the files the
-#: template includes, so ANY template edit can change them).
+#: template changes: the ``dj-update`` containers that accumulate rows (which
+#: also read the files the template includes, so ANY template edit can change
+#: them). (The template hash that keyed the legacy saved renderer went with
+#: that cache in 2.0.)
 _TEMPLATE_DERIVED_CLASS_CACHES = (
-    "_djust_template_hash_slot",
     "_djust_accumulating_ids",
     "_djust_accumulating_warned",
     "_djust_accumulating_timeouts",
@@ -649,18 +649,11 @@ _TEMPLATE_DERIVED_CLASS_CACHES = (
 def note_template_change(path: str) -> int:
     """Forget what every LiveView class derived from its template, after a file change.
 
-    The state backend keys a view's saved Rust renderer by the hash of its
-    template (``_initialize_rust_view``), and that hash is cached on the class
-    for its lifetime (``_get_cached_template_hash_slot``). A ``.py`` reload
-    makes a new class; a template-only edit does not, so the same session kept
-    getting the renderer compiled from the old template. Dropping the cached
-    hash makes the next render hash the edited source and miss that entry.
-
-    The same goes for the ``dj-update`` containers found by reading the template
-    (``_accumulating_containers``, #3647): cached per class, they kept the ids of
-    the template as it was until a restart. They are dropped here too, for every
-    class, because an edit of an included file changes them without touching the
-    view's own template.
+    The ``dj-update`` containers found by reading the template
+    (``_accumulating_containers``, #3647) are cached per class, so they kept the
+    ids of the template as it was until a restart. They are dropped here, for
+    every class, because an edit of an included file changes them without
+    touching the view's own template.
 
     Dev-only (the file watcher); returns how many classes were reset.
     """
