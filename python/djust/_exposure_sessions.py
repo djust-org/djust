@@ -69,7 +69,10 @@ def unsupported_session_message(session: Any) -> str:
     if session is None:
         found = "no session (is SessionMiddleware installed?)"
     else:
-        found = "%s.%s" % (type(session).__module__, type(session).__qualname__)
+        found = "%s.%s" % (
+            getattr(type(session), "__module__", "?"),
+            getattr(type(session), "__qualname__", "?"),
+        )
     return (
         'State declared with persist="server" is kept in a server-side session, '
         "and this request's session cannot hold it: %s. Set SESSION_ENGINE to one "

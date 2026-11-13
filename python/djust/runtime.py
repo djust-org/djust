@@ -6192,8 +6192,11 @@ class ViewRuntime(RuntimeTurnPort):
                 "State unavailable. Please reload the page.", code="state_error", **extra
             )
             return False
+        # The explicit codec's JSON primitives, applied as the mount restore
+        # applies them (no tag decode: explicit state is never tagged).
+        view_instance = view
         for key, value in restored.items():
-            safe_setattr(view, key, value, allow_private=False, raise_on_blocked=True)
+            safe_setattr(view_instance, key, value, allow_private=False, raise_on_blocked=True)
         logger.warning(
             "Explicit state save refused: field %s over its %s limit; the saved state was kept",
             sanitize_for_log(refused.field),
