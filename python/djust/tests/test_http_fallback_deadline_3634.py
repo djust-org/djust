@@ -24,6 +24,7 @@ callback was still blocked), never a duration.
 from __future__ import annotations
 
 import asyncio
+import functools
 import gc
 import json
 import logging
@@ -240,6 +241,50 @@ def _reset():
         if thread.name.startswith(request_mixin._HTTP_BACKGROUND_THREAD_PREFIX):
             thread.join(10)
     LOG.clear()
+
+
+@pytest.fixture(autouse=True)
+def _worker_is_running_before_the_budget_is(monkeypatch):
+    """Hand the request a worker only once its callback has begun (or ended).
+
+    The budget is 0.05 s, and the clock starts when the request first waits on a
+    worker. A worker whose event loop is not up within that time is abandoned
+    before its callback's first step: the product then cancels the task, and the
+    callback never runs. On a loaded 4-vCPU CI runner that happened (#4115:
+    STARTED unset in ``test_the_pages_hanging_task_does_not_hold_the_post``).
+    The race was in the harness, not in what these tests are about, and 16 of
+    them assumed the worker won it.
+
+    So the request waits for the worker before timing it, as the
+    controllable-primitive rule (#1830) prescribes: what each test measures, a
+    callback that is running and does not finish within the budget, is then
+    certain rather than likely. "Begun" is counted per worker (a second worker
+    must set ``STARTED`` again). A callback that never sets it is waited for
+    until it ends or 5 s pass, and is then handed over as it is. A request that
+    runs its callback on its own thread never calls ``_start_background_run``
+    and is untouched, so a regression that waits for the callback still fails
+    these tests.
+    """
+    real = request_mixin._start_background_run
+    starts = [0]
+    set_started = STARTED.set
+
+    def counted_set():
+        starts[0] += 1
+        set_started()
+
+    monkeypatch.setattr(STARTED, "set", counted_set)
+
+    @functools.wraps(real)
+    def started_then_handed_over(*args, **kwargs):
+        before = starts[0]
+        run = real(*args, **kwargs)
+        deadline = time.monotonic() + 5
+        while starts[0] == before and not run.done.is_set() and time.monotonic() < deadline:
+            run.done.wait(0.005)
+        return run
+
+    monkeypatch.setattr(request_mixin, "_start_background_run", started_then_handed_over)
 
 
 def _get_request():
