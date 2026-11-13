@@ -362,7 +362,7 @@ class TestRequestScopedChanges:
     async def test_a_changed_value_renders_and_an_unchanged_one_is_not_sent(self, scoped):
         key = await harness.new_session_key_async()
         with harness.ws_settings(MODULE):
-            comm, mount = await harness.connect(Scoped, key)
+            comm, mount = await harness.mount_view(Scoped, key)
             try:
                 assert "TOKEN-SENTINEL-0" in mount["html"] and "CONSTANT" in mount["html"]
                 await harness.event(comm, "inc")
@@ -403,7 +403,7 @@ class TestRequestScopedChanges:
         key, and the page keeps the old text."""
         key = await harness.new_session_key_async()
         with harness.shortcuts(monkeypatch, "request_scoped_changes"), harness.ws_settings(MODULE):
-            comm, _mount = await harness.connect(Scoped, key)
+            comm, _mount = await harness.mount_view(Scoped, key)
             try:
                 await harness.event(comm, "inc")
                 TOKEN["value"] = "TOKEN-SENTINEL-1"
@@ -417,7 +417,7 @@ class TestRequestScopedChanges:
     async def test_a_forced_full_render_carries_the_changed_value(self, scoped):
         key = await harness.new_session_key_async()
         with harness.ws_settings(MODULE):
-            comm, _mount = await harness.connect(Scoped, key)
+            comm, _mount = await harness.mount_view(Scoped, key)
             try:
                 await harness.event(comm, "inc")
                 TOKEN["value"] = "TOKEN-SENTINEL-1"
@@ -435,7 +435,7 @@ class TestRequestScopedChanges:
         caplog.set_level(logging.INFO)
         key = await harness.new_session_key_async()
         with harness.ws_settings(MODULE):
-            comm, _mount = await harness.connect(Scoped, key)
+            comm, _mount = await harness.mount_view(Scoped, key)
             try:
                 frames = [await harness.event(comm, "inc")]
                 TOKEN["value"] = "TOKEN-SENTINEL-1"
@@ -489,7 +489,7 @@ class TestRequestScopedChanges:
         dropped while the value rides the sidecar, so the return is sent."""
         key = await harness.new_session_key_async()
         with harness.ws_settings(MODULE):
-            comm, _mount = await harness.connect(Scoped, key)
+            comm, _mount = await harness.mount_view(Scoped, key)
             try:
                 await harness.event(comm, "inc")
                 real = TOKEN["value"]
@@ -509,7 +509,7 @@ class TestRequestScopedChanges:
         resets these without knowing about them."""
         key = await harness.new_session_key_async()
         with harness.ws_settings(MODULE):
-            comm, _mount = await harness.connect(Scoped, key)
+            comm, _mount = await harness.mount_view(Scoped, key)
             try:
                 await harness.event(comm, "inc")
                 view = SEEN[-1]
@@ -574,7 +574,7 @@ class TestScopedComponentRender:
         TOKEN["value"] = "TOKEN-SENTINEL-0"
         key = await harness.new_session_key_async()
         with harness.ws_settings(MODULE):
-            comm, _mount = await harness.connect(ScopedComponentPage, key)
+            comm, _mount = await harness.mount_view(ScopedComponentPage, key)
             try:
                 await harness.event(comm, "select", {"component_id": "nav", "value": "a"})
                 if change:
@@ -770,7 +770,7 @@ class TestTheSnapshotFingerprintIsNotReused:
         equal to the previous render's and never send the new label."""
         key = await harness.new_session_key_async()
         with harness.ws_settings(MODULE):
-            comm, mount = await harness.connect(LateWriter, key)
+            comm, mount = await harness.mount_view(LateWriter, key)
             try:
                 assert "<p" in mount["html"] and ">A<" in mount["html"]
                 frame = await harness.event(comm, "retitle", {"value": "b"})
@@ -822,7 +822,7 @@ class TestPlainSubIds:
     async def _run(self, monkeypatch, *off: str) -> List[Dict[str, Any]]:
         key = await harness.new_session_key_async()
         with harness.shortcuts(monkeypatch, *off), harness.ws_settings(MODULE):
-            comm, _mount = await harness.connect(LateInsert, key)
+            comm, _mount = await harness.mount_view(LateInsert, key)
             try:
                 return [await harness.event(comm, "grow") for _ in range(4)]
             finally:

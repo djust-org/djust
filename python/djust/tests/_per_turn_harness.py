@@ -217,7 +217,7 @@ def new_session_key() -> str:
     return str(session.session_key)
 
 
-async def connect(view_class: type, session_key: str, user: Any = None) -> Any:
+async def mount_view(view_class: type, session_key: str, user: Any = None) -> Any:
     """Open a socket through the real consumer and mount *view_class*."""
     from channels.testing import WebsocketCommunicator
     from django.contrib.auth.models import AnonymousUser

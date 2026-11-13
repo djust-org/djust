@@ -136,7 +136,7 @@ async def turn(monkeypatch, view_class, event_name, *off) -> Dict[str, Any]:
         with harness.shortcuts(monkeypatch, *off), harness.ws_settings(MODULE):
             for name in off:
                 assert not _per_turn.on(name), f"{name} was not turned off"
-            comm, _mount = await harness.connect(view_class, key)
+            comm, _mount = await harness.mount_view(view_class, key)
             try:
                 await harness.event(comm, event_name)  # warm-up: first event after mount
                 counts.reset()

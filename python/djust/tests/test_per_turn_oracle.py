@@ -744,7 +744,7 @@ async def run_ws(view_class: type, script: Script) -> List[Dict[str, Any]]:
     await _users()
     key = await harness.new_session_key_async()
     with harness.ws_settings(MODULE, DJUST_LIVE_RENDER_ALLOWED_MODULES=[MODULE]):
-        comm, mount_frame = await harness.connect(view_class, key)
+        comm, mount_frame = await harness.mount_view(view_class, key)
         frames = [mount_frame]
         try:
             for step in script:
