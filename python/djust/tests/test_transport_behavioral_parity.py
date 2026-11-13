@@ -1054,20 +1054,19 @@ class TestMountStashAndBaselines:
 
     @pytest.mark.asyncio
     @override_settings(LIVEVIEW_ALLOWED_MODULES=["djust."])
-    async def test_mount_captures_private_and_dirty_baselines(self):
-        """``dispatch_mount`` calls ``_snapshot_user_private_attrs`` +
-        ``_capture_dirty_baseline`` post-mount (WS websocket.py:2598-2603) so
-        change-detection sees the correct since-mount delta.
+    async def test_mount_captures_the_dirty_baseline(self):
+        """``dispatch_mount`` calls ``_capture_dirty_baseline`` post-mount so
+        change-detection sees the correct since-mount delta. (The private-name
+        snapshot it also took fed the legacy private-state session save, which
+        2.0 removed.)
 
-        Gate-off (#1468): delete the two baseline calls from ``dispatch_mount`` →
-        the spies below never fire → this FAILS.
+        Gate-off (#1468): delete the baseline call from ``dispatch_mount`` →
+        the spy below never fires → this FAILS.
         """
         from unittest.mock import MagicMock
 
         view = _MountStashView()
-        snap_spy = MagicMock()
         dirty_spy = MagicMock()
-        view._snapshot_user_private_attrs = snap_spy
         view._capture_dirty_baseline = dirty_spy
         runtime, _ = _runtime_with_view(view)
 
@@ -1080,7 +1079,6 @@ class TestMountStashAndBaselines:
             }
         )
 
-        assert snap_spy.called, "_snapshot_user_private_attrs must be called at mount (#1911)"
         assert dirty_spy.called, "_capture_dirty_baseline must be called at mount (#1911)"
 
 

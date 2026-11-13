@@ -1,8 +1,8 @@
 """Tenant scope for saved view state (#2973).
 
 Every place that saves or restores a view's state, in the state backend
-(``_initialize_rust_view``) or in the Django session (``liveview_<path>`` and
-its ``__private`` / ``_components`` / ``__sticky__`` siblings), derives its key
+(``_initialize_rust_view``) or in the Django session (a legacy lazy child's
+``liveview_<path>`` entry), derives its key
 through this module, so tenant scoping has one definition.
 
 - A view without a ``get_state_key_prefix()`` hook (no ``TenantMixin``) is not
@@ -73,25 +73,16 @@ def session_view_key(view: Any, path: str) -> Optional[str]:
 
     ``liveview_<path>`` for a view that is not tenant-scoped,
     ``liveview_tenant:<id>:<path>`` for a tenant view, ``None`` to skip.
-    The ``__private``, ``_components`` and ``__sticky__`` keys are built from
-    this value (or from :func:`scoped_path`), so they are scoped too.
+    Keys built from this value (or from :func:`scoped_path`) are scoped too.
     """
     scoped = scoped_path(view, path)
     return None if scoped is None else f"liveview_{scoped}"
 
 
-#: Beside the state key: the private attributes the session could not hold
-#: (not JSON), which the HTTP fallback rebuilds with ``mount()``.
-UNSAVED_PRIVATE_SUFFIX = "__private_unsaved"
-
-#: Beside the state key: a digest of the state a GET saved while the work
-#: ``mount()`` queued had not run (#3635). The page-POST fallback runs that work
-#: on the first POST that still finds the saved state unchanged.
-MOUNT_WORK_SUFFIX = "__mount_work"
-
-#: What a view stores beside its state key: its private state, its components
-#: and the loading-state marker.
-_OWN_KEY_SUFFIXES = ("", "__private", UNSAVED_PRIVATE_SUFFIX, "_components", MOUNT_WORK_SUFFIX)
+#: The view's own state key. (Its ``__private``, ``_components`` and
+#: ``__mount_work`` siblings were the legacy page-POST fallback's; 2.0 removed
+#: them with that session state.)
+_OWN_KEY_SUFFIXES = ("",)
 
 
 def _is_own(key: str, own_key: str) -> bool:

@@ -650,7 +650,6 @@ class WizardView(LiveView):
 A legacy view no longer sends a token at all, and a token a 1.x server signed
 is refused. The session copy that `enable_state_snapshot` also restored from
 is gone too (below), so a legacy view mounts fresh on Back.
-The HTTP page-POST fallback still restores a legacy view's public and private state from the session between requests; that goes later in 2.0 (rows 5 and 6 of the exposure-flip plan).
 
 `enable_state_snapshot = True` (and `PersistentLiveView`, which set it) also
 saved every public attribute in the session after each socket event and put
@@ -683,7 +682,8 @@ class CartView(LiveView):
         self.items = [*self.items, sku]
 ```
 
-Session state that 1.x saved for a page is not read on a reconnect. The HTTP page-POST fallback still restores a legacy view's public and private state from the session between requests; that goes later in 2.0 (rows 5 and 6 of the exposure-flip plan).
+Session state that 1.x saved for a page is not read on a reconnect, nor by the
+HTTP page-POST fallback ([below](#state-a-legacy-view-no-longer-keeps)).
 
 The component registers its own event on the view, and `self.nav.active` is
 the current tab in your handlers. Each component has one event, so a template
@@ -716,6 +716,7 @@ To open or close from your own handler, set the state:
 | `DJUST_REDIS_URL` | `DJUST_CONFIG['REDIS_URL']` |
 | `TEMPLATES[...]['BACKEND'] = "djust.template_backend.DjustTemplateBackend"` | `"djust.template.backend.DjustTemplateBackend"` |
 | `template_auto_call`, `virtual_keyed_ops`, `django_value_repr` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the key. What each one could switch off is always on. |
+| `view_state_in_session` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the key. No view state is kept in the session any more ([below](#state-a-legacy-view-no-longer-keeps)), so there is nothing to switch off. System check `djust.C027`, which validated it, is retired. |
 
 <!-- END GENERATED removed-table:settings -->
 
@@ -771,6 +772,68 @@ state the old value.
   `dj-chart-update="always"` for the old behaviour
   ([#4004](https://github.com/djust-org/djust/issues/4004)).
 
+### State a legacy view no longer keeps
+
+A view that still states `exposure_policy = "legacy"` mounts, renders its
+public attributes and handles events within one connection as before. What it
+no longer has between requests and reconnects:
+
+- **Its private attributes.** `_name` attributes were saved in the session
+  (`liveview_<path>__private`) and put back on the next page-POST fallback
+  request. They are rebuilt by `mount()` now.
+- **Its public state and its components' state in the session.** The page GET
+  and each page-POST fallback request saved the view's public context
+  (`liveview_<path>`) and its components (`liveview_<path>_components`), and
+  the next POST restored them instead of running `mount()`. Each POST now
+  mounts the view again, runs the work `mount()` queued and applies the event,
+  so a "load more" offset, a form draft or an open dropdown set on `self` is
+  back at its `mount()` value. An event addressed to an interactive component
+  (`DropdownMenu`) the previous answer rendered is refused with 400
+  `"Component not found"`, because the new mount gives it a new identity, as
+  it already did on an explicit view. For the same reason a client-owned
+  component's visibility report (`observe_toggle`) sent over the fallback no
+  longer reaches the view: each POST mounts the component with a new identity
+  and a new observation lifetime, so the report is refused or dropped and an
+  `on.toggled` observer does not run. `handle_restore()` is
+  not called for a legacy view, since nothing is restored.
+- **Its cached renderer.** The compiled template, render state and diff
+  baseline were kept in the state backend (`DJUST_CONFIG['STATE_BACKEND']`)
+  under the session and page and reused by the next request or reconnect. Each
+  view instance builds its own now, as an explicit view always did.
+
+Keys a 1.x server left in a session are never read. Declare what must survive
+on an explicit view; private attributes stay private and are rebuilt by
+`mount()`:
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler, state
+
+
+class FeedView(LiveView):
+    # 1.3 (legacy): self.offset = 0 and self._page_size = 20 in mount(); the
+    # page-POST fallback saved both in the session between requests.
+    exposure_policy = "explicit"
+    template = """<div dj-root>
+        <p>Showing from {{ offset }}</p>
+        <button dj-click="more">More</button>
+    </div>"""
+
+    offset = state(0, persist="server")
+
+    def mount(self, request, **kwargs):
+        self._page_size = 20  # rebuilt by mount() on every request
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["offset"] = self.offset
+        return context
+
+    @event_handler()
+    def more(self, **kwargs):
+        self.offset += self._page_size
+```
+
 ## 4. Still to be removed before the final release
 
 These still work on the 2.0 development line. Each is to be removed, or made
@@ -793,7 +856,8 @@ looking for a replacement.
   attribute; the view then runs like any other LiveView.
 - **`enable_state_snapshot` and `PersistentLiveView`.** These saved every
   public attribute in the session, and in 1.x the browser held a signed,
-  readable copy. Both are removed. 2.0 has no way to save a view's whole
+  readable copy. Both are removed, and so is the page-POST fallback's session
+  copy of a legacy view ([State a legacy view no longer keeps](#state-a-legacy-view-no-longer-keeps)). 2.0 has no way to save a view's whole
   state. Declare the fields worth keeping with
   `state(..., persist=...)`, and rebuild the rest in `mount()` and
   `handle_restore()`.
@@ -818,4 +882,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 9fd14cfc7058 -->
+<!-- generated-doc prose-sha256: b1c21d089577 -->

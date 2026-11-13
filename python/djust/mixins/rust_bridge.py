@@ -2,10 +2,8 @@
 RustBridgeMixin - Rust backend integration for LiveView.
 """
 
-import hashlib
 import logging
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, List, Optional, Set, Tuple, Union
-from urllib.parse import parse_qs, urlencode
 
 from django.utils.datastructures import MultiValueDict
 from django.utils.safestring import SafeData
@@ -18,7 +16,6 @@ from .._exposure_providers import (
 )
 from .._accumulating_containers import view_accumulating_container_ids
 from ..change_detection import deep_fingerprint, fingerprints_by_content, warn_fingerprint_truncated
-from ..security import sanitize_for_log
 from ..serialization import holds_form, normalize_django_value
 from ..state_pass import convert_for_render, fingerprint_and_convert
 from ..template_filters import _ensure_custom_filters_bridged
@@ -345,12 +342,6 @@ class RustBridgeMixin:
 
         def get_template(self) -> str: ...
 
-    # Cached per-template hash slot — a class-level cache written into
-    # ``cls.__dict__`` by ``_get_cached_template_hash_slot``. Declared here so
-    # the strict-island resolves the dynamic class-attribute write without a
-    # runtime change.
-    _djust_template_hash_slot: str
-
     #: Adaptive loop-cache bypass (#3071). After this many consecutive
     #: renders whose loop-cache hit rate is below
     #: ``_LOOP_CACHE_MIN_HIT_RATIO``, the view turns the loop render cache off
@@ -442,8 +433,7 @@ class RustBridgeMixin:
             # A Rust view contains render context and a mutable VDOM baseline,
             # not the declared server-persistence projection. Keep it owned by
             # this instance; reconnect rebuilds it from authorized context and
-            # the separately restored declared state. Never read legacy cache.
-            self._cache_key = None
+            # the separately restored declared state.
             if self._rust_view is None or not getattr(self, "_rust_view_explicit", False):
                 _ensure_custom_filters_bridged()
                 explicit_template_source = self.get_template()
@@ -476,154 +466,12 @@ class RustBridgeMixin:
         _ensure_custom_filters_bridged()
 
         if self._rust_view is None:
-            # Derive the per-template 8-hex hash for the cache key (#1362
-            # section 1) — operators no longer need to set
-            # ``REDIS_KEY_PREFIX = f"djust:{BUILD_ID}:"`` to avoid stale
-            # state acting as a diff baseline post-deploy; the framework
-            # now invalidates the cache automatically whenever the
-            # primary template's bytes change.
-            #
-            # Multi-template caveat: the cache key uses the PRIMARY
-            # template's source hash. Sub-template changes via
-            # ``{% include %}`` / ``{% extends %}`` parents that don't
-            # alter the primary's source bytes won't invalidate by
-            # themselves. In practice the primary nearly always shifts
-            # when included templates change downstream (block content
-            # moves, include filenames change, etc.), so this is
-            # acceptable for v0.9.4-2; if a deploy ever ships a pure
-            # sub-template-only edit, operators can clear the backend
-            # explicitly via ``djust clear --all``.
-            #
-            # Perf note: ``_get_cached_template_hash_slot`` caches the
-            # 8-hex hash on the view class so cache HITs don't pay the
-            # ``get_template()`` cost on every WS reconnect. Pre-#1362
-            # the cache HIT path skipped ``get_template()`` entirely;
-            # this preserves that property by only loading + hashing
-            # the template source once per class lifetime.
-            template_hash_slot = self._get_cached_template_hash_slot()
-            template_source = None  # loaded lazily on cache MISS only
-
-            # Try to get from cache if we have a session
-            if hasattr(self, "_websocket_session_id") and self._websocket_session_id:
-                ws_path = getattr(self, "_websocket_path", "/")
-                ws_query = getattr(self, "_websocket_query_string", "")
-
-                query_hash = ""
-                if ws_query:
-                    params = parse_qs(ws_query)
-                    sorted_query = urlencode(sorted(params.items()), doseq=True)
-                    query_hash = hashlib.md5(
-                        sorted_query.encode(), usedforsecurity=False
-                    ).hexdigest()[:8]
-
-                # Use the actual page path to match the HTTP render cache key.
-                # Prefer the request parameter (passed from render()/render_with_diff()),
-                # then fall back to self.request (set on the view during WS mount).
-                # Falls back to view class name + ws_path if neither is available.
-                page_path = getattr(request, "path", None) or getattr(
-                    getattr(self, "request", None), "path", None
-                )
-                if page_path:
-                    view_key = f"liveview_{page_path}"
-                else:
-                    view_class = self.__class__.__name__
-                    view_key = f"liveview_{view_class}_{ws_path}"
-                if query_hash:
-                    view_key = f"{view_key}_{query_hash}"
-                session_key = (
-                    getattr(self, "_django_session_key", None) or self._websocket_session_id
-                )
-
-                from ..state_backends import get_backend
-
-                backend = get_backend()
-                # (A view mounted beside the page view has a scope of its own in
-                # the key: ``_tenant_state.state_scope``, #3252.)
-                cache_key = self._saved_state_key(session_key, view_key, template_hash_slot)
-                self._cache_key = cache_key
-                # codeql[py/log-injection] — cache_key may contain request.path; sanitize
-                logger.debug(
-                    "[LiveView] Cache lookup (WebSocket): cache_key=%s",
-                    sanitize_for_log(self._cache_key),
-                )
-
-                cached = backend.get(cache_key) if cache_key is not None else None
-                if cached and cache_key is not None:
-                    cached_view, timestamp = cached
-                    self._rust_view = cached_view
-                    # template_dirs are not serialized; restore them after cache hit
-                    self._rust_view.set_template_dirs(get_template_dirs())
-                    if getattr(
-                        self._rust_view, "potential_authenticated_partial_root", lambda: False
-                    )():
-                        self._rust_view.set_authenticated_view_path(
-                            f"{getattr(type(self), '__module__', '<unknown>')}.{type(self).__name__}"
-                        )
-                    # loop_render_cache flag is transient (not serialized);
-                    # re-apply it from config after a cache hit (#1967).
-                    self._apply_loop_render_cache_flag()
-                    logger.debug("[LiveView] Cache HIT! Using cached RustLiveView")
-                    backend.set(cache_key, cached_view)
-                    return
-                else:
-                    logger.debug("[LiveView] Cache MISS! Will create new RustLiveView")
-            elif request and hasattr(request, "session"):
-                view_key = f"liveview_{request.path}"
-                if request.GET:
-                    query_hash = hashlib.md5(
-                        request.GET.urlencode().encode(), usedforsecurity=False
-                    ).hexdigest()[:8]
-                    view_key = f"{view_key}_{query_hash}"
-                session_key = request.session.session_key
-                if not session_key:
-                    request.session.create()
-                    session_key = request.session.session_key
-
-                from ..state_backends import get_backend
-
-                backend = get_backend()
-                cache_key = self._saved_state_key(session_key, view_key, template_hash_slot)
-                self._cache_key = cache_key
-                # codeql[py/log-injection] — cache_key may contain request.path; sanitize
-                logger.debug(
-                    "[LiveView] Cache lookup (HTTP): cache_key=%s",
-                    sanitize_for_log(self._cache_key),
-                )
-
-                cached = backend.get(cache_key) if cache_key is not None else None
-                if cached and cache_key is not None:
-                    cached_view, timestamp = cached
-                    self._rust_view = cached_view
-                    # template_dirs are not serialized; restore them after cache hit
-                    self._rust_view.set_template_dirs(get_template_dirs())
-                    if getattr(
-                        self._rust_view, "potential_authenticated_partial_root", lambda: False
-                    )():
-                        self._rust_view.set_authenticated_view_path(
-                            f"{getattr(type(self), '__module__', '<unknown>')}.{type(self).__name__}"
-                        )
-                    # loop_render_cache flag is transient (not serialized);
-                    # re-apply it from config after a cache hit (#1967).
-                    self._apply_loop_render_cache_flag()
-                    logger.debug("[LiveView] Cache HIT! Using cached RustLiveView")
-                    backend.set(cache_key, cached_view)
-                    return
-                else:
-                    logger.debug("[LiveView] Cache MISS! Will create new RustLiveView")
-
-            # codeql[py/log-injection] — cache_key may contain request.path; sanitize
-            logger.debug(
-                "[LiveView] Creating NEW RustLiveView for cache_key=%s",
-                sanitize_for_log(self._cache_key),
-            )
-            # Lazy template-source load: pre-PR #1362-Iter-1 fix the source
-            # was hoisted before the cache lookup, but the cache HIT path
-            # doesn't actually need it (the cached RustLiveView already
-            # carries its compiled template). Defer to here so cache HITs
-            # avoid the Django template loader + inheritance resolution
-            # cost on every WS reconnect.
-            if template_source is None:
-                template_source = self.get_template()
+            # 2.0: a legacy view's Rust view is owned by this instance, as an
+            # explicit view's is. The shared state-backend copy keyed by the
+            # session and page (the "legacy render cache") was removed: it let
+            # a reconnect skip get_template() and reuse the previous
+            # connection's render state and VDOM baseline.
+            template_source = self.get_template()
             logger.debug("[LiveView] Template length: %d chars", len(template_source))
             logger.debug("[LiveView] Template preview: %s...", template_source[:200])
 
@@ -641,134 +489,6 @@ class RustBridgeMixin:
                 )
             # Apply the per-item loop render cache flag (#1967, default OFF).
             self._apply_loop_render_cache_flag()
-
-            if self._cache_key:
-                from ..state_backends import get_backend
-
-                backend = get_backend()
-                backend.set(self._cache_key, self._rust_view)
-
-    def _refresh_cached_rust_view(self) -> None:
-        """Re-store the cached snapshot of this view's Rust view after a render.
-
-        The state backend keeps a snapshot of the view stored under
-        ``_cache_key``, never the object itself (which this view goes on
-        rendering and tearing down, possibly on a pool thread while another
-        socket of the session reads the key). A no-op for a view with no
-        cache key and for a backend that keeps the state :meth:`set` wrote.
-        """
-        cache_key = getattr(self, "_cache_key", None)
-        rust_view = getattr(self, "_rust_view", None)
-        if not cache_key or rust_view is None:
-            return
-        from ..state_backends import get_backend
-
-        refresh = getattr(get_backend(), "refresh", None)
-        if callable(refresh):
-            refresh(cache_key, rust_view)
-
-    def _saved_state_key(
-        self, session_key: str, view_key: str, template_hash_slot: str
-    ) -> Optional[str]:
-        """Return the state-backend key for this view's saved state, or ``None``.
-
-        A view with a ``get_state_key_prefix()`` hook (``TenantMixin``) keys its
-        saved state by tenant: ``tenant:<id>:<session>_<view>_t<hash>``. One
-        session that reaches two tenants on the same URL then holds two
-        separate entries instead of one shared one (#2973). Views without the
-        hook (no multi-tenancy) keep the unprefixed key, so a project that does
-        not use tenants loses nothing.
-
-        Fail-closed: when the hook is present but returns no prefix (a tenant
-        view whose tenant is unresolved, e.g. ``tenant_required = False``),
-        the key is ``None`` and nothing is read from or written to the
-        backend. Falling back to the unprefixed key would put that request in
-        the namespace every non-tenant view shares.
-        """
-        from .._tenant_state import state_scope
-
-        tenant_scope = state_scope(self)
-        if tenant_scope is None:
-            logger.debug(
-                "[LiveView] %s has no tenant; saved view state is not used",
-                type(self).__name__,
-            )
-            return None
-        return f"{tenant_scope}{session_key}_{view_key}{template_hash_slot}"
-
-    def _get_cached_template_hash_slot(self) -> str:
-        """Return the ``_t<8hex>`` cache-key slot for this view's template.
-
-        Caches the slot on the view CLASS (not the instance) so the cost
-        of ``get_template()`` (Django template loader + inheritance
-        resolution) and ``compute_template_hash()`` (Rust call) is paid
-        ONCE per class lifetime, not on every cache lookup.
-
-        Pre-PR #1362-Iter-1 ``_initialize_rust_view`` did NOT call
-        ``get_template()`` on cache HIT — the cached ``RustLiveView`` was
-        returned without re-loading the source. Hoisting the source load
-        before the cache check (to derive the per-template hash for the
-        cache key) introduced a real perf cost on the WS reconnect hot
-        path. This method preserves the original property: cache HITs no
-        longer pay the per-call template-load cost.
-
-        Why class-level (not instance-level): the ``template`` /
-        ``template_name`` class attributes are stable for the lifetime of
-        the process in 99%+ of apps. Hot-reload's class-replacement
-        already produces a new class object (different ``cls`` →
-        different ``_template_hash_slot_cache`` slot), so dev-time
-        template edits naturally invalidate without explicit busting.
-
-        Falls back to an empty slot ("") if the Rust extension is
-        unavailable for any reason. Cache invalidation falls back to
-        TTL — same behavior as v0.9.4-1 and earlier.
-        """
-        cls = type(self)
-        # Per-class cache: written into ``cls.__dict__`` (NOT inherited
-        # via MRO lookups) so subclasses with different templates don't
-        # see the parent's hash. Using ``__dict__`` access avoids the
-        # standard attribute resolution that would walk the MRO.
-        cached: Optional[str] = cls.__dict__.get("_djust_template_hash_slot")
-        name = getattr(self, "template_name", None)
-        named_partial = False
-        if name and "#" in name and name.partition("#")[2]:
-            import django
-
-            named_partial = django.VERSION >= (6, 0)
-        if cached is not None and not named_partial:
-            return cached
-        try:
-            from .._rust import compute_template_hash
-
-            template_source = self.get_template()
-            slot = f"_t{compute_template_hash(template_source)}"
-        except Exception:
-            from .._exposure import uses_legacy_exposure
-            from .._exposure_diagnostics import diagnostics_allowed
-
-            if not diagnostics_allowed() or not uses_legacy_exposure(self):
-                # get_template() can change policy before failing. Do not log
-                # its payload or continue into the legacy cache after that.
-                raise
-            # Defensive: if the Rust extension is unavailable for any
-            # reason, fall back to the legacy un-hashed key shape rather
-            # than raising. Don't memoize the empty fallback so a future
-            # call (after the Rust extension comes back) still has a
-            # chance to populate the cache. Empty-slot path is a
-            # defensive fallback that virtually never triggers in
-            # practice; the steady-state cost of recomputing it on
-            # failure is negligible compared to the failure mode itself.
-            logger.exception(
-                "[LiveView] compute_template_hash failed; cache key will not "
-                "include template hash slot (fallback to TTL-based invalidation)"
-            )
-            return ""
-        # Named partial source is supplied by a different base template;
-        # re-evaluate its selected-body hash rather than retaining a stale
-        # class-level slot after that base changes.
-        if not named_partial:
-            cls._djust_template_hash_slot = slot
-        return slot
 
     def set_changed_keys(self, keys: Union[str, Iterable[str], None] = None) -> None:
         """Mark one or more public attrs as changed, forcing a re-render.

@@ -29,6 +29,6 @@ class CartView(LiveView):
 ```
 
 `mount()` runs on every reconnect, then the declared fields come back and
-`handle_restore()` runs. The HTTP page-POST fallback still restores a legacy
-view's public and private state from the session between requests. `djust.C304` now warns about a `client=True` field with a
+`handle_restore()` runs. The page-POST fallback's session copy went too (next
+section). `djust.C304` now warns about a `client=True` field with a
 credential-like name.

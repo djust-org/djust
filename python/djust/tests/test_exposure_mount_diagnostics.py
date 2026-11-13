@@ -133,7 +133,6 @@ async def test_successful_policy_change_cannot_enable_nested_diagnostics(
         self.exposure_policy = "legacy"
 
     monkeypatch.setattr(FailureView, "handle_params", change_policy)
-    monkeypatch.delattr(FailureView, "_djust_template_hash_slot", raising=False)
     await test_mount_diagnostics_respect_policy_at_entry_and_failure(
         monkeypatch, caplog, debug, "render", "explicit", "legacy"
     )

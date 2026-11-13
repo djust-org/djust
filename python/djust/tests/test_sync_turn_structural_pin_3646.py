@@ -615,11 +615,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     (
         "runtime.py",
         "ViewRuntime._dispatch_mount_body",
-        "view_instance._snapshot_user_private_attrs",
-    ): plumbing(_STATE),
-    (
-        "runtime.py",
-        "ViewRuntime._dispatch_mount_body",
         "view_instance._capture_dirty_baseline",
     ): plumbing(_STATE),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "enforce_object_permission"): leaf(),

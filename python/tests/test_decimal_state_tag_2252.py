@@ -41,7 +41,8 @@ the set is pinned mechanically in `TestTheDecodeSiteInventory`.
 grep matters: it names `mixins/rust_bridge.py`, which has no restore path at
 all, and omits three that do — `runtime.py`'s `_restore_snapshot` call (the
 legacy signed back-navigation snapshot, removed in 2.0), `time_travel.py`'s
-replay restores, and `_restore_component_state`.
+replay restores, and `_restore_component_state` (removed in 2.0 with the
+component session state).
 
 Every template assertion is a differential against real Django, and the curated
 matrix is paired with a randomized sweep (v1.1.1-2 retro: a table samples the
@@ -610,60 +611,6 @@ def _with_session(request):
 
 
 @pytest.mark.django_db
-class TestTheRealHTTPPostRoundTrip:
-    """`mixins/request.py` — the GET writes the session, a FRESH view's POST
-    reads it back through `safe_setattr`. Two decode sites in one path: the
-    public `saved_state` loop and `_restore_private_state`."""
-
-    def _seed(self):
-        factory = RequestFactory()
-        get_request = _with_session(factory.get("/price-2252/"))
-        _PriceView().get(get_request)
-        return factory, get_request
-
-    def test_a_decimal_attr_survives_the_post_restore_as_a_decimal(self) -> None:
-        factory, get_request = self._seed()
-        fresh = _PriceView()
-        post = factory.post(
-            "/price-2252/",
-            data='{"event":"bump","params":{}}',
-            content_type="application/json",
-        )
-        post.session = get_request.session
-        response = fresh.post(post)
-        assert response.status_code == 200, response.content
-        # `bump` adds Decimal('0.10') — which RAISES TypeError if the restored
-        # attr came back a float, and produces 20.00 (not 20.0) only if the
-        # restored value kept its exponent.
-        assert isinstance(fresh.price, Decimal)
-        assert str(fresh.price) == "20.00"
-        assert fresh.huge == HUGE
-
-    def test_the_private_decimal_survives_too(self) -> None:
-        """`_restore_private_state` (its body, `_apply_private_state`) is the shared
-        decode point for all three of its callers."""
-        factory, get_request = self._seed()
-        fresh = _PriceView()
-        post = factory.post(
-            "/price-2252/",
-            data='{"event":"bump","params":{}}',
-            content_type="application/json",
-        )
-        post.session = get_request.session
-        fresh.post(post)
-        assert isinstance(fresh._secret_price, Decimal)
-        assert str(fresh._secret_price) == "0.00"
-
-    def test_the_session_bytes_really_carry_the_tag(self) -> None:
-        """Pin the wire form, not only the behaviour — so a future change that
-        keeps the round trip working by a DIFFERENT mechanism is visible."""
-        _, get_request = self._seed()
-        saved = get_request.session["liveview_/price-2252/"]
-        assert saved["price"] == {STATE_DECIMAL_TAG: "19.90"}
-        assert saved["huge"] == {STATE_DECIMAL_TAG: str(HUGE)}
-
-
-@pytest.mark.django_db
 class TestTheSnapshotCapture:
     """`live_view.py`'s capture (`_capture_snapshot_state`, read by time-travel
     recording) goes through the ENCODER adapter, a different serializer from
@@ -681,32 +628,6 @@ class TestTheSnapshotCapture:
         assert isinstance(restored["price"], Decimal)
         assert str(restored["price"]) == "19.90"
         assert restored["huge"] == HUGE
-
-
-@pytest.mark.django_db
-class TestTheComponentRoundTrip:
-    """`mixins/components.py::_restore_component_state` — the shared decode
-    point for its two callers (`mixins/request.py` POST, `runtime.py` mount)."""
-
-    def test_a_component_decimal_round_trips(self) -> None:
-        from djust.components.base import LiveComponent
-        from djust.mixins.components import ComponentMixin
-
-        class _Card(LiveComponent):
-            template = "<div>{{ amount }}</div>"
-
-            def __init__(self, **kwargs):
-                super().__init__(**kwargs)
-                self.amount = Decimal("2.50")
-
-        holder = ComponentMixin()
-        target = _Card()
-        target.amount = None
-        stored = normalize_django_value({"amount": Decimal("2.50")}, state_roundtrip=True)
-        assert stored["amount"] == {STATE_DECIMAL_TAG: "2.50"}
-        holder._restore_component_state(target, stored)
-        assert isinstance(target.amount, Decimal)
-        assert str(target.amount) == "2.50"
 
 
 @pytest.mark.django_db
@@ -768,8 +689,9 @@ EXPECTED_DECODE_SITES = {
     ("_lazy_containers.py", "mount_http_lazy"),
     # The body of `_restore_private_state`, which enters its `lifecycle` step around it (#3646).
     ("live_view.py", "_apply_private_state"),
-    ("mixins/components.py", "_restore_component_state"),
-    ("mixins/request.py", "_post_turn_body"),  # ADR-044: inside the POST turn
+    # 2.0 removed the page-POST fallback's session restore and the component
+    # session restore, with their decodes (``mixins/request.py``,
+    # ``mixins/components.py``).
     ("time_travel.py", "restore_snapshot"),
     ("time_travel.py", "restore_component_snapshot"),
     ("time_travel.py", "to_dict"),
@@ -853,6 +775,21 @@ def _explicit_root_json_assignments(tree):
     }
 
 
+def _explicit_self_json_assignments(tree):
+    """``mixins/request.py``'s one restore: an explicit view's declared server
+    fields from the explicit codec, which accepts JSON primitives only."""
+    expected = (
+        ast.parse("safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)")
+        .body[0]
+        .value
+    )
+    return {
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and ast.dump(node) == ast.dump(expected)
+    }
+
+
 class TestTheDecodeSiteInventory:
     def test_the_decode_sites_are_exactly_the_expected_set(self) -> None:
         """A SET, not a floor (#1125). A new restore path that forgets the
@@ -912,6 +849,21 @@ class TestTheDecodeSiteInventory:
                     and node.func.id == "safe_setattr"
                 }
                 if calls and calls == _explicit_root_json_assignments(tree):
+                    continue
+            if rel == "mixins/request.py":
+                # The page-POST fallback's legacy session restore (which
+                # decoded) was removed in 2.0. What is left assigns an explicit
+                # view's declared server fields, JSON primitives from the
+                # explicit codec; exempted by exact call shape.
+                tree = ast.parse(src)
+                calls = {
+                    node
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "safe_setattr"
+                }
+                if calls and calls == _explicit_self_json_assignments(tree):
                     continue
             restoring.add(rel)
         decoding = {module for module, _ in _decode_call_sites()}

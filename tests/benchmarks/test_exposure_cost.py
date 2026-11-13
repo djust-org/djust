@@ -388,14 +388,13 @@ def memory_backend(monkeypatch):
 
 
 @pytest.mark.benchmark(group="exposure_render_cache")
-@pytest.mark.parametrize("case", ["legacy_warm", "legacy_cold", "explicit"])
+@pytest.mark.parametrize("case", ["legacy", "explicit"])
 def test_repeated_mount_renderer(benchmark, staged, memory_backend, rf, case):
     """Renderer setup + first render for a second mount of the same page.
 
-    ``legacy_warm``: the shared backend already holds this session+path's
-    RustLiveView (the reuse legacy gets on reconnect). ``legacy_cold``: same
-    code with the backend emptied first (a cache miss). ``explicit``: never
-    consults the shared backend and always builds its own renderer.
+    Neither policy consults the shared backend: each builds its own renderer.
+    (Until 2.0 a legacy view reused the RustLiveView the backend held for its
+    session and path, the "legacy_warm" case; that cache was removed.)
     """
     from types import SimpleNamespace
 
@@ -411,19 +410,9 @@ def test_repeated_mount_renderer(benchmark, staged, memory_backend, rf, case):
         view._rust_view.update_state(context)
         return view._rust_view.render()
 
-    _mount_render()  # prime: legacy stores its renderer in the backend
-    if case == "legacy_warm":
-        assert memory_backend._cache, "legacy warm case must hit a populated cache"
-
-    def _setup():
-        if case == "legacy_cold":
-            memory_backend._cache.clear()
-        return (), {}
-
-    html = benchmark.pedantic(_mount_render, setup=_setup, rounds=200, warmup_rounds=5)
+    html = benchmark.pedantic(_mount_render, rounds=200, warmup_rounds=5)
     assert "SKU-00049" in html
-    if case == "explicit":
-        assert memory_backend._cache == {}
+    assert memory_backend._cache == {}
 
 
 # ---------------------------------------------------------------------------

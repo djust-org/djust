@@ -201,7 +201,7 @@ def _as_caller(user_id):
   | `"tick"` | `handle_tick()` |
   | `"render"` | every call djust makes to `get_context_data()`, on every transport |
   | `"auth"` | an authorization decision that runs your code: `check_permissions()`, Django's access mixins and replayed `dispatch` decorators (`test_func`), `@permission_required` on a handler, and the object-permission check (`get_object()` + `has_object_permission()`) |
-  | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the signed client snapshot's restore gate (`_should_restore_snapshot()`), the restore of private state (`_restore_private_state()`, which re-fetches private model references; a guarded step, so a wrapper that swallows a failure cannot leave a half-restored view), and a released view's teardown hooks **only when they run on a worker thread**; on the event loop they run with no step (see [Not wrapped](#not-wrapped)) |
+  | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the signed client snapshot's restore gate (`_should_restore_snapshot()`), the restore of a legacy lazy child's private state (`_restore_private_state()`, which re-fetches private model references; a guarded step, so a wrapper that swallows a failure cannot leave a half-restored view), and a released view's teardown hooks **only when they run on a worker thread**; on the event loop they run with no step (see [Not wrapped](#not-wrapped)) |
 - `view` is the view or component whose code runs; `turn` is
   `djust.turns.current_turn()`, or `None` when the step runs outside a turn (a
   `start_async` callback runs between its start and result turns).
@@ -232,8 +232,7 @@ def _as_caller(user_id):
   | Request | Entries, in order |
   |---|---|
   | HTTP page GET | `"auth"` (view-level), `"lifecycle"` (the `on_mount` chain, only when the view has one), `"mount"`, `"handle_params"`, `"auth"` (object check, when `get_object()` is overridden), `"render"` (one step: the GET's own `get_context_data()`; the render that follows reads that context instead of entering a second step, #3725) |
-  | HTTP POST event, no saved state | `"auth"`, `"mount"`, `"handle_params"`, `"auth"`, `"event"`, `"render"`, `"render"` (a legacy view evaluates once to save the state and once to render, #3734) |
-  | HTTP POST event, saved state restored | `"auth"`, `"lifecycle"` (the private-state restore), `"auth"`, `"hook"` (`handle_restore()`), `"event"`, `"render"`, `"render"` |
+  | HTTP POST event (legacy view: 2.0 keeps no state between requests, so every POST is this) | `"auth"`, `"mount"`, `"handle_params"`, `"auth"`, `"event"`, `"render"` |
 
   Each is one entry on the thread that runs it. Keep the wrapper cheap.
 - `disconnected()` runs when a connection ends, outside any turn: the wrapper
@@ -328,8 +327,7 @@ Everything above is the sync code djust runs on a worker thread through
   HTTP response phase. The *other* component and tag hooks are not here: see
   [template-time hooks](#not-wrapped-template-time-form-and-tag-hooks).
 - **State restores that assign with `setattr`.** The time-travel jump
-  (`restore_snapshot`, `restore_component_snapshot`) and a component restore
-  (`_restore_component_state`) assign saved fields with `safe_setattr` / `setattr`,
+  (`restore_snapshot`, `restore_component_snapshot`) assigns saved fields with `safe_setattr` / `setattr`,
   so a property setter you wrote would run there without the scope. They call no
   hook by name and read no rows. (`_restore_private_state` is different: it
   re-fetches private model references, so it is a `"lifecycle"` step.)
