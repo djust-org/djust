@@ -369,7 +369,16 @@ def _make_view():
     return view
 
 
-def _drive(monkeypatch, *, single_pass: bool):
+def _drive(monkeypatch, *, single_pass: bool, shipped: bool = False):
+    # The comparison with the two-pass stand-in is about the fused walk alone.
+    # Two later shortcuts read its "converted" answer to decide what to send
+    # (#3996, #3999), and the stand-in never gives one, so with them on the two
+    # runs would differ in which unchanged keys are re-sent, not in any value.
+    # ``shipped=True`` is the configuration that ships (every shortcut on).
+    if not shipped:
+        monkeypatch.setattr(
+            "djust._per_turn.disabled", frozenset({"request_scoped_changes", "plain_sub_ids"})
+        )
     if not single_pass:
         monkeypatch.setattr(
             rust_bridge, "fingerprint_and_convert", _original_fingerprint_and_convert
@@ -402,6 +411,32 @@ def _drive(monkeypatch, *, single_pass: bool):
 
 
 class TestSync:
+    def test_the_shipped_configuration_renders_the_same_pages(self, monkeypatch):
+        """Every shortcut on, as shipped: the same HTML and safe keys as the
+        two-pass run, and every value it sends is one the two-pass run sent
+        with the same content. It may send FEWER keys (a context processor's
+        unchanged value, a scalar that only shared an id with a row), never a
+        different value and never one key less than changed."""
+        new_log, new_html = _drive(monkeypatch, single_pass=True, shipped=True)
+        old_log, old_html = _drive(monkeypatch, single_pass=False)
+        assert new_html == old_html
+        assert [k for k, _ in new_log] == [k for k, _ in old_log]
+        fewer = 0
+        for (kind, new), (_, old) in zip(new_log, old_log):
+            if kind == "mark_safe_keys":
+                assert set(new) <= set(old)
+                continue
+            new, old = dict(new), dict(old)
+            new.pop("csrf_token", None)
+            old.pop("csrf_token", None)
+            assert set(new) <= set(old), kind
+            assert _same(new, {k: old[k] for k in new}), kind
+            fewer += len(old) - len(new)
+        sent = [s for k, s in new_log if k == "update_state"]
+        assert "rows" in sent[0] and "rows" in sent[2] and "rows" not in sent[1]
+        assert "meta" in sent[3]
+        assert fewer > 0, "the shipped configuration re-sent every unchanged key"
+
     def test_sync_hands_rust_the_same_values_and_safe_keys(self, monkeypatch):
         new_log, new_html = _drive(monkeypatch, single_pass=True)
         old_log, old_html = _drive(monkeypatch, single_pass=False)

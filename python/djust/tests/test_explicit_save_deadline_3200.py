@@ -31,6 +31,10 @@ from djust.tests.test_exposure_runtime import RuntimeView, make_request, mount
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
+#: What an unset or invalid ``DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`` means
+#: (#4098; it was 0.150).
+DEFAULT_WAIT_S = 2.0
+
 
 @pytest.fixture
 def staged(monkeypatch):
@@ -53,7 +57,6 @@ async def test_a_busy_sync_thread_does_not_fail_the_save(staged):
     ``sync_to_async`` hop waits roughly 300 ms in the queue. The old shape spent
     its whole 150 ms budget there. The save itself takes milliseconds.
     """
-    assert runtime_module.EVENT_STATE_SAVE_TIMEOUT_S == 0.150
     request = await sync_to_async(make_request)()
     runtime, transport = await mount(request)
     transport.sent.clear()
@@ -67,7 +70,11 @@ async def test_a_busy_sync_thread_does_not_fail_the_save(staged):
     workers = [asyncio.ensure_future(other_session()) for _ in range(4)]
     try:
         await asyncio.sleep(0.05)  # let the queue fill
-        await runtime.dispatch_event({"type": "event", "event": "increment", "params": {}})
+        # The 150 ms deadline this was reported against. It is no longer the
+        # default (#4098 raised it to 2 s), so
+        # it is set here to keep the queueing claim tested.
+        with override_settings(DJUST_EXPLICIT_STATE_SAVE_TIMEOUT=0.150):
+            await runtime.dispatch_event({"type": "event", "event": "increment", "params": {}})
     finally:
         stop = True
         await asyncio.gather(*workers)
@@ -311,16 +318,16 @@ async def test_a_refused_save_is_still_terminal(staged):
 @pytest.mark.parametrize(
     "value,expected",
     [
-        (None, 0.150),
+        (None, DEFAULT_WAIT_S),
         (0.5, 0.5),
         (2, 2.0),
-        (0, 0.150),
-        (-1, 0.150),
-        (11, 0.150),
-        (True, 0.150),
-        ("1", 0.150),
-        (float("nan"), 0.150),
-        (float("inf"), 0.150),
+        (0, DEFAULT_WAIT_S),
+        (-1, DEFAULT_WAIT_S),
+        (11, DEFAULT_WAIT_S),
+        (True, DEFAULT_WAIT_S),
+        ("1", DEFAULT_WAIT_S),
+        (float("nan"), DEFAULT_WAIT_S),
+        (float("inf"), DEFAULT_WAIT_S),
     ],
 )
 def test_explicit_save_timeout_setting(value, expected):

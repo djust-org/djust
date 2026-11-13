@@ -3339,7 +3339,8 @@ permissions. Existing handler/object authorization then runs against that reques
 After the handler it revalidates root/child binding, declarations, view and object
 permissions, and saves only the routed child's declared server fields through
 the bound adapter. This is independent of legacy browser-snapshot opt-in. The
-storage await retains the 150ms deadline; timeout cancellation or persistence
+storage await retains the 150ms deadline (2 s by default since #4098, which
+found 150 ms cost events their update on one slow write); timeout cancellation or persistence
 failure sends a static error and no successful embedded update. Handler and
 explicit render errors likewise do not echo or log their exception values.
 Embedded rendering uses the active-child context and rejects raw-view context.
@@ -3465,7 +3466,7 @@ the existing ancestry limit. After projection and application authorization hook
 the helper rechecks the captured scopes and registry membership before writing.
 One backend flush stores the child batch; root persistence remains separate.
 
-The runtime save retains the 150ms deadline. Failure emits a static error instead
+The runtime save retains the 150ms deadline (2 s by default since #4098). Failure emits a static error instead
 of an update/noop acknowledgement. Because rendering may already have advanced
 the server VDOM, a subsequent successful event is forced to send full HTML.
 HTTP storage exceptions are also sanitized, including chained exception text;
@@ -3524,7 +3525,7 @@ transactional with the whole parent render.
 Parent events, shared-runtime mounts and HTTP GET/POST sweep the reconciled
 registry. Routed child events use the same post-render batch rather than a
 separate pre-render child flush, so removed descendants are pruned before an
-`embedded_update` success frame. The existing 150ms runtime storage deadline is
+`embedded_update` success frame. The existing 150ms runtime storage deadline (2 s by default since #4098) is
 owned by the shared helper. Failed/cancelled flushes restore local staged keys
 and the modified flag, not an uncertain remote commit or application effects.
 
