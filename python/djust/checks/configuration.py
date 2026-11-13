@@ -1267,7 +1267,9 @@ def _s005_source_facts(
     try:
         _S005_SOURCE_FACTS[cls] = facts
     except TypeError:
-        pass
+        # A class that cannot be weakly referenced is not cached; its facts are
+        # recomputed on the next check run, which is only slower.
+        logger.debug("S005 source facts not cached for %s: not weak-referenceable", cls)
     return facts
 
 
