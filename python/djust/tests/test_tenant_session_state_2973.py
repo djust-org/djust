@@ -99,20 +99,9 @@ class TestKeyDerivationHasOneHome:
     def test_session_keys_are_only_built_by_the_tenant_helper(self):
         """A new ``f"liveview_{...}"`` site would silently skip the tenant scope."""
         found = {rel for rel, src in self._sources() if 'f"liveview_{' in src}
-        assert found == {
-            "_tenant_state.py",  # session_view_key
-            "mixins/rust_bridge.py",  # state-backend view_key, then _saved_state_key
-        }, found
-
-    def test_state_backend_key_is_only_built_by_saved_state_key(self):
-        import re
-
-        src = dict(self._sources())["mixins/rust_bridge.py"]
-        cache_key_rhs = set(re.findall(r"self\._cache_key = (.+)", src))
-        assert cache_key_rhs == {"cache_key", "None"} or cache_key_rhs == {"cache_key"}, (
-            cache_key_rhs
-        )
-        assert len(re.findall(r"cache_key = self\._saved_state_key\(", src)) == 2
+        # (``mixins/rust_bridge.py`` built the legacy render cache's key until
+        # 2.0 removed that cache.)
+        assert found == {"_tenant_state.py"}, found  # session_view_key
 
 
 class TestScopeHelpers:

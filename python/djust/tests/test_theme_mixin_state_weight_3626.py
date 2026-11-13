@@ -189,12 +189,12 @@ class BumpView(VariableView):
 
 
 class TestTheHttpPostFallback:
-    def test_a_post_turn_patches_only_the_counter(self):
-        """End to end: the fallback POST of a mixed-in view re-renders and patches
-        only what moved. (The injection mechanism itself is pinned by
-        ``test_processor_context_injects_a_derived_name_and_removes_it_again``:
-        the Rust state the POST restores keeps the switcher, so this turn alone
-        cannot tell an injected value from a retained one.)"""
+    def test_a_post_turn_renders_the_page_with_the_counter(self):
+        """End to end: the fallback POST of a mixed-in view re-renders. 2.0
+        keeps no legacy renderer between requests (the state-backend cache was
+        removed), so a fresh instance answers with the whole page, as an
+        explicit view does. (The injection mechanism itself is pinned by
+        ``test_processor_context_injects_a_derived_name_and_removes_it_again``.)"""
         import json
 
         request = _request()
@@ -213,10 +213,9 @@ class TestTheHttpPostFallback:
         response = view.post(post)
         assert response.status_code == 200
         body = json.loads(response.content)
-        patches = json.dumps(body.get("patches") or [])
-        assert "C1" in patches
-        assert "data-theme-switcher" not in patches
-        assert len(body["patches"]) == 1, patches
+        assert "patches" not in body, body
+        assert "C1" in body["html"]
+        assert "data-theme-switcher" in body["html"]
 
     def test_processor_context_injects_a_derived_name_and_removes_it_again(self):
         request = _request()
@@ -408,29 +407,3 @@ class TestTheWebSocketPath:
         for frame in frames[1:]:
             patches = json.dumps(frame.get("patches"))
             assert "data-theme-switcher" not in patches and "<style" not in patches
-
-    async def test_the_snapshot_after_the_events_holds_none_of_the_heavy_values(self):
-        """The backend's ``set`` runs once at the mount, BEFORE the first sync, with
-        an empty state; the render's state is stored by ``refresh`` afterwards. So
-        read what ``refresh`` stores, after the mount and after each event, and
-        look for the strings themselves, not only the key names."""
-        from asgiref.sync import sync_to_async
-        from django.test import override_settings
-
-        def rendered_strings():
-            view, _request_, _response = _get(TagOnlyView)
-            return {
-                name: str(getattr(view, name)) for name in HEAVY_NAMES if name != "theme_presets"
-            }
-
-        strings = await sync_to_async(rendered_strings)()
-        with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-            _frames, stored = await _drive_ws("WsTagOnly")
-        refreshed = [entry for entry in stored if entry[2] == "refresh"]
-        assert len(refreshed) >= 3, f"the post-render store never ran: {stored}"
-        floor = min(len(text) for text in strings.values())
-        for size, keys, _kind, blob in refreshed:
-            assert [n for n in HEAVY_NAMES if n in keys] == [], keys
-            assert size < floor, f"a one-counter view stores {size} bytes (a chunk is {floor})"
-            for name, text in strings.items():
-                assert text[:200].encode() not in blob, f"{name} is inside the stored snapshot"

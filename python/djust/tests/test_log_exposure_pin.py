@@ -157,15 +157,6 @@ MIXIN_TABLES = {
             ),
         },
     ),
-    "mixins/rust_bridge.py": (
-        {},
-        {
-            (
-                "_get_cached_template_hash_slot",
-                "[LiveView] compute_template_hash failed; cache k",
-            ): "template hashing",
-        },
-    ),
     "mixins/activity.py": (
         {
             (

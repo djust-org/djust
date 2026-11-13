@@ -249,7 +249,8 @@ class TestWorkMountQueued:
         """The one answer holds the rows; it does not leave ``-`` on the page."""
         with STATELESS:
             _, _, body = _post(LoadsAfterFirstRender, "select")
-        assert '"text": "rows"' in body, body
+        # A whole-page answer (2.0 keeps no legacy renderer to diff against).
+        assert ">rows</p>" in body, body
         assert "saw:rows" in body, body
 
     def test_a_denied_object_is_never_read(self):

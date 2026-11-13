@@ -1,4 +1,7 @@
-"""Render context is not permission to persist a Rust view across requests."""
+"""Render context is not permission to persist a Rust view across requests.
+
+No view (explicit or, since 2.0, legacy) keeps its Rust view in the state backend.
+"""
 
 from types import SimpleNamespace
 
@@ -45,19 +48,17 @@ def test_explicit_render_state_never_enters_shared_backend(backend, rf, transpor
 
 
 @pytest.mark.parametrize("transport", ["http", "ws"])
-def test_explicit_view_cannot_restore_legacy_render_context(backend, rf, transport):
+def test_legacy_render_state_never_enters_shared_backend_either(backend, rf, transport):
+    """2.0 removed the legacy render cache: a legacy view's Rust view is its
+    own, as an explicit view's is, and a second view on the same session and
+    page starts from nothing."""
     legacy = initialize("legacy", transport, rf)
-    # The backend stores a snapshot, refreshed after each render (it never
-    # keeps the view's own object), so the state reaches it through a render.
     legacy._rust_view.update_state({"display": "LEGACY_RENDER_SENTINEL"})
-    legacy._refresh_cached_rust_view()
-    assert backend._cache, "Legacy caching must remain exercised"
-    explicit = initialize("explicit", transport, rf)
-    assert "LEGACY_RENDER_SENTINEL" not in explicit._rust_view.render()
-    assert explicit._cache_key is None
-    # Isolation must not erase another policy's cache entry.
-    restored = initialize("legacy", transport, rf)
-    assert "LEGACY_RENDER_SENTINEL" in restored._rust_view.render()
+    assert "LEGACY_RENDER_SENTINEL" in legacy._rust_view.render()
+    assert backend._cache == {}
+    again = initialize("legacy", transport, rf)
+    assert again._rust_view is not legacy._rust_view
+    assert "LEGACY_RENDER_SENTINEL" not in again._rust_view.render()
 
 
 @pytest.mark.parametrize("transport", ["http", "ws"])

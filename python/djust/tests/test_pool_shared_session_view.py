@@ -206,25 +206,6 @@ class _CachedCounter(LiveView):
         self.count = 0
 
 
-def test_a_render_leaves_the_latest_state_in_the_backend(rf, memory_backend):
-    """The next request of the page (the HTTP page-POST fallback diffs against
-    it) must start from the last render, as when the backend kept the live
-    object, although it now keeps only snapshots."""
-    from types import SimpleNamespace
-
-    request = rf.get("/counter/")
-    request.session = SimpleNamespace(session_key="one-session")
-    view = _CachedCounter()
-    view.request = request
-    view.mount(request)
-    view.render_with_diff(request)
-    view.count = 7
-    view.render_with_diff(request)
-    (key,) = memory_backend._cache
-    restored, _ = memory_backend.get(key)
-    assert "<p>7</p>" in restored.render()
-
-
 class _BrokenRender(_TablePage):
     def _sync_state_to_rust(self, *args, **kwargs):
         raise RuntimeError("Already borrowed")

@@ -659,8 +659,6 @@ class RequestMixin:
 
         def _get_all_child_views(self) -> Dict[str, Any]: ...
 
-        def _refresh_cached_rust_view(self) -> None: ...
-
         def _record_dj_model_fields_from_rust(self, rust_view: Any) -> None: ...
 
         def _assign_component_ids(self) -> None: ...
@@ -1016,7 +1014,6 @@ class RequestMixin:
             t0 = time.perf_counter()
             self._rust_view.commit_authenticated_page()
             self._pending_authenticated_page = False
-            self._refresh_cached_rust_view()
             self._record_dj_model_fields_from_rust(self._rust_view)
             request._djust_timing["vdom_ms"] = round((time.perf_counter() - t0) * 1000, 2)
             if not uses_legacy_exposure(self):

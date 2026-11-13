@@ -333,7 +333,9 @@ class Bumps(ReadsPresets):
 
 
 class TestTheHttpPostFallback:
-    def test_a_post_turn_renders_the_list_and_patches_only_the_counter(self):
+    def test_a_post_turn_renders_the_list_with_the_counter(self):
+        """2.0 keeps no legacy renderer between requests, so the fresh instance
+        answers with the whole page, as an explicit view does."""
         request = _request()
         view = Bumps()
         view.setup(request)
@@ -351,11 +353,9 @@ class TestTheHttpPostFallback:
         assert response.status_code == 200
         body = json.loads(response.content)
         presets = ThemeManager(request=post).get_available_presets()
-        patches = json.dumps(body.get("patches") or [])
         # The fallback render read the list (the text node carries its length and
-        # first name), and only that one text node moved.
-        assert f"C1|n{len(presets)}|first={presets[0]['name']}" in patches, patches
-        assert len(body["patches"]) == 1, patches
+        # first name).
+        assert f"C1|n{len(presets)}|first={presets[0]['name']}" in body["html"], body
 
     def test_processor_context_injects_the_list_and_removes_it_again(self):
         request = _request()
@@ -528,20 +528,6 @@ async def _drive_ws(view_name):
 
 @pytest.mark.asyncio
 class TestTheWebSocketPath:
-    async def test_every_store_after_the_mount_and_each_event_omits_the_presets(self):
-        from asgiref.sync import sync_to_async
-        from django.test import override_settings
-
-        presets_bytes = await sync_to_async(lambda: len(_presets_bytes(_request())))()
-        with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-            _frames, stored = await _drive_ws("WsCounter")
-        refreshed = [entry for entry in stored if entry[2] == "refresh"]
-        assert len(refreshed) >= 3, f"the post-render store never ran: {stored}"
-        for size, keys, _kind, blob in refreshed:
-            assert "theme_presets" not in keys, keys
-            assert size < presets_bytes, f"{size} bytes stored; the list alone is {presets_bytes}"
-            assert b"primary_hsl" not in blob
-
     async def test_the_events_still_patch_the_counter(self):
         from django.test import override_settings
 

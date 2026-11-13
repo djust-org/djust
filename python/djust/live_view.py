@@ -1071,7 +1071,6 @@ class LiveView(
         self._rust_view: Optional[RustLiveView] = None
         self._rust_view_explicit: bool = False
         self._session_id: Optional[str] = None
-        self._cache_key: Optional[str] = None
         self._handler_metadata: Optional[Dict[str, Dict[str, Any]]] = (
             None  # Cache for decorator metadata
         )
