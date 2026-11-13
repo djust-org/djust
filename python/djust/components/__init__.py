@@ -209,12 +209,5 @@ def __getattr__(name: str) -> Any:
 
     try:
         return getattr(subpackage, name)
-    except ImportError:
-        # A component class 2.0 removed (#4002): the subpackage's own
-        # ``__getattr__`` names it for that module; name it for this one.
-        from djust._removed_settings import refuse_removed_name
-
-        refuse_removed_name(__name__, name)
-        raise
     except AttributeError:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None

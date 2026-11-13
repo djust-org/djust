@@ -1,0 +1,186 @@
+"""Tour / Onboarding Guide component — product tour with spotlight highlights."""
+
+import html
+from typing import Any, Optional
+
+from djust import Component
+
+
+class Tour(Component):
+    """Product tour with spotlight highlights and step navigation.
+
+    Renders a guided tour overlay with spotlight on target elements,
+    popover descriptions, and next/prev/skip navigation.
+    Uses ``dj-hook="Tour"`` for client-side positioning; the page must include
+    ``djust_components/tour.js``. The hook dims the page with a cut-out and a
+    ring around the step's ``target`` element (a CSS selector), places the
+    popover beside it, follows it as the page scrolls or resizes, scrolls it
+    into view, and falls back to a centred popover when the target is missing
+    (also after a server re-render removed it). The popover takes focus and
+    keeps it (Tab cycles), a new step is announced, and focus returns to the
+    opener when the tour ends. A field inside the spotlight can be clicked and
+    typed into: it keeps focus, and the arrow keys then belong to it.
+    ArrowRight / ArrowLeft go to the next / previous step (not past the last),
+    and Escape skips the tour; each presses the component's own button, so the
+    hook sends no event of its own.
+
+    Known limit: a CSS ``zoom`` on an ancestor of the tour or its target (not
+    browser zoom, and not a ``transform``, which is handled) shifts the
+    spotlight ring away from the target.
+
+    The buttons send ``event`` with ``value`` ``"next"``, ``"prev"``,
+    ``"skip"`` or ``"finish"``. ``value`` comes from the browser, so treat it
+    as untrusted: ignore anything else and clamp the step::
+
+        @event_handler()
+        def tour(self, value="", **kwargs):
+            if value == "next":
+                self.tour_step = min(self.tour_step + 1, len(self.steps) - 1)
+            elif value == "prev":
+                self.tour_step = max(self.tour_step - 1, 0)
+            elif value in ("skip", "finish"):
+                self.tour_open = False
+    An app's own ``Tour`` hook, in ``window.djust.hooks`` or
+    ``window.DjustHooks``, replaces the shipped one (a hook assigned with
+    ``window.DjustHooks = {...}`` after the script also drops it; merge with
+    ``Object.assign`` instead).
+
+    Usage in a LiveView::
+
+        self.tour = Tour(
+            steps=[
+                {"target": "#sidebar", "title": "Navigation",
+                 "content": "Use the sidebar to navigate."},
+                {"target": "#create-btn", "title": "Create",
+                 "content": "Click here to create a new item."},
+            ],
+            active=0,
+        )
+
+    In template::
+
+        {{ tour|safe }}
+
+    CSS Custom Properties::
+
+        --dj-tour-overlay-bg: overlay/backdrop color
+        --dj-tour-popover-bg: popover background
+        --dj-tour-popover-fg: popover text color
+        --dj-tour-popover-radius: popover border radius
+        --dj-tour-popover-shadow: popover box shadow
+        --dj-tour-highlight-color: spotlight border color
+        --dj-tour-highlight-radius: spotlight border radius
+
+    Args:
+        steps: list of step dicts with target, title, content
+        active: index of current step (default 0)
+        event: djust event the Back / Next / Skip / Finish buttons send, with
+            ``value`` ``"prev"`` / ``"next"`` / ``"skip"`` / ``"finish"``
+        show_progress: show step progress indicator (default True)
+        show_skip: show skip button (default True)
+        custom_class: additional CSS classes
+    """
+
+    def __init__(
+        self,
+        steps: Optional[list] = None,
+        active: int = 0,
+        event: str = "tour",
+        show_progress: bool = True,
+        show_skip: bool = True,
+        custom_class: str = "",
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            steps=steps,
+            active=active,
+            event=event,
+            show_progress=show_progress,
+            show_skip=show_skip,
+            custom_class=custom_class,
+            **kwargs,
+        )
+        self.steps = steps or []
+        self.active = active
+        self.event = event
+        self.show_progress = show_progress
+        self.show_skip = show_skip
+        self.custom_class = custom_class
+
+    def _render_custom(self) -> str:
+        classes = ["dj-tour"]
+        if self.custom_class:
+            classes.append(html.escape(self.custom_class))
+        class_str = " ".join(classes)
+
+        if not isinstance(self.steps, list) or not self.steps:
+            return ""
+
+        try:
+            idx = int(self.active)
+        except (ValueError, TypeError):
+            idx = 0
+        total = len(self.steps)
+        idx = max(0, min(idx, total - 1))
+
+        step = self.steps[idx]
+        if not isinstance(step, dict):
+            return ""
+
+        e_event = html.escape(self.event)
+        e_target = html.escape(str(step.get("target", "")))
+        e_title = html.escape(str(step.get("title", "")))
+        e_content = html.escape(str(step.get("content", "")))
+
+        # Progress dots
+        progress_html = ""
+        if self.show_progress:
+            dots = []
+            for i in range(total):
+                dot_cls = "dj-tour__dot"
+                if i == idx:
+                    dot_cls += " dj-tour__dot--active"
+                elif i < idx:
+                    dot_cls += " dj-tour__dot--completed"
+                dots.append(f'<span class="{dot_cls}"></span>')
+            progress_html = f'<div class="dj-tour__progress">{"".join(dots)}</div>'
+
+        # Navigation buttons
+        prev_btn = ""
+        if idx > 0:
+            prev_btn = (
+                f'<button class="dj-tour__prev" type="button" '
+                f"{self.event_attrs(self.event, value='prev')}>Back</button>"
+            )
+
+        next_label = "Finish" if idx == total - 1 else "Next"
+        next_action = "finish" if idx == total - 1 else "next"
+        next_btn = (
+            f'<button class="dj-tour__next" type="button" '
+            f"{self.event_attrs(self.event, value=next_action)}>{next_label}</button>"
+        )
+
+        skip_btn = ""
+        if self.show_skip and idx < total - 1:
+            skip_btn = (
+                f'<button class="dj-tour__skip" data-dj-close type="button" '
+                f"{self.event_attrs(self.event, value='skip')}>Skip tour</button>"
+            )
+
+        step_label = f'<span class="dj-tour__step-label">Step {idx + 1} of {total}</span>'
+
+        return (
+            f'<div class="{class_str}" dj-hook="Tour" '
+            f'data-target="{e_target}" data-step="{idx}" '
+            f'data-total="{total}" data-event="{e_event}" role="dialog" aria-modal="true">'
+            f'<div class="dj-tour__overlay"></div>'
+            f'<div class="dj-tour__popover">'
+            f'<div class="dj-tour__header">'
+            f'<h4 class="dj-tour__title">{e_title}</h4>'
+            f"{step_label}</div>"
+            f'<div class="dj-tour__body">'
+            f'<p class="dj-tour__content">{e_content}</p></div>'
+            f"{progress_html}"
+            f'<div class="dj-tour__footer">'
+            f"{skip_btn}{prev_btn}{next_btn}</div></div></div>"
+        )

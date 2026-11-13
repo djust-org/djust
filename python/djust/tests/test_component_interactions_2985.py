@@ -1,6 +1,6 @@
-"""SortableList, SortableGrid and JsonViewer ship their interactions (#2985).
+"""SortableList, SortableGrid, JsonViewer and LogViewer ship their interactions (#2985).
 
-The three components rendered a ``dj-hook`` that no shipped script answered.
+The four components rendered a ``dj-hook`` that no shipped script answered.
 Each now has a script under ``djust_components/`` that registers the hook. What
 the server renders has to stay what that script (and any hook an app already
 registered) reads, on every one of the three render paths: the component
@@ -9,12 +9,14 @@ class, the Django template tag, and the Rust-engine handler.
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
 from django.template import Context, Template
 
 from djust.components.components.json_viewer import JsonViewer
+from djust.components.components.log_viewer import LogViewer
 from djust.components.components.sortable_grid import SortableGrid
 from djust.components.components.sortable_list import SortableList
 
@@ -88,6 +90,44 @@ def test_a_disabled_list_keeps_its_markers():
     assert "draggable" not in html
 
 
+class TestLogViewerHookAttributes:
+    LINES = ["12:00 INFO up", "12:01 ERROR down", "no level"]
+
+    def _paths(self, **kw) -> dict[str, str]:
+        cls_kw = {k: v for k, v in kw.items()}
+        tag_args = " ".join(
+            f"{k}={json.dumps(v) if isinstance(v, str) else v}" for k, v in kw.items()
+        )
+        return {
+            "class": LogViewer(lines=self.LINES, **cls_kw).render(),
+            "tag": _tag("{% log_viewer lines=lines " + tag_args + " %}", lines=self.LINES),
+        }
+
+    def test_the_hook_is_told_how_to_render_a_streamed_line(self):
+        for path, html in self._paths(max_lines=50, filter_level="ERROR").items():
+            assert 'data-line-numbers="true"' in html, path
+            assert 'data-max-lines="50"' in html, path
+            assert 'data-filter-level="error"' in html, path
+
+    def test_no_limits_no_attributes(self):
+        for path, html in self._paths(show_line_numbers=False).items():
+            assert "data-line-numbers" not in html, path
+            assert "data-max-lines" not in html, path
+            assert "data-filter-level" not in html, path
+
+    def test_markup_an_app_hook_reads_is_unchanged(self):
+        for path, html in self._paths(stream_event="new_logs").items():
+            assert 'dj-hook="LogViewer"' in html, path
+            assert 'data-stream-event="new_logs"' in html, path
+            assert 'data-auto-scroll="true"' in html, path
+            assert 'role="log" aria-live="polite"' in html, path
+            assert "dj-log-viewer__body" in html, path
+
+    def test_the_three_render_paths_agree(self):
+        paths = self._paths(stream_event="new_logs", max_lines=50, filter_level="error")
+        assert paths["class"] == paths["tag"]
+
+
 class TestJsonViewerMarkupTheHookReads:
     DATA = {"name": "djust", "nested": {"deep": [1, 2, {"x": 'q"uote'}]}}
 
@@ -125,6 +165,7 @@ class TestJsonViewerMarkupTheHookReads:
         ("sortable_list", "SortableList", "sortable-list.js"),
         ("sortable_grid", "SortableGrid", "sortable-grid.js"),
         ("json_viewer", "JsonViewer", "json-viewer.js"),
+        ("log_viewer", "LogViewer", "log-viewer.js"),
     ],
 )
 class TestScriptsAreShippedAndFound:

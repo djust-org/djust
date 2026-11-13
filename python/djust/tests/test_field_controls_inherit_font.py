@@ -58,7 +58,7 @@ def test_the_family_reader_reads_the_last_declaration():
 
 # Text-bearing field controls in the component stylesheet. ``.combobox-input`` is
 # rendered as ``combobox-input form-input`` and is covered by ``.form-input``;
-# ``.dj-md-textarea__input`` already sets ``font: inherit``.
+# ``.dj-mminput__text`` and ``.dj-md-textarea__input`` already set ``font: inherit``.
 COMPONENT_FIELD_RULES = (
     ".form-input",
     ".form-select",
@@ -78,6 +78,7 @@ COMPONENT_FIELD_RULES = (
     ".dj-dependent-select__control select",
     ".dj-currency-input__field",
     ".dj-filter-bar__select",
+    ".dj-mminput__text",
     ".dj-mentions__input",
     ".dj-md-textarea__input",
     ".dj-form-array__input",
@@ -102,7 +103,12 @@ def test_theme_field_classes_inherit_the_page_font(selector: str):
 
 
 # Controls that are code surfaces, and the rule that makes each one monospace.
-MONOSPACE_RULES = (".color-hex-input",)
+MONOSPACE_RULES = (
+    ".dj-prompt-editor__textarea",
+    ".dj-cron-input__input",
+    ".color-hex-input",
+    ".dj-md-editor__textarea",
+)
 
 
 @pytest.mark.parametrize("selector", MONOSPACE_RULES)

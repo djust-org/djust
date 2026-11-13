@@ -275,6 +275,11 @@ def test_catalog_programming_error_is_not_swallowed(monkeypatch):
     "name,purpose,marker",
     [
         (
+            "calendar",
+            "Display events on a monthly calendar with optional event click actions",
+            "dj-calendar__event",
+        ),
+        (
             "wizard",
             "Guide users through labelled, selectable steps and a content area",
             "dj-wizard__step",
@@ -289,6 +294,11 @@ def test_catalog_programming_error_is_not_swallowed(monkeypatch):
             "Enter a monetary value with a currency symbol and code",
             "dj-currency-input__symbol",
         ),
+        (
+            "cron_input",
+            "Edit five cron schedule fields alongside the current expression",
+            "dj-cron-input__preview",
+        ),
         ("fieldset", "Group form controls under an optional legend", "<fieldset"),
         (
             "markdown_textarea",
@@ -296,7 +306,22 @@ def test_catalog_programming_error_is_not_swallowed(monkeypatch):
             "dj-md-textarea__tab",
         ),
         ("audit_log", "Display user actions in a timestamped audit table", "dj-audit-log__table"),
+        (
+            "gantt_chart",
+            "Visualize task start positions, durations and progress on an SVG timeline",
+            "dj-gantt__bar",
+        ),
         ("sortable_grid", "Reorder draggable items in a grid", 'draggable="true"'),
+        (
+            "breadcrumb_dropdown",
+            "Navigate breadcrumb levels with collapsed ancestors in a dropdown",
+            "dj-breadcrumb__link",
+        ),
+        (
+            "live_indicator",
+            "Show a named user activity with animated typing dots",
+            "dj-live-indicator",
+        ),
         (
             "meter",
             "Display colored value segments against a total with an optional legend",
@@ -306,6 +331,21 @@ def test_catalog_programming_error_is_not_swallowed(monkeypatch):
             "notification_badge",
             "Show an unread count or dot with an optional pulse",
             "dj-notification-badge",
+        ),
+        (
+            "qr_code",
+            "Display a decorative QR-style SVG pattern derived from supplied text",
+            "dj-qr-code__svg",
+        ),
+        (
+            "ribbon",
+            "Display a labelled ribbon positioned at a corner of its container",
+            "dj-ribbon__text",
+        ),
+        (
+            "agent_step",
+            "Show an agent action with status, duration and optional details",
+            "dj-agent-step__status",
         ),
         (
             "import_wizard",

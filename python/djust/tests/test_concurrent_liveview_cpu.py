@@ -56,7 +56,8 @@ class _Marked:
 
 
 def _general_fingerprint(value, budget=change_detection.DEFAULT_BUDGET):
-    counter = [budget]
+    # ``[budget, bare leaf types]``: the encoding ``deep_fingerprint`` selects.
+    counter = [budget, change_detection._BARE]
     return _walk_general(value, counter, 0, ()), counter[0] < 0
 
 

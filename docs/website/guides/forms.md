@@ -766,3 +766,9 @@ Each radio input carries the attribute; the CSS finds its wrapper with `:has()`.
 - **Set `_model_instance` before `super().mount()`** when editing existing records, or from djust 1.3 use [`ModelFormMixin`](#editing-one-record-with-modelformmixin).
 - **Keep `form_data` keys consistent.** FormMixin initializes all field keys in `mount()`. Don't add or remove keys -- it breaks VDOM diffing.
 - **Use `form_errors` for cross-field validation.** Errors from `clean()` go to `form_errors`, per-field errors go to `field_errors`.
+
+## Markdown editor
+
+See the [Markdown Editor guide](markdown-editor.md) for optional Visual/Markdown editing,
+native form integration, asset loading, table actions, the `bubble_menu` and `floating_menu`
+options, theme variables and editing limitations.
