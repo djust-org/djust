@@ -28,9 +28,74 @@ from django.contrib.sessions.backends.cached_db import SessionStore as CachedDBS
 from django.contrib.sessions.backends.db import SessionStore as DBSession
 from django.contrib.sessions.backends.file import SessionStore as FileSession
 
-from ._exposure import ExposureContract, ExposureError, clone_json_state
+from ._exposure import (
+    ExposureConfigurationError,
+    ExposureContract,
+    ExposureError,
+    StateLimitError,
+    StateLimits,
+    clone_json_state,
+)
 
 _SERVER_SESSION_TYPES = (DBSession, CachedDBSession, CacheSession, FileSession)
+
+#: The ``SESSION_ENGINE`` values whose store can hold ``persist="server"``
+#: state: exactly the store classes in ``_SERVER_SESSION_TYPES`` (#4092).
+SUPPORTED_SESSION_ENGINES = tuple(cls.__module__ for cls in _SERVER_SESSION_TYPES)
+
+
+class UnsupportedSessionEngine(ExposureConfigurationError, ExposureError):
+    """Declared server state with a session store that cannot hold it (#4092).
+
+    A configuration error, not a payload error: the message is
+    framework-authored and names no view value, so the protected HTTP entry
+    lets it reach the developer (``ExposureConfigurationError``) instead of a
+    bare 500. Still an :class:`ExposureError` for the callers that refuse on
+    one. System check ``djust.C030`` reports the same combination at startup.
+    """
+
+
+def session_store_supported(store_class: Any) -> bool:
+    """Whether a session store class can hold server state: exactly one of the
+    audited stores. A subclass or a custom store needs a reviewed adapter.
+
+    The one predicate for the runtime (the request's session) and system check
+    ``djust.C030`` (the configured engine), so the two cannot disagree.
+    """
+    return any(store_class is supported for supported in _SERVER_SESSION_TYPES)
+
+
+def session_engine_store(engine: Any) -> Any:
+    """The ``SessionStore`` class ``SESSION_ENGINE`` resolves to, as Django
+    resolves it; ``None`` when it does not import."""
+    from importlib import import_module
+
+    if not isinstance(engine, str) or not engine:
+        return None
+    try:
+        return getattr(import_module(engine), "SessionStore", None)
+    except Exception:  # noqa: BLE001 — Django reports a broken engine itself
+        logger.debug("djust: SESSION_ENGINE does not import; not checked")
+        return None
+
+
+def unsupported_session_message(session: Any) -> str:
+    """The configuration error for a session store that cannot hold server state."""
+    if session is None:
+        found = "no session (is SessionMiddleware installed?)"
+    else:
+        found = "%s.%s" % (
+            getattr(type(session), "__module__", "?"),
+            getattr(type(session), "__qualname__", "?"),
+        )
+    return (
+        'State declared with persist="server" is kept in a server-side session, '
+        "and this request's session cannot hold it: %s. Set SESSION_ENGINE to one "
+        'of %s, or declare the state without persist="server".'
+        % (found, ", ".join(SUPPORTED_SESSION_ENGINES))
+    )
+
+
 # Envelope format 2 records the application contract version (E2-9). Format-1
 # envelopes are unindexed and are rejected, so the view remounts (D-j).
 _VERSION = 2
@@ -173,8 +238,8 @@ def server_state_adapter(
     if not any(field.persist == "server" for field in contract.fields.values()):
         return None
     session = getattr(request, "session", None)
-    if session is None or type(session) not in _SERVER_SESSION_TYPES:
-        raise ExposureError("Explicit persistence requires a supported server-side session")
+    if session is None or not session_store_supported(type(session)):
+        raise UnsupportedSessionEngine(unsupported_session_message(session))
     if not session.session_key:
         if not create:
             return None
@@ -188,11 +253,80 @@ def server_state_adapter(
     )
 
 
+class StateLimitExceeded(ExposureError):
+    """A save refused because the declared server state is over its limits (#4095).
+
+    Raised before anything is written: the stored state is the last one that
+    fit. ``field`` is the declared field that does not fit (alone, or the
+    largest one when only the fields together are over); ``limit`` is
+    ``"bytes"`` or ``"structure"``. The message names the field and the limit,
+    never a value, so a transport can show it to the user.
+    """
+
+    def __init__(self, field: str, limit: str, limits: StateLimits) -> None:
+        self.field = field
+        self.limit = limit
+        if limit == "bytes":
+            bound = "the %d-byte limit for persisted state" % limits.max_bytes
+        else:
+            bound = "the persisted-state limit of %d values and nesting depth %d" % (
+                limits.max_nodes,
+                limits.max_depth,
+            )
+        super().__init__(
+            "The change was not saved: state field '%s' would exceed %s." % (field, bound)
+        )
+
+
+def _limit_culprit(contract: ExposureContract, view: Any) -> str:
+    """Which declared server field makes the projection go over its limits.
+
+    The first field that is over the limits on its own; else (only the
+    fields together are over) the one with the largest encoded size.
+    """
+    largest, largest_size = "", -1
+    for name, policy in contract.fields.items():
+        if not policy.permits("server"):
+            continue
+        value = getattr(view, name, None)
+        try:
+            clone_json_state({name: value}, limits=contract.limits)
+        except StateLimitError:
+            return name
+        except ExposureError:
+            continue
+        try:
+            size = len(json.dumps(value, ensure_ascii=False))
+        except (TypeError, ValueError):
+            continue
+        if size > largest_size:
+            largest, largest_size = name, size
+    return largest
+
+
+def _project_for_save(adapter: "ServerStateSession", view: Any) -> dict[str, Any]:
+    try:
+        return adapter.contract.project_view(view, "server")
+    except StateLimitError as error:
+        field = _limit_culprit(adapter.contract, view)
+        raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
+
+
 def save_server_state(view: Any, request: Any) -> None:
-    """Persist only declared server fields after the transport's authorization."""
+    """Persist only declared server fields after the transport's authorization.
+
+    Raises :class:`StateLimitExceeded`, before writing anything, when the
+    declared server state is over its limits.
+    """
     adapter = server_state_adapter(view, request, create=True)
     if adapter is not None:
-        adapter.save(adapter.contract.project_view(view, "server"))
+        values = _project_for_save(adapter, view)
+        try:
+            adapter.save(values)
+        except StateLimitError as error:
+            # The envelope's own overhead tipped it over: the fields are the cause.
+            field = _limit_culprit(adapter.contract, view)
+            raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
 
 
 def load_server_state(view: Any, request: Any) -> dict[str, Any] | None:
@@ -218,8 +352,12 @@ async def asave_server_state(view: Any, request: Any) -> None:
 
     adapter = await sync_to_async(server_state_adapter)(view, request, create=True)
     if adapter is not None:
-        values = await sync_to_async(adapter.contract.project_view)(view, "server")
-        await adapter.asave(values)
+        values = await sync_to_async(_project_for_save)(adapter, view)
+        try:
+            await adapter.asave(values)
+        except StateLimitError as error:
+            field = await sync_to_async(_limit_culprit)(adapter.contract, view)
+            raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
 
 
 @dataclass(frozen=True)

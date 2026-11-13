@@ -4,6 +4,7 @@ Property Manager Dashboard View
 Main dashboard showing key metrics, recent activity, and quick actions.
 """
 
+from djust.decorators import event_handler
 from djust_shared.views import BaseViewWithNavbar
 from djust.decorators import cache, debounce
 from djust_shared.components.ui import HeroSection, FeatureCard
@@ -60,6 +61,7 @@ class RentalDashboardView(BaseViewWithNavbar):
             date__gte=thirty_days_ago
         ).order_by('-date')[:10]
 
+    @event_handler
     @debounce(wait=0.5)
     def search_properties(self, query: str = "", **kwargs):
         """
@@ -80,6 +82,7 @@ class RentalDashboardView(BaseViewWithNavbar):
         else:
             self.properties = Property.objects.all()
 
+    @event_handler
     def filter_properties(self, status: str = "all", **kwargs):
         """Filter properties by status"""
         self.filter_status = status

@@ -374,6 +374,16 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 ---
 
+### C030: Server state with an unsupported session engine
+
+**Severity**: Error
+
+**What causes it**: A view declares `state(..., persist="server")` while `SESSION_ENGINE` names a store that cannot hold server state, such as `django.contrib.sessions.backends.signed_cookies`. Every request of that view fails.
+
+**Fix**: Set `SESSION_ENGINE` to `django.contrib.sessions.backends.db`, `cached_db`, `cache` or `file`, or declare the state without `persist="server"`.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error

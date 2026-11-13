@@ -12,6 +12,7 @@ replayed in jsdom by ``tests/js/vdom_correctness_v1_2_1_8.test.js``.
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 from djust import state
 
 # --- #2997 keyed filter / restore ------------------------------------------
@@ -48,6 +49,7 @@ def keyed_filter_view(shape):
             ctx["items"] = self.items
             return ctx
 
+        @event_handler
         def set_items(self, items):
             self.items = list(items)
 

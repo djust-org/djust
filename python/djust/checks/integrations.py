@@ -3,6 +3,7 @@
 Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 """
 
+from djust._framework_code import is_djust_module
 import logging
 import re
 from typing import Any, Optional
@@ -131,7 +132,7 @@ def check_service_worker_advanced(app_configs: Any, **kwargs: Any) -> list[Check
         for cls in _walk_subclasses(LiveView):
             # Skip internal djust classes (tests/examples still checked).
             module = getattr(cls, "__module__", "") or ""
-            if module.startswith("djust.") or module.startswith("djust_"):
+            if is_djust_module(module):
                 if "test" not in module and "example" not in module:
                     continue
             try:

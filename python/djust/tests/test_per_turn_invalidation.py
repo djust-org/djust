@@ -216,6 +216,10 @@ class TestHandlerPlans:
 
         with_handler, without = _equal_by_name(True), _equal_by_name(False)
         assert {with_handler: "first"}.get(without) == "first"
+        # The table is cleared when it reaches _PLAN_LIMIT; start empty so the
+        # two plans below cannot be split by that clear (a whole-suite run
+        # filled the table: main-health 2026-11-13, #4072).
+        _parameter_metadata._PLANS.clear()
         _parameter_metadata._event_methods(with_handler())
         _parameter_metadata._event_methods(without())
         keys = [k for k in _parameter_metadata._PLANS if k[0] in (id(with_handler), id(without))]

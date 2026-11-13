@@ -759,20 +759,28 @@ def _explicit_child_json_assignments(tree):
 
 
 def _explicit_root_json_assignments(tree):
-    """``runtime.py``'s one restore: declared fields from the explicit codecs,
-    which accept JSON primitives only and are never tagged."""
+    """``runtime.py``'s one restore site: ``apply_restored_state``, which the
+    reconnect mount and the over-limit rollback (#4095) both call. It assigns
+    declared fields from the explicit codecs, which accept JSON primitives only
+    and are never tagged. Identified by function AND call shape, exactly once."""
     expected = (
-        ast.parse(
-            "safe_setattr(view_instance, key, value, allow_private=False, raise_on_blocked=True)"
-        )
+        ast.parse("safe_setattr(view, key, value, allow_private=False, raise_on_blocked=True)")
         .body[0]
         .value
     )
-    return {
+    functions = [
         node
-        for node in ast.walk(tree)
+        for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "apply_restored_state"
+    ]
+    assert len(functions) == 1, "Review runtime.py's explicit restore codec boundary"
+    calls = {
+        node
+        for node in ast.walk(functions[0])
         if isinstance(node, ast.Call) and ast.dump(node) == ast.dump(expected)
     }
+    assert len(calls) == 1, "Review runtime.py's explicit restore codec boundary"
+    return calls
 
 
 def _explicit_self_json_assignments(tree):

@@ -3,6 +3,7 @@
 Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 """
 
+from djust._framework_code import is_djust_module
 import inspect
 import logging
 import os
@@ -19,6 +20,7 @@ from djust.checks.utils import (
     DjustWarning,
     _blank_template_comments,
     _is_check_suppressed,
+    _is_framework_internal_class,
     _is_production,
     _walk_subclasses,
     _get_template_dirs,
@@ -741,6 +743,73 @@ def _check_query_budget_mode(errors: list[CheckMessage]) -> None:
     )
 
 
+def _views_declaring_server_state(LiveView: type, ExposureContract: Any) -> list[str]:
+    """Project LiveViews that declare a ``persist="server"`` field (C030), sorted."""
+    views = []
+    for cls in _walk_subclasses(LiveView):
+        if _is_framework_internal_class(cls) or cls.__dict__.get("abstract") is True:
+            continue
+        try:
+            fields = ExposureContract.from_view_class(cls).fields
+        except Exception:  # noqa: BLE001 — declarations that do not compile are V-checks' report
+            continue
+        if any(exposure.persist == "server" for exposure in fields.values()):
+            views.append("%s.%s" % (cls.__module__, cls.__qualname__))
+    return sorted(set(views))
+
+
+def _check_server_state_session_engine(errors: list[CheckMessage]) -> None:
+    """C030 — declared ``persist="server"`` state needs a server-side session store (#4092).
+
+    Server state is kept in the session, so a store that cannot hold it (the
+    signed-cookies engine, a custom engine) fails every request of such a view.
+    The runtime refuses with :class:`~djust._exposure_sessions.UnsupportedSessionEngine`;
+    this reports the combination at startup. Only the exact audited stores
+    count, as at runtime.
+    """
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C030"):
+        return
+    try:
+        from djust._exposure import ExposureContract
+        from djust._exposure_sessions import (
+            SUPPORTED_SESSION_ENGINES,
+            session_engine_store,
+            session_store_supported,
+        )
+        from djust.live_view import LiveView
+    except ImportError:
+        return  # LiveView not importable (Rust extension missing) — skip.
+    engine = getattr(settings, "SESSION_ENGINE", "django.contrib.sessions.backends.db")
+    # Decided by the class the engine resolves to, as the runtime decides by
+    # the request's session class: an engine module that re-exports a
+    # supported store is supported, a subclass of one is not.
+    store = session_engine_store(engine)
+    if store is None or session_store_supported(store):
+        return
+    views = _views_declaring_server_state(LiveView, ExposureContract)
+    if not views:
+        return
+    shown = ", ".join(views[:5]) + (" and %d more" % (len(views) - 5) if len(views) > 5 else "")
+    errors.append(
+        DjustError(
+            'SESSION_ENGINE is %r, which cannot hold state declared with persist="server" '
+            "(declared by %s)." % (engine, shown),
+            hint=(
+                "Server state is kept in a server-side session. Every request of these "
+                "views fails while the engine cannot hold it. Supported engines: %s."
+                % ", ".join(SUPPORTED_SESSION_ENGINES)
+            ),
+            id="djust.C030",
+            fix_hint=(
+                "Set `SESSION_ENGINE` to one of the supported engines, or declare the "
+                'state without `persist="server"`.'
+            ),
+        )
+    )
+
+
 def _check_liveview_middleware(errors: list[CheckMessage]) -> None:
     """C026 — every ``LIVEVIEW_MIDDLEWARE`` entry is an importable ``async def`` (ADR-044).
 
@@ -1382,6 +1451,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # C029 -- LIVEVIEW_CONFIG['query_budget'] is not None / "off" / "warn" / "error"
     _check_query_budget_mode(errors)
 
+    # C030 -- persist="server" state with a session engine that cannot hold it (#4092)
+    _check_server_state_session_engine(errors)
+
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)
     asgi_path = getattr(settings, "ASGI_APPLICATION", None)
@@ -1668,7 +1740,7 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         for cls in _walk_subclasses(LiveView):
             module = getattr(cls, "__module__", "") or ""
-            if module.startswith("djust.") or module.startswith("djust_"):
+            if is_djust_module(module):
                 if "test" not in module and "example" not in module:
                     continue
 

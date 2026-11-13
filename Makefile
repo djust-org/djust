@@ -423,6 +423,7 @@ MERGE_GATES := \
 	tests/test_ci_python_test_shards.py \
 	tests/test_corpus_shards.py \
 	tests/test_git_env_guard_3179.py \
+	tests/integration/multinode/test_survival_table.py \
 	tests/test_merge_gates_3757.py \
 	tests/test_promotion_ledger.py \
 	tests/test_reset_fixture_hygiene_2234.py \

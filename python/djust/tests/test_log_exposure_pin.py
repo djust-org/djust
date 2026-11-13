@@ -1050,6 +1050,10 @@ MIXIN_TABLES = {
         {
             ("_inject_debug", "Failed to inject debug info"): "debug payload assembly",
             ("_watch_disconnect", "is_disconnected() raised; halting watcher"): "ASGI probe",
+            ("_post_turn_body", "HTTP event state save refused: field %s over its"): (
+                "StateLimitExceeded (#4095): a declared field name and a limit kind, "
+                "framework-authored, never a value"
+            ),
         },
     ),
     # assign_async's runners and the SSE deferred flush now log through

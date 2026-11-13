@@ -35,7 +35,12 @@ transport layer.
 - `send_event(name, raise_on_missing=True, **params)` — call a handler by
   name. Returns a dict with `state_before`, `state_after`, `duration_ms`,
   `success`, `error`. An unknown handler raises `NoHandlerFoundError` unless
-  you pass `raise_on_missing=False`. An exception raised *inside* the handler
+  you pass `raise_on_missing=False`. The transports' event-security check runs
+  first, as it does over WebSocket: a method without `@event_handler` (under
+  the default strict `event_security`), a server-push method or a private name
+  raises `EventRejectedError` (a `NoHandlerFoundError`), or comes back as
+  `success=False` with `code="event_rejected"` when you pass
+  `raise_on_missing=False`. An exception raised *inside* the handler
   is not re-raised: it comes back as `success=False` with the message in
   `error`, so assert on `result["success"]`.
 - A handler's `@rate_limit` applies, through the same per-caller store the
@@ -57,7 +62,12 @@ transport layer.
 - `assert_state_contains(**expected)` — checks `expected in actual`: a
   substring for strings, one element for lists, a key for dicts. It is not a
   subset match (`items=["a"]` fails against `["a", "b"]`).
-- `get_state()` — return a snapshot of public attrs.
+- `get_state()` — return the view's state: its declared `state()` fields and
+  the public attributes its own code sets or defines. Names the framework
+  defines (`request`, `template`, `login_required`, ...) are left out, even
+  when your code sets them (`page_title`, a `FormMixin` attribute): assert on
+  those through `render()` or the attribute itself
+  (`client.view_instance.page_title`).
 - `render(engine="rust")` — render the view template and return the HTML.
 
 ## Phoenix-parity assertions (v0.5.1)

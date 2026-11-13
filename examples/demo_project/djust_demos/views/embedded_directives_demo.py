@@ -7,14 +7,17 @@ same handler names, so the page shows which one received each event:
 WebSocket, SSE and HTTP-only transports.
 """
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 
 class _Receiver:
     """The same four handlers on both views; each records what arrived."""
 
-    received = ""
+    # Declared state: under explicit exposure an undeclared attribute renders
+    # as an empty string (T027). Persisted on the server so the HTTP-only
+    # transport, which mounts again for every event, keeps what arrived.
+    received = state("", persist="server")
 
     def _record(self, name):
         self.received = (self.received + " " + name).strip()

@@ -201,20 +201,64 @@ async def test_a_tampered_token_is_refused():
         await socket.disconnect()
 
 
+class _FrozenTime:
+    """``time`` as the snapshot code reads it, stopped at ``now`` (#4100).
+
+    The token's age is decided by the clock the signer and the codec read, so
+    the test sets that clock instead of waiting: however slow the run, the
+    young token stays young and the old one is old.
+    """
+
+    def __init__(self, now: float) -> None:
+        import time as _real_time
+
+        self._real = _real_time
+        self.now = now
+
+    def time(self) -> float:
+        return self.now
+
+    def __getattr__(self, name: str):
+        return getattr(self._real, name)
+
+
+def _clock_at(now: float):
+    """Set the clock of the snapshot codec and of Django's signer together."""
+    import contextlib
+    from unittest import mock
+
+    import django.core.signing as signing
+
+    import djust._exposure_snapshots as snapshots
+
+    frozen = _FrozenTime(now)
+    stack = contextlib.ExitStack()
+    stack.enter_context(mock.patch.object(snapshots, "time", frozen))
+    stack.enter_context(mock.patch.object(signing, "time", frozen))
+    return stack
+
+
 async def test_an_expired_token_is_refused():
+    import time
+
     key = await sync_to_async(_fresh_key)()
+    issued = float(int(time.time()))
     with override_settings(DJUST_STATE_SNAPSHOT_MAX_AGE=1):
-        token = await _token_after_two_bumps(key)
+        with _clock_at(issued):
+            token = await _token_after_two_bumps(key)
         socket = await _connect(key)
         try:
-            fresh = await _mount(socket, ClientKept, token=token)
+            # The control, on the clock the token was issued at: valid while young.
+            with _clock_at(issued):
+                fresh = await _mount(socket, ClientKept, token=token)
             assert "step=2" in fresh["html"], "the control: the token is valid while young"
         finally:
             await socket.disconnect()
-        await asyncio.sleep(1.2)
         socket = await _connect(key)
         try:
-            expired = await _mount(socket, ClientKept, token=token)
+            # Past its one-second max age by the clock, not by waiting.
+            with _clock_at(issued + 2):
+                expired = await _mount(socket, ClientKept, token=token)
             assert "step=0" in expired["html"], expired["html"]
         finally:
             await socket.disconnect()

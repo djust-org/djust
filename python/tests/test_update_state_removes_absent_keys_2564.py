@@ -39,6 +39,7 @@ pytest.importorskip("django")
 
 from django.utils.safestring import mark_safe  # noqa: E402
 
+from djust.decorators import event_handler
 from djust import _rust  # noqa: E402
 from djust.live_view import LiveView  # noqa: E402
 from djust.serialization import normalize_django_value  # noqa: E402
@@ -84,6 +85,7 @@ def _make_delete_view(make_value: Any, source: str) -> type:
                 ctx["k"] = self.k
             return ctx
 
+        @event_handler
         def forget(self):
             del self.k
 
@@ -121,9 +123,11 @@ class TestDeleteThenRenderOnTheLiveViewEntry2564:
                     ctx["k"] = self.k
                 return ctx
 
+            @event_handler
             def forget(self):
                 del self.k
 
+            @event_handler
             def restore(self):
                 self.k = "SECRET-B"
 
@@ -155,9 +159,11 @@ def _make_gated_view(source: str) -> type:
                 ctx["secret"] = SECRET
             return ctx
 
+        @event_handler
         def hide(self):
             self.show = False
 
+        @event_handler
         def hide_and_touch(self):
             # A SECOND changed key, so the diff render takes the PARTIAL path
             # (`set_changed_keys` is only called when something changed) and
@@ -296,6 +302,7 @@ class TestFrameworkKeysAreRetained2564:
                 self.title = "Static"
                 self.n = 0
 
+            @event_handler
             def bump(self):
                 self.n += 1
 

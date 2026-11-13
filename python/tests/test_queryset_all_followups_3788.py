@@ -37,6 +37,7 @@ from django.contrib.auth.models import Group, User
 from django.db import OperationalError, connection, models
 from django.test.utils import CaptureQueriesContext
 
+from djust.decorators import event_handler
 from djust import _rust
 from djust.live_view import LiveView
 from djust.mixins.context import _holds_db_value
@@ -168,6 +169,7 @@ class TestAQuerySetReachedThroughAContainer3788:
                 self.d = {"users": _users()}
                 self.n = 0
 
+            @event_handler
             def bump(self, **kwargs):
                 self.n += 1
 
