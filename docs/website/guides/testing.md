@@ -64,7 +64,10 @@ transport layer.
   subset match (`items=["a"]` fails against `["a", "b"]`).
 - `get_state()` — return the view's state: its declared `state()` fields and
   the public attributes its own code sets or defines. Names the framework
-  defines (`request`, `template`, `login_required`, ...) are left out.
+  defines (`request`, `template`, `login_required`, ...) are left out, even
+  when your code sets them (`page_title`, a `FormMixin` attribute): assert on
+  those through `render()` or the attribute itself
+  (`client.view_instance.page_title`).
 - `render(engine="rust")` — render the view template and return the HTML.
 
 ## Phoenix-parity assertions (v0.5.1)

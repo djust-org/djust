@@ -16,6 +16,7 @@ import pytest
 from django.test import TestCase
 
 from djust import LiveView, state
+from djust.decorators import event_handler
 from djust.testing import LiveViewSmokeTest, LiveViewTestClient
 
 
@@ -102,3 +103,27 @@ def test_the_fuzzer_does_not_count_a_validation_refusal_as_a_handler_failure():
     """The fuzzer's own payloads (``None``, ``[]``, ``{}`` for ``field``) reach
     ``update_model`` and are refused by validation: not a failure."""
     FuzzUpdateModel("test_fuzz_handlers_succeed").test_fuzz_handlers_succeed()
+
+
+class RaisingView(LiveView):
+    exposure_policy = "explicit"
+    template = "<div></div>"
+
+    @event_handler
+    def boom(self, value: str = "", **kwargs):
+        raise ValueError("handler failed on valid input")
+
+
+class _FuzzRaising(TestCase, LiveViewSmokeTest):
+    __test__ = False  # driven by the test below
+    fuzz = True
+
+    def _get_views(self):
+        return [RaisingView]
+
+
+def test_the_fuzzer_still_reports_a_handler_that_raises_on_valid_input():
+    """The validation skip cannot hide a real failure: ``boom`` accepts every
+    string payload the fuzzer sends and then raises."""
+    with pytest.raises(AssertionError, match=r"RaisingView\.boom .*handler failed on valid input"):
+        _FuzzRaising("test_fuzz_handlers_succeed").test_fuzz_handlers_succeed()

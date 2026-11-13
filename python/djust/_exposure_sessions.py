@@ -55,13 +55,28 @@ class UnsupportedSessionEngine(ExposureConfigurationError, ExposureError):
     """
 
 
-def session_engine_supported(engine: Any) -> bool:
-    """Whether ``SESSION_ENGINE`` names a store that can hold server state.
+def session_store_supported(store_class: Any) -> bool:
+    """Whether a session store class can hold server state: exactly one of the
+    audited stores. A subclass or a custom store needs a reviewed adapter.
 
-    Only the exact audited stores qualify, as at runtime: a subclass or a
-    custom engine needs a reviewed adapter.
+    The one predicate for the runtime (the request's session) and system check
+    ``djust.C030`` (the configured engine), so the two cannot disagree.
     """
-    return isinstance(engine, str) and engine in SUPPORTED_SESSION_ENGINES
+    return any(store_class is supported for supported in _SERVER_SESSION_TYPES)
+
+
+def session_engine_store(engine: Any) -> Any:
+    """The ``SessionStore`` class ``SESSION_ENGINE`` resolves to, as Django
+    resolves it; ``None`` when it does not import."""
+    from importlib import import_module
+
+    if not isinstance(engine, str) or not engine:
+        return None
+    try:
+        return getattr(import_module(engine), "SessionStore", None)
+    except Exception:  # noqa: BLE001 — Django reports a broken engine itself
+        logger.debug("djust: SESSION_ENGINE does not import; not checked")
+        return None
 
 
 def unsupported_session_message(session: Any) -> str:
@@ -223,7 +238,7 @@ def server_state_adapter(
     if not any(field.persist == "server" for field in contract.fields.values()):
         return None
     session = getattr(request, "session", None)
-    if session is None or type(session) not in _SERVER_SESSION_TYPES:
+    if session is None or not session_store_supported(type(session)):
         raise UnsupportedSessionEngine(unsupported_session_message(session))
     if not session.session_key:
         if not create:

@@ -135,7 +135,7 @@ assert "<li>" in html
 
 #### `get_state() -> dict`
 
-The current view state as a dictionary: the declared `state()` fields and the public attributes the view's own code sets (in `mount()`, a handler) or defines on its own classes. Names the framework defines are not the view's state and are left out: `request`, the attributes `LiveView.__init__` sets, and class attributes of djust's classes such as `template` or `login_required`. `state_before` and `state_after` in a `send_event()` result are this dictionary. Useful for assertions not covered by `assert_state()`:
+The current view state as a dictionary: the declared `state()` fields and the public attributes the view's own code sets (in `mount()`, a handler) or defines on its own classes. Names the framework defines are not the view's state and are left out: `request`, the attributes `LiveView.__init__` sets, and class attributes of djust's classes such as `template` or `login_required`, even when your code sets one (`page_title`, a `FormMixin` attribute); assert on those through `render()` or the attribute itself. `state_before` and `state_after` in a `send_event()` result are this dictionary. Useful for assertions not covered by `assert_state()`:
 
 ```python
 state = client.get_state()

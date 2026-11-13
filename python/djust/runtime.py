@@ -511,6 +511,56 @@ async def _run_explicit_save(
         raise
 
 
+#: Marks a deferred root save that never started (``ExplicitSaveDeferred.work``
+#: is None): its values are on the view only (#4095).
+_SAVE_NEVER_STARTED = object()
+
+
+def _discard_turn_effects(view: Any) -> None:
+    """Drop what a refused turn's handler queued for after its turn (#4095).
+
+    The queues the turn-end drain (``ViewRuntime._flush_all_pending``) and the
+    background dispatch read: dropped, not sent, because the turn's state was
+    refused. Stream operations stay: they are applied by the next render, and
+    the restore asks for full HTML.
+    """
+    tasks = getattr(view, "_async_tasks", None)
+    if tasks:
+        view._async_tasks = {}
+    for drain in (
+        "_drain_push_events",
+        "_drain_flash",
+        "_drain_page_metadata",
+        "_drain_pending_layout",
+        "_drain_deferred",
+        "_drain_navigation",
+    ):
+        method = getattr(view, drain, None)
+        if callable(method):
+            method()
+
+
+async def apply_restored_state(view: Any, restored: Dict[str, Any], request: Any) -> None:
+    """Put validated declared state back on ``view``, then let it reconcile.
+
+    The one runtime restore (#4095): the reconnect mount and the over-limit
+    rollback both apply stored values this way, so they cannot drift. The
+    values come from the explicit codecs, JSON primitives only, never tagged,
+    so there is nothing to decode. ``handle_restore(request)`` then runs, as it
+    does after every restore (#3989): the values came back after the view's
+    other state was set, so the view rebuilds what it derives from them (rows
+    read for a restored id, a "running" flag whose work did not survive).
+    Exceptions propagate; each caller answers them its own way.
+    """
+    from .security import safe_setattr
+
+    for key, value in restored.items():
+        safe_setattr(view, key, value, allow_private=False, raise_on_blocked=True)
+    handle_restore = getattr(view, "handle_restore", None)
+    if callable(handle_restore):
+        await call_hook(handle_restore, request)
+
+
 def _diagnostics_policy_allows(owner: Any) -> bool:
     """Legacy owner or DEBUG: see ``_exposure_diagnostics.diagnostics_policy_allows``."""
     from ._exposure_diagnostics import diagnostics_policy_allows
@@ -3011,6 +3061,8 @@ class ViewRuntime(RuntimeTurnPort):
         # per runtime), the count of committed explicit turns, and the pending
         # catch-up turn scheduled after a deferred save.
         self._explicit_save_pending: Optional["asyncio.Future[None]"] = None
+        # The last deferred root save, until a save succeeds (#4095).
+        self._explicit_unlanded: Any = None
         self._explicit_commits = 0
         # The request whose binding this turn's root save just checked against
         # the mount binding; read once by ``_explicit_event_snapshot`` (#3997).
@@ -3433,7 +3485,6 @@ class ViewRuntime(RuntimeTurnPort):
             await call_hook(view_instance.mount, request, **mount_kwargs)
             if not legacy_exposure:
                 from ._exposure_sessions import load_server_state
-                from .security import safe_setattr
 
                 if callable(getattr(view_instance, "resolve_tenant", None)):
                     request.tenant = getattr(view_instance, "_tenant", None)
@@ -3459,39 +3510,31 @@ class ViewRuntime(RuntimeTurnPort):
                         # both dictionaries are completely validated first.
                         restored = {**(restored or {}), **client_values}
                 if restored is not None:
-                    for key, value in restored.items():
-                        safe_setattr(
-                            view_instance,
-                            key,
-                            value,
-                            allow_private=False,
-                            raise_on_blocked=True,
-                        )
                     # #3989: the declared state came back AFTER mount() ran, so
-                    # mount() never saw it. The same hook the HTTP fallback
-                    # calls lets the view act on what was restored: read rows again from a restored id, or clear a
-                    # persisted "running" flag whose background work did not
-                    # survive the reconnect. The HTTP fallback (mixins/request.py) and an
-                    # embedded child (templatetags/live_tags.py) call it too (#1646).
-                    handle_restore = getattr(view_instance, "handle_restore", None)
-                    if callable(handle_restore):
-                        try:
-                            await call_hook(handle_restore, request)
-                        except Exception as exc:
-                            # Named for what failed: the handler below would
-                            # report this as an error in mount().
-                            response = handle_exception(
-                                exc,
-                                error_type="mount",
-                                view_class=view_path,
-                                logger=logger,
-                                log_message=(
-                                    f"Error in {sanitize_for_log(view_path)}.handle_restore()"
-                                ),
-                                expose_details=_diagnostics_policy_allows(view_instance),
-                            )
-                            await self._fail_mount(view_instance, exc, response)
-                            return
+                    # mount() never saw it. ``apply_restored_state`` runs the
+                    # same ``handle_restore`` hook the HTTP fallback calls, so
+                    # the view can act on what was restored: read rows again
+                    # from a restored id, or clear a persisted "running" flag
+                    # whose background work did not survive the reconnect. The
+                    # HTTP fallback (mixins/request.py) and an embedded child
+                    # (templatetags/live_tags.py) call it too (#1646).
+                    try:
+                        await apply_restored_state(view_instance, restored, request)
+                    except Exception as exc:
+                        # Named for what failed: the handler below would
+                        # report this as an error in mount().
+                        response = handle_exception(
+                            exc,
+                            error_type="mount",
+                            view_class=view_path,
+                            logger=logger,
+                            log_message=(
+                                f"Error in {sanitize_for_log(view_path)}.handle_restore()"
+                            ),
+                            expose_details=_diagnostics_policy_allows(view_instance),
+                        )
+                        await self._fail_mount(view_instance, exc, response)
+                        return
                     # #1977: the client's DOM predates this restore, so the
                     # Rust diff baseline primed by the mount render does not
                     # match it. The first event after the restore must send
@@ -6125,6 +6168,11 @@ class ViewRuntime(RuntimeTurnPort):
                 deadline=self._explicit_save_deadline(),
             )
         except ExplicitSaveDeferred as deferred:
+            # The turn's values are on the view; the store has them only once
+            # this save lands (#4095 reads it).
+            self._explicit_unlanded = (
+                deferred.work if deferred.work is not None else _SAVE_NEVER_STARTED
+            )
             await self._explicit_save_deferred(view, extra, child=False, waited=deferred.waited)
             return False
         except LateSaveDropped:
@@ -6164,46 +6212,80 @@ class ViewRuntime(RuntimeTurnPort):
         """A turn whose declared server state is over its limits (#4095).
 
         Nothing was written: the store still holds the last state that fit.
-        The view's declared server fields are put back to that stored state,
-        so the view, the store and the page (whose success frame is withheld)
-        agree, and the next event starts from what is saved. Keeping the
-        oversized value in memory only would fail every later save and show
-        the user a value a reconnect silently loses. The user gets an error
-        naming the field and the limit; the next update is full HTML. Values
-        the handler set on fields that are not persisted stay, as after any
-        turn. With no stored state to go back to (or a store that cannot be
-        read), the answer is the reload error, as for any failed save.
+        The view goes back to that stored state (:func:`apply_restored_state`,
+        which also runs ``handle_restore``), so the view, the store and the
+        page (whose success frame is withheld) agree, and the next event starts
+        from what is saved. Keeping the oversized value in memory only would
+        fail every later save and show the user a value a reconnect silently
+        loses. What the refused handler queued for after its turn (background
+        work, push events, flash, page metadata, a layout swap, deferred
+        callbacks, navigation) is discarded with its state: its effects were
+        refused. The user gets an error naming the field and the limit; the
+        next update is full HTML. Values the handler set on fields that are
+        not persisted stay, as after any turn.
+
+        The reload error instead, when going back to the store would lose
+        something: when an earlier turn's save was deferred and has not landed
+        (:meth:`_explicit_store_behind`), the store is behind the view and the
+        user was told that turn's change would appear; rolling back to the
+        store would drop it silently. The refused turn's change cannot be told
+        apart from it in memory, so the page is asked to reload, which says so,
+        and the pending catch-up, which would only try to save the oversized
+        value, is withdrawn. Also when there is no stored state to go back to,
+        or reading or restoring it fails.
         """
         from ._exposure_sessions import load_server_state
-        from .security import safe_setattr
 
         view._force_full_html = True
         request = getattr(view, "_djust_event_request", None)
-        try:
-            restored = await sync_to_async(load_server_state)(view, request)
-        except Exception as exc:  # noqa: BLE001 — storage errors can carry server-only values
-            from ._exposure_diagnostics import log_failure_for
+        restored = None
+        if self._explicit_store_behind():
+            logger.warning(
+                "Explicit state over its limits while an earlier save has not landed; "
+                "asking for a reload"
+            )
+            self._withdraw_explicit_catch_up()
+        else:
+            try:
+                restored = await sync_to_async(load_server_state)(view, request)
+                if restored is not None:
+                    _discard_turn_effects(view)
+                    await apply_restored_state(view, restored, request)
+            except Exception as exc:  # noqa: BLE001 — storage/hook errors can carry values
+                from ._exposure_diagnostics import log_failure_for
 
-            log_failure_for(logger, (view,), exc, "Reading saved state failed: %s", exc)
-            restored = None
+                log_failure_for(logger, (view,), exc, "Restoring saved state failed: %s", exc)
+                restored = None
+            if restored is None:
+                logger.warning("Explicit state over its limits and no saved state to go back to")
         if restored is None:
-            logger.warning("Explicit state over its limits and no saved state to go back to")
             await self.transport.send_error(
                 "State unavailable. Please reload the page.", code="state_error", **extra
             )
             return False
-        # The explicit codec's JSON primitives, applied as the mount restore
-        # applies them (no tag decode: explicit state is never tagged).
-        view_instance = view
-        for key, value in restored.items():
-            safe_setattr(view_instance, key, value, allow_private=False, raise_on_blocked=True)
         logger.warning(
             "Explicit state save refused: field %s over its %s limit; the saved state was kept",
             sanitize_for_log(refused.field),
             refused.limit,
         )
         await self.transport.send_error(str(refused), code="state_too_large", **extra)
+        # Work ``handle_restore`` queued belongs to the restored state.
+        from .mixins.async_work import has_pending_async_work
+
+        if has_pending_async_work(view):
+            self._dispatch_async_work(None)
         return False
+
+    def _withdraw_explicit_catch_up(self) -> None:
+        """Cancel a scheduled catch-up turn that has not started its own turn."""
+        catch_up = self._explicit_catch_up
+        if (
+            catch_up is not None
+            and not catch_up.done()
+            and not self._in_explicit_catch_up
+            and catch_up is not asyncio.current_task()
+        ):
+            catch_up.cancel()
 
     @staticmethod
     def _explicit_error_fields(
@@ -6235,6 +6317,22 @@ class ViewRuntime(RuntimeTurnPort):
     def _explicit_save_succeeded(self) -> None:
         self._explicit_commits += 1
         self._explicit_deferrals = 0
+        self._explicit_unlanded = None
+
+    def _explicit_store_behind(self) -> bool:
+        """Whether the store may lack values the view holds (#4095).
+
+        True when the last deferred root save never started or did not land
+        (failed, cancelled or still running) and no save has succeeded since:
+        those values are in memory only, and the catch-up turn would save
+        them. A deferred save that landed carried every value up to it.
+        """
+        unlanded = self._explicit_unlanded
+        if unlanded is None:
+            return False
+        if unlanded is _SAVE_NEVER_STARTED or not unlanded.done() or unlanded.cancelled():
+            return True
+        return unlanded.exception() is not None
 
     async def _explicit_save_deferred(
         self, view: Any, extra: Dict[str, Any], *, child: bool, waited: Optional[float] = None

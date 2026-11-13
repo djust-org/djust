@@ -775,13 +775,18 @@ def _check_server_state_session_engine(errors: list[CheckMessage]) -> None:
         from djust._exposure import ExposureContract
         from djust._exposure_sessions import (
             SUPPORTED_SESSION_ENGINES,
-            session_engine_supported,
+            session_engine_store,
+            session_store_supported,
         )
         from djust.live_view import LiveView
     except ImportError:
         return  # LiveView not importable (Rust extension missing) — skip.
     engine = getattr(settings, "SESSION_ENGINE", "django.contrib.sessions.backends.db")
-    if session_engine_supported(engine):
+    # Decided by the class the engine resolves to, as the runtime decides by
+    # the request's session class: an engine module that re-exports a
+    # supported store is supported, a subclass of one is not.
+    store = session_engine_store(engine)
+    if store is None or session_store_supported(store):
         return
     views = _views_declaring_server_state(LiveView, ExposureContract)
     if not views:

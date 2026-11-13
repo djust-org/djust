@@ -115,9 +115,16 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   `persist="server"` fields over the limit is refused for that event: nothing
   is saved, the user gets an error naming the field and the limit
   (`code="state_too_large"`; HTTP status 413 on the fallback), and the view goes
-  back to the last saved state, so later events work. Bound what a field can
-  hold in your handler (a count cap does not bound bytes: one long text value
-  is enough).
+  back to the last saved state (and `handle_restore()` runs, as after a
+  reconnect), so later events work. What the refused handler queued for after
+  its turn (`start_async` work, push events, flash, navigation, deferred
+  callbacks) is discarded with it. Saved state is per session and route, not
+  per browser tab: going back to "the last saved state" means what any tab of
+  that session last saved on that route, so a refusal in one tab can bring in
+  another tab's change. If an earlier turn's save was deferred and has not
+  landed, the refusal is the reload error instead, so that turn's change is not
+  dropped silently. Bound what a field can hold in your handler (a count cap
+  does not bound bytes: one long text value is enough).
 - **`DJUST_SERVER_STATE_MAX_AGE`.** The lifetime of a server envelope in
   seconds, from 1 to 86400. The default is 3600. System check `djust.C020`
   validates it.

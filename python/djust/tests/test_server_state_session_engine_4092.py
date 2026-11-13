@@ -91,9 +91,48 @@ def test_the_check_is_quiet_for_a_supported_engine(engine):
     assert _c030(engine) == []
 
 
-def test_the_check_reports_a_subclass_engine_too():
-    """The runtime accepts only the exact audited stores; so does the check."""
-    assert _c030("myproject.sessions.custom_db")
+def _engine_module(monkeypatch, name, store):
+    import sys
+    import types
+
+    module = types.ModuleType(name)
+    module.SessionStore = store
+    monkeypatch.setitem(sys.modules, name, module)
+    return name
+
+
+def test_an_engine_that_re_exports_a_supported_store_is_not_reported(monkeypatch):
+    """Decided by the resolved class, as the runtime decides (review of #4092)."""
+    from django.contrib.sessions.backends.db import SessionStore as DBStore
+
+    engine = _engine_module(monkeypatch, "project_sessions_reexport_4092", DBStore)
+    assert _c030(engine) == []
+
+
+def test_a_subclass_of_the_cookie_store_is_reported(monkeypatch):
+    from django.contrib.sessions.backends.signed_cookies import SessionStore as CookieStore
+
+    class Signed(CookieStore):
+        pass
+
+    engine = _engine_module(monkeypatch, "project_sessions_cookie_4092", Signed)
+    assert _c030(engine)
+
+
+def test_a_subclass_of_a_supported_store_is_reported_as_the_runtime_refuses_it(monkeypatch):
+    from django.contrib.sessions.backends.db import SessionStore as DBStore
+
+    from djust._exposure_sessions import session_store_supported
+
+    class Custom(DBStore):
+        pass
+
+    assert not session_store_supported(Custom)
+    assert _c030(_engine_module(monkeypatch, "project_sessions_custom_4092", Custom))
+
+
+def test_an_engine_that_does_not_import_is_left_to_django():
+    assert _c030("project_sessions_missing_4092.nowhere") == []
 
 
 def test_the_engine_list_is_the_runtime_list():
