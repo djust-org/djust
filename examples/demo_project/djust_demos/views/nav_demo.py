@@ -27,7 +27,7 @@ class NavDemoPageAView(LiveView):
 
     exposure_policy = "explicit"
     page = state("A")
-    clicks = state(0)
+    clicks = state(0, persist="server")
     template_name = "demos/nav_demo_a.html"
 
     def mount(self, request, **kwargs):
@@ -44,7 +44,7 @@ class NavDemoPageBView(LiveView):
 
     exposure_policy = "explicit"
     page = state("B")
-    clicks = state(0)
+    clicks = state(0, persist="server")
     template_name = "demos/nav_demo_b.html"
 
     def mount(self, request, **kwargs):

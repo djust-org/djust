@@ -28,6 +28,12 @@ from djust import state
 # ---------------------------------------------------------------------------
 
 
+# A persisted list a client can grow is capped: persist="server" state is kept
+# in the session and is bounded (64 KB per view), and every event re-saves it,
+# so the oldest entries are dropped instead of letting it grow without limit.
+MAX_NOTIFICATIONS = 20
+
+
 class AudioPlayerView(LiveView):
     """Persistent audio player. Survives Dashboard ↔ Settings navigation.
 
@@ -38,8 +44,8 @@ class AudioPlayerView(LiveView):
 
     exposure_policy = "explicit"
     track_title = state("Demo Track — Ambient 1")
-    is_playing = state(False)
-    elapsed_seconds = state(0)
+    is_playing = state(False, persist="server")
+    elapsed_seconds = state(0, persist="server")
     sticky = True
     sticky_id = "audio-player"
     template_name = "sticky_demo/audio_player.html"
@@ -73,7 +79,7 @@ class NotificationCenterView(LiveView):
     """
 
     exposure_policy = "explicit"
-    notifications = state()
+    notifications = state(persist="server")
     sticky = True
     sticky_id = "notification-center"
     template_name = "sticky_demo/notification_center.html"
@@ -107,6 +113,7 @@ class NotificationCenterView(LiveView):
                 "text": f"Ad-hoc notification #{len(self.notifications) + 1}",
             }
         )
+        del self.notifications[:-MAX_NOTIFICATIONS]  # keep the newest MAX_NOTIFICATIONS
 
 
 # ---------------------------------------------------------------------------
@@ -118,8 +125,8 @@ class DashboardView(LiveView):
     """Dashboard — embeds BOTH stickies and shows some metrics."""
 
     exposure_policy = "explicit"
-    metric_visitors = state(42)
-    metric_orders = state(7)
+    metric_visitors = state(42, persist="server")
+    metric_orders = state(7, persist="server")
     template_name = "sticky_demo/dashboard.html"
 
     def mount(self, request, **kwargs):

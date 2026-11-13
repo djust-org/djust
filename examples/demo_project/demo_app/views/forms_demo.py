@@ -3,6 +3,7 @@ Forms demo views - showcasing Django forms integration with LiveView
 """
 
 from djust import LiveView, FormMixin
+from djust.decorators import event_handler
 from ..forms import RegistrationForm, ContactForm, ProfileForm, SimpleContactForm
 from .base import BaseTemplateView
 
@@ -42,6 +43,7 @@ class RegistrationFormView(FormMixin, LiveView):
         """Handle validation errors"""
         self.error_message = "Please correct the errors below"
 
+    @event_handler
     def clear_message(self, **kwargs):
         """Clear success/error messages"""
         self.success_message = ""
@@ -73,6 +75,7 @@ class ContactFormView(FormMixin, LiveView):
         """Handle validation errors"""
         self.error_message = "Please correct the errors below"
 
+    @event_handler
     def clear_message(self, **kwargs):
         """Clear messages"""
         self.success_message = ""
@@ -100,6 +103,7 @@ class ProfileFormView(FormMixin, LiveView):
         self.success_message = "Profile updated successfully!"
         # In real app: save to database
 
+    @event_handler
     def clear_message(self, **kwargs):
         """Clear messages"""
         self.success_message = ""
@@ -125,6 +129,7 @@ class SimpleContactFormView(FormMixin, LiveView):
         """Handle failed form submission"""
         self.error_message = "Please correct the errors below."
 
+    @event_handler
     def clear_message(self, **kwargs):
         """Clear success/error messages"""
         self.success_message = ""
@@ -160,6 +165,7 @@ class AutoContactFormView(FormMixin, LiveView):
         """Handle failed form submission"""
         self.error_message = "Please correct the errors below."
 
+    @event_handler
     def clear_message(self, **kwargs):
         """Clear success/error messages"""
         self.success_message = ""
@@ -191,6 +197,7 @@ class AutoContactFormTailwindView(FormMixin, LiveView):
         """Handle failed form submission"""
         self.error_message = "Please correct the errors below."
 
+    @event_handler
     def clear_message(self, **kwargs):
         """Clear success/error messages"""
         self.success_message = ""
@@ -222,6 +229,7 @@ class AutoContactFormPlainView(FormMixin, LiveView):
         """Handle failed form submission"""
         self.error_message = "Please correct the errors below."
 
+    @event_handler
     def clear_message(self, **kwargs):
         """Clear success/error messages"""
         self.success_message = ""

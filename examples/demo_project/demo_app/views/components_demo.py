@@ -9,6 +9,7 @@ This demonstrates:
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 from djust.components.ui import Badge, Button
 from djust import state
 
@@ -57,7 +58,7 @@ class ComponentsDemoView(LiveView):
     badge_count_python = state()
     badge_count_python_ms = state()
     many_badges = state()
-    count = state(0)
+    count = state(0, persist="server")
     template = """
     <!DOCTYPE html>
     <html lang="en">
@@ -320,15 +321,18 @@ badges = [Badge(f"Badge {i}", variant=v)
         return context
 
     # Event handlers for interactive counter
+    @event_handler
     def increment(self):
         """Increment counter"""
         self.count += 1
 
+    @event_handler
     def decrement(self):
         """Decrement counter"""
         if self.count > 0:
             self.count -= 1
 
+    @event_handler
     def reset(self):
         """Reset counter"""
         self.count = 0

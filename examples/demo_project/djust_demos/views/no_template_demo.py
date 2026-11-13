@@ -20,6 +20,12 @@ from djust.components.ui import (
 from djust import state
 
 
+# A persisted list a client can grow is capped: persist="server" state is kept
+# in the session and is bounded (64 KB per view), and every event re-saves it,
+# so the oldest entries are dropped instead of letting it grow without limit.
+MAX_ITEMS = 20
+
+
 class NoTemplateDemo(LiveView):
     """
     A complete interactive dashboard with ZERO template files.
@@ -34,11 +40,11 @@ class NoTemplateDemo(LiveView):
     """
 
     exposure_policy = "explicit"
-    counter = state(0)
-    items = state(default_factory=lambda: ["Buy groceries", "Walk the dog", "Write code"])
+    counter = state(0, persist="server")
+    items = state(default_factory=lambda: ["Buy groceries", "Walk the dog", "Write code"], persist="server")
     show_success = state(False)
     notification_count = state(3)
-    progress = state(45)
+    progress = state(45, persist="server")
     selected_theme = state("Default")
     navbar = state()
     theme_dropdown = state()
@@ -405,6 +411,7 @@ class NoTemplateDemo(LiveView):
         import random
         items = ["Read a book", "Exercise", "Learn Python", "Build a project", "Drink water"]
         self.items.append(random.choice(items))
+        del self.items[:-MAX_ITEMS]  # keep the newest MAX_ITEMS
 
     @event_handler
     def remove_item(self, index: str = None, **kwargs):
@@ -459,6 +466,7 @@ class NoTemplateDemo(LiveView):
         items = ["Debug code", "Review PR", "Update docs", "Fix tests", "Deploy app"]
         for _ in range(3):
             self.items.append(random.choice(items))
+        del self.items[:-MAX_ITEMS]  # keep the newest MAX_ITEMS
 
     @event_handler
     def show_success_alert(self):

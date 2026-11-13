@@ -26,7 +26,7 @@ class RustComponentsDemo(LiveView):
 
     exposure_policy = "explicit"
     dropdown_message = state("")
-    counter = state(0)
+    counter = state(0, persist="server")
     selected_option = state("opt1")
     selected_country = state("United States")
     variant_selections = state(default_factory=lambda: {
@@ -34,7 +34,7 @@ class RustComponentsDemo(LiveView):
             'success': None,
             'warning': None,
             'danger': None
-        })
+        }, persist="server")
     selected_location = state("Canada")
     basic_dropdown = state()
     dropdown_primary = state()

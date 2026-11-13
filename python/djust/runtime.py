@@ -4009,13 +4009,13 @@ class ViewRuntime(RuntimeTurnPort):
         #      emits a full-HTML ``component_event`` frame; does NOT reassign
         #      the target view, per #1467).
         #
-        # Both mirror the WS ``_handle_event_inner`` subsystems verbatim while
-        # WS routing stays on its own bespoke path (Phase 2.1 ADDs the runtime
-        # copy; Phase 2.3 deletes the WS copy). SSE has neither components nor
-        # sticky children, so both checks fall straight through to the
-        # single-view path — the empty-registry no-op. Each helper returns
-        # ``True`` when it fully handled the event (we return), ``False`` to
-        # fall through.
+        # Both were ported from the WS ``_handle_event_inner`` subsystems, which
+        # are gone: every transport (WebSocket and SSE alike) routes its events
+        # here, so a component or sticky-child event over SSE takes the same
+        # path as over a socket (#4087). A view with neither falls straight
+        # through to the single-view path — the empty-registry no-op. Each
+        # helper returns ``True`` when it fully handled the event (we return),
+        # ``False`` to fall through.
         if await self._dispatch_sticky_child_event(
             data, event_name, params, positional_args, event_ref
         ):

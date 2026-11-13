@@ -933,6 +933,5 @@ def test_the_http_fallbacks_result_hook_runs_in_the_async_step(probe):
     """``start_async`` work run inside a fallback POST hands its outcome to
     ``handle_async_result`` as an ``async`` step, as on the socket (#3625)."""
     bg, view_cls, seen = _http_result_view()
-    with bg.STATELESS:
-        bg._post(view_cls, "kick_off")
+    bg._post(view_cls, "kick_off")
     assert seen == ["async"], seen

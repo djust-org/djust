@@ -1,6 +1,7 @@
 """Documentation views for djust_docs app"""
 
 from djust import LiveView
+from djust.decorators import event_handler
 from djust.components.layout import NavbarComponent, NavItem
 from djust_shared.views import BaseTemplateView
 from djust import state
@@ -23,17 +24,19 @@ class ComponentsGuideView(LiveView):
     """
 
     exposure_policy = "explicit"
-    demo_count = state(0)
+    demo_count = state(0, persist="server")
     template_name = 'docs/components-guide.html'
 
     def mount(self, request, **kwargs):
         """Initialize demo counter"""
         self.demo_count = 0
 
+    @event_handler
     def increment_demo_count(self):
         """Event handler to increment the demo counter"""
         self.demo_count += 1
 
+    @event_handler
     def reset_demo_count(self):
         """Event handler to reset the demo counter"""
         self.demo_count = 0

@@ -3,6 +3,7 @@ Optimistic Counter Demo - demonstrates @optimistic with error handling
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 import time
 from djust import state
 
@@ -19,7 +20,7 @@ class OptimisticCounterView(LiveView):
     """
 
     exposure_policy = "explicit"
-    count = state(5)
+    count = state(5, persist="server")
     error = state(None)
     template = """
     <!DOCTYPE html>
@@ -147,6 +148,7 @@ class OptimisticCounterView(LiveView):
         self.count = 5
         self.error = None
 
+    @event_handler
     def increment(self, **kwargs):
         """
         Increment counter.
@@ -159,6 +161,7 @@ class OptimisticCounterView(LiveView):
         # Simulate network delay (comment out for instant updates)
         # time.sleep(0.3)
 
+    @event_handler
     def decrement(self, **kwargs):
         """
         Decrement counter (with validation).

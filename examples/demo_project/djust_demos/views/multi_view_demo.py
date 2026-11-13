@@ -22,8 +22,8 @@ class MultiViewPage(LiveView):
     """The page's own view, mounted by the stock client's ``autoMount``."""
 
     exposure_policy = "explicit"
-    clicks = state(0)
-    pushes = state(0)
+    clicks = state(0, persist="server")
+    pushes = state(0, persist="server")
     template_name = "demos/multi_view.html"
 
     def mount(self, request, **kwargs):
@@ -58,8 +58,8 @@ class MultiViewWidget(LiveView):
     """A lazily hydrated view; the page holds two of them."""
 
     exposure_policy = "explicit"
-    clicks = state(0)
-    pushes = state(0)
+    clicks = state(0, persist="server")
+    pushes = state(0, persist="server")
     template = (
         '<div dj-root><p>clicks <b data-role="clicks">{{ clicks }}</b> '
         'pushes <b data-role="pushes">{{ pushes }}</b></p>'
@@ -90,7 +90,7 @@ class MultiViewUploader(UploadMixin, LiveView):
     """A lazy view with a file input: the upload belongs to this view."""
 
     exposure_policy = "explicit"
-    saved = state(default_factory=list)
+    saved = state(default_factory=list, persist="server")
     template = (
         '<div dj-root><input type="file" data-role="file" dj-upload="doc">'
         '<button data-role="save" dj-click="save">save</button>'
@@ -115,7 +115,7 @@ class MultiViewGuarded(LiveView):
     click is refused in this container alone."""
 
     exposure_policy = "explicit"
-    pings = state(0)
+    pings = state(0, persist="server")
     login_required = True
     permission_required = "auth.view_user"
     template = (

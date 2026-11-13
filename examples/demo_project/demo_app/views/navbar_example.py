@@ -7,7 +7,7 @@ This demonstrates the shadcn-like component approach where components are:
 3. Customizable (can be extended and configured)
 """
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.components.layout import NavbarComponent, NavItem
 
 
@@ -62,7 +62,8 @@ class CustomNavbarView(LiveView):
     on a per-view basis.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    title = state("")
     template_name = 'custom_navbar.html'
 
     def mount(self, request, **kwargs):

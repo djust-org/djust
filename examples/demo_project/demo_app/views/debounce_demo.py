@@ -3,6 +3,7 @@ Debounce Demo - demonstrates @debounce decorator with search
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 from djust.decorators import debounce
 from djust import state
 
@@ -19,7 +20,7 @@ class DebounceSearchView(LiveView):
 
     exposure_policy = "explicit"
     query = state("")
-    search_count = state(0)
+    search_count = state(0, persist="server")
     template = """
     <div dj-root class="container mt-5">
         <div class="row">
@@ -51,7 +52,7 @@ class DebounceSearchView(LiveView):
                                 <div class="card bg-light">
                                     <div class="card-body">
                                         <h5 class="card-title text-muted small mb-1">Current Query</h5>
-                                        <p class="h4 mb-0">{{ query or '(empty)' }}</p>
+                                        <p class="h4 mb-0">{{ query|default:'(empty)' }}</p>
                                     </div>
                                 </div>
                             </div>
@@ -111,6 +112,7 @@ def search(self, value: str = "", **kwargs):
         self.query = ""
         self.search_count = 0
 
+    @event_handler
     @debounce(wait=0.5, max_wait=2.0)
     def search(self, value: str = "", **kwargs):
         """

@@ -3,6 +3,7 @@ Demo LiveView examples
 """
 
 from djust import LiveView, FormMixin
+from djust.decorators import event_handler
 from djust._rust import fast_json_dumps
 from django.views.generic import TemplateView
 from django.http import JsonResponse
@@ -13,6 +14,12 @@ from djust.components.layout import NavbarComponent, NavItem
 from djust import state
 
 
+# A persisted list a client can grow is capped: persist="server" state is kept
+# in the session and is bounded (64 KB per view), and every event re-saves it,
+# so the oldest entries are dropped instead of letting it grow without limit.
+MAX_DEMO_TODOS = 20
+
+
 class IndexView(LiveView):
     """
     Landing page with links to demos.
@@ -20,14 +27,15 @@ class IndexView(LiveView):
     A LiveView to demonstrate reactive navbar badges AND inline demos on the main page!
     """
     exposure_policy = "explicit"
-    notification_count = state(0)
-    demo_counter = state(0)
+    notification_count = state(0, persist="server")
+    demo_counter = state(0, persist="server")
+    search_query = state("", persist="server")
     all_languages = state(default_factory=lambda: [
             "Python", "JavaScript", "TypeScript", "Java", "Go",
             "Rust", "Ruby", "PHP", "C++", "C#", "Swift", "Kotlin"
         ])
     filtered_languages = state()
-    demo_todos = state(default_factory=list)
+    demo_todos = state(default_factory=list, persist="server")
     template_name = 'index.html'
 
     def mount(self, request, **kwargs):
@@ -44,20 +52,24 @@ class IndexView(LiveView):
         self.filtered_languages = self.all_languages
         self.demo_todos = []
 
+    @event_handler
     def increment_notifications(self):
         """Event handler to increment notifications"""
         self.notification_count += 1
 
+    @event_handler
     def reset_notifications(self):
         """Event handler to reset notifications"""
         self.notification_count = 0
 
     # Inline demo event handlers
+    @event_handler
     def increment_counter(self):
         """Counter demo: increment the counter"""
         self.demo_counter += 1
 
-    def on_search_demo(self, value):
+    @event_handler
+    def on_search_demo(self, value="", **kwargs):
         """Search demo: filter languages"""
         self.search_query = value
         if value:
@@ -68,14 +80,17 @@ class IndexView(LiveView):
         else:
             self.filtered_languages = self.all_languages
 
-    def add_todo(self, todo_text=""):
+    @event_handler
+    def add_todo(self, todo_text="", **kwargs):
         """Todo demo: add a new todo from user input"""
         if todo_text.strip():
             self.demo_todos.append({
                 'text': todo_text.strip(),
                 'done': False
             })
+            del self.demo_todos[:-MAX_DEMO_TODOS]  # keep the newest MAX_DEMO_TODOS
 
+    @event_handler
     def toggle_todo(self, index=0, **kwargs):
         """Todo demo: toggle todo completion"""
         if index == '' or index is None:
@@ -84,6 +99,7 @@ class IndexView(LiveView):
         if 0 <= index < len(self.demo_todos):
             self.demo_todos[index]['done'] = not self.demo_todos[index]['done']
 
+    @event_handler
     def delete_todo(self, index=0, **kwargs):
         """Todo demo: delete a todo"""
         if index == '' or index is None:
@@ -135,7 +151,7 @@ class NavbarBadgeDemo(LiveView):
     update in real-time when state changes.
     """
     exposure_policy = "explicit"
-    notification_count = state(0)
+    notification_count = state(0, persist="server")
     template = """
     <div class="p-4 bg-white rounded-lg border border-gray-200">
         <!-- Navbar with badge -->
@@ -178,10 +194,12 @@ class NavbarBadgeDemo(LiveView):
         """Initialize with notification counter"""
         self.notification_count = 0
 
+    @event_handler
     def increment_notifications(self):
         """Event handler to increment notifications"""
         self.notification_count += 1
 
+    @event_handler
     def reset_notifications(self):
         """Event handler to reset notifications"""
         self.notification_count = 0
@@ -221,12 +239,15 @@ class CounterView(BaseViewWithNavbar):
     def mount(self, request, **kwargs):
         self.count = 0
 
+    @event_handler
     def increment(self):
         self.count += 1
 
+    @event_handler
     def decrement(self):
         self.count -= 1
 
+    @event_handler
     def reset(self):
         self.count = 0
 
@@ -241,7 +262,8 @@ class TodoView(BaseViewWithNavbar):
         self.todos = []
         self.next_id = 1
 
-    def add_todo(self, text=""):
+    @event_handler
+    def add_todo(self, text="", **kwargs):
         if text.strip():
             self.todos.append({
                 'id': self.next_id,
@@ -250,6 +272,7 @@ class TodoView(BaseViewWithNavbar):
             })
             self.next_id += 1
 
+    @event_handler
     def toggle_todo(self, id=None, **kwargs):
         # Accept both 'id' and 'todo_id' for backwards compatibility
         item_id = id or kwargs.get('todo_id')
@@ -259,6 +282,7 @@ class TodoView(BaseViewWithNavbar):
                     todo['done'] = not todo['done']
                     break
 
+    @event_handler
     def delete_todo(self, id=None, **kwargs):
         # Accept both 'id' and 'todo_id' for backwards compatibility
         item_id = id or kwargs.get('todo_id')
@@ -284,7 +308,8 @@ class ChatView(BaseViewWithNavbar):
         self.messages = []
         self.username = request.user.username if request.user.is_authenticated else "Guest"
 
-    def send_message(self, message=""):
+    @event_handler
+    def send_message(self, message="", **kwargs):
         if message.strip():
             import datetime
             self.messages.append({
@@ -318,11 +343,13 @@ class ReactDemoView(BaseViewWithNavbar):
             {'text': 'Build amazing apps', 'done': False},
         ]
 
+    @event_handler
     def increment_server(self):
         """Increment server-side counter (LiveView state)"""
         self.server_count += 1
 
-    def add_todo_item(self, text=""):
+    @event_handler
+    def add_todo_item(self, text="", **kwargs):
         """Add a new todo item"""
         if text.strip():
             self.todos.append({'text': text, 'done': False})
@@ -413,38 +440,45 @@ class PerformanceTestView(BaseViewWithNavbar):
             return 0
         return sum(1 for item in self._items if item.get('selected', False))
 
+    @event_handler
     def add_items_10(self):
         """Add 10 items"""
         if not hasattr(self, '_items'):
             self._items = []
         self._items.extend(self._generate_items(10))
 
+    @event_handler
     def add_items_100(self):
         """Add 100 items"""
         if not hasattr(self, '_items'):
             self._items = []
         self._items.extend(self._generate_items(100))
 
+    @event_handler
     def add_items_1000(self):
         """Add 1000 items"""
         if not hasattr(self, '_items'):
             self._items = []
         self._items.extend(self._generate_items(1000))
 
+    @event_handler
     def clear_all(self):
         """Clear all items"""
         self._items = []
         self.next_id = 1
         self.filter_text = ""
 
-    def filter_items(self, value=""):
+    @event_handler
+    def filter_items(self, value="", **kwargs):
         """Update filter text"""
         self.filter_text = value
 
-    def sort_items(self, value="name"):
+    @event_handler
+    def sort_items(self, value="name", **kwargs):
         """Update sort order"""
         self.sort_by = value
 
+    @event_handler
     def toggle_item(self, **kwargs):
         """Toggle item selection"""
         item_id = kwargs.get('id')
@@ -455,23 +489,27 @@ class PerformanceTestView(BaseViewWithNavbar):
                     item['selected'] = not item.get('selected', False)
                     break
 
+    @event_handler
     def select_all(self):
         """Select all items"""
         if hasattr(self, '_items'):
             for item in self._items:
                 item['selected'] = True
 
+    @event_handler
     def deselect_all(self):
         """Deselect all items"""
         if hasattr(self, '_items'):
             for item in self._items:
                 item['selected'] = False
 
+    @event_handler
     def delete_selected(self):
         """Delete all selected items"""
         if hasattr(self, '_items'):
             self._items = [item for item in self._items if not item.get('selected', False)]
 
+    @event_handler
     def toggle_priority(self, **kwargs):
         """Toggle item priority"""
         item_id = kwargs.get('id')
@@ -482,6 +520,7 @@ class PerformanceTestView(BaseViewWithNavbar):
                     item['priority'] = not item.get('priority', False)
                     break
 
+    @event_handler
     def toggle_priority_selected(self):
         """Toggle priority for all selected items"""
         if hasattr(self, '_items'):
@@ -489,6 +528,7 @@ class PerformanceTestView(BaseViewWithNavbar):
                 if item.get('selected', False):
                     item['priority'] = not item.get('priority', False)
 
+    @event_handler
     def delete_item(self, **kwargs):
         """Delete a specific item"""
         item_id = kwargs.get('id')
@@ -1065,7 +1105,8 @@ class ProductDataTableView(BaseViewWithNavbar):
         """Initialize with sample data"""
         self.products = self._generate_sample_products(20)
 
-    def add_sample_products(self):
+    @event_handler
+    def add_sample_products(self, **kwargs):
         """Add more sample products"""
         new_products = self._generate_sample_products(10, start_id=len(self.products) + 1)
         self.products.extend(new_products)
@@ -1074,7 +1115,8 @@ class ProductDataTableView(BaseViewWithNavbar):
         """Clear all products"""
         self.products = []
 
-    def toggle_inactive(self):
+    @event_handler
+    def toggle_inactive(self, **kwargs):
         """Toggle active status of some products"""
         import random
         for product in random.sample(self.products, min(5, len(self.products))):
@@ -1325,6 +1367,7 @@ class RegistrationFormView(FormMixin, LiveView):
         """Handle validation errors"""
         self.error_message = "Please correct the errors below"
 
+    @event_handler
     def clear_message(self, **kwargs):
         """Clear success/error messages"""
         self.success_message = ""
@@ -1544,6 +1587,7 @@ class ContactFormView(FormMixin, LiveView):
         """Handle validation errors"""
         self.error_message = "Please correct the errors below"
 
+    @event_handler
     def clear_message(self, **kwargs):
         """Clear messages"""
         self.success_message = ""
@@ -1789,6 +1833,7 @@ class ProfileFormView(FormMixin, LiveView):
         self.success_message = "Profile updated successfully!"
         # In real app: save to database
 
+    @event_handler
     def clear_message(self, **kwargs):
         """Clear messages"""
         self.success_message = ""
