@@ -17,6 +17,15 @@ Both are lower bounds on what the allocators hold (block rounding, free lists)
 and neither is a clock or a resident-set reading, so a test can assert on the
 numbers and :func:`fit` can state how they grow.
 
+The Rust numbers are the same on every machine and interpreter. The Python
+numbers do not depend on the machine but do depend on the interpreter: a
+tuple is 8 bytes larger from CPython 3.14, and a free-threaded build adds 16
+bytes to most objects. Those are fixed amounts per object, by type, so
+:func:`reference_sizeof` takes them off again and reports every object as
+CPython 3.12 sizes it. The published numbers are stated for 3.12, and the
+tests that compare against them measure with ``reference_sizeof``, which makes
+them the same test on every interpreter.
+
 ``measure`` mounts a view over a real ``WebsocketCommunicator``, sends the
 events it is given and reports the bytes per owner. ``test_view_memory.py``
 is where the numbers in ``docs/website/guides/scaling.md`` come from, and it
@@ -34,7 +43,7 @@ import gc
 import sys
 import types
 import weakref
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 #: Attributes of the view that are the previous render's bookkeeping.
 FINGERPRINT_ATTRS = ("_prev_context_fingerprints", "_prev_request_scoped")
@@ -79,6 +88,38 @@ _SHARED_TYPES: Tuple[type, ...] = (
 )
 
 
+#: ``sys.getsizeof`` of the empty value of each builtin type on CPython 3.12
+#: (and 3.13, which sizes them the same). A later interpreter differs from
+#: these by a fixed amount per object of the type, whatever its length:
+#: measured on 3.13, 3.14, 3.14t, 3.15 and 3.15t.
+REFERENCE_PYTHON = (3, 12)
+_REFERENCE_EMPTY = {
+    tuple: 40,
+    list: 56,
+    dict: 64,
+    set: 216,
+    frozenset: 216,
+    str: 41,
+    bytes: 33,
+    int: 28,
+    bool: 28,
+    float: 24,
+    type(None): 16,
+}
+_EMPTY_VALUES: Tuple[Any, ...] = ((), [], {}, set(), frozenset(), "", b"", 0, False, 0.0, None)
+#: What this interpreter adds to one object of each type, over 3.12.
+_EXTRA: Dict[type, int] = {
+    type(empty): sys.getsizeof(empty) - _REFERENCE_EMPTY[type(empty)] for empty in _EMPTY_VALUES
+}
+#: The same for an instance of any other class (its object header).
+_EXTRA_OBJECT = sys.getsizeof(object()) - 16
+
+
+def reference_sizeof(obj: Any) -> int:
+    """``sys.getsizeof(obj)`` as CPython 3.12 would report it."""
+    return sys.getsizeof(obj) - _EXTRA.get(type(obj), _EXTRA_OBJECT)
+
+
 def _is_process_wide(obj: Any) -> bool:
     """Is *obj* something every socket shares (a class, a module, a function)?"""
     if isinstance(obj, _SHARED_TYPES):
@@ -105,11 +146,18 @@ def _is_process_wide(obj: Any) -> bool:
     )
 
 
-def deep_bytes(root: Any, seen: Set[int], stop: Sequence[Any] = ()) -> int:
+def deep_bytes(
+    root: Any,
+    seen: Set[int],
+    stop: Sequence[Any] = (),
+    sizeof: Callable[[Any], int] = sys.getsizeof,
+) -> int:
     """``sys.getsizeof`` of *root* and everything it alone reaches.
 
     *seen* holds the ``id()`` of every object already charged; it is updated.
     Objects in *stop* are not entered (the view while walking the consumer).
+    *sizeof* is :func:`reference_sizeof` for a number that is compared with a
+    published one.
     """
     stop_ids = {id(obj) for obj in stop}
     total = 0
@@ -121,7 +169,7 @@ def deep_bytes(root: Any, seen: Set[int], stop: Sequence[Any] = ()) -> int:
             continue
         seen.add(oid)
         try:
-            total += sys.getsizeof(obj)
+            total += sizeof(obj)
         except TypeError:
             continue
         if isinstance(obj, (str, bytes, bytearray, int, float, bool, type(None))):
@@ -158,8 +206,14 @@ def state_names(view: Any) -> List[str]:
     ]
 
 
-def report(consumer: Any, view: Any) -> Dict[str, int]:
-    """Bytes held per owner for one connected view."""
+def report(
+    consumer: Any, view: Any, sizeof: Callable[[Any], int] = sys.getsizeof
+) -> Dict[str, int]:
+    """Bytes held per owner for one connected view.
+
+    With ``sizeof=reference_sizeof`` the Python side is what CPython 3.12
+    would hold, on any interpreter.
+    """
     gc.collect()
     seen: Set[int] = set()
     out: Dict[str, int] = dict.fromkeys(OWNERS, 0)
@@ -171,16 +225,20 @@ def report(consumer: Any, view: Any) -> Dict[str, int]:
     # entered while an owner's own data is walked.
     both = (view, consumer)
     for name in state_names(view):
-        out["py.state"] += deep_bytes(attrs[name], seen, stop=both)
-    out["py.dirty_baseline"] = deep_bytes(attrs.get("_dirty_baseline"), seen, stop=both)
+        out["py.state"] += deep_bytes(attrs[name], seen, stop=both, sizeof=sizeof)
+    out["py.dirty_baseline"] = deep_bytes(
+        attrs.get("_dirty_baseline"), seen, stop=both, sizeof=sizeof
+    )
     for name in FINGERPRINT_ATTRS:
-        out["py.context_fingerprints"] += deep_bytes(attrs.get(name), seen, stop=both)
+        out["py.context_fingerprints"] += deep_bytes(
+            attrs.get(name), seen, stop=both, sizeof=sizeof
+        )
     for name in REF_ATTRS:
-        out["py.context_refs"] += deep_bytes(attrs.get(name), seen, stop=both)
+        out["py.context_refs"] += deep_bytes(attrs.get(name), seen, stop=both, sizeof=sizeof)
     consumer_attrs = vars(consumer)
-    out["py.recovery_html"] = deep_bytes(consumer_attrs.get("_recovery_html"), seen)
-    out["py.view_other"] = deep_bytes(view, seen, stop=(consumer,))
-    out["py.consumer_other"] = deep_bytes(consumer, seen, stop=(view,))
+    out["py.recovery_html"] = deep_bytes(consumer_attrs.get("_recovery_html"), seen, sizeof=sizeof)
+    out["py.view_other"] = deep_bytes(view, seen, stop=(consumer,), sizeof=sizeof)
+    out["py.consumer_other"] = deep_bytes(consumer, seen, stop=(view,), sizeof=sizeof)
 
     if rust_view is not None:
         real = getattr(rust_view, "_real", rust_view)
@@ -249,6 +307,7 @@ async def measure(
     view_class: type,
     events: Iterable[Tuple[str, Optional[Dict[str, Any]]]] = (),
     module: Optional[str] = None,
+    sizeof: Callable[[Any], int] = sys.getsizeof,
 ) -> Dict[str, int]:
     """Mount *view_class*, send *events*, and report what the socket then holds.
 
@@ -266,7 +325,7 @@ async def measure(
             consumer = recorded.consumers[-1]
             view = consumer.view_instance
             assert view is not None
-            out = report(consumer, view)
+            out = report(consumer, view, sizeof=sizeof)
             out["page_bytes"] = len((mount_frame.get("html") or "").encode())
         finally:
             await comm.disconnect()

@@ -5,8 +5,11 @@ process's memory is open sockets times what one of them holds. These tests
 measure that with the accounting in ``_view_memory`` (a ``sys.getsizeof`` walk
 on the Python side, ``RustLiveView.retained_bytes()`` on the Rust side) over a
 real ``WebsocketCommunicator``. No test reads a resident size or a clock: the
-numbers are counts of bytes that are the same on every machine, and the laws
-are fits to four sizes.
+numbers are counts of bytes that do not depend on the machine, and the laws
+are fits to four sizes. The Python side is measured as CPython 3.12 sizes
+objects (``_view_memory.reference_sizeof``), whatever interpreter runs the
+test: a tuple is 8 bytes larger from 3.14 and a free-threaded build adds 16
+bytes to most objects, and the published numbers are stated for 3.12.
 
 * the attribution: every owner, for a counter, a 50 KB static page, a
   1,000-row list, 20 components and a form;
@@ -68,7 +71,9 @@ STATE_OWNERS = (
 
 
 async def measured(view_class: type, event: Tuple[str, Any]) -> Dict[str, int]:
-    return await vm.measure(view_class, [event], module=scenarios.MODULE)
+    return await vm.measure(
+        view_class, [event], module=scenarios.MODULE, sizeof=vm.reference_sizeof
+    )
 
 
 def page_part(report: Dict[str, int]) -> int:
@@ -312,7 +317,7 @@ def _tuples(root: Any) -> Set[int]:
 async def test_two_users_share_the_template_text_and_nothing_of_each_other():
     # Two visitors, each with a session of their own.
     recorded = vm.Recorded()
-    view_class = scenarios.row_list(8)
+    view_class = scenarios.row_list(8, mark="twosessions")  # a template no other test mounts
     with harness.ws_settings(scenarios.MODULE):
         comms = []
         try:
@@ -329,8 +334,10 @@ async def test_two_users_share_the_template_text_and_nothing_of_each_other():
             # Shared: the template source text, one copy for both sockets.
             a = first._rust_view.retained_bytes()
             b = second._rust_view.retained_bytes()
-            assert a["template_source_address"] == b["template_source_address"]
-            assert a["template_source_holders"] >= 2
+            # ``holders`` counts the references to ONE allocation, so two
+            # means both views read the same text. No address is reported.
+            assert a["template_source_holders"] == b["template_source_holders"] == 2
+            assert not any("address" in key for key in a)
             assert a["template_source"] == b["template_source"] == 0
             assert a["shared_template_source"] == len(view_class.template)
 
@@ -354,7 +361,7 @@ async def test_two_users_share_the_template_text_and_nothing_of_each_other():
 
 async def test_a_second_socket_of_the_same_page_adds_no_template_text():
     """One socket or two: the shared text is counted once, by neither."""
-    view_class = scenarios.static_page(25)
+    view_class = scenarios.static_page(30)  # a size no other test mounts
     recorded = vm.Recorded()
     with harness.ws_settings(scenarios.MODULE):
         comms = []
@@ -371,7 +378,7 @@ async def test_a_second_socket_of_the_same_page_adds_no_template_text():
             for comm in comms:
                 await comm.disconnect()
     assert reports[0]["total"] == reports[1]["total"]
-    assert reports[0]["shared_template_source"] > 25_000
+    assert reports[0]["shared_template_source"] > 30_000
     assert reports[0]["template_source_holders"] == 2
 
 

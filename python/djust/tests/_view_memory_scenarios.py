@@ -120,9 +120,14 @@ TABLE = (
 )
 
 
-def row_list(n: int) -> type:
-    """A view holding *n* plain rows and rendering them as a table."""
-    name = f"Rows{n}"
+def row_list(n: int, mark: str = "") -> type:
+    """A view holding *n* plain rows and rendering them as a table.
+
+    Every size shares one template text. *mark* (letters only) gives the class
+    a template of its own, for a test that counts who shares it.
+    """
+    assert mark.isalpha() or not mark
+    name = f"Rows{n}{mark}"
     existing = globals().get(name)
     if existing is not None:
         return existing
@@ -142,7 +147,10 @@ def row_list(n: int) -> type:
         {
             "__module__": MODULE,
             "exposure_policy": "explicit",
-            "template": "<div dj-root><h1>{{ title }}</h1>" + TABLE + "</div>",
+            "template": "<div dj-root><h1>{{ title }}</h1>"
+            + (f"<b hidden>{mark}</b>" if mark else "")
+            + TABLE
+            + "</div>",
             "title": state("Rows"),
             "items": state(default_factory=list),
             "mount": mount,

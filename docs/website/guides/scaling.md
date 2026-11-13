@@ -135,9 +135,9 @@ Planning figures, each from one setup:
 
 Each open WebSocket keeps three things alive in its process: the consumer, the view object, and a Rust renderer that holds the last rendered tree (the diff baseline) and a copy of the state the template reads. So a process's memory grows with *open sockets × what one view holds*, and what one view holds grows with the page and with the state, not with traffic. A page with no interaction costs the same as a busy one.
 
-The model below is measured, not estimated. `python/djust/tests/test_view_memory.py` mounts each view over a real WebSocket, sends one event, and counts the bytes each owner then holds: a `sys.getsizeof` walk on the Python side and `RustLiveView.retained_bytes()` (capacities and `size_of`) on the Rust side. Those counts are the same on every machine. The same test fails when a number in this section is more than 10% from what it measures.
+The model below is measured, not estimated. `python/djust/tests/test_view_memory.py` mounts each view over a real WebSocket, sends one event, and counts the bytes each owner then holds: a `sys.getsizeof` walk on the Python side and `RustLiveView.retained_bytes()` (capacities and `size_of`) on the Rust side. Those counts do not depend on the machine or on load. The Rust-side counts are the same everywhere. The Python-side counts depend on the interpreter: the numbers in this section are for **CPython 3.12 and 3.13**, which size objects the same. From 3.14 a tuple is 8 bytes larger, which adds about 11% to the fingerprints row and nothing measurable to the others; a free-threaded build (3.14t, 3.15t) also adds 16 bytes to every string and number, about 12% on the state row. The test measures the Python side as 3.12 sizes it whatever interpreter runs it, and fails when a number in this section is more than 10% from what it measures.
 
-**The formula** (djust 2.0, bytes one connected view holds after an event):
+**The formula** (djust 2.0 on CPython 3.12, bytes one connected view holds after an event):
 
 ```text
 view ≈ 37 KB + P × page_bytes + S × state_bytes
@@ -154,7 +154,7 @@ Two shortcuts that follow from it:
 
 <!-- view-memory: base_kb=37 static_page=13.6 table_page=28 state=5.1 row_kb=5.0 static_total=13.6 -->
 
-**Who holds it** (bytes, one view, after one event):
+**Who holds it** (bytes, one view, after one event; the Python rows as CPython 3.12 sizes them):
 
 | Owner | Counter | 50 KB static page | 1,000-row table (113 KB page) | 20 components | Form |
 |---|---:|---:|---:|---:|---:|
@@ -187,7 +187,7 @@ These are counted bytes. What the allocator takes for them is higher: block roun
 - **Budget sockets per process from the formula.** At 0.76 MB a view, 1,000 open sockets of a 50 KB page are about 0.8 GB before the allocator's share; at 5 MB a view the same thousand need 5 GB, which is a reason to change the page, not the pod. `worker_threads` does not change this number: it sets how many turns run at once, not what a parked socket holds.
 - **A list over the fingerprint budget** (20,000 nodes, about 1,500 rows of five fields) holds no fingerprint at all and is re-sent to the renderer on every turn instead. It costs less memory and more CPU per event; the framework logs it once per view class.
 
-There is no built-in per-view memory limit or warning in 2.0. A view can report its own Rust side with `self._rust_view.retained_bytes()` if you want to sample it in your own metrics.
+There is no built-in per-view memory limit or warning in 2.0. A view can report its own Rust side with `self._rust_view.retained_bytes()` if you want to sample it in your own metrics: a dict of byte counts and node counts per owner, with no addresses or content in it.
 
 **Size the container for the peak.** RSS levels off after load; it does not fall back, because the allocator keeps freed pages for reuse. Watch the state backend's entry count and the live heap, not RSS alone. On 3.14t:
 
