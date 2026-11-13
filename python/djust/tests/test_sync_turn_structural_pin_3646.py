@@ -539,10 +539,9 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("_exposure_auth.py", "aauthorize_event", "_event_request"): plumbing(_SESSION, _TENANT),
     ("_exposure_auth.py", "aauthorize_event", "authorize_event"): plumbing(_SESSION, _TENANT),
     ("_exposure_child_persistence.py", "asave_child_states", "_capture_batch"): plumbing(_STATE),
-    ("_exposure_sessions.py", "asave_server_state", "server_state_adapter"): plumbing(_RENDER),
-    ("_exposure_sessions.py", "asave_server_state", "_project_for_save"): plumbing(_RENDER),
-    # #4095: names the over-limit field by projecting declared fields one by one.
-    ("_exposure_sessions.py", "asave_server_state", "_limit_culprit"): plumbing(_RENDER),
+    # #4107: the whole save (declared fields, the automatic state, the #4095
+    # over-limit naming) in one hop; it reads attributes and state() fields.
+    ("_exposure_sessions.py", "asave_server_state", "save_server_state"): plumbing(_RENDER),
     ("_session_merge.py", "asave_merged", "save_merged"): plumbing(_SESSION),
     ("_turn_ports.py", "run_http_turn.run_body", "call_body"): entry(_HTTP_BODY),
     ("_view_hooks.py", "call_async_result", "handler"): refused_async(),

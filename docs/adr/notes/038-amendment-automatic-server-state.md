@@ -28,8 +28,9 @@ snapshots still read declarations only.
 1. **What is saved.** An instance attribute is saved when its name is public
    (no leading underscore), is not framework-owned (not set by `LiveView()`
    itself, not in `CHANGE_DETECTION_IGNORED`, not in `reserved_state_names()`,
-   not a `static_assigns` / `temporary_assigns` key), is not a descriptor other
-   than a `state()` field on the class, and its value is accepted by the
+   not a `static_assigns` / `temporary_assigns` key, not a name a djust or
+   Django class in the MRO defines, not the per-connection `client_timezone`),
+   is not a descriptor other than a `state()` field on the class, and its value is accepted by the
    existing explicit codec (`clone_json_state`: `None`, `bool`, `int`, `float`,
    `str`, `list`, `dict`, exact types). A `state()` field with no `persist=` is
    saved the same way; `persist=False` opts it out. `persist="server"` and
@@ -54,8 +55,10 @@ snapshots still read declarations only.
 
 3. **Deploys.** The envelope records a digest of the view class's code: for
    every application class in the MRO, the bytecode, constants and names of its
-   functions and its plain class attributes, plus `exposure_schema_version`,
-   the declared fields and the djust version. An envelope whose digest differs
+   functions and its plain class attributes (not the `_djust_*` caches the
+   framework writes on a class after a render: two processes must agree whether
+   or not they have rendered), plus `exposure_schema_version`, the declared
+   fields and the djust version. An envelope whose digest differs
    is discarded and the view mounts fresh. *Reason:* undeclared attributes have
    no schema, so "same code" is the only check that covers them; bytecode needs
    no source files and ignores line numbers, so editing another class in the
@@ -70,8 +73,10 @@ snapshots still read declarations only.
    components. They are skipped, not replaced by an identifier: re-query in
    `mount()` or `handle_restore()`. Attribute names on the serialization floor
    (`password`, `is_superuser`, `is_staff`, `DJUST_SENSITIVE_FIELDS`) are
-   skipped. `FormMixin` removes sensitive fields from `form_data` before it is
-   stored (the #4078 predicate, `is_sensitive_form_field`). Context-processor
+   skipped. `FormMixin` blanks sensitive fields in `form_data` before it is
+   stored and replaces an error message that contains their value (the #4078
+   predicate, `is_sensitive_form_field`); this amends D-e: other form input and
+   errors are saved. Context-processor
    output never becomes an instance attribute, so #1786's shape cannot recur;
    its regression tests are extended to the store.
 
@@ -86,13 +91,19 @@ snapshots still read declarations only.
    `rows = state(persist=False)`; to make its loss an error, declare it
    `persist="server"`.
 
-6. **Cost.** One bounded serialization of the saved attributes per turn (the
-   projection the explicit save already made for declared fields), no extra
-   fingerprint walk, and **no session write when the encoded state equals what
-   the store already holds** (per-turn switch `unchanged_save_skip`, covered by
-   the frame-comparison oracle). A view whose state is still what `mount()`
-   produced stores nothing. The envelope is rewritten once half its lifetime has passed, so
-   an active page does not expire.
+6. **Cost.** On the socket event path the runtime takes its post-event
+   change-detection snapshot before the commit and hands the changed keys to
+   the save; the render decision reuses that same snapshot. A turn that changed
+   no saved attribute therefore **walks nothing extra and writes nothing**. A
+   turn that did change one serializes the saved state once (the projection the
+   explicit save already made for declared fields) and writes the session only
+   when the encoding differs from what the store holds. Both are the per-turn
+   switch `unchanged_save_skip`, covered by the frame-comparison oracle and a
+   count-based gate-off. Other turns (background results, `url_change`, the
+   fallback POST) have no snapshot to reuse and serialize once per turn. A
+   view whose state is still what `mount()` produced stores nothing. The
+   envelope is rewritten once half its lifetime has passed, so an active page
+   does not expire.
 
 7. **Legacy views** (`exposure_policy = "legacy"`) use the same module over the
    stateless HTTP fallback, which is where 1.x kept their state. Over a socket a

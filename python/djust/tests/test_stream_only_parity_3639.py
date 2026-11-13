@@ -417,7 +417,9 @@ class TestCallSiteInventory:
         # ViewRuntime: the event spine's pre/post and noop-token, the deferred
         # twin, the bound-component route
         ("python/djust/runtime.py", "_dispatch_component_event"): 2,
-        ("python/djust/runtime.py", "_dispatch_event_render"): 2,
+        # (three call expressions, two snapshots per turn: the post-event one is
+        # taken before the commit and reused, or taken after it; #4107)
+        ("python/djust/runtime.py", "_dispatch_event_render"): 3,
         ("python/djust/runtime.py", "_dispatch_single_event_body"): 2,
         ("python/djust/runtime.py", "handler"): 1,
         # the SSE tick (``TestSseTick``): the pre/post pair of ``handle_tick``

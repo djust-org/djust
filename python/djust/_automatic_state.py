@@ -41,6 +41,7 @@ from inspect import getattr_static
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from . import _per_turn
+from ._class_snapshot import namespace
 from ._exposure import (
     _NAME,
     _UNSAFE_KEYS,
@@ -221,7 +222,7 @@ def _compute_class_digest(view_class: type) -> str:
             out.append("base=%s.%s" % (cls.__module__, cls.__qualname__))
             continue
         out.append("class=%s.%s{" % (cls.__module__, cls.__qualname__))
-        for name, value in sorted(dict(vars(cls)).items()):
+        for name, value in sorted(namespace(cls).items()):  # #3151: one atomic copy
             if name.startswith("__") and name.endswith("__") and not callable(value):
                 continue  # __doc__, __module__, __firstlineno__, __annotations__, ...
             if name.startswith("_djust_"):
@@ -271,7 +272,7 @@ def _unsaved_attrs(view_class: type) -> frozenset:
     """Names framework mixins rebuild in ``mount()`` and never save."""
     names: set = set()
     for owner in view_class.__mro__:
-        declared = vars(owner).get("_djust_unsaved_attrs")
+        declared = namespace(owner).get("_djust_unsaved_attrs")
         if isinstance(declared, frozenset):
             names.update(declared)
     return frozenset(names)
@@ -316,7 +317,7 @@ class _Names:
         if declared is _MISSING:
             return True
         for owner in self.view_class.__mro__:
-            if name in vars(owner):
+            if name in namespace(owner):
                 if not _is_application_class(owner):
                     return False  # a djust (or Django) class defines it: framework configuration
                 break
@@ -350,7 +351,7 @@ def _candidates(view: Any) -> Dict[str, Any]:
             found[name] = value
     # A state() field stores its value under ``_state_<name>``.
     for owner in type(view).__mro__:
-        for name, declared in list(vars(owner).items()):
+        for name, declared in namespace(owner).items():  # #3151
             if type(declared) is not StateProperty or name in found:
                 continue
             if getattr_static(type(view), name, _MISSING) is not declared:
