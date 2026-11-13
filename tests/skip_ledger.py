@@ -27,33 +27,42 @@ import pytest
 RECORD_ENV = "DJUST_RECORD_SKIPS"
 ONLY_ENV = "DJUST_ONLY_IDS_FILE"
 
-_skipped: list[str] = []
-
 
 def _is_worker(config: pytest.Config) -> bool:
     return hasattr(config, "workerinput")
 
 
-def pytest_runtest_logreport(report: pytest.TestReport) -> None:
-    if not os.environ.get(RECORD_ENV) or not report.skipped or hasattr(report, "wasxfail"):
-        return
-    # A sweep case the sample did not draw is not a Django-version skip: it runs nightly.
-    if "sweep" in getattr(report, "keywords", {}):
-        return
-    _skipped.append(report.nodeid)
+class _Ledger:
+    """One per session: a module-level list would be shared with any nested in-process run
+    (``pytester``), which then writes the outer session's skips as its own."""
+
+    def __init__(self, target: str) -> None:
+        self.target = target
+        self.skipped: list[str] = []
+
+    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+        if not report.skipped or hasattr(report, "wasxfail"):
+            return
+        # A sweep case the sample did not draw is not a Django-version skip: it runs nightly.
+        if "sweep" in getattr(report, "keywords", {}):
+            return
+        self.skipped.append(report.nodeid)
+
+    def pytest_collectreport(self, report: pytest.CollectReport) -> None:
+        # A module that skips itself at import (``pytest.skip(allow_module_level=True)``) never
+        # reaches the run phase: its collect report is the only trace, keyed by the module's id.
+        if report.skipped and report.nodeid:
+            self.skipped.append(report.nodeid)
+
+    def pytest_sessionfinish(self, session: pytest.Session) -> None:
+        if not _is_worker(session.config):
+            Path(self.target).write_text("".join(f"{n}\n" for n in sorted(set(self.skipped))))
 
 
-def pytest_collectreport(report: pytest.CollectReport) -> None:
-    # A module that skips itself at import (``pytest.skip(allow_module_level=True)``) never
-    # reaches the run phase: its collect report is the only trace, keyed by the module's id.
-    if os.environ.get(RECORD_ENV) and report.skipped and report.nodeid:
-        _skipped.append(report.nodeid)
-
-
-def pytest_sessionfinish(session: pytest.Session) -> None:
+def pytest_configure(config: pytest.Config) -> None:
     target = os.environ.get(RECORD_ENV)
-    if target and not _is_worker(session.config):
-        Path(target).write_text("".join(f"{n}\n" for n in sorted(set(_skipped))))
+    if target:
+        config.pluginmanager.register(_Ledger(target), "djust-skip-ledger")
 
 
 def read_ids(path: str) -> set[str]:

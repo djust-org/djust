@@ -421,6 +421,7 @@ MERGE_GATES := \
 	python/djust/tests/test_no_absolute_time_bounds_3711.py \
 	python/tests/test_no_override_settings_with_fixture_3728.py \
 	python/tests/test_no_reported_crash_signals_2701.py \
+	python/tests/test_sweep_tiers_4074.py \
 	python/tests/test_safe_markup_gate_3848.py \
 	python/tests/test_template_library_parity_3663.py \
 	python/tests/test_user_rows_do_not_leak_between_tests.py

@@ -44,6 +44,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.git_env import isolated_git_env
+
 MODE_ENV = "DJUST_SWEEP_SAMPLE"
 SEED_ENV = "DJUST_SWEEP_SEED"
 CHANGED_ENV = "DJUST_SWEEP_CHANGED"  # comma-separated paths
@@ -175,7 +177,13 @@ def _read_changed(listed: str | None, listing: str | None) -> frozenset[str]:
     for args in (["diff", "--name-only", "origin/main...HEAD"], ["diff", "--name-only", "HEAD"]):
         try:
             res = subprocess.run(
-                ["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=20, check=False
+                ["git", *args],
+                cwd=ROOT,
+                env=isolated_git_env(),
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
             )
         except (OSError, subprocess.SubprocessError):
             continue

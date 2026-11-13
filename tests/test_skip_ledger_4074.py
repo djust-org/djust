@@ -57,6 +57,10 @@ def test_runs():
 
 
 def _run(pytester: pytest.Pytester, monkeypatch, env: dict[str, str], *args: str):
+    # The outer run may itself be recording (CI sets DJUST_RECORD_SKIPS): the inner run must
+    # neither inherit that target nor see the outer session's skips.
+    monkeypatch.delenv("DJUST_RECORD_SKIPS", raising=False)
+    monkeypatch.delenv("DJUST_ONLY_IDS_FILE", raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     return pytester.runpytest(

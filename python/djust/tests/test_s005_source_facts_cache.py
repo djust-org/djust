@@ -10,6 +10,7 @@ auth decision, and that it lets a class go.
 """
 
 import gc
+import weakref
 import inspect
 
 from djust.checks import check_configuration
@@ -92,7 +93,10 @@ def test_a_collected_class_leaves_the_cache():
     cls = _make_view("S005CacheCollected")
     check_configuration(None)
     assert cls in _S005_SOURCE_FACTS
-    size_with = len(_S005_SOURCE_FACTS)
+    gone = weakref.ref(cls)
     del cls
     gc.collect()
-    assert len(_S005_SOURCE_FACTS) == size_with - 1
+    # The class is collected, and nothing in the cache still names it. (Not a size check:
+    # under a full suite the same collection frees other test classes' entries too.)
+    assert gone() is None
+    assert not [k for k in list(_S005_SOURCE_FACTS) if k.__name__ == "S005CacheCollected"]
