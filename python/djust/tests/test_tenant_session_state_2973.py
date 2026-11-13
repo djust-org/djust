@@ -1,25 +1,18 @@
 """#2973: view state saved in the Django session is keyed by tenant.
 
-Legacy views also keep their state in ``request.session["liveview_<path>"]``
-(+ ``__private`` / ``_components`` / ``__sticky__``). Before #2973 that key had
-no tenant, so one session on two tenants at the same URL restored one tenant's
-state into the other's view:
-
-- HTTP fallback POST: tenant B's event ran with tenant A's saved state (and
-  A's ``tenant`` context key through the ``tenant`` property setter).
-
-It is driven here through the real transport code, same session, same URL,
-tenant resolved from the Host. (The WS/SSE reconnect restore of an
-``enable_state_snapshot`` view, the other path #2973 fixed, was removed in 2.0.)
+The legacy page-POST fallback kept a view's state in
+``request.session["liveview_<path>"]``; before #2973 that key had no tenant,
+so one session on two tenants at the same URL restored one tenant's state into
+the other's view. 2.0 removed that session state (and the WS/SSE reconnect
+restore); what is left is the key derivation the legacy lazy child still uses
+(``session_view_key``), pinned below.
 """
 
 from __future__ import annotations
 
-import json
 
 import pytest
-from django.contrib.sessions.backends.db import SessionStore
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
 
 from djust import LiveView
 from djust.decorators import event_handler
@@ -85,84 +78,6 @@ def _settings_and_seen():
         ALLOWED_HOSTS=_ALLOWED, DJUST_CONFIG=_CONFIG, LIVEVIEW_ALLOWED_MODULES=[__name__]
     ):
         yield
-
-
-def _new_session() -> SessionStore:
-    store = SessionStore()
-    store.create()
-    return store
-
-
-def _get(view_cls, host, session):
-    request = RequestFactory().get(_URL, HTTP_HOST=host)
-    request.session = session
-    view_cls().get(request)
-
-
-def _post(view_cls, host, session, event):
-    request = RequestFactory().post(
-        _URL,
-        data=json.dumps({"event": event, "params": {}}),
-        content_type="application/json",
-        HTTP_HOST=host,
-    )
-    request.session = session
-    response = view_cls().post(request)
-    assert response.status_code == 200, response.content
-    return response
-
-
-# --------------------------------------------------------------------------- #
-# HTTP fallback POST
-# --------------------------------------------------------------------------- #
-class TestHttpFallbackPost:
-    def test_post_on_tenant_b_does_not_run_with_tenant_a_state(self):
-        session = _new_session()
-        _get(_SecretView, "globex.example.com", session)
-        _get(_SecretView, "acme.example.com", session)  # the newer write, tenant A
-
-        _post(_SecretView, "globex.example.com", session, "read")
-
-        assert _SEEN == [("globex", "fresh-globex", "private-globex")], _SEEN
-
-    def test_each_tenant_restores_its_own_state(self):
-        """Isolation by keying, not by dropping state: both get their own back."""
-        session = _new_session()
-        _get(_SecretView, "acme.example.com", session)
-        _post(_SecretView, "acme.example.com", session, "keep")
-        _get(_SecretView, "globex.example.com", session)
-
-        _post(_SecretView, "acme.example.com", session, "read")
-        _post(_SecretView, "globex.example.com", session, "read")
-
-        assert _SEEN == [
-            # Private attributes are not kept (2.0): mount() rebuilt this one.
-            ("acme", "secret-of-acme", "private-acme"),
-            ("globex", "fresh-globex", "private-globex"),
-        ], _SEEN
-
-    def test_session_keys_carry_the_tenant(self):
-        session = _new_session()
-        _get(_SecretView, "acme.example.com", session)
-        keys = [k for k in session.keys() if k.startswith("liveview_")]
-        assert keys and all(k.startswith("liveview_tenant:acme:") for k in keys), keys
-
-    def test_unresolved_tenant_saves_and_restores_nothing(self):
-        session = _new_session()
-        _get(_OptionalSecretView, "testserver", session)
-        assert not [k for k in session.keys() if k.startswith("liveview_")]
-        # A key a non-tenant view left behind is not read by the tenant view.
-        session[f"liveview_{_URL}"] = {"secret": "shared"}
-        _post(_OptionalSecretView, "testserver", session, "read")
-        assert _SEEN == [(None, "fresh-notenant", None)], _SEEN
-
-    def test_view_without_the_hook_keeps_the_unprefixed_key(self):
-        session = _new_session()
-        _get(_PlainView, "acme.example.com", session)
-        assert f"liveview_{_URL}" in session
-        _post(_PlainView, "acme.example.com", session, "keep")
-        _post(_PlainView, "acme.example.com", session, "read")
-        assert _SEEN == [("plain", "kept-plain")]
 
 
 # --------------------------------------------------------------------------- #

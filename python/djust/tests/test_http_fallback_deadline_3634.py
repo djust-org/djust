@@ -47,8 +47,8 @@ pytestmark = pytest.mark.django_db
 
 PATH = "/deadline/"
 KEY = "http_fallback_background_timeout"
-SHORT = override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False, KEY: 0.05})
-OFF = override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False})
+SHORT = override_settings(LIVEVIEW_CONFIG={KEY: 0.05})
+OFF = override_settings(LIVEVIEW_CONFIG={})
 
 LOG: list = []
 STARTED = threading.Event()
@@ -503,7 +503,7 @@ class TestTheBudgetClock:
 
 class TestWorkThatFinishesInTime:
     def test_a_fast_task_is_delivered_as_before(self):
-        with override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False, KEY: 60}):
+        with override_settings(LIVEVIEW_CONFIG={KEY: 60}):
             view, response, body = _post(Watching, "kick_fast")
         assert response.status_code == 200, body
         assert view.status == "fast-done"
@@ -512,14 +512,14 @@ class TestWorkThatFinishesInTime:
         _join_workers()
 
     def test_a_fast_async_def_task_is_delivered_as_before(self):
-        with override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False, KEY: 60}):
+        with override_settings(LIVEVIEW_CONFIG={KEY: 60}):
             view, _, body = _post(Watching, "kick_fast_async")
         assert view.status == "fast-async-done", body
         assert LOG == [("result", "fast_async", "fast-async", None, "")]
         _join_workers()
 
     def test_a_failing_task_still_goes_to_handle_async_result_not_a_500(self, caplog):
-        with override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False, KEY: 60}):
+        with override_settings(LIVEVIEW_CONFIG={KEY: 60}):
             with caplog.at_level(logging.ERROR, logger="djust.mixins.request"):
                 view, response, body = _post(Watching, "kick_failing")
         assert response.status_code == 200, body
@@ -531,7 +531,7 @@ class TestWorkThatFinishesInTime:
         """A turn-scoped value (tenant, request id) is still visible to the callback."""
         token = CTX.set("from-the-request")
         try:
-            with override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False, KEY: 60}):
+            with override_settings(LIVEVIEW_CONFIG={KEY: 60}):
                 _post(Watching, "kick_reads_context")
         finally:
             CTX.reset(token)
@@ -539,7 +539,7 @@ class TestWorkThatFinishesInTime:
         _join_workers()
 
     def test_no_noise_when_nothing_is_abandoned(self, caplog):
-        with override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False, KEY: 60}):
+        with override_settings(LIVEVIEW_CONFIG={KEY: 60}):
             with caplog.at_level(logging.WARNING, logger="djust.mixins.request"):
                 _post(Watching, "kick_fast")
         assert not [r for r in caplog.records if KEY in r.getMessage()]
@@ -572,21 +572,6 @@ class TestEveryBranchOfThePostDispatch:
             view, response, body = _post(MountWatcher, "plain", initial=initial, get=False)
             assert STARTED.is_set() and not FINISHED.is_set()
         assert response.status_code == 200, body
-        _join_workers()
-
-    def test_a_deadline_during_mount_work_consumes_the_marker(self):
-        """Documented: a slow loader is not retried by the next POST; the page stays loading."""
-        marker = "liveview_%s__mount_work" % PATH
-        with override_settings(LIVEVIEW_CONFIG={KEY: 0.05}):
-            initial = _get_request()
-            MountWatcher().get(initial)
-            assert marker in initial.session
-            _post(MountWatcher, "plain", initial=initial, get=False)
-            assert STARTED.is_set()
-            assert marker not in initial.session
-            STARTED.clear()
-            _post(MountWatcher, "plain", initial=initial, get=False)
-            assert not STARTED.is_set(), "the abandoned load was started again"
         _join_workers()
 
     def test_explicit_exposure_mount_work_is_bounded(self):
@@ -796,7 +781,7 @@ class TestTheValidatorIsTotal:
     @pytest.mark.parametrize("value", HUGE_OR_BAD)
     def test_a_real_post_runs_the_task_with_no_deadline(self, value):
         """No 500, no OverflowError reported to the view: it is simply not bounded."""
-        with override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False, KEY: value}):
+        with override_settings(LIVEVIEW_CONFIG={KEY: value}):
             view, response, body = _post(Watching, "kick_fast")
         assert response.status_code == 200, body
         assert LOG == [("result", "fast", "fast-result", None, "")]
@@ -805,7 +790,7 @@ class TestTheValidatorIsTotal:
 
     def test_the_largest_valid_deadline_works_in_a_real_post(self):
         """``Event.wait`` accepts it: no OverflowError, the result is delivered."""
-        cfg = {"view_state_in_session": False, KEY: threading.TIMEOUT_MAX}
+        cfg = {KEY: threading.TIMEOUT_MAX}
         with override_settings(LIVEVIEW_CONFIG=cfg):
             view, response, body = _post(Watching, "kick_fast")
         assert response.status_code == 200, body
@@ -852,7 +837,7 @@ class TestAbandonedThreadsAreCapped:
 
     def test_a_task_that_finishes_in_time_never_counts(self, monkeypatch):
         monkeypatch.setattr(request_mixin, "_HTTP_BACKGROUND_MAX_ABANDONED", 1)
-        cfg = {"view_state_in_session": False, KEY: 60}
+        cfg = {KEY: 60}
         with override_settings(LIVEVIEW_CONFIG=cfg):
             for _ in range(3):
                 LOG.clear()
@@ -932,7 +917,7 @@ class TestConcurrentPostsCannotOvershootTheCap:
             held_when_all_asked.append(request_mixin._WORKERS_RESERVED)
             RELEASE.set()
 
-        cfg = {"view_state_in_session": False, KEY: 60}
+        cfg = {KEY: 60}
         with override_settings(LIVEVIEW_CONFIG=cfg):
             statuses = self._concurrent_posts(on_started=release_once_everyone_has_asked)
         _join_workers()
@@ -989,7 +974,7 @@ class TestConcurrentPostsCannotOvershootTheCap:
 
     def test_slots_of_tasks_that_finish_are_released_under_concurrency(self, monkeypatch):
         monkeypatch.setattr(request_mixin, "_HTTP_BACKGROUND_MAX_ABANDONED", self.CAP)
-        cfg = {"view_state_in_session": False, KEY: 60}
+        cfg = {KEY: 60}
         with override_settings(LIVEVIEW_CONFIG=cfg):
             self._concurrent_posts("kick_fast")
             LOG.clear()
@@ -1001,7 +986,7 @@ class TestConcurrentPostsCannotOvershootTheCap:
 class TestACancelledErrorFromTheCallbackIsHandedBack:
     def test_it_reaches_the_request_thread_as_a_cancelled_task(self):
         """The worker hands ``(Exception, CancelledError)`` back; the request skips it."""
-        cfg = {"view_state_in_session": False, KEY: 60}
+        cfg = {KEY: 60}
         with override_settings(LIVEVIEW_CONFIG=cfg):
             view, response, body = _post(Watching, "kick_cancelled")
         assert response.status_code == 200, body
@@ -1026,7 +1011,7 @@ class TestSystemExitFromTheCallbackIsNotSwallowed:
             _post(Watching, "kick_exit")
 
     def test_with_a_deadline_it_propagates_identically(self):
-        cfg = {"view_state_in_session": False, KEY: 60}
+        cfg = {KEY: 60}
         with override_settings(LIVEVIEW_CONFIG=cfg), pytest.raises(SystemExit) as caught:
             _post(Watching, "kick_exit")
         assert "callback asked to exit" in str(caught.value)
@@ -1035,7 +1020,7 @@ class TestSystemExitFromTheCallbackIsNotSwallowed:
 
     def test_the_slot_is_released_when_it_propagates(self, monkeypatch):
         monkeypatch.setattr(request_mixin, "_HTTP_BACKGROUND_MAX_ABANDONED", 1)
-        cfg = {"view_state_in_session": False, KEY: 60}
+        cfg = {KEY: 60}
         with override_settings(LIVEVIEW_CONFIG=cfg):
             with pytest.raises(SystemExit):
                 _post(Watching, "kick_exit")
@@ -1068,11 +1053,11 @@ class TestAnAsyncCallbackRunsOnItsOwnLoop:
         return seen["loop"]
 
     def test_without_the_key_it_runs_on_the_server_loop(self):
-        server_loop = self._under_a_server_loop({"view_state_in_session": False})
+        server_loop = self._under_a_server_loop({})
         assert LOOPS == [server_loop]
 
     def test_with_the_key_it_runs_on_a_private_loop(self):
-        server_loop = self._under_a_server_loop({"view_state_in_session": False, KEY: 60})
+        server_loop = self._under_a_server_loop({KEY: 60})
         assert len(LOOPS) == 1
         assert LOOPS[0] is not server_loop
         _join_workers()

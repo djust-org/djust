@@ -4,7 +4,6 @@ RequestMixin - HTTP GET/POST request handling for LiveView.
 
 import asyncio
 import contextvars
-import hashlib
 import inspect
 import json
 from types import MappingProxyType
@@ -40,7 +39,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.db import models
 
-from ..serialization import decode_state_roundtrip, normalize_django_value
+from ..serialization import normalize_django_value
 from ..utils import is_model_list
 from ..validation import (
     validate_handler_params,
@@ -52,9 +51,7 @@ from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler, is_push_only
 from ..hooks import run_on_mount_hooks
 from .._exposure import uses_legacy_exposure
-from .._tenant_state import MOUNT_WORK_SUFFIX
 from .._view_hooks import call_async_result_sync, call_hook_sync
-from .async_work import has_pending_async_work
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -421,56 +418,6 @@ def _run_http_background_work(view: Any, budget: Optional[_BackgroundBudget] = N
         )
 
 
-def _saved_state_digest(session: Any, view_key: str) -> Optional[str]:
-    """A digest of the state ``session`` holds for ``view_key``.
-
-    Canonicalized through one JSON round trip, so the value written during a
-    request and the one the next request reads back from the session store
-    digest alike (tuples become lists, integer keys become strings). ``None``
-    when the state cannot be digested, which records nothing.
-    """
-    try:
-        canonical = json.loads(json.dumps(session.get(view_key), default=str))
-        return hashlib.sha256(json.dumps(canonical, sort_keys=True).encode("utf-8")).hexdigest()
-    except (TypeError, ValueError):
-        return None
-
-
-def _set_mount_work_marker(session: Any, view_key: Optional[str], owed: bool) -> None:
-    """Record whether the state just saved is still a loading state (#3635).
-
-    ``owed`` is true when the work ``mount()`` / ``handle_params()`` queued
-    (``start_async``, ``assign_async``) has not run for the state saved under
-    ``view_key``: the GET never runs it (the socket or SSE mount does), and a
-    fallback POST that could not run it saves the same loading state again. The
-    marker is a digest of that saved state, so any other writer that saves a
-    different state under the key (a socket turn) invalidates it without having
-    to know it exists. Tasks are closures and cannot be saved; the fact that
-    they are owed can.
-    """
-    if view_key is None:
-        return
-    key = f"{view_key}{MOUNT_WORK_SUFFIX}"
-    digest = _saved_state_digest(session, view_key) if owed else None
-    if digest is None:
-        session.pop(key, None)
-    else:
-        session[key] = digest
-
-
-def _mount_work_is_owed(session: Any, view_key: Optional[str]) -> bool:
-    """True when the state saved under ``view_key`` is still the loading state a GET saved."""
-    if view_key is None:
-        return False
-    recorded = session.get(f"{view_key}{MOUNT_WORK_SUFFIX}")
-    if not isinstance(recorded, str):
-        return False
-    # Plain equality: the digest is not a secret, and ``hmac.compare_digest``
-    # raises ``TypeError`` on a ``str`` with non-ASCII characters.
-    current = _saved_state_digest(session, view_key)
-    return current is not None and recorded == current
-
-
 def _drain_http_side_channels(view: Any, resp_data: Dict[str, Any]) -> None:
     """Put ``view``'s queued client side effects on an HTTP fallback answer.
 
@@ -718,10 +665,6 @@ class RequestMixin:
 
         def _assign_component_ids(self) -> None: ...
 
-        def _restore_component_state(self, component: Any, state: Dict[str, Any]) -> None: ...
-
-        def _save_components_to_session(self, request: Any, context: Dict[str, Any]) -> None: ...
-
     @contextmanager
     def _processor_context(self, request: "HttpRequest") -> Iterator[Dict[str, Any]]:
         """Temporarily inject context processor output as instance attributes.
@@ -900,62 +843,13 @@ class RequestMixin:
         state_serializable = state
         t_json = (time.perf_counter() - t0) * 1000
 
-        # Save state to session after GET so the WebSocket mount can restore it
-        # instead of re-running mount() (which doubles page load cost).
-        # Also used by HTTP-only POST path to restore state before event handling.
-        from .._tenant_state import session_view_key
-
-        # None = a tenant view with no resolved tenant: nothing is saved (#2973).
-        view_key = session_view_key(self, request.path)
-        # Use _cached_context (pre-context-processor copy) to avoid
-        # non-serializable processor objects (PermWrapper, csrf, etc.)
-        _cached = self._cached_context or {}
-        # ``streams`` is DERIVED from ``_streams`` on every get_context_data()
-        # call — it is not user state and must never be persisted (#2112).
-        #
-        # Persisting it is self-poisoning: the restore paths below (and the WS
-        # equivalent in runtime.py) safe_setattr every saved key back onto the
-        # view, so ``self.streams`` would become a public attribute, the
-        # attribute walk would put that STALE dict into the context, and the
-        # existing-key-wins guard in mixins/context.py would then skip the live
-        # data forever — every insert after a restore invisible.
-        #
-        # It is also pure bloat: the documented 500-item example persists ~45 KB
-        # per GET, and streams exist precisely to keep large collections OUT of
-        # state.
-        if uses_legacy_exposure(self):
-            from .context import legacy_unsaved_keys
-            from ..components.base import is_component_collection
-
-            _render_only = legacy_unsaved_keys(self, _cached)
-            _session_state = {
-                k: v
-                for k, v in _cached.items()
-                if not isinstance(v, LiveComponent)
-                and not is_component_collection(v)
-                and k != "streams"
-                and k not in _render_only
-            }
-            t0_sc = time.perf_counter()
-            from ..config import view_state_in_session
-
-            # ``view_state_in_session=False``: nothing about the view goes in
-            # the session; the fallback POST mounts again instead.
-            if view_key is not None and view_state_in_session():
-                request.session[view_key] = normalize_django_value(
-                    _session_state, state_roundtrip=True
-                )
-                # The GET never runs the work mount() / handle_params() queued (the
-                # socket or SSE mount does), and it cannot tell whether this client
-                # will ever open one. Record that the state above is a loading
-                # state, so a page-POST fallback can run the work (#3635).
-                _set_mount_work_marker(request.session, view_key, has_pending_async_work(self))
-                t0_sc = time.perf_counter()
-                self._save_components_to_session(request, _cached)
-        else:
+        # An explicit view saves its declared persist="server" fields. A legacy
+        # view keeps nothing between requests (2.0): the page-POST fallback and
+        # the socket mount run mount() again.
+        t0_sc = time.perf_counter()
+        if not uses_legacy_exposure(self):
             from .._exposure_sessions import save_server_state
 
-            t0_sc = time.perf_counter()
             save_server_state(self, request)
         t_save_components = (time.perf_counter() - t0_sc) * 1000
 
@@ -1671,7 +1565,6 @@ class RequestMixin:
 
     def _post_turn_body(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle POST requests - event handling"""
-        from ..components.base import LiveComponent
 
         # Referenced by the ``except`` at the end of this method, which must not
         # raise its own UnboundLocalError when the failure precedes their
@@ -1757,38 +1650,9 @@ class RequestMixin:
             if not is_safe_event_name(event_name):
                 return JsonResponse({"error": "Invalid event name"}, status=400)
 
-            # Restore state from session
-            from .._tenant_state import session_view_key
-
-            # None = tenant view with no resolved tenant: restore and save nothing (#2973).
-            view_key = session_view_key(self, request.path)
             legacy_exposure = uses_legacy_exposure(self)
-            from ..config import view_state_in_session
 
-            # ``view_state_in_session=False``: read and write nothing of the
-            # view's in the session; the empty state below runs mount() first.
-            session_state = legacy_exposure and view_key is not None and view_state_in_session()
-            saved_state = request.session.get(view_key, {}) if session_state else {}
-            # The saved state is still the loading state a GET saved while the
-            # page's mount-queued work had not run (#3635); read before anything
-            # below changes the session.
-            mount_work_owed = bool(
-                session_state and saved_state and _mount_work_is_owed(request.session, view_key)
-            )
-
-            # #2252: the write side tagged every Decimal
-            # (``normalize_django_value(..., state_roundtrip=True)`` above), so
-            # decode before anything is applied to the view — an undecoded tag
-            # reaches the template as a dict.
-            saved_state = decode_state_roundtrip(saved_state)
-
-            from .._state_restore import restore_public_state
-
-            # Never over a method or property of the view class (a context key
-            # named like one would replace it on the instance).
-            restore_public_state(self, saved_state)
-
-            # ADR-035: bound after the restore so saved state cannot supply it.
+            # ADR-035: bound before mount() so the route, not the body, supplies it.
             bind_route = getattr(self, "_djust_bind_route_kwargs", None)
             if callable(bind_route):
                 bind_route(kwargs)
@@ -1829,53 +1693,20 @@ class RequestMixin:
                 # server field the previous request saved (#3624).
                 _run_http_handle_params(self, request)
                 mount_work_pending = True
-            elif not saved_state:
+            else:
+                # A legacy view keeps nothing between requests (2.0): every POST
+                # mounts it again. The page's URL state is rebuilt the way the
+                # GET builds it: the event must meet the page the browser shows,
+                # and the render it answers with must not diff against mount()'s
+                # defaults (#3624).
                 call_hook_sync(self.mount, request, **kwargs)
-                # Nothing was restored, so the page's URL state is rebuilt the way
-                # the GET builds it: the event must meet the page the browser
-                # shows, and the render it answers with must not diff against
-                # mount()'s defaults (#3624).
                 _run_http_handle_params(self, request)
                 mount_work_pending = True
-            else:
-                # Private attributes are not kept between requests (2.0), so
-                # mount() rebuilds them, then the saved public state goes back
-                # on top, so the handler sees the state the page had (the
-                # explicit-exposure branch above does the same).
-                call_hook_sync(self.mount, request, **kwargs)
-                # handle_params() may build private state from the URL too.
-                _run_http_handle_params(self, request)
-                if mount_work_owed:
-                    # What the GET saved is mount()'s loading state: its work never
-                    # ran (the GET cannot run it, and this client opened no socket
-                    # or stream to run it). The saved state goes back on top, so the
-                    # page the browser shows is kept, and the tasks mount() queued
-                    # run right before the handler, over it (#3635).
-                    mount_work_pending = True
-                else:
-                    # The page already has mount()'s background results, and the
-                    # saved state below puts them back; running them again would
-                    # only repeat the read.
-                    self.__dict__.pop("_async_tasks", None)
-                restore_public_state(self, saved_state)
-                if callable(bind_route):
-                    bind_route(kwargs)
 
             self._assign_component_ids()
 
-            # Restore component state
-            component_state = (
-                request.session.get(f"{view_key}_components", {}) if session_state else {}
-            )
-            from ..components.base import is_session_component
-
-            for key, state in component_state.items():
-                component = getattr(self, key, None)
-                if component is not None and is_session_component(component):
-                    self._restore_component_state(component, state)
-
             # --- Authorization layer 3 of 3: object-level (ADR-017) ----------
-            # Runs here, after the session-state restore above, because
+            # Runs here, after mount() and the declared-state restore above, because
             # ``get_object()`` reads the access-determining state (e.g.
             # ``self.<x>_id``) from it; and per event, as the WS path does, so a
             # session cannot carry a stale ``_object`` cache past a denial. A
@@ -1899,7 +1730,7 @@ class RequestMixin:
             # session does not hold, from the restored state. After the object
             # check, so it never reads for a denied object. An explicit view
             # whose declared state was restored gets it too (#3989).
-            if (legacy_exposure and saved_state) or explicit_restored:
+            if explicit_restored:
                 handle_restore = getattr(self, "handle_restore", None)
                 if callable(handle_restore):
                     call_hook_sync(handle_restore, request)
@@ -2132,28 +1963,7 @@ class RequestMixin:
                 _inject_side_channels(redirect_response)
                 return JsonResponse(redirect_response)
 
-            if legacy_exposure:
-                from ..sync_turn import run_sync_step
-
-                updated_context = run_sync_step(self, "render", self.get_context_data)
-                from .context import legacy_unsaved_keys
-                from ..components.base import is_component_collection
-
-                render_only = legacy_unsaved_keys(self, updated_context)
-                state = {
-                    k: v
-                    for k, v in updated_context.items()
-                    if not isinstance(v, LiveComponent)
-                    and not is_component_collection(v)
-                    and k not in render_only
-                }
-                if session_state:
-                    request.session[view_key] = normalize_django_value(state, state_roundtrip=True)
-                    # Still owed when this POST could not run mount's work (an event
-                    # the view does not define): the state saved is a loading state.
-                    _set_mount_work_marker(request.session, view_key, mount_work_pending)
-                    self._save_components_to_session(request, updated_context)
-            else:
+            if not legacy_exposure:
                 from .._exposure_sessions import save_server_state
 
                 save_server_state(self, request)

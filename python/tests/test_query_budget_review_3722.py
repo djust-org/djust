@@ -516,13 +516,13 @@ class TestWhatThePhasesCountOnTheGet:
         assert len(GET_CALLS) == 1  # and still no second evaluation
 
     def test_the_budget_counts_each_pass_separately(self, warned):
-        """Each ``get_context_data()`` pass is judged on its own, not summed.
+        """Each ``get_context_data()`` pass is judged on its own.
 
         A GET is one pass of 2 queries. The HTTP POST fallback of a legacy view
-        is two (one to save the state, one to render), so a request makes 4
-        queries across 2 passes: still within a render budget of 2 per pass. If
-        the meter summed a request's passes, that would warn. The control: the
-        same queries against a render budget of 1 DO warn.
+        made two passes until 2.0 (one to save the state in the session, one to
+        render); with the session save removed it makes one, so its 2 queries
+        stay within a render budget of 2. The control: the same queries against
+        a render budget of 1 DO warn.
         """
         client = Client()
         assert client.get("/spending/").status_code == 200
@@ -535,7 +535,7 @@ class TestWhatThePhasesCountOnTheGet:
             HTTP_X_DJUST_EVENT="poke",
         )
         assert response.status_code == 200, response.content
-        assert GET_CALLS.count("spend") >= 2, "the POST fallback should make several passes"
+        assert GET_CALLS.count("spend") == 1, "the POST fallback makes one pass (2.0)"
         assert warned() == []  # 2 queries per pass, within a render budget of 2
 
         assert Client().get("/spendingtight/").status_code == 200

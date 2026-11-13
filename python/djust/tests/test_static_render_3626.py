@@ -272,21 +272,16 @@ class TestTheStoredSnapshot:
 
 
 class TestTheHttpFallback:
-    @pytest.mark.parametrize("in_session", [True, False])
-    def test_an_event_answers_the_whole_page_with_consecutive_versions(self, backend, in_session):
-        with override_settings(LIVEVIEW_CONFIG={"view_state_in_session": in_session}):
-            initial, _html = _get(StaticDiagram)
-            first = _post(StaticDiagram, initial, "toggle")
-            second = _post(StaticDiagram, initial, "nothing")
-            third = _post(StaticDiagram, initial, "toggle")
+    def test_an_event_answers_the_whole_page_with_consecutive_versions(self, backend):
+        initial, _html = _get(StaticDiagram)
+        first = _post(StaticDiagram, initial, "toggle")
+        second = _post(StaticDiagram, initial, "nothing")
+        third = _post(StaticDiagram, initial, "toggle")
         for frame in (first, second, third):
             assert "patches" not in frame, frame.keys()
             assert "table_1999" in frame["html"]
         assert first["version"] + 1 == second["version"]
         assert second["version"] + 1 == third["version"]
-        if in_session:
-            # The state the session holds carries the toggles across requests.
-            assert ">open<" in first["html"] and ">open<" not in third["html"]
         assert _stored(backend)["total"] < 1_000
 
     def test_a_normal_view_still_patches(self, backend):

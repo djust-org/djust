@@ -194,24 +194,15 @@ def test_config_is_copied_and_output_html_is_escaped():
     assert f'data-component-id="{view.menu.component_id}"' in html
 
 
-def test_state_restore_preserves_identity_without_restoring_callbacks_or_config():
-    view = mounted()
-    view.menu.open = True
-    state = view._extract_component_state(view.menu)
-    fresh = mounted()
-    old_id = fresh.menu.component_id
-    fresh._restore_component_state(fresh.menu, state)
-    assert fresh.menu.component_id == view.menu.component_id
-    assert old_id not in fresh._components
-    assert fresh._components[fresh.menu.component_id] is fresh.menu
-    assert fresh.menu.open
-    assert set(state) == {"binding_id", "open", "selected"}
-    async_to_sync(fresh.menu.select)(value="edit")
-    assert fresh.calls == 1 and view.calls == 0
-
-
 @pytest.mark.django_db
-def test_real_http_fallback_preserves_id_and_awaits_callback():
+def test_http_fallback_refuses_an_event_for_a_binding_from_a_previous_request():
+    """2.0 keeps no component state between page-POST fallback requests.
+
+    Each POST mounts the view again, so an interactive binding gets a new
+    identity, and an event addressed to the identity the GET rendered is
+    refused visibly (400, logged), never applied to some other component. An
+    explicit view already behaved this way.
+    """
     from django.test import RequestFactory
     from djust.tests.test_exposure_runtime import make_request
 
@@ -219,26 +210,18 @@ def test_real_http_fallback_preserves_id_and_awaits_callback():
     view = MenuPage()
     assert view.get(request).status_code == 200
     identity = view.menu.component_id
-    assert identity != "menu"
-    for target, event, params, result in [
-        (identity, "toggle", {}, "initial"),
-        (identity, "select", {"value": "edit"}, "project:edit"),
-    ]:
-        post = RequestFactory().post(
-            request.path,
-            data=json.dumps({"event": event, "params": {"component_id": target, **params}}),
-            content_type="application/json",
-        )
-        post.user, post.session, post.tenant = request.user, request.session, None
-        restored = MenuPage()
-        response = restored.post(post)
-        assert response.status_code == 200, response.content
-        assert restored.result == result
-        if event == "select":
-            assert result.encode() in response.content
-            assert restored.calls == 1 and restored.other.open
-        state = request.session[f"liveview_{request.path}_components"]
-        assert state["menu"]["binding_id"] == identity
+    post = RequestFactory().post(
+        request.path,
+        data=json.dumps({"event": "toggle", "params": {"component_id": identity}}),
+        content_type="application/json",
+    )
+    post.user, post.session, post.tenant = request.user, request.session, None
+    restored = MenuPage()
+    response = restored.post(post)
+    assert response.status_code == 400, response.content
+    assert b"Component not found" in response.content
+    assert restored.calls == 0
+    assert not [k for k in request.session.keys() if k.endswith("_components")]
 
 
 @pytest.mark.asyncio
@@ -310,41 +293,6 @@ async def test_real_websocket_two_menus_and_unknown_target():
             assert frame["type"] == "error", frame
         finally:
             await socket.disconnect()
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"binding_id": "menu"},
-        {"open": "true"},
-        {"selected": 42},
-        {"callback": "evil"},
-    ],
-)
-def test_invalid_snapshot_is_rejected_without_partial_mutation(changes):
-    view = mounted()
-    before = view._extract_component_state(view.menu)
-    registry = dict(view._components)
-    with pytest.raises(ValueError):
-        view._restore_component_state(view.menu, {**before, **changes})
-    assert view._extract_component_state(view.menu) == before
-    assert view._components == registry
-
-
-def test_restore_identity_collision_rejected():
-    view = mounted()
-    state = view._extract_component_state(view.other)
-    before = view._extract_component_state(view.menu)
-    with pytest.raises(ValueError, match="collision"):
-        view._restore_component_state(view.menu, state)
-    assert view._extract_component_state(view.menu) == before
-
-
-def test_restored_selection_is_checked_against_current_server_configuration():
-    view = mounted()
-    state = view._extract_component_state(view.menu)
-    view._restore_component_state(view.menu, {**state, "selected": "disabled"})
-    assert view.menu.selected == "" and view.calls == 0
 
 
 def test_callback_exception_does_not_rollback_component_or_run_twice():

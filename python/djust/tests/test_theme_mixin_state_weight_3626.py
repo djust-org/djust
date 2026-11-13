@@ -106,23 +106,6 @@ class TestTheViewStateOmitsTheHeavyChunks:
             f"the four chunks ({smallest_chunk}): they are in the state again"
         )
 
-    def test_the_session_save_has_none_of_the_four(self):
-        from djust._tenant_state import session_view_key
-
-        view, request, _response = _get(TagOnlyView)
-        saved = request.session[session_view_key(view, request.path)]
-        present = [name for name in HEAVY_NAMES if name in saved]
-        assert present == [], f"ThemeMixin leaked {present} into the session save"
-
-    def test_the_private_state_save_does_not_carry_the_raw_css(self):
-        """``_theme_css_raw`` (the push_event CSS) was a stored private attr."""
-        from djust._tenant_state import session_view_key
-
-        view, request, _response = _get(TagOnlyView)
-        private = request.session.get(f"{session_view_key(view, request.path)}__private", {})
-        assert "_theme_css_raw" not in private
-        assert "_theme_css_raw" not in view.__dict__
-
     def test_the_instance_dict_does_not_hold_them(self):
         view, _request_, _response = _get(TagOnlyView)
         assert [n for n in HEAVY_NAMES if n in view.__dict__] == []

@@ -277,11 +277,18 @@ async def test_a_view_owns_its_own_keys_and_not_a_longer_path_s():
     own = "liveview_/app"
     for key in (
         own,
-        own + "_components",
         own + "__sticky_ids",
         own + "__sticky__dock",
     ):
         assert _is_own(key, own), key
-    for key in ("liveview_/app/detail", "liveview_/app/detail__private", "liveview_/other"):
+    for key in (
+        "liveview_/app/detail",
+        "liveview_/app/detail__private",
+        "liveview_/other",
+        # Legacy siblings 2.0 no longer writes are not claimed either.
+        own + "__private",
+        own + "_components",
+        own + "__mount_work",
+    ):
         assert not _is_own(key, own), key
     assert not _is_own(own, "")

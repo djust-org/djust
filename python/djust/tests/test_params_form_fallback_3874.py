@@ -1129,7 +1129,7 @@ def _stateless():
     from django.conf import settings
 
     current = dict(getattr(settings, "LIVEVIEW_CONFIG", None) or {})
-    return override_settings(LIVEVIEW_CONFIG={**current, "view_state_in_session": False})
+    return override_settings(LIVEVIEW_CONFIG={**current})
 
 
 class TestFallbackPost(_Cases):

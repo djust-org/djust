@@ -141,13 +141,6 @@ class TestTheStoredSnapshotOmitsThePresets:
                 f"preset {preset['name']!r} is inside the stored snapshot"
             )
 
-    def test_the_session_save_does_not_hold_it(self):
-        from djust._tenant_state import session_view_key
-
-        view, request, _response = _get(Counter)
-        saved = request.session[session_view_key(view, request.path)]
-        assert "theme_presets" not in saved, sorted(saved)
-
     def test_the_instance_dict_does_not_hold_it(self):
         view, _request_, _response = _get(Counter)
         assert "theme_presets" not in view.__dict__
@@ -231,25 +224,6 @@ class TestThePageShell:
         view, _request_, _response = _get(ShellView)
         _blob, state = _snapshot(view)
         assert "theme_presets" not in state
-
-    def test_no_normalizer_call_receives_the_list(self, shell_templates):
-        from unittest.mock import patch
-
-        import djust.serialization as serialization
-        from djust.request_scoped import RequestScopedList
-
-        seen = []
-        real = serialization.normalize_django_value
-
-        def spy(value, *args, **kwargs):
-            seen.append(value)
-            return real(value, *args, **kwargs)
-
-        with patch.object(serialization, "normalize_django_value", spy):
-            _get(ShellView)
-        assert seen, "the spy never ran, so it measured nothing"
-        assert not any(isinstance(v, RequestScopedList) for v in seen)
-        assert not any(isinstance(v, dict) and "theme_presets" in v for v in seen)
 
 
 class TestACustomProcessorsPlainListIsStillStored:

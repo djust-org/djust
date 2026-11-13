@@ -592,8 +592,10 @@ def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None
             removed_in="2.0.0",
             instead=(
                 'exposure_policy = "explicit" (the default: declare state() fields and '
-                "supply template context in get_context_data(); see %s)"
-                % EXPLICIT_EXPOSURE_GUIDE_URL
+                "supply template context in get_context_data(); see %s). A legacy view "
+                "keeps no state between requests in 2.0: the page-POST fallback mounts "
+                'it again on every POST; declare state(persist="server") for what must '
+                "survive" % EXPLICIT_EXPOSURE_GUIDE_URL
             ),
             # Both walk out of djust's own frames: to the ``class`` statement,
             # or to the code that constructed the view.
