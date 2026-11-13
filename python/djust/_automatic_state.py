@@ -385,10 +385,19 @@ def limits_for(view: Any) -> Tuple[int, int]:
     return maximum * 1024, min(warn, maximum) * 1024
 
 
+def _node_limit(maximum: int) -> int:
+    """How many values one attribute may hold: a bound on the walk, scaled
+    with the byte limit so that a raised ``automatic_state_max_kb`` is the one
+    limit an author meets."""
+    return max(_MAX_NODES, maximum // 2)
+
+
 def _refuse(view: Any, name: str, limit: str, maximum: int) -> None:
     from ._exposure_sessions import StateLimitExceeded
 
-    bounds = StateLimits(max_bytes=maximum, max_nodes=_MAX_NODES, max_depth=_MAX_DEPTH)
+    bounds = StateLimits(
+        max_bytes=maximum, max_nodes=min(_node_limit(maximum), 1000000), max_depth=_MAX_DEPTH
+    )
     refusal = StateLimitExceeded(name, limit, bounds)
     owner = type(view)
     logger.log(
@@ -460,7 +469,7 @@ def project(view: Any) -> Projection:
         try:
             return encode_state_value(
                 value,
-                max_nodes=_MAX_NODES,
+                max_nodes=_node_limit(maximum),
                 max_depth=_MAX_DEPTH,
                 enums=enums,
                 convert=_model_as_dict,
