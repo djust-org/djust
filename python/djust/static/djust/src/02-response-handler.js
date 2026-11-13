@@ -331,10 +331,13 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 );
 
                 // Revert VDOM version — recovery response will set the correct version
-                clientVdomVersion = data.version - 1;
+                if (data.version !== undefined) clientVdomVersion = data.version - 1;
 
                 if (isWSConnected()) {
                     liveViewWS.sendMessage({ type: 'request_html', ...slotFrameFields(_activeSlot && _activeSlot.id) });
+                } else if (transport && transport === _localEventTransport) {
+                    // Page-POST fallback (#4108): fetch the page and morph it in.
+                    await _httpFallbackResync();
                 } else {
                     // No WebSocket available — last resort page reload
                     window.location.reload();

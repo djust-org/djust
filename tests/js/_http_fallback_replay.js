@@ -13,7 +13,8 @@ export const DIGEST_HEADER = 'X-Djust-Render-Digest';
 /** The once-per-session notice that events are going over HTTP (#1674). */
 const FALLBACK_NOTICE = /falling back to full-page HTTP re-renders/;
 
-export function loadPage(documentHtml, path = '/') {
+/** Resolves once the client initialised (it does so on DOMContentLoaded). */
+export async function loadPage(documentHtml, path = '/') {
     const navigations = [];
     const logs = [];
     const virtualConsole = new VirtualConsole();
@@ -33,6 +34,9 @@ export function loadPage(documentHtml, path = '/') {
     win.eval(client);
     let reloaded = 0;
     try { win.location.reload = () => { reloaded += 1; }; } catch (_e) { /* non-writable */ }
+    if (win.document.readyState === 'loading') {
+        await new Promise(resolve => win.document.addEventListener('DOMContentLoaded', resolve));
+    }
     const requests = [];
     return {
         dom, win, requests,

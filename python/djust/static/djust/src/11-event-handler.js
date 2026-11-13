@@ -15,6 +15,88 @@ const _pendingHttpControllers = new Set();
 // input typed since. Null when nothing is in flight, so an event sent alone
 // still goes out synchronously.
 let _httpEventChain = null;
+// #4108: the page-POST fallback answers with patches when the server can show
+// that this page displays the render it would diff against. The proof is a
+// keyed digest of that render: the page GET carries one (a <meta>, outside
+// dj-root), every fallback answer carries the next, and each fallback POST
+// echoes the latest. Null when unknown (a socket or SSE mount rendered this
+// page, or an answer changed the DOM without naming a digest); the server then
+// answers with the whole page, as it does when the digest does not match.
+// There is no version counter on this path: a patch answer has no `version`,
+// and a whole-page answer re-bases the cursor (see handleEvent).
+let _httpRenderDigest = null;
+// Whole-page answers in a row to requests that echoed a digest. A page whose
+// render differs on every request (a clock, a random id) never matches, and
+// each echo costs the server a second render: after two misses the digest is
+// withheld for `_HTTP_DIGEST_HOLD` events, then offered again.
+let _httpDigestMisses = 0;
+let _httpDigestHold = 0;
+const _HTTP_DIGEST_HOLD = 8;
+const _RENDER_DIGEST_META = 'meta[name="djust-render-digest"]';
+
+function _readPageRenderDigest() {
+    const meta = document.querySelector(_RENDER_DIGEST_META);
+    _httpRenderDigest = (meta && meta.getAttribute('content')) || null;
+    _httpDigestMisses = _httpDigestHold = 0;
+}
+
+// The digest this fallback request echoes, if any.
+function _renderDigestToSend() {
+    if (!_httpRenderDigest) return null;
+    if (_httpDigestHold > 0) {
+        _httpDigestHold -= 1;
+        return null;
+    }
+    return _httpRenderDigest;
+}
+
+// Record what a fallback answer says about the render now on the page.
+function _noteRenderDigest(data, sent) {
+    const whole = typeof data.html === 'string';
+    const changed = whole || (Array.isArray(data.patches) && data.patches.length > 0)
+        || data.type === 'embedded_update';
+    if (typeof data.render_digest === 'string' && data.render_digest) {
+        _httpRenderDigest = data.render_digest;
+    } else if (changed) {
+        _httpRenderDigest = null;
+    }
+    if (!sent || !changed) return;
+    if (!whole) {
+        _httpDigestMisses = 0;
+    } else if (++_httpDigestMisses >= 2) {
+        _httpDigestHold = _HTTP_DIGEST_HOLD;
+    }
+}
+
+// A patch answer did not fit this DOM (a script changed its structure). The
+// event's state is already saved, so the page GET shows the result: fetch it
+// and morph its root in, keeping what a reload would drop. Reload only when
+// that cannot be done.
+async function _httpFallbackResync() {
+    const url = window.location.href;
+    _httpRenderDigest = null;
+    try {
+        const response = await fetch(url, {headers: {'Accept': 'text/html'}});
+        if (!response.ok) throw new Error(`status ${response.status}`);
+        const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+        const fresh = page.querySelector('[dj-root]:not(html):not(head)');
+        const root = getLiveViewRoot();
+        if (!fresh || !root || url !== window.location.href) throw new Error('no root');
+        // The page's own contracts and digest travel outside dj-root.
+        for (const selector of ['script[data-djust-parameter-contracts]', _RENDER_DIGEST_META]) {
+            document.querySelector(selector)?.remove();
+            const next = page.querySelector(selector);
+            if (next) document.head.appendChild(document.importNode(next, true));
+        }
+        clientVdomVersion = null;
+        applyDjUpdateElements(root, fresh);
+        _installPageParameterContracts();
+        reinitAfterDOMUpdate();
+    } catch (_e) {
+        window.location.reload();
+    }
+}
+
 for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide']) {
     window.addEventListener(event, () => {
         _httpPageGeneration += 1;
@@ -29,6 +111,7 @@ for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide'])
 // data block names another view (a socket live_redirect replaced the root)
 // leaves the scope unknown rather than applying a stale mount's rules.
 function _installPageParameterContracts() {
+    _readPageRenderDigest();
     const root = findPageViewContainer();
     const path = root ? root.getAttribute('dj-view') : null;
     _localEventTransport.primaryViewPath = path || null;
@@ -67,6 +150,8 @@ function _eventContractTransport() {
 // A socket mount of the page's root also refreshes the page scope, so an HTTP
 // fallback after a socket live_redirect uses the current mount's contracts.
 function _mirrorPageParameterContracts(manifest, viewPath) {
+    // The socket's mount render is on the page now, not the GET's (#4108).
+    _httpRenderDigest = null;
     if (typeof viewPath !== 'string' || !viewPath) return;
     _localEventTransport.primaryViewPath = viewPath;
     try {
@@ -433,6 +518,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         }
         // Input, configured-name cookie, then server meta tag (00-namespace.js).
         const csrfToken = window.djust.csrfToken();
+        // Read here, after the wait above: the previous answer set it.
+        const sentDigest = teardown ? null : _renderDigestToSend();
         const response = await fetch(teardown ? teardown.url : window.location.href, {
             keepalive: !!teardown,
             ...(httpController ? {signal: httpController.signal} : {}),
@@ -444,7 +531,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 // A strict (or invalid) page scope asks for an explicit
                 // contract clear when the rendered tree no longer has one.
                 ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null
-                    ? {'X-Djust-Parameter-Contracts': '1'} : {})
+                    ? {'X-Djust-Parameter-Contracts': '1'} : {}),
+                ...(sentDigest ? {'X-Djust-Render-Digest': sentDigest} : {})
             },
             body: JSON.stringify(paramsToSend)
         });
@@ -484,6 +572,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // handleServerResponse, so it needs its own call.
         stripClientOwnedFrameFlags(data);
         _recordParameterContractFrame(_localEventTransport, data);
+        _noteRenderDigest(data, sentDigest);
         if (data.type === 'embedded_update') {
             // An embedded child's event: the server answers with the child's own
             // HTML, as the socket transports do (#3104).
@@ -495,7 +584,11 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             // whole-page answer starts its own version count (v1) and is not
             // the successor of the previous answer. Like a socket mount or an
             // html_recovery frame, it re-bases the cursor instead of being
-            // checked against it; the strict check stays for patch answers.
+            // checked against it. A patch answer of this transport carries no
+            // version at all (#4108): the server sends one only after matching
+            // the render digest this request echoed, which checks the content
+            // the patches apply to, not the order of answers. A patch answer
+            // that does carry a version is still checked against the cursor.
             if (typeof data.html === 'string' && data.patches === undefined && data.version !== undefined) {
                 clientVdomVersion = null;
             }

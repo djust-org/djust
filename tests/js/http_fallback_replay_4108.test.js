@@ -20,7 +20,7 @@ const fixture = JSON.parse(
 describe('page-POST fallback replay', () => {
     for (const [name, scenario] of Object.entries(fixture.scenarios)) {
         it(`${name}: the client ends with the expected DOM`, async () => {
-            const page = loadPage(scenario.get, scenario.url);
+            const page = await loadPage(scenario.get, scenario.url);
             try {
                 const {win} = page;
                 for (let i = 0; i < scenario.events.length; i++) {
