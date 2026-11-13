@@ -106,3 +106,26 @@ def test_pre_push_passes_one_combined_marker_expression():
     assert len(re.findall(r'(?<!\w)-m\s+"', invocation)) == 0, invocation
     assert "MARK_FILTER" in invocation
     assert 'MARK_EXPR="${MARK_EXPR:+$MARK_EXPR and }not slow"' in script
+
+
+def test_a_sweep_marker_keeps_a_recorded_slow_test_in_the_fast_tier(pytester):
+    """#4074: a ``sweep`` test is slow only in full; a fast-tier run samples it, so it stays."""
+    pytester.makeini(INI.replace("    nightly: nightly", "    nightly: nightly\n    sweep: sweep"))
+    pytester.makepyfile(
+        test_b="""
+        import pytest
+
+        @pytest.mark.sweep("p")
+        def test_sampled():
+            pass
+
+        def test_heavy():
+            pass
+        """
+    )
+    (pytester.path / ".test_durations").write_text(
+        json.dumps({"test_b.py::test_sampled": 400.0, "test_b.py::test_heavy": 5.0})
+    )
+    result = _run(pytester, "-m", "not slow", "-v")
+    result.assert_outcomes(passed=1, deselected=1)
+    result.stdout.fnmatch_lines(["*test_sampled PASSED*"])

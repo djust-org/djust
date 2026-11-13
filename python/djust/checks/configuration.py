@@ -6,8 +6,9 @@ Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 import inspect
 import logging
 import os
+import weakref
 from importlib import import_module
-from typing import Any
+from typing import Any, Callable, Optional
 
 from django.core.checks import CheckMessage, register
 
@@ -1226,6 +1227,52 @@ def _missing_admin_context_processors(settings: Any) -> list:
     return [p for p in _ADMIN_CONTEXT_PROCESSORS if p not in configured]
 
 
+# S005 reads each LiveView's source: ``_extract_exposed_state`` runs
+# ``inspect.getsource`` + ``ast.parse`` per method, and ``getsourcelines(cls)``
+# re-parses the class's whole module to find it. Those facts are fixed for a
+# given class object, but ``check_configuration`` can run many times in one
+# process (every test that calls it scans every LiveView subclass alive), so
+# they are kept per class. Weak keys: a collected class drops its entry, and a
+# new class can never inherit one through a reused ``id``.
+_S005_SOURCE_FACTS: "weakref.WeakKeyDictionary[type, tuple[bool, str, Optional[int]]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _s005_source_facts(
+    cls: type, extract_exposed_state: Callable[[type], dict[str, Any]]
+) -> tuple[bool, str, Optional[int]]:
+    """Return ``(exposes_state, source_file, source_line)`` for S005.
+
+    ``source_file``/``source_line`` are only looked up when the class exposes
+    state, as before (``""``/``None`` otherwise or when unavailable).
+    """
+    try:
+        return _S005_SOURCE_FACTS[cls]
+    except (KeyError, TypeError):
+        pass
+    exposed = bool(extract_exposed_state(cls))
+    cls_file = ""
+    cls_line: Optional[int] = None
+    if exposed:
+        try:
+            cls_file = inspect.getfile(cls) if hasattr(cls, "__module__") else ""
+        except (OSError, TypeError):
+            cls_file = ""
+        try:
+            cls_line = inspect.getsourcelines(cls)[1]
+        except (OSError, TypeError):
+            cls_line = None
+    facts = (exposed, cls_file, cls_line)
+    try:
+        _S005_SOURCE_FACTS[cls] = facts
+    except TypeError:
+        # A class that cannot be weakly referenced is not cached; its facts are
+        # recomputed on the next check run, which is only slower.
+        logger.debug("S005 source facts not cached for %s: not weak-referenceable", cls)
+    return facts
+
+
 # ---------------------------------------------------------------------------
 # Configuration checks (C0xx)
 # ---------------------------------------------------------------------------
@@ -1683,17 +1730,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             if _has_auth_mixin(cls):
                 continue
 
-            exposed = _extract_exposed_state(cls)
+            exposed, cls_file, cls_line = _s005_source_facts(cls, _extract_exposed_state)
             if exposed:
                 cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
-                try:
-                    cls_file = inspect.getfile(cls) if hasattr(cls, "__module__") else ""
-                except (OSError, TypeError):
-                    cls_file = ""
-                try:
-                    cls_line = inspect.getsourcelines(cls)[1]
-                except (OSError, TypeError):
-                    cls_line = None
                 errors.append(
                     DjustWarning(
                         "%s exposes state without authentication." % cls_label,

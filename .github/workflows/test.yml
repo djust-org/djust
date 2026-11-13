@@ -1,7 +1,27 @@
 name: Tests
 
 on:
+  # A manual run is the FULL run: every interpreter, the slow tier and every unit of the
+  # exhaustive sweeps (tests/sweep_sample.py, #4074). Untick full_sweeps to sample them.
   workflow_dispatch:
+    inputs:
+      full_sweeps:
+        description: Run every unit of the exhaustive security sweeps (else a seeded sample)
+        type: boolean
+        default: true
+  # The nightly cross-version run: .github/workflows/main-health.yml calls this workflow on its
+  # schedule (#4074), so `github.event_name` is `schedule` there and the matrix below is full.
+  # The sweeps are sampled in it: main-health's serial suite already runs every unit, once.
+  workflow_call:
+    inputs:
+      full_sweeps:
+        type: boolean
+        default: false
+      # Keeps a called run out of the caller-independent concurrency group below, so the
+      # nightly matrix and a push or a manual run of the same commit never cancel each other.
+      caller:
+        type: string
+        default: main-health
   push:
     branches: [ main, '1.*', '2.*' ]
     paths-ignore:
@@ -28,7 +48,8 @@ on:
   #     below is per-entry: entries never cancel each other.
   #   * There is no `github.event.pull_request` (so no `full-tests` label): the
   #     queue is treated like a pull request (3.12 only, the fast tier), and
-  #     the push to main that follows the merge still runs the full matrix.
+  #     the push to main that follows the merge runs the slow tier on 3.12; the
+  #     other interpreters run nightly (#4074).
   #   * No job here posts a comment or otherwise needs a PR context.
   merge_group:
     types: [checks_requested]
@@ -76,7 +97,7 @@ on:
 # branches and PRs keep cancelling superseded revisions as before.
 # Pinned by tests/test_ci_main_runs_not_cancelled.py.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  group: ${{ inputs.caller }}${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 # Least-privilege GITHUB_TOKEN (#2523). Every job here only reads the
@@ -251,7 +272,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
+        python-version: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
     name: python-build (py${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v7
@@ -301,13 +322,15 @@ jobs:
   # Python tests - runs in parallel with pytest-xdist
   #
   # Matrix-on-PR is the project's #1 minute sink (3 cells × ~10 min each).
-  # On PR (and in the merge queue) we run only the canonical interpreter
-  # (3.12); on push to main
-  # we run the full matrix (3.12/3.13/3.14, plus 3.15 allowed to fail). 3.13 / 3.14 regressions are
-  # caught on push or manual dispatch instead of at PR time — one merge later,
-  # not "never". Historical evidence the matrix has value: PRs #450 / #452
-  # shipped real 3.14-support fixes. Tradeoff accepted because the absolute
-  # cost (~8 min/PR × dependabot volume) outweighed the latency.
+  # On PR, in the merge queue AND on push to main we run only the canonical
+  # interpreter (3.12) against all three Django series; the full interpreter
+  # matrix (3.12/3.13/3.14, plus 3.15 allowed to fail) runs nightly (main-health
+  # calls this workflow on its schedule) and on manual dispatch. 3.13 / 3.14
+  # regressions are therefore caught the next night, not on the merge commit
+  # (#4074: a push to main cost ~800 runner-minutes, ~11 pushes a day, and every
+  # one of those commits had already passed the merge queue on 3.12). Historical
+  # evidence the matrix has value: PRs #450 / #452 shipped real 3.14-support
+  # fixes, so it moved, it was not dropped.
   #
   # SHARDED 4-way with pytest-split. Measured on the last completed run
   # before sharding (run 33681681995): this job was 1191s, of which 1005s
@@ -353,8 +376,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
-        django-version: ["5.2", "6.0", "6.1"]
+        python-version: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
+        # One Django series before merge (5.2, the LTS the dev environment uses); all three
+        # nightly and on a manual run (#4074). What only runs on Django 6 is covered before
+        # merge by `python-tests-django6-only` below, from the skips these 5.2 shards record.
+        django-version: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["5.2","6.0","6.1"]') || fromJSON('["5.2"]') }}
         group: [1, 2, 3, 4]
     name: python-tests (py${{ matrix.python-version }}, Django ${{ matrix.django-version }}, shard ${{ matrix.group }}/4)
     # Installs the extension python-build compiled for this interpreter rather
@@ -524,6 +550,35 @@ jobs:
       # URL-sweep module fixture charged to its first test, #3781), so a normal run prints
       # nothing; the timer fires from a C thread, so it still works when the
       # hang holds the GIL. Pinned by tests/test_ci_hang_dump_3800.py.
+      # The exhaustive sweeps (tests/sweep_sample.py, #4074) always run the cases tied to the
+      # files this change touches; list them. A queue entry may hold several PRs and what its
+      # base_sha means for a group is unverified (docs/testing-strategy.md), so it also diffs
+      # against the tip of its base branch and takes the union, as ci-change-scope.py does.
+      # Empty on schedule / dispatch (no base), and when a base cannot be fetched: the sample
+      # then draws without them, and the log says so.
+      - name: List the changed paths for the sweep sample
+        env:
+          BASES: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }} ${{ github.event.merge_group.base_ref }}
+        run: |
+          out="$RUNNER_TEMP/changed-paths.txt"
+          # With the status letter, for the early tier's path rules (tests/early_tier.py): a test
+          # module ADDED or DELETED runs the tree-scanning pins. --no-renames: a rename is D + A.
+          status="$RUNNER_TEMP/changed-status.txt"
+          : > "$out"
+          : > "$status"
+          for base in $BASES; do
+            [ "$base" = "0000000000000000000000000000000000000000" ] && continue
+            if git fetch --no-tags --depth=1 origin "$base" && git diff --name-only FETCH_HEAD HEAD >> "$out" \
+              && git diff --name-status --no-renames FETCH_HEAD HEAD >> "$status"; then
+              echo "diffed against $base"
+            else
+              echo "::warning::could not diff against $base; the sweep sample draws without its changed paths"
+            fi
+          done
+          sort -u -o "$out" "$out"
+          sort -u -o "$status" "$status"
+          echo "$(wc -l < "$out") changed path(s)"
+
       - name: Run Python tests (parallel with pytest-xdist, shard ${{ matrix.group }}/4)
         # PR fast tier: pull requests skip the duration-derived `slow` tier
         # (tests/slow_tier.py — > 1s in .test_durations: ~1.6% of tests,
@@ -539,9 +594,20 @@ jobs:
           DJUST_COLLECTED_FLOOR: "1"
           # A merge-queue entry has no PR labels, so it is treated like an
           # unlabelled PR (fast tier, 3.12 only): the push to main that follows
-          # the merge still runs the slow tier and the other interpreters.
+          # the merge still runs the slow tier (3.12; other interpreters nightly).
           # Flip to the full tier for the queue by dropping the `merge_group` arm.
           PYTEST_MARK: ${{ ((github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'full-tests')) || github.event_name == 'merge_group') && 'not nightly and not slow' || 'not nightly' }}
+          # #4074: the exhaustive sweeps run a seeded sample here, every unit nightly
+          # (main-health) and on a manual run; a `full-tests` PR label runs every unit too.
+          # The seed differs per commit and per cell, so successive runs rotate through the
+          # whole population; a failing sweep prints the command that re-runs its sample.
+          DJUST_SWEEP_SAMPLE: ${{ (inputs.full_sweeps || contains(github.event.pull_request.labels.*.name, 'full-tests')) && '0' || '1' }}
+          DJUST_SWEEP_SEED: ${{ github.sha }}-py${{ matrix.python-version }}-dj${{ matrix.django-version }}
+          DJUST_SWEEP_CHANGED_FILE: ${{ runner.temp }}/changed-paths.txt
+          # tests/early_tier.py: the path rules that keep pins early for this change's shape.
+          DJUST_CHANGED_STATUS_FILE: ${{ runner.temp }}/changed-status.txt
+          # tests/skip_ledger.py: every skipped node id, for python-tests-django6-only.
+          DJUST_RECORD_SKIPS: ${{ runner.temp }}/skipped.txt
         run: |
           PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto --dist loadfile -m "$PYTEST_MARK" -o faulthandler_timeout=1800 --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
 
@@ -574,6 +640,17 @@ jobs:
           # broke. Silence must not be the failure mode twice. The step is
           # `continue-on-error`, so a red one is visible without blocking.
           if-no-files-found: error
+
+      # What this 5.2 shard skipped, for python-tests-django6-only (#4074). Only the cell that
+      # job reads uploads: 3.12 on Django 5.2. `always()`: a red shard still says what it skipped.
+      - name: Upload the tests this shard skipped
+        if: always() && matrix.python-version == '3.12' && matrix.django-version == '5.2'
+        uses: actions/upload-artifact@v7
+        with:
+          name: skipped-on-django-5.2-shard-${{ matrix.group }}
+          path: ${{ runner.temp }}/skipped.txt
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Run Python linter
         if: matrix.group == 1
@@ -647,6 +724,72 @@ jobs:
   # No longer continue-on-error since #3074 (it had soaked green since #1534),
   # so a failure shows red; it is still NOT wired into the test-summary
   # aggregate gate, so it does not by itself block a merge.
+  # The tests the Django 5.2 shards skipped, run on Django 6.1 (#4074). Before merge the
+  # shards run one Django series; about a hundred tests exist only on Django 6 (template
+  # partials, the CSP nonce tag) and would otherwise run nowhere until the nightly. The list
+  # comes from what the shards actually skipped (tests/skip_ledger.py), so a new Django-6-only
+  # file needs no registration. Runs on every event (cheap; on the nightly 6.1 shards cover
+  # the same tests again). A test skipped here too was skipped on every cell: the log lists
+  # those with their reasons.
+  python-tests-django6-only:
+    name: python-tests (Django 6.1, skipped on 5.2)
+    needs: [changes, python-tests]
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && needs.python-tests.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Download the extension built for 3.12
+        uses: actions/download-artifact@v8
+        with:
+          name: djust-wheel-py3.12
+          path: ${{ runner.temp }}/djust-wheel
+
+      - name: Download what the Django 5.2 shards skipped
+        uses: actions/download-artifact@v8
+        with:
+          pattern: skipped-on-django-5.2-shard-*
+          path: ${{ runner.temp }}/skipped
+
+      - name: Install Python dependencies, Django 6.1 and the prebuilt extension
+        env:
+          UV_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: |
+          uv sync --frozen --extra dev --no-install-project --python "$UV_PYTHON"
+          uv pip install --python .venv/bin/python "Django~=6.1.0" pytest-xdist
+          .venv/bin/python -c 'import django; assert django.get_version().startswith("6.1."), django.get_version()'
+          export UV_PYTHON="$PWD/.venv/bin/python"
+          echo "UV_PYTHON=$UV_PYTHON" >> "$GITHUB_ENV"
+          scripts/ci-install-prebuilt-djust.sh "$RUNNER_TEMP/djust-wheel"
+
+      # All four shard lists must be there: a shard that died before writing one would make
+      # this job quietly run a quarter less. tests/skip_ledger.py refuses an empty list.
+      - name: Run on Django 6.1 the tests Django 5.2 skipped
+        env:
+          PYTEST_MARK: ${{ ((github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'full-tests')) || github.event_name == 'merge_group') && 'not nightly and not slow' || 'not nightly' }}
+          DJUST_ONLY_IDS_FILE: ${{ runner.temp }}/skipped-on-5.2.txt
+          DJUST_SWEEP_SAMPLE: '1'
+          DJUST_SWEEP_SEED: ${{ github.sha }}-django6-only
+        run: |
+          lists=$(find "$RUNNER_TEMP/skipped" -name skipped.txt | wc -l)
+          if [ "$lists" -ne 4 ]; then
+            echo "::error::expected 4 skip lists from the Django 5.2 shards, found $lists"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP"/skipped/*/skipped.txt | sort -u > "$DJUST_ONLY_IDS_FILE"
+          echo "$(wc -l < "$DJUST_ONLY_IDS_FILE") test(s) skipped on Django 5.2"
+          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -n auto --dist loadfile -m "$PYTEST_MARK" -rs -q -o faulthandler_timeout=1800
+
   python-free-threaded:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
@@ -1342,7 +1485,7 @@ jobs:
   # Summary job - waits for all test jobs
   test-summary:
     runs-on: ubuntu-latest
-    needs: [changes, benchmarks, rust-tests, python-tests, windows-ai-inventory, javascript-tests, javascript-coverage, playwright-tests, browser-smoke, nav-hooks-guard, security-scan, security-tests, demo-checks, django-template-suite]
+    needs: [changes, benchmarks, rust-tests, python-tests, python-tests-django6-only, windows-ai-inventory, javascript-tests, javascript-coverage, playwright-tests, browser-smoke, nav-hooks-guard, security-scan, security-tests, demo-checks, django-template-suite]
     if: always()
     steps:
       # `needs.python-tests.result` is the MATRIX-WIDE result: GitHub reports
@@ -1359,6 +1502,7 @@ jobs:
           echo "  Change scope: ${{ needs.changes.result }} (docs_only=${{ needs.changes.outputs.docs_only }}, rust_skip=${{ needs.changes.outputs.rust_skip }})"
           echo "  Rust tests: ${{ needs.rust-tests.result }}"
           echo "  Python tests: ${{ needs.python-tests.result }}"
+          echo "  Python tests on Django 6.1, skipped on 5.2: ${{ needs.python-tests-django6-only.result }}"
           echo "  Windows AI inventory: ${{ needs.windows-ai-inventory.result }}"
           echo "  JavaScript tests: ${{ needs.javascript-tests.result }}"
           echo "  JavaScript coverage: ${{ needs.javascript-coverage.result }} (skipped on PRs without full-tests)"
@@ -1385,6 +1529,7 @@ jobs:
           # event; the event check here is a second lock on the same door);
           # javascript-coverage likewise only on pull_request / merge_group.
           if [ "${{ needs.python-tests.result }}" == "success" ] && \
+             [ "${{ needs.python-tests-django6-only.result }}" == "success" ] && \
              { [ "${{ needs.rust-tests.result }}" == "success" ] || \
                { [ "${{ needs.rust-tests.result }}" == "skipped" ] && \
                  [ "${{ needs.changes.result }}" == "success" ] && \
@@ -1444,6 +1589,7 @@ jobs:
           RESULTS: |
             rust-tests=${{ needs.rust-tests.result }}
             python-tests=${{ needs.python-tests.result }}
+            python-tests-django6-only=${{ needs.python-tests-django6-only.result }}
             windows-ai-inventory=${{ needs.windows-ai-inventory.result }}
             javascript-tests=${{ needs.javascript-tests.result }}
             javascript-coverage=${{ needs.javascript-coverage.result }}

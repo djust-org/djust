@@ -46,6 +46,11 @@ NOT_DETECTABLE = {
         "workflow and .test_durations: a PR that adds a test file moves the shards another "
         "PR's durations were cut for"
     ),
+    "tests/test_promotion_ledger.py": (
+        "reads tests/promotion-ledger.json and every test file an entry names, and the files the "
+        "early-tier path rules name: a PR that renames or deletes a test another PR's ledger "
+        "entry (or rule) points at passes alone and fails on the merge"
+    ),
     "python/tests/test_safe_markup_gate_3848.py": (
         "runs the safe-markup guard over python/djust and reconciles it with the committed audit "
         "baseline: a PR that adds an interpolated mark_safe / _safe / safe_html, or a class that "

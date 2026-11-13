@@ -212,6 +212,7 @@ markers = [
     "components: marks tests for djust.components module",
     "pr_tier: stays in the PR fast tier even when .test_durations records it over 1s (tests/slow_tier.py)",
     "nightly: marks exhaustive differential sweeps for scheduled nightly CI (deselect with '-m \"not nightly\"')",
+    "sweep(population): an exhaustive sweep that runs a seeded sample before merge and every unit nightly (tests/sweep_sample.py)",
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

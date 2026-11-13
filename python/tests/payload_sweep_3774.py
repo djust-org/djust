@@ -345,11 +345,41 @@ NOT_DRIVEN_GENERICALLY = {
 }
 
 
-def sweep(extra_drivers=()) -> dict:
-    """Run every driver; return the injections found and what was discovered/rendered."""
+def units(extra_drivers=()) -> list[str]:
+    """Every unit :func:`sweep` drives, as ``kind:name`` (the sampling unit, #4074)."""
+    out = []
+    for module_name in TAG_MODULES:
+        module = importlib.import_module(module_name)
+        filters = {f for f in getattr(getattr(module, "register", None), "filters", {}).values()}
+        for name, obj in inspect.getmembers(module):
+            if getattr(obj, "__module__", None) != module_name or name in NOT_DRIVEN_GENERICALLY:
+                continue
+            if obj in filters:
+                continue
+            if inspect.isclass(obj) and issubclass(obj, Node):
+                out.append(f"node:{module_name}.{name}")
+            elif inspect.isfunction(obj) and not name.startswith(("_", "do_")):
+                out.append(f"function:{module_name}.{name}")
+    seen_classes: set[type] = set()
+    for _tag, handler, _block in handlers():
+        if type(handler) in seen_classes or not hasattr(handler, "render"):
+            continue
+        seen_classes.add(type(handler))
+        if type(handler).__module__ == HANDLER_MODULES[0]:
+            out.append(f"handler:{HANDLER_MODULES[0]}.{type(handler).__name__}")
+    out += [f"driver:{label}" for label, _produce in extra_drivers]
+    return out
+
+
+def sweep(extra_drivers=(), only=None) -> dict:
+    """Run every driver; return the injections found and what was discovered/rendered.
+
+    ``only`` (a set of :func:`units` names) restricts the run to a sample: everything is still
+    DISCOVERED and counted, only the selected units are driven (``sampled_*`` counts them)."""
     all_keys, numeric = keys()
     found: list[tuple] = []
-    rendered = discovered = 0
+    rendered = discovered = sampled = 0
+    wanted = (lambda unit: True) if only is None else only.__contains__
     for module_name in TAG_MODULES:
         module = importlib.import_module(module_name)
         filters = {f for f in getattr(getattr(module, "register", None), "filters", {}).values()}
@@ -360,6 +390,9 @@ def sweep(extra_drivers=()) -> dict:
                 continue
             if inspect.isclass(obj) and issubclass(obj, Node):
                 discovered += 1
+                if not wanted(f"node:{module_name}.{name}"):
+                    continue
+                sampled += 1
                 ok = False
                 for mode in MODES:
                     for shape in SHAPES:
@@ -370,6 +403,8 @@ def sweep(extra_drivers=()) -> dict:
                         found += [(module_name, name, shape, mode, h) for h in injections(out)]
                 rendered += ok
             elif inspect.isfunction(obj) and not name.startswith(("_", "do_")):
+                if not wanted(f"function:{module_name}.{name}"):
+                    continue
                 for mode in MODES:
                     for variant in FUNCTION_VARIANTS:
                         out = render_function(obj, variant, mode)
@@ -377,7 +412,7 @@ def sweep(extra_drivers=()) -> dict:
                             found += [
                                 (module_name, name, variant, mode, h) for h in injections(out)
                             ]
-    handlers_discovered = handlers_rendered = 0
+    handlers_discovered = handlers_rendered = handlers_sampled = 0
     seen_classes: set[type] = set()
     for tag, handler, block in handlers():
         if type(handler) in seen_classes or not hasattr(handler, "render"):
@@ -386,6 +421,9 @@ def sweep(extra_drivers=()) -> dict:
         if type(handler).__module__ != HANDLER_MODULES[0]:
             continue  # a handler another module registers (function components, suspense) has its own tests
         handlers_discovered += 1
+        if not wanted(f"handler:{HANDLER_MODULES[0]}.{type(handler).__name__}"):
+            continue
+        handlers_sampled += 1
         ok = False
         for mode in MODES:
             for shape in SHAPES:
@@ -399,6 +437,8 @@ def sweep(extra_drivers=()) -> dict:
                     found += [(HANDLER_MODULES[0], tag, shape, mode, h) for h in injections(out)]
         handlers_rendered += ok
     for label, produce in extra_drivers:
+        if not wanted(f"driver:{label}"):
+            continue
         for mode in MODES:
             try:
                 outputs = produce(mode)
@@ -413,4 +453,6 @@ def sweep(extra_drivers=()) -> dict:
         "discovered": discovered,
         "handlers_rendered": handlers_rendered,
         "handlers_discovered": handlers_discovered,
+        "sampled": discovered if only is None else sampled,
+        "handlers_sampled": handlers_discovered if only is None else handlers_sampled,
     }
