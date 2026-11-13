@@ -85,9 +85,10 @@ _SHAPE_CHARS = 16  # crc32 and adler32 of the shape text, as hex
 _SHAPE_ALPHABET = frozenset("0123456789abcdef")
 
 # One tag or comment of the renderer's serialization. Attribute values are
-# quoted, so a ">" inside one does not end the tag.
+# quoted, so a ">" inside one does not end the tag. A comment ends at "-->" or
+# at "--!>", as it does in the browser's HTML parser (CodeQL alert 3151).
 _TOKEN = re.compile(
-    r"<!--(?P<comment>.*?)-->"
+    r"<!--(?P<comment>.*?)--!?>"
     r"|<(?P<close>/?)(?P<tag>[A-Za-z][^\s/>]*)(?P<attrs>(?:[^>\"']|\"[^\"]*\"|'[^']*')*)>",
     re.DOTALL,
 )
