@@ -24,10 +24,14 @@ Two exported names collide with submodule names: ``live_view`` and
 ``_rebind_live_view_decorator``), regardless of whether the submodule was
 imported first. The one order that differs from the eager pre-#2559 init:
 ``import djust.live_view`` BEFORE any lazy resolution leaves the attribute
-bound to the module until the first resolution -- the same thing
-``djust.rate_limit`` has always done. Import the decorators from
-``djust.live_view`` / ``djust.decorators`` directly to sidestep the
-collision entirely.
+bound to the module until the first resolution.
+
+``djust.rate_limit`` works as the decorator in every order (#3993): before the
+submodule is imported it is the decorator; once it is, it is that submodule,
+which is callable as the decorator (``djust.rate_limit._RateLimitModule``), so
+``import djust.rate_limit as rl`` and ``from djust.rate_limit import X`` keep
+giving the module. Import the decorators from ``djust.live_view`` /
+``djust.decorators`` directly to sidestep the collision entirely.
 """
 
 from __future__ import annotations
@@ -184,7 +188,7 @@ def _rebind_live_view_decorator() -> None:
     WHICH public name was touched first. Contract: after any lazy name has
     resolved, ``djust.live_view`` is the decorator regardless of import
     order; only a submodule-first import with NO lazy resolution yet sees
-    the module (the same behaviour ``djust.rate_limit`` has always had).
+    the module.
     """
     submodule = sys.modules.get("djust.live_view")
     if submodule is not None and isinstance(globals().get("live_view"), types.ModuleType):

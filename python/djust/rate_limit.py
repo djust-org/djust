@@ -5,6 +5,7 @@ Uses a token bucket algorithm: tokens refill at a steady rate, and each event
 consumes one token. Burst capacity allows short bursts of activity.
 """
 
+import sys
 import threading
 import types
 import time
@@ -530,3 +531,35 @@ def reset_handler_buckets() -> None:
     """Clear the shared per-caller @rate_limit state — used by tests."""
     with _handler_buckets_lock:
         _handler_buckets.clear()
+
+
+class _RateLimitModule(types.ModuleType):
+    """``djust.rate_limit``: this submodule, and -- called -- the ``@rate_limit`` decorator.
+
+    ``rate_limit`` is both a public decorator (``from djust import rate_limit``)
+    and the name of this submodule. Importing the submodule binds the package
+    attribute ``djust.rate_limit`` to the MODULE, so before #3993
+    ``from djust import rate_limit`` raised ``'module' object is not callable``
+    once the runtime had imported it. Re-binding the attribute to the decorator
+    function (as ``djust.live_view`` is) would break ``import djust.rate_limit
+    as rl``, which reads the package attribute first. So the module itself is
+    callable: ``djust.rate_limit(rate=..., burst=...)`` is exactly
+    ``djust.decorators.rate_limit(rate=..., burst=...)``, in every import order,
+    and every submodule import form still yields this module.
+    """
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        from .decorators import rate_limit as decorator
+
+        return decorator(*args, **kwargs)
+
+    @property
+    def __signature__(self) -> Any:
+        import inspect
+
+        from .decorators import rate_limit as decorator
+
+        return inspect.signature(decorator)
+
+
+sys.modules[__name__].__class__ = _RateLimitModule
