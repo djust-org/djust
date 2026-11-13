@@ -14,10 +14,10 @@
     "python/tests/test_safe_markup_guard_3864.py",
     "python/tests/test_safe_markup_guard_3766.py",
     "python/tests/test_safe_markup_guard_3848.py",
+    "-m",
+    "not slow",
     "--deselect",
-    "python/tests/test_safe_markup_guard_3864.py::TestTheGateOffListApplies::test_every_mutation_text_still_applies",
-    "--deselect",
-    "python/tests/test_safe_markup_guard_3864.py::TestMonotoneMatrix::test_the_full_cross_product"
+    "python/tests/test_safe_markup_guard_3864.py::TestTheGateOffListApplies::test_every_mutation_text_still_applies"
   ],
   "deadline": 400,
   "rss_mb": 4096,
@@ -149,16 +149,34 @@
       "new": "                    if self._actuals"
     },
     {
-      "label": "the escapers' order: a value escaper before the JSON escaper",
+      "label": "the escapers' order (pass B): a value escaper before the JSON escaper",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "        for kind in (\"json*\", \"json\", \"sens*\", \"sens\"):",
-      "new": "        for kind in (\"json*\", \"sens*\", \"json\", \"sens\"):"
+      "old": "            (\"json*\", \"json\", \"sens*\", \"sens\")\n            if self.call_binding",
+      "new": "            (\"json*\", \"sens*\", \"json\", \"sens\")\n            if self.call_binding"
     },
     {
-      "label": "the depth bound is not carried into a helper's hold level",
+      "label": "the depth bound is not carried into a helper's hold level (pass B)",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                            self._hold_level(r.value, fscope, origins, d)\n",
-      "new": "                            self._hold_level(r.value, fscope, origins)\n"
+      "old": "                                r.value, fscope, origins, d if self.call_binding else 0\n",
+      "new": "                                r.value, fscope, origins, 0\n"
+    },
+    {
+      "label": "the union is pass B alone (review 3, a)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "    return sorted(set(first) | set(second), key=",
+      "new": "    return sorted(set(second), key="
+    },
+    {
+      "label": "pass A binds calls too, so its caches are written under a binding (review 3, b)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "    first = _Module(source, module, is_package, dynamic_bases).findings()",
+      "new": "    first = _Module(source, module, is_package, dynamic_bases, call_binding=True).findings()"
+    },
+    {
+      "label": "pass B is not run",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "    second = _Module(source, module, is_package, dynamic_bases, call_binding=True).findings()\n",
+      "new": "    second = []\n"
     }
   ]
 }

@@ -8,9 +8,10 @@ its parameters bound to this call's arguments, each judged as if written in plac
 
 * the sink is flagged when what it returns, for these arguments, is built from a raw value or places a
   value escaper's output where its position rules do not allow (``<a href={u}>``);
-* it only ever ADDS a finding: the verdict is OR-ed with the one without the binding, and ``clean``
-  never reads a binding, so everything the guard of ``main`` flags stays flagged
-  (``TestMonotoneMatrix`` checks that over the full cross product, by execution);
+* it only ever ADDS a finding: ``find_unsafe_markup`` runs two analyzers that share no state, pass A
+  the guard as it was (no call is ever bound) and pass B with the judgement, and reports the union.
+  ``TestTwoPasses`` checks pass A against the recorded findings of ``main``'s guard over the call
+  matrix, the stress programs of the third review and the real tree, and the union against them too;
 * containers that outlive the call (a module list, a mutable default, a parameter, an attribute) are
   judged with every binding off; a parameter this call binds to a literal decides ``if p`` /
   ``if p is None`` when the function never rebinds it; a recursive call, ``*args`` / ``**kw`` and a call
@@ -25,13 +26,18 @@ Refs #3864, #3845.
 
 from __future__ import annotations
 
+import copy
+import functools
 import json
 import time
 from pathlib import Path
 
 import pytest
+import safe_markup_baseline_3864 as base
 import safe_markup_call_fuzz_3864 as fuzz
+import safe_markup_stress_3864 as stress
 
+from scripts.lib import safe_markup_taint as taint
 from scripts.lib.safe_markup_taint import find_unsafe_markup
 
 pytestmark = pytest.mark.components
@@ -366,6 +372,27 @@ ROWS.update(
             "def g(x):\n    return mark_safe(tag('<b title=\"', safe_url(x)))\n",
             True,
         ),
+        "review 3: a bound sink at module level, scanned first, then the unbound one (ce1)": (
+            'from django.utils.html import conditional_escape\ndef g(x, flag=None):\n    s = "a"\n    if flag is not None:\n        s = conditional_escape(safe_url(x))\n    if x == "nest":\n        return f"<i>{g(x, flag)}</i>"\n    return s\n\ndef f(y):\n    return mark_safe(f"<a href={g(y, 1)}>")\n\nX = mark_safe(g("v"))\n',
+            True,
+        ),
+        "review 3: a bound sink at module level, after the unbound one": (
+            'from django.utils.html import conditional_escape\ndef g(x, flag=None):\n    s = "a"\n    if flag is not None:\n        s = conditional_escape(safe_url(x))\n    if x == "nest":\n        return f"<i>{g(x, flag)}</i>"\n    return s\n\ndef f(y):\n    return mark_safe(f"<a href={g(y, 1)}>")\nX = mark_safe(g(\'v\'))\n',
+            True,
+        ),
+        "review 3: a bound sink in a function scanned first (ce2)": (
+            'from django.utils.html import conditional_escape\ndef g(x, flag=None):\n    s = "a"\n    if flag is not None:\n        s = conditional_escape(safe_url(x))\n    if x == "nest":\n        return f"<i>{g(x, flag)}</i>"\n    return s\n\ndef f(y):\n    return mark_safe(f"<a href={g(y, 1)}>")\n\ndef a_first(v):\n    return mark_safe(g(v))\n',
+            True,
+        ),
+        "review 3: a bound sink in a function scanned last": (
+            'from django.utils.html import conditional_escape\ndef g(x, flag=None):\n    s = "a"\n    if flag is not None:\n        s = conditional_escape(safe_url(x))\n    if x == "nest":\n        return f"<i>{g(x, flag)}</i>"\n    return s\n\ndef a_first(v):\n    return mark_safe(g(v))\ndef f(y):\n    return mark_safe(f"<a href={g(y, 1)}>")\n',
+            True,
+        ),
+        "bare: a method of a fresh instance named like a str method": (
+            "class Card:\n    def format(self, u):\n        return f'<b>{u}</b>'\n"
+            "def f(x):\n    return mark_safe(Card().format(x))\n",
+            True,
+        ),
         "bare: a starred call binds nothing": (
             "def w(a, u=''):\n    return f'<p>{u}</p>'\n"
             "def f(x):\n    return mark_safe(w(*(escape(x), x)))\n",
@@ -429,38 +456,129 @@ class TestKnownGaps:
         assert not flagged(KNOWN_GAPS[label][0]), f"the guard learned {label}: move it to ROWS"
 
 
-BASELINE = ROOT / "python/tests/safe_markup_call_matrix_baseline_3864.json"
+def _pass_a(source: str, **kwargs) -> list:
+    """Pass A alone: the guard as it was, in which no call is ever bound."""
+    return sorted(base.key(f) for f in taint._Module(source, **kwargs).findings())
 
 
-def _baseline() -> set[str]:
-    return {json.dumps(m) for m in json.loads(BASELINE.read_text())["misses"]}
+def _union(source: str, **kwargs) -> list:
+    return sorted(base.key(f) for f in find_unsafe_markup(source, **kwargs))
 
 
-class TestMonotoneMatrix:
-    """MONOTONE against ``main``, by execution: over the FULL cross product of
-    ``safe_markup_call_fuzz_3864.matrix()`` (every source x every helper x every placement, run
-    against every payload), the guard clears no case that lets a payload through unless the guard of
-    ``main`` clears it too (``safe_markup_call_matrix_baseline_3864.json``, regenerated by running the
-    fuzz module with main's guard). The full product is in the slow tier; every 25th case runs on PRs."""
+def _check(corpus: str, items) -> None:
+    """Pass A finds exactly what main's guard found, and the union at least that."""
+    differ, lost = [], []
+    for name, source, kwargs, expected in items:
+        a = _pass_a(source, **kwargs)
+        if a != expected:
+            differ.append((name, expected, a))
+        if not {tuple(x) for x in expected} <= {tuple(x) for x in _union(source, **kwargs)}:
+            lost.append(name)
+    assert differ == [], f"{corpus}: pass A is not main's guard: {differ[:3]}"
+    assert lost == [], f"{corpus}: the union lost a finding of main's guard: {lost[:5]}"
+
+
+@functools.lru_cache(maxsize=1)
+def _recorded() -> dict:
+    return json.loads(base.BASELINE.read_text())
+
+
+def _matrix_items(step: int = 1):
+    recorded = _recorded()["matrix"]
+    for case in fuzz.matrix()[::step]:
+        k = base.matrix_key(case)
+        yield k, fuzz.build(*case), {}, recorded.get(k, [])
+
+
+def _stress_items(count: int):
+    recorded = _recorded()["stress"]
+    for seed in range(count):
+        yield str(seed), stress.program(seed), {}, recorded.get(str(seed), [])
+
+
+def _tree_items():
+    recorded = _recorded()["tree"]
+    files = base.tree_files()
+    dynamic = taint.dynamic_class_names(text for _, text in files)
+    for path, text in files:
+        entry = recorded.get(path)
+        if entry is None or entry["crc"] != base.crc(text):
+            continue  # not main's file any more (changed or new since the baseline)
+        yield path, text, {"dynamic_bases": dynamic}, entry["findings"]
+
+
+class TestTwoPasses:
+    """MONOTONE against ``main`` by construction: ``find_unsafe_markup`` runs two analyzers that share
+    no state, and reports the union. These tests pin both halves against the recorded findings of
+    ``main``'s guard (``safe_markup_baseline_3864``): pass A alone finds EXACTLY those, over the call
+    matrix, the stress programs of the third review and the real tree, and the union at least those.
+    The full corpora are in the slow tier; a sample of the matrix and the stress programs runs on
+    PRs."""
 
     @pytest.mark.slow
-    def test_the_full_cross_product(self):
-        result = fuzz.misses(find_unsafe_markup, fuzz.matrix())
-        new = {json.dumps(m) for m in result["misses"]} - _baseline()
-        assert new == set(), sorted(new)[:10]
-        assert result["unsafe"] >= 2000 and result["cleared"] >= 800, result  # not vacuous
+    def test_the_matrix(self):
+        _check("matrix", _matrix_items())
+
+    @pytest.mark.slow
+    def test_the_stress_programs(self):
+        assert _recorded()["stress_programs"] == base.STRESS_PROGRAMS
+        _check("stress", _stress_items(base.STRESS_PROGRAMS))
+
+    @pytest.mark.slow
+    def test_the_real_tree(self):
+        items = list(_tree_items())
+        assert len(items) >= 500, "the baseline no longer matches the tree: record it again"
+        _check("tree", items)
 
     @pytest.mark.pr_tier
-    def test_a_sample_of_the_cross_product(self):
-        result = fuzz.misses(find_unsafe_markup, fuzz.matrix()[::25])
-        new = {json.dumps(m) for m in result["misses"]} - _baseline()
-        assert new == set(), sorted(new)[:10]
+    def test_a_sample_of_each(self):
+        _check("matrix", _matrix_items(step=120))
+        _check("stress", _stress_items(30))  # the tree takes a whole-tree read: slow tier only
 
-    def test_the_baseline_covers_the_whole_product(self):
-        """A miss of main outside today's product would hide nothing; a product that grew without
-        a regenerated baseline is caught by the full test."""
-        cases = {json.dumps([s, h, p]) for s, h, p in fuzz.matrix()}
-        assert _baseline() <= cases
+    def test_pass_a_never_binds_a_call(self):
+        """Pass A's binding table raises on any write: a run that reaches it would fail here."""
+        mod = taint._Module("def f(x):\n    return x\n")
+        with pytest.raises(RuntimeError):
+            mod._actuals[1] = {}
+        for seed in range(40):
+            taint._Module(stress.program(seed)).findings()  # raises if pass A ever binds
+
+    def test_the_two_passes_share_no_state(self, monkeypatch):
+        """Every table and cache of pass B is its own object, and nothing pass A keeps is written
+        while pass B runs (instrumented over stress programs and a slice of the matrix)."""
+        made: list = []
+        original = taint._Module.__init__
+
+        def record(self, *args, **kwargs):
+            original(self, *args, **kwargs)
+            made.append(self)
+
+        monkeypatch.setattr(taint._Module, "__init__", record)
+        sources = [stress.program(seed) for seed in range(40)]
+        sources += [fuzz.build(*case) for case in fuzz.matrix()[::60]]
+        for source in sources:
+            made.clear()
+            find_unsafe_markup(source)
+            assert len(made) == 2, "find_unsafe_markup must run exactly two analyzers"
+            first, second = made
+            assert not first.call_binding and second.call_binding
+            shared = [
+                name
+                for name, value in vars(first).items()
+                if isinstance(value, (dict, set, list))
+                and value is vars(second).get(name)
+                and value is not taint._NO_BINDINGS
+            ]
+            assert shared == [], shared
+            snapshot = {
+                name: copy.copy(value)
+                for name, value in vars(first).items()
+                if isinstance(value, (dict, set, list))
+            }
+            # pass B has run (second.findings()) after pass A: A's tables are as A left them
+            second.findings()
+            for name, value in snapshot.items():
+                assert vars(first)[name] == value, f"pass B wrote pass A's {name}"
 
 
 class TestTheCallFuzz:

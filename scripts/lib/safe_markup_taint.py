@@ -68,8 +68,10 @@ A piece is clean when it is:
   is also judged by what that function returns with its parameters bound to THIS call's arguments,
   each judged as if written in place: ``mark_safe(tag(safe_url(x)))`` of ``def tag(u): return f"<a
   href={u}>"`` and ``mark_safe(helper(x))`` of a helper that interpolates its argument are flagged.
-  It only ever ADDS a finding (OR-ed with the verdict without it; ``clean`` never reads a binding), so
-  a call's result is clean exactly when it was before. Containers that outlive the call are judged
+  It only ever ADDS a finding, by construction: ``find_unsafe_markup`` runs TWO analyzers that share
+  no state, pass A the guard as it was (no call is ever bound: its binding table raises on a write)
+  and pass B with this judgement, and reports the union of their findings (it costs one more
+  analysis per file). Containers that outlive the call are judged
   with every binding off; a parameter the call binds to a literal decides ``if p`` / ``if p is None``
   when the function never rebinds it; a recursive call, ``*args`` / ``**kw`` and a call that does not
   fit the signature are judged with the parameters raw; past the depth bound the sink is flagged;
@@ -526,6 +528,16 @@ def _return_values(fn: ast.AST) -> list[ast.expr | None]:
     return [n.value for n in _own_nodes(fn) if isinstance(n, ast.Return)]
 
 
+class _NoBindings(dict):
+    """The binding table of pass A: no call is ever bound there; a write is a bug, so it raises."""
+
+    def __setitem__(self, key: object, value: object) -> None:
+        raise RuntimeError("pass A of the safe-markup guard never binds a call (#3864)")
+
+
+_NO_BINDINGS: dict = _NoBindings()
+
+
 class _Def:
     """One binding of a name: what reaches a use is a SET of these (see :class:`_Flow`)."""
 
@@ -644,8 +656,12 @@ class _Module:
         module: str | None = None,
         is_package: bool = False,
         dynamic_bases: frozenset[str] = frozenset(),
+        call_binding: bool = False,
     ) -> None:
         self.source = source
+        #: pass B (``find_unsafe_markup``): also judge a sink handed a call with that call's
+        #: arguments (#3864). Pass A (``False``) is the guard as it was: nothing ever binds a call.
+        self.call_binding = call_binding
         #: names of classes (anywhere in the package) that write attributes under names the source
         #: does not show (``Component``: ``setattr(self, key, value)`` for every kwarg), and the
         #: classes that inherit from them: see :func:`dynamic_class_names`
@@ -700,7 +716,7 @@ class _Module:
         #: id(scope) -> parameter -> the argument (an ``_Actual``) of the call whose RESULT is being
         #: judged at a sink (#3864). Only ``tainted`` sets it, and only to flag MORE: a verdict that
         #: reads it is OR-ed with the one it would give without (``_returns_tainted``).
-        self._actuals: dict[int, dict[str, object]] = {}
+        self._actuals: dict[int, dict[str, object]] = {} if call_binding else _NO_BINDINGS
         self._facts: dict[int, dict[int, tuple[tuple[str, str, bool], ...]]] = {}
         self._memo_text: dict[tuple, str] = {}
         #: (id(callee expression), id(scope)) -> what ``_local_function`` found (it reads only
@@ -1946,13 +1962,15 @@ class _Module:
                         # the depth carries on into the callee (#3864: a chain of helpers each
                         # calling the next ran Python out of stack); past the bound it is ``2``
                         held = any(
-                            self._hold_level(r.value, fscope, origins, d)
+                            self._hold_level(
+                                r.value, fscope, origins, d if self.call_binding else 0
+                            )
                             for r in _own_nodes(fn)
                             if isinstance(r, ast.Return) and r.value is not None
                         )
                     finally:
                         self._fn_hold_busy.discard(key)
-                    if d > 30:
+                    if d > 30 and self.call_binding:
                         return 2 if held else 0  # cut short by the bound: not remembered
                     self._fn_hold[key] = 2 if held else 0
                 return self._fn_hold[key]
@@ -2129,7 +2147,11 @@ class _Module:
                     break
         # the strictest first: a value that may be JSON-in-script (text only) in one case and a
         # value escaper's output (a quoted value too) in another is placed as the JSON one (#3864)
-        for kind in ("json*", "json", "sens*", "sens"):
+        for kind in (
+            ("json*", "json", "sens*", "sens")
+            if self.call_binding
+            else ("json*", "sens*", "json", "sens")  # pass A: as it was
+        ):
             if kind in found:
                 return kind
         return None
@@ -3224,7 +3246,7 @@ class _Module:
                     self.clean(a, sc, d, seen)
                     for a in [*e.args[1:], *(k.value for k in e.keywords)]
                 )
-            local = self._local_callee(e.func, sc)
+            local = self._local_callee(e.func, sc) if self.call_binding else None
             if local is not None and self._returns_tainted(local, e, sc, d, seen):
                 return (
                     True  # a function of this file builds it out of what this call passes (#3864)
@@ -4054,7 +4076,13 @@ def find_unsafe_markup(
     escaper) and a ``def`` in the file has an origin of its own; without it neither does, which can
     only flag more, never less. ``dynamic_bases`` is :func:`dynamic_class_names` over the package.
     """
-    return _Module(source, module, is_package, dynamic_bases).findings()
+    # Two analyzers that share NOTHING (#3864): pass A is the guard as it was, in which no call is
+    # ever bound; pass B adds the judgement of a sink handed a call, with its own copy of every
+    # table and cache. A finding of either is a finding, so whatever pass B does, the result holds
+    # every finding pass A makes.
+    first = _Module(source, module, is_package, dynamic_bases).findings()
+    second = _Module(source, module, is_package, dynamic_bases, call_binding=True).findings()
+    return sorted(set(first) | set(second), key=lambda f: (f.lineno, f.function, f.sink, f.why))
 
 
 def _main(argv: list[str]) -> int:
