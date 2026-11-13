@@ -13,6 +13,7 @@ Not shipped — lives under ``tests/`` purely to generate committed fixtures.
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 from djust import state as djust_state
 
 _TEMPLATE = """
@@ -71,18 +72,23 @@ class InlineWhitespaceView(LiveView):
 
     # --- event handlers (immutable updates so change detection fires) ---
 
+    @event_handler
     def set_texts(self, label, code, tail):
         self.label, self.code, self.tail = label, code, tail
 
+    @event_handler
     def set_tags(self, tags):
         self.tags = list(tags)
 
+    @event_handler
     def set_chips(self, chips):
         self.chips = list(chips)
 
+    @event_handler
     def toggle(self):
         self.show = not self.show
 
+    @event_handler
     def set_md(self, md):
         self.md = md
 
@@ -124,6 +130,7 @@ def keyed_list_view(shape):
             ctx["items"] = self.items
             return ctx
 
+        @event_handler
         def set_items(self, items):
             self.items = list(items)
 

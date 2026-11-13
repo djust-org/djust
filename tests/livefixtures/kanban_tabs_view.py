@@ -15,6 +15,7 @@ fixtures consumed by ``tests/js/vdom_client_faithful_diff.test.js``.
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 from djust import state
 
 # One {% if active_tab == N %} block per tab. Tab 3 (KANBAN_TAB) renders a
@@ -142,9 +143,11 @@ class KanbanTabsView(LiveView):
 
     # --- event handlers ---
 
+    @event_handler
     def switch_tab(self, tab):
         self.active_tab = int(tab)
 
+    @event_handler
     def move_card(self, card_id, to_column, to_index=0):
         """Move a card to ``to_column`` at ``to_index`` (cross-column move).
 
