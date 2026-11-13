@@ -146,6 +146,8 @@ As soon as there is more than one process, **in-process state is not shared**. A
 
 ### Option B: Redis between processes
 
+For what each kind of state does when a request or a reconnect lands on another process, measured with two real processes, see [What Survives a Reconnect, a Restart and a Second Process](state-survival.md).
+
 Every process gets the same settings:
 
 ```python

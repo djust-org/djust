@@ -311,6 +311,11 @@ navigation:
         file: guides/scaling.md
         order: 13.4
         level: advanced
+      - title: What Survives a Reconnect, a Restart and a Second Process
+        slug: state-survival
+        file: guides/state-survival.md
+        order: 13.45
+        level: advanced
       - title: Scaling Across Cores
         slug: scaling-across-cores
         file: guides/scaling-across-cores.md
