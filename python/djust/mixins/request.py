@@ -2107,8 +2107,14 @@ class RequestMixin:
 
             # uses_legacy_exposure is the module-level import; a local import
             # here would make the name local to all of post().
+            from .._exposure import ExposureConfigurationError
             from .._exposure_diagnostics import diagnostics_policy_allows
 
+            if isinstance(e, ExposureConfigurationError):
+                # A configuration error is framework-authored and value-free:
+                # it reaches the developer as on the GET path
+                # (``protected_http_outcome``), not as a generic answer (#4092).
+                raise
             if not diagnostics_policy_allows(self):
                 # ADR-038: undeclared state can occur in the exception's message,
                 # its traceback and the posted params, so in production a

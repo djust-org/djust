@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 115 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 116 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -40,6 +40,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C027 | Config | Retired | Retired in 2.0 with `view_state_in_session`: the setting was not `True` or `False`. Never emitted; the ID is not reused |
 | C028 | Config | Error | `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is not `None` or a number of seconds greater than 0 |
 | C029 | Config | Error | `LIVEVIEW_CONFIG['query_budget']` is not `None`, `"off"`, `"warn"` or `"error"` |
+| C030 | Config | Error | A view declares `persist="server"` state and `SESSION_ENGINE` cannot hold it |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -296,6 +297,13 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: `LIVEVIEW_CONFIG['query_budget']` (or the same key in `DJUST_CONFIG`) is set to something other than `None`, `"off"`, `"warn"` or `"error"`, such as `True`, `"WARN"`, `1` or `"errors"`. The request path never fails over it: it reads the value as `"warn"` and logs that once, so a project that meant `"error"` would not learn it otherwise. See [Per-view query budgets](website/testing/index.md#per-view-query-budgets).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C029"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C029"]` (the runtime still reads it as `"warn"`)
 - **False positives**: None
+
+### C030 — Server state with an unsupported session engine
+- **Severity**: Error
+- **Method**: Settings inspection and declared `state()` fields
+- **What it detects**: A LiveView declares `state(..., persist="server")` and `SESSION_ENGINE` is not one of `django.contrib.sessions.backends.db`, `cached_db`, `cache` or `file` (for example `signed_cookies`, or a custom engine). Server state is kept in a server-side session, so every request of such a view fails; at runtime it is refused with `UnsupportedSessionEngine`, which names the supported engines (#4092).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C030"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C030"]`
+- **False positives**: A custom engine whose store subclasses a supported one is still reported: the runtime accepts only the exact audited stores.
 
 <!-- END GENERATED check-sections:C -->
 

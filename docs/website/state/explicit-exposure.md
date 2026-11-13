@@ -107,7 +107,9 @@ token = state("", persist="server", render=False)  # handlers only, never templa
 
 - **Sessions.** Server persistence needs a server-side session backend: `db`,
   `cached_db`, `cache` or `file`. Cookie sessions are browser-readable, so they
-  are rejected.
+  are rejected: a request of a view with `persist="server"` state raises
+  `UnsupportedSessionEngine` (an `ImproperlyConfigured`) naming the engine, and
+  system check `djust.C030` reports the combination at startup.
 - **`DJUST_SERVER_STATE_MAX_AGE`.** The lifetime of a server envelope in
   seconds, from 1 to 86400. The default is 3600. System check `djust.C020`
   validates it.

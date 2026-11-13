@@ -28,9 +28,54 @@ from django.contrib.sessions.backends.cached_db import SessionStore as CachedDBS
 from django.contrib.sessions.backends.db import SessionStore as DBSession
 from django.contrib.sessions.backends.file import SessionStore as FileSession
 
-from ._exposure import ExposureContract, ExposureError, clone_json_state
+from ._exposure import (
+    ExposureConfigurationError,
+    ExposureContract,
+    ExposureError,
+    clone_json_state,
+)
 
 _SERVER_SESSION_TYPES = (DBSession, CachedDBSession, CacheSession, FileSession)
+
+#: The ``SESSION_ENGINE`` values whose store can hold ``persist="server"``
+#: state: exactly the store classes in ``_SERVER_SESSION_TYPES`` (#4092).
+SUPPORTED_SESSION_ENGINES = tuple(cls.__module__ for cls in _SERVER_SESSION_TYPES)
+
+
+class UnsupportedSessionEngine(ExposureConfigurationError, ExposureError):
+    """Declared server state with a session store that cannot hold it (#4092).
+
+    A configuration error, not a payload error: the message is
+    framework-authored and names no view value, so the protected HTTP entry
+    lets it reach the developer (``ExposureConfigurationError``) instead of a
+    bare 500. Still an :class:`ExposureError` for the callers that refuse on
+    one. System check ``djust.C030`` reports the same combination at startup.
+    """
+
+
+def session_engine_supported(engine: Any) -> bool:
+    """Whether ``SESSION_ENGINE`` names a store that can hold server state.
+
+    Only the exact audited stores qualify, as at runtime: a subclass or a
+    custom engine needs a reviewed adapter.
+    """
+    return isinstance(engine, str) and engine in SUPPORTED_SESSION_ENGINES
+
+
+def unsupported_session_message(session: Any) -> str:
+    """The configuration error for a session store that cannot hold server state."""
+    if session is None:
+        found = "no session (is SessionMiddleware installed?)"
+    else:
+        found = "%s.%s" % (type(session).__module__, type(session).__qualname__)
+    return (
+        'State declared with persist="server" is kept in a server-side session, '
+        "and this request's session cannot hold it: %s. Set SESSION_ENGINE to one "
+        'of %s, or declare the state without persist="server".'
+        % (found, ", ".join(SUPPORTED_SESSION_ENGINES))
+    )
+
+
 # Envelope format 2 records the application contract version (E2-9). Format-1
 # envelopes are unindexed and are rejected, so the view remounts (D-j).
 _VERSION = 2
@@ -174,7 +219,7 @@ def server_state_adapter(
         return None
     session = getattr(request, "session", None)
     if session is None or type(session) not in _SERVER_SESSION_TYPES:
-        raise ExposureError("Explicit persistence requires a supported server-side session")
+        raise UnsupportedSessionEngine(unsupported_session_message(session))
     if not session.session_key:
         if not create:
             return None

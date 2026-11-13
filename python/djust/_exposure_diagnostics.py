@@ -148,8 +148,15 @@ def log_failure(
     what the call site passed to its logger and ``traceback=True`` stands for
     ``logger.exception``, so output is unchanged wherever details are allowed.
     """
+    from ._exposure import ExposureConfigurationError
+
     if diagnostics_allowed():
         getattr(log, level)(msg, *args, exc_info=exc if traceback else None)
+    elif isinstance(exc, ExposureConfigurationError):
+        # Framework-authored and value-free (``protected_http_outcome`` lets
+        # the same errors reach the developer): the operator needs the reason,
+        # such as an unsupported SESSION_ENGINE (#4092). No traceback.
+        getattr(log, level)("%s: %s", PROTECTED_FAILURE, exc)
     else:
         # Value-free, but at the call site's level: a DEBUG-level site on a
         # hot path (dirty tracking) must not become an ERROR per turn.
