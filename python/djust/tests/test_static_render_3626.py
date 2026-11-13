@@ -244,10 +244,7 @@ class TestTheHttpFallback:
         # answer instead of checking it against the previous one
         # (tests/js/http-fallback-whole-page-version.test.js).
         assert [frame["version"] for frame in (first, second, third)] == [1, 1, 1]
-        # #4107: the view's state is saved between requests, so the menu the
-        # first POST opened is still open on the second and closed by the third.
-        assert ">open<" in first["html"] and ">open<" in second["html"]
-        assert ">closed<" in third["html"]
+        assert ">open<" in first["html"] and ">closed<" in second["html"]
         assert backend._cache == {}
 
     def test_a_normal_view_answers_the_whole_page_too(self, backend):

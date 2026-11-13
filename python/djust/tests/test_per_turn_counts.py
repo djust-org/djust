@@ -336,10 +336,11 @@ async def test_an_unchanged_turn_neither_serializes_nor_writes_the_saved_state(m
     seen.update(project=0, write=0)
     off = await turn(monkeypatch, BareCounter, "nothing", "unchanged_save_skip")
     assert now["reply"] == off["reply"] == "noop"
-    # One projection at the mount (the basis), none for the two turns, no write.
-    assert with_shortcut == {"project": 1, "write": 0}
+    # The mount saves what mount() built (no page GET came first here); the
+    # two turns that change nothing neither serialize nor write.
+    assert with_shortcut == {"project": 1, "write": 1}
     # Gate-off: the mount's, then one projection and one write per turn.
-    assert seen == {"project": 3, "write": 2}
+    assert seen == {"project": 3, "write": 3}
     # The snapshots change detection takes are the same two per turn either way.
     assert now["snapshot_assigns.calls"] == off["snapshot_assigns.calls"] == 2
 

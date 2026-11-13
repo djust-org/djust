@@ -340,7 +340,7 @@ This method is optional. If it is not implemented, tasks still re-render when th
 
 A job started with `start_async()` or `@background` belongs to the connection that started it. If the browser reconnects, or the worker restarts, the job's result is not delivered to the new connection.
 
-That matters because the loading flag is saved. A view's public attributes and `state()` fields are saved server-side between requests, so the flag comes back with the rest of the view's state, so the page shows a job as running that no longer exists. `mount()` cannot fix it, because restored state is applied after `mount()` returns. Clear the flag in `handle_restore()`, which runs once the restored values are in place:
+That matters because the loading flag is saved with the rest of the view's state, so it comes back with it, so the page shows a job as running that no longer exists. `mount()` cannot fix it, because restored state is applied after `mount()` returns. Clear the flag in `handle_restore()`, which runs once the restored values are in place:
 
 ```python
 from djust import LiveView
@@ -381,7 +381,7 @@ Two things to keep in mind:
 - **Keep `handle_restore()` idempotent.** What it changes is saved by the next event, not by the reconnect, so it runs again on each reconnect until then.
 - **A second tab looks like a reconnect.** Declared state is shared by every tab of one session on the same page, so a second tab restores `generating=True` while the first tab's job is still running. If that matters, keep the flag out of persisted state.
 
-A flag that is not saved needs none of this: name it with a leading underscore (`self._generating`) or declare it `state(False, persist=False)`, and a reconnect starts from its `mount()` value.
+A flag that is not saved needs none of this: declare it `state(False, persist=False)`.
 
 ## Combining Both Systems
 

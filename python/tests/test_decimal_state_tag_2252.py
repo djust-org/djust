@@ -687,6 +687,8 @@ EXPECTED_DECODE_SITES = {
     # #3252: restore the lazy child's server-held public/private session state,
     # tagged at save_http_lazy's encoder-less JSON boundary.
     ("_lazy_containers.py", "mount_http_lazy"),
+    # #4107: a view's saved state, read back from the session.
+    ("_automatic_state.py", "_read"),
     # The body of `_restore_private_state`, which enters its `lifecycle` step around it (#3646).
     ("live_view.py", "_apply_private_state"),
     # 2.0 removed the page-POST fallback's session restore and the component

@@ -48,9 +48,8 @@ class _Probed:
 
 class CounterView(_Probed, LiveView):
     """One field of each kind: server-persisted, client-persisted, plain
-    ``state()``, an ordinary attribute, one opted out of saving, and a private
-    one. ``_mounted_pid`` and ``_restored`` are private so that they describe
-    THIS view object, not a saved one (#4107)."""
+    ``state()``, an ordinary attribute, a private one, and one opted out of
+    saving (#4107)."""
 
     exposure_policy = "explicit"
     template = "<div dj-root>" + PROBE + "</div>"
@@ -63,7 +62,6 @@ class CounterView(_Probed, LiveView):
     def mount(self, request, **kwargs):
         self.plain_attr = 0
         self._private_attr = 0
-        self.unsaveable = {os.getpid()}  # a set: not plain data, never saved
         self._mounted_pid = os.getpid()
         self._restored = False
 
@@ -78,7 +76,6 @@ class CounterView(_Probed, LiveView):
             "plain_attr": self.plain_attr,
             "not_saved": self.not_saved,
             "private_attr": self._private_attr,
-            "unsaveable_pid": sorted(self.unsaveable)[0],
             "restored": self._restored,
             "mounted_pid": self._mounted_pid,
         }

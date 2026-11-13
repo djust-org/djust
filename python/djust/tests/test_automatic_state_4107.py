@@ -25,7 +25,7 @@ from django.contrib.auth.models import AnonymousUser, User
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory
 
-from djust import LiveView, _automatic_state, _per_turn, event_handler
+from djust import LiveView, _automatic_state, _per_turn, event_handler  # noqa: F401
 from djust.decorators import state
 from djust.tests import _per_turn_harness as harness
 
@@ -363,87 +363,9 @@ from django.urls import path as _path  # noqa: E402
 urlpatterns = [_path(f"auto-{case[0].__name__}/", case[0].as_view()) for case in CASES]
 
 
-@pytest.mark.django_db
-def test_a_legacy_view_keeps_its_state_over_the_fallback():
-    view, key, _ = _fallback(LegacyCounter, [("inc",), ("inc",), ("inc",)])
-    assert view.count == 3
-    assert _stored_values(key) == {"count": 3}
-
-
 # ---------------------------------------------------------------------------
 # What is saved, and what is not
 # ---------------------------------------------------------------------------
-
-
-class Names(_Base):
-    shown = ("count",)
-    limit = 5  # a plain class-level default
-    temporary_assigns = {"flash_rows": []}
-
-    @property
-    def doubled(self):
-        return self.count * 2
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-        self.limit = 7
-        self._private = "p"
-        self.password = "hunter2"
-        self.is_staff = True
-        self.flash_rows = ["x"]
-        self.page_title = "Title"
-
-    @event_handler()
-    def inc(self, **kwargs):
-        self.count += 1
-
-
-@pytest.mark.django_db
-def test_only_public_serializable_application_attributes_are_stored():
-    _view, key, _ = _fallback(Names, [("inc",)])
-    assert _stored_values(key) == {"count": 1, "limit": 7}
-
-
-@pytest.mark.django_db
-def test_unserializable_values_are_skipped_named_once_and_never_fail(caplog):
-    _automatic_state._NOTICED.clear()
-    with caplog.at_level(logging.DEBUG, logger="djust.automatic_state"):
-        view, key, _ = _fallback(Unserializable, [("inc",), ("inc",)])
-    assert view.count == 2
-    assert _stored_values(key) == {"count": 2}
-    text = [record.getMessage() for record in caplog.records]
-    for name in ("price", "viewer", "mixed"):
-        assert sum(f"Unserializable.{name} " in line for line in text) == 1, (name, text)
-    assert "1.50" not in "".join(text)
-
-
-@pytest.mark.django_db
-def test_request_user_lazy_queryset_and_model_never_enter_the_store():
-    """#1786's shapes: nothing request-scoped is stored, by type, even nested."""
-    from django.utils.functional import SimpleLazyObject, lazystr
-
-    class Scoped(_Base):
-        shown = ("count",)
-
-        def mount(self, request, **kwargs):
-            self.count = 0
-            self.req = request
-            self.viewer = request.user
-            self.lazy_user = SimpleLazyObject(lambda: request.user)
-            self.label = lazystr("lazy")
-            self.rows = User.objects.all()
-            self.row = User(username="unsaved")
-            self.holder = {"user": request.user}
-            self.listed = [User(username="in-a-list")]
-            self.session_ref = request.session
-
-        @event_handler()
-        def inc(self, **kwargs):
-            self.count += 1
-
-    _view, key, _ = _fallback(Scoped, [("inc",)])
-    assert _stored_values(key) == {"count": 1}
-    assert "AnonymousUser" not in json.dumps(_stored(key))
 
 
 @pytest.mark.django_db
@@ -525,94 +447,6 @@ def test_a_saved_unexposed_attribute_reaches_no_fallback_answer():
 # ---------------------------------------------------------------------------
 
 
-def _tamper(key: str, **values: Any) -> None:
-    session = SessionStore(key)
-    (name,) = [n for n in session.keys() if n.startswith("_djust_auto_")]
-    envelope = session[name]
-    envelope["values"].update(values)
-    session[name] = envelope
-    session.save()
-
-
-@pytest.mark.django_db
-def test_a_stored_name_the_view_would_not_save_is_not_put_back():
-    view, key, _ = _fallback(Names, [("inc",)])
-    _tamper(
-        key,
-        _private="injected",
-        __class__="x",
-        doubled=99,  # a property
-        inc="not a method any more",
-        mount="x",
-        request="x",
-        template_name="evil.html",
-        login_required=False,
-        password="injected",
-        flash_rows=["injected"],
-        brand_new="allowed: a handler may create attributes",
-        _framework_attrs=[],
-        exposure_policy="legacy",
-    )
-    request = _request("POST", key, "inc")
-    restored = Names()
-    assert restored.post(request).status_code == 200
-    assert restored.count == 2
-    assert restored._private == "p" and restored.password == "hunter2"
-    assert restored.doubled == 4 and callable(restored.inc) and callable(restored.mount)
-    assert restored.exposure_policy == "explicit"
-    assert restored.template_name != "evil.html"
-    assert restored.flash_rows != ["injected"]
-    assert restored.brand_new.startswith("allowed")
-
-
-@pytest.mark.django_db
-def test_a_field_with_its_own_persist_is_not_restored_from_the_automatic_store():
-    class Strict(_Base):
-        shown = ("count",)
-        token = state("server-default", persist="client", client=True)
-        scratch = state(0, persist=False)
-
-        def mount(self, request, **kwargs):
-            self.count = 0
-
-        @event_handler()
-        def inc(self, **kwargs):
-            self.count += 1
-
-    _view, key, _ = _fallback(Strict, [("inc",)])
-    assert _stored_values(key) == {"count": 1}
-    _tamper(key, token="forged", scratch=41)
-    view = Strict()
-    view.post(_request("POST", key, "inc"))
-    assert view.token == "server-default" and view.scratch == 0 and view.count == 2
-
-
-@pytest.mark.django_db
-def test_stored_values_are_revalidated_and_a_bad_envelope_is_ignored():
-    _view, key, _ = _fallback(Counter, [("inc",)])
-    session = SessionStore(key)
-    (name,) = [n for n in session.keys() if n.startswith("_djust_auto_")]
-    for change in (
-        {"version": 99},
-        {"code": "0" * 64},
-        {"binding": "0" * 64},
-        {"created": 2**40},
-        {"values": [1, 2]},
-        {"extra": 1},
-    ):
-        envelope = dict(SessionStore(key)[name])
-        envelope.update(change)
-        broken = SessionStore(key)
-        broken[name] = envelope
-        broken.save()
-        view = Counter()
-        assert view.post(_request("POST", key, "nothing")).status_code == 200
-        assert view.count == 0, change
-        _fallback_again = SessionStore(key)
-        _fallback_again[name] = session[name]
-        _fallback_again.save()
-
-
 # ---------------------------------------------------------------------------
 # Binding, page loads, deploys
 # ---------------------------------------------------------------------------
@@ -621,215 +455,24 @@ def test_stored_values_are_revalidated_and_a_bad_envelope_is_ignored():
 @pytest.mark.django_db
 def test_state_is_bound_to_the_user_and_the_route():
     _view, key, _ = _fallback(Counter, [("inc",), ("inc",)])
+    same = Counter()
+    same.post(_request("POST", key, "nothing"))
+    assert same.count == 2
+    elsewhere = Counter()
+    elsewhere.post(_request("POST", key, "nothing", path="/another-route/"))
+    assert elsewhere.count == 0
+    # Another principal presenting the same session key reads nothing.
     user = User.objects.create(username="auto-4107-other")
     other = _request("POST", key, "nothing")
     other.user = user
     view = Counter()
     view.post(other)
-    assert view.count == 0  # another principal on the same session key
-    elsewhere = _request("POST", key, "nothing", path="/another-route/")
-    view = Counter()
-    view.post(elsewhere)
-    assert view.count == 0
-    same = Counter()
-    same.post(_request("POST", key, "nothing"))
-    assert same.count == 2
-
-
-@pytest.mark.django_db
-def test_a_page_load_starts_fresh_and_drops_the_stored_state():
-    _view, key, _ = _fallback(Counter, [("inc",)])
-    assert _stored(key)
-    assert Counter().get(_request("GET", key)).status_code == 200
-    assert not _stored(key)
-
-
-@pytest.mark.django_db
-def test_a_view_that_changes_nothing_stores_nothing():
-    _view, key, _ = _fallback(Counter, [("nothing",), ("nothing",)])
-    assert not _stored(key)
-
-
-def test_the_class_digest_follows_the_code_not_the_file_position():
-    def build(body: str, pad: str = "") -> type:
-        namespace: Dict[str, Any] = {"LiveView": LiveView, "event_handler": event_handler}
-        source = (
-            pad
-            + "class Shop(LiveView):\n"
-            + "    exposure_policy = 'explicit'\n"
-            + "    TAGS = frozenset({'a', 'b', 'c', 'd'})\n"
-            + "    def mount(self, request, **kwargs):\n"
-            + "        self.items = []\n"
-            + "    @event_handler()\n"
-            + "    def add(self, **kwargs):\n"
-            + f"        {body}\n"
-        )
-        exec(compile(source, "shop.py", "exec"), namespace)  # noqa: S102 — fixed test source
-        namespace["Shop"].__module__ = "shop"
-        return namespace["Shop"]
-
-    same = _automatic_state.class_digest(build("self.items.append(1)"))
-    assert (
-        _automatic_state.class_digest(build("self.items.append(1)", pad="\n\n\n# moved\n")) == same
-    )
-    assert _automatic_state.class_digest(build("self.items.append(2)")) != same
-    assert _automatic_state.class_digest(build("self.items.append({'price': 1})")) != same
-
-
-@pytest.mark.django_db
-def test_the_class_digest_is_the_same_before_and_after_a_render():
-    """The framework caches per-class facts ON the class after a render
-    (``_djust_*``). A process that has rendered and one that has not must agree,
-    or state saved by one is dropped by the other."""
-
-    class Fresh(Declared):
-        pass
-
-    before = _automatic_state._compute_class_digest(Fresh)
-    assert Fresh().get(_request("GET", None)).status_code == 200
-    # What the socket path leaves on the class (seen across two real processes).
-    Fresh._djust_rendered_state_cache = ("kept", "scratch")
-    Fresh._djust_descriptor_fields_cache = {"kept": ("state", "_state_kept")}
-    assert _automatic_state._compute_class_digest(Fresh) == before
-    Fresh.page_size = 20  # an application class attribute does change it
-    assert _automatic_state._compute_class_digest(Fresh) != before
-
-
-def test_the_class_digest_is_equal_across_processes_with_other_hash_seeds():
-    import os
-    import subprocess
-    import sys
-
-    program = (
-        "import django, os\n"
-        "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'demo_project.settings')\n"
-        "django.setup()\n"
-        "from djust import _automatic_state\n"
-        "from djust.tests.test_automatic_state_4107 import Names, Rows\n"
-        "print(_automatic_state.class_digest(Names), _automatic_state.class_digest(Rows))\n"
-    )
-    seen = set()
-    for seed in ("1", "2", "3"):
-        env = dict(os.environ, PYTHONHASHSEED=seed, PYTHONPATH=os.pathsep.join(sys.path))
-        out = subprocess.run(  # noqa: S603 — the test's own interpreter and source
-            [sys.executable, "-c", program], env=env, capture_output=True, text=True, check=True
-        )
-        seen.add(out.stdout.strip().splitlines()[-1])
-    assert len(seen) == 1, seen
-
-
-@pytest.mark.django_db
-def test_state_written_by_other_code_of_the_class_is_dropped(monkeypatch):
-    _view, key, _ = _fallback(Counter, [("inc",), ("inc",)])
-
-    @event_handler()
-    def inc(self, **kwargs):
-        self.count += 10  # the deploy changed the handler
-
-    monkeypatch.setattr(Counter, "inc", inc)
-    view = Counter()
-    view.post(_request("POST", key, "inc"))
-    assert view.count == 10  # mount()'s 0, not the old code's 2
-    monkeypatch.undo()
-    # The old version, still live during a rolling deploy, drops the new one's.
-    view = Counter()
-    view.post(_request("POST", key, "inc"))
-    assert view.count == 1
-
-
-@pytest.mark.django_db
-def test_bumping_the_schema_version_drops_stored_state(monkeypatch):
-    _view, key, _ = _fallback(Counter, [("inc",)])
-    monkeypatch.setattr(Counter, "exposure_schema_version", 2, raising=False)
-    view = Counter()
-    view.post(_request("POST", key, "nothing"))
     assert view.count == 0
 
 
 # ---------------------------------------------------------------------------
 # Size, cost, capture
 # ---------------------------------------------------------------------------
-
-
-class Big(_Base):
-    shown = ("count",)
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-        self.small = "s"
-        self.rows = []
-
-    @event_handler()
-    def grow(self, **kwargs):
-        self.count += 1
-        self.rows = ["x" * 1000] * 80  # ~80 KB: over the 64 KB budget
-
-
-@pytest.mark.django_db
-def test_a_value_over_the_limit_is_left_out_and_the_event_succeeds(caplog):
-    _automatic_state._NOTICED.clear()
-    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
-        view, key, _ = _fallback(Big, [("grow",), ("grow",)])
-    assert view.count == 2
-    assert _stored_values(key) == {"count": 2, "small": "s"}
-    assert sum("Big.rows " in record.getMessage() for record in caplog.records) == 1
-
-
-@pytest.mark.django_db
-def test_the_session_is_not_written_when_the_state_did_not_change(monkeypatch):
-    from djust import _session_merge
-
-    writes: List[int] = []
-    real = _session_merge.save_merged
-    monkeypatch.setattr(
-        _session_merge, "save_merged", lambda *a, **k: (writes.append(1), real(*a, **k))[1]
-    )
-    _fallback(Counter, [("inc",), ("nothing",), ("nothing",), ("inc",)])
-    assert len(writes) == 2
-
-
-@pytest.mark.django_db
-def test_without_the_shortcut_every_turn_writes(monkeypatch):
-    """Gate-off for ``unchanged_save_skip``: the write it saves comes back."""
-    from djust import _session_merge
-
-    writes: List[int] = []
-    real = _session_merge.save_merged
-    monkeypatch.setattr(
-        _session_merge, "save_merged", lambda *a, **k: (writes.append(1), real(*a, **k))[1]
-    )
-    monkeypatch.setattr(_per_turn, "disabled", frozenset({"unchanged_save_skip"}))
-    _fallback(Counter, [("inc",), ("nothing",), ("nothing",), ("inc",)])
-    assert len(writes) == 4
-
-
-@pytest.mark.django_db
-def test_an_unchanged_state_is_rewritten_once_half_its_lifetime_has_passed(monkeypatch):
-    _view, key, _ = _fallback(Counter, [("inc",)])
-    created = next(iter(_stored(key).values()))["created"]
-    real = _automatic_state.time.time
-    monkeypatch.setattr(_automatic_state.time, "time", lambda: real() + 1900)  # > 3600 / 2
-    view = Counter()
-    view.post(_request("POST", key, "nothing"))
-    assert view.count == 1
-    assert next(iter(_stored(key).values()))["created"] > created
-
-
-@pytest.mark.django_db
-def test_what_is_stored_does_not_share_references_with_the_view():
-    """Mutation after capture: the stored copy and the basis stay as captured."""
-    request = _request("POST", None, "add")
-    view = EditedList()
-    view.mount(request)
-    undo = _automatic_state.stage(view, request)
-    assert undo is not None
-    basis = view._djust_auto_basis
-    view.items.append("after-capture")
-    (envelope,) = [v for k, v in request.session.items() if k.startswith("_djust_auto_")]
-    assert envelope["values"] == {"items": ["a"]}
-    assert view._djust_auto_basis == basis
-    # And the changed state is seen as changed, not as "already stored".
-    assert _automatic_state.stage(view, request) is not None
 
 
 @pytest.mark.django_db
@@ -862,41 +505,9 @@ def test_bookkeeping_is_framework_state_not_application_state():
     } <= view._framework_attrs
 
 
-@pytest.mark.django_db
-def test_a_cookie_session_holds_no_automatic_state():
-    from django.contrib.sessions.backends.signed_cookies import SessionStore as CookieSession
-
-    request = _request("POST", None, "inc")
-    request.session = CookieSession()
-    view = Counter()
-    view.mount(request)
-    view.count = 3
-    assert _automatic_state.stage(view, request) is None
-    assert not list(request.session.keys())
-
-
 # ---------------------------------------------------------------------------
 # Framework attributes; the clear/stats helpers (#4087)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_per_connection_and_framework_class_attributes_are_not_stored():
-    class Tz(_Base):
-        shown = ("count",)
-
-        def mount(self, request, **kwargs):
-            self.count = 0
-            self.client_timezone = "Europe/Paris"  # set per connection by the transport
-            self.tick_interval = 5  # djust configuration, defined on a djust class
-            self.login_required = False
-
-        @event_handler()
-        def inc(self, **kwargs):
-            self.count += 1
-
-    _view, key, _ = _fallback(Tz, [("inc",)])
-    assert _stored_values(key) == {"count": 1}
 
 
 @pytest.mark.django_db
@@ -924,50 +535,847 @@ def test_saved_state_can_be_listed_measured_and_cleared_per_session():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.django_db
-def test_an_unchanged_turn_serializes_nothing_and_a_changed_one_does(monkeypatch):
-    request = _request("POST", None, "x")
-    view = EditedList()
-    view.mount(request)
-    assert _automatic_state.load(view, request) is None  # the basis: mount()'s state
-    calls: List[int] = []
-    real = _automatic_state.project
-    monkeypatch.setattr(_automatic_state, "project", lambda v: (calls.append(1), real(v))[1])
-    view._djust_auto_changed = {"_private", "_changed_keys"}  # nothing saved changed
-    assert _automatic_state.stage(view, request) is None
-    assert calls == [] and view._djust_auto_changed is None
-    view.items.append("b")
-    view._djust_auto_changed = {"items"}
-    assert _automatic_state.stage(view, request) is not None
-    assert calls == [1]
+# ---------------------------------------------------------------------------
+# Every plain Python value comes back with its type
+# ---------------------------------------------------------------------------
+
+import datetime as dt  # noqa: E402
+import enum  # noqa: E402
+import uuid as uuid_module  # noqa: E402
+import zoneinfo  # noqa: E402
+
+from djust.serialization import (  # noqa: E402
+    StateValueError,
+    decode_state_roundtrip,
+    encode_state_value,
+)
 
 
-@pytest.mark.django_db
-def test_the_changed_keys_are_one_turns_answer_and_are_used_once():
-    """Stale value: an "unchanged" answer left over from an earlier turn must
-    not hide a later change."""
-    request = _request("POST", None, "x")
-    view = EditedList()
-    view.mount(request)
-    _automatic_state.load(view, request)
-    view._djust_auto_changed = set()
-    assert _automatic_state.stage(view, request) is None  # consumed here
-    view.items.append("later")  # a later turn with no answer of its own
-    assert _automatic_state.stage(view, request) is not None
+class Colour(enum.Enum):
+    RED = "r"
+    GREEN = "g"
+
+
+class Level(enum.IntEnum):
+    LOW = 1
+    HIGH = 2
+
+
+_SCALARS = [
+    None,
+    True,
+    False,
+    0,
+    -1,
+    2**53,
+    -(2**70),
+    1.5,
+    float("inf"),
+    float("-inf"),
+    "",
+    "text \u00e9 \U0001f600",
+    Decimal("1.50"),
+    Decimal("-0"),
+    Decimal("Infinity"),
+    Decimal("1E+30"),
+    dt.date.min,
+    dt.date.max,
+    dt.date(2026, 2, 28),
+    dt.datetime(2026, 11, 1, 1, 30, fold=1),
+    dt.datetime(2026, 3, 8, 12, 0, 0, 123456, tzinfo=dt.timezone.utc),
+    dt.datetime(2026, 11, 1, 1, 30, tzinfo=zoneinfo.ZoneInfo("America/New_York"), fold=1),
+    dt.datetime(2026, 6, 1, 9, tzinfo=zoneinfo.ZoneInfo("Asia/Kolkata")),
+    dt.datetime(2026, 6, 1, 9, tzinfo=dt.timezone(dt.timedelta(hours=-3, minutes=-30))),
+    dt.datetime.min,
+    dt.time(23, 59, 59, 999999),
+    dt.time(8, 0, tzinfo=dt.timezone(dt.timedelta(hours=2))),
+    dt.timedelta(days=-1, seconds=5, microseconds=7),
+    dt.timedelta.max,
+    uuid_module.UUID("12345678-1234-5678-1234-567812345678"),
+    b"",
+    b"\x00\xff bytes",
+    Colour.RED,
+    Level.HIGH,
+]
+_CONTAINERS = [
+    lambda v: [v],
+    lambda v: (v,),
+    lambda v: {"key": v},
+    lambda v: [(), [], {}, (v, [v, {"deep": (v,)}])],
+    lambda v: {"__djust_value__": v},  # a user dict that looks like a tag
+    lambda v: {"__djust_decimal__": "not a number", "other": v},
+]
+_HASHABLE_CONTAINERS = [
+    lambda v: {v},
+    lambda v: frozenset({v, "other"}),
+    lambda v: {v: "by key", 2: v},
+    lambda v: {(v, 1): [v]},
+    lambda v: {(v, "a"), (v, "b")},  # a set of tuples
+]
+_ENUMS = frozenset({Colour, Level})
+
+
+def _matrix() -> List[Any]:
+    values: List[Any] = list(_SCALARS) + [(), [], {}, set(), frozenset(), Decimal("NaN")]
+    for scalar in _SCALARS:
+        values += [build(scalar) for build in _CONTAINERS]
+        values += [build(scalar) for build in _HASHABLE_CONTAINERS]
+    return values
+
+
+def _same(a: Any, b: Any) -> bool:
+    """Equal in type and value at every level (NaN equals NaN here)."""
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, (list, tuple)):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict):
+        if len(a) != len(b):
+            return False
+        return all(any(_same(k, j) and _same(v, w) for j, w in b.items()) for k, v in a.items())
+    if isinstance(a, (set, frozenset)):
+        return len(a) == len(b) and all(any(_same(x, y) for y in b) for x in a)
+    if isinstance(a, Decimal):
+        return str(a) == str(b)
+    if isinstance(a, float) and a != a:
+        return b != b
+    if isinstance(a, (dt.datetime, dt.time)):
+        return (
+            a.replace(tzinfo=None) == b.replace(tzinfo=None)
+            and a.fold == b.fold
+            and type(a.tzinfo) is type(b.tzinfo)
+            and a.utcoffset() == b.utcoffset()
+            and str(a.tzinfo) == str(b.tzinfo)
+        )
+    return bool(a == b)
+
+
+def test_every_plain_value_round_trips_through_json_with_its_type():
+    checked = 0
+    for value in _matrix():
+        wire = json.loads(json.dumps(encode_state_value(value, enums=_ENUMS)))
+        back = decode_state_roundtrip(wire, enums=_ENUMS, strict=True)
+        assert _same(value, back), (value, wire, back)
+        checked += 1
+    assert checked == len(_SCALARS) * (len(_CONTAINERS) + len(_HASHABLE_CONTAINERS) + 1) + 6
+
+
+def test_the_comparison_used_by_the_round_trip_test_is_not_blind():
+    assert not _same((), [])
+    assert not _same({1}, frozenset({1}))
+    assert not _same(Decimal("1.5"), Decimal("1.50"))
+    assert not _same(1, True) and not _same(1, 1.0)
+    assert not _same(
+        dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc),
+        dt.datetime(2026, 1, 1, tzinfo=zoneinfo.ZoneInfo("UTC")),
+    )
+    assert not _same(dt.datetime(2026, 11, 1, 1, 30), dt.datetime(2026, 11, 1, 1, 30, fold=1))
+
+
+def test_a_set_encodes_to_the_same_bytes_whatever_its_iteration_order():
+    forward = encode_state_value({("b", 2), ("a", 1), ("c", 3)})
+    backward = encode_state_value(set(reversed(sorted({("b", 2), ("a", 1), ("c", 3)}))))
+    assert json.dumps(forward) == json.dumps(backward)
 
 
 @pytest.mark.parametrize(
-    "keys,touches",
+    "value",
     [
-        (set(), False),
-        ({"_private", "_changed_keys", "_streams"}, False),
-        ({"count"}, True),
-        ({"_state_count"}, True),  # a state() field's slot
-        ({"_private", "brand_new"}, True),  # an attribute the handler created
+        object(),
+        lambda: 1,
+        type("Sub", (str,), {})("subclass of str"),
+        type("Rows", (list,), {})([1]),
+        __import__("collections").OrderedDict(a=1),
+        __import__("collections").namedtuple("P", "x")(1),
+        open,
+        [1, {"deep": object()}],
+        dt.datetime(
+            2026, 1, 1, tzinfo=type("Zone", (dt.tzinfo,), {"utcoffset": lambda s, d: None})()
+        ),
+    ],
+    ids=lambda value: type(value).__name__,
+)
+def test_other_objects_are_refused_never_converted(value):
+    with pytest.raises(StateValueError) as raised:
+        encode_state_value(value, enums=_ENUMS)
+    assert "subclass of str" not in str(raised.value)
+
+
+def test_an_enum_is_saved_and_restored_only_through_classes_the_view_references():
+    with pytest.raises(StateValueError):
+        encode_state_value(Colour.RED)  # no classes given
+    with pytest.raises(StateValueError):
+        encode_state_value(Colour.RED, enums=frozenset({Level}))
+    wire = encode_state_value(Colour.GREEN, enums=_ENUMS)
+    with pytest.raises(StateValueError):
+        decode_state_roundtrip(wire, enums=frozenset({Level}), strict=True)
+    assert decode_state_roundtrip(wire) == wire  # not strict: left as it is, never imported
+    assert Colour in _automatic_state.enum_classes(Typed)  # this module's global
+
+
+@pytest.mark.parametrize(
+    "tagged",
+    [
+        ["enum", ["os", "PathLike", "x"]],
+        ["enum", ["builtins", "eval", "__call__"]],
+        ["call", ["os", "system", "id"]],
+        ["pickle", "gASV"],
+        ["tuple", "not a list"],
+        ["date", "2026-13-45"],
+        ["bytes", "***"],
+        ["datetime", ["2026-01-01T00:00:00", ["zone", "../../etc/passwd"], 0]],
+        ["timedelta", [1, "2", 3]],
+        "not a list",
     ],
 )
-def test_which_changed_keys_mean_saved_state_changed(keys, touches):
-    assert _automatic_state._touches_saved(keys) is touches
+def test_a_tag_restores_only_through_the_fixed_table(tagged):
+    with pytest.raises(StateValueError):
+        decode_state_roundtrip({"__djust_value__": tagged}, enums=_ENUMS, strict=True)
+
+
+class Typed(_Base):
+    """The review's reproduction: these came back as ``mount()`` defaults."""
+
+    shown = ("label",)
+
+    def mount(self, request, **kwargs):
+        self.label = "start"
+        self.day = None
+        self.pair = ()
+        self.tags = set()
+        self.price = Decimal("0")
+        self.when = None
+        self.colour = Colour.RED
+        self.by_id = {}
+
+    @event_handler()
+    def fill(self, **kwargs):
+        self.label = "filled"
+        self.day = dt.date(2026, 11, 13)
+        self.pair = (1, "two")
+        self.tags = {"a", "b"}
+        self.price = Decimal("19.90")
+        self.when = dt.datetime(2026, 11, 13, 9, 30, tzinfo=zoneinfo.ZoneInfo("Europe/Paris"))
+        self.colour = Colour.GREEN
+        self.by_id = {7: ("x", Decimal("1.0"))}
+
+    @event_handler()
+    def nothing(self, **kwargs):
+        pass
+
+
+def _typed_state(view: Any) -> Dict[str, Any]:
+    return {
+        name: getattr(view, name)
+        for name in ("label", "day", "pair", "tags", "price", "when", "colour", "by_id")
+    }
+
+
+_FILLED = {
+    "label": "filled",
+    "day": dt.date(2026, 11, 13),
+    "pair": (1, "two"),
+    "tags": {"a", "b"},
+    "price": Decimal("19.90"),
+    "when": dt.datetime(2026, 11, 13, 9, 30, tzinfo=zoneinfo.ZoneInfo("Europe/Paris")),
+    "colour": Colour.GREEN,
+    "by_id": {7: ("x", Decimal("1.0"))},
+}
+
+
+@pytest.mark.django_db
+def test_typed_values_survive_the_fallback_with_their_types():
+    view, _key, _ = _fallback(Typed, [("fill",), ("nothing",)])
+    assert _same(_typed_state(view), _FILLED), _typed_state(view)
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_typed_values_survive_a_reconnect_and_a_later_fallback_post():
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE):
+        comm, _mount = await harness.mount_view(Typed, key)
+        assert (await harness.event(comm, "fill"))["type"] != "error"
+        await comm.disconnect()
+        again, _mount = await harness.mount_view(Typed, key)
+        assert (await harness.event(again, "nothing"))["type"] != "error"
+        await again.disconnect()
+
+    def read_back() -> Any:
+        view = Typed()
+        assert view.post(_request("POST", key, "nothing")).status_code == 200
+        return _typed_state(view)
+
+    assert _same(await sync_to_async(read_back)(), _FILLED)
+
+
+# ---------------------------------------------------------------------------
+# Whole or refused: the size limit
+# ---------------------------------------------------------------------------
+
+
+class Cart(_Base):
+    """The review's reproduction: 300 items, then 800 more."""
+
+    shown = ("count",)
+    automatic_state_max_kb = 16
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+        self.catalog = "c"
+        self.cart = []
+
+    @event_handler()
+    def add(self, n: int = 1, **kwargs):
+        self.count += 1
+        self.cart = self.cart + [{"sku": "item-%04d" % i, "qty": 1} for i in range(n)]
+
+
+async def _event_or_error(comm: Any, name: str, params: Any = None) -> Dict[str, Any]:
+    """Send one event; the frame that answers it, or the error frame a refused
+    change gets (which carries no ``ref``)."""
+    from djust.tests._ws_frames import has_type, receive_until
+
+    await comm.send_json_to({"type": "event", "event": name, "params": params or {}, "ref": 4107})
+    frames = await receive_until(
+        comm, has_type("error", "patch", "html_update", "noop"), what=f"the answer to {name!r}"
+    )
+    return frames[-1]
+
+
+@pytest.mark.django_db
+def test_state_over_the_limit_is_refused_whole_never_saved_in_part(caplog):
+    first = _request("GET", None)
+    assert Cart().get(first).status_code == 200
+    key = first.session.session_key
+    assert Cart().post(_request("POST", key, "add", {"n": 300})).status_code == 200
+    before = _stored_values(key)
+    assert len(before["cart"]) == 300 and before["count"] == 1
+    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
+        refused = Cart().post(_request("POST", key, "add", {"n": 800}))
+    assert refused.status_code == 413
+    body = json.loads(refused.content)
+    assert body["code"] == "state_too_large"
+    assert "'cart'" in body["error"] and "16384-byte" in body["error"]
+    assert _stored_values(key) == before  # whole, as it was: never a subset
+    assert any("Cart" in r.getMessage() and "cart" in r.getMessage() for r in caplog.records)
+    # The page is still usable from its last saved state.
+    view = Cart()
+    assert view.post(_request("POST", key, "add", {"n": 1})).status_code == 200
+    assert len(view.cart) == 301 and view.count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_over_a_socket_the_change_is_refused_and_the_view_goes_back():
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE):
+        comm, _mount = await harness.mount_view(Cart, key)
+        try:
+            assert (await harness.event(comm, "add", {"n": 300}))["type"] != "error"
+            refused = await _event_or_error(comm, "add", {"n": 800})
+            assert refused["type"] == "error" and refused["code"] == "state_too_large", refused
+            assert "cart" in refused["error"]
+            after = await harness.event(comm, "add", {"n": 1})
+            assert after["type"] != "error", after
+        finally:
+            await comm.disconnect()
+    stored = await sync_to_async(_stored_values)(key)
+    assert len(stored["cart"]) == 301 and stored["count"] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_refused_first_change_goes_back_to_mounts_state_with_nothing_stored():
+    """Nothing saved yet: the refused change still has a state to go back to."""
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE):
+        comm, _mount = await harness.mount_view(Cart, key)
+        try:
+            refused = await _event_or_error(comm, "add", {"n": 2000})
+            assert refused["type"] == "error" and refused["code"] == "state_too_large", refused
+            after = await harness.event(comm, "add", {"n": 2})
+            assert after["type"] != "error", after
+        finally:
+            await comm.disconnect()
+    stored = await sync_to_async(_stored_values)(key)
+    assert len(stored["cart"]) == 2 and stored["count"] == 1
+
+
+@pytest.mark.django_db
+def test_large_state_is_warned_about_once_naming_the_largest_attributes(caplog, settings):
+    settings.DJUST_AUTOMATIC_STATE_WARN_KB = 4
+    _automatic_state._NOTICED.clear()
+    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
+        view, key, _ = _fallback(Cart, [("add", {"n": 200}), ("add", {"n": 1})])
+    assert len(view.cart) == 201
+    lines = [r.getMessage() for r in caplog.records if "Largest" in r.getMessage()]
+    assert len(lines) == 1 and "cart" in lines[0] and "Cart" in lines[0], lines
+    assert "item-0001" not in "".join(lines)
+
+
+def test_the_limits_come_from_the_view_then_the_settings_then_the_defaults(settings):
+    assert _automatic_state.limits_for(Counter()) == (512 * 1024, 100 * 1024)
+    settings.DJUST_AUTOMATIC_STATE_MAX_KB = 64
+    assert _automatic_state.limits_for(Counter()) == (64 * 1024, 64 * 1024)
+    assert _automatic_state.limits_for(Cart())[0] == 16 * 1024
+    settings.DJUST_AUTOMATIC_STATE_MAX_KB = "lots"
+    assert _automatic_state.limits_for(Counter())[0] == 512 * 1024
+
+
+# ---------------------------------------------------------------------------
+# What cannot be saved is reported, loudly under DEBUG
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Secrets are not stored
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_secret_form_controls_are_blanked_whatever_their_widget():
+    from django import forms
+
+    from djust.forms import FormMixin, is_secret_form_control
+
+    class Pay(forms.Form):
+        name = forms.CharField()
+        ref = forms.CharField(widget=forms.HiddenInput)
+        card = forms.CharField(widget=forms.TextInput(attrs={"autocomplete": "cc-number"}))
+        code = forms.CharField(widget=forms.TextInput(attrs={"autocomplete": "cc-csc"}))
+        sms = forms.CharField(widget=forms.TextInput(attrs={"autocomplete": "one-time-code"}))
+        fresh = forms.CharField(widget=forms.TextInput(attrs={"autocomplete": "new-password"}))
+        pw = forms.CharField(widget=forms.PasswordInput)
+
+    class PayView(FormMixin, LiveView):
+        exposure_policy = "explicit"
+        form_class = Pay
+        template = "<div dj-root>{{ form_data.name }}</div>"
+
+        @event_handler()
+        def fill(self, **kwargs):
+            for name in self.form_data:
+                self.form_data[name] = name + "-value-4107"
+            self.field_errors = {"card": ["card-value-4107 is not a card"], "name": ["too short"]}
+
+    _view, key, _ = _fallback(PayView, [("fill",), ("fill",)])
+    stored = _stored_values(key)
+    assert stored["form_data"] == {
+        "name": "name-value-4107",
+        "ref": "ref-value-4107",  # hidden, server-rendered, not named as a secret
+        "card": "",
+        "code": "",
+        "sms": "",
+        "fresh": "",
+        "pw": "",
+    }
+    assert stored["field_errors"] == {"card": ["Invalid value."], "name": ["too short"]}
+    for secret in ("card", "code", "sms", "fresh", "pw"):
+        assert secret + "-value-4107" not in json.dumps(_stored(key))
+    assert not is_secret_form_control("name", None)
+    assert is_secret_form_control("password", None)  # the explicit list (the floor)
+
+
+# ---------------------------------------------------------------------------
+# The page, the session store, the class digest
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_cookie_session_holds_no_automatic_state(caplog):
+    """A cookie session is readable by the browser: nothing may be written to
+    it. The request is otherwise complete, so only the store check stops it."""
+    from django.contrib.sessions.backends.signed_cookies import SessionStore as CookieSession
+
+    _automatic_state._NOTICED.clear()
+    request = _request("POST", None, "inc")
+    key = request.session.session_key
+    request.session = CookieSession(key)
+    request.session._session_key = key
+    assert request.session.session_key == key
+    view = Counter()
+    view.mount(request)
+    view.count = 3
+    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
+        assert _automatic_state.stage(view, request) is None
+    assert not [name for name in request.session.keys() if name.startswith("_djust_")]
+    assert any("session store cannot hold" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.django_db
+def test_a_legacy_view_takes_no_part():
+    """Deprecated and on its way out: nothing is saved for it on any transport,
+    so a fallback POST cannot bring back a value older than its socket's."""
+    view, key, _ = _fallback(LegacyCounter, [("inc",), ("inc",)])
+    assert view.count == 1 and not _stored(key)
+
+
+# ---------------------------------------------------------------------------
+# The 1.3 model: a saved view is rebuilt, mount() does not run again
+# ---------------------------------------------------------------------------
+
+CALLS: List[str] = []
+
+
+class Rebuilt(_Base):
+    shown = ("count",)
+
+    def mount(self, request, **kwargs):
+        CALLS.append("mount")
+        self.count = 0
+        self._cursor = 10  # private, created by mount(): saved too
+        self.loaded_by = "mount"
+
+    def handle_restore(self, request):
+        CALLS.append("restore")
+
+    @event_handler()
+    def inc(self, **kwargs):
+        self.count += 1
+        self._cursor += 1
+        self.loaded_by = "handler"
+
+
+def _saved_envelope(key: str) -> Dict[str, Any]:
+    stored = _stored(key)
+    assert len(stored) == 1, list(stored)
+    return next(iter(stored.values()))
+
+
+@pytest.mark.django_db
+def test_a_later_fallback_request_restores_and_does_not_run_mount_again():
+    CALLS.clear()
+    view, key, _ = _fallback(Rebuilt, [("inc",), ("inc",), ("inc",)])
+    assert CALLS == ["mount", "restore", "restore", "restore"]  # the GET's mount only
+    assert (view.count, view._cursor, view.loaded_by) == (3, 13, "handler")
+    envelope = _saved_envelope(key)
+    assert envelope["values"] == {"count": 3, "loaded_by": "handler"}
+    # (beside the framework's own post-init slots, which 1.3 saved as well)
+    assert envelope["private"]["_cursor"] == 13 and envelope["remount"] is False
+
+
+@pytest.mark.django_db
+def test_with_nothing_saved_the_fallback_post_runs_mount():
+    CALLS.clear()
+    request = _request("POST", None, "inc")
+    view = Rebuilt()
+    assert view.post(request).status_code == 200
+    assert CALLS == ["mount"] and view.count == 1  # no restore hook: nothing was restored
+
+
+@pytest.mark.django_db
+def test_a_page_load_mounts_again_and_overwrites_the_saved_state():
+    CALLS.clear()
+    _view, key, _ = _fallback(Rebuilt, [("inc",), ("inc",)])
+    assert _saved_envelope(key)["values"]["count"] == 2
+    assert Rebuilt().get(_request("GET", key)).status_code == 200
+    assert _saved_envelope(key)["values"] == {"count": 0, "loaded_by": "mount"}
+    assert CALLS.count("mount") == 2
+
+
+class Holder:
+    pass
+
+
+class HoldsObjects(_Base):
+    """What a 1.3 application holds: the user, a queryset, a service object."""
+
+    shown = ("count",)
+
+    def mount(self, request, **kwargs):
+        CALLS.append("mount")
+        self.count = 0
+        self.user = request.user
+        self.rows = User.objects.all()
+        self.service = Holder()
+        self._client = Holder()
+
+    @event_handler()
+    def inc(self, **kwargs):
+        self.count += 1
+        assert self.user is not None and self.rows is not None  # re-created, never missing
+        assert isinstance(self.service, Holder) and isinstance(self._client, Holder)
+
+
+@pytest.mark.django_db
+def test_an_unsaveable_attribute_is_skipped_warned_once_and_recreated_by_mount(caplog, settings):
+    """Never a string, never missing, never an error (DEBUG included): the next
+    request runs mount() again and the saved state goes back over it."""
+    CALLS.clear()
+    _automatic_state._NOTICED.clear()
+    settings.DEBUG = True
+    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
+        view, key, _ = _fallback(HoldsObjects, [("inc",), ("inc",), ("inc",)])
+    assert view.count == 3  # the saved count over mount()'s 0
+    assert CALLS == ["mount"] * 4  # the GET, and each POST: something was not saved
+    envelope = _saved_envelope(key)
+    assert envelope["values"] == {"count": 3} and envelope["remount"] is True
+    assert "_client" not in envelope["private"]
+    text = "\n".join(record.getMessage() for record in caplog.records)
+    for name in ("user", "rows", "service"):
+        assert text.count("HoldsObjects.%s " % name) == 1, (name, text)
+    assert "a queryset is never saved" in text and "a Holder cannot be saved" in text
+    assert "mount() runs again" in text
+    assert "_client" not in text  # a private attribute is skipped quietly, as in 1.3
+    assert "Holder object at" not in json.dumps(_stored(key))  # nothing stringified
+
+
+@pytest.mark.django_db
+def test_a_model_instance_is_saved_as_its_field_dict_as_in_1_3():
+    class HoldsModel(_Base):
+        shown = ("count",)
+
+        def mount(self, request, **kwargs):
+            self.count = 0
+            self.member = User(username="ann-4107", email="ann@example.com", password="pw-hash")
+
+        @event_handler()
+        def inc(self, **kwargs):
+            self.count += 1
+
+    view, key, _ = _fallback(HoldsModel, [("inc",), ("inc",)])
+    assert view.count == 2
+    saved_member = _saved_envelope(key)["values"]["member"]
+    assert saved_member["username"] == "ann-4107" and "password" not in saved_member
+    assert isinstance(view.member, dict) and view.member["username"] == "ann-4107"
+
+
+@pytest.mark.django_db
+def test_work_mount_queued_makes_the_next_request_mount_again():
+    class Queues(_Base):
+        shown = ("count",)
+
+        def mount(self, request, **kwargs):
+            CALLS.append("mount")
+            self.count = 0
+            self.start_async(self._work, name="work")
+
+        def _work(self):
+            self.count = 100
+
+        @event_handler()
+        def inc(self, **kwargs):
+            self.count += 1
+
+    CALLS.clear()
+    first = _request("GET", None)
+    assert Queues().get(first).status_code == 200
+    assert _saved_envelope(first.session.session_key)["remount"] is True
+    view = Queues()
+    assert view.post(_request("POST", first.session.session_key, "inc")).status_code == 200
+    assert CALLS == ["mount", "mount"]
+
+
+@pytest.mark.django_db
+def test_a_sensitive_name_is_not_stored_and_is_reported(caplog, settings):
+    settings.DJUST_SENSITIVE_FIELDS = ["api_key"]
+    _automatic_state._NOTICED.clear()
+
+    class Keys(_Base):
+        shown = ("count",)
+
+        def mount(self, request, **kwargs):
+            self.count = 0
+            self.password = "pw-4107"
+            self.api_key = "key-4107"
+            self.is_staff = True
+
+        @event_handler()
+        def inc(self, **kwargs):
+            self.count += 1
+
+    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
+        _view, key, _ = _fallback(Keys, [("inc",)])
+    assert _saved_envelope(key)["values"] == {"count": 1}
+    assert "pw-4107" not in json.dumps(_stored(key)) and "key-4107" not in json.dumps(_stored(key))
+    text = "\n".join(record.getMessage() for record in caplog.records)
+    assert text.count("Keys.password ") == 1 and text.count("Keys.api_key ") == 1
+    assert "pw-4107" not in text and "key-4107" not in text
+
+
+class Names(_Base):
+    shown = ("count",)
+    limit = 5  # a plain class-level default
+    temporary_assigns = {"flash_rows": []}
+
+    @property
+    def doubled(self):
+        return self.count * 2
+
+    def helper(self):
+        return "method"
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+        self.limit = 7
+        self._private = "p"
+        self.flash_rows = ["x"]
+        self.page_title = "Title"
+        self.client_timezone = "Europe/Paris"
+        self.tick_interval = 5
+
+    @event_handler()
+    def inc(self, **kwargs):
+        self.count += 1
+
+
+@pytest.mark.django_db
+def test_only_application_attributes_are_stored():
+    _view, key, _ = _fallback(Names, [("inc",)])
+    envelope = _saved_envelope(key)
+    assert envelope["values"] == {"count": 1, "limit": 7}
+    assert envelope["private"]["_private"] == "p"
+    assert not [name for name in envelope["private"] if name.startswith(("_djust_", "_state_"))]
+
+
+def _tamper(key: str, section: str, **values: Any) -> None:
+    session = SessionStore(key)
+    (name,) = [n for n in session.keys() if n.startswith("_djust_auto_")]
+    envelope = session[name]
+    envelope[section].update(values)
+    session[name] = envelope
+    session.save()
+
+
+@pytest.mark.django_db
+def test_a_stored_name_the_view_would_not_save_is_not_put_back():
+    """Also 1.3's deploy rule: state saved by older code goes onto the new code,
+    except a name that is now a method or a property."""
+    _view, key, _ = _fallback(Names, [("inc",)])
+    _tamper(
+        key,
+        "values",
+        _private="public section, private name",
+        __class__="x",
+        doubled=99,
+        helper="was an attribute in the old code",
+        inc="x",
+        mount="x",
+        request="x",
+        template_name="evil.html",
+        login_required=False,
+        password="injected",
+        flash_rows=["injected"],
+        exposure_policy="legacy",
+        brand_new="allowed: a handler may create attributes",
+    )
+    _tamper(
+        key,
+        "private",
+        __dict__={},
+        __class__="x",
+        _framework_attrs=[],
+        _user_private_keys=["x"],
+        _djust_auto_basis="x",
+        _djust_event_request="x",
+        _state_count=41,
+        _async_tasks={"x": 1},
+        helper="x",
+        public_name="private section, public name",
+        _kept="allowed",
+    )
+    view = Names()
+    assert view.post(_request("POST", key, "inc")).status_code == 200
+    assert view.count == 2 and view._private == "p" and view._kept == "allowed"
+    assert view.doubled == 4 and view.helper() == "method" and callable(view.inc)
+    assert view.exposure_policy == "explicit" and view.template_name != "evil.html"
+    assert not hasattr(view, "password") and not hasattr(view, "public_name")
+    assert view.brand_new.startswith("allowed")
+    assert type(view) is Names and isinstance(view._framework_attrs, frozenset)
+    assert view._djust_auto_basis != "x" and not getattr(view, "_async_tasks", None)
+
+
+@pytest.mark.django_db
+def test_a_bad_envelope_reads_as_nothing_saved():
+    _view, key, _ = _fallback(Counter, [("inc",)])
+    session = SessionStore(key)
+    (name,) = [n for n in session.keys() if n.startswith("_djust_auto_")]
+    good = dict(session[name])
+    for change in (
+        {"version": 99},
+        {"binding": "0" * 64},
+        {"created": 2**40},
+        {"values": [1, 2]},
+        {"private": "x"},
+        {"remount": "yes"},
+        {"extra": 1},
+        {"values": {"count": {"__djust_value__": ["enum", ["os", "PathLike", "x"]]}}},
+    ):
+        broken = SessionStore(key)
+        broken[name] = {**good, **change}
+        broken.save()
+        view = Counter()
+        assert view.post(_request("POST", key, "nothing")).status_code == 200
+        assert view.count == 0, change
+        fixed = SessionStore(key)
+        fixed[name] = good
+        fixed.save()
+
+
+@pytest.mark.django_db
+def test_the_session_is_written_only_when_the_state_changed(monkeypatch):
+    from djust import _session_merge
+
+    writes: List[int] = []
+    real = _session_merge.save_merged
+    monkeypatch.setattr(
+        _session_merge, "save_merged", lambda *a, **k: (writes.append(1), real(*a, **k))[1]
+    )
+    _fallback(Counter, [("inc",), ("nothing",), ("nothing",), ("inc",)])
+    assert len(writes) == 3  # the page load, and the two changes
+    writes.clear()
+    monkeypatch.setattr(_per_turn, "disabled", frozenset({"unchanged_save_skip"}))
+    _fallback(Counter, [("inc",), ("nothing",), ("nothing",), ("inc",)])
+    assert len(writes) == 5  # gate-off: every request writes
+
+
+@pytest.mark.django_db
+def test_an_unchanged_state_is_rewritten_once_half_its_lifetime_has_passed(monkeypatch):
+    _view, key, _ = _fallback(Counter, [("inc",)])
+    created = _saved_envelope(key)["created"]
+    real = _automatic_state.time.time
+    monkeypatch.setattr(_automatic_state.time, "time", lambda: real() + 1900)  # > 3600 / 2
+    view = Counter()
+    view.post(_request("POST", key, "nothing"))
+    assert view.count == 1 and _saved_envelope(key)["created"] > created
+
+
+@pytest.mark.django_db
+def test_what_is_stored_does_not_share_references_with_the_view():
+    """Mutation after capture: the stored copy stays as captured, and the
+    changed state is then seen as changed."""
+    request = _request("POST", None, "add")
+    view = EditedList()
+    view.mount(request)
+    assert _automatic_state.stage(view, request) is not None
+    view.items.append("after-capture")
+    assert _saved_values_in(request.session) == {"items": ["a"]}
+    assert _automatic_state.stage(view, request) is not None
+    assert _saved_values_in(request.session) == {"items": ["a", "after-capture"]}
+
+
+def _saved_values_in(session: Any) -> Any:
+    (envelope,) = [v for k, v in session.items() if k.startswith("_djust_auto_")]
+    return envelope["values"]
+
+
+@pytest.mark.django_db
+def test_the_turns_changed_keys_are_used_once_and_never_hide_a_later_change(monkeypatch):
+    request = _request("POST", None, "x")
+    view = EditedList()
+    view.mount(request)
+    assert _automatic_state.stage(view, request) is not None  # the basis
+    calls: List[int] = []
+    real = _automatic_state.project
+    monkeypatch.setattr(_automatic_state, "project", lambda v: (calls.append(1), real(v))[1])
+    view._djust_auto_changed = set()  # this turn changed nothing
+    assert _automatic_state.stage(view, request) is None
+    assert calls == [] and view._djust_auto_changed is None
+    view.items.append("later")  # a later turn with no answer of its own
+    assert _automatic_state.stage(view, request) is not None and calls == [1]
+    view._djust_auto_changed = {"_cursor"}  # a private attribute changed: saved state
+    assert _automatic_state.stage(view, request) is None and calls == [1, 1]
 
 
 @pytest.mark.asyncio
@@ -997,10 +1405,52 @@ async def test_over_a_socket_only_changing_turns_serialize_and_write(monkeypatch
 
 
 def test_a_state_field_is_read_without_creating_its_default():
-    """Reading through the descriptor would add ``_state_<name>`` to the
-    instance, which change detection would report as the turn's change."""
     view = Declared()
     before = set(vars(view))
-    values, _encoded = _automatic_state.project(view)
-    assert values == {"kept": 0}
+    assert _automatic_state.project(view).public == {"kept": 0}
     assert set(vars(view)) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_socket_mount_runs_mount_then_puts_the_saved_state_back():
+    """The socket keeps running mount() (its registrations live in the
+    process), then restores public and private state over it."""
+    CALLS.clear()
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE):
+        comm, _mount = await harness.mount_view(Rebuilt, key)
+        await harness.event(comm, "inc")
+        await harness.event(comm, "inc")
+        await comm.disconnect()
+        again, mount = await harness.mount_view(Rebuilt, key)
+        frame = await harness.event(again, "inc")
+        await again.disconnect()
+    assert CALLS == ["mount", "mount", "restore"]
+    assert _probe_of(mount["html"]) == {"count": 2}
+    assert frame["type"] != "error"
+    assert (await sync_to_async(_saved_envelope)(key))["private"]["_cursor"] == 13
+
+
+def test_the_store_is_written_and_read_in_one_place_each():
+    """Every transport saves and restores through ``_exposure_sessions``;
+    nothing else calls the store's functions."""
+    import pathlib
+    import re as regex
+
+    root = pathlib.Path(_automatic_state.__file__).parent
+    callers: Dict[str, set] = {}
+    for path in root.rglob("*.py"):
+        if "tests" in path.parts or path.name == "_automatic_state.py":
+            continue
+        found = regex.findall(
+            r"_automatic_state\.(stage|load|saved|apply_private)\(", path.read_text()
+        )
+        for name in found:
+            callers.setdefault(name, set()).add(path.name)
+    assert callers == {
+        "stage": {"_exposure_sessions.py"},
+        "load": {"_exposure_sessions.py"},
+        "saved": {"_exposure_sessions.py"},
+        "apply_private": {"request.py"},
+    }

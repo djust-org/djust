@@ -783,6 +783,9 @@ class RequestMixin:
         # IMPORTANT: mount() must be called first to initialize clean state
         t0 = time.perf_counter()
         call_hook_sync(self.mount, request, **kwargs)
+        # Which ``_private`` attributes mount() created: saved with the view's
+        # state so a later request can be rebuilt without mount() (1.3).
+        cast(Any, self)._snapshot_user_private_attrs()
         t_mount = (time.perf_counter() - t0) * 1000
 
         # Call handle_params after mount (Phoenix parity).
@@ -842,12 +845,11 @@ class RequestMixin:
         t_json = (time.perf_counter() - t0) * 1000
 
         t0_sc = time.perf_counter()
-        # A page load is a fresh mount(): declared persist="server" fields are
-        # written as mount() left them, and the route's automatic state (#4107)
-        # is dropped, for explicit and legacy views alike.
+        # A page load is a fresh mount(): the view's state is saved as mount()
+        # left it, overwriting what an earlier page load saved (as in 1.3).
         from .._exposure_sessions import save_server_state
 
-        save_server_state(self, request, fresh=True)
+        save_server_state(self, request)
         t_save_components = (time.perf_counter() - t0_sc) * 1000
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
@@ -1671,26 +1673,30 @@ class RequestMixin:
             # One budget for every wait on background work in this request
             # (#3634); ``None`` unless ``http_fallback_background_timeout`` is set.
             bg_budget = _http_background_budget()
-            from .._exposure_sessions import load_server_state
+            from .. import _automatic_state
+            from .._exposure_sessions import load_saved_view
 
-            # Every view, explicit or legacy (#4107): mount() rebuilds the
-            # transient parts for this request, then the saved state is put
-            # back over it: declared persist="server" fields and the view's
-            # automatic state. Both are validated by ``load_server_state``;
-            # nothing rendered or sent by the client is read here.
-            call_hook_sync(self.mount, request, **kwargs)
-            restored = load_server_state(self, request)
-            if restored is not None:
-                for key, value in restored.items():
-                    safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
-                explicit_restored = True
-            # The socket mount restores, then reads the URL (``dispatch_mount``:
-            # mount, ``load_server_state``, ``handle_params``). Same order
-            # here, so the URL this request carries wins over a saved value the
-            # previous request stored (#3624), and the event meets the page the
-            # browser shows.
+            # The 1.3 rule (#4107): a view whose state is saved is REBUILT from
+            # it, and mount() does not run again; mount() runs only when
+            # nothing is saved, or when something of the view could not be
+            # saved (an unsaveable attribute, a component, work mount() queued),
+            # and then the saved state goes back over what mount() built. What
+            # is put back was validated by the store; nothing the client sent
+            # is read here.
+            saved_view = load_saved_view(self, request)
+            if saved_view.must_mount:
+                call_hook_sync(self.mount, request, **kwargs)
+                cast(Any, self)._snapshot_user_private_attrs()
+                mount_work_pending = True
+            for key, value in saved_view.public.items():
+                safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
+            _automatic_state.apply_private(self, saved_view.private)
+            explicit_restored = saved_view.found and bool(saved_view.public or saved_view.private)
+            # The socket mount restores, then reads the URL (``dispatch_mount``).
+            # Same order here, so the URL this request carries wins over a
+            # saved value the previous request stored (#3624), and the event
+            # meets the page the browser shows.
             _run_http_handle_params(self, request)
-            mount_work_pending = True
 
             self._assign_component_ids()
 

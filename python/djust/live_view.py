@@ -1084,6 +1084,8 @@ class LiveView(
         self._djust_auto_bytes = 0
         # The keys the turn's change detection found changed, for the save.
         self._djust_auto_changed: Any = None
+        self._djust_auto_restore_same = False
+        self._djust_restore_changed_view = True
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())
 
         # v0.8.0 — @action server-action state. Initialized AFTER

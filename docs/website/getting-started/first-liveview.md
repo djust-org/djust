@@ -53,7 +53,7 @@ class CounterView(LiveView):
 - Every event handler needs `@event_handler()` — djust blocks undecorated methods for security
 - Declare the parameters each binding sends; `manage.py check` reports a handler that would reject one (`djust.T020`)
 - State lives on `self` — any change to `self.count` triggers a re-render automatically
-- What you set on `self` is saved server-side between requests, on every transport: public attributes and `state()` fields whose values are plain data (`None`, booleans, numbers, strings, lists, dicts). Saving is not exposure: only a `state()` field or `get_context_data()` puts a value in the template. A name with a leading underscore is not saved; `manage.py check` reports a handler that relies on one across events (`djust.V029`)
+- A view's state is saved server-side between requests, as in 1.x: its public attributes, the `_private` attributes `mount()` creates, and its `state()` fields. Saving is not exposure: only a `state()` field or `get_context_data()` puts a value in the template. Over the HTTP fallback a later request rebuilds the view from its saved state and does not run `mount()` again, so read what must be fresh on every request in `handle_restore()` or `get_context_data()`
 
 ## 2. Create the Template
 

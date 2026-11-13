@@ -66,7 +66,7 @@ def test_every_answer_is_a_whole_page_the_client_rebases_on():
     ]
     for frame in frames:
         assert "patches" not in frame and frame["version"] == 1, frame
-    # #4107: the count is saved between requests (1, kept, 2).
+    # Nothing is kept between requests: each POST mounts again (count 0 + 1).
     assert ">1</p>" in frames[0]["html"]
-    assert ">1</p>" in frames[1]["html"]
-    assert ">2</p>" in frames[2]["html"]
+    assert ">0</p>" in frames[1]["html"]
+    assert ">1</p>" in frames[2]["html"]

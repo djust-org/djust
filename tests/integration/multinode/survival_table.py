@@ -89,13 +89,19 @@ STATE_ROWS = (
     ),
     Row(
         "plain_attr",
-        "Ordinary public attribute holding plain data",
+        "Ordinary attribute set in `mount()` or a handler, public or `_private`",
         "Nothing: it is saved automatically, and is not rendered unless declared.",
     ),
     Row(
         "not_saved",
-        "`_private` attribute, `state(persist=False)`, or a value that is not plain data",
-        "Rebuild it in `mount()` or `handle_restore()`; drop the underscore if it must survive.",
+        "`state(..., persist=False)` field",
+        "Nothing: you asked for it not to be kept.",
+    ),
+    Row(
+        "mount",
+        "`mount()`",
+        "Put what must be read again on every request in `handle_restore()` or "
+        "`get_context_data()`, not only in `mount()`.",
     ),
     Row(
         "handle_restore",
@@ -125,8 +131,7 @@ STATE_ROWS = (
     Row(
         "legacy",
         '`exposure_policy = "legacy"` view attribute',
-        "Nothing over the HTTP fallback. Over a socket it lives in the process: "
-        "migrate the view to explicit exposure.",
+        "Migrate the view to explicit exposure: a legacy view's state is not saved.",
     ),
     Row(
         "component",
@@ -191,10 +196,20 @@ STATE_CELLS: Dict[Tuple[str, str], Entry] = {
     ("plain_attr", RESTART): Cell("restored (last completed save)", _T + "kill_after_save"),
     ("not_saved", SAME): Cell("kept", _T + "ws_events_on_one_process"),
     ("not_saved", HTTP): Cell(
-        "lost: every request runs `mount()`", _T + "http_fallback_alternating_processes"
+        "lost: every request starts from the default", _T + "http_fallback_alternating_processes"
     ),
-    ("not_saved", WS): Cell("lost: `mount()` value", _T + "ws_reconnect_to_another_process"),
-    ("not_saved", RESTART): Cell("lost: `mount()` value", _T + "kill_after_save"),
+    ("not_saved", WS): Cell("lost: the default", _T + "ws_reconnect_to_another_process"),
+    ("not_saved", RESTART): Cell("lost: the default", _T + "kill_after_save"),
+    ("mount", SAME): NA("runs once, when the page's view is built"),
+    ("mount", HTTP): Cell(
+        "not run again: the view is rebuilt from its saved state",
+        _T + "http_fallback_alternating_processes",
+    ),
+    ("mount", WS): Cell(
+        "runs on the new process, then the saved state is put back over it",
+        _T + "ws_reconnect_to_another_process",
+    ),
+    ("mount", RESTART): NA("same mount path as the reconnect to another process"),
     ("handle_restore", SAME): NA("no remount, so nothing to restore"),
     ("handle_restore", HTTP): Cell(
         "called on every request", _T + "http_fallback_alternating_processes"
@@ -233,7 +248,7 @@ STATE_CELLS: Dict[Tuple[str, str], Entry] = {
     ("wizard", WS): Cell("restored: the step and the answers", _T + "wizard_step"),
     ("wizard", RESTART): NA("same mount path as the reconnect to another process"),
     ("legacy", SAME): Cell("kept", _T + "legacy_view"),
-    ("legacy", HTTP): Cell("kept (1, 2 across A, B)", _T + "legacy_view"),
+    ("legacy", HTTP): Cell("lost: every request runs `mount()`", _T + "legacy_view"),
     ("legacy", WS): Cell("lost: `mount()` value", _T + "legacy_view"),
     ("legacy", RESTART): NA("same mount path as the reconnect to another process"),
     ("component", SAME): Cell("kept", _T + "components"),
@@ -399,7 +414,7 @@ for _engine in ("db", "file", "cache_file", "cache_redis", "cached_db"):
     ENGINE_CELLS[(_engine, HTTP)] = Cell("kept", _T + "session_engine_across_processes")
     ENGINE_CELLS[(_engine, WS)] = Cell("restored", _T + "session_engine_across_processes")
 ENGINE_CELLS[("cache_locmem", HTTP)] = Cell(
-    "500 error, the session cookie is deleted; the next request starts a new session",
+    "not kept: each process holds its own sessions, so each request starts over",
     _T + "session_engine_across_processes",
     gap=True,
 )

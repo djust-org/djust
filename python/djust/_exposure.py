@@ -315,7 +315,7 @@ class _ClassFacts:
     provider.
     """
 
-    __slots__ = ("snapshot", "providers", "contracts", "exposures", "code_digest")
+    __slots__ = ("snapshot", "providers", "contracts", "exposures", "code_digest", "enums")
 
     def __init__(self, view_class: type) -> None:
         # Before anything is compiled: see ``ClassSnapshot``.
@@ -325,6 +325,7 @@ class _ClassFacts:
         self.exposures: tuple[tuple[Any, Any], ...] = ()
         # ``_automatic_state.class_digest`` (#4107), compiled on first use.
         self.code_digest: str | None = None
+        self.enums: Any = None
 
     def fresh(self) -> bool:
         for descriptor, exposure in self.exposures:

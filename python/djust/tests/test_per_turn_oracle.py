@@ -894,6 +894,10 @@ async def observe(run: Callable[[], Any]) -> List[Any]:
     stored state shows as a "non-serializable value" warning (#1786) before it
     shows in any frame.
     """
+    from djust import _automatic_state
+
+    # Its once-per-process reports would be in the first run's log only.
+    _automatic_state._NOTICED.clear()
     handler = _Warnings()
     logger = logging.getLogger("djust")
     logger.addHandler(handler)
@@ -1326,7 +1330,14 @@ def _break_unchanged_save_skip(patch: Any) -> None:
     from djust import _automatic_state
 
     # As if every state encoded to what the store already holds.
-    patch.setattr(_automatic_state, "_encode", lambda values: "the same")
+    real = _automatic_state.project
+
+    def stale(view: Any) -> Any:
+        state = real(view)
+        state.text = "[{},{},false]"
+        return state
+
+    patch.setattr(_automatic_state, "project", stale)
 
 
 SABOTAGE = {

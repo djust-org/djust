@@ -58,17 +58,17 @@ def test_ws_events_on_one_process(db_cluster, survival):
     socket.event("increment")
     second = socket.event("increment")
     probe = probe_from(second)
-    for field in ("count", "client_count", "plain_state", "plain_attr"):
+    for field in ("count", "client_count", "plain_state"):
         row = {
             "count": "persist_server",
             "client_count": "persist_client",
             "plain_state": "plain_state",
-            "plain_attr": "plain_attr",
         }[field]
         survival.observe("state", row, "same", _kept(probe[field], 2))
     survival.observe(
-        "state", "not_saved", "same", _kept((probe["not_saved"], probe["private_attr"]), (2, 2))
+        "state", "plain_attr", "same", _kept((probe["plain_attr"], probe["private_attr"]), (2, 2))
     )
+    survival.observe("state", "not_saved", "same", _kept(probe["not_saved"], 2))
     survival.observe("state", "render", "same", "patches" if kinds(second) == ["patch"] else "?")
     socket.close()
 
@@ -96,23 +96,34 @@ def test_http_fallback_alternating_processes(db_cluster, survival):
         reset if {p["client_count"] for p in probes} == {1} else "?",
     )
     # #4107: what the view sets on self is saved, declared or not.
-    for field in ("plain_state", "plain_attr"):
-        survival.observe(
-            "state",
-            field,
-            "http",
-            "kept (1, 2, 3 across A, B, A)"
-            if [p[field] for p in probes] == [1, 2, 3]
-            else "? %r" % ([p[field] for p in probes],),
-        )
+    kept = "kept (1, 2, 3 across A, B, A)"
+    survival.observe(
+        "state",
+        "plain_state",
+        "http",
+        kept if [p["plain_state"] for p in probes] == [1, 2, 3] else "?",
+    )
+    both = [(p["plain_attr"], p["private_attr"]) for p in probes]
+    survival.observe(
+        "state", "plain_attr", "http", kept if both == [(1, 1), (2, 2), (3, 3)] else "? %r" % both
+    )
     survival.observe(
         "state",
         "not_saved",
         "http",
-        "lost: every request runs `mount()`"
-        if {(p["not_saved"], p["private_attr"]) for p in probes} == {(1, 1)}
-        and [p["unsaveable_pid"] for p in probes] == pids
+        "lost: every request starts from the default"
+        if {p["not_saved"] for p in probes} == {1}
         else "?",
+    )
+    # 1.3's rule: the view is rebuilt from what the GET's mount() saved on A;
+    # no later request runs mount() again, on either process.
+    survival.observe(
+        "state",
+        "mount",
+        "http",
+        "not run again: the view is rebuilt from its saved state"
+        if {p["mounted_pid"] for p in probes} == {db_cluster["A"].pid}
+        else "? %r" % ([p["mounted_pid"] for p in probes],),
     )
     survival.observe(
         "state",
@@ -154,16 +165,17 @@ def _restored_counter(survival, column: str, probe, *, count: int, client: int) 
         "restored from the browser's signed token" if probe["client_count"] == client else "lost",
     )
     saved = {"ws": "restored", "restart": "restored (last completed save)"}[column]
-    for field in ("plain_state", "plain_attr"):
-        survival.observe("state", field, column, saved if probe[field] == count else "lost")
+    survival.observe(
+        "state", "plain_state", column, saved if probe["plain_state"] == count else "lost"
+    )
     survival.observe(
         "state",
-        "not_saved",
+        "plain_attr",
         column,
-        "lost: `mount()` value"
-        if (probe["not_saved"], probe["private_attr"]) == (0, 0)
-        and probe["unsaveable_pid"] == probe["pid"]
-        else "kept",
+        saved if (probe["plain_attr"], probe["private_attr"]) == (count, count) else "lost",
+    )
+    survival.observe(
+        "state", "not_saved", column, "lost: the default" if probe["not_saved"] == 0 else "kept"
     )
     survival.observe(
         "state",
@@ -183,7 +195,14 @@ def test_ws_reconnect_to_another_process(db_cluster, survival):
     socket_b = browser.socket("B")
     mounted = socket_b.mount(COUNTER, "/counter/", reconnect_from=socket_a)
     probe = probe_from(mounted)
-    assert probe["mounted_pid"] == db_cluster["B"].pid, "mount() ran on B"
+    survival.observe(
+        "state",
+        "mount",
+        "ws",
+        "runs on the new process, then the saved state is put back over it"
+        if probe["count"] == 2
+        else "?",
+    )
     _restored_counter(survival, "ws", probe, count=2, client=2)
     first = socket_b.event("increment")
     second = socket_b.event("increment")
@@ -369,10 +388,7 @@ def test_legacy_view(db_cluster, survival):
     socket_b.close()
     counts = [_post(browser, node, "/legacy/", "increment")[1]["count"] for node in ("A", "B")]
     survival.observe(
-        "state",
-        "legacy",
-        "http",
-        "kept (1, 2 across A, B)" if counts == [1, 2] else "? %r" % (counts,),
+        "state", "legacy", "http", "lost: every request runs `mount()`" if counts == [1, 1] else "?"
     )
 
 
@@ -737,8 +753,10 @@ def test_session_engine_across_processes(engine, survival, request):
             over_http = (
                 "500 error, the session cookie is deleted; the next request starts a new session"
             )
+        elif statuses == [200, 200] and counts == [1, 1]:
+            over_http = "not kept: each process holds its own sessions, so each request starts over"
         else:
-            over_http = "? %r" % (answers,)
+            over_http = "? %r %r %r" % (statuses, counts, cookie_kept)
         survival.observe("engines", engine, "http", over_http)
 
         browser = Browser(cluster)

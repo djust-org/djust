@@ -36,7 +36,7 @@ server memory, available to your handlers and never exported.
 | Destination | Comes only from |
 | --- | --- |
 | Template context | Declared `state()` fields, `get_context_data()` additions and registered framework providers |
-| Server-side saved state (reconnect, cross-worker restore, HTTP fallback) | What the view sets on `self`: public attributes and `state()` fields holding plain data. Never sent to the browser |
+| Server-side saved state (reconnect, cross-worker restore, HTTP fallback) | The view's own state: public attributes, the `_private` ones `mount()` creates, `state()` fields. Never sent to the browser |
 | Raw browser data (`get_state()`, HTTP API `assigns`) | `state(..., client=True)` fields |
 | Back-navigation snapshot | `state(..., persist="client", client=True)` fields |
 | Debug panel, time travel, bug capture | A redacted projection: names and types, not values |
@@ -47,11 +47,10 @@ panel: a declared field renders, but it reaches `get_state()` only with
 `client=True`.
 
 **Exposure is about the client; saving is automatic.** Keeping a value on the
-server exposes nothing, so it needs no declaration: what a view sets on `self`
-is saved in the server-side session after each event and put back after
-`mount()` on the next request or reconnect, when its name is public and its
-value is plain data. Saving a value does not render it, send it, or let the
-client set it. See [what survives](../guides/state-survival.md).
+server exposes nothing, so it needs no declaration: the view's state is saved
+in the server-side session after each event, as in 1.x, and a later request
+rebuilds the view from it. Saving a value does not render it, send it, or let
+the client set it. See [what survives](../guides/state-survival.md).
 
 ### What the template sees
 
@@ -89,7 +88,7 @@ result and an ordinary attribute still have to be returned from
 from djust.decorators import state
 
 count = state(0)                                 # reactive, rendered, saved server-side
-scratch = state(0, persist=False)                # rebuilt by mount() on every request
+scratch = state(0, persist=False)                # never saved: starts from its default
 cart = state(default_factory=list, persist="server")  # saved strictly: an error if it cannot be
 page = state(1, persist="client", client=True)   # restorable on back-navigation
 token = state("", persist="server", render=False)  # handlers only, never template context
@@ -102,20 +101,16 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   `render=False`, because its attribute walk renders every public field.
 
 - A field with no `persist=` is saved server-side with the rest of the view's
-  state, bound to the session, the user, the tenant and the route. A value that
-  is not plain data, or does not fit the 64 KB limit, is left out and the event
-  still succeeds. `persist=False` keeps a field out: it starts from its default
-  on every request.
-- `persist="server"` is the strict form: a value that is not plain data, or a
-  change that would exceed the limit, is refused with an error.
+  state, bound to the session, the user, the tenant and the route.
+  `persist=False` keeps a field out.
+- `persist="server"` is the strict form: a value that cannot be saved, or a
+  change over the declared-field limit, is refused with an error.
 - `client=True` lets the raw value reach the browser.
 - `persist="client"` requires `client=True`. A contradictory declaration fails
   at class definition.
-- Only plain data (strings, numbers, booleans, `None`, and lists or dicts of
-  them) is saved. `Decimal`, dates, `UUID`, model instances and querysets are
-  never stringified: with `persist="server"` they are an error, otherwise they
-  are skipped and named once on the `djust.automatic_state` logger. Store an id
-  and load the object again in `mount()`, `handle_restore()` or
+- Only JSON primitives (strings, numbers, booleans, `None`, and lists or dicts
+  of them) can be persisted. `Decimal`, dates, `UUID` and model instances are
+  rejected rather than stringified. Store an id and load the object again in
   `get_context_data()`.
 
 ## Supported configuration
@@ -249,10 +244,11 @@ token = state("", persist="server", render=False)  # handlers only, never templa
 
 - **Forms.** `FormMixin` provides `form_data`, `form_errors`, `field_errors`,
   `is_valid` and its messages to the template. Input and errors are saved
-  server-side with the view's state, except a password field or a name on the
-  sensitive-field list: its input is never stored, and an error message that
-  contains it is replaced. `form_input = persisted_form_input("name", "email")`
-  from `djust.forms` is the strict, declared form of the same.
+  server-side with the view's state, except password, one-time-code and
+  payment-card inputs and names on the sensitive-field list: such input is
+  never stored, and an error message that contains it is replaced.
+  `form_input = persisted_form_input("name", "email")` from `djust.forms` is
+  the strict, declared form of the same.
   Opting in a password field, or a name on the sensitive-field list, is
   refused at class definition (at mount, for a form class chosen by
   `get_form_class()`). Such fields render empty and never reach storage,

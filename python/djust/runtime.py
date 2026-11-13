@@ -3483,6 +3483,9 @@ class ViewRuntime(RuntimeTurnPort):
 
         try:
             await call_hook(view_instance.mount, request, **mount_kwargs)
+            # Which ``_private`` attributes mount() created (saved with the
+            # view's state, #4107).
+            view_instance._snapshot_user_private_attrs()
             if not legacy_exposure:
                 from ._exposure_sessions import load_server_state
 
@@ -3540,8 +3543,12 @@ class ViewRuntime(RuntimeTurnPort):
                     # match it. The first event after the restore must send
                     # full HTML, not a patch against that stale baseline. The
                     # mount render reads the flag and never resets it; the
-                    # first event's render consumes it.
-                    view_instance._force_full_html = True
+                    # first event's render consumes it. Not when the restore
+                    # put back exactly what mount() built (#4107): the page
+                    # GET saved that state and rendered the page from it, so
+                    # the browser's DOM and the baseline already agree.
+                    if view_instance.__dict__.get("_djust_restore_changed_view", True):
+                        view_instance._force_full_html = True
         except Exception as exc:
             response = handle_exception(
                 exc,

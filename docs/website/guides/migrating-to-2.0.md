@@ -324,26 +324,36 @@ class AppView(LiveView):
 ### Keeping state across a reconnect
 
 A reconnect, a second worker and every event over the HTTP fallback give the
-user a new view object. `mount()` runs, then the view's saved state is put back
-from the server-side session, then `handle_restore()` runs.
+user a new view object, built from the view's saved state as in 1.3.
 
-**What you set on `self` is saved.** Public attributes and `state()` fields
-are saved after each event when their value is plain data: `None`, booleans,
-numbers, strings, and lists and dicts of those. This needs no declaration and
-exposes nothing: a saved value reaches the template only through a `state()`
-field or `get_context_data()`, and reaches the browser as data only with
-`client=True`.
+**What is saved.** After the page load and after each event that changed it,
+the view's state is saved in the server-side session: its public attributes,
+the `_private` attributes `mount()` created, and its `state()` fields. Every
+plain Python value comes back with its type (numbers, strings, lists, dicts,
+tuples, sets, `Decimal`, dates and times, `UUID`, bytes, enum members). A
+model instance is saved as a dict of its fields, as in 1.3. Saving needs no
+declaration and exposes nothing: a saved value reaches the template only
+through a `state()` field or `get_context_data()`, and reaches the browser as
+data only with `client=True`.
 
-Not saved: a name with a leading underscore, a field declared
-`state(..., persist=False)`, djust's own attributes, and any value that is not
-plain data (a model instance, a queryset, a `Decimal`, a `date`, the request,
-the user). Such a value is skipped, the event still succeeds, and the
-attribute comes from `mount()` on the next request; the `djust.automatic_state`
-logger names it once. Rebuild it in `mount()` or `handle_restore()`.
+**How it comes back.** Over the HTTP fallback a later request restores the
+saved state and does **not** run `mount()` again; then `handle_params()` and
+`handle_restore()` run. `mount()` runs again only when nothing is saved, or
+when something of the view could not be saved (a queryset, the request's
+user, an arbitrary object, a component, work `mount()` queued): such a value
+is skipped, never turned into a string, a WARNING on the `djust.automatic_state`
+logger names it once, and the next request runs `mount()` to re-create it
+before the saved state is put back over it. Over a socket, `mount()` runs
+when the socket mounts and the saved state is put back over it. A full page
+load runs `mount()` and overwrites what was saved.
 
-`persist="server"` is the strict form of the same thing: the field must be
-plain data and must fit the size limit, and a change that does not is refused
-with an error instead of being skipped.
+**What is not saved.** A field declared `state(..., persist=False)`; names on
+the sensitive-field list (`password`, `is_staff`, `is_superuser`,
+`DJUST_SENSITIVE_FIELDS`); and, in a `FormMixin` form, password, one-time-code
+and payment-card inputs.
+
+`persist="server"` is the strict form: a value that cannot be saved is an
+error instead of being skipped.
 
 ```python
 from djust import LiveView
@@ -396,17 +406,21 @@ class ReportView(LiveView):
   without the fix for [#3989](https://github.com/djust-org/djust/issues/3989)
   call `handle_restore()` only on legacy views; on those, an explicit view
   gets its fields back and no hook.
-- **Underscore names are never saved.** If `self._draft` has to survive a
-  reconnect, rename it `self.draft`. Saving it does not render it.
-- **A page load starts fresh.** A full page load runs `mount()` and discards
-  the route's saved state; a reconnect and a fallback event restore it.
-- **A deploy that changes the view's code resets its state.** Saved state
-  written by different code of the view class (its methods, its class
-  attributes, its `state()` fields) is dropped and the view mounts fresh.
-- **Large values are left out.** Saved state is limited to 64 KB, 10,000
-  values and 16 levels per view. When it does not fit, the largest attributes
-  are left out, with a warning naming them. Name a large value `_rows`, or
-  declare it `rows = state(persist=False)`, and load it in `mount()`.
+- **`mount()` is not the place for what must be fresh.** A value `mount()`
+  computes (a permission flag, a list of rows) is saved and comes back as it
+  was until the page is loaded again, exactly as it lives on in a socket's
+  view. Authorization belongs in the framework's gates (`login_required`,
+  `permission_required`, `check_permissions`, object permissions), which run on
+  every request; data that must be current belongs in `handle_restore()` or
+  `get_context_data()`.
+- **Size.** A WARNING names the largest attributes once a view's saved state
+  passes 100 KB (`DJUST_AUTOMATIC_STATE_WARN_KB`). Past 512 KB
+  (`DJUST_AUTOMATIC_STATE_MAX_KB`, or `automatic_state_max_kb` on the view)
+  the event's change is refused whole, with an error naming the view, the
+  attribute and the limit; the page stays on its last saved state. State is
+  never saved in part.
+- **Deploys.** As in 1.3, saved state is applied to the code that is running;
+  a saved name that is now a method or a property is skipped.
 - **Grants are not inherited.** A `state(..., persist=...)` or `client=True`
   field on a base class has to be declared again on each concrete view. A base
   class may declare `state()` fields without grants.
@@ -419,10 +433,7 @@ class ReportView(LiveView):
   `migrate_state(self, old_version, values)` to translate it.
 
 A view that is served without a WebSocket (the HTTP fallback) gets a new view
-object for every event, and its saved state is put back each time, as in 1.3.
-What does not come back is what is not saved: underscore names and values
-that are not plain data. `manage.py check` reports a handler that changes an
-underscore attribute a later event reads (`djust.V029`).
+object for every event, rebuilt from its saved state as in 1.3.
 
 ### Other things explicit exposure refuses
 
@@ -920,4 +931,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 81b70c2ffcd1 -->
+<!-- generated-doc prose-sha256: 9186747a22cd -->

@@ -30,7 +30,7 @@ class CounterView(LiveView):
     """
 
     # Declared state renders in the template; other attributes do not.
-    # What a view sets on self is saved server-side between requests.
+    # The view's state is saved server-side between requests.
     count = state(0)
 
     @event_handler

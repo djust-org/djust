@@ -333,32 +333,27 @@ def _flush(session: Any, expected_key: Any) -> None:
     save_merged(session, expected_key)
 
 
-def save_server_state(view: Any, request: Any, *, fresh: bool = False) -> None:
+def save_server_state(view: Any, request: Any) -> None:
     """Save the view's server-side state after the transport's authorization.
 
     Two parts, one session write (#4107):
 
-    * declared ``persist="server"`` fields, strictly: raises
-      :class:`StateLimitExceeded`, before writing anything, when they are over
-      their limits;
-    * the view's automatic state (``_automatic_state``): best effort, never an
-      error for a value, and not written when it equals what is stored.
+    * declared ``persist="server"`` fields, strictly: a value the declared
+      codec refuses is an error;
+    * the rest of the view's state (``_automatic_state``): its public
+      attributes and the private ones ``mount()`` created, as 1.3 saved them.
+      Not written when it equals what is stored.
 
-    ``fresh=True`` is the full page load: ``mount()`` just ran and nothing was
-    restored, so the stored automatic state of this route is dropped instead
-    of written (a view that changes nothing creates no session).
+    Either part over its size limit raises :class:`StateLimitExceeded` before
+    anything is written: state is never saved in part. Called after the page
+    GET's ``mount()`` too, where it overwrites what an earlier page load saved.
     """
     from . import _automatic_state
 
     adapter = _declared_adapter(view, request, create=True)
     # Projected first: a refusal must leave the session dict untouched.
     values = _project_for_save(adapter, view) if adapter is not None else None
-    undo = None
-    if fresh:
-        changed = _automatic_state.discard(view, request)
-    else:
-        undo = _automatic_state.stage(view, request)
-        changed = undo is not None
+    undo = _automatic_state.stage(view, request)
     if adapter is not None and values is not None:
         try:
             adapter.save(values)  # flushes the automatic envelope with it
@@ -368,9 +363,49 @@ def save_server_state(view: Any, request: Any, *, fresh: bool = False) -> None:
                 undo()
             field = _limit_culprit(adapter.contract, view)
             raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
-    elif changed:
+    elif undo is not None:
         session = request.session
         _flush(session, session.session_key)
+
+
+class SavedView:
+    """What the store holds for a view, read BEFORE ``mount()`` (the HTTP
+    fallback): the values to put back, and whether ``mount()`` must run first.
+
+    ``must_mount`` is 1.3's rule: nothing saved, or something of the view could
+    not be saved (an unsaveable attribute, a component, work ``mount()`` queued
+    that has not run), so only ``mount()`` can supply it.
+    """
+
+    __slots__ = ("public", "private", "must_mount", "found")
+
+    def __init__(self, public: dict[str, Any], private: dict[str, Any], must_mount: bool) -> None:
+        self.public = public
+        self.private = private
+        self.must_mount = must_mount
+        self.found = bool(public or private) or not must_mount
+
+
+def load_saved_view(view: Any, request: Any) -> SavedView:
+    """Read a view's saved state before deciding whether to run ``mount()``."""
+    from . import _automatic_state
+
+    public: dict[str, Any] = {}
+    stored = _automatic_state.saved(view, request)
+    declared: dict[str, Any] | None = None
+    adapter = _declared_adapter(view, request)
+    if adapter is not None:
+        try:
+            declared = adapter.load()
+        except ExposureError:
+            declared = None
+    if stored is None:
+        # Nothing of the view's own state is stored: mount() builds it. Declared
+        # fields, if any, still go back over it.
+        return SavedView(declared or {}, {}, True)
+    public.update(stored.public)
+    public.update(declared or {})
+    return SavedView(public, stored.private, stored.remount)
 
 
 def load_server_state(view: Any, request: Any) -> dict[str, Any] | None:
@@ -394,9 +429,15 @@ def load_server_state(view: Any, request: Any) -> dict[str, Any] | None:
             restored = adapter.load()
         except ExposureError:
             restored = None
+    declared_restored = restored is not None
+    # Also puts the saved private attributes back on the view.
     automatic = _automatic_state.load(view, request)
     if automatic is not None:
         restored = {**automatic, **(restored or {})}
+    # For the socket mount (#1977): did the restore change what mount() built?
+    view.__dict__["_djust_restore_changed_view"] = declared_restored or not view.__dict__.get(
+        "_djust_auto_restore_same", False
+    )
     return restored
 
 
