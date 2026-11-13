@@ -274,3 +274,42 @@ def test_the_introspection_guards_are_still_reachable_after_class_creation():
         json.dumps(_extract_view_schema(view, [LiveView]))
         json.dumps(_audit_class(view, "LiveView", verbose=True, base_classes=[LiveView]))
         _extract_vars(view)
+
+
+@pytest.mark.parametrize("name", ["temporary_assigns", "static_assigns"])
+@pytest.mark.parametrize("shape", ["assigned-after-creation", "property"])
+def test_check_liveviews_reads_the_assigns_settings_only_when_they_are_collections(name, shape):
+    """``check_liveviews`` (Q007) called ``.keys()`` on ``temporary_assigns`` and
+    ``set()`` on ``static_assigns``; the two shapes class creation cannot refuse
+    put a non-collection there, and the check crashed (#4070)."""
+    import gc
+
+    from djust.checks.components import check_liveviews
+
+    if shape == "property":
+        view = type(
+            "AssignsShape",
+            (LiveView,),
+            {
+                "__module__": __name__,
+                "exposure_policy": "explicit",
+                "template": "<div dj-root></div>",
+                name: property(lambda self: None),
+            },
+        )
+    else:
+        view = type(
+            "AssignsShape",
+            (LiveView,),
+            {
+                "__module__": __name__,
+                "exposure_policy": "explicit",
+                "template": "<div dj-root></div>",
+            },
+        )
+        setattr(view, name, state(None))
+    try:
+        check_liveviews(None)  # must not raise
+    finally:
+        del view
+        gc.collect()

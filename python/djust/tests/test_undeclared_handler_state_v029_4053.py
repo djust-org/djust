@@ -120,6 +120,23 @@ def _post_three(view_cls):
     return seen
 
 
+def _no_persist(views):
+    @event_handler
+    def increment(self, **kwargs):
+        self.count += 1
+
+    return views(
+        "NoPersist",
+        (LiveView,),
+        {
+            "exposure_policy": "explicit",
+            "template": "<div dj-root>[count={{ count }}]</div>",
+            "count": state(0),
+            "increment": increment,
+        },
+    )
+
+
 @pytest.mark.django_db
 def test_canary_the_mount_only_counter_is_stuck_on_the_fallback_and_v029_reports_it(views):
     mount_only, persisted = _mount_only(views), _persisted(views)
@@ -130,23 +147,40 @@ def test_canary_the_mount_only_counter_is_stuck_on_the_fallback_and_v029_reports
     assert len(reported) == 1, [m.msg for m in reported]
     message = reported[0]
     assert message.id == "djust.V029"
-    assert "increment() changes self.count" in message.msg
+    assert "increment() changes self.count, which a later event reads" in message.msg
+    assert "not declared state" in message.msg
     assert 'count = state(<default>, persist="server")' in message.hint
     assert message.line_number and message.file_path.endswith(".py")
     assert _messages_for(persisted) == []
 
 
-def test_not_reported_private_framework_declared_descriptor_and_non_handler(views):
+@pytest.mark.django_db
+def test_canary_a_state_field_without_persist_is_stuck_too_and_v029_reports_it(views):
+    """The old README shape, ``count = state(0)``: not restored on the fallback."""
+    no_persist = _no_persist(views)
+    assert _post_three(no_persist) == [1, 1, 1]
+    reported = _messages_for(no_persist)
+    assert len(reported) == 1, [m.msg for m in reported]
+    assert "changes state() field count, which a later event reads" in reported[0].msg
+    assert 'without persist="server"' in reported[0].msg
+
+
+def test_not_reported_shapes_that_survive_or_are_recomputed(views):
     class Base(LiveView):
         exposure_policy = "explicit"
         template = "<div dj-root></div>"
-        inherited = state(0)
+        inherited = state(0, persist="server")
 
     class DeclaresMixin:
-        from_mixin = state(0)
+        from_mixin = state(0, persist="server")
+
+    def query(value):
+        return [value]
 
     class Quiet(DeclaresMixin, Base):
-        own = state(0)
+        own = state(0, persist="server")
+        label_text = state("")  # no persist, but only ever replaced
+        temporary_assigns = {"messages": []}
 
         @computed
         def doubled(self):
@@ -162,25 +196,35 @@ def test_not_reported_private_framework_declared_descriptor_and_non_handler(view
 
         def mount(self, request, **kwargs):
             self.plain_in_mount = 0
+            self.messages = []
 
         @event_handler
         def change(self, **kwargs):
-            self._scratch = 1  # private
-            self.own += 1  # declared here, augmented
-            self.inherited += 1  # declared on a base
-            self.from_mixin = 2  # declared on a plain mixin
+            self._scratch += 1  # private, even read-then-written
+            self.own += 1  # declared with persist, augmented
+            self.inherited += 1  # declared with persist on a base
+            self.from_mixin = self.from_mixin + 2  # declared with persist on a mixin
             self.page_title = "x"  # a framework setting (a property)
             self.template_name = "other.html"  # a framework setting (a plain value)
-            self.label = "y"  # a property with a setter
+            self.label = self.label + "y"  # a property with a setter
+            self.label_text = "fresh"  # a no-persist field replaced, not read first
+            self.messages.append("hi")  # a temporary_assigns key, reset every render
+
+        @event_handler
+        def search(self, value: str = "", **kwargs):
+            # Per-event recomputation: set from the arguments, read after the
+            # write by the same handler, read by nothing else.
+            self.results = query(value)
+            self.result_count = len(self.results)
 
         def not_a_handler(self):
-            self.plain = 1
+            self.plain += 1
 
-    assert _messages_for(Quiet) == []
+    assert _messages_for(Quiet) == [], [m.msg for m in _messages_for(Quiet)]
     assert _messages_for(Base) == []
 
 
-def test_reported_mount_only_handler_only_and_class_level_default(views):
+def test_reported_read_then_write_mutation_and_read_by_a_later_event(views):
     class Loud(LiveView):
         exposure_policy = "explicit"
         template = "<div dj-root></div>"
@@ -188,21 +232,41 @@ def test_reported_mount_only_handler_only_and_class_level_default(views):
 
         def mount(self, request, **kwargs):
             self.count = 0
+            self.items = []
+            self.index = {}
 
         @event_handler
         def increment(self, **kwargs):
-            self.count += 1  # set only in mount()
-            self.total = self.total + 1
+            self.count += 1  # augmented
+            self.total = self.total + 1  # self.x = f(self.x)
+            self.items.append(1)  # in-place mutation
+            self.index["k"] = 1  # subscript store
 
         @event_handler
         def search(self, value: str = "", **kwargs):
-            self.query = value  # set only by the handler
+            self.query = value  # read by another handler below
+
+        @event_handler
+        def pick(self, value: str = "", **kwargs):
+            self.picked = value  # read by get_context_data
+            self.last = self.query
+
+        def get_context_data(self, **kwargs):
+            return {**super().get_context_data(**kwargs), "picked": self.picked}
 
     texts = sorted(m.msg for m in _messages_for(Loud))
-    assert len(texts) == 3, texts
-    assert any("increment() changes self.count" in t for t in texts)
-    assert any("increment() changes self.total" in t for t in texts)
-    assert any("search() changes self.query" in t for t in texts)
+    expected = [
+        "increment() changes self.count",
+        "increment() changes self.total",
+        "increment() changes self.items",
+        "increment() changes self.index",
+        "search() changes self.query",
+        "pick() changes self.picked",
+    ]
+    assert len(texts) == len(expected), texts
+    for fragment in expected:
+        assert any(fragment in t for t in texts), (fragment, texts)
+    assert not any("self.last" in t for t in texts)  # set, read by nothing later
 
 
 def test_a_handler_in_a_mixin_is_reported_once_naming_the_mixin(views):
@@ -210,6 +274,7 @@ def test_a_handler_in_a_mixin_is_reported_once_naming_the_mixin(views):
         @event_handler
         def bump(self, **kwargs):
             self.bumps = getattr(self, "bumps", 0) + 1
+            self.hits += 1
 
     class First(CountsMixin, LiveView):
         exposure_policy = "explicit"
@@ -222,6 +287,7 @@ def test_a_handler_in_a_mixin_is_reported_once_naming_the_mixin(views):
     reported = _messages_for(First) + _messages_for(Second)
     assert len(reported) == 1, [m.msg for m in reported]
     assert "(in " in reported[0].msg and "CountsMixin)" in reported[0].msg
+    assert "self.hits" in reported[0].msg
 
 
 def test_a_legacy_view_is_not_checked(views):
@@ -233,7 +299,7 @@ def test_a_legacy_view_is_not_checked(views):
 
             @event_handler
             def increment(self, **kwargs):
-                self.count = 1
+                self.count += 1
 
     assert _messages_for(Legacy) == []
 
