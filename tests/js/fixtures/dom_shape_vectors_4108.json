@@ -74,6 +74,12 @@
    "client": "same"
   },
   {
+   "name": "comment_bang_close_keeps_element",
+   "html": "<div dj-root=\"\"><p>a</p><!-- n --!><p>x</p><!-- m --><p>b</p></div>",
+   "shape": "e79bba862b110460",
+   "client": "same"
+  },
+  {
    "name": "djif_marker",
    "html": "<div dj-root=\"\"><!--dj-if id=\"if-1-0\"--><p>x</p><!--/dj-if--></div>",
    "shape": "2c398072087b01c7",

@@ -417,6 +417,23 @@ def test_void_and_raw_text_elements_and_whitespace_keeping_ones():
     assert _shape("<p>\n</p>") == _shape("<p></p>")
 
 
+def test_a_comment_closed_by_bang_ends_where_the_browser_ends_it():
+    """``--!>`` closes a comment in the HTML parser as ``-->`` does (CodeQL 3151).
+
+    The server patches only when the client's shape equals the render's, so the
+    server must end a comment exactly where the browser does. Otherwise its shape
+    describes a tree the client does not have. The shared vectors
+    ``comment_bang_close`` and ``comment_bang_close_keeps_element`` hold the
+    client to the same values.
+    """
+    assert _shape("<p>a</p><!-- n --!><p>b</p>") == _shape("<p>a</p><!-- n --><p>b</p>")
+    # Read on to the next "-->" and the <p>x</p> between the two comments would
+    # vanish from the server's shape while the browser keeps it.
+    kept = "<p>a</p><!-- n --!><p>x</p><!-- m --><p>b</p>"
+    assert _shape(kept) == _shape("<p>a</p><p>x</p><p>b</p>")
+    assert _shape(kept) != _shape("<p>a</p><p>b</p>")
+
+
 VECTORS = json.loads(
     (
         Path(__file__).resolve().parents[3]
