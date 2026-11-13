@@ -20,7 +20,7 @@ Ledger granularity is the test FUNCTION (``path::Class::test_name``, parameters 
 parametrized id is derived from parameter values and churns with them, and a whole file is too
 coarse for a per-second budget. An entry promotes every parametrization of its function.
 
-``make test-early`` (``DJUST_EARLY_ONLY=1``) runs exactly the early tier: every ledger entry,
+``make test-early`` (``pytest --early-only``) runs exactly the early tier: every ledger entry,
 every ``pr_tier`` test and the pins the current change's path rules select.
 
 The numbers are starting values, kept here and nowhere else.
@@ -49,8 +49,10 @@ LEDGER_FILE = "tests/promotion-ledger.json"
 DURATIONS_FILE = ".test_durations"
 MAKEFILE = "Makefile"
 
-#: ``make test-early``: keep only the early tier.
-EARLY_ONLY_ENV = "DJUST_EARLY_ONLY"
+#: ``make test-early``: keep only the early tier. A command-line option, not an environment
+#: variable: a test that runs pytest in a subprocess must not inherit it (xdist passes options on
+#: to its workers).
+EARLY_ONLY_OPTION = "--early-only"
 #: Changed paths as ``git diff --name-status --no-renames`` lines (``A\tpath``), one per line, in
 #: a file (CI writes it from the PR's diff) or inline (tests, reproductions). Neither set, the
 #: local default is git (see ``changed_status``).
@@ -325,6 +327,15 @@ def _excludes_slow(markexpr: str) -> bool:
     return "not slow" in " ".join(markexpr.split())
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        EARLY_ONLY_OPTION,
+        action="store_true",
+        default=False,
+        help="run only the early tier: promotion-ledger entries, pr_tier tests, path-rule pins",
+    )
+
+
 def pytest_configure(config: pytest.Config) -> None:
     # Computed here, before the report header and before any collection hook asks.
     early_tier(config)
@@ -334,7 +345,7 @@ def early_tier(config: pytest.Config) -> EarlyTier:
     """This session's early tier (computed once per session, never module-global)."""
     found = config.stash.get(_KEY, None)
     if found is None:
-        only = os.environ.get(EARLY_ONLY_ENV) == "1"
+        only = bool(getattr(config.option, "early_only", False))
         rootpath = Path(config.rootpath)
         # Path rules matter only when the slow tier is deselected (or in `make test-early`):
         # a full run already runs every pin, and need not ask git anything.
@@ -365,7 +376,13 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         return
     keep, drop = [], []
     for item in items:
-        early = item.get_closest_marker("pr_tier") is not None or tier.reason(item) is not None
+        reason = tier.reason(item)
+        early = item.get_closest_marker("pr_tier") is not None or reason == "promotion ledger"
+        # A rule selects whole files; an exhaustive sweep in one is already sampled on every PR
+        # (tests/sweep_sample.py), so the early tier keeps its structural pins, not its units:
+        # a sweep left in would run in full whenever the change touches a path it shares.
+        if reason is not None and item.get_closest_marker("sweep") is None:
+            early = True
         (keep if early else drop).append(item)
     if drop:
         config.hook.pytest_deselected(items=drop)

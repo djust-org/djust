@@ -352,7 +352,7 @@ test-fast: ## Python fast tier: everything except `slow` (>1s in .test_durations
 .PHONY: test-early
 test-early: ## The early tier: promotion-ledger entries + pr_tier tests + the path-rule pins this change selects
 	@files=$$($(PYTHON) scripts/promotion_ledger.py early-files) || exit $$?; \
-	DJUST_EARLY_ONLY=1 DJUST_SWEEP_SAMPLE=1 PYTHONPATH=. $(PYTHON) -m pytest $$files -n 2 --dist loadfile -q -m "not nightly" --benchmark-disable
+	DJUST_FULL_LOCAL=1 DJUST_SWEEP_SAMPLE=1 PYTHONPATH=. $(PYTHON) -m pytest $$files --early-only -n 2 --dist loadfile -q -m "not nightly" --benchmark-disable
 
 .PHONY: test-integration
 test-integration: test ## Run the unchanged full integration gate before declaring a milestone ready

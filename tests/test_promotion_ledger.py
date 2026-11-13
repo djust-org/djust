@@ -33,7 +33,6 @@ WORKFLOW = ROOT / ".github/workflows/main-health.yml"
 OUTER_ENV = (
     early_tier.CHANGED_STATUS_FILE_ENV,
     early_tier.CHANGED_STATUS_ENV,
-    early_tier.EARLY_ONLY_ENV,
     "DJUST_SLOW_TIER",
     "GITHUB_OUTPUT",
 )
@@ -485,7 +484,10 @@ def test_slow_pr_tier():
 def project(pytester):
     pytester.makeini(INI)
     pytester.makepyfile(test_p=PROJECT)
-    pytester.makepyfile(test_gate="def test_pin():\n    pass\n")
+    pytester.makepyfile(
+        test_gate="import pytest\n\ndef test_pin():\n    pass\n\n"
+        "@pytest.mark.sweep\ndef test_unit():\n    pass\n"
+    )
     slow = ["test_slow_promoted", "test_slow_plain", "test_slow_pr_tier"]
     durations = {f"test_p.py::{name}": 5.0 for name in slow}
     durations["test_gate.py::test_pin"] = 5.0
@@ -501,7 +503,7 @@ def project(pytester):
 def _inner(pytester, monkeypatch, *args, changes="", only=False):
     monkeypatch.setenv(early_tier.CHANGED_STATUS_ENV, changes)
     if only:
-        monkeypatch.setenv(early_tier.EARLY_ONLY_ENV, "1")
+        args = (early_tier.EARLY_ONLY_OPTION, *args)
     return pytester.runpytest(
         "-p", "tests.early_tier", "-p", "tests.slow_tier", "-p", "no:cacheprovider",
         "-p", "no:django", "-p", "no:randomly", *args,
@@ -510,7 +512,7 @@ def _inner(pytester, monkeypatch, *args, changes="", only=False):
 
 def test_a_ledger_entry_runs_in_the_fast_tier(project, monkeypatch):
     res = _inner(project, monkeypatch, "-m", "not slow", "-v")
-    res.assert_outcomes(passed=3)
+    res.assert_outcomes(passed=4)  # with the sweep test, which sampling (not this tier) handles
     res.stdout.fnmatch_lines(["*test_slow_promoted PASSED*", "*test_slow_pr_tier PASSED*"])
     assert "test_slow_plain" not in res.stdout.str()
     assert "test_pin" not in res.stdout.str()
@@ -531,6 +533,8 @@ def test_early_only_runs_exactly_the_ledger_pr_tier_and_rule_pins(project, monke
     for name in ("test_slow_promoted", "test_slow_pr_tier", "test_pin"):
         assert f"{name} PASSED" in out, name
     assert "test_fast" not in out and "test_slow_plain" not in out
+    # a sweep in a rule-selected file is left to its own sampling, not run whole
+    assert "test_unit" not in out
 
 
 def test_the_junit_report_carries_node_ids_and_tiers(project, monkeypatch):
@@ -543,6 +547,7 @@ def test_the_junit_report_carries_node_ids_and_tiers(project, monkeypatch):
         "test_p.py::test_fast": "early",
         "test_p.py::test_slow_pr_tier": "early",
         "test_gate.py::test_pin": "late",
+        "test_gate.py::test_unit": "early",
     }
 
 

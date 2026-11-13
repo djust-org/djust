@@ -344,7 +344,9 @@ tests check fires it.
     make test-early
 
 It collects the ledger entries' files, every file using `pr_tier` and the files the fired rules
-name, and keeps only the early tests (`DJUST_EARLY_ONLY=1`), sweeps sampled, on two workers.
+name, and keeps only the early tests (`pytest --early-only`) on two workers. A rule selects
+whole files, but the exhaustive sweep units in them are left to their own sampling (their
+`pr_tier` census tests stay).
 
 ### The merge queue is on (ruleset `merge-queue`)
 
