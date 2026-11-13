@@ -6,6 +6,7 @@ urlpatterns = [
     path("counter/", views.CounterView.as_view()),
     path("counter2/", views.CounterView.as_view()),
     path("legacy/", views.LegacyCounterView.as_view()),
+    path("held/", views.HeldView.as_view()),
     path("items/<int:pk>/", views.ItemView.as_view()),
     path("form/", views.FormView.as_view()),
     path("wizard/", views.WizardView.as_view()),

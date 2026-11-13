@@ -338,14 +338,19 @@ data only with `client=True`.
 
 **How it comes back.** Over the HTTP fallback a later request restores the
 saved state and does **not** run `mount()` again; then `handle_params()` and
-`handle_restore()` run. `mount()` runs again only when nothing is saved, or
-when something of the view could not be saved (a queryset, the request's
-user, an arbitrary object, a component, work `mount()` queued): such a value
-is skipped, never turned into a string, a WARNING on the `djust.automatic_state`
-logger names it once, and the next request runs `mount()` to re-create it
-before the saved state is put back over it. Over a socket, `mount()` runs
-when the socket mounts and the saved state is put back over it. A full page
-load runs `mount()` and overwrites what was saved.
+`handle_restore()` run, and what a handler set goes back over what
+`handle_params()` assigned. `mount()` runs again only when nothing is saved, or
+when something of the view could not be saved (a queryset, the request's user,
+an arbitrary object, work `mount()` queued): such a value is skipped, never
+turned into a string, a WARNING on the `djust.automatic_state` logger names it
+once, and the next request runs `mount()` to re-create it before the saved
+state is put back over it. Over a socket, a mount or reconnect runs `mount()`
+and then puts back only what a handler changed since `mount()`, so everything
+`mount()` computes is fresh there. A full page load runs `mount()` and starts a
+new saved state.
+
+**One state per tab.** Each page load carries a tab id; two tabs on one route
+do not share state (1.3 shared it). A reload is a new tab.
 
 **What is not saved.** A field declared `state(..., persist=False)`; names on
 the sensitive-field list (`password`, `is_staff`, `is_superuser`,
@@ -931,4 +936,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 9186747a22cd -->
+<!-- generated-doc prose-sha256: 2e12e10867a4 -->

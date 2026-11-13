@@ -441,6 +441,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': csrfToken,
                 'X-Djust-Event': eventName,
+                'X-Djust-Tab': djustTabId(),
                 // A strict (or invalid) page scope asks for an explicit
                 // contract clear when the rendered tree no longer has one.
                 ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null

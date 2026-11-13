@@ -119,6 +119,17 @@ STATE_ROWS = (
         "Nothing: the URL is read again; it wins over a persisted field of the same name.",
     ),
     Row(
+        "held_model",
+        "A model instance `mount()` loads and keeps (`self.obj = Model.objects.get(...)`)",
+        "Over the HTTP fallback read it again in `handle_restore()`: it comes back as "
+        "a dict of its fields, as in 1.3.",
+    ),
+    Row(
+        "params_default",
+        "A value a handler set that `handle_params()` would default",
+        "Nothing: the saved value goes back after `handle_params()`.",
+    ),
+    Row(
         "form",
         "`FormMixin` input and errors, mid-validation",
         "Nothing: input and errors are saved, except password and other sensitive fields.",
@@ -136,7 +147,7 @@ STATE_ROWS = (
     Row(
         "component",
         "`LiveComponent` state",
-        "Persist the values on the view and build the component from them.",
+        "Nothing: its state is saved with the view's.",
     ),
     Row(
         "dropdown",
@@ -239,6 +250,19 @@ STATE_CELLS: Dict[Tuple[str, str], Entry] = {
         _T + "url_kwargs_and_handle_params",
     ),
     ("url", RESTART): NA("same mount path as the reconnect to another process"),
+    ("held_model", SAME): Cell("the instance", _T + "held_model_and_handle_params"),
+    ("held_model", HTTP): Cell(
+        "a dict of its fields: the view is rebuilt from saved state, `mount()` does not run",
+        _T + "held_model_and_handle_params",
+    ),
+    ("held_model", WS): Cell(
+        "the instance `mount()` loaded on the new process", _T + "held_model_and_handle_params"
+    ),
+    ("held_model", RESTART): NA("same mount path as the reconnect to another process"),
+    ("params_default", SAME): Cell("kept", _T + "held_model_and_handle_params"),
+    ("params_default", HTTP): Cell("kept", _T + "held_model_and_handle_params"),
+    ("params_default", WS): Cell("kept", _T + "held_model_and_handle_params"),
+    ("params_default", RESTART): NA("same mount path as the reconnect to another process"),
     ("form", SAME): Cell("kept", _T + "form_mid_validation"),
     ("form", HTTP): Cell("input and errors restored", _T + "form_mid_validation"),
     ("form", WS): Cell("input and errors restored", _T + "form_mid_validation"),
@@ -252,8 +276,10 @@ STATE_CELLS: Dict[Tuple[str, str], Entry] = {
     ("legacy", WS): Cell("lost: `mount()` value", _T + "legacy_view"),
     ("legacy", RESTART): NA("same mount path as the reconnect to another process"),
     ("component", SAME): Cell("kept", _T + "components"),
-    ("component", HTTP): Cell("event refused (Component not found)", _T + "components"),
-    ("component", WS): Cell("lost: mounts fresh", _T + "components"),
+    ("component", HTTP): Cell(
+        "kept: the event reaches the component and its state carries", _T + "components"
+    ),
+    ("component", WS): Cell("restored", _T + "components"),
     ("component", RESTART): NA("same mount path as the reconnect to another process"),
     ("dropdown", SAME): Cell("kept", _T + "components"),
     ("dropdown", HTTP): Cell("event refused (Component not found)", _T + "components"),
@@ -311,8 +337,9 @@ SESSION_ROWS = (
     ),
     Row(
         "two_sockets_same_route",
-        "Two sockets of one session on the same route",
-        "Expect last write wins; keep shared data in your own storage.",
+        "Two tabs of one session on the same route",
+        "Nothing for the view's own state: each page load is its own tab. A "
+        '`persist="server"` field is per route: keep shared data in your own storage.',
     ),
     Row(
         "two_sockets_other_route",
@@ -358,10 +385,12 @@ SESSION_CELLS: Dict[Tuple[str, str], Entry] = {
         "other tenant mounts fresh; own tenant restored", _T + "tenant_scoping_across_processes"
     ),
     ("two_sockets_same_route", SAME): Cell(
-        "last write wins (a stale socket overwrites)", _T + "two_sockets_same_route"
+        'independent; a `persist="server"` field is still shared (last write wins)',
+        _T + "two_sockets_same_route",
     ),
     ("two_sockets_same_route", WS): Cell(
-        "last write wins (a stale socket overwrites)", _T + "two_sockets_same_route"
+        'independent; a `persist="server"` field is still shared (last write wins)',
+        _T + "two_sockets_same_route",
     ),
     ("two_sockets_other_route", SAME): NA("same binding rule; measured across processes"),
     ("two_sockets_other_route", WS): Cell("independent", _T + "two_sockets_other_route"),

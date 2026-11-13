@@ -60,7 +60,7 @@ from ._exposure import (
 logger = logging.getLogger("djust.automatic_state")
 
 #: Envelope format. A reader discards any other.
-_VERSION = 3
+_VERSION = 6
 _KEY_PREFIX = "_djust_auto_"
 _MISSING: Any = object()
 #: Public names a transport sets per connection, and this module's own settings.
@@ -295,6 +295,10 @@ def _candidates(view: Any) -> Dict[str, Any]:
     def take(name: str, value: Any) -> None:
         if not names.application(name):
             return
+        if callable(value):
+            # Not state: Django's ``View.setup()`` sets ``self.head = self.get``
+            # on every dispatched view, and 1.3 never saved a callable either.
+            return
         if names.sensitive(name):
             _report(
                 view,
@@ -425,18 +429,128 @@ def _model_as_dict(value: Any) -> Any:
 class Projection:
     """A view's saveable state, encoded.
 
-    ``public`` and ``private`` are the encoded attribute values; ``remount``
-    says something of the view could not be saved, so the next request must
-    run ``mount()`` to have it; ``text`` is the canonical encoding of all three.
+    ``public`` and ``private`` are the encoded attribute values, ``components``
+    the encoded state of each component the view holds, by attribute name;
+    ``remount`` says something of the view could not be saved, so the next
+    request must run ``mount()`` to have it; ``text`` is the canonical
+    encoding of all four.
     """
 
-    __slots__ = ("public", "private", "remount", "text")
+    __slots__ = ("public", "private", "remount", "components", "text")
 
-    def __init__(self, public: Dict[str, Any], private: Dict[str, Any], remount: bool) -> None:
+    def __init__(
+        self,
+        public: Dict[str, Any],
+        private: Dict[str, Any],
+        remount: bool,
+        components: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.public = public
         self.private = private
         self.remount = remount
-        self.text = _encode([public, private, remount])
+        self.components = components or {}
+        self.text = _encode([public, private, remount, self.components])
+
+
+# ---------------------------------------------------------------------------
+# Component state (1.3's ``<key>_components``)
+# ---------------------------------------------------------------------------
+
+
+def _held_components(view: Any) -> Dict[str, Any]:
+    """The components a view holds, by attribute name: public instance
+    attributes, and the class-level descriptors this view has materialized.
+    ADR-034 interactive components (a ``DropdownMenu``, a keyed collection) are
+    left out: their identity is rebuilt per mount (#4046)."""
+    from .components._interactive import DropdownMenu
+    from .components.base import BoundComponent, Component, LiveComponent
+
+    found: Dict[str, Any] = {}
+    held = [(n, v) for n, v in list(vars(view).items()) if not n.startswith("_")]
+    held += list((vars(view).get("_component_bindings") or {}).items())
+    # A class-level component descriptor caches its per-view binding here.
+    held += [
+        (n[len("_component_") :], v)
+        for n, v in list(vars(view).items())
+        if n.startswith("_component_") and n != "_component_bindings"
+    ]
+    for name, value in held:
+        if not isinstance(value, (BoundComponent, Component, LiveComponent)):
+            continue
+        if isinstance(value, DropdownMenu) or getattr(
+            type(value), "_djust_component_collection", False
+        ):
+            continue
+        if type(name) is str and _NAME.fullmatch(name):
+            found[name] = value
+    return found
+
+
+def _component_values(component: Any) -> Tuple[Any, Dict[str, Any]]:
+    """``(where the values live, the values)``: a component's ``state`` (a
+    dict, or a typed state object), else its own public attributes, as 1.3's
+    ``_extract_component_state`` read them."""
+    state = getattr(component, "state", None)
+    if isinstance(state, dict):
+        # Its identity is the view's to assign, not saved state.
+        return state, {key: value for key, value in state.items() if key != "component_id"}
+    holder = state if state is not None and hasattr(state, "__dict__") else component
+    values = {
+        key: value
+        for key, value in list(vars(holder).items())
+        if not key.startswith("_")
+        and key not in ("template", "template_name", "component_id", "state")
+        and not callable(value)
+    }
+    return holder, values
+
+
+def _project_components(view: Any, enums: Any) -> Dict[str, Any]:
+    from .serialization import StateValueError, encode_state_value
+
+    out: Dict[str, Any] = {}
+    for name, component in _held_components(view).items():
+        encoded: Dict[str, Any] = {}
+        for key, value in _component_values(component)[1].items():
+            if type(key) is not str:
+                continue
+            try:
+                encoded[key] = encode_state_value(
+                    value, max_nodes=_MAX_NODES, max_depth=_MAX_DEPTH, enums=enums
+                )
+            except StateValueError:
+                continue  # 1.3 skipped a value it could not save, silently
+        out[name] = encoded
+    return out
+
+
+def apply_components(view: Any, components: Dict[str, Any]) -> None:
+    """Put saved component state back on the components the view holds now
+    (after ``mount()`` rebuilt them, or as a class-level descriptor is
+    materialized). A name that is no longer a component is skipped."""
+    if not components:
+        return
+    for name, values in components.items():
+        if type(name) is not str or not _NAME.fullmatch(name) or type(values) is not dict:
+            continue
+        try:
+            component = getattr(view, name, None)
+        except Exception:  # noqa: BLE001 — a descriptor that cannot bind yet
+            continue
+        if component is None or name not in _held_components(view):
+            continue
+        holder, current = _component_values(component)
+        for key, value in values.items():
+            if type(key) is not str or key.startswith("_") or key in _UNSAFE_KEYS:
+                continue
+            if isinstance(holder, dict):
+                if key in current or type(holder) is dict:
+                    holder[key] = value
+            elif key in current or not hasattr(type(holder), key):
+                try:
+                    setattr(holder, key, value)
+                except (AttributeError, TypeError):
+                    continue
 
 
 def _private_candidates(view: Any, names: _Names) -> Dict[str, Any]:
@@ -494,6 +608,7 @@ def project(view: Any) -> Projection:
         encoded = encode(name, value, True)
         if encoded is not _MISSING:
             private[name] = encoded
+    components = _project_components(view, enums)
     if vars(view).get("_async_tasks"):
         # Work mount() queued has not run (the GET never runs it): the next
         # request runs mount() again so the work exists (1.3's ``__mount_work``).
@@ -503,7 +618,7 @@ def project(view: Any) -> Projection:
         # Framework mixins blank what must not be stored (FormMixin: secret
         # form controls). Runs on the encoded copy, never on the live values.
         public = hook(public)
-    result = Projection(public, private, remount)
+    result = Projection(public, private, remount, components)
     size = len(result.text.encode("utf-8"))
     if size > warn or size > maximum:
         both = [*public.items(), *private.items()]
@@ -529,23 +644,88 @@ def project(view: Any) -> Projection:
 # Storage
 # ---------------------------------------------------------------------------
 
-_ENVELOPE = frozenset({"version", "binding", "created", "expires", "values", "private", "remount"})
+_ENVELOPE = frozenset(
+    {
+        "version",
+        "binding",
+        "created",
+        "expires",
+        "values",
+        "private",
+        "remount",
+        "components",
+        "changed",
+        "page",
+    }
+)
 
 
 class _Store:
     """The session, key and binding of one view's envelope."""
 
-    __slots__ = ("session", "key", "binding", "max_age")
+    __slots__ = ("session", "key", "binding", "max_age", "page")
 
-    def __init__(self, session: Any, key: str, binding: str, max_age: int) -> None:
+    def __init__(self, session: Any, key: str, binding: str, max_age: int, page: str) -> None:
         self.session = session
         self.key = key
         self.binding = binding
         self.max_age = max_age
+        self.page = page  # the view class and route, shared by its tabs
+
+
+#: A tab id: minted by the page GET, sent back by the page's client. It only
+#: selects one of the states inside the caller's own session, so it needs no
+#: signature: the envelope stays bound to the session, user, tenant and route.
+_TAB = re.compile(r"[A-Za-z0-9_-]{8,64}\Z", re.ASCII)
+#: Tab states kept per session, view and route; the oldest goes first. A page
+#: load mints a new tab, so this is also how many reloads' states can linger
+#: until they expire.
+MAX_TABS = 8
+TAB_HEADER = "X-Djust-Tab"
+TAB_META = "djust-tab"
+
+
+def page_with_tab(html: str, tab: str) -> str:
+    """The page with its tab id in a ``<meta name="djust-tab">``, where the
+    client reads it. In ``<head>`` when the page has one, else in front."""
+    if not tab_id(tab):
+        return html
+    meta = '<meta name="%s" content="%s">' % (TAB_META, tab)
+    found = re.search(r"</head\s*>", html, re.IGNORECASE)
+    if found is None:
+        return meta + html
+    return html[: found.start()] + meta + html[found.start() :]
+
+
+def new_tab_id() -> str:
+    """A fresh tab id for a page load."""
+    import secrets
+
+    return secrets.token_urlsafe(12)
+
+
+def tab_id(value: Any) -> str:
+    """A tab id a client sent, or ``""`` when it sent none or sent anything
+    that is not one. ``""`` selects nothing: no state is read or saved."""
+    return value if type(value) is str and _TAB.fullmatch(value) else ""
+
+
+def _page_key(view: Any, binding_view: str) -> str:
+    view_class = type(view)
+    owner = "%s.%s" % (view_class.__module__, view_class.__qualname__)
+    identity = json.dumps([owner, binding_view], separators=(",", ":")).encode()
+    return hashlib.sha256(identity).hexdigest()
 
 
 def _store(view: Any, request: Any, *, create: bool) -> Optional[_Store]:
-    """Where this view's saved state lives, or None when it cannot be kept."""
+    """Where this view's saved state lives, or None when it cannot be kept.
+
+    One state per tab: the key is the view class, the route and the tab id the
+    page load was given (``view._djust_tab``). Without a tab id nothing is read
+    or saved, so a request can never be handed another tab's state."""
+    tab = tab_id(vars(view).get("_djust_tab"))
+    if not tab:
+        return None
     from ._exposure_sessions import request_binding, server_state_max_age, session_store_supported
 
     session = getattr(request, "session", None)
@@ -574,30 +754,35 @@ def _store(view: Any, request: Any, *, create: bool) -> Optional[_Store]:
         return None
     if session.session_key != binding.session:
         return None
-    view_class = type(view)
-    owner = "%s.%s" % (view_class.__module__, view_class.__qualname__)
-    identity = json.dumps([owner, binding.view], separators=(",", ":")).encode()
-    key = _KEY_PREFIX + hashlib.sha256(identity).hexdigest()
-    return _Store(session, key, binding.digest, max_age)
+    page = _page_key(view, binding.view)
+    key = _KEY_PREFIX + hashlib.sha256((page + "|" + tab).encode()).hexdigest()
+    return _Store(session, key, binding.digest, max_age, page)
 
 
 class Saved:
-    """What the store holds for a view: decoded values, and whether ``mount()``
-    must run before they are put back."""
+    """What the store holds for a view: decoded values, the names a handler
+    changed since ``mount()``, and whether ``mount()`` must run before they are
+    put back."""
 
-    __slots__ = ("public", "private", "remount", "text", "created")
+    __slots__ = ("public", "private", "remount", "components", "changed", "raw", "text", "created")
 
     def __init__(
         self,
         public: Dict[str, Any],
         private: Dict[str, Any],
         remount: bool,
+        components: Dict[str, Any],
+        changed: frozenset,
+        raw: Tuple[Dict[str, Any], Dict[str, Any]],
         text: str,
         created: int,
     ) -> None:
         self.public = public
         self.private = private
         self.remount = remount
+        self.components = components
+        self.changed = changed
+        self.raw = raw  # the encoded public and private values, as stored
         self.text = text
         self.created = created
 
@@ -617,6 +802,7 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
         return None
     created, expires = envelope["created"], envelope["expires"]
     public, private = envelope["values"], envelope["private"]
+    components, changed = envelope["components"], envelope["changed"]
     now = int(time.time())
     if (
         type(envelope["version"]) is not int
@@ -631,6 +817,8 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
         or now >= min(expires, created + store.max_age)
         or type(public) is not dict
         or type(private) is not dict
+        or type(components) is not dict
+        or type(changed) is not list
         or type(envelope["remount"]) is not bool
     ):
         return None
@@ -649,12 +837,53 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
                 for name, item in kept_private.items()
             },
             envelope["remount"],
-            _encode([public, private, envelope["remount"]]),
+            {
+                name: decode_state_roundtrip(item, enums=enums, strict=True)
+                for name, item in components.items()
+                if type(item) is dict
+            },
+            frozenset(name for name in changed if type(name) is str),
+            (kept_public, kept_private),
+            _encode([public, private, envelope["remount"], components]),
             created,
         )
     except StateValueError:
         logger.warning("djust: stored view state could not be restored and was discarded")
         return None
+
+
+class _Basis:
+    """What a view's next save is compared with.
+
+    ``text`` / ``created``: the encoding the store holds (or the view held when
+    its mount sequence finished) and when it was written; a save equal to it is
+    skipped. ``public`` / ``private``: the encoded values at that point, per
+    name. ``changed``: the names a handler, or a later lifecycle step, has
+    changed since ``mount()``. A save adds every name whose value differs from
+    this basis, and the record is stored with the state; a page GET starts it
+    empty again.
+    """
+
+    __slots__ = ("text", "created", "public", "private", "changed")
+
+    def __init__(
+        self,
+        text: str,
+        created: Optional[int],
+        public: Dict[str, Any],
+        private: Dict[str, Any],
+        changed: frozenset,
+    ) -> None:
+        self.text = text
+        self.created = created
+        self.public = public
+        self.private = private
+        self.changed = changed
+
+
+def _basis(view: Any) -> Optional[_Basis]:
+    basis = view.__dict__.get("_djust_auto_basis")
+    return basis if isinstance(basis, _Basis) else None
 
 
 def saved(view: Any, request: Any) -> Optional[Saved]:
@@ -668,7 +897,9 @@ def saved(view: Any, request: Any) -> Optional[Saved]:
     store = _store(view, request, create=False)
     found = _read(view, store) if store is not None else None
     if found is not None:
-        view.__dict__["_djust_auto_basis"] = (found.text, found.created)
+        view.__dict__["_djust_auto_basis"] = _Basis(
+            found.text, found.created, found.raw[0], found.raw[1], found.changed
+        )
     return found
 
 
@@ -681,9 +912,14 @@ def apply_private(view: Any, private: Dict[str, Any]) -> None:
 
 
 def load(view: Any, request: Any) -> Optional[Dict[str, Any]]:
-    """The stored public values to put back, or None; private attributes are
-    put back here. For a caller that has already run ``mount()``: the socket
-    mount and the over-limit rollback (#4095)."""
+    """After ``mount()`` has run (the socket mount, the over-limit rollback):
+    the stored public values to put back, or None. Private attributes and
+    component state are put back here.
+
+    Only what a handler changed goes back (``Saved.changed``): a value
+    ``mount()`` computed and no handler touched stays as this ``mount()`` built
+    it (a permission flag read from the user is fresh).
+    """
     first = _basis(view) is None
     found = saved(view, request)
     if found is None:
@@ -702,34 +938,169 @@ def load(view: Any, request: Any) -> Optional[Dict[str, Any]]:
             except StateLimitExceeded:
                 return None  # reported; refused again at the first save
         return None
+    if not first:
+        # The over-limit rollback (#4095): the whole saved state goes back,
+        # not only what handlers changed; the view is already running.
+        return put_back(view, found.public, found.private, found.components, over_mount=True)
     # Whether putting it back changes the view mount() just built. When it
-    # does not (the page GET saved exactly this), the page the browser holds
-    # already shows it and the first event may answer with patches (#1977).
+    # does not, nothing is applied, and the page the browser holds already
+    # shows the view's state, so the first event may answer with patches
+    # (#1977).
     try:
-        # The values only: ``remount`` says what the save could not hold, not
-        # what the view shows.
-        same = json.loads(project(view).text)[:2] == json.loads(found.text)[:2]
+        mine = project(view)
+        same = mine.components == _encoded_components(found, mine) and all(
+            found.raw[0].get(name, _MISSING) == mine.public.get(name, _MISSING)
+            if name in found.raw[0]
+            else found.raw[1].get(name, _MISSING) == mine.private.get(name, _MISSING)
+            for name in found.changed
+            if name in found.raw[0] or name in found.raw[1]
+        )
     except (ExposureError, ValueError):
         same = False
     view.__dict__["_djust_auto_restore_same"] = same
-    apply_private(view, found.private)
-    return found.public
+    public = put_back(
+        view,
+        found.public,
+        found.private,
+        found.components,
+        over_mount=True,
+        changed=found.changed,
+    )
+    # The socket mount calls handle_params() after this restore (the URL wins
+    # over a declared field, #3624); what was put back here goes on again after
+    # it (``reapply``), so the hook's defaults do not reset what a handler set.
+    view.__dict__["_djust_auto_reapply"] = (public, found.private, found.changed)
+    return public
 
 
-def _basis(view: Any) -> Any:
-    return view.__dict__.get("_djust_auto_basis")
+def _encoded_components(found: Saved, mine: Projection) -> Dict[str, Any]:
+    """The stored component state as it would be encoded now, for comparing."""
+    from .serialization import encode_state_value
+
+    try:
+        return {
+            name: {key: encode_state_value(value) for key, value in values.items()}
+            for name, values in found.components.items()
+        }
+    except ValueError:
+        return {"": None}  # not comparable: treat as different
 
 
-def _still_fresh(basis: Any, now: int) -> bool:
+def reapply(view: Any) -> Dict[str, Any]:
+    """After ``handle_params()`` on a mount that restored: the public values
+    to assign again (private ones are assigned here). Used once."""
+    pending = view.__dict__.get("_djust_auto_reapply")
+    view.__dict__["_djust_auto_reapply"] = None
+    if not pending:
+        return {}
+    public, private, changed = pending
+    return put_back(view, public, private, {}, over_mount=True, changed=changed)
+
+
+def finish_mount(view: Any) -> None:
+    """The end of a socket mount: what the restore put back goes on again over
+    ``handle_params()``'s defaults, and the view is settled (:func:`settle`)."""
+    from .security import safe_setattr
+
+    for key, value in reapply(view).items():
+        safe_setattr(view, key, value, allow_private=False, raise_on_blocked=True)
+    settle(view)
+
+
+def put_back(
+    view: Any,
+    public: Dict[str, Any],
+    private: Dict[str, Any],
+    components: Dict[str, Any],
+    *,
+    over_mount: bool,
+    changed: Optional[frozenset] = None,
+) -> Dict[str, Any]:
+    """The ONE place that decides which saved values go back on a view.
+
+    Returns the public values for the caller to assign; assigns the private
+    attributes and the component state itself.
+
+    ``changed`` (the socket mount): only these names go back, the ones a
+    handler changed since ``mount()``; everything else stays as this
+    ``mount()`` built it. None (the HTTP fallback) puts every saved value back,
+    as 1.3 did: there the view is rebuilt from its saved state.
+
+    ``over_mount``: ``mount()`` has just run on this view, so it holds live
+    objects: a saved value is never put over a live model instance, which was
+    saved only as a dict of its fields.
+
+    A rule that restores less (one tab's state) belongs here and in
+    :func:`_store`'s key, nowhere else.
+    """
+    if changed is not None:
+        public = {name: value for name, value in public.items() if name in changed}
+        private = {name: value for name, value in private.items() if name in changed}
+    if over_mount:
+        from .live_view import _holds_model
+
+        live = vars(view)
+        public = {
+            name: value
+            for name, value in public.items()
+            if not _holds_model(_live_value(view, name))
+        }
+        private = {
+            name: value for name, value in private.items() if not _holds_model(live.get(name))
+        }
+    apply_private(view, private)
+    apply_components(view, components)
+    return public
+
+
+def _live_value(view: Any, name: str) -> Any:
+    """The view's current value for a public name, without creating a
+    ``state()`` default."""
+    live = vars(view)
+    if name in live:
+        return live[name]
+    return live.get("_state_" + name)
+
+
+def settle(view: Any) -> None:
+    """The mount sequence is over (``mount()`` or the rebuild, the restore,
+    ``handle_params()``): what the view holds NOW is what the next handler
+    starts from. A save records as changed every name that differs from it.
+
+    Called by the socket mount and the fallback POST before the event. A page
+    GET does not call it: its save starts the record empty.
+    """
+    if uses_legacy_exposure(view):
+        return
+    basis = _basis(view)
+    try:
+        state = project(view)
+    except ExposureError:
+        return  # over its limit: reported; the first save refuses
+    view.__dict__["_djust_auto_basis"] = _Basis(
+        # The store's own text, so that a turn which changes nothing is not
+        # written; the per-name values are the view's.
+        state.text if basis is None or basis.created is None else basis.text,
+        None if basis is None else basis.created,
+        state.public,
+        state.private,
+        frozenset() if basis is None else basis.changed,
+    )
+    view.__dict__["_djust_auto_settled"] = state.text
+
+
+def _still_fresh(basis: _Basis, now: int) -> bool:
     """Stored less than half a lifetime ago. Past that the unchanged state is
     rewritten, so an active page's state does not expire."""
+    if basis.created is None:
+        return False
     from ._exposure_sessions import server_state_max_age
 
     try:
         max_age = server_state_max_age()
     except ExposureError:
         return True
-    return bool(now - basis[1] < max_age // 2)
+    return bool(now - basis.created < max_age // 2)
 
 
 def stage(view: Any, request: Any, *, create: bool = True) -> Optional[Callable[[], None]]:
@@ -745,25 +1116,42 @@ def stage(view: Any, request: Any, *, create: bool = True) -> Optional[Callable[
     nothing changed (``_djust_auto_changed``, set by the runtime from the
     snapshots it takes anyway), nothing is walked. Otherwise the state is
     encoded once, and written only when the encoding differs from what the
-    store holds.
+    view held when its mount sequence finished or last saved.
     """
     if uses_legacy_exposure(view):
         return None
-    changed = view.__dict__.get("_djust_auto_changed")
-    if changed is not None:
+    hint = view.__dict__.get("_djust_auto_changed")
+    if hint is not None:
         view.__dict__["_djust_auto_changed"] = None  # one turn's answer, used once
     basis = _basis(view)
     skip = _per_turn.on("unchanged_save_skip")
     now = int(time.time())
-    if skip and basis is not None and changed is not None and not changed:
+    if skip and basis is not None and hint is not None and not hint:
         if _still_fresh(basis, now):
             return None
     state = project(view)
-    if skip and basis is not None and basis[0] == state.text and _still_fresh(basis, now):
+    settled = view.__dict__.get("_djust_auto_settled")
+    unchanged = basis is not None and state.text in (basis.text, settled)
+    if skip and basis is not None and unchanged and _still_fresh(basis, now):
         return None
     store = _store(view, request, create=create)
     if store is None:
         return None
+    # The names a handler (or a later lifecycle step) changed since mount():
+    # those already recorded, and every name whose value differs from the
+    # basis. With no basis (the page GET's save, a mount with nothing stored)
+    # the record starts empty.
+    changed: frozenset = frozenset()
+    if basis is not None:
+        changed = basis.changed | frozenset(
+            name
+            for now_values, then_values in (
+                (state.public, basis.public),
+                (state.private, basis.private),
+            )
+            for name, value in now_values.items()
+            if then_values.get(name, _MISSING) != value
+        )
     envelope = {
         "version": _VERSION,
         "binding": store.binding,
@@ -772,11 +1160,20 @@ def stage(view: Any, request: Any, *, create: bool = True) -> Optional[Callable[
         "values": state.public,
         "private": state.private,
         "remount": state.remount,
+        "components": state.components,
+        "changed": sorted(changed),
+        "page": store.page,
     }
     session = store.session
     previous = session.get(store.key, _MISSING)
     session[store.key] = envelope
-    view.__dict__["_djust_auto_basis"] = (state.text, now)
+    _evict_old_tabs(session, store)
+    previous_basis = view.__dict__.get("_djust_auto_basis")
+    previous_settled = settled
+    view.__dict__["_djust_auto_basis"] = _Basis(
+        state.text, now, state.public, state.private, changed
+    )
+    view.__dict__["_djust_auto_settled"] = None
     view.__dict__["_djust_auto_bytes"] = len(_encode(envelope))
 
     def undo() -> None:
@@ -784,9 +1181,26 @@ def stage(view: Any, request: Any, *, create: bool = True) -> Optional[Callable[
             session.pop(store.key, None)
         else:
             session[store.key] = previous
-        view.__dict__["_djust_auto_basis"] = basis
+        view.__dict__["_djust_auto_basis"] = previous_basis
+        view.__dict__["_djust_auto_settled"] = previous_settled
 
     return undo
+
+
+def _evict_old_tabs(session: Any, store: _Store) -> None:
+    """Keep at most :data:`MAX_TABS` states of this view and route in the
+    session: the oldest are removed, the one just written never."""
+    tabs = []
+    for key in list(session.keys()):
+        if type(key) is not str or not key.startswith(_KEY_PREFIX) or key == store.key:
+            continue
+        envelope = session.get(key)
+        if type(envelope) is dict and envelope.get("page") == store.page:
+            created = envelope.get("created")
+            tabs.append((created if type(created) is int else 0, key))
+    tabs.sort()
+    for _created, key in tabs[: max(0, len(tabs) - (MAX_TABS - 1))]:
+        del session[key]
 
 
 # ---------------------------------------------------------------------------

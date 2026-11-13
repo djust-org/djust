@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from decimal import Decimal
 from typing import Any, Dict, List
@@ -209,7 +210,21 @@ def _probe_of(markup: str) -> Dict[str, Any]:
     return json.loads(html.unescape(found.group(1)))
 
 
-def _request(method: str, key: str | None, event: str = "", params: Any = None, path=harness.PATH):
+@pytest.fixture(autouse=True)
+def _one_tab(monkeypatch):
+    """Every page load in this module is the same tab unless a test says
+    otherwise: the GET mints the id the harness's client sends back."""
+    monkeypatch.setattr(_automatic_state, "new_tab_id", lambda: harness.TAB)
+
+
+def _request(
+    method: str,
+    key: str | None,
+    event: str = "",
+    params: Any = None,
+    path=harness.PATH,
+    tab: str = harness.TAB,
+):
     factory = RequestFactory()
     if method == "GET":
         request = factory.get(path)
@@ -219,6 +234,7 @@ def _request(method: str, key: str | None, event: str = "", params: Any = None, 
             data=json.dumps(params or {}),
             content_type="application/json",
             HTTP_X_DJUST_EVENT=event,
+            HTTP_X_DJUST_TAB=tab,
         )
     request.user = AnonymousUser()
     request.tenant = None
@@ -326,7 +342,11 @@ async def test_sse_events_then_a_fallback_post_see_the_same_state(view_class, sc
         first = await sync_to_async(request_for)(
             "GET",
             f"/djust/sse/{sid}/",
-            {"view": f"{MODULE}.{view_class.__name__}", "_djust_url": url},
+            {
+                "view": f"{MODULE}.{view_class.__name__}",
+                "_djust_url": url,
+                "_djust_tab": harness.TAB,
+            },
         )
         response = await DjustSSEStreamView().get(first, session_id=sid)
         assert response.status_code == 200
@@ -996,6 +1016,7 @@ def test_a_cookie_session_holds_no_automatic_state(caplog):
     assert request.session.session_key == key
     view = Counter()
     view.mount(request)
+    view._djust_tab = harness.TAB
     view.count = 3
     with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
         assert _automatic_state.stage(view, request) is None
@@ -1053,6 +1074,26 @@ def test_a_later_fallback_request_restores_and_does_not_run_mount_again():
     assert envelope["values"] == {"count": 3, "loaded_by": "handler"}
     # (beside the framework's own post-init slots, which 1.3 saved as well)
     assert envelope["private"]["_cursor"] == 13 and envelope["remount"] is False
+
+
+@pytest.mark.django_db
+def test_a_view_dispatched_through_as_view_is_still_rebuilt_without_mount(caplog):
+    """Django's ``View.setup()`` puts ``self.head = self.get`` on every
+    dispatched view: a callable is not state, so it neither makes the next
+    request mount again nor draws a warning."""
+    CALLS.clear()
+    _automatic_state._NOTICED.clear()
+    entry = Rebuilt.as_view()
+    first = _request("GET", None)
+    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
+        assert entry(first).status_code == 200
+        key = first.session.session_key
+        for _ in range(3):
+            assert entry(_request("POST", key, "inc")).status_code == 200
+    assert CALLS == ["mount", "restore", "restore", "restore"]
+    envelope = _saved_envelope(key)
+    assert envelope["remount"] is False and envelope["values"]["count"] == 3
+    assert not caplog.records, [record.getMessage() for record in caplog.records]
 
 
 @pytest.mark.django_db
@@ -1348,6 +1389,7 @@ def test_what_is_stored_does_not_share_references_with_the_view():
     request = _request("POST", None, "add")
     view = EditedList()
     view.mount(request)
+    view._djust_tab = harness.TAB
     assert _automatic_state.stage(view, request) is not None
     view.items.append("after-capture")
     assert _saved_values_in(request.session) == {"items": ["a"]}
@@ -1365,6 +1407,7 @@ def test_the_turns_changed_keys_are_used_once_and_never_hide_a_later_change(monk
     request = _request("POST", None, "x")
     view = EditedList()
     view.mount(request)
+    view._djust_tab = harness.TAB
     assert _automatic_state.stage(view, request) is not None  # the basis
     calls: List[int] = []
     real = _automatic_state.project
@@ -1433,24 +1476,538 @@ async def test_a_socket_mount_runs_mount_then_puts_the_saved_state_back():
 
 
 def test_the_store_is_written_and_read_in_one_place_each():
-    """Every transport saves and restores through ``_exposure_sessions``;
-    nothing else calls the store's functions."""
+    """Every transport saves and restores through ``_exposure_sessions`` (and
+    the fallback's ``put_back``); nothing else calls the store's functions."""
     import pathlib
     import re as regex
 
     root = pathlib.Path(_automatic_state.__file__).parent
     callers: Dict[str, set] = {}
+    pattern = (
+        r"_automatic_state\.(stage|load|saved|apply_private|put_back|reapply|settle"
+        r"|finish_mount|apply_components)\("
+    )
     for path in root.rglob("*.py"):
         if "tests" in path.parts or path.name == "_automatic_state.py":
             continue
-        found = regex.findall(
-            r"_automatic_state\.(stage|load|saved|apply_private)\(", path.read_text()
-        )
-        for name in found:
+        for name in regex.findall(pattern, path.read_text()):
             callers.setdefault(name, set()).add(path.name)
     assert callers == {
         "stage": {"_exposure_sessions.py"},
         "load": {"_exposure_sessions.py"},
         "saved": {"_exposure_sessions.py"},
+        "finish_mount": {"_exposure_sessions.py"},
+        "put_back": {"request.py"},
         "apply_private": {"request.py"},
+        "settle": {"request.py"},
     }
+
+
+# ---------------------------------------------------------------------------
+# A held model, handle_params(), components, two tabs
+# ---------------------------------------------------------------------------
+
+
+class HoldsLiveModel(_Base):
+    """``mount()`` loads a model; a handler calls a method on it."""
+
+    shown = ("count", "who")
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+        self.who = ""
+        self.obj = User.objects.get(username="auto-4107-a")
+        self._owner = User.objects.get(username="auto-4107-b")
+
+    @event_handler()
+    def greet(self, **kwargs):
+        self.count += 1
+        self.who = self.obj.get_username() + "/" + self._owner.get_username()
+
+
+async def _page_then_socket(view_class: type) -> Any:
+    """The real order: the page GET (which saves), then the socket mount."""
+    first = await sync_to_async(_request)("GET", None)
+    status = await sync_to_async(lambda: view_class().get(first).status_code)()
+    assert status == 200
+    key = first.session.session_key
+    comm, mount = await harness.mount_view(view_class, key)
+    return key, comm, mount
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_over_a_socket_a_model_mount_loaded_stays_a_model():
+    """The GET saved the model as a dict of its fields; the socket's mount()
+    loaded the instance again, and the saved dict must not go over it: not
+    when nothing changed, and not after a reconnect that restores other state."""
+    await sync_to_async(_users)()
+    with harness.ws_settings(MODULE):
+        key, comm, _mount = await _page_then_socket(HoldsLiveModel)
+        try:
+            frame = await _event_or_error(comm, "greet")
+            assert frame["type"] != "error", frame
+        finally:
+            await comm.disconnect()
+        saved_now = await sync_to_async(_saved_envelope)(key)
+        assert isinstance(saved_now["values"]["obj"], dict)  # 1.3's saved form
+        again, mount = await harness.mount_view(HoldsLiveModel, key)
+        try:
+            assert _probe_of(mount["html"]) == {"count": 1, "who": "auto-4107-a/auto-4107-b"}
+            frame = await _event_or_error(again, "greet")
+            assert frame["type"] != "error", frame  # self.obj is still a User
+        finally:
+            await again.disconnect()
+    assert (await sync_to_async(_saved_envelope)(key))["values"]["count"] == 2
+
+
+class SwapsModel(HoldsLiveModel):
+    """A handler replaces the held model, so the attribute is one a handler
+    changed and its saved form (a dict) is a candidate to put back."""
+
+    @event_handler()
+    def swap(self, **kwargs):
+        self.obj = User.objects.get(username="auto-4107-c")
+        self._owner = User.objects.get(username="auto-4107-c")
+        self.count += 1
+
+
+class RemountsWithModel(HoldsLiveModel):
+    """Holds something unsaveable too, so every fallback request runs mount()
+    and the saved state goes back over it."""
+
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        self.service = Holder()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_saved_model_dict_never_goes_over_the_instance_mount_loaded():
+    await sync_to_async(_users)()
+    with harness.ws_settings(MODULE):
+        key, comm, _mount = await _page_then_socket(SwapsModel)
+        assert (await _event_or_error(comm, "swap"))["type"] != "error"
+        await comm.disconnect()
+        stored = await sync_to_async(_saved_envelope)(key)
+        assert "obj" in stored["changed"] and isinstance(stored["values"]["obj"], dict)
+        again, _mount = await harness.mount_view(SwapsModel, key)
+        try:
+            frame = await _event_or_error(again, "greet")
+            assert frame["type"] != "error", frame  # obj and _owner are model instances
+        finally:
+            await again.disconnect()
+
+
+@pytest.mark.django_db
+def test_a_fallback_request_that_mounts_keeps_the_model_mount_loaded():
+    _users()
+    view, _key, _ = _fallback(RemountsWithModel, [("greet",), ("greet",), ("greet",)])
+    assert isinstance(view.obj, User) and isinstance(view._owner, User)
+    assert (view.count, view.who) == (3, "auto-4107-a/auto-4107-b")
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_socket_mount_after_the_page_get_applies_nothing():
+    CALLS.clear()
+    with harness.ws_settings(MODULE):
+        _key, comm, _mount = await _page_then_socket(Rebuilt)
+        frame = await harness.event(comm, "inc")
+        await comm.disconnect()
+    # mount() on the GET and on the socket; the saved state equals what the
+    # socket's mount() built, so nothing was restored and the first event
+    # answers with a patch, not the whole page.
+    assert CALLS == ["mount", "mount", "restore"]
+    assert frame["type"] == "patch", frame
+
+
+class Tabs(_Base):
+    """A handler-set value ``handle_params()`` would default."""
+
+    shown = ("tab", "count")
+
+    def mount(self, request, **kwargs):
+        self.tab = "a"
+        self.count = 0
+
+    def handle_params(self, params, uri):
+        self.tab = params.get("tab", "a")
+
+    @event_handler()
+    def pick(self, value: str = "b", **kwargs):
+        self.tab = value
+
+    @event_handler()
+    def inc(self, **kwargs):
+        self.count += 1
+
+
+class TabsRemounts(Tabs):
+    """The same, on a view that mounts every request (it holds an object)."""
+
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        self.service = Holder()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("view_class", [Tabs, TabsRemounts])
+def test_handle_params_does_not_reset_what_a_handler_set_over_the_fallback(view_class):
+    view, _key, _ = _fallback(view_class, [("pick", {"value": "b"}), ("inc",), ("inc",)])
+    assert (view.tab, view.count) == ("b", 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("view_class", [Tabs, TabsRemounts])
+async def test_handle_params_does_not_reset_what_a_handler_set_on_a_reconnect(view_class):
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE):
+        comm, _mount = await harness.mount_view(view_class, key)
+        await harness.event(comm, "pick", {"value": "b"})
+        await harness.event(comm, "inc")
+        await comm.disconnect()
+        again, mount = await harness.mount_view(view_class, key)
+        await again.disconnect()
+    assert _probe_of(mount["html"]) == {"tab": "b", "count": 1}
+
+
+from djust.components.descriptors.base import LiveComponent as _DescriptorComponent  # noqa: E402
+from djust.components.descriptors.base import TypedState as _TypedState  # noqa: E402
+
+
+class Bump(_DescriptorComponent):
+    template = "<span>{{ n }}</span>"
+
+    class State(_TypedState):
+        n: int = 0
+
+
+class HasComponent(_Base):
+    shown = ("count",)
+    bumper = Bump()
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    def get_context_data(self, **kwargs):
+        return {"probe": json.dumps({"count": self.count, "n": self.bumper.state.n})}
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.count += 1
+        self.bumper.state.n += 1
+
+
+@pytest.mark.django_db
+def test_a_components_state_survives_fallback_posts():
+    view, key, _ = _fallback(HasComponent, [("bump",), ("bump",), ("bump",)])
+    assert (view.count, view.bumper.state.n) == (3, 3)
+    assert _saved_envelope(key)["components"] == {"bumper": {"n": 3}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_components_state_survives_a_reconnect():
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE):
+        comm, _mount = await harness.mount_view(HasComponent, key)
+        await harness.event(comm, "bump")
+        await harness.event(comm, "bump")
+        await comm.disconnect()
+        again, mount = await harness.mount_view(HasComponent, key)
+        frame = await harness.event(again, "bump")
+        await again.disconnect()
+    assert _probe_of(mount["html"]) == {"count": 2, "n": 2}  # the view AND its component
+    assert frame["type"] != "error"
+    stored = await sync_to_async(_saved_envelope)(key)
+    assert stored["components"] == {"bumper": {"n": 3}} and stored["values"]["count"] == 3
+
+
+@pytest.mark.django_db
+def test_stored_component_state_only_goes_onto_components():
+    _view, key, _ = _fallback(HasComponent, [("bump",)])
+    _tamper(
+        key,
+        "components",
+        count={"real": "a plain attribute, not a component"},
+        bump={"__name__": "x"},
+        __class__={"x": 1},
+        bumper={"n": 5, "_private": "x", "__class__": "x", "__proto__": 1},
+    )
+    view = HasComponent()
+    assert view.post(_request("POST", key, "bump")).status_code == 200
+    assert view.count == 2 and callable(view.bump)
+    assert view.bumper.state.n == 6
+    assert not hasattr(view.bumper.state, "_private")
+    assert type(view.bumper.state).__name__ == "State"
+
+
+# ---------------------------------------------------------------------------
+# A socket mount puts back only what a handler changed
+# ---------------------------------------------------------------------------
+
+STAFF = {"is": True}
+
+
+class Gated(_Base):
+    """``mount()`` computes a permission flag and a default; handlers change a
+    counter, the default, and create an attribute ``mount()`` never sets."""
+
+    shown = ("can_edit", "count", "label", "extra")
+
+    def mount(self, request, **kwargs):
+        self.can_edit = STAFF["is"]
+        self.count = 0
+        self.label = "from-mount"
+        self._seen = STAFF["is"]
+
+    def get_context_data(self, **kwargs):
+        extra = getattr(self, "extra", None)
+        return {"probe": json.dumps([self.can_edit, self.count, self.label, extra, self._seen])}
+
+    @event_handler()
+    def inc(self, **kwargs):
+        self.count += 1
+
+    @event_handler()
+    def rename(self, **kwargs):
+        self.label = "from-handler"
+        self.extra = "made by a handler"
+
+
+def _gated(markup: str) -> List[Any]:
+    import html
+    import re
+
+    return json.loads(html.unescape(re.search(r"<pre[^>]*>(.*?)</pre>", markup, re.S).group(1)))
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_reconnect_keeps_what_mount_computes_fresh_and_restores_handler_changes():
+    """The right is revoked between two connections: ``can_edit`` (and the
+    private ``_seen``) are what THIS mount() computed, while the counter, the
+    label a handler changed and the attribute a handler created come back."""
+    STAFF["is"] = True
+    try:
+        with harness.ws_settings(MODULE):
+            key, comm, _mount = await _page_then_socket(Gated)
+            await harness.event(comm, "inc")
+            await harness.event(comm, "inc")
+            await harness.event(comm, "rename")
+            await comm.disconnect()
+            stored = await sync_to_async(_saved_envelope)(key)
+            assert stored["changed"] == ["count", "extra", "label"]
+            assert stored["values"]["can_edit"] is True  # saved, but not a handler's change
+            STAFF["is"] = False  # revoked
+            again, mount = await harness.mount_view(Gated, key)
+            frame = await harness.event(again, "inc")
+            await again.disconnect()
+        assert _gated(mount["html"]) == [False, 2, "from-handler", "made by a handler", False]
+        assert frame["type"] != "error"
+        stored = await sync_to_async(_saved_envelope)(key)
+        # The record is kept, and the store now holds the fresh mount() values.
+        assert stored["changed"] == ["count", "extra", "label"]
+        assert stored["values"]["can_edit"] is False and stored["values"]["count"] == 3
+    finally:
+        STAFF["is"] = True
+
+
+@pytest.mark.django_db
+def test_over_the_fallback_a_mount_computed_value_continues_as_saved_as_in_1_3():
+    """The fallback rebuilds the view from its saved state and does not run
+    mount(), so what mount() computed at the page load continues until the
+    next page load. Authorization belongs in the gates, not in mount()."""
+    STAFF["is"] = True
+    try:
+        first = _request("GET", None)
+        assert Gated().get(first).status_code == 200
+        key = first.session.session_key
+        Gated().post(_request("POST", key, "inc"))
+        STAFF["is"] = False
+        view = Gated()
+        view.post(_request("POST", key, "inc"))
+        assert (view.can_edit, view.count) == (True, 2)
+        assert _saved_envelope(key)["changed"] == ["count"]
+        # A page load runs mount() again and starts the record empty.
+        assert Gated().get(_request("GET", key)).status_code == 200
+        fresh = _saved_envelope(key)
+        assert fresh["values"]["can_edit"] is False and fresh["changed"] == []
+    finally:
+        STAFF["is"] = True
+
+
+@pytest.mark.django_db
+def test_changes_made_over_the_fallback_are_recorded_for_a_later_socket_mount():
+    _view, key, _ = _fallback(Gated, [("inc",), ("rename",), ("inc",)])
+    assert _saved_envelope(key)["changed"] == ["count", "extra", "label"]
+
+
+@pytest.mark.django_db
+def test_a_stored_changed_record_cannot_name_what_the_view_would_not_restore():
+    _view, key, _ = _fallback(Names, [("inc",)])
+    session = SessionStore(key)
+    (name,) = [n for n in session.keys() if n.startswith("_djust_auto_")]
+    envelope = session[name]
+    envelope["changed"] = ["count", "__class__", "inc", "template_name", "_framework_attrs", 7]
+    envelope["values"].update(template_name="evil.html", inc="x")
+    session[name] = envelope
+    session.save()
+    request = _request("POST", key, "inc")
+    view = Names()
+    view.mount(request)
+    view._djust_tab = harness.TAB
+    view._snapshot_user_private_attrs()
+    restored = _automatic_state.load(view, request)
+    assert restored == {"count": 1}
+    assert callable(view.inc) and type(view) is Names
+
+
+# ---------------------------------------------------------------------------
+# One saved state per tab (#4106)
+# ---------------------------------------------------------------------------
+
+TAB_A, TAB_B = "tab-aaaaaaaa", "tab-bbbbbbbb"
+
+
+@pytest.mark.django_db
+def test_the_page_carries_a_new_tab_id_on_every_load(monkeypatch):
+    monkeypatch.undo()  # the real id minting
+    first = _request("GET", None)
+    pages = [
+        Counter().get(_request("GET", first.session.session_key)).content.decode() for _ in "ab"
+    ]
+    ids = [
+        re.search(r'<meta name="djust-tab" content="([A-Za-z0-9_-]{8,64})">', page)
+        for page in pages
+    ]
+    assert all(ids) and ids[0].group(1) != ids[1].group(1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_two_tabs_on_one_route_keep_independent_state_over_the_socket():
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE):
+        tab_a, _mount = await harness.mount_view(Counter, key, tab=TAB_A)
+        await harness.event(tab_a, "inc")
+        await harness.event(tab_a, "inc")
+        tab_b, mount_b = await harness.mount_view(Counter, key, tab=TAB_B)
+        await harness.event(tab_b, "inc")
+        await tab_a.disconnect()
+        await tab_b.disconnect()
+        again_a, mount_a = await harness.mount_view(Counter, key, tab=TAB_A)
+        again_b, mount_b2 = await harness.mount_view(Counter, key, tab=TAB_B)
+        # A duplicated browser tab carries the same id, so it shares the state.
+        copy_a, mount_copy = await harness.mount_view(Counter, key, tab=TAB_A)
+        for socket in (again_a, again_b, copy_a):
+            await socket.disconnect()
+    assert _probe_of(mount_b["html"]) == {"count": 0}  # not tab A's 2
+    assert _probe_of(mount_a["html"]) == {"count": 2}
+    assert _probe_of(mount_b2["html"]) == {"count": 1}
+    assert _probe_of(mount_copy["html"]) == {"count": 2}
+    assert len(await sync_to_async(_stored)(key)) == 2
+
+
+@pytest.mark.django_db
+def test_two_tabs_on_one_route_keep_independent_state_over_the_fallback():
+    key = _request("GET", None).session.session_key
+    for tab, events in ((TAB_A, 3), (TAB_B, 1)):
+        for _ in range(events):
+            assert Counter().post(_request("POST", key, "inc", tab=tab)).status_code == 200
+    counts = {}
+    for tab in (TAB_A, TAB_B):
+        view = Counter()
+        view.post(_request("POST", key, "nothing", tab=tab))
+        counts[tab] = view.count
+    assert counts == {TAB_A: 3, TAB_B: 1}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "forged",
+    [
+        "",
+        "short",
+        "x" * 65,
+        "has space in it",
+        "../../etc/passwd",
+        "tab-aaaaaaa\u00e9",
+        "tab-cccccccc",
+    ],
+)
+def test_a_missing_malformed_or_unknown_tab_id_restores_nothing(forged):
+    key = _request("GET", None).session.session_key
+    for _ in range(2):
+        Counter().post(_request("POST", key, "inc", tab=TAB_A))
+    before = _stored(key)
+    view = Counter()
+    response = view.post(_request("POST", key, "inc", tab=forged))
+    assert response.status_code == 200  # never an error page
+    assert view.count == 1  # mounted fresh: not tab A's state
+    after = _stored(key)
+    assert {k: v["values"] for k, v in after.items() if k in before} == {
+        k: v["values"] for k, v in before.items()
+    }
+    if not _automatic_state.tab_id(forged):
+        assert after.keys() == before.keys()  # and nothing is saved without an id
+
+
+def test_what_counts_as_a_tab_id(monkeypatch):
+    monkeypatch.undo()  # the real id minting
+    assert _automatic_state.tab_id("tab-aaaaaaaa") == "tab-aaaaaaaa"
+    assert len(_automatic_state.new_tab_id()) == 16
+    assert _automatic_state.tab_id(_automatic_state.new_tab_id())
+    for bad in (
+        None,
+        7,
+        b"tab-aaaaaaaa",
+        ["tab-aaaaaaaa"],
+        "",
+        "a" * 7,
+        "a" * 65,
+        "tab aaaaaaa",
+        "tab-aaaa\n",
+    ):
+        assert _automatic_state.tab_id(bad) == ""
+
+
+@pytest.mark.django_db
+def test_the_oldest_tab_states_of_a_route_are_evicted_past_the_cap(monkeypatch):
+    clock = {"now": int(_automatic_state.time.time()) - 100}
+    monkeypatch.setattr(_automatic_state.time, "time", lambda: clock["now"])
+    key = _request("GET", None).session.session_key
+    tabs = ["tab-%08d" % n for n in range(_automatic_state.MAX_TABS + 3)]
+    for tab in tabs:
+        clock["now"] += 1
+        assert Counter().post(_request("POST", key, "inc", tab=tab)).status_code == 200
+    # Another route's tab states are not counted with this route's.
+    Counter().post(_request("POST", key, "inc", tab=TAB_A, path="/another-route/"))
+    stored = _stored(key)
+    assert len(stored) == _automatic_state.MAX_TABS + 1
+    first_kept = clock["now"] - (_automatic_state.MAX_TABS - 1)
+    assert sorted(v["created"] for v in stored.values())[0] == first_kept  # the three oldest went
+    newest = Counter()
+    newest.post(_request("POST", key, "nothing", tab=tabs[-1]))
+    assert newest.count == 1
+    oldest = Counter()
+    oldest.post(_request("POST", key, "nothing", tab=tabs[0]))
+    assert oldest.count == 0  # evicted: mounts fresh
+
+
+@pytest.mark.django_db
+def test_a_tab_id_cannot_reach_another_users_or_sessions_state():
+    key = _request("GET", None).session.session_key
+    for _ in range(2):
+        Counter().post(_request("POST", key, "inc", tab=TAB_A))
+    other_session = _request("GET", None).session.session_key
+    view = Counter()
+    view.post(_request("POST", other_session, "nothing", tab=TAB_A))
+    assert view.count == 0
+    request = _request("POST", key, "nothing", tab=TAB_A)
+    request.user = User.objects.create(username="auto-4107-tab")
+    view = Counter()
+    view.post(request)
+    assert view.count == 0

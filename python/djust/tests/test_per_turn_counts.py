@@ -338,9 +338,11 @@ async def test_an_unchanged_turn_neither_serializes_nor_writes_the_saved_state(m
     assert now["reply"] == off["reply"] == "noop"
     # The mount saves what mount() built (no page GET came first here); the
     # two turns that change nothing neither serialize nor write.
-    assert with_shortcut == {"project": 1, "write": 1}
-    # Gate-off: the mount's, then one projection and one write per turn.
-    assert seen == {"project": 3, "write": 3}
+    # (Two projections at the mount: the save, and the baseline taken once
+    # handle_params() has run, against which a handler's changes are found.)
+    assert with_shortcut == {"project": 2, "write": 1}
+    # Gate-off: the mount's two, then one projection and one write per turn.
+    assert seen == {"project": 4, "write": 3}
     # The snapshots change detection takes are the same two per turn either way.
     assert now["snapshot_assigns.calls"] == off["snapshot_assigns.calls"] == 2
 

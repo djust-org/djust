@@ -845,8 +845,12 @@ class RequestMixin:
         t_json = (time.perf_counter() - t0) * 1000
 
         t0_sc = time.perf_counter()
-        # A page load is a fresh mount(): the view's state is saved as mount()
-        # left it, overwriting what an earlier page load saved (as in 1.3).
+        # A page load is a fresh mount() and a new tab (#4106): its state is
+        # saved as mount() left it, under an id the page carries and its client
+        # sends back. Another tab on this route keeps its own state.
+        from .. import _automatic_state as _saved_state
+
+        self.__dict__["_djust_tab"] = _saved_state.new_tab_id()
         from .._exposure_sessions import save_server_state
 
         save_server_state(self, request)
@@ -987,6 +991,7 @@ class RequestMixin:
 
         # Inject LiveView client script
         html = self._inject_client_script(html)
+        html = _saved_state.page_with_tab(html, self.__dict__.get("_djust_tab", ""))
 
         # #3252: the page-POST fallback hosts its lazy slots too. The
         # streaming path flushes their thunks through the chunk emitter; here
@@ -1683,20 +1688,61 @@ class RequestMixin:
             # and then the saved state goes back over what mount() built. What
             # is put back was validated by the store; nothing the client sent
             # is read here.
+            # The tab the page says it is (#4106). It selects one of this
+            # session's own states; none or a malformed one selects nothing.
+            self.__dict__["_djust_tab"] = _automatic_state.tab_id(
+                request.headers.get(_automatic_state.TAB_HEADER)
+            )
             saved_view = load_saved_view(self, request)
+
+            def _assign(values: Dict[str, Any]) -> None:
+                for key, value in values.items():
+                    safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
+
             if saved_view.must_mount:
                 call_hook_sync(self.mount, request, **kwargs)
                 cast(Any, self)._snapshot_user_private_attrs()
                 mount_work_pending = True
-            for key, value in saved_view.public.items():
-                safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
-            _automatic_state.apply_private(self, saved_view.private)
-            explicit_restored = saved_view.found and bool(saved_view.public or saved_view.private)
-            # The socket mount restores, then reads the URL (``dispatch_mount``).
-            # Same order here, so the URL this request carries wins over a
-            # saved value the previous request stored (#3624), and the event
-            # meets the page the browser shows.
-            _run_http_handle_params(self, request)
+                # Declared persist="server" fields, then the URL: the URL this
+                # request carries wins over a declared field (#3624), as on the
+                # socket mount.
+                _assign(saved_view.declared)
+                _run_http_handle_params(self, request)
+            else:
+                # Rebuilt from the saved state, no mount(). handle_params()
+                # still runs, because 2.0 pins that the URL THIS request
+                # carries wins over a declared persist="server" field (#3624,
+                # ``test_http_fallback_handle_params_3624``): the saved state
+                # goes on first so the hook can read it, and the undeclared
+                # part goes back again below.
+                _assign(saved_view.declared)
+                _assign(saved_view.public)
+                _automatic_state.apply_private(self, saved_view.private)
+                _run_http_handle_params(self, request)
+            # The rest of the saved state goes over what mount() and
+            # handle_params() built, as 1.3 put it back: what a handler set (a
+            # tab the URL does not carry) is not reset by handle_params().
+            # ``put_back`` decides what goes back (never a saved model dict over
+            # the live instance mount() just loaded) and restores the private
+            # attributes and the components' state.
+            _assign(
+                _automatic_state.put_back(
+                    self,
+                    saved_view.public,
+                    saved_view.private,
+                    saved_view.components,
+                    over_mount=saved_view.must_mount,
+                )
+            )
+            # The view is as the next handler finds it: a save records as
+            # changed every name that differs from this.
+            _automatic_state.settle(self)
+            explicit_restored = saved_view.found and bool(
+                saved_view.declared
+                or saved_view.public
+                or saved_view.private
+                or saved_view.components
+            )
 
             self._assign_component_ids()
 

@@ -52,19 +52,41 @@ are never persisted" and D-e (form input).
 6. **Cost.** The session is written only when the state changed, and a socket
    turn whose change detection found nothing changed serializes nothing.
 
+## Decided after review (2026-11-13)
+
+- **Socket mount restores handler changes only.** The envelope records the
+  names a handler, or a later lifecycle step, changed since `mount()`
+  (`changed`): each save adds every name whose value differs from the view's
+  state at the end of its mount sequence. A socket mount runs `mount()` and puts
+  back only those names; what `mount()` computes is fresh. The fallback keeps
+  1.3's rule (no `mount()`, everything saved goes back), so the two paths
+  differ for values `mount()` computes and no handler changes.
+- **A saved model dict never goes over a live instance** that `mount()` just
+  loaded (`put_back(over_mount=True)`).
+- **`handle_params()`** still runs on every fallback request, because 2.0 pins
+  that the URL a request carries wins over a declared `persist="server"` field
+  (#3624); the undeclared saved state goes back after it, so the hook does not
+  reset what a handler set. The same on a socket mount.
+- **Component state** is saved with the view's state and put back onto the
+  components the view holds (1.3's `<key>_components`). ADR-034 interactive
+  components are left out: their identity is rebuilt per mount (#4046).
+- **Per-tab state (#4106).** The page GET mints a tab id
+  (`secrets.token_urlsafe(12)`), carried in `<meta name="djust-tab">`; the
+  client sends it on the socket mount frame (`tab`), the SSE stream URL
+  (`_djust_tab`) and each fallback POST (`X-Djust-Tab`). The store key is the
+  view class, the route and the tab id, inside the session; the envelope stays
+  bound to session, user, tenant and route. No id, or a malformed one, saves
+  and restores nothing. At most 8 tab states per view and route are kept; the
+  oldest is evicted at a write. A navigation that stays on the socket keeps
+  the page's tab id with the new route's key. A duplicated browser tab shares
+  its original's id until its next page load.
+
 ## Not done here
 
 - **One envelope.** Declared `persist="server"` fields keep their own envelope
-  (`_djust_explicit_...`) beside the view's state (`_djust_auto_...`). Both are
-  written in one session save and restored through one function. Merging them
-  means moving the schema digest, `migrate_state` and the child-slot adapters.
-- **Component state** (`<key>_components` in 1.3). A view that holds a
-  component runs `mount()` again on the next request, which rebuilds it with
-  its initial state. Interactive components over the fallback are unchanged
-  (#4046).
+  (`_djust_explicit_...`), per route and therefore shared by tabs. Both are
+  written in one session save.
 - **Legacy-policy views** save nothing.
-- **Per-tab state** (#4106): two tabs on one route share one envelope, last
-  write wins, and a page load in one tab overwrites it, as in 1.3.
 
 ## Clearing and counting saved state (#4087)
 

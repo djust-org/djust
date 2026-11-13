@@ -106,7 +106,7 @@ def make_request(session_key=None):
     return request
 
 
-async def mount(request, view_class):
+async def mount(request, view_class, tab=None):
     transport = MockTransport()
     transport.build_request = lambda: request
 
@@ -117,7 +117,12 @@ async def mount(request, view_class):
     runtime = ViewRuntime(transport)
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
         await runtime.dispatch_mount(
-            {"type": "mount", "view": __name__ + "." + view_class.__name__, "url": PATH}
+            {
+                "type": "mount",
+                "view": __name__ + "." + view_class.__name__,
+                "url": PATH,
+                "tab": tab,
+            }
         )
     assert not transport.errors, transport.errors
     assert any(frame.get("type") == "mount" for frame in transport.sent), transport.sent
@@ -382,14 +387,14 @@ async def test_reconnect_restores_form_input_and_errors_but_no_sensitive_field(s
     """#4107: form input and errors are saved with the view's state; a sensitive
     field never is, opted in or not."""
     request = await sync_to_async(make_request)()
-    runtime, _ = await mount(request, PersistedFormView)
+    runtime, _ = await mount(request, PersistedFormView, tab="tab-forms-0001")
     await event(runtime, "validate_field", field="name", value="Al")
     await event(runtime, "validate_field", field="email", value="bad")
     await event(runtime, "validate_field", field="password", value=PASSWORD)
     assert runtime.view_instance.field_errors["email"]
 
     fresh = await sync_to_async(make_request)(request.session.session_key)
-    second, transport = await mount(fresh, PersistedFormView)
+    second, transport = await mount(fresh, PersistedFormView, tab="tab-forms-0001")
     view = second.view_instance
     assert view.form_data == {"name": "Al", "email": "bad", "password": ""}
     assert view.field_errors["email"] and view.is_valid is False
@@ -403,14 +408,14 @@ async def test_reconnect_restores_form_input_and_errors_but_no_sensitive_field(s
 @pytest.mark.asyncio
 async def test_reconnect_without_opt_in_restores_the_input_from_the_automatic_state(staged):
     request = await sync_to_async(make_request)()
-    runtime, _ = await mount(request, ExplicitFormView)
+    runtime, _ = await mount(request, ExplicitFormView, tab="tab-forms-0001")
     await event(runtime, "validate_field", field="name", value="Al")
     assert runtime.view_instance.form_data["name"] == "Al"  # the event ran
     raw = await sync_to_async(SessionStore(request.session.session_key).load)()
     assert not any(key.startswith("_djust_explicit_") for key in raw)
 
     fresh = await sync_to_async(make_request)(request.session.session_key)
-    second, _ = await mount(fresh, ExplicitFormView)
+    second, _ = await mount(fresh, ExplicitFormView, tab="tab-forms-0001")
     assert second.view_instance.form_data["name"] == "Al"  # #4107
 
 

@@ -368,29 +368,49 @@ def save_server_state(view: Any, request: Any) -> None:
         _flush(session, session.session_key)
 
 
+def reapply_saved_state(view: Any) -> None:
+    """Put the view's restored (undeclared) state back over what
+    ``handle_params()`` just set, on a socket mount (#4107). Declared
+    ``persist="server"`` fields are not touched: for them the URL wins (#3624).
+    """
+    from . import _automatic_state
+
+    _automatic_state.finish_mount(view)
+
+
 class SavedView:
     """What the store holds for a view, read BEFORE ``mount()`` (the HTTP
     fallback): the values to put back, and whether ``mount()`` must run first.
 
-    ``must_mount`` is 1.3's rule: nothing saved, or something of the view could
-    not be saved (an unsaveable attribute, a component, work ``mount()`` queued
-    that has not run), so only ``mount()`` can supply it.
+    ``declared`` holds the strict ``persist="server"`` fields, ``public`` /
+    ``private`` / ``components`` the rest of the view's state. ``must_mount``
+    is 1.3's rule: nothing saved, or something of the view could not be saved
+    (an unsaveable attribute, a component, work ``mount()`` queued that has not
+    run), so only ``mount()`` can supply it.
     """
 
-    __slots__ = ("public", "private", "must_mount", "found")
+    __slots__ = ("declared", "public", "private", "components", "must_mount", "found")
 
-    def __init__(self, public: dict[str, Any], private: dict[str, Any], must_mount: bool) -> None:
+    def __init__(
+        self,
+        declared: dict[str, Any],
+        public: dict[str, Any],
+        private: dict[str, Any],
+        must_mount: bool,
+        components: dict[str, Any] | None = None,
+    ) -> None:
+        self.declared = declared
         self.public = public
         self.private = private
+        self.components = components or {}
         self.must_mount = must_mount
-        self.found = bool(public or private) or not must_mount
+        self.found = bool(declared or public or private or self.components) or not must_mount
 
 
 def load_saved_view(view: Any, request: Any) -> SavedView:
     """Read a view's saved state before deciding whether to run ``mount()``."""
     from . import _automatic_state
 
-    public: dict[str, Any] = {}
     stored = _automatic_state.saved(view, request)
     declared: dict[str, Any] | None = None
     adapter = _declared_adapter(view, request)
@@ -402,10 +422,10 @@ def load_saved_view(view: Any, request: Any) -> SavedView:
     if stored is None:
         # Nothing of the view's own state is stored: mount() builds it. Declared
         # fields, if any, still go back over it.
-        return SavedView(declared or {}, {}, True)
-    public.update(stored.public)
-    public.update(declared or {})
-    return SavedView(public, stored.private, stored.remount)
+        return SavedView(declared or {}, {}, {}, True)
+    return SavedView(
+        declared or {}, stored.public, stored.private, stored.remount, stored.components
+    )
 
 
 def load_server_state(view: Any, request: Any) -> dict[str, Any] | None:

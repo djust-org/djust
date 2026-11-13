@@ -217,7 +217,11 @@ def new_session_key() -> str:
     return str(session.session_key)
 
 
-async def mount_view(view_class: type, session_key: str, user: Any = None) -> Any:
+#: The tab id the harness's page sends (#4106): one tab unless a test says otherwise.
+TAB = "per-turn-tab-1"
+
+
+async def mount_view(view_class: type, session_key: str, user: Any = None, tab: str = TAB) -> Any:
     """Open a socket through the real consumer and mount *view_class*."""
     from channels.testing import WebsocketCommunicator
     from django.contrib.auth.models import AnonymousUser
@@ -236,6 +240,7 @@ async def mount_view(view_class: type, session_key: str, user: Any = None) -> An
             "type": "mount",
             "view": f"{view_class.__module__}.{view_class.__name__}",
             "url": PATH,
+            "tab": tab,
         }
     )
     frame = await comm.receive_json_from()

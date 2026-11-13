@@ -104,7 +104,9 @@ def _post_three(view_cls):
     get.tenant = None
     get.session = SessionStore()
     get.session.create()
-    view_cls().get(get)
+    page = view_cls()
+    page.get(get)
+    tab = page._djust_tab  # the tab id the page carries and its client sends back
     seen = []
     for _ in range(3):
         request = RequestFactory().post(
@@ -112,6 +114,7 @@ def _post_three(view_cls):
             data=json.dumps({}),
             content_type="application/json",
             HTTP_X_DJUST_EVENT="increment",
+            HTTP_X_DJUST_TAB=tab,
         )
         request.user, request.session, request.tenant = get.user, get.session, None
         body = view_cls().post(request).content.decode("utf-8")

@@ -3331,6 +3331,11 @@ class ViewRuntime(RuntimeTurnPort):
 
         # Stash transport identity on the view (used by VDOM caching).
         view_instance._websocket_session_id = self.session_id
+        # The tab the page says it is (#4106): selects one of this session's
+        # own saved states. None, or a malformed one, selects nothing.
+        from ._automatic_state import tab_id as _tab_id
+
+        view_instance._djust_tab = _tab_id(data.get("tab"))
         view_instance._websocket_path = page_url
         view_instance._websocket_query_string = ""
 
@@ -3596,6 +3601,13 @@ class ViewRuntime(RuntimeTurnPort):
             query_string = urlencode(params) if params else ""
             uri = f"{page_url}?{query_string}" if query_string else page_url
             await run_handle_params(view_instance, params, uri)
+            if not legacy_exposure:
+                # #4107: what a handler set (restored above) goes back over the
+                # defaults handle_params() just assigned; a declared
+                # persist="server" field keeps the URL's value (#3624).
+                from ._exposure_sessions import reapply_saved_state
+
+                reapply_saved_state(view_instance)
         except Exception as exc:
             response = handle_exception(
                 exc,

@@ -209,3 +209,15 @@ const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
     style.textContent = '[dj-cloak] { display: none !important; }';
     document.head.appendChild(style);
 })();
+
+// ============================================================================
+// The page's tab id (#4106)
+// ============================================================================
+// The page GET puts <meta name="djust-tab" content="..."> in the document. The
+// client sends it back on the socket and SSE mount frames and on every
+// fallback POST, and the server keeps one saved state per tab under it. An
+// empty string when the page carries none: the server then saves nothing.
+function djustTabId() {
+    const meta = document.querySelector('meta[name="djust-tab"]');
+    return (meta && meta.getAttribute('content')) || '';
+}

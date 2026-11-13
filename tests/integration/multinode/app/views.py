@@ -135,6 +135,30 @@ class ItemView(_Probed, LiveView):
         self.hits += 1
 
 
+class HeldView(_Probed, LiveView):
+    """A model ``mount()`` loads, and a value a handler sets that
+    ``handle_params()`` would default (#4107)."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root>" + PROBE + "</div>"
+
+    def mount(self, request, **kwargs):
+        self.member = get_user_model().objects.order_by("pk").first()
+        self.tab = "a"
+        self.count = 0
+
+    def handle_params(self, params, uri):
+        self.tab = params.get("tab", "a")
+
+    def snapshot(self):
+        return {"member": type(self.member).__name__, "tab": self.tab, "count": self.count}
+
+    @event_handler()
+    def pick(self, value: str = "b", **kwargs):
+        self.tab = value
+        self.count += 1
+
+
 class SignupForm(forms.Form):
     name = forms.CharField(min_length=3)
     email = forms.EmailField()

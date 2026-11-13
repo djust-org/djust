@@ -740,6 +740,12 @@ A view's state is saved in the server-side session between requests, as in
 - **Bound.** The envelope carries the `StateBinding` digest (session, user,
   tenant, route) and a lifetime; state for another principal reads as nothing
   stored.
+- **A tab id selects, it does not authorize.** The page's tab id
+  (`<meta name="djust-tab">`, sent back as `X-Djust-Tab` and in the mount
+  frame) picks one of the states inside the caller's own session. The
+  envelope stays bound to the session, user, tenant and route, so an id copied
+  elsewhere reaches nothing; a missing or malformed id saves and restores
+  nothing; at most 8 tab states per route are kept.
 - **Not a projection.** Template context, client state, signed snapshot tokens
   and debug payloads still read declarations only (ADR-038 D1). A saved value
   that is not declared or supplied by `get_context_data()` appears in no frame.

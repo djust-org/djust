@@ -216,7 +216,9 @@ class TestExplicitExposureOrder:
         second = _post(initial, ExplicitPersisted(), "archive", url=PATH + "?scope=b")
         assert second.status_code == 200, second.content
         assert ("handler", "b") in SEEN, SEEN
-        assert ("mount-work", "b") in SEEN, SEEN
+        # #4107: the second POST rebuilds the view from its saved state and
+        # does not run mount() again, so mount queues no work on it.
+        assert not [seen for seen in SEEN if seen[0] == "mount-work"], SEEN
 
 
 class _Repo:

@@ -58,6 +58,16 @@ from djust.tests._ws_frames import drain_extra, has_type, receive_until
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
+
+@pytest.fixture(autouse=True)
+def _one_tab(monkeypatch):
+    """Every page load here is the same tab (#4106): the GET's id is the one
+    the harness's client sends back, and the page bytes are repeatable."""
+    from djust import _automatic_state
+
+    monkeypatch.setattr(_automatic_state, "new_tab_id", lambda: harness.TAB)
+
+
 MODULE = __name__
 RAN: List[str] = []
 
@@ -982,6 +992,7 @@ def run_http(view_class: type, script: Script) -> List[Any]:
                 data=json.dumps(params or {}),
                 content_type="application/json",
                 HTTP_X_DJUST_EVENT=event_name,
+                HTTP_X_DJUST_TAB=harness.TAB,
             )
         made.user, made.tenant, made.session = AnonymousUser(), None, session
         return made

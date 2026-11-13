@@ -1085,6 +1085,11 @@ class LiveView(
         # The keys the turn's change detection found changed, for the save.
         self._djust_auto_changed: Any = None
         self._djust_auto_restore_same = False
+        self._djust_auto_reapply: Any = None
+        self._djust_auto_settled: Any = None
+        # The tab this view belongs to: minted by the page GET, sent back by
+        # that page's client on its socket mount and fallback POSTs (#4106).
+        self._djust_tab = ""
         self._djust_restore_changed_view = True
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())
 

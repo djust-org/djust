@@ -212,6 +212,18 @@ const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
 })();
 
 // ============================================================================
+// The page's tab id (#4106)
+// ============================================================================
+// The page GET puts <meta name="djust-tab" content="..."> in the document. The
+// client sends it back on the socket and SSE mount frames and on every
+// fallback POST, and the server keeps one saved state per tab under it. An
+// empty string when the page carries none: the server then saves nothing.
+function djustTabId() {
+    const meta = document.querySelector('meta[name="djust-tab"]');
+    return (meta && meta.getAttribute('content')) || '';
+}
+
+// ============================================================================
 // DOM Helper Functions
 // ============================================================================
 
@@ -2651,6 +2663,7 @@ class LiveViewWebSocket {
             type: 'mount',
             view: viewPath,
             params: params,
+            tab: djustTabId(),
             url: window.location.pathname,
             has_prerendered: options.hasPrerendered ?? (this.skipMountHtml || false),  // Tell server we have pre-rendered content
             client_timezone: clientTimezone  // IANA timezone string (e.g. "America/New_York")
@@ -3076,6 +3089,7 @@ class LiveViewSSE {
         const urlParams = new URLSearchParams(params);
         urlParams.set('view', viewPath);
         urlParams.set('_djust_url', window.location.pathname);
+        urlParams.set('_djust_tab', djustTabId());
         // #2966: dj-track-static. The stream GET is the mount, and an
         // EventSource auto-reconnect re-requests this same URL, so the page's
         // tracked asset URLs ride it (a POSTed mount frame would be a no-op).
@@ -3480,6 +3494,7 @@ class LiveViewSSE {
             type: 'mount',
             view: viewPath,
             params,
+            tab: djustTabId(),
             url: window.location.pathname,
             has_prerendered: options.hasPrerendered ?? false,
             client_timezone: clientTimezone,
@@ -3594,6 +3609,7 @@ class LiveViewSSE {
             type: 'mount',
             view: viewPath,
             params,
+            tab: djustTabId(),
             url: window.location.pathname,
             has_prerendered: false,
             client_timezone: tz,
@@ -8941,6 +8957,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': csrfToken,
                 'X-Djust-Event': eventName,
+                'X-Djust-Tab': djustTabId(),
                 // A strict (or invalid) page scope asks for an explicit
                 // contract clear when the rendered tree no longer has one.
                 ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null
