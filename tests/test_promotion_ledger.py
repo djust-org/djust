@@ -407,6 +407,20 @@ def test_each_rule_says_why(rule):
     assert rule.why and rule.targets and rule.statuses <= {"A", "D", "M"}
 
 
+def test_a_check_doc_source_change_runs_the_generated_check_doc_pins():
+    """#4080 moved the check docs to one source file per check under docs/checks/."""
+    covered = early_tier.selected_by_rules(ROOT, {("M", "docs/checks/V028.md")})
+    for pin in (
+        "python/djust/tests/test_check_id_uniqueness_2070.py",
+        "python/djust/tests/test_check_id_registry_4080.py",
+        "tests/test_generated_docs_4080.py",
+    ):
+        assert pin in covered, pin
+    assert "tests/test_generated_docs_4080.py" in early_tier.selected_by_rules(
+        ROOT, {("M", "python/djust/checks/security.py")}
+    )
+
+
 def test_a_modified_test_module_does_not_fire_the_registry_rule_but_added_or_deleted_does():
     rule = early_tier.PATH_RULES[0]
     assert rule.name == "test-module-added-or-removed"

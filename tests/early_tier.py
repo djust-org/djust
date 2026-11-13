@@ -109,10 +109,13 @@ PATH_RULES: tuple[PathRule, ...] = (
             "the ID-uniqueness and docs-table pins"
         ),
         statuses=frozenset({"A", "D", "M"}),
-        patterns=(r"^python/djust/checks/", r"^docs/system-checks\.md$"),
+        patterns=(r"^python/djust/checks/", r"^docs/system-checks\.md$", r"^docs/checks/"),
         targets=(
             "python/djust/tests/test_check_id_uniqueness_2070.py",
             "python/djust/tests/test_c0xx_docs_table_pin_2562.py",
+            # #4080: the check docs and the check-ID registry are generated from docs/checks/.
+            "python/djust/tests/test_check_id_registry_4080.py",
+            "tests/test_generated_docs_4080.py",
         ),
         example="python/djust/checks/security.py",
     ),
