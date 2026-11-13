@@ -2209,24 +2209,13 @@ STRUCTURE = {
         """,
         True,
     ),
-    # The sink sits INSIDE the nested function: a call's RESULT is judged with that call's arguments
-    # since #3864, so only a sink in the function's own body still needs every call site in view.
-    "a nested function with its own sink, called with literal arguments": (
-        """
-        def f(xs):
-            def btn(val):
-                return mark_safe(f'<b>{val}</b>')
-            return btn('a') + btn('b')
-        """,
-        False,
-    ),
     "a nested function also handed to map": (
         """
         def f(xs):
             def btn(val):
-                return mark_safe(f'<b>{val}</b>')
+                return f'<b>{val}</b>'
             extra = list(map(btn, xs))
-            return btn('a')
+            return mark_safe(f"<p>{btn('a')}</p>")
         """,
         True,
     ),
@@ -2234,8 +2223,8 @@ STRUCTURE = {
         """
         def f(xs):
             def btn(val):
-                return mark_safe(f'<b>{val}</b>')
-            out = btn('a')
+                return f'<b>{val}</b>'
+            out = mark_safe(f"<p>{btn('a')}</p>")
             return btn
         """,
         True,
@@ -2424,9 +2413,9 @@ class TestClassAttributesAndLocalHelpers:
 
     def test_a_helper_that_builds_from_its_argument_is_judged_at_the_sink(self):
         """``mark_safe(helper(x))`` where helper builds a raw string was an unflagged known miss until
-        #3864: the call's result is now judged with this call's arguments, which is what catches
-        ``mark_safe(tag(safe_url(x)))`` for a ``tag`` that puts its parameter in an unquoted
-        attribute. A call the helper is clean for stays clean."""
+        #3864: a call handed to a sink is also judged with this call's arguments (which is what
+        catches ``mark_safe(tag(safe_url(x)))`` for a ``tag`` that puts its parameter in an unquoted
+        attribute). The same helper handed a literal stays clean."""
         source = (
             "def helper(x):\n    return f'<a {x}>'\ndef f(x):\n    return mark_safe(helper(x))\n"
         )
@@ -2505,20 +2494,8 @@ class TestNoEscaperIsImportedThroughAReExport:
 # The limits, pinned (so that when the guard learns one, the entry moves)
 # ---------------------------------------------------------------------------
 
-#: Code that is SAFE and still flagged: the reason handlers are in the audited baseline. A sink in a
-#: METHOD's own body is judged with its parameters raw, whatever the callers in view pass (a subclass
-#: anywhere may call it with anything): binding them needs a "private to this class" contract (#3845).
+#: Code that is SAFE and still flagged: the reason the 13 handlers in the audited baseline are there.
 STILL_FLAGGED_BUT_SAFE = {
-    "a sink in a method whose callers escape": """
-        class H:
-            def _item(self, e_event):
-                return mark_safe(f'<i dj-click="{e_event}">')
-            def render(self, event):
-                return self._item(conditional_escape(event))
-        """,
-}
-#: ... and what the guard proves since #3864: a call's RESULT, with the arguments that call passes.
-PROVEN_SINCE_3864 = {
     "a parameter the caller escaped": """
         def item(e_event):
             return f'<i dj-click="{e_event}">'
@@ -2534,10 +2511,6 @@ class TestTheLimitsArePinned:
         """When one of these stops being flagged the guard learned it: move the row, and delete the
         audit entries it clears."""
         assert flagged(STILL_FLAGGED_BUT_SAFE[label]) != [], label
-
-    @pytest.mark.parametrize("label", sorted(PROVEN_SINCE_3864))
-    def test_safe_code_the_guard_proves_since_3864(self, label):
-        assert flagged(PROVEN_SINCE_3864[label]) == [], label
 
     def test_the_docstring_names_the_limits_this_adds(self):
         doc = taint.__doc__ or ""

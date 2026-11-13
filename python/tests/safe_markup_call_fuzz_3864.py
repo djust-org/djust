@@ -40,12 +40,17 @@ PAYLOADS = (
     'x";INJ();"',
     "1;INJ()",
     "x}INJ{y",
+    '" onmouseover=1 x="',
+    "');INJ();//",
+    "</script><x>",
+    "</textarea><x>",
+    "--><x>",
 )
 
 HEADER = (
     "from django.utils.html import conditional_escape, escape\n"
     "from django.utils.safestring import mark_safe\n"
-    "from djust.components.utils import safe_url\n"
+    "from djust.components.utils import attr_text, safe_url\n"
 )
 
 #: where the value comes from (``x`` is the raw parameter)
@@ -53,6 +58,8 @@ SOURCES = {
     "raw": "x",
     "escape": "escape(x)",
     "url": "safe_url(x)",
+    "attr_text": "attr_text(x)",
+    "cond_escape": "conditional_escape(x)",
     "digits": "str(len(x))",
     "literal": "'k'",
 }
@@ -129,6 +136,16 @@ HELPERS: dict[str, tuple] = {
         "{w}(V)",
         "{G}['q'] = x",
     ),
+    # a helper that RETURNS an escaper's output, or whole attributes built from one
+    "returns_url": ("def {w}(u):\n    return safe_url(u)\n", "{w}(V)"),
+    "returns_attr_text": ("def {w}(u):\n    return attr_text(u)\n", "{w}(V)"),
+    "returns_escape": ("def {w}(u):\n    return escape(u)\n", "{w}(V)"),
+    "whole_attr": ("def {w}(u):\n    return f' aria-label=\"{{escape(u)}}\"'\n", "{w}(V)"),
+    "whole_attr_href": ("def {w}(u):\n    return f' href=\"{{u}}\"'\n", "{w}(V)"),
+    "attr_name": (
+        "def {w}(u, n='title'):\n    return f'<i {{n}}=\"{{escape(u)}}\">'\n",
+        "{w}(V, V)",
+    ),
     "global_text": (
         "{G} = {{}}\ndef {w}(k):\n    return f'{{k}}-{{escape({G}[\"q\"])}}'\n",
         "{w}(V)",
@@ -141,15 +158,38 @@ PLACEMENTS = {
     "bare": "mark_safe(E)",
     "text": "mark_safe(f'<div>{E}</div>')",
     "quoted": "mark_safe(f'<div title=\"{E}\">d</div>')",
+    "single_quoted": "mark_safe(f\"<div title='{E}'>d</div>\")",
     "unquoted": "mark_safe(f'<div title={E}>d</div>')",
+    "between": "mark_safe(f'<div{E}>d</div>')",
+    "attr_name": "mark_safe(f'<div {E}=\"1\">d</div>')",
+    "tag_name": "mark_safe(f'<{E}>d</div>')",
     "url": "mark_safe(f'<a href=\"{E}\">l</a>')",
     "event": "mark_safe(f'<b onclick=\"go(\\'{E}\\')\">b</b>')",
+    "style_attr": "mark_safe(f'<b style=\"color:{E}\">b</b>')",
     "script": "mark_safe(f\"<script>var a='{E}';</script>\")",
+    "script_unquoted": "mark_safe(f'<script>var a={E};</script>')",
     "style": "mark_safe(f'<style>.c{{color:{E}}}</style>')",
+    "srcdoc": "mark_safe(f'<iframe srcdoc=\"{E}\"></iframe>')",
+    "textarea": "mark_safe(f'<textarea>{E}</textarea>')",
+    "comment": "mark_safe(f'<!-- {E} -->')",
 }
-
+#: one placement per URL attribute name the guard knows about (``URL_ATTRIBUTES`` below)
 #: Attributes a browser reads as a URL
-URL_ATTRIBUTES = ("href", "src", "action", "formaction")
+URL_ATTRIBUTES = (
+    "href",
+    "src",
+    "action",
+    "formaction",
+    "srcset",
+    "poster",
+    "background",
+    "cite",
+    "data",
+    "ping",
+    "xlink:href",
+)
+for _name in URL_ATTRIBUTES[1:]:
+    PLACEMENTS["url_" + _name.replace(":", "_")] = "mark_safe(f'<a " + _name + '="{E}">l</a>\')'
 
 
 class _Collect(HTMLParser):
@@ -168,6 +208,16 @@ class _Collect(HTMLParser):
             self.attrs.append((name, value or ""))
             if name.startswith("on"):
                 self.code.append(value or "")
+            elif name == "style":
+                self.css.append(value or "")
+            elif name == "srcdoc":  # a document of its own: parsed as one
+                inner = _Collect()
+                inner.feed(value or "")
+                inner.close()
+                self.tags += inner.tags
+                self.attrs += inner.attrs
+                self.code += inner.code
+                self.css += inner.css
 
     def handle_startendtag(self, tag, attrs):
         self.handle_starttag(tag, attrs)
@@ -213,12 +263,13 @@ def injected(html: str) -> bool:
     if "x" in parser.tags or any(name == "onmouseover" for name, _ in parser.attrs):
         return True
     if any(
-        name in URL_ATTRIBUTES and value.strip().lower().startswith("javascript:")
+        (name in URL_ATTRIBUTES or name.endswith("href"))
+        and "javascript:" in value.strip().lower().replace(" ", "")[:11]
         for name, value in parser.attrs
     ):
         return True
     return any(_runs_outside_a_string(c) for c in parser.code) or any(
-        "INJ{" in c for c in parser.css
+        "INJ{" in c or "INJ(" in c for c in parser.css
     )
 
 
@@ -294,3 +345,57 @@ def survey(
         if flagged and not unsafe:
             result["false_positives"].append(label)
     return result
+
+
+def matrix() -> list[tuple[str, list[str], str]]:
+    """The FULL cross product of one helper: every source x every helper x every placement."""
+    return [(s, [h], p) for s in SOURCES for h in HELPERS for p in PLACEMENTS]
+
+
+def misses(guard, cases: list[tuple[str, list[str], str]]) -> dict:
+    """``{"misses": [...], "unsafe": n, "cleared": n}``: the cases that let a payload through when
+    RUN (not as a bare passthrough) and that ``guard`` (a ``find_unsafe_markup``) clears."""
+    out: dict = {"misses": [], "unsafe": 0, "cleared": 0}
+    for source, helpers, placement in cases:
+        module = build(source, helpers, placement)
+        flagged = bool(guard(module))
+        unsafe, bare = run(module)
+        out["unsafe"] += unsafe and not bare
+        out["cleared"] += not flagged
+        if unsafe and not bare and not flagged:
+            out["misses"].append([source, list(helpers), placement])
+    return out
+
+
+if __name__ == "__main__":  # pragma: no cover - regenerates the baseline from another guard
+    # python python/tests/safe_markup_call_fuzz_3864.py <main's safe_markup_taint.py> <out.json>
+    import importlib.util
+    import json
+    import sys
+
+    import django
+    from django.conf import settings
+
+    settings.configure()
+    django.setup()
+    spec = importlib.util.spec_from_file_location("baseline_taint", sys.argv[1])
+    guard = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    sys.modules["baseline_taint"] = guard
+    spec.loader.exec_module(guard)  # type: ignore[union-attr]
+    result = misses(guard.find_unsafe_markup, matrix())
+    with open(sys.argv[2], "w") as fh:
+        json.dump(
+            {
+                "_comment": (
+                    "Cases of safe_markup_call_fuzz_3864.matrix() that are unsafe when RUN and that "
+                    "the guard of main at the commit below clears. test_safe_markup_guard_3864 "
+                    "asserts the guard clears none outside this list (monotone against main)."
+                ),
+                "main_commit": sys.argv[3] if len(sys.argv) > 3 else "",
+                "misses": sorted(result["misses"]),
+            },
+            fh,
+            indent=1,
+        )
+        fh.write("\n")
+    print(len(result["misses"]), "misses,", result["unsafe"], "unsafe of", len(matrix()))
