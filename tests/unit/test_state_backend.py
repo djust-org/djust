@@ -24,6 +24,31 @@ from djust._rust import RustLiveView
 from djust import state
 
 
+class _LaterTime:
+    """The ``time`` module the memory backend reads, ``offset`` seconds later."""
+
+    def __init__(self, offset):
+        self._offset = offset
+
+    def time(self):
+        return time.time() + self._offset
+
+    def monotonic(self):
+        return time.monotonic() + self._offset
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def _backend_clock_later_by(offset):
+    """Move the in-memory backend's clock instead of sleeping past a TTL (#4100)."""
+    from unittest import mock
+
+    import djust.state_backends.memory as memory
+
+    return mock.patch.object(memory, "time", _LaterTime(offset))
+
+
 class TestRustSerialization:
     """Test native Rust serialization with MessagePack."""
 
@@ -152,13 +177,11 @@ class TestInMemoryBackend:
         backend.set("key1", view)
         assert backend.get("key1") is not None
 
-        # Wait for expiration
-        time.sleep(1.1)
-
-        # Cleanup expired sessions
-        cleaned = backend.cleanup_expired(ttl=1)
-        assert cleaned == 1
-        assert backend.get("key1") is None
+        # Past the TTL by the backend's clock, not by waiting (#4100)
+        with _backend_clock_later_by(2):
+            cleaned = backend.cleanup_expired(ttl=1)
+            assert cleaned == 1
+            assert backend.get("key1") is None
 
     def test_cleanup_ttl_zero_never_expires(self):
         """SESSION_TTL=0 means "never expire" — cleanup_expired is a no-op (#409).
@@ -666,11 +689,9 @@ class TestIntegration:
         view = RustLiveView("<div>test</div>")
         backend.set("old_key", view)
 
-        # Wait for expiration
-        time.sleep(1.1)
-
-        # Cleanup
-        cleaned = cleanup_expired_sessions(ttl=1)
+        # Past the TTL by the backend's clock, not by waiting (#4100)
+        with _backend_clock_later_by(2):
+            cleaned = cleanup_expired_sessions(ttl=1)
         assert cleaned == 1
 
         # Cleanup
