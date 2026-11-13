@@ -81,20 +81,24 @@ class DjustTemplateBackend(BaseEngine):
         # override it. Context dictionary keys never configure escaping.
         self.autoescape = bool(options.pop("autoescape", True))
 
+        # Django's `OPTIONS['libraries']` / `OPTIONS['builtins']`, with the
+        # meaning `DjangoTemplates` gives them (#2547). `libraries` extends
+        # the `{% load %}` name map; `builtins` are bridged now.
+        self.template_libraries: Dict[str, str] = dict(options.pop("libraries", {}) or {})
+        self.template_builtins: List[str] = list(options.pop("builtins", []) or [])
+
         # Anything still in OPTIONS is a key djust does not implement. Django
         # raises `ImproperlyConfigured` for an unknown option; staying silent is
-        # what let the four keys above go unnoticed.
+        # what let the four keys above go unnoticed. Checked only after every
+        # supported key is popped: `libraries` and `builtins` used to be popped
+        # after this check, so a correctly configured backend warned that they
+        # were unsupported (#3956).
         if options:
             logger.warning(
                 "DjustTemplateBackend: unsupported TEMPLATES OPTIONS key(s) %s — ignored",
                 ", ".join(sorted(options)),
             )
 
-        # Django's `OPTIONS['libraries']` / `OPTIONS['builtins']`, with the
-        # meaning `DjangoTemplates` gives them (#2547). `libraries` extends
-        # the `{% load %}` name map; `builtins` are bridged now.
-        self.template_libraries: Dict[str, str] = dict(options.pop("libraries", {}) or {})
-        self.template_builtins: List[str] = list(options.pop("builtins", []) or [])
         from ..template_libraries import register_backend_libraries, rendering_with_backend
 
         with rendering_with_backend(self):

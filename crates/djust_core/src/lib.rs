@@ -1472,6 +1472,33 @@ impl Encoded {
         }
         Some((a.hi, a.lo).cmp(&(b.hi, b.lo)))
     }
+
+    /// Python's own `<` between the two live objects, as `sorted()` asks it: `dictsort` over
+    /// keys the engine has no comparison for (a `UUID`, a lazy string, a `date` beside a
+    /// `datetime`) (#3919 review).
+    ///
+    /// * `None`: either side has no live object to ask, so nothing is known; the caller keeps
+    ///   its previous answer.
+    /// * `Some(Err(()))`: Python raised (`TypeError` for a pair it cannot order: two models,
+    ///   two managers, a `date` beside a `datetime`). Django's `dictsort` then renders `""`.
+    /// * `Some(Ok(ordering))`: `Less` when `self < other`, `Greater` when `other < self`,
+    ///   `Equal` otherwise.
+    pub fn python_order(
+        &self,
+        other: &Encoded,
+    ) -> Option<std::result::Result<std::cmp::Ordering, ()>> {
+        let (a, b) = (self.live.as_ref()?, other.live.as_ref()?);
+        Some(Python::attach(|py| {
+            let (a, b) = (a.bind(py), b.bind(py));
+            if a.lt(b).map_err(|_| ())? {
+                return Ok(std::cmp::Ordering::Less);
+            }
+            if b.lt(a).map_err(|_| ())? {
+                return Ok(std::cmp::Ordering::Greater);
+            }
+            Ok(std::cmp::Ordering::Equal)
+        }))
+    }
 }
 
 /// Untagged in human-readable formats, with ONE exception (#2214).
@@ -4701,6 +4728,26 @@ fn is_model_floor_proxy(ob: &Bound<'_, PyAny>) -> bool {
     }
 }
 
+/// Is this object a floored MANAGER / QUERYSET proxy (`djust.serialization._SidecarQuerySetProxy`)?
+///
+/// What a model's floor proxy hands back for a related manager (`u.groups`), which is not
+/// callable through the proxy. `dictsort` asks, because Django orders the manager itself and
+/// raises (#3919).
+fn is_queryset_floor_proxy(ob: &Bound<'_, PyAny>) -> bool {
+    static CLASS: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+    let py = ob.py();
+    let class = CLASS.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+        Ok(py
+            .import("djust.serialization")?
+            .getattr("_SidecarQuerySetProxy")?
+            .unbind())
+    });
+    match class {
+        Ok(class) => ob.is_instance(class.bind(py)).unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
 /// What a carried model answers that a carried object in general does not (#3888).
 ///
 /// * **Equality** is the model's own `==` (same class, same pk). The proxy's `__eq__` is that, and
@@ -5307,6 +5354,12 @@ impl Encoded {
                     Ok(found) => found,
                     Err(_) => current.getattr(part).ok()?,
                 };
+            }
+            // `_property_resolver` never CALLS what it finds: a method or a related manager is
+            // ordered as itself, which raises, and Django's `dictsort` renders `""` (#3919). It
+            // used to cross as a value the sort could order, so the rows came out sorted.
+            if current.is_callable() || is_queryset_floor_proxy(&current) {
+                return None;
             }
             current.extract::<Value>().ok()
         })

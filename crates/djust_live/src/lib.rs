@@ -4572,20 +4572,29 @@ fn python_to_json_value(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<serde_js
 ///
 /// # Returns
 /// The merged template string with all inheritance resolved
+///
+/// With `source`, the child's source is that text (a `from_string` template),
+/// and `template_path` names it only in an error (#3920).
 #[pyfunction]
+#[pyo3(signature = (template_path, template_dirs, source=None))]
 fn resolve_template_inheritance(
     template_path: String,
     template_dirs: Vec<String>,
+    source: Option<String>,
 ) -> PyResult<String> {
     guard_panic("resolve_template_inheritance", move || {
         use djust_templates::inheritance::resolve_template_inheritance as resolve;
+        use djust_templates::inheritance::resolve_template_inheritance_from_source as resolve_source;
 
         // Convert string paths to PathBuf
         let dirs: Vec<PathBuf> = template_dirs.iter().map(PathBuf::from).collect();
 
         // Resolve inheritance using AST-based implementation
-        let resolved = resolve(&template_path, &dirs)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        let resolved = match source {
+            Some(source) => resolve_source(&source, &dirs),
+            None => resolve(&template_path, &dirs),
+        }
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
         Ok(resolved)
     })
@@ -5379,7 +5388,7 @@ fn gated_names(
     let names: Vec<&str> = tree
         .keys()
         .map(|k| k.as_str())
-        .filter(|k| *k != WHOLE_MARK)
+        .filter(|k| *k != WHOLE_MARK && *k != ROW_TEXT_KEY)
         .collect();
     permitted_among(py, obj, &names, gate)
 }
@@ -5609,6 +5618,13 @@ fn serialize_all_row(
 /// It is never an attribute: [`gated_names`] drops it, so no walk reads it.
 const WHOLE_MARK: &str = "__djust_whole__";
 
+/// The path a template reads a row's TEXT through when it reads the row whole
+/// AND by field (`{{ u }}{{ u.pk }}`, #3911): the extractor files
+/// `djust_templates::parser::ROW_TEXT_PATH`, and the row carries `str(row)`
+/// under it, the key the renderer prints a serialized object by. Never an
+/// attribute read: [`gated_names`] drops it.
+const ROW_TEXT_KEY: &str = djust_templates::parser::ROW_TEXT_PATH;
+
 /// The QuerySet methods a template can chain after `.all`.
 const ALL_CHAIN_METHODS: [&str; 4] = ["count", "exists", "first", "last"];
 
@@ -5733,6 +5749,17 @@ fn serialize_all_methods(
     Ok(out.into_any().unbind())
 }
 
+/// `djust.serialization.model_identity`, resolved once per process (#3911).
+fn row_identity(py: Python<'_>) -> PyResult<&Py<PyAny>> {
+    static FN: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+    FN.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+        Ok(py
+            .import("djust.serialization")?
+            .getattr("model_identity")?
+            .unbind())
+    })
+}
+
 /// Serialize a single Python object based on path tree
 fn serialize_object_with_paths(
     py: Python,
@@ -5748,6 +5775,29 @@ fn serialize_object_with_paths(
     // template renders `string_if_invalid` (empty) — the same outcome as the
     // eager channel.
     let permitted = gated_names(py, obj, tree, gate)?;
+
+    // A row the template also prints whole (#3911) carries what a serialized
+    // model carries for that: its identity map (`id`, `pk`, `__str__`,
+    // `__model__`, `djust.serialization.model_identity`, the one producer), so
+    // the renderer prints `__str__` and treats the map as a model, not a dict
+    // (`{{ u.items }}` is empty, as on Django). Keys the paths already filled
+    // win. A non-model row gets its text only; a `__str__` that raises leaves
+    // the key out, as a whole row's serializer does.
+    if tree.contains_key(ROW_TEXT_KEY) {
+        if obj.hasattr("_meta").unwrap_or(false) {
+            if let Ok(identity) = row_identity(py)?.bind(py).call1((obj,)) {
+                if let Ok(identity) = identity.cast::<PyDict>() {
+                    for (key, value) in identity.iter() {
+                        if !result.contains(&key)? {
+                            result.set_item(key, value)?;
+                        }
+                    }
+                }
+            }
+        } else if let Ok(text) = obj.str() {
+            result.set_item(ROW_TEXT_KEY, text)?;
+        }
+    }
 
     for (attr_name, node) in tree {
         if !permitted.contains(attr_name) {
@@ -7394,22 +7444,41 @@ fn get_vdom_node_mut<'a>(vdom: &'a mut VNode, path: &[usize]) -> Option<&'a mut 
     Some(node)
 }
 
+/// A path map from the template parser as a Python `dict[str, list[str]]`, or
+/// its parse error as a `ValueError`. Shared by the two path extractors.
+fn paths_map_to_py(
+    py: Python,
+    vars_map: djust_core::Result<std::collections::HashMap<String, Vec<String>>>,
+) -> PyResult<Py<PyAny>> {
+    // Call Rust template parser
+    let vars_map = vars_map.map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Template parsing error: {e}"))
+    })?;
+
+    // Convert Rust HashMap to Python dict
+    let py_dict = PyDict::new(py);
+    for (key, paths) in vars_map {
+        let py_list = PyList::new(py, paths.iter().map(|s| s.as_str()))?;
+        py_dict.set_item(key, py_list)?;
+    }
+
+    Ok(py_dict.into())
+}
+
 #[pyfunction(name = "extract_template_variables")]
 fn extract_template_variables_py(py: Python, template: String) -> PyResult<Py<PyAny>> {
     guard_panic("extract_template_variables_py", move || {
-        // Call Rust template parser
-        let vars_map = djust_templates::extract_template_variables(&template).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Template parsing error: {e}"))
-        })?;
+        paths_map_to_py(py, djust_templates::extract_template_variables(&template))
+    })
+}
 
-        // Convert Rust HashMap to Python dict
-        let py_dict = PyDict::new(py);
-        for (key, paths) in vars_map {
-            let py_list = PyList::new(py, paths.iter().map(|s| s.as_str()))?;
-            py_dict.set_item(key, py_list)?;
-        }
-
-        Ok(py_dict.into())
+/// The item-key reads (`dictsort:'k'`, `regroup ... by k`) nothing else in the
+/// template reads, per root (#3919). See
+/// `djust_templates::parser::extract_item_key_only_reads`.
+#[pyfunction(name = "extract_item_key_only_reads")]
+fn extract_item_key_only_reads_py(py: Python, template: String) -> PyResult<Py<PyAny>> {
+    guard_panic("extract_item_key_only_reads_py", move || {
+        paths_map_to_py(py, djust_templates::extract_item_key_only_reads(&template))
     })
 }
 
@@ -7655,6 +7724,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // JIT auto-serialization
     m.add_function(wrap_pyfunction!(extract_template_variables_py, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_item_key_only_reads_py, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_queryset_py, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_context_py, m)?)?;
 

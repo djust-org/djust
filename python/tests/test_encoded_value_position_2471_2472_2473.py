@@ -859,6 +859,23 @@ class TestOneComparisonChokepoint:
             "(#2471/#2480)."
         )
 
+    #: file -> CALLS of `Encoded::python_order`, Python's own `<` between two live
+    #: objects (#3919 review). It is a second way into Python comparison beside the
+    #: `encoded_partial_cmp` chokepoint, used ONLY by `dictsort`: `compare_sort_values`
+    #: (to order a pair the engine has no comparison for) and `keys_are_orderable` (to
+    #: refuse a pair Python raises on). A new caller must be added here with a test.
+    EXPECTED_PYTHON_ORDER_CALLERS = {
+        "crates/djust_templates/src/filters.rs": 2,
+    }
+
+    def test_python_order_has_exactly_the_dictsort_callers(self) -> None:
+        found: dict[str, int] = {}
+        for path in sorted(REPO.glob("crates/*/src/**/*.rs")):
+            n = len(re.findall(r"\.python_order\(", path.read_text(encoding="utf-8")))
+            if n:
+                found[str(path.relative_to(REPO))] = n
+        assert found == self.EXPECTED_PYTHON_ORDER_CALLERS, found
+
     def test_the_definition_is_the_only_one(self) -> None:
         """The other half of the same pin: one definition, so a second copy of
         the rule cannot appear beside it."""

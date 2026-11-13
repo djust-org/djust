@@ -392,9 +392,9 @@ class TestTheBackendNoLongerSerializesATopLevelModel:
         seen: list[str] = []
         original = rendering.DjustTemplate._jit_serialize_queryset
 
-        def spy(self, queryset, variable_name):
+        def spy(self, queryset, variable_name, *args, **kwargs):
             seen.append(variable_name)
-            return original(self, queryset, variable_name)
+            return original(self, queryset, variable_name, *args, **kwargs)
 
         monkeypatch.setattr(rendering.DjustTemplate, "_jit_serialize_queryset", spy)
         got = _backend(

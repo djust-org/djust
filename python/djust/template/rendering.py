@@ -379,7 +379,36 @@ class DjustTemplate:
             str(error),
         )
 
-    def _jit_serialize_queryset(self, queryset: QuerySet, variable_name: str) -> list:
+    @cached_property
+    def _jit_source(self) -> str:
+        """The source the JIT extracts variable paths from: this template with its
+        ``{% extends %}`` chain resolved (#3920).
+
+        A read that lives in a PARENT template (``{% for u in users|dictsort:'name' %}``
+        in ``base.html``, the child filling a block inside the loop) is a read of the
+        rows this template renders. Extracting from the child alone left it out, so
+        the rows lacked the field. A LiveView extracts from the resolved template
+        already (``_jit_template_content``). A parent that cannot be resolved here
+        falls back to the child source: the render itself reports a missing parent.
+        """
+        source = self.template_string
+        if "extends" not in source:
+            return source
+        from djust._rust import resolve_template_inheritance
+
+        try:
+            return resolve_template_inheritance(
+                getattr(self.origin, "template_name", None) or "<string>",
+                [str(path) for path in self.backend.template_dirs],
+                source,
+            )
+        except Exception:  # noqa: BLE001 — extraction source only; the render reports it
+            logger.debug("[JIT] could not resolve inheritance for path extraction")
+            return source
+
+    def _jit_serialize_queryset(
+        self, queryset: QuerySet, variable_name: str, context: Optional[dict] = None
+    ) -> list:
         """
         Apply JIT auto-serialization to a Django QuerySet.
 
@@ -397,21 +426,46 @@ class DjustTemplate:
         """
         try:
             # Extract variable paths from template
-            variable_paths_map = extract_template_variables(self.template_string)
-            paths_for_var = variable_paths_map.get(variable_name, [])
+            from djust.mixins.jit import (
+                drop_callable_sort_keys,
+                resolve_variable_keys,
+                split_variable_keys,
+                whole_rows_without_callable_sort_keys,
+            )
+
+            source = self._jit_source
+            variable_paths_map = extract_template_variables(source)
+            paths_for_var, key_variables = split_variable_keys(
+                variable_paths_map.get(variable_name, [])
+            )
+            # ``dictsort:<variable>``: the ONE column the variable names in this
+            # render's context (#3910).
+            # Only beside field reads: rows read whole carry every column already.
+            sort_keys = (
+                tuple(resolve_variable_keys(key_variables, context, queryset.model))
+                if paths_for_var
+                else ()
+            )
+            if sort_keys:
+                paths_for_var = sorted(set(paths_for_var) | set(sort_keys))
+            paths_for_var = drop_callable_sort_keys(
+                queryset.model, source, variable_name, paths_for_var
+            )
 
             if not paths_for_var:
                 # No template access detected, use default serialization
                 logger.debug(
                     "[JIT] No paths found for '%s', using DjangoJSONEncoder", variable_name
                 )
-                return [normalize_django_value(obj) for obj in queryset]
+                return whole_rows_without_callable_sort_keys(
+                    queryset, source, variable_name, key_variables, context
+                )
 
             # Generate cache key (includes model hash for invalidation on model changes)
             model_class = queryset.model
-            template_hash = hashlib.sha256(self.template_string.encode()).hexdigest()[:8]
+            template_hash = hashlib.sha256(source.encode()).hexdigest()[:8]
             model_hash = _get_model_hash(model_class) if _get_model_hash else ""
-            cache_key = (template_hash, variable_name, model_hash)
+            cache_key = (template_hash, variable_name, model_hash, sort_keys)
 
             # Check cache
             if cache_key in _jit_serializer_cache:
@@ -442,7 +496,8 @@ class DjustTemplate:
 
             # Serialize with Rust (5-10x faster)
             # The same row cap the LiveView path passes (#3788, #1646).
-            result = serialize_queryset(list(queryset), paths_for_var, all_row_cap())
+            items = list(queryset)
+            result = serialize_queryset(items, paths_for_var, all_row_cap())
 
             logger.debug(
                 "[JIT] Serialized %s objects for '%s' using Rust", len(result), variable_name
@@ -571,7 +626,7 @@ class DjustTemplate:
         for key, value in list(context_dict.items()):
             if isinstance(value, QuerySet):
                 # Auto-serialize QuerySet with query optimization
-                serialized = self._jit_serialize_queryset(value, key)
+                serialized = self._jit_serialize_queryset(value, key, raw_context)
                 context_dict[key] = serialized
                 jit_serialized_keys.add(key)
 
