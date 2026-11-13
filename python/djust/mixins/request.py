@@ -527,6 +527,35 @@ def _run_http_deferred(view: Any) -> None:
 PARAMETER_CONTRACTS_HEADER = "X-Djust-Parameter-Contracts"
 
 
+def _compress_fallback_answer(request: Any, response: Any) -> Any:
+    """Gzip a page-POST answer for a client that accepts it (#4108).
+
+    A whole-page answer is the root's HTML as JSON: tens of kilobytes for a
+    page with a table, and it compresses about sevenfold. Whether a deployment
+    compresses ``application/json`` is a matter of its middleware and proxy
+    configuration (nginx's default ``gzip_types`` is ``text/html`` alone), so
+    the answer is compressed here, by Django's own ``GZipMiddleware`` applied
+    to this one response. That keeps its rules: only for a request that
+    accepts gzip, only a body of 200 bytes or more (a patch answer is usually
+    smaller and goes out as it is), ``Vary: Accept-Encoding``, and the random
+    padding that blunts BREACH. A response that already has a
+    ``Content-Encoding`` is left alone, and one this function compressed is
+    left alone by a ``GZipMiddleware`` the project installed.
+    ``LIVEVIEW_CONFIG["http_fallback_compress"] = False`` turns it off.
+    """
+    try:
+        from ..config import config
+
+        if config.get("http_fallback_compress", True) is False:
+            return response
+        from django.middleware.gzip import GZipMiddleware
+
+        return GZipMiddleware(lambda _request: response).process_response(request, response)
+    except Exception:  # noqa: BLE001 - compression is an optimisation, never a failure
+        logger.debug("HTTP fallback answer was not compressed", exc_info=False)
+        return response
+
+
 def _initial_parameter_contracts(view: Any, view_path: str) -> Optional[str]:
     """Escaped JSON for the initial page's contract element, or None if legacy.
 
@@ -1532,6 +1561,10 @@ class RequestMixin:
         return JsonResponse(response)
 
     def post(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
+        """Handle POST requests: the event's turn, then the answer's compression (#4108)."""
+        return _compress_fallback_answer(request, self._post_turn(request, *args, **kwargs))
+
+    def _post_turn(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle POST requests - event handling, as one turn (ADR-044).
 
         An ``event`` turn (``http``/``client``), or a ``mount``/``lazy`` turn

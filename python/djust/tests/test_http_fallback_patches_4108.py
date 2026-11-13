@@ -703,3 +703,52 @@ def test_the_pre_render_goes_through_the_sync_turn_wrapper(monkeypatch):
     assert answer_kind(_send(client, "/p/counting/", "increment", digest)) == "patches"
     renders_through_wrapper = [s for s in steps if s == ("render", "get_context_data")]
     assert len(renders_through_wrapper) == len(Counting.calls) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Compression of the answer
+# --------------------------------------------------------------------------- #
+
+
+def _post_accepting_gzip(client: Client, url: str, event: str, digest: str | None):
+    return post_event(client, url, event, {}, digest, HTTP_ACCEPT_ENCODING="gzip, br")
+
+
+def test_a_whole_page_answer_is_gzipped_for_a_client_that_accepts_it(renders):
+    import gzip
+
+    client, _digest = _open("/p/wide/")
+    response = _post_accepting_gzip(client, "/p/wide/", "shift", None)
+    assert response["Content-Encoding"] == "gzip"
+    assert "Accept-Encoding" in response["Vary"]
+    answer = json.loads(gzip.decompress(response.content))
+    assert ">1149</li>" in answer["html"]
+    plain = post_event(_open("/p/wide/")[0], "/p/wide/", "shift", {}, None)
+    assert not plain.has_header("Content-Encoding")
+    # The point of it: the page with 150 rows goes out several times smaller.
+    assert len(response.content) * 3 < len(plain.content)
+
+
+def test_a_small_patch_answer_is_sent_as_it_is(renders):
+    client, digest = _open("/m/counter/")
+    response = _post_accepting_gzip(client, "/m/counter/", "increment", digest)
+    assert not response.has_header("Content-Encoding")
+    assert answer_kind(json.loads(response.content)) == "patches"
+
+
+def test_compression_can_be_left_to_the_deployment(renders):
+    client, _digest = _open("/p/wide/")
+    with override_settings(LIVEVIEW_CONFIG={"http_fallback_compress": False}):
+        response = _post_accepting_gzip(client, "/p/wide/", "shift", None)
+    assert not response.has_header("Content-Encoding")
+    assert ">1149</li>" in json.loads(response.content)["html"]
+
+
+def test_a_projects_own_gzip_middleware_does_not_compress_it_twice(renders, settings):
+    import gzip
+
+    settings.MIDDLEWARE = ["django.middleware.gzip.GZipMiddleware", *settings.MIDDLEWARE]
+    client, _digest = _open("/p/wide/")
+    response = _post_accepting_gzip(client, "/p/wide/", "shift", None)
+    assert response["Content-Encoding"] == "gzip"
+    assert ">1149</li>" in json.loads(gzip.decompress(response.content))["html"]

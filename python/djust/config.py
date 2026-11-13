@@ -333,6 +333,11 @@ class LiveViewConfig:
         # answer for every view; a view opts out alone with
         # ``http_fallback_patches = False``.
         "http_fallback_patches": True,
+        # #4108: gzip a page-POST answer of 200 bytes or more for a client that
+        # accepts it, with Django's ``GZipMiddleware`` rules, whatever the
+        # project's middleware or proxy does for ``application/json``. ``False``
+        # leaves compression to the deployment.
+        "http_fallback_compress": True,
         # `virtual_keyed_ops`, `django_value_repr` and `template_auto_call`
         # were kill switches that defaulted ON; 2.0 hard-wired all three and
         # removed the keys (see `djust._removed_settings`).
