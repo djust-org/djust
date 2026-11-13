@@ -169,9 +169,11 @@ class _ClassPlan:
     rebuilds the plan instead of serving a stale one.
     """
 
-    __slots__ = ("entries", "mros", "names", "snapshot")
+    __slots__ = ("entries", "mros", "names", "snapshot", "types")
 
     def __init__(self, owner_type: type, declaration_type: type, bound_component: bool) -> None:
+        # The class OBJECTS this plan was built for; see ``_class_plan``.
+        self.types = (owner_type, declaration_type)
         # Snapshot BEFORE resolving: a class changed while the plan is being
         # built then fails the very next ``fresh()`` rather than never.
         self.mros = ((owner_type, owner_type.__mro__), (declaration_type, declaration_type.__mro__))
@@ -212,7 +214,9 @@ class _ClassPlan:
 
     def fresh(self) -> bool:
         for cls, mro in self.mros:
-            if cls.__mro__ != mro:
+            # By identity: ``!=`` on the tuples would ask a metaclass's ``__eq__``.
+            now = cls.__mro__
+            if len(now) != len(mro) or not all(map(operator.is_, now, mro)):
                 return False
         for cls, keys, values in self.snapshot:
             # Compared against a copy: iterating the live namespace races a
@@ -233,14 +237,26 @@ class _ClassPlan:
 # go. A bounded plain dict does: hot view replacement strands at most this many
 # old plans, and an app with more (owner, declaration) pairs than this merely
 # rebuilds plans, which is the pre-cache cost, never a wrong answer.
+#
+# Keyed by ``id()`` of the two classes, and every hit checks the plan was built
+# for those very class objects. Keyed by the classes themselves, the lookup
+# used their ``__eq__`` / ``__hash__``: under a metaclass that defines them (by
+# name, say) two distinct classes shared one plan, and one class's handlers
+# were listed for the other. The plan holds both classes, so their ids cannot
+# be reused while it lives.
 _PLAN_LIMIT = 512
-_PLANS: dict[tuple[type, type, bool], _ClassPlan] = {}
+_PLANS: dict[tuple[int, int, bool], _ClassPlan] = {}
 
 
 def _class_plan(owner_type: type, declaration_type: type, bound_component: bool) -> _ClassPlan:
-    key = (owner_type, declaration_type, bound_component)
+    key = (id(owner_type), id(declaration_type), bound_component)
     plan = _PLANS.get(key)
-    if plan is None or not plan.fresh():
+    if (
+        plan is None
+        or plan.types[0] is not owner_type
+        or plan.types[1] is not declaration_type
+        or not plan.fresh()
+    ):
         plan = _ClassPlan(owner_type, declaration_type, bound_component)
         if len(_PLANS) >= _PLAN_LIMIT:
             _PLANS.clear()

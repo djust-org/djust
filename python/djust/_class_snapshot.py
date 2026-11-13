@@ -18,6 +18,7 @@ instead of ``dir()``. Both cost one dict copy per class; neither takes a lock.
 
 from __future__ import annotations
 
+import operator
 from typing import Any, Dict, List
 
 _OBJECT_DIR = object.__dir__
@@ -69,3 +70,88 @@ def attribute_names(obj: Any) -> List[str]:
         names.update(own.copy())
     _merge_classes(names, cls)
     return sorted(names)
+
+
+# ``Py_TPFLAGS_IMMUTABLETYPE``: a class whose dictionary can never change
+# (``object``, ``type``, the builtins), so it needs no re-check.
+_IMMUTABLE_TYPE = 1 << 8
+
+
+class ClassSnapshot:
+    """The class dictionaries a per-class fact was derived from, and whether
+    they still say the same thing (#3997).
+
+    The same rule as ``_parameter_metadata._ClassPlan.fresh``: the MRO, then
+    every class dictionary in it, keys in order and values by identity. A
+    hot-replaced view (a new class object), a reassigned ``__bases__``, and an
+    added, deleted or swapped class attribute on the class or on any base
+    therefore fail :meth:`fresh`, and the fact is derived again. The metaclass
+    chain is included because ``inspect.getattr_static`` on a class reads it.
+
+    Each value is also held with its TYPE, so reassigning ``__class__`` on an
+    object a class dictionary holds (a ``state()`` descriptor turned into
+    something else, or the reverse) fails the check though the dictionary still
+    holds the same object. And the class's ``__name__`` and ``__qualname__``
+    are compared: they live in type slots, not in the class dictionary.
+
+    :meth:`is_for` says whether the snapshot was taken of a given class OBJECT.
+    A table of snapshots must ask it on every hit and must be keyed by
+    ``id()``: a metaclass may define ``__eq__`` / ``__hash__`` (by name, say),
+    and a table keyed by the class itself would then hand one class another
+    class's facts.
+
+    What it cannot see is a change INSIDE an object a class attribute holds
+    (appending to a class-level list, editing a function's ``__dict__``): the
+    attribute still holds the same object. A fact that depends on such
+    contents must check them itself.
+
+    Take the snapshot BEFORE deriving the fact, so a class changed while the
+    fact is being derived fails the next :meth:`fresh` instead of never.
+    """
+
+    __slots__ = ("cls", "meta", "mro", "meta_mro", "names", "dicts")
+
+    def __init__(self, cls: type) -> None:
+        self.cls = cls
+        self.meta = type(cls)
+        self.mro = cls.__mro__
+        self.meta_mro = self.meta.__mro__
+        self.names = (cls.__name__, cls.__qualname__)
+        classes = dict.fromkeys(self.mro + self.meta_mro)
+        dicts = []
+        for klass in classes:
+            if klass.__flags__ & _IMMUTABLE_TYPE:
+                continue
+            # One atomic copy, so keys and values come from the same instant (#3151).
+            current = namespace(klass)
+            values = tuple(current.values())
+            dicts.append((klass, tuple(current), values, tuple(map(type, values))))
+        self.dicts = tuple(dicts)
+
+    def is_for(self, cls: Any) -> bool:
+        """Whether this is the snapshot of *cls* itself, by identity."""
+        return self.cls is cls
+
+    @staticmethod
+    def _same(left: tuple, right: tuple) -> bool:
+        """Element-wise identity; never calls a class's ``__eq__``."""
+        return len(left) == len(right) and all(map(operator.is_, left, right))
+
+    def fresh(self) -> bool:
+        cls = self.cls
+        if type(cls) is not self.meta:
+            return False
+        if not self._same(cls.__mro__, self.mro) or not self._same(
+            self.meta.__mro__, self.meta_mro
+        ):
+            return False
+        if (cls.__name__, cls.__qualname__) != self.names:
+            return False
+        for klass, keys, values, kinds in self.dicts:
+            current = namespace(klass)
+            if len(current) != len(values) or tuple(current) != keys:
+                return False
+            for now, then, kind in zip(current.values(), values, kinds):
+                if now is not then or type(now) is not kind:
+                    return False
+        return True

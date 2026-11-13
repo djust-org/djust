@@ -22,7 +22,8 @@ from ..template_filters import _ensure_custom_filters_bridged
 from ..utils import get_template_dirs
 from ..render_env import apply_render_env
 from ..request_scoped import is_request_scoped_data
-from .context import _keeps_out_of_state
+from .. import _per_turn
+from .context import PROCESSOR_RECORD_ATTR, PROCESSOR_REPLAY_ATTR, _keeps_out_of_state
 from .context import _request_scoped_keys as request_scoped_keys
 
 logger = logging.getLogger(__name__)
@@ -231,6 +232,124 @@ def _collect_sub_ids(
     elif isinstance(value, (list, tuple)):
         for v in value:
             _collect_sub_ids(v, collected, visited, depth + 1)
+
+
+#: ``_request_scoped_fingerprint``'s answer for a value it does not fingerprint.
+_NO_FINGERPRINT: Any = object()
+
+#: Exact scalar types that are JSON data and their own fingerprint leaf.
+_EXACT_PLAIN_SCALARS = frozenset((str, int, float, bool, type(None)))
+
+
+def _request_scoped_fingerprint(key: str, value: Any) -> Tuple[bool, Any, Any]:
+    """How a request-scoped context value takes part in change detection (#3996).
+
+    Returns ``(keeps_out, fingerprint, converted)``:
+
+    * ``keeps_out`` is :func:`_keeps_out_of_state`: the value rides the sidecar
+      and is never in the Rust state (the request, a lazy ``user``, ``perms``,
+      the messages storage, a lazy HTML chunk, a ``RequestScopedList``). Such a
+      value is NOT fingerprinted: nothing about it is kept between turns, and
+      it is never reported as a changed key (#1786).
+    * otherwise the value is plain data that ``update_state`` stores. When it is
+      made only of exact builtin containers and exact leaf types (what
+      ``state_pass`` converts), ``fingerprint`` is its structural fingerprint,
+      which holds values and no reference to the object, and ``converted`` is
+      the ``(safe paths, rendered value)`` pair of the same walk. A value of any
+      other type that still counts as serialisable (a ``SimpleLazyObject`` over
+      a string, a ``str`` subclass, an ``IntEnum``) gets ``_NO_FINGERPRINT``:
+      its fingerprint would keep the object itself, and a lazy object can hold
+      the request. It is sent on every turn and never reported, as before.
+
+    ONE statement of the rule for the Rust sync and the scoped component
+    render's check, so the two cannot disagree (#1646).
+    """
+    kind = type(value)
+    if kind in _EXACT_PLAIN_SCALARS:
+        # The common case (a settings string, a flag), answered as the two
+        # calls below answer it: it is serialisable, and this is its fingerprint.
+        return False, ("v", kind, value), None
+    if _keeps_out_of_state(value):
+        return True, _NO_FINGERPRINT, None
+    fingerprint, truncated, converted = fingerprint_and_convert(value, key)
+    if converted is None:
+        return False, _NO_FINGERPRINT, None
+    if truncated:
+        # An incomplete fingerprint cannot prove equality: equal to nothing.
+        fingerprint = object()
+    return False, fingerprint, converted
+
+
+def _trusted_request_scoped_fingerprints(view: Any, prev_refs: Any) -> Optional[Dict[str, Any]]:
+    """The fingerprints the last sync kept for request-scoped data, or None.
+
+    They are kept as ``(refs, fingerprints)`` where ``refs`` is the very
+    ``_prev_context_refs`` dict the same sync stored, and are believed only
+    while *prev_refs* is still that object. Every site that discards the
+    previous render (``_static_render`` after releasing the baseline, a
+    ``_force_full_html`` sync, anything that assigns a new ``_prev_context_refs``)
+    therefore discards these too, without having to know they exist.
+    """
+    stored = getattr(view, "_prev_request_scoped", None)
+    if not prev_refs or type(stored) is not tuple or stored[0] is not prev_refs:
+        return None
+    fingerprints: Dict[str, Any] = stored[1]
+    return fingerprints
+
+
+def request_scoped_data_changed(view: Any, context: Dict[str, Any]) -> Optional[str]:
+    """Name a context processor's plain-data value that differs from the last
+    sync, or None (#3996).
+
+    For the scoped component render (ADR-032), which sends a patch without a
+    Rust sync: it runs the processors over *context* (the view's own context)
+    and compares what they add with what the last sync kept. Values that ride
+    the sidecar are not compared, as in the sync. With no trusted previous sync
+    the answer is a reason, so the caller renders in full.
+    """
+    if not _per_turn.on("request_scoped_changes"):
+        return None
+    request = getattr(view, "request", None)
+    if request is None:
+        return None
+    previous = _trusted_request_scoped_fingerprints(view, getattr(view, "_prev_context_refs", None))
+    if previous is None:
+        return "<no previous request-scoped values>"
+    # Record what each processor returns. When the scoped render is refused,
+    # the caller renders the page in this same event, and that render's sync
+    # takes these outputs instead of calling every processor a second time.
+    # They are dropped when the scoped patch is sent, and by the caller once
+    # the page render is over (``runtime._drop_processor_replay``), and
+    # ``_apply_context_processors`` takes them at most once and only for this
+    # request object, so they cannot reach a later turn.
+    view.__dict__.pop(PROCESSOR_REPLAY_ATTR, None)
+    record: Dict[Any, Any] = {}
+    view.__dict__[PROCESSOR_RECORD_ATTR] = record
+    try:
+        full = view._apply_context_processors(dict(context), request)
+    finally:
+        view.__dict__.pop(PROCESSOR_RECORD_ATTR, None)
+    reason: Optional[str] = None
+    seen: Set[str] = set()
+    for key in request_scoped_keys(view):
+        if key not in full:
+            continue
+        keeps_out, fingerprint, _converted = _request_scoped_fingerprint(key, full[key])
+        if keeps_out or fingerprint is _NO_FINGERPRINT:
+            continue
+        seen.add(key)
+        if previous.get(key, _MISSING) != fingerprint:
+            reason = str(key)
+            break
+    else:
+        for key in previous:
+            if key not in seen:
+                reason = str(key)
+                break
+    # Whatever the answer: a scoped render can still be refused after this
+    # (no single node, a failed patch), and the page render then follows.
+    view.__dict__[PROCESSOR_REPLAY_ATTR] = (request, record)
+    return reason
 
 
 def _unassigned_temporary_keys(view: Any) -> Set[str]:
@@ -815,6 +934,47 @@ class RustBridgeMixin:
             if getattr(self, "_force_full_html", False):
                 prev_refs = {}
 
+            # Request-scoped PLAIN DATA takes part in change detection (#3996).
+            #
+            # Until now every request-scoped key was left out of the previous
+            # render's bookkeeping (#1786), so each one looked new on every
+            # sync: its serialisable values were converted and handed to
+            # ``update_state`` again on every turn, and because the same keys
+            # were also left out of the changed keys, a value that DID change
+            # was stored but the node reading it was not rendered again.
+            #
+            # Now a value that ``update_state`` stores and that is made of
+            # exact plain types is fingerprinted like any other key: unchanged,
+            # it is not sent; changed (or new), it is sent AND reported as a
+            # changed key. What #1786 keeps out stays out: a value that rides
+            # the sidecar (the request, ``user``, ``perms``, messages, a lazy
+            # chunk) is never fingerprinted, kept or reported, and the
+            # fingerprints live in their own attribute, never in
+            # ``_prev_context_refs``. See ``_request_scoped_fingerprint``.
+            #
+            # ``rs_keeps_out`` holds the keeps-out verdict of every
+            # request-scoped key in this context, so it is asked once per sync.
+            rs_on = _per_turn.on("request_scoped_changes")
+            rs_keeps_out: Dict[str, bool] = {}
+            rs_fps: Dict[str, Any] = {}
+            rs_unchanged: Set[str] = set()
+            if rs_on:
+                rs_prev = _trusted_request_scoped_fingerprints(self, prev_refs)
+                for key in _request_scoped_keys:
+                    if key not in full_context:
+                        continue
+                    keeps_out, rs_fp, rs_converted = _request_scoped_fingerprint(
+                        key, full_context[key]
+                    )
+                    rs_keeps_out[key] = keeps_out
+                    if rs_fp is _NO_FINGERPRINT:
+                        continue
+                    rs_fps[key] = rs_fp
+                    if rs_prev is not None and rs_prev.get(key, _MISSING) == rs_fp:
+                        rs_unchanged.add(key)
+                    elif rs_converted is not None:
+                        converted_by_fp[key] = rs_converted
+
             # Determine which context to send to Rust
             if prev_refs:
                 if changed_keys:
@@ -823,10 +983,40 @@ class RustBridgeMixin:
                     # comparison which produces false positives due to Python
                     # int cache misses on the double-sync path.
                     changed_sub_ids: Set[int] = set()
+                    # A changed attribute that is itself a context value, and is
+                    # plain data, needs no walk for the ids under it (#3999).
+                    # The ids find a context value that IS an object inside the
+                    # attribute. Inside plain data such an object is either a
+                    # dict / list / tuple / set, which the loop below compares by
+                    # structural fingerprint anyway, or an immutable leaf, which
+                    # cannot have changed while it is the same object. "Plain"
+                    # is decided by the walk that converts the value for Rust
+                    # (``fingerprint_and_convert`` converts only exact builtin
+                    # containers and exact immutable leaf types), taken now, on
+                    # this very object, and reused below as the key's
+                    # fingerprint and rendered value: the key is being sent
+                    # (its own id is still added), so that walk ran regardless.
+                    plain_on = _per_turn.on("plain_sub_ids")
+                    context_key_of: Optional[Dict[int, str]] = None
                     for key in changed_keys:
                         val = getattr(self, key, None) or full_context.get(key)
-                        if val is not None:
-                            _collect_sub_ids(val, changed_sub_ids)
+                        if val is None:
+                            continue
+                        if plain_on and type(val) in (dict, list, tuple):
+                            if context_key_of is None:
+                                context_key_of = {
+                                    id(v): k
+                                    for k, v in full_context.items()
+                                    if type(v) in (dict, list, tuple)
+                                    and k not in _request_scoped_keys
+                                }
+                            ctx_key = context_key_of.get(id(val))
+                            if ctx_key is not None and full_context[ctx_key] is val:
+                                _fp_of(ctx_key, val, convert=True)
+                                if ctx_key in converted_by_fp:
+                                    changed_sub_ids.add(id(val))
+                                    continue
+                        _collect_sub_ids(val, changed_sub_ids)
 
                     context = {}
                     for key in changed_keys:
@@ -858,7 +1048,10 @@ class RustBridgeMixin:
                     for key, value in full_context.items():
                         if key in context:
                             continue
-                        if key not in prev_refs:
+                        if key in rs_keeps_out:
+                            if key not in rs_unchanged:
+                                context[key] = value  # request-scoped (#3996)
+                        elif key not in prev_refs:
                             context[key] = value  # new key
                         elif getattr(value, "_dirty", False):
                             context[key] = value  # TypedState dirty flag
@@ -882,7 +1075,10 @@ class RustBridgeMixin:
                     # and for in-place mutations without snapshot detection.
                     context = {}
                     for key, value in full_context.items():
-                        if key not in prev_refs:
+                        if key in rs_keeps_out:
+                            if key not in rs_unchanged:
+                                context[key] = value  # request-scoped (#3996)
+                        elif key not in prev_refs:
                             context[key] = value  # new key
                         elif getattr(value, "_dirty", False):
                             context[key] = value  # TypedState dirty flag
@@ -915,6 +1111,14 @@ class RustBridgeMixin:
             self._prev_context_refs = {
                 k: id(v) for k, v in full_context.items() if k not in _request_scoped_keys
             }
+            # Fingerprints of the request-scoped plain data just synced (#3996),
+            # tied to the refs dict above: see
+            # ``_trusted_request_scoped_fingerprints``. Fingerprints only, and
+            # only of values the Rust state holds a copy of.
+            if rs_on:
+                self._prev_request_scoped = (self._prev_context_refs, rs_fps)
+            else:
+                self.__dict__.pop("_prev_request_scoped", None)
             self._prev_context_immutables = {
                 k: v
                 for k, v in full_context.items()
@@ -966,7 +1170,11 @@ class RustBridgeMixin:
                 # rendering. Serializable processor outputs (e.g. theming's
                 # ``{{ theme_head }}`` SafeString) are NOT skipped — they fall
                 # through to the normal handling below.
-                if key in _request_scoped_keys and _keeps_out_of_state(value):
+                if (
+                    rs_keeps_out[key]
+                    if key in rs_keeps_out
+                    else key in _request_scoped_keys and _keeps_out_of_state(value)
+                ):
                     # A lazily rendered trusted-HTML value (theming's
                     # ``theme_head`` & co., #3028) is SafeData that is not a
                     # ``str``. It must NOT keep a stale state entry under the
@@ -1181,7 +1389,12 @@ class RustBridgeMixin:
             # otherwise be reported as changed keys — triggering spurious
             # partial re-renders. They never change the user-visible output
             # (their values are re-applied fresh each cycle), so skip them.
-            _skip_keys = _FRAMEWORK_KEYS | _temp_assigns | _request_scoped_keys
+            #
+            # #3996: that holds for the values that ride the sidecar. Plain data
+            # a processor supplies is fingerprinted now (``rs_fps``), so it is
+            # in ``context`` only when it changed, and then it IS a changed
+            # key: a template reading it renders the new value.
+            _skip_keys = _FRAMEWORK_KEYS | _temp_assigns | (_request_scoped_keys - rs_fps.keys())
             # Collect auto-generated _count keys (context.py adds {list_key}_count).
             # Only exclude keys where the base name is a list in full_context.
             _auto_count_keys = set()

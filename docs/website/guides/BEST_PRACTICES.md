@@ -765,7 +765,12 @@ Two more things the warning does and does not tell you:
   list that no template needs stored, return it as
   `djust.request_scoped.RequestScopedList(items)`: it stays a real `list`
   (`json_script`, `json.dumps` and `isinstance` work) and rides to the renderer
-  without being stored.
+  without being stored. A stored value is sent to the renderer again only on a
+  turn where it differs from the last render, and then the template nodes that
+  read it are rendered again. A value that is not plain data (the request,
+  `user`, `perms`, the messages storage, a lazy object) is never compared: a
+  node that reads one is rendered again only when something else it reads
+  changes.
 - **It also fires from the post-render store.** A view that is small at mount and
   grows past the threshold during its life is reported on the render that crosses
   it, once per view until it drops back under, not only on the next reload. This
