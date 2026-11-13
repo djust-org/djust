@@ -242,7 +242,7 @@ class TestTheHttpFallback:
         # POST's fresh instance numbers its whole-page answer v1 (as an explicit
         # view does); the client re-bases its cursor on a whole-page fallback
         # answer instead of checking it against the previous one
-        # (tests/js/http-fallback-whole-page-version-4086.test.js).
+        # (tests/js/http-fallback-whole-page-version.test.js).
         assert [frame["version"] for frame in (first, second, third)] == [1, 1, 1]
         assert ">open<" in first["html"] and ">closed<" in second["html"]
         assert backend._cache == {}

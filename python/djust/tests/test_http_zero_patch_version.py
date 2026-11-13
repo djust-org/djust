@@ -6,7 +6,7 @@ nothing had to answer an empty patch list carrying the next version, or the
 client's version check failed and it reloaded the page. 2.0 removed that
 cache: every fallback request renders on a fresh renderer and answers with the
 whole page as v1, which the client re-bases on instead of checking
-(``tests/js/http-fallback-whole-page-version-4086.test.js``). An explicit view
+(``tests/js/http-fallback-whole-page-version.test.js``). An explicit view
 always answered this way. Pinned here: every answer, changing or not, is that
 whole page.
 """
