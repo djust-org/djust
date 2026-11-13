@@ -201,10 +201,15 @@ def _tests(path: str, root: Path = ROOT):
     yield from walk(tree.body, f"{path}::", module_marks)
 
 
+#: The committed durations, read once at import: each CI xdist worker rewrites the live file with
+#: only its own tests (tests/test_ci_python_test_shards.py), so a read inside a test can see a subset.
+_DURATIONS_TEXT = (ROOT / ".test_durations").read_text()
+
+
 def _recorded() -> dict[str, float]:
     """Recorded seconds of the slowest case of each test function (what ``slow_tier`` judges)."""
     out: dict[str, float] = {}
-    for nodeid, seconds in json.loads((ROOT / ".test_durations").read_text()).items():
+    for nodeid, seconds in json.loads(_DURATIONS_TEXT).items():
         base = nodeid.split("[", 1)[0]
         out[base] = max(out.get(base, 0.0), seconds)
     return out

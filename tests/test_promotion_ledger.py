@@ -27,6 +27,10 @@ from tests import early_tier
 from tests.git_env import GIT_EXECUTION_VARS
 
 ROOT = Path(__file__).resolve().parents[1]
+#: The committed durations, read once at import: under CI's ``--store-durations
+#: --clean-durations`` each xdist worker rewrites the live file with only its own tests, so a
+#: read from inside a test can see a subset (tests/test_ci_python_test_shards.py).
+COMMITTED_DURATIONS = early_tier.load_durations(ROOT / early_tier.DURATIONS_FILE)
 WORKFLOW = ROOT / ".github/workflows/main-health.yml"
 
 #: Environment an outer run may carry that would leak into an inner one.
@@ -676,7 +680,7 @@ def test_every_ledger_entry_names_a_test_that_exists_and_the_ledger_fits_its_bud
         "tests/promotion-ledger.json names tests that do not exist. Update the entry to the "
         "new name, or remove it:\n  " + "\n  ".join(problems)
     )
-    durations = early_tier.load_durations(ROOT / early_tier.DURATIONS_FILE)
+    durations = COMMITTED_DURATIONS
     assert pl.enforce_budget(copy.deepcopy(ledger), durations) == [], "the ledger is over budget"
     for e in ledger["entries"]:
         assert set(e) == {"test", "promoted", "last_failed", "reason", "green_streak", "pinned"}, e

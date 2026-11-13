@@ -28,6 +28,9 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "test.yml"
 DURATIONS = ROOT / ".test_durations"
+#: Read once at import: each CI xdist worker rewrites the live file with only its own tests
+#: (tests/test_ci_python_test_shards.py), so a read inside a test can see a subset.
+DURATIONS_TEXT = DURATIONS.read_text(encoding="utf-8")
 HEADROOM = 3  # "comfortably above the slowest legitimate test"
 
 
@@ -48,7 +51,7 @@ def test_the_shard_step_arms_the_dump():
 
 
 def test_the_threshold_is_more_than_3x_the_slowest_recorded_test():
-    recorded = json.loads(DURATIONS.read_text(encoding="utf-8"))
+    recorded = json.loads(DURATIONS_TEXT)
     slowest_id, slowest = max(recorded.items(), key=lambda kv: kv[1])
     assert _timeout() > HEADROOM * slowest, (
         f"faulthandler_timeout={_timeout()}s is within {HEADROOM}x of the slowest recorded test "

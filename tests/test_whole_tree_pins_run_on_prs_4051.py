@@ -54,8 +54,18 @@ ALLOWED: dict[str, str] = {
 }
 
 
+#: The committed durations, read ONCE at import (collection), never from inside a test. CI runs
+#: ``--store-durations --clean-durations`` under xdist, and pytest-split rewrites
+#: ``.test_durations`` in every worker at its sessionfinish with only that worker's tests, while
+#: other workers are still running (see tests/test_ci_python_test_shards.py). A read inside a test
+#: can then see a subset: PR #4084's shard 3 reported the ALLOWED entry stale that way.
+_COMMITTED = (DURATIONS, DURATIONS.read_text())
+
+
 def _durations() -> dict[str, float]:
-    return json.loads(DURATIONS.read_text())
+    if DURATIONS == _COMMITTED[0]:
+        return json.loads(_COMMITTED[1])
+    return json.loads(DURATIONS.read_text())  # a test pointed DURATIONS at its own file
 
 
 def _slow_pins() -> list[str]:
