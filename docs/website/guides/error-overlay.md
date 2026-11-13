@@ -25,8 +25,9 @@ Three pieces cooperate:
 
 ## Deferred state saves
 
-When storage exceeds the interactive save deadline, the server keeps saving and
-schedules a catch-up render. The client shows the error message as a text-only
+By default a turn waits for its state save, so this status does not appear.
+When `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is set below its 10-second default
+and storage exceeds it, the server keeps saving and schedules a catch-up render. The client shows the error message as a text-only
 status with `role="status"`, without a modal or traceback. A successful render
 for the same view and target clears that status; a persistent failure restores
 the development error overlay. Navigation also clears outgoing saving status.

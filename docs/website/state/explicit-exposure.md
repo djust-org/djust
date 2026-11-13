@@ -112,9 +112,14 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   seconds, from 1 to 86400. The default is 3600. System check `djust.C020`
   validates it.
 - **`DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`.** How long a turn waits for its
-  state save, in seconds: greater than 0 and at most 10. The default is 0.15.
-  The time counts from when the save starts running, not from when it is
-  queued behind other sessions' work. System check `djust.C024` validates it.
+  state save, in seconds: greater than 0 and at most 10. The default is 10:
+  a turn waits for its own save, and a save still running after 10 seconds
+  is the reload error. Set a smaller value to answer a slow save early with
+  the `transient` error described under
+  [What changes at runtime](#what-changes-at-runtime); the event then gets no
+  frame of its own, and a full-HTML update follows. The time counts from when
+  the save starts running, not from when it is queued behind other sessions'
+  work. System check `djust.C024` validates it.
 - **`DJUST_STATE_SNAPSHOT_MAX_AGE` / `DJUST_STATE_SNAPSHOT_ENABLED`.** The
   signed back-navigation snapshot's lifetime, and its master switch. The
   lifetime is a whole number of seconds from 1 to 86400, 3600 by default; a
@@ -146,15 +151,20 @@ token = state("", persist="server", render=False)  # handlers only, never templa
 - **A failed state save is reported, not hidden.** The client gets a
   `state_error` instead of an update, and a failed root save revokes its
   back-navigation snapshot. So the browser never shows a state that storage
-  does not have. Saves of one page are ordered: a save that is still running
-  delays the next one, so a late write never replaces a newer one.
-  A save that only ran out of time is marked `transient` and does not ask the
-  user to reload: the change is kept on the server, and once storage answers
-  one catch-up update saves it and sends full HTML. If the catch-up cannot do
-  that, storage keeps missing the deadline (three deferrals in a row), or a
-  save has been running for 10 seconds, the error is the reload error instead.
-  At mount there is no page to update yet, so a slow save there is also the
-  reload error.
+  does not have.
+- **Events on one page are saved one at a time, in order.** A turn waits for
+  its save before it answers, and the page's next event starts after that.
+  So events sent in quick succession (fast clicks, typing) all take effect,
+  each gets its own update, and storage ends with the last one, however slow
+  a single write is. A late write never replaces a newer one. A save still
+  running after 10 seconds is the reload error.
+  With `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` set below 10, a save that outruns
+  it is marked `transient` instead and does not ask the user to reload: the
+  change is kept on the server, and once storage answers one catch-up update
+  saves it and sends full HTML. If the catch-up cannot do that, or storage
+  keeps missing the deadline (three deferrals in a row), the error is the
+  reload error. At mount there is no page to update yet, so a save that
+  outruns the deadline there is also the reload error.
 - **A save still running after a logout is dropped.** Over SSE a save can
   outlive the request that started it. Before it writes, it looks the session
   up once, and it writes nothing if the session was logged out, flushed or

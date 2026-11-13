@@ -533,8 +533,8 @@ def _check_explicit_state_save_timeout(errors: list[CheckMessage]) -> None:
 
     It bounds how long an ADR-038 explicit turn waits for its state save,
     counted from when the save starts running (#3200). At runtime an invalid
-    value falls back to the 0.15 s default, so report it at startup instead
-    of letting the configured value be silently ignored.
+    value falls back to the 10 s default (#4098), so report it at startup
+    instead of letting the configured value be silently ignored.
     """
     from django.conf import settings
 
@@ -552,7 +552,7 @@ def _check_explicit_state_save_timeout(errors: list[CheckMessage]) -> None:
             "and at most 10.",
             hint=(
                 "It bounds how long an explicit view's turn waits for its state save. "
-                "With an invalid value the runtime uses the default of 0.15 seconds."
+                "With an invalid value the runtime uses the default of 10 seconds."
             ),
             id="djust.C024",
             fix_hint="Set `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT = 0.5` (or remove it) in your settings.",

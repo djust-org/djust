@@ -259,7 +259,7 @@ console.log("debug info"); // noqa: Q003
 ### C024 — Invalid `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`
 - **Severity**: Error
 - **Method**: Settings inspection
-- **What it detects**: `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is set but is not an `int` or `float` greater than 0 and at most 10 (booleans, strings, NaN and infinity are rejected). The setting is how long, in seconds, an ADR-038 explicit turn waits for its state save, counted from when the save starts running (#3200). At runtime an invalid value falls back to the 0.15 s default.
+- **What it detects**: `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is set but is not an `int` or `float` greater than 0 and at most 10 (booleans, strings, NaN and infinity are rejected). The setting is how long, in seconds, an ADR-038 explicit turn waits for its state save, counted from when the save starts running (#3200). At runtime an invalid value falls back to the 10 s default.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C024"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C024"]` (the runtime still uses the default)
 - **False positives**: None
 
