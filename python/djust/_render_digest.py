@@ -260,10 +260,15 @@ def dom_shape(html: Any) -> str | None:
                 return None
             continue
         piece = "<" + tag
-        found = _ATTR["id"].search(attrs)
+        # (The substring tests only spare most tags three regex searches.)
+        found = _ATTR["id"].search(attrs) if ' id="' in attrs else None
         if found and found.group(1):
             piece += "#" + _shape_name(found.group(1))
-        found = _ATTR["dj-key"].search(attrs) or _ATTR["data-key"].search(attrs)
+        found = (
+            (_ATTR["dj-key"].search(attrs) or _ATTR["data-key"].search(attrs))
+            if 'key="' in attrs
+            else None
+        )
         if found and found.group(1):
             piece += "@" + _shape_name(found.group(1))
         out.append(piece)
