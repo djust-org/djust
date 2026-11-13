@@ -746,6 +746,14 @@ To open or close from your own handler, set the state:
   page load used to serve the page without its base template.
 - **A model or QuerySet that cannot be serialized for the template is an
   error.** It used to be serialized again a slower way.
+- **A `state()` field named after a framework name raises when the view class
+  is created.** `template_name = state(...)`, `temporary_assigns = state(...)`,
+  `request`, `kwargs`, `page_title`, `sticky` and any other name of a framework
+  setting, a `LiveView` method or per-request identity
+  (`djust._exposure.reserved_state_names()`) raises `ExposureConfigurationError`
+  naming the field, whether it is declared on the view, on a mixin or on a base
+  class. Such a field used to import and then crash a system check or a
+  management command, or fail at render. Rename it (`template_name_value`).
 
 ### Defaults that changed
 
@@ -882,4 +890,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: b1c21d089577 -->
+<!-- generated-doc prose-sha256: ea54a3f329a9 -->
