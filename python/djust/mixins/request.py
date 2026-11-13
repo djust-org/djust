@@ -527,6 +527,13 @@ def _run_http_deferred(view: Any) -> None:
 PARAMETER_CONTRACTS_HEADER = "X-Djust-Parameter-Contracts"
 
 
+#: A page POST carrying this header (value ``1``) and no event asks for the
+#: page as the saved state renders it now (#4108).
+RESYNC_HEADER = "X-Djust-Resync"
+#: What such a request is called where an event name is logged.
+RESYNC_EVENT = "djust:resync"
+
+
 def _compress_fallback_answer(request: Any, response: Any) -> Any:
     """Gzip a page-POST answer for a client that accepts it (#4108).
 
@@ -924,9 +931,9 @@ class RequestMixin:
             # ``_inject_client_script``). A page prepared in one evaluation
             # (the branch not taken here) has no separate diff render; it gets
             # its first digest from its first fallback answer.
-            from .._render_digest import render_digest
+            from .._render_digest import render_token
 
-            self.__dict__["_page_render_digest"] = render_digest(self, request, baseline_html)
+            self.__dict__["_page_render_digest"] = render_token(self, request, baseline_html)
             t_render_diff = (time.perf_counter() - t0) * 1000
             self._lazy_thunks = list(page_lazy_thunks)
             if not uses_legacy_exposure(self):
@@ -1664,7 +1671,18 @@ class RequestMixin:
                 )
                 return JsonResponse({"redirect": redirect_url}, status=403)
 
-            data = json.loads(request.body)
+            # #4108: a resync request. The client's page no longer matches what
+            # the server last sent it (a patch answer did not fit its DOM), and
+            # it asks for the page as the saved state renders it now. No event:
+            # the view is restored as for any event, every view-level and
+            # object-level check below runs, no handler does, and the answer is
+            # the whole page with its digest. (The page GET is no substitute:
+            # it is a new page load, which mounts again and saves that state.)
+            render_only = request.headers.get(RESYNC_HEADER) == "1"
+
+            data = json.loads(request.body) if (request.body or not render_only) else {}
+            if render_only:
+                data = {"event": RESYNC_EVENT, "params": {}}
             # Support both formats:
             # 1. Standard: {"event": "name", "params": {...}}
             # 2. HTTP fallback: X-Djust-Event header + flat params in body
@@ -1685,7 +1703,7 @@ class RequestMixin:
                 return JsonResponse({"error": "No event name provided"}, status=400)
 
             # Security: validate event name format (blocks dunders, private methods)
-            if not is_safe_event_name(event_name):
+            if not render_only and not is_safe_event_name(event_name):
                 return JsonResponse({"error": "Invalid event name"}, status=400)
 
             legacy_exposure = uses_legacy_exposure(self)
@@ -1784,10 +1802,6 @@ class RequestMixin:
             # already holds a diff baseline. It keeps the answer it always got:
             # the patches from that baseline, numbered by its renderer.
             reused_renderer = getattr(self, "_rust_view", None) is not None
-            # Whether this request's first render binds the page's embedded
-            # children (an explicit page names them in ``owned_children``).
-            # Read before any render of this request.
-            cold_children = not getattr(self, "_explicit_child_vdom_tracking", False)
             # ADR-031: an event carrying ``component_id`` targets the
             # registered component, as ``runtime._dispatch_component_event``
             # does over WebSocket (#1646 — the HTTP fallback must not differ).
@@ -1857,12 +1871,20 @@ class RequestMixin:
                     )
                     return JsonResponse({"error": "Component not found"}, status=400)
                 params = {k: v for k, v in params.items() if k != "component_id"}
-            handler = getattr(owner, event_name, None)
-            if handler is not None and is_push_only(owner, event_name, handler):
+            handler = None if render_only else getattr(owner, event_name, None)
+            if render_only:
+                # The page's own reads (``assign_async`` / ``start_async`` in
+                # mount() or handle_params()) finish before the render, as they
+                # do before an event's handler: the page the client asks for
+                # is the loaded one.
+                if mount_work_pending:
+                    _run_http_background_work(self, bg_budget)
+                    mount_work_pending = False
+            elif handler is not None and is_push_only(owner, event_name, handler):
                 # Server-push only (#3002): to a browser it is a method that
                 # does not exist, as on the WebSocket and SSE paths.
                 handler = None
-            if handler is None or not callable(handler):
+            if not render_only and (handler is None or not callable(handler)):
                 # Same answer for the page view as for a component: an event
                 # that resolves to no callable must not fall through to a
                 # render and a state save as if a handler had run (the socket
@@ -1961,9 +1983,10 @@ class RequestMixin:
                     _run_http_background_work(self, bg_budget)
                     mount_work_pending = False
                 # #4108: the view is now what the page GET (or the previous
-                # answer) rendered. Render it once before the handler; if the
-                # client shows that render (it echoed its digest), the render
-                # after the handler diffs against it and the answer is patches.
+                # answer) rendered. Render a copy of it before the handler; if
+                # the client shows that render (it echoed its digest and its DOM
+                # has that shape), the render after the handler diffs against it
+                # and the answer is patches.
                 # After every refusal, so a refused request renders nothing;
                 # for the page's own handlers only (a component or embedded
                 # child event is answered as before). Not for an ``@cache``
@@ -2070,22 +2093,12 @@ class RequestMixin:
             # like {% if user.is_authenticated %} evaluate to false and the HTTP
             # fallback returns logged-out HTML. Fixes #705.
             # Unified via _processor_context context manager (#717).
-            if baseline_matched:
-                # #4108: this is the request's second render. The renderer
-                # re-renders the nodes whose keys changed, and a value a context
-                # processor supplies as an object (``messages``, ``user``,
-                # ``perms``, the request) is never compared, so a handler that
-                # added a message or signed a user in would leave those nodes
-                # as the baseline rendered them. Name them changed: the answer
-                # then holds what a single render after the handler shows.
-                from .._http_fallback_baseline import rerender_request_scoped
-
-                rerender_request_scoped(self)
             with self._processor_context(request):
                 from .._child_rendering import render_view_with_diff
 
                 t0_render = time.perf_counter()
                 self._prepare_child_ids()
+                cold_children = not getattr(self, "_explicit_child_vdom_tracking", False)
                 html, patches_json, version = render_view_with_diff(self, request)
                 if cold_children and getattr(self, "_explicit_child_vdom_tracking", False):
                     response_fields["owned_children"] = [
@@ -2113,9 +2126,9 @@ class RequestMixin:
 
             # #4108: every render answer names the digest of the render it
             # delivers; the client echoes it with its next fallback POST.
-            from .._render_digest import ANSWER_FIELD, render_digest
+            from .._render_digest import ANSWER_FIELD, render_token
 
-            answer_digest = render_digest(self, request, html)
+            answer_digest = render_token(self, request, html)
             if answer_digest:
                 response_fields[ANSWER_FIELD] = answer_digest
 

@@ -3,44 +3,55 @@
 A fallback request builds its view afresh, so its renderer has nothing to diff
 the handler's result against. :func:`prepare_baseline` renders the restored
 view once before the handler runs. When that render is the one the browser
-shows (the client echoed its digest, ``_render_digest``), the renderer keeps it
-as the diff baseline and the request answers with patches. In every other case
-the renderer is reset, and the request goes on exactly as it did before this
-module existed: one render after the handler, answered as a whole page.
+shows (the client echoed its digest and reports the same DOM shape,
+``_render_digest``), its renderer becomes the request's renderer, and the
+render after the handler returns the patches from it. In every other case the
+request goes on exactly as it did before this module existed: one render after
+the handler, answered as a whole page.
 
-A render is not free of effects, so the extra one is only made when nothing it
-consumes is needed again. What a render consumes, and what happens here:
+**The pre-handler render runs on a throwaway copy of the view.** A render is
+not free of effects: it evaluates querysets (which then hold their rows), fills
+``cached_property`` values, consumes ``temporary_assigns`` and stream
+operations, registers embedded children, and records what it sent for the next
+render's change detection. Done on the view itself, any of those would leak
+into the render after the handler: a queryset the handler's write made stale
+would be rendered from its cache, and the answer would miss the change that a
+single render shows. So the view is deep-copied (the request is shared, not
+copied), the copy is rendered and dropped, and only its renderer (the compiled
+template and the baseline tree) is kept. The view the handler runs on has never
+rendered: its render after the handler is a first render in every respect
+except that the renderer has a tree to diff against. It sends its whole
+context and renders every node.
 
-* ``temporary_assigns`` are reset to their defaults after a render, and stream
-  operations are cleared. A view that has either is not pre-rendered.
+What the copy cannot isolate is the request, which both renders share:
+
 * Django's messages are marked used when a template iterates them, and a used
   message is deleted when the response is processed. The flag is put back after
   the pre-render: a request that then answers without a render (a
   ``live_redirect``, a skipped render) must leave the message for the next
-  page. A render after the handler iterates and consumes them as before.
-* Embedded child views and lazy slots are registered (and, on an explicit page,
-  bound to its nodes) by the render that prints them. A page whose template
-  embeds one is not pre-rendered. If a render registers one all the same (an
-  ``{% include %}`` brought it in), it is discarded like any render the client
-  does not show, and the answer is the whole page.
-* ``dj-update`` containers (append, prepend, ignore) and virtual lists hold DOM
-  that is not the server's render, so a path into them cannot be trusted. A
-  page whose render has either is answered with the whole page.
+  page.
 * ``get_context_data()`` and the context processors run for the pre-render as
   they do for any render (through ``render_with_diff`` and the sync-turn
-  wrapper). A view whose context is costly or has effects of its own turns the
-  feature off: ``http_fallback_patches = False``.
-* An exception raised by the pre-render is not the request's failure: the
-  renderer is reset and the handler runs. If the same error is real, the
-  render after the handler raises it and is answered as before.
+  wrapper). A view whose context is costly, or acts on something outside the
+  view (the database, a counter in the session), turns the feature off:
+  ``http_fallback_patches = False``.
+
+No pre-render is made, and the answer is the whole page, for a view with
+``temporary_assigns`` or streams and for a page whose template embeds another
+view: there the browser's DOM is by design not the server's render. A render
+that holds a ``dj-update`` container, a virtual list or an embedded child is
+answered with the whole page too. A view that cannot be copied (it holds a
+lock, a connection, an open file), and a pre-render that raises, are not the
+request's failure: the handler runs and the answer is the whole page.
 """
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Any
 
-from ._render_digest import digests_match, render_digest, supplied_digest
+from ._render_digest import render_digest, supplied_token, tokens_match
 
 logger = logging.getLogger(__name__)
 
@@ -97,59 +108,52 @@ def _holds_other_views(view: Any) -> bool:
     return bool(view.__dict__.get("_http_lazy_containers") or view.__dict__.get("_lazy_thunks"))
 
 
-def _discard(view: Any) -> None:
-    """Forget the pre-render: the next render is a first render again."""
-    rust_view = getattr(view, "_rust_view", None)
-    if rust_view is not None:
-        rust_view.reset()
-
-
-def rerender_request_scoped(view: Any) -> None:
-    """Have the next render re-render what reads a context processor's value.
-
-    Called before the render that follows a kept baseline. See the call site.
-    """
-    keys = set(getattr(view, "_context_processor_keys", None) or ())
-    keys.add("request")
-    forced = view.__dict__.get("_djust_forced_changed_keys")
-    view.__dict__["_djust_forced_changed_keys"] = keys | set(forced or ())
+def _throwaway_copy(view: Any, request: Any) -> Any:
+    """A deep copy of ``view`` that shares the request and nothing else."""
+    memo: dict[int, Any] = {id(request): request}
+    return copy.deepcopy(view, memo)
 
 
 def prepare_baseline(view: Any, request: Any) -> bool:
-    """Render ``view`` before its handler; ``True`` if the client shows that render.
+    """Render a copy of ``view`` before its handler; ``True`` if the client shows that render.
 
-    ``True`` leaves the renderer holding that render: the render after the
-    handler returns the patches from it. ``False`` means no render was made, or
-    it was discarded: the renderer is a new one and the request answers exactly
-    as it did before this existed. Never raises.
+    ``True`` gives ``view`` the copy's renderer: the render after the handler
+    returns the patches from the copy's render. ``False`` leaves ``view``
+    untouched, so the request answers exactly as it did before this existed.
+    Never raises.
     """
-    supplied = supplied_digest(request)
+    supplied = supplied_token(request)
     if (
         supplied is None
         or not patches_enabled(view)
         or _consumed_by_a_render(view)
         or _embeds_views(view)
     ):
-        # No render: nothing was consumed and nothing has to be undone.
         return False
 
     messages = getattr(request, "_messages", None)
     messages_used = getattr(messages, "used", None)
-    lazy_thunks = view.__dict__.get("_lazy_thunks")
-    lazy_before = list(lazy_thunks) if isinstance(lazy_thunks, list) else None
     matched = False
     try:
         from ._child_rendering import render_view_with_diff
 
-        with view._processor_context(request):
-            view._prepare_child_ids()
-            html, _, _ = render_view_with_diff(view, request)
+        baseline = _throwaway_copy(view, request)
+        with baseline._processor_context(request):
+            baseline._prepare_child_ids()
+            html, _, _ = render_view_with_diff(baseline, request)
         if (
             isinstance(html, str)
-            and not _holds_other_views(view)
+            and not _holds_other_views(baseline)
             and not any(marker in html for marker in _CLIENT_OWNED_MARKERS)
+            and tokens_match(html, render_digest(view, request, html), supplied)
         ):
-            matched = digests_match(render_digest(view, request, html), supplied)
+            renderer = getattr(baseline, "_rust_view", None)
+            if renderer is not None:
+                # The renderer only: the compiled template and the baseline
+                # tree. None of the copy's Python state comes with it.
+                view._rust_view = renderer
+                view._rust_view_explicit = getattr(baseline, "_rust_view_explicit", False)
+                matched = True
     except Exception as exc:  # noqa: BLE001 - see the module docstring
         from ._exposure_diagnostics import log_failure_for
 
@@ -161,14 +165,4 @@ def prepare_baseline(view: Any, request: Any) -> bool:
                 messages.used = messages_used
             except Exception:  # noqa: BLE001 - a storage without the flag keeps its own
                 logger.debug("could not restore the messages 'used' flag")
-        # The render after the handler stashes its own lazy slots.
-        if lazy_before is not None:
-            view.__dict__["_lazy_thunks"] = lazy_before
-        if not matched:
-            try:
-                _discard(view)
-            except Exception as exc:  # noqa: BLE001 - never the request's failure
-                from ._exposure_diagnostics import log_failure_for
-
-                log_failure_for(logger, (view,), exc, "HTTP fallback baseline reset failed")
     return matched

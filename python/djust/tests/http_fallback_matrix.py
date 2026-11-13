@@ -220,6 +220,44 @@ class Stamped(LiveView):
         self.count += 1
 
 
+class Leaving(LiveView):
+    """Rows with a ``dj-remove`` exit: a removed row stays in the DOM while it plays."""
+
+    exposure_policy = "explicit"
+    template = PAGE % (
+        "\n<h1>Rows</h1>\n<ul>{% for r in rows %}\n"
+        '<li dj-remove="fade-out" data-key="{{ r.id }}"><span>{{ r.name }}</span></li>'
+        "{% endfor %}</ul>\n"
+    )
+    rows = state(default_factory=_rows, persist="server")
+
+    @event_handler
+    def remove(self, row: int = 0, **kwargs):
+        self.rows = [r for r in self.rows if r["id"] != int(row)]
+
+    @event_handler
+    def rename(self, row: int = 0, **kwargs):
+        self.rows = [
+            {**r, "name": r["name"] + "*"} if r["id"] == int(row) else dict(r) for r in self.rows
+        ]
+
+
+class Hooked(LiveView):
+    """A ``dj-hook`` element: client code may add or remove DOM around it."""
+
+    exposure_policy = "explicit"
+    template = PAGE % (
+        '\n<div dj-hook="Widget" class="host"></div>\n'
+        "<ul><li>one</li><li>two</li></ul>\n"
+        '<button dj-click="toggle" class="{% if on %}active{% endif %}">toggle</button>\n'
+    )
+    on = state(False, persist="server")
+
+    @event_handler
+    def toggle(self, **kwargs):
+        self.on = not self.on
+
+
 VIEWS: dict[str, type] = {
     "counter": Counter,
     "list": ListEdit,
@@ -229,6 +267,8 @@ VIEWS: dict[str, type] = {
     "unstable": Unstable,
     "volatile": Volatile,
     "stamped": Stamped,
+    "leaving": Leaving,
+    "hooked": Hooked,
 }
 
 urlpatterns = [path("m/%s/" % name, cls.as_view()) for name, cls in VIEWS.items()]
@@ -259,6 +299,11 @@ SCENARIOS: dict[str, tuple[str, list[tuple[str, dict]]]] = {
     "unstable": ("/m/unstable/", [("increment", {})] * 2),
     "volatile": ("/m/volatile/", [("bump", {})] * 3),
     "stamped": ("/m/stamped/", [("increment", {})] * 2),
+    "leaving": (
+        "/m/leaving/",
+        [("remove", {"row": 1}), ("rename", {"row": 3}), ("rename", {"row": 2})],
+    ),
+    "hooked": ("/m/hooked/", [("toggle", {})] * 3),
 }
 
 _DJ_ID = re.compile(r'\sdj-id="[^"]*"')
@@ -357,11 +402,13 @@ def run_fallback(
     log: RenderLog,
     *,
     client: Client | None = None,
+    echo: bool = True,
 ) -> dict:
     """GET the page, then POST each event the way the client's fallback does.
 
-    The digest the page and each answer carry is echoed as the client echoes it
-    (``DigestEcho``). Returns the GET document, the answers, each answer's kind,
+    The token the page and each answer carry is echoed as a client whose DOM
+    is the server's render echoes it (``DigestEcho``); ``echo=False`` sends
+    none, as a client whose DOM has another shape does. Returns the GET document, the answers, each answer's kind,
     the number of diff renders each request made, and the server's root HTML
     after each request.
     """
@@ -369,11 +416,13 @@ def run_fallback(
     got = client.get(url)
     assert got.status_code == 200, got.status_code
     document = got.content.decode()
-    echo = DigestEcho(meta_digest(document))
+    token = meta_digest(document)
+    send_tokens = echo
+    echo = DigestEcho(token)
     out: dict = {
         "url": url,
         "get": document,
-        "get_digest": echo.digest,
+        "get_digest": token,
         "events": [list(e) for e in events],
         "answers": [],
         "kinds": [],
@@ -383,7 +432,7 @@ def run_fallback(
     }
     for event, params in events:
         before = len(log.htmls)
-        sent = echo.to_send()
+        sent = echo.to_send() if send_tokens else None
         out["sent_digests"].append(sent)
         response = post_event(client, url, event, params, sent)
         assert response.status_code == 200, (response.status_code, response.content[:300])

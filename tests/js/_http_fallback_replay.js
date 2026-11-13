@@ -14,7 +14,7 @@ export const DIGEST_HEADER = 'X-Djust-Render-Digest';
 const FALLBACK_NOTICE = /falling back to full-page HTTP re-renders/;
 
 /** Resolves once the client initialised (it does so on DOMContentLoaded). */
-export async function loadPage(documentHtml, path = '/') {
+export async function loadPage(documentHtml, path = '/', {hooks = {}} = {}) {
     const navigations = [];
     const logs = [];
     const virtualConsole = new VirtualConsole();
@@ -32,6 +32,8 @@ export async function loadPage(documentHtml, path = '/') {
     });
     const win = dom.window;
     win.eval(client);
+    // Registered before the client initialises, as a page's own script does.
+    win.djust.hooks = Object.assign(win.djust.hooks || {}, hooks);
     let reloaded = 0;
     try { win.location.reload = () => { reloaded += 1; }; } catch (_e) { /* non-writable */ }
     if (win.document.readyState === 'loading') {
@@ -48,9 +50,15 @@ export async function loadPage(documentHtml, path = '/') {
             const before = requests.length;
             win.fetch = async (url, init = {}) => {
                 const headers = init.headers || {};
+                // "<digest>.<shape>": the digest the client was given, and the
+                // shape it computed from its own DOM.
+                const token = headers[DIGEST_HEADER] ?? null;
                 const request = {
                     url: String(url), method: init.method || 'GET',
-                    digest: headers[DIGEST_HEADER] ?? null,
+                    token,
+                    digest: token ? token.split('.')[0] : null,
+                    shape: token ? token.split('.')[1] : null,
+                    resync: headers['X-Djust-Resync'] === '1',
                     event: headers['X-Djust-Event'] ?? null,
                     body: init.body ?? null,
                 };
@@ -64,16 +72,45 @@ export async function loadPage(documentHtml, path = '/') {
             await win.djust.handleEvent(event, {...params, _targetElement: target});
             return requests[before] || null;
         },
+        /** The shape of the page's DOM, as the client computes it. */
+        shape: () => win.djust.domShape(win.document.querySelector('[dj-root]')),
         reloads: () => reloaded + navigations.length,
         problems: () => logs.filter(l => !FALLBACK_NOTICE.test(l[1])).map(l => l[1].slice(0, 300)),
         close: () => win.close(),
     };
 }
 
+/**
+ * The server, for a replayed scenario: the recorded patch answer when the
+ * client sent the token the server expects at this step (its digest, and a DOM
+ * shape equal to the render's), the recorded whole page otherwise. A resync
+ * request gets the whole page of the step it follows.
+ */
+export function recordedServer(scenario) {
+    let step = -1;
+    return (request) => {
+        if (!request.resync) step += 1;
+        const patched = !request.resync && request.token !== null &&
+            request.token === scenario.sent_digests[step];
+        return patched ? scenario.answers[step] : scenario.answers_whole[step];
+    };
+}
+
+/** End a `dj-remove` exit that is still playing, as its transition's end does. */
+export function finishExits(win) {
+    for (const el of win.document.querySelectorAll('[dj-remove]')) {
+        el.dispatchEvent(new win.Event('transitionend'));
+    }
+}
+
 /** The element an event of the matrix is sent from. */
 export function eventTarget(win, event, params) {
     const doc = win.document;
     if (params && params.field_name) return doc.querySelector(`[name="${params.field_name}"]`);
+    // Any element of the root will do: the event name travels in a header.
+    if (!doc.querySelector(`[dj-click="${event}"],[dj-change="${event}"]`)) {
+        return doc.querySelector('[dj-root]');
+    }
     return doc.querySelector(`[dj-click="${event}"],[dj-change="${event}"]`);
 }
 

@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import json
 import re
+from functools import cached_property
 
 import pytest
 from django.contrib import messages
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
+from django.core.paginator import Paginator
 from django.test import Client, override_settings
 from django.urls import path
 
@@ -151,17 +154,17 @@ class Wide(LiveView):
 
 
 class Fragile(LiveView):
-    """Its first render of a request raises; later ones do not."""
+    """Its next ``failures`` renders raise; later ones do not."""
 
     exposure_policy = "explicit"
     template = PAGE % "\n<p>Value: <b>{{ count }}</b></p>\n"
     count = state(0, persist="server")
-    fail_first_render = False
+    failures = 0
 
     def get_context_data(self, **kwargs):
-        if type(self).fail_first_render and not self.__dict__.get("_rendered_once"):
-            self.__dict__["_rendered_once"] = True
-            raise RuntimeError("first render of this request")
+        if type(self).failures > 0:
+            type(self).failures -= 1
+            raise RuntimeError("this render fails")
         return super().get_context_data(**kwargs)
 
     @event_handler
@@ -235,6 +238,109 @@ class Greeter(LiveView):
         )
 
 
+def _rename_alice() -> None:
+    get_user_model().objects.filter(username="alice").update(username="bob")
+
+
+class _Roster(LiveView):
+    """Shows users it read before the handler; the handler renames one in the database."""
+
+    exposure_policy = "explicit"
+    template = PAGE % (
+        "\n<ul>{% for name in names %}<li>{{ name }}</li>{% endfor %}</ul>\n"
+        "<p>Renames: <b>{{ count }}</b></p>\n"
+    )
+    count = state(0, persist="server")
+
+    def names(self) -> list[str]:
+        raise NotImplementedError
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(names=self.names(), **kwargs)
+
+    @event_handler
+    def rename(self, **kwargs):
+        _rename_alice()
+        self.count += 1
+
+
+class HeldQueryset(_Roster):
+    """``mount()`` keeps a queryset; rendering it fills its result cache."""
+
+    count = state(0, persist="server")
+
+    def mount(self, request, **kwargs):
+        self._rows = get_user_model().objects.order_by("pk")
+
+    def names(self):
+        return [user.username for user in self._rows]
+
+
+class CachedProperty(_Roster):
+    count = state(0, persist="server")
+
+    @cached_property
+    def roster(self):
+        return list(get_user_model().objects.order_by("pk").values_list("username", flat=True))
+
+    def names(self):
+        return self.roster
+
+
+class RelatedManager(_Roster):
+    """Rows read through a related manager, kept unevaluated by ``mount()``."""
+
+    count = state(0, persist="server")
+
+    def mount(self, request, **kwargs):
+        self._members = Group.objects.get(name="crew").user_set.order_by("pk")
+
+    def names(self):
+        return [user.username for user in self._members]
+
+
+class Paginated(_Roster):
+    count = state(0, persist="server")
+
+    def mount(self, request, **kwargs):
+        self._pages = Paginator(get_user_model().objects.order_by("pk"), 10)
+
+    def names(self):
+        return [user.username for user in self._pages.page(1)] + ["of %d" % self._pages.count]
+
+
+def _member_names(request):
+    """A context processor that queries on every call."""
+    return {
+        "member_names": ", ".join(
+            get_user_model().objects.order_by("pk").values_list("username", flat=True)
+        )
+    }
+
+
+class QueryingProcessor(LiveView):
+    exposure_policy = "explicit"
+    template = PAGE % '\n<p class="members">{{ member_names }}</p>\n<p><b>{{ count }}</b></p>\n'
+    count = state(0, persist="server")
+
+    def _get_context_processors(self):
+        return [*super()._get_context_processors(), __name__ + "._member_names"]
+
+    @event_handler
+    def rename(self, **kwargs):
+        _rename_alice()
+        self.count += 1
+
+
+STALE_DATA_VIEWS = {
+    "queryset": HeldQueryset,
+    "cached-property": CachedProperty,
+    "related-manager": RelatedManager,
+    "paginator": Paginated,
+    "context-processor": QueryingProcessor,
+}
+
+
 urlpatterns = [
     *matrix.urlpatterns,
     path("p/notices/", Notices.as_view()),
@@ -246,6 +352,7 @@ urlpatterns = [
     path("p/fragile/", Fragile.as_view()),
     path("p/nested/", Nested.as_view()),
     path("p/members/", Members.as_view()),
+    *(path("p/stale/%s/" % name, cls.as_view()) for name, cls in STALE_DATA_VIEWS.items()),
     path("p/outer/", Outer.as_view()),
     path("p/greeter/", Greeter.as_view()),
     # The same view class on a second route.
@@ -269,6 +376,10 @@ def _routes():
 @pytest.fixture
 def renders(monkeypatch):
     return matrix.RenderLog(monkeypatch)
+
+
+#: Shaped like a token, and nobody's.
+WRONG = "A" * 22 + "." + "0" * 16
 
 
 def _open(url: str, client: Client | None = None) -> tuple[Client, str]:
@@ -481,9 +592,129 @@ def test_a_request_made_while_another_runs_leaves_the_loser_with_a_whole_page(re
     assert answer_kind(current) == "patches"
 
 
+def test_the_right_digest_with_a_dom_of_another_shape_selects_the_whole_page(renders):
+    """The client's DOM is not laid out as the render: its paths are not the server's."""
+    client, token = _open("/m/list/")
+    digest, _, shape = token.partition(".")
+    other_shape = ("0" if shape[0] != "0" else "1") + shape[1:]
+    answer, count = _counted(renders, client, "/m/list/", "add", digest + "." + other_shape)
+    assert count == 2
+    assert "patches" not in answer and answer["version"] == 1
+    # The same digest with the render's own shape would have been patched.
+    fresh, token = _open("/m/list/")
+    assert answer_kind(_send(fresh, "/m/list/", "add", token)) == "patches"
+
+
+def test_a_token_names_the_shape_of_the_render_it_stands_for(renders):
+    from djust import _render_digest
+
+    client, token = _open("/m/list/")
+    assert token.partition(".")[2] == _render_digest.dom_shape(renders.htmls[-1])
+    answer = _send(client, "/m/list/", "add", token)
+    # A row was added: another shape, named by the answer's token.
+    assert answer["render_digest"].partition(".")[2] == _render_digest.dom_shape(renders.htmls[-1])
+    assert answer["render_digest"].partition(".")[2] != token.partition(".")[2]
+
+
+# --------------------------------------------------------------------------- #
+# Resync: the page as the saved state renders it, with no event
+# --------------------------------------------------------------------------- #
+
+
+def _resync(client: Client, url: str, body: str = "{}", **headers):
+    return client.post(
+        url, data=body, content_type="application/json", HTTP_X_DJUST_RESYNC="1", **headers
+    )
+
+
+def test_a_resync_request_answers_the_whole_page_from_the_saved_state(renders):
+    client, token = _open("/m/counter/")
+    first = _send(client, "/m/counter/", "increment", token)
+    second = _send(client, "/m/counter/", "increment", first["render_digest"])
+    assert answer_kind(second) == "patches"
+    before = len(renders.htmls)
+    response = _resync(client, "/m/counter/")
+    assert response.status_code == 200
+    answer = json.loads(response.content)
+    # One render, no handler: the state the two events left, not mount()'s.
+    assert len(renders.htmls) - before == 1
+    assert _is_whole_page_of(answer, ">2</strong>")
+    # It names the token of that page, which is the one the last answer named.
+    assert answer["render_digest"] == second["render_digest"]
+    # The state is untouched: the next event counts on from it, with patches.
+    third = _send(client, "/m/counter/", "increment", answer["render_digest"])
+    assert third["patches"] == [{"type": "SetText", "path": [1, 0, 1, 0], "text": "3"}]
+
+
+def test_a_page_get_is_not_a_resync(renders):
+    """Why the request exists: the page GET mounts again and saves that."""
+    client, token = _open("/m/counter/")
+    _send(client, "/m/counter/", "increment", token)
+    assert ">1</strong>" in json.loads(_resync(client, "/m/counter/").content)["html"]
+    client.get("/m/counter/")
+    assert ">0</strong>" in json.loads(_resync(client, "/m/counter/").content)["html"]
+
+
+@pytest.mark.parametrize("body", ["{}", "", '{"event": "increment", "params": {}}'])
+def test_a_resync_request_runs_no_handler_whatever_its_body_says(renders, body):
+    client, token = _open("/m/counter/")
+    _send(client, "/m/counter/", "increment", token)
+    response = _resync(client, "/m/counter/", body, HTTP_X_DJUST_EVENT="increment")
+    assert response.status_code == 200
+    assert ">1</strong>" in json.loads(response.content)["html"]
+    # Nothing was incremented and nothing was saved over the state.
+    assert ">1</strong>" in json.loads(_resync(client, "/m/counter/").content)["html"]
+
+
+def test_a_resync_request_passes_the_views_own_checks(renders):
+    user = get_user_model().objects.create_user("resync-user", password="pw")
+    anonymous = Client()
+    before = len(renders.htmls)
+    response = _resync(anonymous, "/p/members/")
+    assert response.status_code == 403 and "redirect" in json.loads(response.content)
+    assert len(renders.htmls) == before
+    client = Client()
+    client.force_login(user)
+    assert _resync(client, "/p/members/").status_code == 200
+
+
+def test_only_the_exact_header_value_is_a_resync(renders):
+    client, _token = _open("/m/counter/")
+    response = client.post(
+        "/m/counter/", data="{}", content_type="application/json", HTTP_X_DJUST_RESYNC="yes"
+    )
+    assert response.status_code == 400  # an event request with no event name
+
+
 # --------------------------------------------------------------------------- #
 # What the pre-handler render must not use up
 # --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("name", list(STALE_DATA_VIEWS))
+@pytest.mark.parametrize("echo", [True, False], ids=["patches", "whole-page"])
+def test_a_row_the_handler_changed_in_the_database_is_in_the_answer(renders, name, echo):
+    """The pre-handler render must leave nothing behind that the next render reuses.
+
+    It evaluates querysets, fills ``cached_property`` values and prefetched
+    relations. Rendered on the view itself, those caches would serve the old
+    row to the render after the handler, and the patch answer would miss a
+    change the whole-page answer shows.
+    """
+    users = get_user_model().objects
+    crew = Group.objects.create(name="crew")
+    for username in ("alice", "carol"):
+        crew.user_set.add(users.create_user(username, password="pw"))
+    url = "/p/stale/%s/" % name
+    client, digest = _open(url)
+    assert "alice" in client.get(url).content.decode()
+    client, digest = _open(url)
+    answer = _send(client, url, "rename", digest if echo else None)
+    assert answer_kind(answer) == ("patches" if echo else "html")
+    body = json.dumps(answer)
+    assert "bob" in body and "alice" not in body
+    # What the server holds now is the page with the new name.
+    assert "bob" in renders.htmls[-1] and "alice" not in renders.htmls[-1]
 
 
 def test_a_refused_request_renders_nothing(renders):
@@ -543,7 +774,7 @@ def test_a_message_added_by_the_handler_is_rendered_once_on_the_patch_path(rende
 @override_settings(MESSAGE_STORAGE="django.contrib.messages.storage.session.SessionStorage")
 def test_a_message_added_by_the_handler_is_in_the_whole_page_after_a_refused_digest(renders):
     client, _digest = _open("/p/notices/")
-    answer, count = _counted(renders, client, "/p/notices/", "announce", "A" * 22)
+    answer, count = _counted(renders, client, "/p/notices/", "announce", WRONG)
     assert count == 2
     assert _is_whole_page_of(answer, "<li") and "saved" in answer["html"]
     assert _pending(client) == []
@@ -645,7 +876,7 @@ def test_a_child_the_template_source_does_not_show_still_selects_the_whole_page(
 
     monkeypatch.setattr(_http_fallback_baseline, "_embeds_views", lambda view: False)
     # Even a digest that matches: a page holding another view is not patched.
-    monkeypatch.setattr(_http_fallback_baseline, "digests_match", lambda expected, supplied: True)
+    monkeypatch.setattr(_http_fallback_baseline, "tokens_match", lambda *args: True)
     client, digest = _open("/p/outer/")
     plain, _ = _open("/p/outer/")
     answer, count = _counted(renders, client, "/p/outer/", "increment", digest)
@@ -671,18 +902,18 @@ def test_a_user_signed_in_by_the_handler_is_rendered_by_the_patch_answer(renders
 
 def test_a_pre_render_that_raises_does_not_fail_the_request(renders):
     client, digest = _open("/p/fragile/")
-    Fragile.fail_first_render = True
+    Fragile.failures = 1
     try:
         answer = _send(client, "/p/fragile/", "increment", digest)
     finally:
-        Fragile.fail_first_render = False
+        Fragile.failures = 0
     assert _is_whole_page_of(answer, ">1</b>")
     # Without a digest the same failure is the render's own, and is reported.
-    Fragile.fail_first_render = True
+    Fragile.failures = 1
     try:
         _send(client, "/p/fragile/", "increment", None, status=500)
     finally:
-        Fragile.fail_first_render = False
+        Fragile.failures = 0
 
 
 def test_the_pre_render_goes_through_the_sync_turn_wrapper(monkeypatch):

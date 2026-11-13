@@ -93,7 +93,7 @@ class _ViewB:
 def test_the_page_get_carries_the_digest_outside_the_root():
     document = Client().get("/m/counter/").content.decode()
     digest = matrix.meta_digest(document)
-    assert digest and len(digest) == 22
+    assert digest and len(digest) == 22 + 1 + 16
     head, _, rest = document.partition("</head>")
     assert 'name="djust-render-digest"' in head
     assert "djust-render-digest" not in rest
@@ -229,41 +229,63 @@ def test_no_session_key_means_no_digest():
 # --------------------------------------------------------------------------- #
 
 
+GOOD_DIGEST = "A" * 22
+GOOD_SHAPE = "0" * 16
+
+
 @pytest.mark.parametrize(
     "value",
     [
         "",
         "short",
-        "A" * 21,
-        "A" * 23,
+        GOOD_DIGEST,  # no shape
+        GOOD_DIGEST + ".",
+        "." + GOOD_SHAPE,
+        "A" * 21 + "." + GOOD_SHAPE,
+        "A" * 23 + "." + GOOD_SHAPE,
         "A" * 5000,
-        "A" * 21 + "=",
-        "A" * 21 + "%",
-        "A" * 20 + "%41",
-        "A" * 21 + "é",
-        " " + "A" * 21,
+        "A" * 21 + "=." + GOOD_SHAPE,
+        "A" * 21 + "%." + GOOD_SHAPE,
+        "A" * 19 + "%41." + GOOD_SHAPE,
+        "A" * 21 + "\u00e9." + GOOD_SHAPE,
+        " " + "A" * 21 + "." + GOOD_SHAPE,
+        GOOD_DIGEST + "." + "0" * 15,
+        GOOD_DIGEST + "." + "0" * 17,
+        GOOD_DIGEST + "." + "G" * 16,
+        GOOD_DIGEST + "." + "A" * 16,  # hex is lower case
+        GOOD_DIGEST + "-" + GOOD_SHAPE,
+        GOOD_DIGEST + "." + "0" * 7 + "." + "0" * 8,
     ],
 )
-def test_a_value_not_shaped_like_a_digest_is_no_digest(value):
+def test_a_value_not_shaped_like_a_token_is_no_token(value):
     request = RequestFactory().post("/", HTTP_X_DJUST_RENDER_DIGEST=value)
-    assert _render_digest.supplied_digest(request) is None
+    assert _render_digest.supplied_token(request) is None
 
 
-def test_a_well_formed_value_is_read_and_compared_exactly():
-    digest = _render_digest.render_digest(_ViewA(), _request(), HTML)
-    request = RequestFactory().post("/", HTTP_X_DJUST_RENDER_DIGEST=digest)
-    assert _render_digest.supplied_digest(request) == digest
-    assert _render_digest.supplied_digest(RequestFactory().post("/")) is None
-    assert _render_digest.digests_match(digest, digest)
-    assert not _render_digest.digests_match(
-        digest, digest[:-1] + ("A" if digest[-1] != "A" else "B")
-    )
-    assert not _render_digest.digests_match(digest, None)
-    assert not _render_digest.digests_match(None, digest)
-    assert not _render_digest.digests_match(None, None)
+def test_a_well_formed_token_is_read_and_both_halves_are_compared():
+    request_for_html = _request()
+    digest = _render_digest.render_digest(_ViewA(), request_for_html, HTML)
+    token = _render_digest.render_token(_ViewA(), request_for_html, HTML)
+    shape = _render_digest.dom_shape(HTML)
+    assert token == digest + "." + shape
+    request = RequestFactory().post("/", HTTP_X_DJUST_RENDER_DIGEST=token)
+    assert _render_digest.supplied_token(request) == (digest, shape)
+    assert _render_digest.supplied_token(RequestFactory().post("/")) is None
+
+    match = _render_digest.tokens_match
+    assert match(HTML, digest, (digest, shape))
+    other_digest = digest[:-1] + ("A" if digest[-1] != "A" else "B")
+    assert not match(HTML, digest, (other_digest, shape))
+    # The right digest with a DOM of another shape: the client's page is not
+    # laid out as the render is.
+    assert not match(HTML, digest, (digest, "0" * 16))
+    assert not match(HTML, digest, None)
+    assert not match(HTML, None, (digest, shape))
+    # A render this reader cannot follow has no shape, so nothing matches it.
+    assert not match("<div><p></div>", digest, (digest, shape))
 
 
-def test_the_comparison_is_constant_time(monkeypatch):
+def test_the_digest_comparison_is_constant_time(monkeypatch):
     calls = []
     real = _render_digest.hmac.compare_digest
 
@@ -272,8 +294,95 @@ def test_the_comparison_is_constant_time(monkeypatch):
         return real(a, b)
 
     monkeypatch.setattr(_render_digest.hmac, "compare_digest", recording)
-    assert _render_digest.digests_match("a" * 22, "a" * 22)
+    shape = _render_digest.dom_shape(HTML)
+    assert _render_digest.tokens_match(HTML, "a" * 22, ("a" * 22, shape))
     assert calls == [(b"a" * 22, b"a" * 22)]
+
+
+# --------------------------------------------------------------------------- #
+# The shape of a render
+# --------------------------------------------------------------------------- #
+
+ROOT = '<div dj-root="" dj-id="0">%s</div>'
+BASE = ROOT % '<h1 dj-id="1">Rows</h1><ul dj-id="2"><li dj-id="3">a</li><li dj-id="4">b</li></ul>'
+
+
+def _shape(inner: str) -> str:
+    shape = _render_digest.dom_shape(ROOT % inner)
+    assert shape is not None and len(shape) == 16
+    return shape
+
+
+def test_the_shape_ignores_what_does_not_move_a_path():
+    base = _render_digest.dom_shape(BASE)
+    same = [
+        # text, attribute values, classes, generated ids, the root's own attributes
+        ROOT % '<h1 dj-id="9">Other</h1><ul dj-id="8" class="x"><li>c</li><li>d</li></ul>',
+        '<div dj-root="" dj-view="app.View" class="page"><h1>Rows</h1><ul><li>a</li><li>b</li></ul></div>',
+        # a comment that is not a dj-if boundary, and indentation
+        ROOT % "<h1>Rows</h1><!-- note -->\n  <ul><li>a</li>\n<li>b</li></ul>",
+        # a ">" inside a quoted attribute value
+        ROOT % '<h1 title="a > b">Rows</h1><ul><li>a</li><li>b</li></ul>',
+    ]
+    assert [_render_digest.dom_shape(html) for html in same] == [base] * len(same)
+
+
+@pytest.mark.parametrize(
+    "inner",
+    [
+        "<ul><li>a</li><li>b</li></ul>",  # an element removed
+        "<h1>Rows</h1><p>new</p><ul><li>a</li><li>b</li></ul>",  # one inserted
+        "<h1>Rows</h1><ul><li>a</li></ul>",  # a row fewer
+        "<h1>Rows</h1><ul><li>a</li><li>b</li><li>c</li></ul>",  # a row more
+        "<h2>Rows</h2><ul><li>a</li><li>b</li></ul>",  # another tag
+        "<h1>Rows</h1><ol><li>a</li><li>b</li></ol>",
+        "<h1></h1><ul><li>a</li><li>b</li></ul>",  # a text child gone
+        "<h1>Rows</h1><ul><li>a</li><li><b>b</b></li></ul>",  # deeper
+        "<h1>Rows</h1><ul><li>a</li></ul><li>b</li>",  # same tags, other nesting
+        '<h1 id="t">Rows</h1><ul><li>a</li><li>b</li></ul>',  # an id
+        '<h1>Rows</h1><ul><li data-key="1">a</li><li>b</li></ul>',  # a key
+        '<h1>Rows</h1><ul><li dj-key="1">a</li><li>b</li></ul>',
+        '<h1>Rows</h1><!--dj-if id="if-1"--><!--/dj-if--><ul><li>a</li><li>b</li></ul>',
+        "<h1>Rows</h1> <ul><li>a</li><li>b</li></ul>",  # a kept single space
+    ],
+)
+def test_the_shape_changes_with_anything_that_moves_a_path(inner):
+    assert _shape(inner) != _render_digest.dom_shape(BASE)
+
+
+def test_two_keyed_rows_swapped_change_the_shape():
+    one = _shape('<ul><li data-key="1">a</li><li data-key="2">b</li></ul>')
+    two = _shape('<ul><li data-key="2">b</li><li data-key="1">a</li></ul>')
+    assert one != two
+
+
+def test_void_and_raw_text_elements_and_whitespace_keeping_ones():
+    # A void element has no children, with or without the closing slash.
+    assert _shape('<input name="a" /><br><p>x</p>') == _shape('<input name="b"><br /><p>y</p>')
+    # Text that looks like markup inside <script> / <textarea> is text.
+    assert _shape("<script>if (a < b) { x = '<p>'; }</script><p>x</p>") == _shape(
+        "<script>y</script><p>x</p>"
+    )
+    assert _shape("<textarea><b>not a tag</b></textarea>") == _shape("<textarea>t</textarea>")
+    # Whitespace is a child inside <pre>, and not inside <p>.
+    assert _shape("<pre>\n</pre>") != _shape("<pre></pre>")
+    assert _shape("<p>\n</p>") == _shape("<p></p>")
+
+
+def test_names_are_written_as_the_client_writes_them():
+    # html-escaped in the markup, percent-encoded in the shape text, so an id
+    # cannot be mistaken for structure.
+    assert _shape('<p id="a&amp;b">x</p>') != _shape('<p id="a">x</p>')
+    assert _shape('<p id="a&gt;&lt;p">x</p>') != _shape('<p id="a">x</p><p>x</p>')
+    assert _render_digest._shape_name("a&amp;b c/é~!*'()") == "a%26b%20c%2F%C3%A9~%21%2A%27%28%29"
+
+
+def test_markup_this_reader_cannot_follow_has_no_shape():
+    for html in ("<div><p></div>", "<div>", "</div>", "<div></div></div>", None, 7):
+        assert _render_digest.dom_shape(html) is None
+    assert (
+        _render_digest.dom_shape("") is None or _render_digest.dom_shape("") == "0000000000000001"
+    )
 
 
 def test_path_addressed_removes_the_id_hints_and_nothing_else():

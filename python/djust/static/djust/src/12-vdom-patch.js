@@ -1732,6 +1732,67 @@ function getSignificantChildren(node) {
     );
 }
 
+// --- DOM shape (#4108) -------------------------------------------------------
+// A checksum of the element tree under a view's root: tags, `id` and key
+// attributes, and which children are text or dj-if markers, counted with
+// getSignificantChildren, the rule patch paths are resolved with. Two trees
+// with one shape resolve every path to corresponding nodes. The server
+// computes the same value from its render (`dom_shape`,
+// python/djust/_render_digest.py); the page-POST fallback applies a patch
+// answer, which is addressed by path, only while the DOM still has the shape
+// of the render the patches were computed from.
+const _SHAPE_CRC = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+        table[n] = c >>> 0; // eslint-disable-line security/detect-object-injection
+    }
+    return table;
+})();
+
+function _shapeName(value) {
+    return encodeURIComponent(value).replace(/[!*'()]/g,
+        c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
+/** The shape of `root`'s tree as 16 hex digits, or null if it cannot be computed. */
+function domShape(root) {
+    if (!root) return null;
+    let crc = 0xFFFFFFFF, a = 1, b = 0;
+    const put = (text) => {
+        for (let i = 0; i < text.length; i++) {
+            let code = text.charCodeAt(i);
+            if (code > 127) code = 63;
+            crc = _SHAPE_CRC[(crc ^ code) & 0xFF] ^ (crc >>> 8);
+            a = (a + code) % 65521;
+            b = (b + a) % 65521;
+        }
+    };
+    const walk = (node) => {
+        for (const child of getSignificantChildren(node)) {
+            if (child.nodeType === Node.ELEMENT_NODE) {
+                const id = child.getAttribute('id');
+                const key = child.getAttribute('dj-key') || child.getAttribute('data-key');
+                put('<' + child.tagName.toLowerCase()
+                    + (id ? '#' + _shapeName(id) : '') + (key ? '@' + _shapeName(key) : ''));
+                walk(child);
+                put('>');
+            } else {
+                put(child.nodeType === Node.TEXT_NODE ? 't' : 'c');
+            }
+        }
+    };
+    try {
+        walk(root);
+    } catch (_e) {
+        return null; // e.g. an id that is not valid UTF-16
+    }
+    const hex = (n) => (n >>> 0).toString(16).padStart(8, '0');
+    return hex(crc ^ 0xFFFFFFFF) + hex((b << 16) | a);
+}
+window.djust.domShape = domShape;
+
 const WHITESPACE_PRESERVING_TAGS = ['PRE', 'CODE', 'TEXTAREA', 'SCRIPT', 'STYLE'];
 
 /**

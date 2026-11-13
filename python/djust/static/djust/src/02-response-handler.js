@@ -368,6 +368,11 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 window.location.reload();
                 return false;
             }
+            // Page-POST fallback (#4108): elements still playing a dj-remove
+            // exit are not part of the page being morphed in.
+            if (transport && transport === _localEventTransport) {
+                globalThis.djust.djRemove?.finishPendingRemovals(liveviewRoot);
+            }
             // Parsed in the root's namespace (an SVG / MathML root keeps its
             // children SVG / MathML), inert.
             const newRoot = _parseRootFrameHtml(data.html, liveviewRoot);

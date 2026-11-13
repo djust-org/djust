@@ -23,6 +23,19 @@ What the digest is, and is not:
 * Not an oracle. A match tells the client that the page it was sent is the
   page the server would send it now, which the whole-page answer says in full.
 
+The digest says the server's pre-handler render is the render it last SENT. It
+does not say the browser's DOM still has that render's structure: a script may
+have inserted or removed a node, a ``dj-remove`` exit may still be playing.
+Patches on this transport are addressed by path, so a shifted DOM would take a
+patch on the wrong node. The second half of the token closes that: the
+**shape** of a render (:func:`dom_shape`) is a checksum of its element tree
+(tags, ``id`` and key attributes, and which children are text or ``dj-if``
+markers), computed with the same child-counting rule the client's path walker
+uses. The server sends the shape with the digest; the client computes the shape
+of its own DOM, sends that with the digest, and applies patches only while its
+DOM still has it. The server answers with patches only when the shape the
+client reports is the shape of its own pre-handler render.
+
 The canonical form leaves out what differs between two renders of equal state:
 the generated ``dj-id`` attributes (a diff render numbers new nodes after the
 old ones, a fresh render numbers them in order; patches on this transport are
@@ -38,7 +51,10 @@ import hmac
 import json
 import re
 import string
+import zlib
+from html import unescape
 from typing import Any
+from urllib.parse import quote
 
 from django.utils.crypto import salted_hmac
 
@@ -65,6 +81,26 @@ _CSRF_INDEX = {char: index for index, char in enumerate(_CSRF_CHARS)}
 _CSRF_SECRET_LENGTH = 32
 _CSRF_TOKEN = re.compile(r"(?<![0-9A-Za-z])[0-9A-Za-z]{64}(?![0-9A-Za-z])")
 _CSRF_PLACEHOLDER = "csrf-token"
+
+_SHAPE_CHARS = 16  # crc32 and adler32 of the shape text, as hex
+_SHAPE_ALPHABET = frozenset("0123456789abcdef")
+
+# One tag or comment of the renderer's serialization. Attribute values are
+# quoted, so a ">" inside one does not end the tag.
+_TOKEN = re.compile(
+    r"<!--(?P<comment>.*?)-->"
+    r"|<(?P<close>/?)(?P<tag>[A-Za-z][^\s/>]*)(?P<attrs>(?:[^>\"']|\"[^\"]*\"|'[^']*')*)>",
+    re.DOTALL,
+)
+_ATTR = {
+    name: re.compile(r'(?:^|\s)%s="([^"]*)"' % re.escape(name))
+    for name in ("id", "dj-key", "data-key")
+}
+_VOID = frozenset("area base br col embed hr img input link meta param source track wbr".split())
+#: Elements whose every text child counts (``isWhitespacePreserving`` in the client).
+_KEEPS_WHITESPACE = frozenset(("pre", "code", "textarea", "script", "style"))
+#: Elements whose content is text up to their own end tag.
+_RAW_TEXT = frozenset(("script", "style", "textarea", "title"))
 
 #: Keys of a patch that name a node by its generated id.
 _ID_HINTS = ("d", "ref_d", "child_d")
@@ -154,21 +190,143 @@ def render_digest(view: Any, request: Any, html: Any) -> str | None:
     return base64.urlsafe_b64encode(tag).decode("ascii").rstrip("=")
 
 
-def supplied_digest(request: Any) -> str | None:
-    """The digest the client echoed, or ``None`` if absent or not shaped like one."""
-    value = request.headers.get(HEADER) if hasattr(request, "headers") else None
-    if not isinstance(value, str) or len(value) != _TAG_CHARS:
-        return None
-    if not _TAG_ALPHABET.issuperset(value):
-        return None
-    return value
+def _is_dj_if_comment(text: str) -> bool:
+    """``isDjIfComment`` in the client: only these comments count as children."""
+    text = text.strip()
+    return text in ("dj-if", "/dj-if") or text.startswith(("dj-if ", "dj-if\t"))
 
 
-def digests_match(expected: str | None, supplied: str | None) -> bool:
-    """Constant-time equality; ``False`` when either side is missing."""
-    if not expected or not supplied:
+def _counts_as_text(text: str, keeps_whitespace: bool) -> bool:
+    """``isSignificantChild`` in the client, for a text node."""
+    if not text:
         return False
-    return hmac.compare_digest(expected.encode("ascii"), supplied.encode("ascii"))
+    if keeps_whitespace or text == " ":
+        return True
+    return bool(text.strip(" \t\n\r\f"))
+
+
+def _shape_name(value: str) -> str:
+    """As the client writes it: ``encodeURIComponent``, plus ``! * ' ( )``."""
+    return quote(unescape(value), safe="~")
+
+
+def dom_shape(html: Any) -> str | None:
+    """A checksum of the element tree of the rendered root ``html``.
+
+    The text hashed is, for each node under the root in document order: an
+    element as ``<tag#id@key`` + its children + ``>`` (``#id`` and ``@key``
+    only when the attribute is present and not empty; the key is ``dj-key``,
+    else ``data-key``), a text node that counts as a child as ``t``, a ``dj-if``
+    boundary comment as ``c``. Which nodes count is the rule the client's path
+    walker uses (``isSignificantChild``), so two trees with one shape resolve
+    every path to corresponding nodes. ``12-vdom-patch.js`` (``domShape``)
+    computes the same text from the live DOM; ``tests/js`` holds them together.
+
+    ``None`` for anything this reader cannot follow (unbalanced tags): the
+    caller then answers with the whole page.
+    """
+    if not isinstance(html, str):
+        return None
+    out: list[str] = []
+    stack: list[str] = []
+    position = 0
+    while True:
+        match = _TOKEN.search(html, position)
+        if match is None:
+            break
+        text = html[position : match.start()]
+        position = match.end()
+        if stack and _counts_as_text(text, stack[-1] in _KEEPS_WHITESPACE):
+            out.append("t")
+        comment = match.group("comment")
+        if comment is not None:
+            if stack and _is_dj_if_comment(comment):
+                out.append("c")
+            continue
+        tag = match.group("tag").lower()
+        if match.group("close"):
+            if not stack or stack[-1] != tag:
+                return None
+            stack.pop()
+            if stack:
+                out.append(">")
+            continue
+        attrs = match.group("attrs")
+        if not stack:
+            # The root element itself: its own attributes are not part of the
+            # shape (the page GET stamps some on it).
+            stack.append(tag)
+            if attrs.rstrip().endswith("/") or tag in _VOID:
+                return None
+            continue
+        piece = "<" + tag
+        found = _ATTR["id"].search(attrs)
+        if found and found.group(1):
+            piece += "#" + _shape_name(found.group(1))
+        found = _ATTR["dj-key"].search(attrs) or _ATTR["data-key"].search(attrs)
+        if found and found.group(1):
+            piece += "@" + _shape_name(found.group(1))
+        out.append(piece)
+        if attrs.rstrip().endswith("/") or tag in _VOID:
+            out.append(">")
+            continue
+        stack.append(tag)
+        if tag in _RAW_TEXT:
+            end = re.compile(r"</%s\s*>" % re.escape(tag), re.IGNORECASE).search(html, position)
+            if end is None:
+                return None
+            if _counts_as_text(html[position : end.start()], tag in _KEEPS_WHITESPACE):
+                out.append("t")
+            position = end.end()
+            stack.pop()
+            out.append(">")
+    if stack:
+        return None
+    data = "".join(out).encode("ascii", "replace")
+    return "%08x%08x" % (zlib.crc32(data) & 0xFFFFFFFF, zlib.adler32(data) & 0xFFFFFFFF)
+
+
+def render_token(view: Any, request: Any, html: Any) -> str | None:
+    """``<digest>.<shape>`` for the rendered root ``html``: what the page GET
+    and every fallback answer carry, or ``None`` when either half is missing."""
+    digest = render_digest(view, request, html)
+    shape = dom_shape(html)
+    if not digest or not shape:
+        return None
+    return digest + "." + shape
+
+
+def supplied_token(request: Any) -> tuple[str, str] | None:
+    """``(digest, shape)`` as the client sent them, or ``None``.
+
+    The digest is the one the client was given; the shape is the one it
+    computed from its own DOM. ``None`` if the header is absent or either half
+    is not shaped like one.
+    """
+    value = request.headers.get(HEADER) if hasattr(request, "headers") else None
+    if not isinstance(value, str) or len(value) != _TAG_CHARS + 1 + _SHAPE_CHARS:
+        return None
+    digest, separator, shape = value.partition(".")
+    if separator != "." or len(digest) != _TAG_CHARS or len(shape) != _SHAPE_CHARS:
+        return None
+    if not _TAG_ALPHABET.issuperset(digest) or not _SHAPE_ALPHABET.issuperset(shape):
+        return None
+    return digest, shape
+
+
+def tokens_match(html: Any, expected_digest: str | None, supplied: tuple[str, str] | None) -> bool:
+    """Whether the client's ``(digest, shape)`` are those of the render ``html``.
+
+    The digest is compared in constant time. The shape is not a secret: it is
+    recomputed here from the server's own render and compared with what the
+    client reports about its DOM.
+    """
+    if not expected_digest or supplied is None:
+        return False
+    digest, shape = supplied
+    if not hmac.compare_digest(expected_digest.encode("ascii"), digest.encode("ascii")):
+        return False
+    return dom_shape(html) == shape
 
 
 def path_addressed(patches: list[Any]) -> list[Any]:

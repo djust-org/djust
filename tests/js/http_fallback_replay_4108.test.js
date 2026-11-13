@@ -12,27 +12,41 @@
  */
 import {describe, it, expect} from 'vitest';
 import {readFileSync} from 'node:fs';
-import {loadPage, domDifference, eventTarget} from './_http_fallback_replay.js';
+import {loadPage, domDifference, eventTarget, recordedServer, finishExits} from './_http_fallback_replay.js';
 
 const fixture = JSON.parse(
     readFileSync('./tests/js/fixtures/http_fallback_replay_4108.json', 'utf8'));
 
+// Steps (0-based) at which the real client's DOM is, by design, not laid out
+// as the server's last render, so it sends no token and gets the whole page:
+//   feed     the client keeps the rows a dj-update="append" list accumulated;
+//   leaving  the row removed at step 0 is still in the DOM, playing its exit.
+const WITHHELD = {feed: [1], leaving: [1, 2]};
+
 describe('page-POST fallback replay', () => {
     for (const [name, scenario] of Object.entries(fixture.scenarios)) {
         it(`${name}: the client ends with the expected DOM`, async () => {
-            const page = await loadPage(scenario.get, scenario.url);
+            const page = await loadPage(scenario.get, scenario.url, {hooks: {Widget: {}}});
+            const server = recordedServer(scenario);
             try {
                 const {win} = page;
                 for (let i = 0; i < scenario.events.length; i++) {
                     const [event, params] = scenario.events[i];
-                    const request = await page.send(event, params, scenario.answers[i],
+                    const request = await page.send(event, params, server,
                         eventTarget(win, event, params));
-                    // The client echoes the digest the page (then each answer) carried.
-                    expect(request.digest, `${name} step ${i + 1}: echoed digest`)
-                        .toBe(scenario.sent_digests[i]);
-                    expect(scenario.kinds[i]).toBe(
-                        'patches' in scenario.answers[i] ? 'patches' : 'html');
+                    if ((WITHHELD[name] || []).includes(i)) {
+                        expect(request.token, `${name} step ${i + 1}: no token`).toBe(null);
+                    } else {
+                        // The client echoes the digest the page (then each
+                        // answer) carried, with the shape it computed from its
+                        // own DOM: the server's shape of the same render,
+                        // character for character, or the server would never
+                        // answer with patches.
+                        expect(request.token, `${name} step ${i + 1}: token sent`)
+                            .toBe(scenario.sent_digests[i]);
+                    }
                 }
+                finishExits(win);
                 for (const mask of fixture.masks) {
                     for (const el of win.document.querySelectorAll(mask.selector)) {
                         el.textContent = mask.text;

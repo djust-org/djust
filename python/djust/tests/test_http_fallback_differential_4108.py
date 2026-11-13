@@ -65,6 +65,8 @@ EXPECTED_KINDS = {
     # handler set is gone, and the baseline differs from the client's page.
     "volatile": ["patches", "html", "html"],
     "stamped": ["html", "html"],
+    "leaving": ["patches", "patches", "patches"],
+    "hooked": ["patches", "patches", "patches"],
 }
 
 #: Diff renders per fallback request: the pre-handler baseline and the render
@@ -111,13 +113,16 @@ def _stable_document(document: str) -> str:
 
 
 def _stable_digests(record: dict) -> dict:
-    """Digests are keyed by a random session: rename them by order of appearance."""
+    """Digests are bound to a random session: rename them by order of appearance."""
     names: dict[str, str] = {}
 
     def name(value):
         if not value:
             return value
-        return names.setdefault(value, "digest-%d" % (len(names) + 1))
+        # "<digest>.<shape>": the shape is a checksum of the render's tree and
+        # is the same in every run, so it stays.
+        digest, _, shape = value.partition(".")
+        return names.setdefault(digest, "digest-%d" % (len(names) + 1)) + "." + shape
 
     document = record["get"]
     if record["get_digest"]:
@@ -142,6 +147,10 @@ async def _scenario(name: str, monkeypatch) -> dict:
     log = matrix.RenderLog(monkeypatch)
     matrix.reset_serial()
     fallback = await sync_to_async(matrix.run_fallback)(url, events, log)
+    # The same events from a client that sends no token: whole pages. The
+    # replay answers with these when the built client withholds its token.
+    matrix.reset_serial()
+    whole = await sync_to_async(lambda: matrix.run_fallback(url, events, log, echo=False))()
     socket = await matrix.run_websocket(url, view_path, events)
     stable = _stable_digests(fallback)
     equal_to_socket = name not in KNOWN_DIFFERENT
@@ -151,6 +160,9 @@ async def _scenario(name: str, monkeypatch) -> dict:
         "get": _stable_document(stable["get"]),
         "sent_digests": stable["sent_digests"],
         "answers": stable["answers"],
+        "answers_whole": [
+            {k: v for k, v in answer.items() if k != "render_digest"} for answer in whole["answers"]
+        ],
         "kinds": fallback["kinds"],
         "renders": fallback["renders"],
         "fallback_final": _masked(fallback["final"]),
