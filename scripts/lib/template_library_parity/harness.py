@@ -370,11 +370,15 @@ def inventory() -> dict[str, variants.TagInfo]:
     from django.template.library import import_library
     from djust import template_libraries as tl
 
+    from djust._removed_settings import REMOVED_TEMPLATE_TAGS
+
     rust_keys = _rust_handler_keys()
     infos: dict[str, variants.TagInfo] = {}
     for label, dotted in LIBRARIES.items():
         library = import_library(dotted)
         for name in sorted(library.tags):
+            if name in REMOVED_TEMPLATE_TAGS:
+                continue  # registered only to refuse itself (#4002); it renders nothing
             fn = library.tags[name]
             kind = tl._classify(fn)
             sig, keys = _python_params(fn, kind)

@@ -17,13 +17,8 @@ from django.template import Context, Template
 
 from djust.components.components.image_lightbox import ImageLightbox
 from djust.components.components.modal import Modal
-from djust.components.components.tour import Tour
 
 IMAGES = [{"src": "/a.jpg", "alt": "A"}, {"src": "/b.jpg", "alt": "B"}]
-STEPS = [
-    {"target": "#a", "title": "One", "content": "First."},
-    {"target": "#b", "title": "Two", "content": "Second."},
-]
 
 
 def _tag(source: str, **context) -> str:
@@ -43,35 +38,19 @@ def _lightbox_paths() -> dict[str, str]:
     }
 
 
-def _tour_paths() -> dict[str, str]:
-    return {
-        "class": Tour(steps=STEPS, active=0).render(),
-        "tag": _tag("{% tour steps=steps active=0 %}", steps=STEPS),
-    }
-
-
 class TestShippedDialogsMarkTheirCloseControl:
     def test_the_lightbox_close_button_on_every_path(self):
         for path, html in _lightbox_paths().items():
             button = _button(html, "dj-lightbox__close")
             assert "data-dj-close" in button and "dj-click" in button, path
 
-    def test_the_tour_skip_button_on_every_path(self):
-        for path, html in _tour_paths().items():
-            button = _button(html, "dj-tour__skip")
-            assert "data-dj-close" in button and "dj-click" in button, path
-
-    def test_the_last_tour_step_has_no_skip_and_so_no_marker(self):
-        html = Tour(steps=STEPS, active=1).render()
-        assert "data-dj-close" not in html
-
     def test_the_stock_modal_uses_dj_modal_close(self):
         html = Modal(title="T", is_open=True).render()
         assert re.search(r'class="dj-modal__close"[^>]*dj-click', html)
 
-    def test_the_marker_is_the_only_difference_for_the_lightbox_and_tour(self):
+    def test_the_marker_is_the_only_difference_for_the_lightbox(self):
         """Additive markup: removing the marker gives the markup the paths had before."""
-        for html in [*_lightbox_paths().values(), *_tour_paths().values()]:
+        for html in _lightbox_paths().values():
             assert " data-dj-close" in html
             assert html.replace(" data-dj-close", "").count("data-dj-close") == 0
 

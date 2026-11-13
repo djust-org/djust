@@ -596,6 +596,7 @@ Every replacement works on 1.3.x, so make the change there.
 | `PersistentLiveView` (`djust.PersistentLiveView`, `djust.live_view.PersistentLiveView`) | `LiveView`, with the fields to keep declared as above. Importing it raises `ImportError` with this advice. |
 | System check `djust.V011` (sticky child and parent snapshot opt-in) | Remove it from `SILENCED_SYSTEM_CHECKS`; nothing reports it. `djust.C304` now warns about a `client=True` field with a credential-like name. |
 | `NonPersistableStateError`, and the `strict=` argument of `LiveView._capture_snapshot_state()` | Nothing. A client field has to be JSON, and a model or `Decimal` is refused when the token is built. |
+| The component classes behind the 33 removed component template tags, from `djust.components` and `djust.components.components`: `ActivityFeed`, `AgentStep`, `AnimatedNumber`, `BreadcrumbDropdown`, `CalendarView`, `CollabSelection`, `ComparisonTable`, `CronInput`, `CursorsOverlay`, `DataCardGrid`, `DiffViewer`, `ErrorPage`, `GanttChart`, `ImageUploadPreview`, `LiveIndicator`, `MapPicker`, `MasonryGrid`, `OrgChart`, `PivotTable`, `PromptEditor`, `QRCode`, `Reactions`, `Ribbon`, `Tour`, `VoiceInput`, `FileTree`, `LogViewer`, `MarkdownEditor`, `Terminal`, `ConversationThread`, `ThinkingIndicator`, `MultimodalInput`, `FeedbackWidget` | Nothing in djust; copy the class from djust 1.3 into your project if you need it |
 
 <!-- END GENERATED removed-table:python -->
 
@@ -730,6 +731,7 @@ To open or close from your own handler, set the state:
 | `window.LiveViewWebSocket`, `window.setCacheConfig`, `window.globalLoadingManager` | The same names on `window.djust` |
 | `block["super"]` and `dict(block)` inside a custom tag that receives `block` | `context["block"].super()` |
 | System checks `djust.C018` and `djust.T015` | Remove them from `SILENCED_SYSTEM_CHECKS`; nothing reports them. |
+| The 33 component template tags no app was found using: all of `_advanced.py` (`{% tour %}`, `{% map_picker %}`, `{% pivot_table %}`, `{% cursors %}`, ...), `{% terminal %}`, `{% markdown_editor %}`, `{% log_viewer %}` and `{% file_tree %}` from `_dev_tools.py` and the AI-chat widgets (`{% conversation_thread %}`, `{% thinking_indicator %}`, `{% multimodal_input %}`, `{% feedback %}`) | The error names the tag and its replacement where there is one (`{% breadcrumb %}` for `{% breadcrumb_dropdown %}`, `{% tree_view %}` for `{% file_tree %}`, `{% markdown_textarea %}` for `{% markdown_editor %}`, ...); otherwise copy the tag from djust 1.3 into a template library of your own |
 
 <!-- END GENERATED removed-table:templates -->
 

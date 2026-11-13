@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Real-browser check of the SortableList, SortableGrid, JsonViewer and LogViewer hooks (#2985).
+"""Real-browser check of the SortableList, SortableGrid and JsonViewer hooks (#2985).
 
-Those four components rendered a ``dj-hook`` that no shipped script answered.
+Those three components rendered a ``dj-hook`` that no shipped script answered.
 Each now has a script under ``djust_components/``. This drives them, as a
 reader would, against a real LiveView over a real WebSocket:
 
@@ -11,8 +11,6 @@ reader would, against a real LiveView over a real WebSocket:
   reorder still works, and a server-initiated reorder lands correctly;
 * JsonViewer: click and keyboard expand/collapse, and Copy puts the formatted
   JSON on the clipboard;
-* LogViewer: a ``push_event`` appends coloured lines, the log follows the newest
-  line until the reader scrolls up, and a server re-render is followed the same way;
 * a page whose app registered its OWN hook of the same name keeps it: the app
   hook runs and the shipped one does not, while the shipped hooks of the other
   components on that page still work.
@@ -42,7 +40,7 @@ from playwright.sync_api import sync_playwright
 
 SCRIPTS = "".join(
     f'<script src="/static/djust_components/{name}.js" defer></script>'
-    for name in ("sortable-list", "sortable-grid", "json-viewer", "log-viewer")
+    for name in ("sortable-list", "sortable-grid", "json-viewer")
 )
 
 PROJECT = {
@@ -101,20 +99,8 @@ PROJECT = {
             <p>grid: <span id="grid-order">{{ grid_csv }}</span></p>
           </section>
           <section id="json-box">{%% json_viewer data=doc collapsed_depth=1 %%}</section>
-          <section id="log-box">
-            {%% log_viewer lines=lines stream_event="new_logs" max_lines=40 %%}
-          </section>
-          <section id="log3-box">
-            {%% log_viewer lines=lines2 stream_event="new_logs3" %%}
-          </section>
-          <section id="log2-box">
-            {%% log_viewer lines=lines2 %%}
-          </section>
           <button id="shuffle" dj-click="shuffle">shuffle</button>
           <button id="drop-one" dj-click="drop_one">drop one</button>
-          <button id="stream" dj-click="stream">stream</button>
-          <button id="grow" dj-click="grow">grow</button>
-          <button id="burst" dj-click="stream_many">burst</button>
         </div>
         """
 
@@ -131,12 +117,8 @@ PROJECT = {
                 self.items = [{"id": k, "label": k.title()} for k in ("alpha", "beta", "gamma", "delta")]
                 self.cells = [{"id": f"t{i}", "label": f"Tile {i}"} for i in range(1, 7)]
                 self.doc = {"name": 'djust "viewer"', "tags": ["a", "b"], "nested": {"deep": {"k": 1}}}
-                self.lines = [f"2026-10-04 INFO line {i}" for i in range(1, 40)]
-                self.lines2 = [f"2026-10-04 DEBUG row {i}" for i in range(1, 40)]
                 self.list_csv = ",".join(i["id"] for i in self.items)
                 self.grid_csv = ",".join(c["id"] for c in self.cells)
-                self.n = 0
-                self.g = 0
 
             # `order` comes from the browser: accept it only as a permutation
             # of the ids rendered, ignore anything else.
@@ -166,30 +148,14 @@ PROJECT = {
                 self.items = list(reversed(self.items))
                 self.list_csv = ",".join(i["id"] for i in self.items)
 
-            @event_handler()
-            def stream(self, **kwargs):
-                self.n += 1
-                self.push_event("new_logs", {"lines": [f"2026-10-04 ERROR streamed {self.n}"]})
-
-            @event_handler()
-            def stream_many(self, **kwargs):
-                for i in range(2000):
-                    self.push_event("new_logs3", {"line": f"2026-10-04 INFO burst {i}"})
-
-            @event_handler()
-            def grow(self, **kwargs):
-                self.g += 1
-                self.lines2 = self.lines2 + [f"2026-10-04 WARN grown {self.g}"]
-
         class Demo(Base):
             template = page(SCRIPTS)
 
         class Custom(Base):
-            # The app registered its own SortableList and LogViewer hooks.
+            # The app registered its own SortableList and SortableGrid hooks.
             template = page(
                 "<script>window.djust = window.djust || {}; window.djust.hooks = {"
-                "SortableList: {mounted() { (window.__appHooks = window.__appHooks || []).push('list'); }},"
-                "LogViewer: {mounted() { (window.__appHooks = window.__appHooks || []).push('log'); }}};"
+                "SortableList: {mounted() { (window.__appHooks = window.__appHooks || []).push('list'); }}};"
                 "window.DjustHooks = {SortableGrid: {mounted() { (window.__appHooks = window.__appHooks || []).push('grid'); }}};"
                 "</script>" + SCRIPTS
             )
@@ -546,146 +512,11 @@ def main() -> int:
                 )
                 page.locator("#json-box").screenshot(path=str(shots / "03-json-viewer.png"))
 
-                # ---------------- LogViewer ----------------
-                body = "#log-box .dj-log-viewer__body"
-                body2 = "#log2-box .dj-log-viewer__body"
-                at_bottom = "b => b.scrollTop + b.clientHeight >= b.scrollHeight - 2"
-                check(
-                    page.eval_on_selector(body, at_bottom), "log: opens scrolled to the newest line"
-                )
-                page.click("#stream")
-                try:
-                    page.wait_for_selector(f"{body} .dj-log-viewer__line--error", timeout=6000)
-                    check(True, "log: a push_event appends an ERROR-coloured line")
-                except Exception:
-                    check(False, "log: a push_event appends an ERROR-coloured line")
-                try:
-                    page.wait_for_function(
-                        "s => { const b = document.querySelector(s); return b.scrollTop + b.clientHeight >= b.scrollHeight - 2; }",
-                        arg=body,
-                        timeout=3000,
-                    )
-                except Exception:
-                    pass
-                check(
-                    page.eval_on_selector(body, at_bottom),
-                    "log: follows the streamed line (next frame)",
-                )
-                check(
-                    page.eval_on_selector(
-                        body,
-                        "b => b.querySelector('.dj-log-viewer__line:last-child .dj-log-viewer__num').textContent",
-                    )
-                    == "40",
-                    "log: streamed line numbering continues (40)",
-                )
-                page.focus(body)
-                page.keyboard.press("Home")  # the reader: a key press, then the scroll event
-                page.wait_for_timeout(
-                    150
-                )  # the scroll event: that is how the hook learns the reader moved
-                page.click("#stream")
-                page.wait_for_timeout(400)
-                check(
-                    page.eval_on_selector(body, "b => b.scrollTop") == 0,
-                    "log: reader scrolled up -> not yanked to the bottom",
-                )
-                check(
-                    page.eval_on_selector_all(f"{body} .dj-log-viewer__line", "els => els.length")
-                    == 40,
-                    "log: data-max-lines keeps the window at 40",
-                )
-                check(
-                    page.eval_on_selector(body2, at_bottom),
-                    "log2 (re-rendered): opens at the bottom",
-                )
-                page.click("#grow")
-                page.wait_for_function(
-                    "s => document.querySelector(s).textContent.includes('grown 1')",
-                    arg=body2,
-                    timeout=6000,
-                )
-                check(
-                    page.eval_on_selector(body2, at_bottom), "log2: a server re-render is followed"
-                )
-                page.focus(body2)
-                page.keyboard.press("Home")
-                page.wait_for_timeout(150)  # the scroll event
-                page.click("#grow")
-                page.wait_for_function(
-                    "s => document.querySelector(s).textContent.includes('grown 2')",
-                    arg=body2,
-                    timeout=6000,
-                )
-                check(
-                    page.eval_on_selector(body2, "b => b.scrollTop") == 0,
-                    "log2: reader scrolled up is left alone by a re-render",
-                )
-                page.locator("#log-box").screenshot(path=str(shots / "04-log-viewer-streamed.png"))
-                page.locator("#log2-box").screenshot(
-                    path=str(shots / "04b-log-viewer-rerendered.png")
-                )
-
-                # ---------------- LogViewer under a fast server stream ----------------
-                load("/")
-                body3 = "#log3-box .dj-log-viewer__body"
-                gap = "b => b.scrollHeight - b.clientHeight - b.scrollTop"
-                page.evaluate("() => document.getElementById('burst').click()")
-                page.wait_for_function(
-                    "s => document.querySelector(s).querySelectorAll('.dj-log-viewer__line').length >= 39 + 2000",
-                    arg=body3,
-                    timeout=20000,
-                )
-                page.wait_for_timeout(300)
-                check(
-                    page.eval_on_selector(body3, gap) <= 1,
-                    f"log: 2,000 single events from the server keep following (gap {page.eval_on_selector(body3, gap):.0f}px)",
-                )
-                page.evaluate("() => document.getElementById('burst').click()")
-                page.wait_for_function(
-                    "s => document.querySelector(s).querySelectorAll('.dj-log-viewer__line').length >= 39 + 4000",
-                    arg=body3,
-                    timeout=20000,
-                )
-                page.wait_for_timeout(300)
-                check(
-                    page.eval_on_selector(body3, gap) <= 1,
-                    "log: and a second burst follows too (pinning never lapsed)",
-                )
-                page.focus(body3)
-                page.keyboard.press("Home")
-                page.wait_for_timeout(200)
-                page.evaluate("() => document.getElementById('burst').click()")
-                page.wait_for_function(
-                    "s => document.querySelector(s).querySelectorAll('.dj-log-viewer__line').length >= 39 + 6000",
-                    arg=body3,
-                    timeout=20000,
-                )
-                page.wait_for_timeout(300)
-                check(
-                    page.eval_on_selector(body3, "b => b.scrollTop") == 0,
-                    "log: a reader who scrolled up stays up while 2,000 events stream",
-                )
-                page.eval_on_selector(body3, "b => { b.scrollTop = b.scrollHeight; }")
-                page.wait_for_timeout(200)
-                page.evaluate("() => document.getElementById('burst').click()")
-                page.wait_for_function(
-                    "s => document.querySelector(s).querySelectorAll('.dj-log-viewer__line').length >= 39 + 8000",
-                    arg=body3,
-                    timeout=20000,
-                )
-                page.wait_for_timeout(300)
-                check(
-                    page.eval_on_selector(body3, gap) <= 1,
-                    "log: scrolling back to the bottom resumes following",
-                )
-
                 # ---------------- app hooks win ----------------
                 console.clear()
                 load("/custom/")
                 ran = page.evaluate("() => window.__appHooks || []")
                 check("list" in ran, "custom: the app's own SortableList hook ran (djust.hooks)")
-                check("log" in ran, "custom: the app's own LogViewer hook ran (djust.hooks)")
                 check(
                     "grid" in ran, "custom: the app's own SortableGrid hook ran (window.DjustHooks)"
                 )
@@ -695,9 +526,8 @@ def main() -> int:
                     and page.eval_on_selector(
                         "#grid-box .dj-sortable-grid__item", "e => e.hasAttribute('tabindex')"
                     )
-                    is False
-                    and page.eval_on_selector(body, "b => b.hasAttribute('tabindex')") is False,
-                    "custom: the shipped hooks did not touch those three elements",
+                    is False,
+                    "custom: the shipped hooks did not touch those two elements",
                 )
                 page.locator("#json-box .dj-json__node--collapsed > .dj-json__toggle").first.click()
                 check(
@@ -744,29 +574,6 @@ def main() -> int:
                 check(
                     ratio >= 4.5,
                     f"json: a string value reads on the viewer ({colours['string']} on {colours['viewer']} = {ratio:.1f}:1)",
-                )
-
-                # ---------------- LogViewer: many single-line events stay cheap ----------------
-                load("/")
-                took = page.evaluate(
-                    """() => {
-                        const send = (p) => window.djust.dispatchPushEventToHooks('new_logs3', p);
-                        const bulk = []; for (let i = 0; i < 10000; i++) bulk.push('INFO bulk ' + i);
-                        send({lines: bulk});
-                        const t0 = performance.now();
-                        for (let i = 0; i < 10000; i++) send({line: 'INFO single ' + i});
-                        return performance.now() - t0;
-                    }"""
-                )
-                rows = page.eval_on_selector_all(
-                    "#log3-box .dj-log-viewer__line", "els => els.length"
-                )
-                check(
-                    rows == 39 + 20000, f"log: 20,000 streamed lines are all present ({rows} rows)"
-                )
-                check(
-                    took < 8000,
-                    f"log: 10,000 single-line events onto a 10,000-row viewer took {took:.0f} ms (< 8000)",
                 )
 
                 errors = [t for k, t in console if k in ("error", "pageerror")]

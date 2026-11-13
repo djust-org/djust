@@ -38,10 +38,9 @@ from django.utils.safestring import mark_safe
 from djust import _rust
 from djust import template_libraries as tl
 from djust.components import rust_handlers as rh
+from djust._removed_settings import REMOVED_TEMPLATE_TAGS
 from djust.components.templatetags import (
-    _advanced,
     _charts,
-    _dev_tools,
     _forms,
     djust_components as lib,
 )
@@ -50,8 +49,9 @@ pytestmark = pytest.mark.components
 
 LAYOUT = {"app_shell", "app_sidebar", "app_header", "app_content"}
 NATIVE = {n for n, _h in rh.NATIVE_INLINE_HANDLERS} | {n for n, _e, _h in rh.NATIVE_BLOCK_HANDLERS}
-BRIDGED = sorted(set(lib.register.tags) - NATIVE)
-_MODULES = (lib, _forms, _advanced, _charts, _dev_tools)
+# A removed tag (#4002) stays registered only to refuse itself; it renders nothing.
+BRIDGED = sorted(set(lib.register.tags) - NATIVE - set(REMOVED_TEMPLATE_TAGS))
+_MODULES = (lib, _forms, _charts)
 
 
 def _django(src: str, ctx: dict) -> str:

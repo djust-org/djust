@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Real-browser check of the DashboardGrid, MentionsInput, CursorsOverlay and
-CollabSelection hooks (#2985, batch 4).
+"""Real-browser check of the DashboardGrid and MentionsInput hooks (#2985, batch 4).
 
-Those four components rendered a ``dj-hook`` that no shipped script answered.
+Those two components rendered a ``dj-hook`` that no shipped script answered.
 Each now has a script under ``djust_components/``. This drives them, as a
 reader would, against a real LiveView over a real WebSocket:
 
@@ -19,14 +18,6 @@ reader would, against a real LiveView over a real WebSocket:
   chosen mention goes to the server as ``{text, mentions: [ids]}`` with the
   plain input event's fields kept, Enter that chooses does not also submit,
   edited-away mentions are dropped, hostile names stay text;
-* CursorsOverlay: the arrows are decoration, joins and leaves are announced,
-  labels stay inside the overlay and off each other (also after a resize),
-  motion is eased and switched off under prefers-reduced-motion;
-* CollabSelection: ranges of a target's text are highlighted with the CSS
-  Custom Highlight API without touching the page's nodes, names sit above the
-  start of each range and follow scrolling, server updates and edits of the
-  text re-anchor, a hostile colour never reaches the style rule, teardown
-  leaves nothing behind;
 * a page whose app registered its OWN hooks of the same name keeps them.
 
 Self-contained: builds a LiveView project in a temp directory, serves it with
@@ -54,7 +45,7 @@ from playwright.sync_api import sync_playwright
 
 SCRIPTS = "".join(
     f'<script src="/static/djust_components/{name}.js" defer></script>'
-    for name in ("dashboard-grid", "mentions-input", "cursors-overlay", "collab-selection")
+    for name in ("dashboard-grid", "mentions-input")
 )
 
 PROJECT = {
@@ -90,17 +81,9 @@ PROJECT = {
         from django.urls import path
         from . import views
 
-        def with_policy(view):
-            def wrapped(request, *args, **kwargs):
-                response = view(request, *args, **kwargs)
-                response["Content-Security-Policy"] = "style-src-elem 'self'"
-                return response
-            return wrapped
-
         urlpatterns = [
             path("", views.Demo.as_view()),
             path("custom/", views.Custom.as_view()),
-            path("csp/", with_policy(views.Demo.as_view())),
         ]
     """,
     "cmpapp/views.py": (
@@ -113,7 +96,6 @@ PROJECT = {
         SCRIPTS = '%s'
 
         HOSTILE = "<img src=x onerror=window.__pwn=1>"
-        DOC = "Hello brave new world. " * 60 + "The end."
 
         ROUTE_PANELS = [{"id": "r1", "title": "R1", "col": 1, "row": 1, "width": 1, "height": 1, "content": "x"}]
         ROUTE_USERS = [{"id": "1", "name": "Alice"}, {"id": "2", "name": "Bob"}]
@@ -177,28 +159,6 @@ PROJECT = {
             {%% mentions_input name="message" users=mention_users event="send_message" %%}
           </section>
 
-          <section id="cu-box" style="margin-top:2rem">
-            <button id="cu-move" dj-click="cu_move">move</button>
-            <button id="cu-add" dj-click="cu_add">add</button>
-            <button id="cu-remove" dj-click="cu_remove">remove</button>
-            <button id="cu-pile" dj-click="cu_pile">pile</button>
-            <div id="cu-stage" style="position:relative;width:420px;height:220px;border:1px solid #888">
-              {%% cursors users=cursors %%}
-            </div>
-          </section>
-
-          <section id="cs-box" style="margin-top:2rem">
-            <button id="cs-move" dj-click="cs_move">move</button>
-            <button id="cs-edit" dj-click="cs_edit">edit</button>
-            <button id="cs-hostile" dj-click="cs_hostile">hostile colour</button>
-            <button id="cs-hide" dj-click="cs_hide">hide</button>
-            <div id="cs-scroll" style="height:90px;width:520px;overflow:auto;border:1px solid #888;padding:24px 8px 8px">
-              <p id="doc" style="margin:0">{{ doc }}</p>
-            </div>
-            <div id="cs-xform" style="transform: translate(40px, 25px)">
-              {%% if cs_show %%}{%% collab_selection users=selections target="#doc" %%}{%% endif %%}
-            </div>
-          </section>
           <section id="route-box" style="margin-top:2rem">
             <h2>routing</h2>
             <div id="route-page">{%% mentions_input name="message" users=route_users event="send_message" %%}</div>
@@ -249,16 +209,6 @@ PROJECT = {
                     {"id": "5", "name": HOSTILE},
                     {"id": "6", "name": "Sam"},
                     {"id": "7", "name": "Sam"},
-                ]
-                self.cursors = [
-                    {"name": "Alice", "color": "#3b82f6", "x": 40, "y": 40},
-                    {"name": "Bob", "color": "#ef4444", "x": 200, "y": 120},
-                ]
-                self.doc = DOC
-                self.cs_show = True
-                self.selections = [
-                    {"name": "Alice", "color": "#3b82f6", "start": 0, "end": 5, "text": "Hello"},
-                    {"name": "Bob", "color": "#ef4444", "start": 6, "end": 11, "text": "brave"},
                 ]
 
             # ---- DashboardGrid: the handlers the component documents ----
@@ -316,61 +266,15 @@ PROJECT = {
                 self.mn_ids = ",".join(m for m in raw if isinstance(m, str) and m in allowed)
                 self.mn_extra = ",".join(sorted(k for k in kwargs if not k.startswith("_")))
 
-            # ---- CursorsOverlay ----
-            @event_handler()
-            def cu_move(self, **kwargs):
-                self.cursors = [dict(c, x=c["x"] + 30, y=c["y"] + 20) for c in self.cursors]
-
-            @event_handler()
-            def cu_add(self, **kwargs):
-                self.cursors = self.cursors + [{"name": "Carol", "color": "#22c55e", "x": 400, "y": 205}]
-
-            @event_handler()
-            def cu_remove(self, **kwargs):
-                self.cursors = [c for c in self.cursors if c["name"] != "Bob"]
-
-            @event_handler()
-            def cu_pile(self, **kwargs):
-                self.cursors = self.cursors + [
-                    {"name": "Dave", "color": "#f59e0b", "x": 40, "y": 40},
-                    {"name": "Erin", "color": "#8b5cf6", "x": 40, "y": 40},
-                ]
-
-            # ---- CollabSelection ----
-            @event_handler()
-            def cs_move(self, **kwargs):
-                self.selections = [
-                    {"name": "Alice", "color": "#3b82f6", "start": 12, "end": 15, "text": "new"},
-                    {"name": "Carol", "color": "#22c55e", "start": 99999, "end": 100000, "text": "end"},
-                ]
-
-            @event_handler()
-            def cs_edit(self, **kwargs):
-                self.doc = "Howdy" + DOC[5:]
-
-            @event_handler()
-            def cs_hostile(self, **kwargs):
-                self.selections = [
-                    {"name": "Mallory", "color": "red; } body { display:none } .x {", "start": 0, "end": 5, "text": "Hello"},
-                    {"name": "Trudy", "color": "url(https://evil.example/x)", "start": 6, "end": 11, "text": "brave"},
-                ]
-
-            @event_handler()
-            def cs_hide(self, **kwargs):
-                self.cs_show = not self.cs_show
-
         class Demo(Base):
             template = page(SCRIPTS)
 
         class Custom(Base):
-            # The app registered its own hooks: two in window.djust.hooks, two in window.DjustHooks.
+            # The app registered its own hooks in window.djust.hooks.
             template = page(
                 "<script>window.djust = window.djust || {}; window.djust.hooks = {"
                 "DashboardGrid: {mounted() { (window.__appHooks = window.__appHooks || []).push('grid'); }},"
                 "MentionsInput: {mounted() { (window.__appHooks = window.__appHooks || []).push('mentions'); }}};"
-                "window.DjustHooks = {"
-                "CursorsOverlay: {mounted() { (window.__appHooks = window.__appHooks || []).push('cursors'); }},"
-                "CollabSelection: {mounted() { (window.__appHooks = window.__appHooks || []).push('collab'); }}};"
                 "</script>" + SCRIPTS
             )
         '''
@@ -437,13 +341,6 @@ def start_server(root: Path, port: int) -> subprocess.Popen:
     proc.kill()
     raise SystemExit("server did not start")
 
-
-HIGHLIGHT_RULES = """
-() => [...document.adoptedStyleSheets, ...document.styleSheets]
-    .flatMap((s) => { try { return [...s.cssRules].map((r) => r.cssText); } catch (e) { return []; } })
-    .filter((t) => t.includes('::highlight(dj-collab-'))
-    .join('\\n')
-"""
 
 GRID_GEOMETRY = """
 () => {
@@ -1204,284 +1101,6 @@ def main() -> int:
                     "routing: and the page's dashboard never saw them",
                 )
 
-                # ======================= CursorsOverlay =======================
-                cu = "#cu-box .dj-cursors"
-                page.eval_on_selector("#cu-stage", "e => e.scrollIntoView({block: 'start'})")
-                page.wait_for_timeout(300)
-                check(
-                    page.eval_on_selector_all(
-                        f"{cu} .dj-cursors__cursor",
-                        "els => els.every(e => e.getAttribute('aria-hidden') === 'true')",
-                    ),
-                    "cursors: the arrows are decoration (aria-hidden)",
-                )
-                check(
-                    page.get_attribute(cu, "aria-label") == "2 cursors",
-                    "cursors: the group keeps its label",
-                )
-                page.click("#cu-add")
-                page.wait_for_function(
-                    "() => document.querySelectorAll('#cu-box .dj-cursors__cursor').length === 3",
-                    timeout=6000,
-                )
-                page.wait_for_timeout(400)
-                check(live() == "Carol joined", f"cursors: a join is announced ({live()!r})")
-
-                def inside_and_apart():
-                    stage = rect("#cu-stage")
-                    rects = page.eval_on_selector_all(
-                        f"{cu} .dj-cursors__label",
-                        "els => els.map(e => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom]; })",
-                    )
-                    inside = all(
-                        lf >= stage["l"] - 1
-                        and t >= stage["t"] - 1
-                        and r <= stage["r"] + 1
-                        and b <= stage["b"] + 1
-                        for lf, t, r, b in rects
-                    )
-                    apart = all(
-                        not (a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3])
-                        for i, a in enumerate(rects)
-                        for b in rects[i + 1 :]
-                    )
-                    return inside, apart, rects
-
-                inside, apart, rects = inside_and_apart()
-                check(
-                    inside,
-                    f"cursors: every label is inside the overlay, also the one at the corner ({[[round(v) for v in r] for r in rects]})",
-                )
-                check(apart, "cursors: and no label sits on another")
-                page.screenshot(path=str(shots / "04-cursors.png"))
-                page.click("#cu-pile")
-                page.wait_for_function(
-                    "() => document.querySelectorAll('#cu-box .dj-cursors__cursor').length === 5",
-                    timeout=6000,
-                )
-                page.wait_for_timeout(500)
-                inside, apart, rects = inside_and_apart()
-                check(
-                    apart and inside,
-                    f"cursors: five cursors, three of them on one spot, still have separate labels ({[[round(v) for v in r] for r in rects]})",
-                )
-                page.click("#cu-remove")
-                page.wait_for_function(
-                    "() => document.querySelectorAll('#cu-box .dj-cursors__cursor').length === 4",
-                    timeout=6000,
-                )
-                page.wait_for_timeout(400)
-                check(live() == "Bob left", f"cursors: a leave is announced ({live()!r})")
-                page.click("#cu-move")
-                page.wait_for_timeout(600)
-                check(live() == "Bob left", "cursors: a movement is not announced")
-                check(
-                    page.eval_on_selector(
-                        f"{cu} .dj-cursors__cursor", "e => getComputedStyle(e).transitionDuration"
-                    )
-                    != "0s",
-                    "cursors: arrows ease to a new position",
-                )
-                page.emulate_media(reduced_motion="reduce")
-                check(
-                    page.eval_on_selector(
-                        f"{cu} .dj-cursors__cursor", "e => getComputedStyle(e).transitionDuration"
-                    )
-                    == "0s",
-                    "cursors: not under prefers-reduced-motion",
-                )
-                page.emulate_media(reduced_motion="no-preference")
-                # a narrower overlay: the label of a cursor that no longer has room on its right goes to its left
-                page.wait_for_timeout(300)
-                alice = page.eval_on_selector(
-                    f"{cu} .dj-cursors__cursor[data-user=Alice]", "e => parseFloat(e.style.left)"
-                )
-                page.evaluate(
-                    f"() => {{ document.getElementById('cu-stage').style.width = '{int(alice + 30)}px'; }}"
-                )
-                page.wait_for_timeout(500)
-                flipped = page.eval_on_selector(
-                    f"{cu} .dj-cursors__cursor[data-user=Alice] .dj-cursors__label",
-                    "e => e.classList.contains('dj-cursors__label--left')",
-                )
-                lab = rect(f"{cu} .dj-cursors__cursor[data-user=Alice] .dj-cursors__label")
-                stage = rect("#cu-stage")
-                check(
-                    flipped and lab["r"] <= stage["r"] + 1,
-                    f"cursors: a resize of the overlay re-places the labels (flipped {flipped}, label right {lab['r']:.0f} vs {stage['r']:.0f})",
-                )
-                page.evaluate(
-                    "() => { document.getElementById('cu-stage').style.width = '420px'; }"
-                )
-                page.wait_for_timeout(500)
-                check(
-                    not page.eval_on_selector(
-                        f"{cu} .dj-cursors__cursor[data-user=Alice] .dj-cursors__label",
-                        "e => e.classList.contains('dj-cursors__label--left')",
-                    ),
-                    "cursors: and back again when there is room",
-                )
-
-                # ======================= CollabSelection =======================
-                cs = "#cs-box .dj-collab-sel"
-                page.eval_on_selector("#cs-box", "e => e.scrollIntoView({block: 'start'})")
-                page.wait_for_timeout(500)
-                highlights = (
-                    "() => { const out = {}; for (const [k, h] of CSS.highlights) "
-                    "if (k.startsWith('dj-collab-')) out[k] = [...h].map(r => r.toString()).join('|'); return out; }"
-                )
-                got = page.evaluate(highlights)
-                check(
-                    sorted(got.values()) == ["Hello", "brave"],
-                    f"collab: each selection is highlighted at its offsets in the target's text ({got})",
-                )
-                check(
-                    page.evaluate("() => document.getElementById('doc').innerHTML")
-                    == "Hello brave new world. " * 60 + "The end.",
-                    "collab: the page's own text nodes are untouched (no marks, no wrappers)",
-                )
-                check(
-                    page.eval_on_selector(
-                        cs, "e => e.classList.contains('dj-collab-sel--anchored')"
-                    ),
-                    "collab: the component marks itself anchored",
-                )
-                names = page.eval_on_selector_all(
-                    f"{cs} .dj-collab-sel__label",
-                    "els => els.map(e => { const r = e.getBoundingClientRect(); return [e.textContent, getComputedStyle(e).position, r.left, r.top, r.bottom]; })",
-                )
-                doc_r = rect("#doc")
-                check(
-                    all(n[1] == "fixed" for n in names)
-                    and abs(names[0][2] - doc_r["l"]) < 12
-                    and names[0][4] <= doc_r["t"] + 24,
-                    f"collab: each name sits above the start of its range ({names})",
-                )
-                range_rect = page.evaluate(
-                    "() => { const k = Object.keys(Object.fromEntries(CSS.highlights)).filter(k => k.startsWith('dj-collab-'))[0]; "
-                    "const r = [...CSS.highlights.get(k)][0].getBoundingClientRect(); return [r.left, r.top]; }"
-                )
-                check(
-                    abs(names[0][2] - range_rect[0]) < 3 and abs(names[0][4] - range_rect[1]) < 8,
-                    f"collab: the first name is placed from its range's own client rect ({names[0][2:]} vs {range_rect})",
-                )
-                page.screenshot(path=str(shots / "05-collab.png"))
-                # the highlight really paints (the ::highlight rule applies a background)
-                check(
-                    len(page.evaluate(HIGHLIGHT_RULES)) > 0,
-                    "collab: the highlight rules are in place",
-                )
-                # scrolling the target moves the names with the text; one scrolled out is hidden
-                page.evaluate("() => { document.getElementById('cs-scroll').scrollTop = 40; }")
-                page.wait_for_timeout(300)
-                vis = page.eval_on_selector_all(
-                    f"{cs} .dj-collab-sel__label",
-                    "els => els.map(e => getComputedStyle(e).visibility)",
-                )
-                check(
-                    vis == ["hidden", "hidden"],
-                    f"collab: names whose text scrolled out of the target are hidden ({vis})",
-                )
-                page.evaluate("() => { document.getElementById('cs-scroll').scrollTop = 0; }")
-                page.wait_for_timeout(300)
-                vis = page.eval_on_selector_all(
-                    f"{cs} .dj-collab-sel__label",
-                    "els => els.map(e => getComputedStyle(e).visibility)",
-                )
-                check(
-                    vis == ["visible", "visible"],
-                    f"collab: and shown again when it scrolls back ({vis})",
-                )
-                # the server moves the selections (and one is out of range)
-                page.click("#cs-move")
-                page.wait_for_timeout(500)
-                got = page.evaluate(highlights)
-                check(
-                    sorted(got.values()) == ["new"],
-                    f"collab: a patch re-anchors; an out-of-range selection draws nothing ({got})",
-                )
-                # the server edits the text
-                page.click("#cs-edit")
-                page.wait_for_timeout(500)
-                check(
-                    page.evaluate(
-                        "() => document.getElementById('doc').textContent.startsWith('Howdy')"
-                    ),
-                    "collab: the server changed the target's text",
-                )
-                got = page.evaluate(highlights)
-                check(
-                    sorted(got.values()) == ["new"],
-                    f"collab: highlights follow the edited text ({got})",
-                )
-                # hostile colours never reach the style rule
-                page.click("#cs-hostile")
-                page.wait_for_timeout(500)
-                css = page.evaluate(HIGHLIGHT_RULES)
-                check(
-                    "evil.example" not in css and "display:none" not in css and "body" not in css,
-                    f"collab: a hostile colour is replaced by the palette in the highlight rule ({css[:120]!r})",
-                )
-                check(
-                    page.evaluate("() => getComputedStyle(document.body).display") != "none",
-                    "collab: and the page is intact",
-                )
-                # the component going away takes its highlights with it
-                page.click("#cs-hide")
-                page.wait_for_timeout(500)
-                check(
-                    page.evaluate(highlights) == {} and page.evaluate(HIGHLIGHT_RULES) == "",
-                    "collab: removing the component leaves no highlight and no rule behind",
-                )
-
-                # ======================= a strict style policy =======================
-                def under_csp(init=None):
-                    ctx = browser.new_context(viewport={"width": 1000, "height": 900})
-                    if init:
-                        ctx.add_init_script(init)
-                    pg = ctx.new_page()
-
-                    pg.goto(base + "/csp/")
-                    pg.wait_for_function(
-                        "() => window.djust && window.djust.liveViewInstance && "
-                        "window.djust.liveViewInstance.viewMounted === true",
-                        timeout=15000,
-                    )
-                    pg.wait_for_timeout(800)
-                    return ctx, pg
-
-                names = "() => [...CSS.highlights.keys()].filter((k) => k.startsWith('dj-collab-')).length"
-                ctx, pg = under_csp()
-                check(
-                    pg.evaluate(names) == 2 and len(pg.evaluate(HIGHLIGHT_RULES)) > 0,
-                    "collab (style-src-elem 'self'): the highlights apply (the rules are a constructed stylesheet)",
-                )
-                check(
-                    pg.eval_on_selector(
-                        "#cs-box .dj-collab-sel",
-                        "e => e.classList.contains('dj-collab-sel--anchored')",
-                    ),
-                    "collab (style-src-elem 'self'): and the component is anchored",
-                )
-                ctx.close()
-                ctx, pg = under_csp("delete CSSStyleSheet.prototype.replaceSync;")
-                check(
-                    pg.evaluate(names) == 0
-                    and not pg.eval_on_selector(
-                        "#cs-box .dj-collab-sel",
-                        "e => e.classList.contains('dj-collab-sel--anchored')",
-                    ),
-                    "collab (no constructed sheets, <style> refused): nothing is highlighted and the component is not anchored",
-                )
-                check(
-                    pg.eval_on_selector(
-                        "#cs-box .dj-collab-sel__highlight",
-                        "e => { const r = e.getBoundingClientRect(); return r.width > 4 && r.height > 4; }",
-                    ),
-                    "collab (no constructed sheets, <style> refused): the selections' own text is still shown",
-                )
-                ctx.close()
-
                 # ======================= app hooks win =======================
                 check(
                     not [t for k, t in console if k == "pageerror"],
@@ -1491,7 +1110,7 @@ def main() -> int:
                 page.wait_for_timeout(300)
                 hooks = page.evaluate("() => window.__appHooks || []")
                 check(
-                    sorted(set(hooks)) == ["collab", "cursors", "grid", "mentions"],
+                    sorted(set(hooks)) == ["grid", "mentions"],
                     f"custom: the app's own hooks ran ({sorted(set(hooks))})",
                 )
                 check(
@@ -1501,17 +1120,6 @@ def main() -> int:
                 check(
                     page.get_attribute("#mn-box .dj-mentions__input", "role") is None,
                     "custom: the shipped mentions hook left the app's input alone",
-                )
-                check(
-                    page.eval_on_selector(
-                        "#cu-box .dj-cursors__cursor", "e => e.getAttribute('aria-hidden')"
-                    )
-                    is None,
-                    "custom: the shipped cursors hook left the app's overlay alone",
-                )
-                check(
-                    page.evaluate("() => CSS.highlights.size") == 0,
-                    "custom: the shipped collab hook drew nothing",
                 )
                 # without the shipped mentions hook the plain input event still goes
                 page.click("#mn-box .dj-mentions__input")

@@ -67,7 +67,6 @@ COMPONENT_CATEGORIES: dict[str, list[str]] = {
     ],
     "Navigation": [
         "breadcrumb",
-        "breadcrumb_dropdown",
         "nav",
         "nav_group",
         "nav_item",
@@ -85,7 +84,6 @@ COMPONENT_CATEGORIES: dict[str, list[str]] = {
     "Forms": [
         "color_picker",
         "combobox",
-        "cron_input",
         "currency_input",
         "date_picker",
         "dependent_select",
@@ -102,25 +100,17 @@ COMPONENT_CATEGORIES: dict[str, list[str]] = {
         "signature_pad",
         "tag_input",
         "time_picker",
-        "voice_input",
     ],
     "Data Display": [
-        "activity_feed",
         "audit_log",
         "code_block",
-        "terminal",
-        "comparison_table",
-        "data_card_grid",
         "data_grid",
         "data_table",
         "description_list",
-        "diff_viewer",
         "expandable_text",
         "inline_edit",
         "json_viewer",
-        "log_viewer",
         "markdown",
-        "pivot_table",
         "source_citation",
         "table",
         "timeline",
@@ -131,8 +121,6 @@ COMPONENT_CATEGORIES: dict[str, list[str]] = {
     "Charts": [
         "bar_chart",
         "calendar_heatmap",
-        "calendar_view",
-        "gantt_chart",
         "gauge",
         "heatmap",
         "line_chart",
@@ -146,23 +134,16 @@ COMPONENT_CATEGORIES: dict[str, list[str]] = {
         "avatar_group",
         "carousel",
         "file_dropzone",
-        "file_tree",
         "image_cropper",
         "image_lightbox",
-        "image_upload_preview",
-        "map_picker",
-        "org_chart",
         "responsive_image",
     ],
     "Feedback": [
-        "agent_step",
         "approval_gate",
         "connection_status",
         "content_loader",
         "empty_state",
         "error_boundary",
-        "error_page",
-        "live_indicator",
         "loading_overlay",
         "notification_badge",
         "notification_center",
@@ -171,7 +152,6 @@ COMPONENT_CATEGORIES: dict[str, list[str]] = {
         "server_event_toast",
         "status_dot",
         "status_indicator",
-        "thinking_indicator",
     ],
     "Layout": [
         "app_shell",
@@ -179,44 +159,32 @@ COMPONENT_CATEGORIES: dict[str, list[str]] = {
         "dashboard_grid",
         "fab",
         "hover_card",
-        "masonry_grid",
         "page_header",
         "resizable_panel",
-        "ribbon",
         "scroll_area",
         "sheet",
         "split_pane",
     ],
     "Advanced": [
-        "animated_number",
         "announcement_bar",
         "chat_bubble",
-        "collab_selection",
         "command_palette",
         "context_menu",
-        "conversation_thread",
         "cookie_consent",
         "copy_button",
         "copyable_text",
         "countdown",
-        "cursors_overlay",
         "export_dialog",
-        "feedback_widget",
         "filter_bar",
         "icon",
         "infinite_scroll",
         "import_wizard",
         "kanban_board",
         "live_counter",
-        "markdown_editor",
         "markdown_textarea",
         "model_selector",
-        "multimodal_input",
         "presence_avatars",
         "progress_circle",
-        "prompt_editor",
-        "qr_code",
-        "reactions",
         "relative_time",
         "rich_text_editor",
         "skeleton_factory",
@@ -225,10 +193,7 @@ COMPONENT_CATEGORIES: dict[str, list[str]] = {
         "split_button",
         "streaming_text",
         "theme_toggle",
-        "thinking_indicator",
         "token_counter",
-        "tour",
-        "voice_input",
     ],
 }
 
@@ -278,13 +243,6 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     "infinite_scroll": [
         {"load_event": "load_more", "finished": True},
         {"load_event": "load_more", "loading": True},
-    ],
-    "terminal": [
-        {
-            "output": ["$ djust new myapp", "Creating project…", "Done in 1.2s"],
-            "title": "shell",
-            "show_line_numbers": True,
-        },
     ],
     "wizard": [
         {
@@ -383,13 +341,6 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
             "icon": "🔍",
         },
     ],
-    "error_page": [
-        {
-            "code": 404,
-            "title": "Not Found",
-            "message": "The page you are looking for does not exist.",
-        },
-    ],
     "page_alert": [
         {"message": "Your trial expires in 3 days.", "type": "warning", "dismissible": True},
     ],
@@ -401,10 +352,6 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     "connection_status": [
         {},
         {"reconnecting_text": "Connection lost...", "connected_text": "Back online!"},
-    ],
-    "live_indicator": [{"user": {"name": "Ada"}, "field": "Title", "action": "typing"}],
-    "thinking_indicator": [
-        {"label": "Thinking..."},
     ],
     "copy_button": [
         {"text": "npm install djust-theming", "label": "Copy"},
@@ -418,9 +365,6 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
         {"name": "x", "size": "sm"},
         {"name": "search", "size": "lg"},
     ],
-    "qr_code": [
-        {"data": "https://djust.org", "size": "md"},
-    ],
     "countdown": [
         {"target": "2026-12-31"},
         {"target": "2026-12-31", "labels": {"days": "sleeps", "seconds": "secs"}},
@@ -430,9 +374,6 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     # the formatting is the client's job. Disabling it made the preview look
     # like a broken component.
     "relative_time": [{"datetime": "2026-09-17T09:00:00Z"}],
-    "animated_number": [
-        {"value": 1234, "duration": 1000},
-    ],
     "live_counter": [
         {"value": 42, "label": "online"},
     ],
@@ -473,14 +414,6 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
             ]
         },
     ],
-    "activity_feed": [
-        {
-            "events": [
-                {"user": "Ada", "action": "commented on", "target": "PR #412", "time": "2m ago"},
-                {"user": "Grace", "action": "merged", "target": "main", "time": "1h ago"},
-            ]
-        }
-    ],
     "notification_badge": [
         {"count": 5},
         {"count": 99},
@@ -492,7 +425,6 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
             "max_display": 2,
         }
     ],
-    "ribbon": [{"text": "New", "variant": "primary", "position": "top-right"}],
     "fab": [
         {"label": "Create", "icon": "+"},
     ],
@@ -521,7 +453,6 @@ PYTHON_COMPONENT_EXAMPLES: dict[str, list[dict]] = {
     "cookie_consent": [
         {"message": "We use cookies to improve your experience."},
     ],
-    "feedback_widget": [{"mode": "thumbs", "value": "up"}],
     "streaming_text": [
         {"text": "Generating response..."},
         {"text": "Streaming with a markdown cursor.", "markdown": True},
@@ -769,7 +700,6 @@ def get_python_component_import(component_name: str) -> tuple[str, list[str]]:
 # misleading, so their pages keep the explicit "no examples" message.
 PYTHON_COMPONENT_EXAMPLES.update(
     {
-        "agent_step": [{}],
         "alert": [{"message": "Example"}],
         "app_shell": [{"content": "<h1>Dashboard</h1><p>Main content area.</p>"}],
         "approval_gate": [{}],
@@ -802,18 +732,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
                     {"label": "Library", "url": "#library"},
                     {"label": "Data", "active": True},
                 ]
-            }
-        ],
-        "breadcrumb_dropdown": [
-            {
-                "items": [
-                    {"label": "Home", "url": "#"},
-                    {"label": "Library", "url": "#library"},
-                    {"label": "Data", "url": "#library-data"},
-                    {"label": "Tables", "url": "#library-data-tables"},
-                    {"label": "Current page"},
-                ],
-                "max_visible": 3,
             }
         ],
         "button": [{"label": "Example"}],
@@ -852,7 +770,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "title": "Contributions",
             }
         ],
-        "calendar_view": [{}],
         "card": [{"header": "Card title", "content": "Card body text.", "footer": "Card footer"}],
         "carousel": [
             {
@@ -880,26 +797,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
                     "time": "10:04 AM",
                     "status": "delivered",
                 }
-            }
-        ],
-        "collab_selection": [
-            {
-                "users": [
-                    {
-                        "name": "Ada Lovelace",
-                        "color": "#3b82f6",
-                        "start": 10,
-                        "end": 25,
-                        "text": "selected text",
-                    },
-                    {
-                        "name": "Grace Hopper",
-                        "color": "#ef4444",
-                        "start": 40,
-                        "end": 55,
-                        "text": "another selection",
-                    },
-                ]
             }
         ],
         "color_picker": [
@@ -936,19 +833,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ),
             }
         ],
-        "comparison_table": [
-            {
-                "plans": [
-                    {"name": "Free", "price": "$0"},
-                    {"name": "Pro", "price": "$20", "highlighted": True},
-                    {"name": "Team", "price": "$60"},
-                ],
-                "features": [
-                    {"name": "Projects", "values": ["1", "Unlimited", "Unlimited"]},
-                    {"name": "Support", "values": ["Community", "Email", "Priority"]},
-                ],
-            }
-        ],
         "content_loader": [{"loaded": False, "placeholder": "<p>Loading…</p>"}],
         "context_menu": [
             {
@@ -960,34 +844,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ),
             }
         ],
-        "conversation_thread": [
-            {
-                "messages": [
-                    {
-                        "sender": "user",
-                        "name": "You",
-                        "text": "Summarise this thread.",
-                        "time": "10:04",
-                    },
-                    {
-                        "sender": "assistant",
-                        "name": "Assistant",
-                        "text": "Three points so far.",
-                        "time": "10:04",
-                    },
-                ]
-            }
-        ],
-        "cron_input": [{}],
         "currency_input": [{}],
-        "cursors_overlay": [
-            {
-                "users": [
-                    {"name": "Ada Lovelace", "color": "#3b82f6", "x": 120, "y": 40},
-                    {"name": "Grace Hopper", "color": "#ef4444", "x": 260, "y": 120},
-                ]
-            }
-        ],
         "dashboard_grid": [
             {
                 "panels": [
@@ -1010,16 +867,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
                         "content": "1,234",
                     },
                 ]
-            }
-        ],
-        "data_card_grid": [
-            {
-                "columns": 3,
-                "items": [
-                    {"title": "Alpha", "description": "First example project.", "category": "Web"},
-                    {"title": "Beta", "description": "Second example project.", "category": "Web"},
-                    {"title": "Gamma", "description": "Third example project.", "category": "CLI"},
-                ],
             }
         ],
         "data_grid": [
@@ -1051,7 +898,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
         ],
         "date_picker": [{}],
         "dependent_select": [{}],
-        "diff_viewer": [{}],
         # Was `[{}]` — every argument defaulted, so the preview rendered a button
         # reading "Menu" and nothing else. `Dropdown` renders its menu only when
         # `is_open`, so a closed preview with no `content` is a lone button with
@@ -1085,22 +931,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
             {"legend": "Shipping address", "content": '<label>Street <input type="text"></label>'}
         ],
         "file_dropzone": [{}],
-        "file_tree": [
-            {
-                "nodes": [
-                    {
-                        "name": "src",
-                        "type": "folder",
-                        "children": [
-                            {"name": "app.py", "type": "file"},
-                            {"name": "util.py", "type": "file"},
-                        ],
-                    },
-                    {"name": "README.md", "type": "file"},
-                ],
-                "selected": "src/app.py",
-            }
-        ],
         "filter_bar": [{"content": "<span>Status: Active</span>", "active_count": 1}],
         "form_array": [{}],
         "form_group": [
@@ -1108,16 +938,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "label": "Email",
                 "content": '<input type="email" placeholder="you@example.com">',
                 "helper": "We never share it.",
-            }
-        ],
-        "gantt_chart": [
-            {
-                "title": "Sprint plan",
-                "tasks": [
-                    {"name": "Design", "start": 0, "duration": 3},
-                    {"name": "Build", "start": 2, "duration": 5},
-                    {"name": "Ship", "start": 6, "duration": 2},
-                ],
             }
         ],
         # A gauge at 0 with no label shows nothing about what a gauge is.
@@ -1133,7 +953,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
             {"trigger": "Hover me", "content": "<p>Shown on hover.</p>", "position": "top"}
         ],
         "image_cropper": [{}],
-        "image_upload_preview": [{}],
         "import_wizard": [{}],
         "inline_edit": [{"name": "title", "value": "Click to edit", "editing": False}],
         "input_group": [
@@ -1187,27 +1006,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "text": "Uploading…",
             },
         ],
-        "log_viewer": [
-            {
-                "lines": [
-                    "[info] server started",
-                    "[info] connected to database",
-                    "[warn] slow query: 1.2s",
-                ]
-            }
-        ],
-        "map_picker": [{"lat": 51.5074, "lng": -0.1278}],
-        "markdown_editor": [{}],
         "markdown_textarea": [{}],
-        "masonry_grid": [
-            {
-                "items": [
-                    {"content": "First card", "height": "120px"},
-                    {"content": "Second card", "height": "90px"},
-                    {"content": "Third card", "height": "140px"},
-                ]
-            }
-        ],
         "mentions_input": [
             {
                 "name": "comment",
@@ -1264,7 +1063,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 "event": "set_frameworks",
             }
         ],
-        "multimodal_input": [{"name": "prompt", "placeholder": "Ask anything…"}],
         "nav_menu": [
             {
                 "brand": "MyApp",
@@ -1298,15 +1096,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
             }
         ],
         "number_stepper": [{}],
-        "org_chart": [
-            {
-                "nodes": [
-                    {"id": "ceo", "name": "Ada Lovelace", "title": "CEO"},
-                    {"id": "cto", "name": "Grace Hopper", "title": "CTO", "parent": "ceo"},
-                    {"id": "eng", "name": "Alan Turing", "title": "Engineer", "parent": "cto"},
-                ]
-            }
-        ],
         "otp_input": [
             {"name": "code", "digits": 6, "label": "Verification code", "event": "verify_code"}
         ],
@@ -1319,22 +1108,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
                     {"label": "Referral", "value": 20},
                 ],
                 "title": "Traffic sources",
-            }
-        ],
-        "pivot_table": [
-            {
-                "rows": "region",
-                "cols": "quarter",
-                # `values` names the numeric field to aggregate. Without it the
-                # table renders its header row and nothing else — a pivot with
-                # no numbers, which looks like a broken component rather than a
-                # missing argument.
-                "values": "revenue",
-                "data": [
-                    {"region": "North", "quarter": "Q1", "revenue": 120},
-                    {"region": "North", "quarter": "Q2", "revenue": 150},
-                    {"region": "South", "quarter": "Q1", "revenue": 90},
-                ],
             }
         ],
         "popover": [
@@ -1353,20 +1126,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
                 ]
             }
         ],
-        "prompt_editor": [
-            {
-                "template": "Summarise {{topic}} for {{audience}} in three bullet points.",
-                "variables": {"topic": "djust LiveView", "audience": "a Django developer"},
-            }
-        ],
         "progress": [{"value": 60, "max": 100, "label": "60% complete", "variant": "success"}],
-        "reactions": [
-            {
-                "options": ["", "👍", "🎉", "❤️"],
-                "counts": {"👍": 3, "🎉": 1, "❤️": 0},
-                "active": ["👍"],
-            }
-        ],
         "resizable_panel": [{"content": "<p>Drag the edge to resize.</p>"}],
         "responsive_image": [
             {
@@ -1510,7 +1270,6 @@ PYTHON_COMPONENT_EXAMPLES.update(
             }
         ],
         "virtual_list": [{}],
-        "voice_input": [{"lang": "en-US"}],
     }
 )
 
@@ -1562,7 +1321,6 @@ COMPONENT_DESCRIPTION_KEYS = (
 #: "needs runtime dependencies or has no examples" was true of none of these:
 #: most render nothing until opened, one is a mixin, one needs a bound form.
 EMPTY_PREVIEW_REASONS: dict[str, str] = {
-    "tour": "Renders nothing until started — it draws over the page's own elements.",
     "form_validation": "Renders a bound Django form field's errors — it needs a form to show anything.",
     "server_event_toast": (
         "A LiveView mixin, not a component — it shows toasts your view pushes, "
@@ -1579,10 +1337,6 @@ PREVIEW_NOTES: dict[str, str] = {
     "infinite_scroll": (
         "An invisible sentinel: when it scrolls into view it sends load_more, "
         "and your view appends the next page."
-    ),
-    "collab_selection": (
-        "Draws other users' selections over your content through a client hook djust "
-        "does not ship — see below."
     ),
 }
 

@@ -80,13 +80,6 @@ def test_a_module_with_no_component_class_documents_no_import():
     assert ctx["class_name"] == ""
 
 
-def test_class_name_is_read_from_the_module_not_guessed():
-    """`qr_code` defines `QRCode`; snake→CamelCase would say `QrCode`."""
-    _module, names = get_python_component_import("qr_code")
-
-    assert names == ["QRCode"]
-
-
 def test_a_module_with_several_components_documents_all_of_them():
     """`form_validation` defines two; documenting one would be arbitrary."""
     _module, names = get_python_component_import("form_validation")

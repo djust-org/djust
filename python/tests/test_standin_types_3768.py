@@ -495,10 +495,10 @@ class TestTheReservedKeyOnTheBlockPath:
 class TestAUuidOrPathInAListParameter:
     """The visible behaviour change, stated: a ``UUID`` or ``Path`` given to a parameter that takes
     a list used to render (the handler got its text, which it iterated as characters) and now
-    raises ``TypeError``, as Django's own tag does. 11 parameters of 8 tags, each for both types."""
+    raises ``TypeError``, as Django's own tag does. 10 parameters of 7 tags (11 of 8 before #4002
+    removed ``animated_number``), each for both types."""
 
     CELLS = [
-        ("animated_number", "separator"),
         ("carousel", "images"),
         ("data_grid", "columns"),
         ("data_grid", "rows"),

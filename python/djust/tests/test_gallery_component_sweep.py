@@ -80,17 +80,18 @@ def test_the_sweep_would_notice_a_failure():
 
 
 def test_component_classes_resolve_by_reading_the_module():
-    """`qr_code` defines `QRCode`; guessing from the module name says `QrCode`."""
-    cls, class_name = _load_component_class("qr_code")
+    """`form_validation` defines `FormErrors` and `FieldError`; guessing from the module name
+    says `FormValidation`, which does not exist. (`qr_code`, the first case, went with #4002.)"""
+    cls, class_name = _load_component_class("form_validation")
 
     assert cls is not None
-    assert class_name == "QRCode"
-    _module, names = get_python_component_import("qr_code")
+    assert class_name in ("FormErrors", "FieldError")
+    _module, names = get_python_component_import("form_validation")
     assert class_name in names
 
 
-@pytest.mark.parametrize("name", ["icon", "markdown", "qr_code"])
-def test_the_three_that_were_blank_still_render(name):
+@pytest.mark.parametrize("name", ["icon", "markdown"])
+def test_the_ones_that_were_blank_still_render(name):
     """Named explicitly so a regression says which component, not just "one"."""
     outputs = [
         render_python_component_example(name, kwargs) for kwargs in PYTHON_COMPONENT_EXAMPLES[name]

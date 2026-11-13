@@ -445,9 +445,3 @@ Full list:
 
 - [Components guide](../core-concepts/components.md)
 - [LiveView API](./liveview.md)
-
-## Markdown editor
-
-See the [Markdown Editor guide](../guides/markdown-editor.md) for optional Visual/Markdown editing,
-native form integration, asset loading, table actions, the `bubble_menu` and `floating_menu`
-options, theme variables and editing limitations.
