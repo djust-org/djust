@@ -303,6 +303,8 @@ class TestPythonExamplesHaveUsefulContent:
 
     def test_message_and_collaboration_previews_show_content(self):
         assert "The deployment is ready for review." in self._render("chat_bubble")
+        assert "Ada Lovelace" in self._render("collab_selection")
+        assert "Grace Hopper" in self._render("cursors_overlay")
 
     def test_stateful_and_overlay_previews_show_their_states(self):
         assert "The chart could not load." in self._render("error_boundary")

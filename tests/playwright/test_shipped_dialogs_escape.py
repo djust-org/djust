@@ -11,7 +11,8 @@ not say Escape was ignored). A new dialog-like component that forgets its marker
 fails here.
 
 Dialogs: ``Modal`` (class), ``ImageLightbox`` (class and the ``{% lightbox %}``
-tag, which is the Rust handler inside a LiveView), and the theming ``{% theme_modal %}``. ``{% modal %}``
+tag, which is the Rust handler inside a LiveView), ``Tour`` (class and
+``{% tour %}``), and the theming ``{% theme_modal %}``. ``{% modal %}``
 renders ``modal-overlay`` without a dialog role and has no Escape handling.
 
 Self-contained: builds a one-page project in a temp directory, serves it with
@@ -76,10 +77,15 @@ PROJECT = {
         from djust.decorators import event_handler
         from djust.components.components.image_lightbox import ImageLightbox
         from djust.components.components.modal import Modal
+        from djust.components.components.tour import Tour
 
         PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw="
         IMAGES = [{"src": PIXEL, "alt": "one"}, {"src": PIXEL, "alt": "two"}]
-        VARIANTS = ["modal_class", "lightbox_class", "lightbox_tag", "theme_modal"]
+        STEPS = [
+            {"target": "#nowhere", "title": "One", "content": "First."},
+            {"target": "#nowhere", "title": "Two", "content": "Second."},
+        ]
+        VARIANTS = ["modal_class", "lightbox_class", "lightbox_tag", "tour_class", "tour_tag", "theme_modal"]
 
         TEMPLATE = (
             "{% load live_tags djust_components theme_components %}<!DOCTYPE html><html><head><title>t</title>"
@@ -91,6 +97,8 @@ PROJECT = {
             + '{% if which == "modal_class" %}{{ modal_class|safe }}{% endif %}'
             + '{% if which == "lightbox_class" %}{{ lightbox_class|safe }}{% endif %}'
             + '{% if which == "lightbox_tag" %}{% lightbox images=images active=0 open=True close_event="close_lightbox" %}{% endif %}'
+            + '{% if which == "tour_class" %}{{ tour_class|safe }}{% endif %}'
+            + '{% if which == "tour_tag" %}{% tour steps=steps active=0 event="tour" %}{% endif %}'
             + '{% if which == "theme_modal" %}{% theme_modal id="tm" title="Themed" is_open=True %}{% endif %}'
             + "</div></body></html>"
         )
@@ -102,8 +110,10 @@ PROJECT = {
                 self.which = ""
                 self.log = ""
                 self.images = IMAGES
+                self.steps = STEPS
                 self.modal_class = Modal(title="Stock", content="x", is_open=True, close_event="close_modal").render()
                 self.lightbox_class = ImageLightbox(images=IMAGES, open=True, close_event="close_lightbox").render()
+                self.tour_class = Tour(steps=STEPS, active=0, event="tour").render()
 
             def _note(self, text):
                 self.log = (self.log + " " + text).strip()
@@ -124,6 +134,12 @@ PROJECT = {
             def close_lightbox(self):
                 self._note("close_lightbox")
                 self.which = ""
+
+            @event_handler()
+            def tour(self, value="", **kwargs):
+                self._note("tour:" + repr(value))
+                if value in ("skip", "finish"):
+                    self.which = ""
 
             @event_handler()
             def toggle_modal(self, value="", **kwargs):
@@ -157,6 +173,8 @@ EXPECT = {
     "modal_class": (".dj-modal", {"event": "close_modal"}),
     "lightbox_class": (".dj-lightbox", {"event": "close_lightbox"}),
     "lightbox_tag": (".dj-lightbox", {"event": "close_lightbox"}),
+    "tour_class": (".dj-tour__popover", {"event": "tour", "value": "skip"}),
+    "tour_tag": (".dj-tour__popover", {"event": "tour", "value": "skip"}),
     "theme_modal": ("[data-theme-modal] [role=dialog]", {"event": "toggle_modal", "value": "tm"}),
 }
 
@@ -273,6 +291,8 @@ def main() -> int:
                 # A real click on each marked close control still works (the marker is
                 # not sent as an argument), including for handlers with no **kwargs.
                 for variant, (selector, want) in EXPECT.items():
+                    if variant.startswith("tour"):
+                        continue  # the tour's close control (Skip) is covered by Escape above
                     page.evaluate(f"() => document.getElementById('open-{variant}').click()")
                     page.wait_for_selector(selector, timeout=6000, state="attached")
                     page.wait_for_timeout(300)
