@@ -18,6 +18,7 @@ pub mod locale;
 pub mod object_key;
 pub mod raw_text;
 pub mod render_env;
+pub mod retained;
 pub mod serialization;
 
 pub use context::{

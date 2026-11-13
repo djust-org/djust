@@ -40,9 +40,12 @@ from uuid import UUID
 
 from django.utils.safestring import SafeString
 
+from . import _per_turn
 from .change_detection import (
+    _BARE,
     _EXACT_SCALARS,
     _MAX_DEPTH,
+    _NO_BARE,
     _TAG_DICT,
     _TAG_ID,
     _TAG_LIST,
@@ -118,7 +121,7 @@ def _leaf_out(value: Any, t: type, path: _Path, safe: List[Any]) -> Any:
 
 def _fused(
     value: Any,
-    counter: List[int],
+    counter: List[Any],
     depth: int,
     path_ids: Tuple[int, ...],
     path: _Path,
@@ -130,7 +133,10 @@ def _fused(
     in lock-step.
     """
     t = type(value)
+    bare = counter[1]
     if t in _EXACT_SCALARS:
+        # Only a scalar ROOT gets here (children are handled inline below),
+        # and a root keeps the tagged form: see ``deep_fingerprint``.
         counter[0] -= 1
         if counter[0] < 0:
             raise _BudgetExhausted
@@ -160,7 +166,10 @@ def _fused(
             tk = type(k)
             if tk in _EXACT_SCALARS:
                 counter[0] -= 1
-                kf: Hashable = (_TAG_VALUE, tk, k) if counter[0] >= 0 else (_TAG_TRUNCATED, id(k))
+                if counter[0] < 0:
+                    kf: Hashable = (_TAG_TRUNCATED, id(k))
+                else:
+                    kf = k if tk in bare else (_TAG_VALUE, tk, k)
             else:
                 kf = _walk(k, counter, child_depth, inner)
             if counter[0] <= 0:
@@ -168,7 +177,10 @@ def _fused(
             tv = type(v)
             if tv in _EXACT_SCALARS:
                 counter[0] -= 1
-                vf: Hashable = (_TAG_VALUE, tv, v) if counter[0] >= 0 else (_TAG_TRUNCATED, id(v))
+                if counter[0] < 0:
+                    vf: Hashable = (_TAG_TRUNCATED, id(v))
+                else:
+                    vf = v if tv in bare else (_TAG_VALUE, tv, v)
                 if ok:
                     if tv in _PLAIN_SCALARS:
                         out_d[k] = v
@@ -184,7 +196,11 @@ def _fused(
                 vf = _walk(v, counter, child_depth, inner)
             if counter[0] < 0:
                 raise _BudgetExhausted
-            append((kf, vf))
+            if bare:
+                append(kf)
+                append(vf)
+            else:
+                append((kf, vf))
         return (_TAG_DICT, tuple(fps)), (out_d if ok else NOT_CONVERTED)
     out_l: list = []
     out_append = out_l.append
@@ -194,7 +210,10 @@ def _fused(
         tv = type(v)
         if tv in _EXACT_SCALARS:
             counter[0] -= 1
-            append((_TAG_VALUE, tv, v) if counter[0] >= 0 else (_TAG_TRUNCATED, id(v)))
+            if counter[0] < 0:
+                append((_TAG_TRUNCATED, id(v)))
+            else:
+                append(v if tv in bare else (_TAG_VALUE, tv, v))
             if ok:
                 if tv in _PLAIN_SCALARS:
                     out_append(v)
@@ -264,7 +283,7 @@ def fingerprint_and_convert(
     ``normalize_django_value(value)``; it is ``None`` when the value holds
     anything this walk leaves to those functions.
     """
-    counter = [budget]
+    counter: List[Any] = [budget, _BARE if _per_turn.on("compact_fingerprints") else _NO_BARE]
     safe: List[Any] = []
     try:
         fp, out = _fused(value, counter, 0, (), prefix, safe)
