@@ -29,11 +29,11 @@ from __future__ import annotations
 import copy
 import functools
 import json
-import time
 from pathlib import Path
 
 import pytest
 import safe_markup_baseline_3864 as base
+from djust.tests._growth import assert_scales_linearly
 import safe_markup_call_fuzz_3864 as fuzz
 import safe_markup_stress_3864 as stress
 
@@ -597,32 +597,39 @@ class TestTheCallFuzz:
 
 class TestRecursionStaysLinear:
     def test_128_mutually_recursive_helpers(self):
-        src = PRELUDE
-        n = 128
-        for i in range(n):
-            src += (
-                f"def h{i}(v, d=0):\n    if d > 3:\n        return escape(v)\n"
-                f"    return h{(i + 1) % n}(v, d + 1) + h{(i + 2) % n}(v, d + 1)\n"
-            )
-        src += "def f(x):\n    return mark_safe(h0(x))\n"
-        start = time.monotonic()
-        find_unsafe_markup(src)
-        assert time.monotonic() - start < 2.0
+        """32 and 128 mutually recursive helpers: the cost grows with the helper count, not
+        faster (#3711: judged by growth, not by a number of seconds)."""
+
+        def run_at(scale):
+            src = PRELUDE
+            n = 32 * scale
+            for i in range(n):
+                src += (
+                    f"def h{i}(v, d=0):\n    if d > 3:\n        return escape(v)\n"
+                    f"    return h{(i + 1) % n}(v, d + 1) + h{(i + 2) % n}(v, d + 1)\n"
+                )
+            src += "def f(x):\n    return mark_safe(h0(x))\n"
+            find_unsafe_markup(src)
+
+        assert_scales_linearly(run_at, what="mutually recursive helpers")
 
     def test_128_helpers_each_calling_six(self):
         """A wide web of helpers: no ``RecursionError`` (the depth bound is carried into a callee's
         hold level), and done in time."""
-        src = PRELUDE
-        n = 128
-        for i in range(n):
-            calls = " + ".join(f"h{(i + j + 1) % n}(v, d + 1)" for j in range(6))
-            src += (
-                f"def h{i}(v, d=0):\n    if d > 9:\n        return escape(v)\n    return {calls}\n"
-            )
-        src += "def f(x):\n    return mark_safe(h0(x))\n"
-        start = time.monotonic()
-        find_unsafe_markup(src)
-        assert time.monotonic() - start < 2.0
+
+        def run_at(scale):
+            src = PRELUDE
+            n = 32 * scale
+            for i in range(n):
+                calls = " + ".join(f"h{(i + j + 1) % n}(v, d + 1)" for j in range(6))
+                src += (
+                    f"def h{i}(v, d=0):\n    if d > 9:\n        return escape(v)\n"
+                    f"    return {calls}\n"
+                )
+            src += "def f(x):\n    return mark_safe(h0(x))\n"
+            find_unsafe_markup(src)
+
+        assert_scales_linearly(run_at, what="helpers each calling six")
 
 
 class TestTheGateOffListApplies:
