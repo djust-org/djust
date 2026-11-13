@@ -1155,7 +1155,19 @@ class LiveView(
         Called once after ``mount()`` completes (by the WS consumer) and again
         whenever the user calls :meth:`mark_clean`.
         """
-        self._dirty_baseline = self._dirty_fingerprint()
+        baseline = self._dirty_fingerprint()
+        from . import _per_turn
+
+        if _per_turn.on("shared_fingerprints"):
+            # One tree per attribute (#3998): where the last render's
+            # fingerprint of the same attribute is equal, the baseline holds
+            # that object. A fingerprint is immutable and shares nothing with
+            # the state, so an equal one is interchangeable.
+            held = self.__dict__.get("_prev_context_fingerprints") or {}
+            for name, entry in baseline.items():
+                if entry[0] == "c" and name in held and held[name] == entry[2]:
+                    baseline[name] = (entry[0], entry[1], held[name])
+        self._dirty_baseline = baseline
         # Snapshotted stand-in for the (excluded, large) baseline: a
         # ``mark_clean()``-only handler flips ``is_dirty`` and must re-render
         # (#2682 review). Assigned here, not in ``__init__``, so it is not in

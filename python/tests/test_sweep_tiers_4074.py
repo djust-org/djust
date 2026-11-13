@@ -38,13 +38,11 @@ SWEEP_FILES = {
 #: The ratchet: each full population is at least this big. Raise a number when a sweep grows;
 #: lowering one is a decision to sweep less and belongs in the PR that does it.
 POPULATION_FLOORS = {
-    # classes 212, tags 18, item-parameters 43, payload units 275 before #4002 removed the 33
-    # unused component tags and their classes
-    "marked-safe/classes": 179,
-    "marked-safe/tags": 13,
-    "marked-safe/item-parameters": 35,
+    "marked-safe/classes": 212,
+    "marked-safe/tags": 18,
+    "marked-safe/item-parameters": 43,
     # 434 before 2.0 removed the Rust-native handlers that had a Python twin (train/2.0)
-    "payload-sweep/units": 242,
+    "payload-sweep/units": 275,
     "guard-fuzz/seeds": 3,
     "guard-fuzz/mutants": 26,
 }

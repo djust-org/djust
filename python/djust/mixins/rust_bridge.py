@@ -15,7 +15,12 @@ from .._exposure_providers import (
     require_no_provider_keys,
 )
 from .._accumulating_containers import view_accumulating_container_ids
-from ..change_detection import deep_fingerprint, fingerprints_by_content, warn_fingerprint_truncated
+from ..change_detection import (
+    deep_fingerprint,
+    fingerprints_by_content,
+    share_structure,
+    warn_fingerprint_truncated,
+)
 from ..serialization import holds_form, normalize_django_value
 from ..state_pass import convert_for_render, fingerprint_and_convert
 from ..template_filters import _ensure_custom_filters_bridged
@@ -278,6 +283,32 @@ def _request_scoped_fingerprint(key: str, value: Any) -> Tuple[bool, Any, Any]:
         # An incomplete fingerprint cannot prove equality: equal to nothing.
         fingerprint = object()
     return False, fingerprint, converted
+
+
+def _reuse_fingerprint(fp: Any, held: Any, baseline_entry: Any) -> Tuple[Any, bool]:
+    """``(fingerprint to store, is it unchanged since the last sync)`` (#3998).
+
+    One tree per attribute, not two or three. A fingerprint is an immutable
+    value that shares nothing with the state, so an EQUAL one can stand in
+    for it:
+
+    * *held* is what the last sync stored for the key (``_MISSING`` if
+      nothing). Equal: the key is unchanged and keeps the object it had, so
+      the caller's comparison is this one and does not run again.
+    * otherwise *baseline_entry* is the dirty baseline's entry for the
+      attribute of the same name (``("c", id, fingerprint)`` for a
+      container). Equal: the baseline's object is stored. Not equal: the new
+      fingerprint is rebuilt from the baseline's rows wherever those are
+      equal (``share_structure``), so one changed row costs one row.
+
+    Never returns a fingerprint that is not equal to *fp*.
+    """
+    if held is not _MISSING and held == fp:
+        return held, True
+    if type(baseline_entry) is tuple and len(baseline_entry) == 3 and baseline_entry[0] == "c":
+        base = baseline_entry[2]
+        return (base if base == fp else share_structure(fp, base)), False
+    return fp, False
 
 
 def _trusted_request_scoped_fingerprints(view: Any, prev_refs: Any) -> Optional[Dict[str, Any]]:
@@ -911,6 +942,17 @@ class RustBridgeMixin:
             def _is_structural(value: Any) -> bool:
                 return isinstance(value, (dict, list, tuple)) or fingerprints_by_content(value)
 
+            share_fps = _per_turn.on("shared_fingerprints")
+            fp_same: Set[str] = set()
+            dirty_baseline = (self.__dict__.get("_dirty_baseline") or {}) if share_fps else {}
+
+            def _fp_differs(key: str, value: Any) -> bool:
+                """Did *key*'s fingerprint change since the last sync?"""
+                fp = _fp_of(key, value)
+                if share_fps:
+                    return key not in fp_same
+                return bool(prev_fps.get(key, _MISSING) != fp)
+
             def _fp_of(key: str, value: Any, convert: bool = False) -> Any:
                 fp = new_fps.get(key, _MISSING)
                 if fp is _MISSING:
@@ -923,6 +965,12 @@ class RustBridgeMixin:
                     if truncated:
                         # An incomplete fingerprint cannot prove equality.
                         fp = object()
+                    elif share_fps:
+                        fp, same = _reuse_fingerprint(
+                            fp, prev_fps.get(key, _MISSING), dirty_baseline.get(key)
+                        )
+                        if same:
+                            fp_same.add(key)
                     new_fps[key] = fp
                     if truncated:
                         warn_fingerprint_truncated(type(self), key, value)
@@ -1058,7 +1106,7 @@ class RustBridgeMixin:
                         elif changed_sub_ids and id(value) in changed_sub_ids:
                             context[key] = value  # sub-object of changed (#703)
                         elif _is_structural(value):
-                            if prev_fps.get(key, _MISSING) != _fp_of(key, value):
+                            if _fp_differs(key, value):
                                 context[key] = value
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
                             # Immutable: compare by value to catch derived
@@ -1083,7 +1131,7 @@ class RustBridgeMixin:
                         elif getattr(value, "_dirty", False):
                             context[key] = value  # TypedState dirty flag
                         elif _is_structural(value):
-                            if prev_fps.get(key, _MISSING) != _fp_of(key, value):
+                            if _fp_differs(key, value):
                                 context[key] = value
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
                             if prev_immutables.get(key, _MISSING) != value:

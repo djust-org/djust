@@ -61,6 +61,7 @@ import importlib
 for _submodule in (
     "djust.components.templatetags._charts",
     "djust.components.templatetags._dev_tools",
+    "djust.components.templatetags._advanced",
 ):
     importlib.import_module(_submodule)
 del _submodule, importlib
@@ -77,15 +78,6 @@ from djust.components.templatetags._forms import (  # noqa: E402
 # Explicit re-export so `from djust_components import _get_field_type` works
 # and static analyzers (CodeQL) recognize these as public re-exports.
 __all__ = ("_get_field_type", "_infer_columns", "_queryset_to_rows", "register")
-
-# Tags 2.0 removed (#4002) stay registered, so a template that still uses one fails to
-# compile with a message naming the tag and its replacement (both engines: the Rust
-# engine reaches these through the ``{% load %}`` bridge like every other tag here).
-from djust._removed_settings import REMOVED_TEMPLATE_TAGS, removed_template_tag  # noqa: E402
-
-for _removed in REMOVED_TEMPLATE_TAGS:
-    register.tag(_removed, removed_template_tag(_removed))
-del _removed
 
 
 # ---------------------------------------------------------------------------
@@ -7354,6 +7346,346 @@ def do_notification_popover(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return NotificationPopoverNode(kwargs)
+
+
+# ---------------------------------------------------------------------------
+# AI Chat: Conversation Thread
+# ---------------------------------------------------------------------------
+
+
+class ConversationThreadNode(template.Node):
+    def __init__(self, kwargs: Any) -> None:
+        self.kwargs = kwargs
+
+    def render(self, context: Any) -> SafeString:
+        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
+        messages = kw.get("messages", [])
+        stream_event = kw.get("stream_event", "new_message")
+        streaming = kw.get("streaming", False)
+        custom_class = kw.get("class", "")
+
+        e_stream = conditional_escape(str(stream_event))
+        e_class = conditional_escape(str(custom_class))
+
+        cls = "dj-chat-thread"
+        if e_class:
+            cls += f" {e_class}"
+
+        msgs_html = []
+        prev_sender = None
+        for msg in messages:
+            if isinstance(msg, dict):
+                sender = msg.get("sender", "user")
+                name = msg.get("name", "")
+                text = msg.get("text", "")
+                time = msg.get("time", "")
+            else:
+                sender = _item_attr(msg, "sender", "user")
+                name = _item_attr(msg, "name")
+                text = _item_attr(msg, "text")
+                time = _item_attr(msg, "time")
+
+            e_name = conditional_escape(str(name))
+            e_text = conditional_escape(str(text))
+            e_time = conditional_escape(str(time))
+
+            grouped = "dj-chat-msg--grouped" if sender == prev_sender else ""
+            side = "dj-chat-msg--ai" if sender == "ai" else "dj-chat-msg--user"
+
+            initials = str(name)[:1].upper() if name else "?"
+            avatar = (
+                f'<span class="dj-chat-avatar">{conditional_escape(initials)}</span>'
+                if sender != prev_sender
+                else '<span class="dj-chat-avatar dj-chat-avatar--hidden"></span>'
+            )
+
+            header = ""
+            if sender != prev_sender:
+                header = (
+                    f'<div class="dj-chat-msg__header">'
+                    f'<span class="dj-chat-msg__name">{e_name}</span>'
+                    f'<span class="dj-chat-msg__time">{e_time}</span>'
+                    f"</div>"
+                )
+
+            msgs_html.append(
+                f'<div class="dj-chat-msg {side} {grouped}">'
+                f"{avatar}"
+                f'<div class="dj-chat-bubble">'
+                f"{header}"
+                f'<div class="dj-chat-msg__text">{e_text}</div>'
+                f"</div></div>"
+            )
+            prev_sender = sender
+
+        streaming_html = ""
+        if streaming:
+            streaming_html = (
+                '<div class="dj-chat-msg dj-chat-msg--ai">'
+                '<span class="dj-chat-avatar">&#8943;</span>'
+                '<div class="dj-chat-bubble">'
+                '<div class="dj-chat-typing">'
+                '<span class="dj-chat-typing__dot"></span>'
+                '<span class="dj-chat-typing__dot"></span>'
+                '<span class="dj-chat-typing__dot"></span>'
+                "</div></div></div>"
+            )
+
+        return mark_safe(
+            f'<div class="{cls}" data-stream-event="{e_stream}">'
+            f"{''.join(msgs_html)}{streaming_html}"
+            f"</div>"
+        )
+
+
+@register.tag("conversation_thread")
+def do_conversation_thread(parser: Any, token: Any) -> template.Node:
+    bits = token.split_contents()[1:]
+    kwargs = _parse_kv_args(bits, parser)
+    return ConversationThreadNode(kwargs)
+
+
+# ---------------------------------------------------------------------------
+# AI Chat: Thinking Indicator
+# ---------------------------------------------------------------------------
+
+
+class ThinkingIndicatorNode(template.Node):
+    VALID_STATUSES = {"thinking", "searching", "generating", "tool_use", "idle"}
+
+    def __init__(self, kwargs: Any) -> None:
+        self.kwargs = kwargs
+
+    def render(self, context: Any) -> SafeString:
+        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
+        status = kw.get("status", "thinking")
+        label = kw.get("label", "")
+        custom_class = kw.get("class", "")
+
+        safe_status = status if status in self.VALID_STATUSES else "thinking"
+
+        if safe_status == "idle":
+            return ""
+
+        e_label = conditional_escape(str(label)) if label else ""
+        e_class = conditional_escape(str(custom_class))
+
+        cls = f"dj-thinking dj-thinking--{safe_status}"
+        if e_class:
+            cls += f" {e_class}"
+
+        if safe_status == "thinking":
+            anim = (
+                '<span class="dj-thinking__dots">'
+                '<span class="dj-thinking__dot"></span>'
+                '<span class="dj-thinking__dot"></span>'
+                '<span class="dj-thinking__dot"></span>'
+                "</span>"
+            )
+        elif safe_status == "searching":
+            anim = '<span class="dj-thinking__pulse"></span>'
+        elif safe_status == "generating":
+            anim = '<span class="dj-thinking__cursor"></span>'
+        else:
+            anim = '<span class="dj-thinking__spinner"></span>'
+
+        label_html = f'<span class="dj-thinking__label">{e_label}</span>' if e_label else ""
+
+        return mark_safe(
+            f'<div class="{cls}" role="status" aria-label="{e_label or safe_status}">'
+            f"{anim}{label_html}"
+            f"</div>"
+        )
+
+
+@register.tag("thinking_indicator")
+def do_thinking_indicator(parser: Any, token: Any) -> template.Node:
+    bits = token.split_contents()[1:]
+    kwargs = _parse_kv_args(bits, parser)
+    return ThinkingIndicatorNode(kwargs)
+
+
+# ---------------------------------------------------------------------------
+# AI Chat: Multimodal Input
+# ---------------------------------------------------------------------------
+
+
+class MultimodalInputNode(template.Node):
+    def __init__(self, kwargs: Any) -> None:
+        self.kwargs = kwargs
+
+    def render(self, context: Any) -> SafeString:
+        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
+        name = kw.get("name", "message")
+        event = kw.get("event", "send")
+        placeholder = kw.get("placeholder", "Type a message...")
+        accept_files = kw.get("accept_files", False)
+        accept_voice = kw.get("accept_voice", False)
+        file_accept = kw.get("file_accept", "*/*")
+        disabled = kw.get("disabled", False)
+        custom_class = kw.get("class", "")
+
+        e_name = conditional_escape(str(name))
+        e_event = conditional_escape(str(event))
+        e_placeholder = conditional_escape(str(placeholder))
+        e_accept = conditional_escape(str(file_accept))
+        e_class = conditional_escape(str(custom_class))
+        disabled_attr = " disabled" if disabled else ""
+
+        cls = "dj-mminput"
+        if disabled:
+            cls += " dj-mminput--disabled"
+        if e_class:
+            cls += f" {e_class}"
+
+        textarea = (
+            f'<textarea class="dj-mminput__text" name="{e_name}" '
+            f'placeholder="{e_placeholder}" rows="1"{disabled_attr}></textarea>'
+        )
+
+        file_btn = ""
+        if accept_files:
+            file_btn = (
+                f'<label class="dj-mminput__btn dj-mminput__file-btn" title="Attach file">'
+                f'<input type="file" accept="{e_accept}" hidden{disabled_attr}>'
+                f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                f'stroke-width="2" width="18" height="18">'
+                f'<path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>'
+                f"</svg></label>"
+            )
+
+        voice_btn = ""
+        if accept_voice:
+            voice_btn = (
+                f'<button type="button" class="dj-mminput__btn dj-mminput__voice-btn" '
+                f'title="Voice input"{disabled_attr}>'
+                f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                f'stroke-width="2" width="18" height="18">'
+                f'<path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>'
+                f'<path d="M19 10v2a7 7 0 01-14 0v-2"/>'
+                f'<line x1="12" y1="19" x2="12" y2="23"/>'
+                f'<line x1="8" y1="23" x2="16" y2="23"/>'
+                f"</svg></button>"
+            )
+
+        send_btn = (
+            f'<button type="button" class="dj-mminput__btn dj-mminput__send-btn" '
+            f'dj-click="{e_event}" title="Send"{disabled_attr}>'
+            f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            f'stroke-width="2" width="18" height="18">'
+            f'<line x1="22" y1="2" x2="11" y2="13"/>'
+            f'<polygon points="22 2 15 22 11 13 2 9 22 2"/>'
+            f"</svg></button>"
+        )
+
+        return mark_safe(f'<div class="{cls}">{file_btn}{voice_btn}{textarea}{send_btn}</div>')
+
+
+@register.tag("multimodal_input")
+def do_multimodal_input(parser: Any, token: Any) -> template.Node:
+    bits = token.split_contents()[1:]
+    kwargs = _parse_kv_args(bits, parser)
+    return MultimodalInputNode(kwargs)
+
+
+# ---------------------------------------------------------------------------
+# AI Chat: Feedback Widget
+# ---------------------------------------------------------------------------
+
+
+class FeedbackWidgetNode(template.Node):
+    VALID_MODES = {"thumbs", "stars", "emoji"}
+
+    def __init__(self, kwargs: Any) -> None:
+        self.kwargs = kwargs
+
+    def render(self, context: Any) -> SafeString:
+        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
+        event = kw.get("event", "rate_response")
+        mode = kw.get("mode", "thumbs")
+        value = kw.get("value", None)
+        custom_class = kw.get("class", "")
+
+        if mode not in self.VALID_MODES:
+            mode = "thumbs"
+
+        e_event = conditional_escape(str(event))
+        e_class = conditional_escape(str(custom_class))
+
+        cls = f"dj-feedback dj-feedback--{mode}"
+        if e_class:
+            cls += f" {e_class}"
+
+        if mode == "thumbs":
+            buttons = self._render_thumbs(e_event, value)
+        elif mode == "stars":
+            buttons = self._render_stars(e_event, value)
+        else:
+            buttons = self._render_emoji(e_event, value)
+
+        return mark_safe(f'<div class="{cls}" role="group" aria-label="Feedback">{buttons}</div>')
+
+    def _render_thumbs(self, e_event: Any, value: Any) -> Any:
+        up_cls = "dj-feedback__btn--active" if value == "up" else ""
+        down_cls = "dj-feedback__btn--active" if value == "down" else ""
+        return (
+            f'<button class="dj-feedback__btn {up_cls}" '
+            f'dj-click="{e_event}" data-value="up" aria-label="Thumbs up">'
+            f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            f'stroke-width="2" width="18" height="18">'
+            f'<path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14z"/>'
+            f'<path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/>'
+            f"</svg></button>"
+            f'<button class="dj-feedback__btn {down_cls}" '
+            f'dj-click="{e_event}" data-value="down" aria-label="Thumbs down">'
+            f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            f'stroke-width="2" width="18" height="18">'
+            f'<path d="M10 15v4a3 3 0 003 3l4-9V2H5.72a2 2 0 00-2 1.7l-1.38 9a2 2 0 002 2.3H10z"/>'
+            f'<path d="M17 2h2.67A2.31 2.31 0 0122 4v7a2.31 2.31 0 01-2.33 2H17"/>'
+            f"</svg></button>"
+        )
+
+    def _render_stars(self, e_event: Any, value: Any) -> Any:
+        parts = []
+        current = int(value) if value and str(value).isdigit() else 0
+        for i in range(1, 6):
+            active = "dj-feedback__star--active" if i <= current else ""
+            fill = "currentColor" if i <= current else "none"
+            parts.append(
+                f'<button class="dj-feedback__btn dj-feedback__star {active}" '
+                f'dj-click="{e_event}" data-value="{i}" aria-label="{i} star">'
+                f'<svg viewBox="0 0 24 24" fill="{fill}" stroke="currentColor" '
+                f'stroke-width="2" width="18" height="18">'
+                f'<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'
+                f"</svg></button>"
+            )
+        return "".join(parts)
+
+    def _render_emoji(self, e_event: Any, value: Any) -> Any:
+        emojis = [
+            ("\U0001f44d", "thumbs_up"),
+            ("\u2764\ufe0f", "heart"),
+            ("\U0001f60a", "smile"),
+            ("\U0001f914", "thinking"),
+            ("\U0001f44e", "thumbs_down"),
+        ]
+        parts = []
+        for emoji, val in emojis:
+            active = "dj-feedback__btn--active" if value == val else ""
+            e_val = conditional_escape(val)
+            parts.append(
+                f'<button class="dj-feedback__btn {active}" '
+                f'dj-click="{e_event}" data-value="{e_val}" aria-label="{e_val}">'
+                f"{emoji}</button>"
+            )
+        return "".join(parts)
+
+
+@register.tag("feedback")
+def do_feedback(parser: Any, token: Any) -> template.Node:
+    bits = token.split_contents()[1:]
+    kwargs = _parse_kv_args(bits, parser)
+    return FeedbackWidgetNode(kwargs)
 
 
 # ---------------------------------------------------------------------------

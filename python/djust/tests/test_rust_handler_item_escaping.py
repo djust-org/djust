@@ -1,4 +1,4 @@
-"""Item content in ``{% dashboard_grid %}`` panels, and
+"""Item content in ``{% masonry_grid %}`` and ``{% dashboard_grid %}`` panels, and
 ``{% audit_log %}`` column names, are escaped the same way on every render path:
 the component class, the Django template tag, and the Rust template engine itself
 (``djust._rust.render_template``, which renders the tag's own node).
@@ -18,6 +18,7 @@ from django.utils.safestring import mark_safe
 
 from djust.components import rust_handlers as rh
 from djust.components.components.dashboard_grid import DashboardGrid
+from djust.components.components.masonry_grid import MasonryGrid
 
 MARKUP_VALUES = [
     "<img src=x onerror=alert(1)>",
@@ -55,6 +56,15 @@ def _bodies(html: str, cls: str) -> list[str]:
     return re.findall(rf'<div class="{cls}">(.*?)</div>', html, re.S)
 
 
+def _masonry(value: Any) -> dict[str, str]:
+    items = [{"content": value, "height": 120}]
+    return {
+        "class": str(MasonryGrid(items=items).render()),
+        "tag": _tag("{% masonry_grid items=items %}", items=items),
+        "engine": _engine("{% masonry_grid items=items %}", items=items),
+    }
+
+
 def _dashboard(value: Any) -> dict[str, str]:
     panels = [{"id": "p1", "title": "T", "content": value}]
     outputs = {
@@ -79,6 +89,16 @@ def _is_raw(html: str) -> bool:
 
 
 @pytest.mark.parametrize("value", MARKUP_VALUES)
+def test_masonry_item_content_is_escaped_on_every_path(value):
+    outputs = _masonry(value)
+    bodies = {path: _bodies(html, "dj-masonry__item") for path, html in outputs.items()}
+    for path, html in outputs.items():
+        assert not _is_raw(html), (path, html)
+        assert bodies[path] == bodies["class"], (path, bodies)
+    assert bodies["class"] == [str(_tag("{{ v }}", v=value))]
+
+
+@pytest.mark.parametrize("value", MARKUP_VALUES)
 def test_dashboard_panel_content_is_escaped_on_every_path(value):
     outputs = _dashboard(value)
     bodies = {
@@ -94,14 +114,20 @@ def test_marked_safe_content_is_kept_where_the_value_reaches_the_tag():
     """conditional_escape semantics: a SafeString passed to the tag as an
     object stays markup, on the class, the tag and the Rust engine."""
     safe = mark_safe("<b>card</b>")
+    html = _engine("{% masonry_grid items=items %}", items=[{"content": safe}])
+    assert '<div class="dj-masonry__item"><b>card</b></div>' in html
     html = _engine(
         "{% dashboard_grid panels=panels %}{% enddashboard_grid %}",
         panels=[{"id": "p", "title": "T", "content": safe}],
     )
     assert '<div class="dj-dashboard-grid__panel-body"><b>card</b></div>' in html
+    assert "<b>card</b>" in str(MasonryGrid(items=[{"content": safe}]).render())
 
 
 def test_valid_plain_text_renders_unchanged():
+    outputs = _masonry("Plain card text")
+    for html in outputs.values():
+        assert '<div class="dj-masonry__item">Plain card text</div>' in html
     outputs = _dashboard("Panel text")
     for html in outputs.values():
         assert '<div class="dj-dashboard-grid__panel-body">Panel text</div>' in html

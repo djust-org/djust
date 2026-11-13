@@ -1054,6 +1054,26 @@ EXAMPLES: Dict[str, Any] = {
             },
         ],
     },
+    "masonry_grid": {
+        "purpose": "Distribute variable-height items into balanced columns",
+        "keywords": (),
+        "related": (),
+        "label": "Masonry Grid",
+        "category": "layout",
+        "variants": [
+            {
+                "name": "Default",
+                "template": "{% masonry_grid items=items columns=3 %}",
+                "context": {
+                    "items": [
+                        {"height": 120, "content": "Card 1"},
+                        {"height": 180, "content": "Card 2"},
+                        {"height": 100, "content": "Card 3"},
+                    ]
+                },
+            },
+        ],
+    },
     "resizable_panel": {
         "purpose": "Resize wrapped content using a drag handle",
         "keywords": (),
@@ -1134,6 +1154,16 @@ EXAMPLES: Dict[str, Any] = {
                 "name": "EUR",
                 "template": '{% currency_input name="amount" label="Amount" currency="EUR" placeholder="0.00" %}',
             },
+        ],
+    },
+    "cron_input": {
+        "purpose": "Edit five cron schedule fields alongside the current expression",
+        "keywords": (),
+        "related": (),
+        "label": "Cron Input",
+        "category": "form",
+        "variants": [
+            {"name": "Default", "template": '{% cron_input name="schedule" value="0 9 * * 1" %}'},
         ],
     },
     "dependent_select": {
@@ -1257,6 +1287,16 @@ EXAMPLES: Dict[str, Any] = {
             },
         ],
     },
+    "image_upload_preview": {
+        "purpose": "Upload multiple images with thumbnail previews and remove actions",
+        "keywords": (),
+        "related": (),
+        "label": "Image Upload Preview",
+        "category": "form",
+        "variants": [
+            {"name": "Default", "template": '{% image_upload_preview name="photos" max=3 %}'},
+        ],
+    },
     "inline_edit": {
         "purpose": "Switch a text value between display and inline editing modes",
         "keywords": (),
@@ -1285,6 +1325,19 @@ EXAMPLES: Dict[str, Any] = {
                     '{% dj_input name="domain" placeholder="example.com" %}'
                     "{% endinput_group %}"
                 ),
+            },
+        ],
+    },
+    "markdown_editor": {
+        "purpose": "Edit Markdown with formatting controls and a rendered preview",
+        "keywords": (),
+        "related": (),
+        "label": "Markdown Editor",
+        "category": "form",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% markdown_editor name="body" placeholder="Write markdown..." %}',
             },
         ],
     },
@@ -1380,6 +1433,19 @@ EXAMPLES: Dict[str, Any] = {
             {
                 "name": "With Strength",
                 "template": '{% password_input name="password" label="Password" show_strength=True %}',
+            },
+        ],
+    },
+    "prompt_editor": {
+        "purpose": "Edit a prompt template and preview substituted variables",
+        "keywords": (),
+        "related": (),
+        "label": "Prompt Editor",
+        "category": "form",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% prompt_editor template="Hello {name}, welcome to {service}!" event="save_prompt" %}',
             },
         ],
     },
@@ -1491,6 +1557,16 @@ EXAMPLES: Dict[str, Any] = {
                     ]
                 },
             },
+        ],
+    },
+    "voice_input": {
+        "purpose": "Capture speech with a microphone control and configurable language",
+        "keywords": (),
+        "related": (),
+        "label": "Voice Input",
+        "category": "form",
+        "variants": [
+            {"name": "Default", "template": '{% voice_input event="transcribe" lang="en-US" %}'},
         ],
     },
     # ── Overlay (additional) ──
@@ -1735,6 +1811,23 @@ EXAMPLES: Dict[str, Any] = {
             },
         ],
     },
+    "error_page": {
+        "purpose": "Display an error code, message and recovery actions",
+        "keywords": (),
+        "related": (),
+        "label": "Error Page",
+        "category": "feedback",
+        "variants": [
+            {
+                "name": "404",
+                "template": '{% error_page code=404 title="Page Not Found" message="The page you are looking for does not exist." %}',
+            },
+            {
+                "name": "500",
+                "template": '{% error_page code=500 title="Server Error" message="Something went wrong on our end." %}',
+            },
+        ],
+    },
     "loading_overlay": {
         "purpose": "Cover wrapped content with a loading indicator while busy",
         "keywords": (),
@@ -1797,6 +1890,51 @@ EXAMPLES: Dict[str, Any] = {
             {"name": "Text", "template": '{% skeleton_for component="text" %}'},
         ],
     },
+    "thinking_indicator": {
+        "purpose": "Show an animated thinking or processing status",
+        "keywords": (),
+        "related": (),
+        "label": "Thinking Indicator",
+        "category": "feedback",
+        "variants": [
+            {
+                "name": "Thinking",
+                "template": '{% thinking_indicator status="thinking" label="Generating response..." %}',
+            },
+        ],
+    },
+    # ── Data (additional) ──
+    "activity_feed": {
+        "purpose": "Display timestamped activity items with optional streaming updates",
+        "keywords": (),
+        "related": (),
+        "label": "Activity Feed",
+        "category": "data",
+        "variants": [
+            {
+                "name": "Default",
+                "template": "{% activity_feed events=events %}",
+                "context": {
+                    "events": [
+                        {
+                            "user": "Alice",
+                            "action": "created",
+                            "target": "Project Alpha",
+                            "time": "2m ago",
+                            "icon": "plus",
+                        },
+                        {
+                            "user": "Bob",
+                            "action": "deployed",
+                            "target": "v1.2.0",
+                            "time": "1h ago",
+                            "icon": "rocket",
+                        },
+                    ]
+                },
+            },
+        ],
+    },
     "audit_log": {
         "purpose": "Display user actions in a timestamped audit table",
         "keywords": (),
@@ -1845,6 +1983,25 @@ EXAMPLES: Dict[str, Any] = {
             },
         ],
     },
+    "calendar": {
+        "purpose": "Display events on a monthly calendar with optional event click actions",
+        "keywords": (),
+        "related": (),
+        "label": "Calendar",
+        "category": "data",
+        "variants": [
+            {
+                "name": "Default",
+                "template": "{% calendar year=2026 month=3 events=events %}",
+                "context": {
+                    "events": [
+                        {"date": "2026-03-15", "title": "Sprint Review", "color": "blue"},
+                        {"date": "2026-03-20", "title": "Release Day", "color": "green"},
+                    ]
+                },
+            },
+        ],
+    },
     "calendar_heatmap": {
         "purpose": "Visualize daily activity intensity on an SVG calendar",
         "keywords": (),
@@ -1857,6 +2014,85 @@ EXAMPLES: Dict[str, Any] = {
                 "template": '{% calendar_heatmap data=data year=2026 title="Contributions" %}',
                 "context": {
                     "data": {"2026-01-05": 3, "2026-01-12": 7, "2026-02-01": 5, "2026-03-10": 10}
+                },
+            },
+        ],
+    },
+    "comparison_table": {
+        "purpose": "Compare features across plans with an optional highlighted plan",
+        "keywords": (),
+        "related": (),
+        "label": "Comparison Table",
+        "category": "data",
+        "variants": [
+            {
+                "name": "Default",
+                "template": "{% comparison_table plans=plans features=features %}",
+                "context": {
+                    "plans": [
+                        {"name": "Free", "price": "$0/mo", "highlighted": False},
+                        {"name": "Pro", "price": "$29/mo", "highlighted": True},
+                    ],
+                    "features": [
+                        {"name": "Projects", "values": ["3", "Unlimited"]},
+                        {"name": "Storage", "values": ["1 GB", "100 GB"]},
+                    ],
+                },
+            },
+        ],
+    },
+    "conversation_thread": {
+        "purpose": "Display chat messages with roles and timestamps",
+        "keywords": (),
+        "related": (),
+        "label": "Conversation Thread",
+        "category": "data",
+        "variants": [
+            {
+                "name": "Default",
+                "template": "{% conversation_thread messages=messages %}",
+                "context": {
+                    "messages": [
+                        {
+                            "sender": "user",
+                            "name": "Alice",
+                            "text": "How do I deploy?",
+                            "time": "10:00 AM",
+                        },
+                        {
+                            "sender": "assistant",
+                            "name": "Bot",
+                            "text": "Run `make deploy` from the project root.",
+                            "time": "10:01 AM",
+                        },
+                    ]
+                },
+            },
+        ],
+    },
+    "data_card_grid": {
+        "purpose": "Display records as cards in a configurable column grid",
+        "keywords": (),
+        "related": (),
+        "label": "Data Card Grid",
+        "category": "data",
+        "variants": [
+            {
+                "name": "Default",
+                "template": "{% data_card_grid items=items columns=2 %}",
+                "context": {
+                    "items": [
+                        {
+                            "title": "Widget A",
+                            "description": "A useful widget.",
+                            "category": "tools",
+                        },
+                        {
+                            "title": "Widget B",
+                            "description": "Another widget.",
+                            "category": "tools",
+                        },
+                    ]
                 },
             },
         ],
@@ -1899,6 +2135,69 @@ EXAMPLES: Dict[str, Any] = {
                         {"term": "Name", "detail": "Alice Johnson"},
                         {"term": "Role", "detail": "Administrator"},
                         {"term": "Status", "detail": "Active"},
+                    ]
+                },
+            },
+        ],
+    },
+    "diff_viewer": {
+        "purpose": "Compare text changes in unified or side-by-side views",
+        "keywords": (),
+        "related": (),
+        "label": "Diff Viewer",
+        "category": "data",
+        "variants": [
+            {
+                "name": "Split",
+                "template": '{% diff_viewer old=old_text new=new_text mode="split" %}',
+                "context": {
+                    "old_text": "Hello World\nFoo Bar",
+                    "new_text": "Hello World\nFoo Baz",
+                },
+            },
+        ],
+    },
+    "file_tree": {
+        "purpose": "Browse files and folders with expansion and selection actions",
+        "keywords": (),
+        "related": (),
+        "label": "File Tree",
+        "category": "data",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% file_tree nodes=nodes event="select_file" %}',
+                "context": {
+                    "nodes": [
+                        {
+                            "id": "1",
+                            "label": "src/",
+                            "children": [
+                                {"id": "2", "label": "main.py", "children": []},
+                                {"id": "3", "label": "utils.py", "children": []},
+                            ],
+                        },
+                        {"id": "4", "label": "README.md", "children": []},
+                    ]
+                },
+            },
+        ],
+    },
+    "gantt_chart": {
+        "purpose": "Visualize task start positions, durations and progress on an SVG timeline",
+        "keywords": (),
+        "related": (),
+        "label": "Gantt Chart",
+        "category": "data",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% gantt_chart tasks=tasks title="Project Timeline" %}',
+                "context": {
+                    "tasks": [
+                        {"name": "Design", "start": 0, "duration": 3, "progress": 100},
+                        {"name": "Development", "start": 2, "duration": 5, "progress": 60},
+                        {"name": "Testing", "start": 6, "duration": 2, "progress": 0},
                     ]
                 },
             },
@@ -1959,6 +2258,27 @@ EXAMPLES: Dict[str, Any] = {
             },
         ],
     },
+    "log_viewer": {
+        "purpose": "Display log lines with severity filtering and optional streaming",
+        "keywords": (),
+        "related": (),
+        "label": "Log Viewer",
+        "category": "data",
+        "variants": [
+            {
+                "name": "Default",
+                "template": "{% log_viewer lines=lines show_line_numbers=True %}",
+                "context": {
+                    "lines": [
+                        "[INFO] Server started on port 8000",
+                        "[DEBUG] Loading configuration...",
+                        "[WARN] Deprecated setting detected",
+                        "[INFO] Ready to accept connections",
+                    ]
+                },
+            },
+        ],
+    },
     "model_table": {
         "purpose": "Render a Django queryset table with inferred model columns and filters",
         "keywords": (),
@@ -1975,6 +2295,26 @@ EXAMPLES: Dict[str, Any] = {
                         {"id": 2, "name": "Gadget", "price": "$19.99"},
                     ],
                     "include": ["name", "price"],
+                },
+            },
+        ],
+    },
+    "org_chart": {
+        "purpose": "Display a hierarchical organization tree with node selection",
+        "keywords": (),
+        "related": (),
+        "label": "Org Chart",
+        "category": "data",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% org_chart nodes=nodes root="ceo" %}',
+                "context": {
+                    "nodes": [
+                        {"id": "ceo", "label": "CEO", "parent": ""},
+                        {"id": "cto", "label": "CTO", "parent": "ceo"},
+                        {"id": "cfo", "label": "CFO", "parent": "ceo"},
+                    ]
                 },
             },
         ],
@@ -2004,6 +2344,27 @@ EXAMPLES: Dict[str, Any] = {
                     "segments": [
                         {"label": "Product", "value": 60},
                         {"label": "Services", "value": 40},
+                    ]
+                },
+            },
+        ],
+    },
+    "pivot_table": {
+        "purpose": "Aggregate records by row and column groups with totals",
+        "keywords": (),
+        "related": (),
+        "label": "Pivot Table",
+        "category": "data",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% pivot_table data=data rows="region" cols="quarter" values="sales" agg="sum" %}',
+                "context": {
+                    "data": [
+                        {"region": "North", "quarter": "Q1", "sales": 100},
+                        {"region": "North", "quarter": "Q2", "sales": 150},
+                        {"region": "South", "quarter": "Q1", "sales": 200},
+                        {"region": "South", "quarter": "Q2", "sales": 175},
                     ]
                 },
             },
@@ -2068,6 +2429,26 @@ EXAMPLES: Dict[str, Any] = {
             },
         ],
     },
+    "terminal": {
+        "purpose": "Display terminal output with ANSI colors and optional streaming",
+        "keywords": (),
+        "related": (),
+        "label": "Terminal",
+        "category": "data",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% terminal output=output title="Console" show_line_numbers=True %}',
+                "context": {
+                    "output": [
+                        "$ python manage.py runserver",
+                        "Watching for file changes with StatReloader",
+                        "Starting development server at http://127.0.0.1:8000/",
+                    ]
+                },
+            },
+        ],
+    },
     "treemap": {
         "purpose": "Show relative values as proportional SVG rectangles",
         "keywords": (),
@@ -2084,6 +2465,29 @@ EXAMPLES: Dict[str, Any] = {
                         {"name": "Photos", "size": 300},
                         {"name": "Videos", "size": 800},
                         {"name": "Code", "size": 200},
+                    ]
+                },
+            },
+        ],
+    },
+    # ── Navigation (additional) ──
+    "breadcrumb_dropdown": {
+        "purpose": "Navigate breadcrumb levels with collapsed ancestors in a dropdown",
+        "keywords": (),
+        "related": (),
+        "label": "Breadcrumb Dropdown",
+        "category": "navigation",
+        "variants": [
+            {
+                "name": "Default",
+                "template": "{% breadcrumb_dropdown items=items max_visible=3 %}",
+                "context": {
+                    "items": [
+                        {"label": "Home", "url": "/"},
+                        {"label": "Products", "url": "/products/"},
+                        {"label": "Electronics", "url": "/products/electronics/"},
+                        {"label": "Phones", "url": "/products/electronics/phones/"},
+                        {"label": "iPhone 15"},
                     ]
                 },
             },
@@ -2187,6 +2591,24 @@ EXAMPLES: Dict[str, Any] = {
             },
         ],
     },
+    # ── Indicator (additional) ──
+    "animated_number": {
+        "purpose": "Animate transitions between numeric values",
+        "keywords": (),
+        "related": (),
+        "label": "Animated Number",
+        "category": "indicator",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% animated_number value=1234 prefix="$" duration=800 %}',
+            },
+            {
+                "name": "Percentage",
+                "template": '{% animated_number value=97 suffix="%" decimals=1 %}',
+            },
+        ],
+    },
     "avatar_group": {
         "purpose": "Display overlapping user avatars with an overflow count",
         "keywords": (),
@@ -2237,6 +2659,20 @@ EXAMPLES: Dict[str, Any] = {
         "category": "indicator",
         "variants": [
             {"name": "Default", "template": '{% live_counter value=42 label="Online Users" %}'},
+        ],
+    },
+    "live_indicator": {
+        "purpose": "Show a named user activity with animated typing dots",
+        "keywords": (),
+        "related": (),
+        "label": "Live Indicator",
+        "category": "indicator",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% live_indicator user=user field="document" action="typing" active=True %}',
+                "context": {"user": {"name": "Alice", "avatar": ""}},
+            },
         ],
     },
     "meter": {
@@ -2291,6 +2727,16 @@ EXAMPLES: Dict[str, Any] = {
             },
         ],
     },
+    "qr_code": {
+        "purpose": "Display a decorative QR-style SVG pattern derived from supplied text",
+        "keywords": (),
+        "related": (),
+        "label": "QR Code",
+        "category": "indicator",
+        "variants": [
+            {"name": "Default", "template": '{% qr_code data="https://djust.org" size="md" %}'},
+        ],
+    },
     "relative_time": {
         "purpose": "Display a timestamp as relative elapsed time",
         "keywords": (),
@@ -2299,6 +2745,20 @@ EXAMPLES: Dict[str, Any] = {
         "category": "indicator",
         "variants": [
             {"name": "Default", "template": '{% relative_time datetime="2026-03-25T10:00:00Z" %}'},
+        ],
+    },
+    "ribbon": {
+        "purpose": "Display a labelled ribbon positioned at a corner of its container",
+        "keywords": (),
+        "related": (),
+        "label": "Ribbon",
+        "category": "indicator",
+        "variants": [
+            {"name": "Default", "template": '{% ribbon text="New" variant="primary" %}'},
+            {
+                "name": "Sale",
+                "template": '{% ribbon text="Sale" variant="danger" position="top-left" %}',
+            },
         ],
     },
     "segmented_progress": {
@@ -2428,6 +2888,20 @@ EXAMPLES: Dict[str, Any] = {
             },
         ],
     },
+    # ── Misc (additional) ──
+    "agent_step": {
+        "purpose": "Show an agent action with status, duration and optional details",
+        "keywords": (),
+        "related": (),
+        "label": "Agent Step",
+        "category": "misc",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% agent_step tool="web_search" status="complete" duration="1.2s" %}Found 3 relevant results.{% endagent_step %}',
+            },
+        ],
+    },
     "approval_gate": {
         "purpose": "Present an action for approval or rejection with a risk indicator",
         "keywords": (),
@@ -2491,6 +2965,49 @@ EXAMPLES: Dict[str, Any] = {
             },
         ],
     },
+    "collab_selection": {
+        "purpose": "Display other users' text selection highlights",
+        "keywords": (),
+        "related": (),
+        "label": "Collab Selection",
+        "category": "misc",
+        "variants": [
+            {
+                "name": "Default",
+                "template": "{% collab_selection users=users %}",
+                "context": {
+                    "users": [
+                        {
+                            "name": "Alice",
+                            "color": "#3B82F6",
+                            "text": "selected text",
+                            "start": 0,
+                            "end": 13,
+                        },
+                    ]
+                },
+            },
+        ],
+    },
+    "cursors": {
+        "purpose": "Overlay named cursors for collaborating users",
+        "keywords": (),
+        "related": (),
+        "label": "Cursors",
+        "category": "misc",
+        "variants": [
+            {
+                "name": "Default",
+                "template": "{% cursors users=users %}",
+                "context": {
+                    "users": [
+                        {"name": "Alice", "color": "#3B82F6", "x": 100, "y": 200},
+                        {"name": "Bob", "color": "#10B981", "x": 300, "y": 150},
+                    ]
+                },
+            },
+        ],
+    },
     "fab": {
         "purpose": "Floating action button with optional secondary speed-dial actions",
         "keywords": (),
@@ -2499,6 +3016,17 @@ EXAMPLES: Dict[str, Any] = {
         "category": "misc",
         "variants": [
             {"name": "Default", "template": '{% fab icon="+" event="create" label="Create" %}'},
+        ],
+    },
+    "feedback": {
+        "purpose": "Collect feedback using thumbs, stars or emoji choices",
+        "keywords": (),
+        "related": (),
+        "label": "Feedback Widget",
+        "category": "misc",
+        "variants": [
+            {"name": "Thumbs", "template": '{% feedback event="rate_response" mode="thumbs" %}'},
+            {"name": "Stars", "template": '{% feedback event="rate_response" mode="stars" %}'},
         ],
     },
     "filter_bar": {
@@ -2557,6 +3085,19 @@ EXAMPLES: Dict[str, Any] = {
             },
         ],
     },
+    "map_picker": {
+        "purpose": "Choose a geographic position on an interactive map",
+        "keywords": (),
+        "related": (),
+        "label": "Map Picker",
+        "category": "misc",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% map_picker lat=40.7128 lng=-74.0060 zoom=13 pick_event="set_location" %}',
+            },
+        ],
+    },
     "model_selector": {
         "purpose": "Choose an AI model with tier, description and context-window details",
         "keywords": (),
@@ -2572,6 +3113,39 @@ EXAMPLES: Dict[str, Any] = {
                         {"value": "gpt-4", "label": "GPT-4"},
                         {"value": "claude", "label": "Claude"},
                     ]
+                },
+            },
+        ],
+    },
+    "multimodal_input": {
+        "purpose": "Compose a message with text, file and voice controls",
+        "keywords": (),
+        "related": (),
+        "label": "Multimodal Input",
+        "category": "misc",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% multimodal_input name="message" event="send" accept_files=True %}',
+            },
+        ],
+    },
+    "reactions": {
+        "purpose": "Display emoji reaction counts with toggle actions",
+        "keywords": (),
+        "related": (),
+        "label": "Reactions",
+        "category": "misc",
+        "variants": [
+            {
+                "name": "Default",
+                "template": '{% reactions options=options counts=counts event="react" %}',
+                "context": {
+                    "options": [
+                        {"emoji": "thumbsup", "label": "Like"},
+                        {"emoji": "heart", "label": "Love"},
+                    ],
+                    "counts": {"thumbsup": 5, "heart": 2},
                 },
             },
         ],
@@ -2641,6 +3215,33 @@ EXAMPLES: Dict[str, Any] = {
             {
                 "name": "Default",
                 "template": '{% theme_toggle current="system" event="set_theme" %}',
+            },
+        ],
+    },
+    "tour": {
+        "purpose": "Guide users through positioned onboarding steps",
+        "keywords": (),
+        "related": (),
+        "label": "Tour",
+        "category": "misc",
+        "variants": [
+            {
+                "name": "Default",
+                "template": "{% tour steps=steps active=0 %}",
+                "context": {
+                    "steps": [
+                        {
+                            "target": "#header",
+                            "title": "Welcome",
+                            "content": "This is the main header.",
+                        },
+                        {
+                            "target": "#sidebar",
+                            "title": "Navigation",
+                            "content": "Browse sections here.",
+                        },
+                    ]
+                },
             },
         ],
     },

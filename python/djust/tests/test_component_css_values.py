@@ -1,7 +1,7 @@
 """Colours, lengths and ratios that components write into ``style`` attributes.
 
-A component that takes a CSS value from its caller (a segment colour in
-``Meter``, a column width, a gap) writes it into an inline ``style``
+A component that takes a CSS value from its caller (a user's colour in
+``CursorsOverlay``, a column width, a gap) writes it into an inline ``style``
 attribute. HTML escaping keeps the value inside the attribute but not inside
 its declaration, so each value is checked against the shapes the component
 documents (``djust.components.utils.safe_css_color`` / ``safe_css_length`` /
@@ -201,8 +201,117 @@ class TestHelpers:
 
 
 # ---------------------------------------------------------------------------
+# CursorsOverlay and CollabSelection: a participant's colour
+# ---------------------------------------------------------------------------
+
+
+def _cursor_users(color: Any) -> list[dict[str, Any]]:
+    return [{"name": "Alice", "color": color, "x": 3, "y": 4}]
+
+
+def _selection_users(color: Any) -> list[dict[str, Any]]:
+    return [{"name": "Alice", "color": color, "start": 0, "end": 5, "text": "Hello"}]
+
+
+def _cursor_paths() -> dict[str, Callable[[Any], str]]:
+    from djust.components.components.cursors_overlay import CursorsOverlay
+
+    return {
+        "class": lambda c: CursorsOverlay(users=_cursor_users(c)).render(),
+        "tag": lambda c: _tag("{% cursors users=users %}", users=_cursor_users(c)),
+        "engine": lambda c: _engine("{% cursors users=users %}", users=_cursor_users(c)),
+    }
+
+
+def _selection_paths() -> dict[str, Callable[[Any], str]]:
+    from djust.components.components.collab_selection import CollabSelection
+
+    return {
+        "class": lambda c: CollabSelection(users=_selection_users(c)).render(),
+        "tag": lambda c: _tag("{% collab_selection users=users %}", users=_selection_users(c)),
+        "engine": lambda c: _engine(
+            "{% collab_selection users=users %}", users=_selection_users(c)
+        ),
+    }
+
+
+PATHS = ["class", "tag", "engine"]
+
+
+class TestCursorsOverlay:
+    @pytest.mark.parametrize("path", PATHS)
+    @pytest.mark.parametrize("color", VALID_COLORS)
+    def test_valid_colour_written_as_given(self, path, color):
+        out = _cursor_paths()[path](color)
+        assert f'fill="{color}"' in out
+        assert f'style="background:{color}"' in out
+
+    @pytest.mark.parametrize("path", PATHS)
+    @pytest.mark.parametrize("color", REFUSED_COLORS)
+    def test_other_values_become_the_palette_colour(self, path, color):
+        out = _cursor_paths()[path](color)
+        assert 'fill="#3b82f6"' in out
+        assert 'style="background:#3b82f6"' in out
+        _assert_absent(out, color)
+
+    def test_palette_follows_position(self):
+        users = [
+            {"name": "A", "color": "#111111"},
+            {"name": "B", "color": "red;x:y"},
+        ]
+        for render in (
+            lambda: _tag("{% cursors users=users %}", users=users),
+            lambda: _engine("{% cursors users=users %}", users=users),
+        ):
+            assert _style_attrs(render())[1::2] == ["background:#111111", "background:#ef4444"]
+
+    @pytest.mark.parametrize("color", VALID_COLORS[:4] + REFUSED_COLORS[:4])
+    def test_paths_agree(self, color):
+        outs = {p: _cursor_paths()[p](color) for p in PATHS}
+        assert len({tuple(_style_attrs(o)) for o in outs.values()}) == 1, outs
+        assert len({tuple(re.findall(r'fill="[^"]*"', o)) for o in outs.values()}) == 1
+
+
+class TestCollabSelection:
+    @pytest.mark.parametrize("path", PATHS)
+    @pytest.mark.parametrize("color", VALID_COLORS)
+    def test_valid_colour_written_as_given(self, path, color):
+        out = _selection_paths()[path](color)
+        assert f'style="--dj-collab-sel-color:{color}"' in out
+        assert f'style="background:{color}"' in out
+
+    @pytest.mark.parametrize("path", PATHS)
+    @pytest.mark.parametrize("color", REFUSED_COLORS)
+    def test_other_values_become_the_palette_colour(self, path, color):
+        out = _selection_paths()[path](color)
+        assert 'style="--dj-collab-sel-color:#3b82f6"' in out
+        assert 'style="background:#3b82f6"' in out
+        _assert_absent(out, color)
+
+    @pytest.mark.parametrize("color", VALID_COLORS[:4] + REFUSED_COLORS[:4])
+    def test_paths_agree(self, color):
+        outs = {p: _selection_paths()[p](color) for p in PATHS}
+        assert len({tuple(_style_attrs(o)) for o in outs.values()}) == 1, outs
+
+
+# ---------------------------------------------------------------------------
 # Other components that take a colour
 # ---------------------------------------------------------------------------
+
+
+def _calendar_events(c: Any) -> list[dict[str, Any]]:
+    return [{"date": "2026-03-25", "title": "Standup", "color": c}]
+
+
+def _calendar_paths() -> dict[str, Callable[[Any], str]]:
+    from djust.components.components.calendar_view import CalendarView
+
+    src = "{% calendar events=events month=3 year=2026 %}"
+    return {
+        "class": lambda c: CalendarView(events=_calendar_events(c), month=3, year=2026).render(),
+        "tag": lambda c: _tag(src, events=_calendar_events(c)),
+        "engine": lambda c: _engine(src, events=_calendar_events(c)),
+    }
 
 
 def _meter_segments(c: Any) -> list[dict[str, Any]]:
@@ -241,6 +350,12 @@ def _kanban_paths() -> dict[str, Callable[[Any], str]]:
 
 COLOUR_CASES = [
     # name, paths, fragments for a valid colour, fragment for a refused one
+    (
+        "calendar",
+        _calendar_paths,
+        ['style="--dj-calendar-event-color: {v}"'],
+        'style="--dj-calendar-event-color: #3b82f6"',
+    ),
     ("meter", _meter_paths, [';background:{v}"', 'style="background:{v}"'], None),
     (
         "color_picker",
@@ -303,6 +418,16 @@ class TestDataTableTwin:
 # ---------------------------------------------------------------------------
 # Lengths, ratios and numbers
 # ---------------------------------------------------------------------------
+
+
+def _map_paths() -> dict[str, Callable[[Any], str]]:
+    from djust.components.components.map_picker import MapPicker
+
+    return {
+        "class": lambda v: MapPicker(height=v).render(),
+        "tag": lambda v: _tag("{% map_picker height=h %}", h=v),
+        "engine": lambda v: _engine("{% map_picker height=h %}", h=v),
+    }
 
 
 def _rte_paths() -> dict[str, Callable[[Any], str]]:
@@ -407,6 +532,7 @@ def _skeleton_paths() -> dict[str, Callable[[Any], str]]:
 
 
 LENGTH_CASES = [
+    ("map_picker", _map_paths, 'style="height:{v}"', 'style="height:400px"'),
     ("rich_text_editor", _rte_paths, 'style="min-height:{v}"', 'style="min-height:200px"'),
     ("scroll_area", _scroll_paths, "max-height: {v};", "max-height: 400px;"),
     ("sticky_header", _sticky_paths, "top: {v};", "top: 0;"),

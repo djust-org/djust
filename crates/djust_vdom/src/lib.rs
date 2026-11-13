@@ -17,6 +17,7 @@ pub mod diff;
 pub mod lis;
 pub mod parser;
 pub mod patch;
+pub mod retained;
 
 pub use parser::MAX_VDOM_DEPTH;
 

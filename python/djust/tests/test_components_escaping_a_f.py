@@ -39,6 +39,7 @@ if not settings.configured:
 from django.utils.safestring import mark_safe  # noqa: E402
 
 from djust.components.components.accordion import Accordion  # noqa: E402
+from djust.components.components.activity_feed import ActivityFeed  # noqa: E402
 from djust.components.components.alert import Alert  # noqa: E402
 from djust.components.components.announcement_bar import AnnouncementBar  # noqa: E402
 from djust.components.components.app_shell import AppShell  # noqa: E402
@@ -48,6 +49,7 @@ from djust.components.components.avatar import Avatar  # noqa: E402
 from djust.components.components.avatar_group import AvatarGroup  # noqa: E402
 from djust.components.components.badge import Badge  # noqa: E402
 from djust.components.components.breadcrumb import Breadcrumb  # noqa: E402
+from djust.components.components.breadcrumb_dropdown import BreadcrumbDropdown  # noqa: E402
 from djust.components.components.button import Button  # noqa: E402
 from djust.components.components.calendar_heatmap import CalendarHeatmap  # noqa: E402
 from djust.components.components.callout import Callout  # noqa: E402
@@ -60,8 +62,10 @@ from djust.components.components.content_loader import ContentLoader  # noqa: E4
 from djust.components.components.context_menu import ContextMenu  # noqa: E402
 from djust.components.components.cookie_consent import CookieConsent  # noqa: E402
 from djust.components.components.dashboard_grid import DashboardGrid  # noqa: E402
+from djust.components.components.data_card_grid import DataCardGrid  # noqa: E402
 from djust.components.components.dropdown import Dropdown  # noqa: E402
 from djust.components.components.dropdown_menu import DropdownMenu  # noqa: E402
+from djust.components.components.error_page import ErrorPage  # noqa: E402
 from djust.components.components.fieldset import Fieldset  # noqa: E402
 from djust.components.components.file_dropzone import FileDropzone  # noqa: E402
 from djust.components.components.filter_bar import FilterBar  # noqa: E402
@@ -134,11 +138,29 @@ ATTR_CASES: List[Tuple[str, Factory]] = [
 #: Navigation URLs (href).
 LINK_CASES: List[Tuple[str, Factory]] = [
     ("breadcrumb_url", lambda v: Breadcrumb(items=[{"label": "Home", "url": v}, "Here"])),
+    (
+        "breadcrumb_dropdown_url",
+        lambda v: BreadcrumbDropdown(items=[{"label": "Home", "url": v}, {"label": "Here"}]),
+    ),
+    (
+        "breadcrumb_dropdown_collapsed_url",
+        lambda v: BreadcrumbDropdown(
+            items=[
+                {"label": "Home", "url": "/"},
+                {"label": "Hidden", "url": v},
+                {"label": "B", "url": "/b"},
+                {"label": "C"},
+            ],
+            max_visible=3,
+        ),
+    ),
     ("cookie_consent_privacy_url", lambda v: CookieConsent(privacy_url=v)),
+    ("error_page_action_url", lambda v: ErrorPage(action_url=v)),
 ]
 
 #: Image sources (img src).
 IMAGE_CASES: List[Tuple[str, Factory]] = [
+    ("activity_feed_avatar", lambda v: ActivityFeed(events=[{"user": "Al", "avatar": v}])),
     ("avatar_src", lambda v: Avatar(src=v, alt="a")),
     ("avatar_group_avatar", lambda v: AvatarGroup(users=[{"name": "Al", "avatar": v}])),
     ("carousel_src", lambda v: Carousel(images=[{"src": v, "alt": "a"}])),
@@ -147,6 +169,7 @@ IMAGE_CASES: List[Tuple[str, Factory]] = [
         "chat_bubble_avatar",
         lambda v: ChatBubble(message={"name": "Al", "text": "hi", "avatar": v}),
     ),
+    ("data_card_grid_image", lambda v: DataCardGrid(items=[{"title": "T", "image": v}])),
 ]
 
 

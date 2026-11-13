@@ -156,6 +156,7 @@ type PreparedAuthenticatedPageOutput = (
     Option<(usize, usize)>,
 );
 type CachedTemplate = (Arc<Template>, u64, bool, Vec<LazyDependency>);
+mod retained;
 static TEMPLATE_CACHE: Lazy<DashMap<(u64, String), CachedTemplate>> = Lazy::new(DashMap::new);
 
 /// `RustLiveView.dj_model_fields(cache=True)` results, keyed by the exact
@@ -360,7 +361,8 @@ fn holds_accumulating_container(node: &VNode, ids: &HashSet<String>) -> bool {
 /// A LiveView component that manages state and rendering (Rust backend)
 #[pyclass(name = "RustLiveView")]
 pub struct RustLiveViewBackend {
-    template_source: String,
+    /// Shared with every view of the same source: see `retained::shared_source`.
+    template_source: Arc<str>,
     /// Render the full template and authenticate its selected LiveView root.
     authenticated_partial_root: bool,
     /// Model bindings from the last successfully authenticated live root.
@@ -495,7 +497,7 @@ impl RustLiveViewBackend {
     #[pyo3(signature = (template_source, template_dirs=None))]
     fn new(template_source: String, template_dirs: Option<Vec<String>>) -> Self {
         Self {
-            template_source,
+            template_source: retained::shared_source(&template_source),
             authenticated_partial_root: false,
             authenticated_model_fields: Vec::new(),
             potential_authenticated_partial_root: false,
@@ -872,13 +874,13 @@ impl RustLiveViewBackend {
         // allowing a text-only VDOM update. Still rerender the full template:
         // custom filters and other external inputs can change even when no
         // tracked context key does. Loop fragments have the same constraint.
-        if self.template_source == new_template_source {
+        if *self.template_source == *new_template_source {
             self.node_html_cache.clear();
             self.fragment_text_map = None;
             self.loop_render_cache.clear();
             return;
         }
-        self.template_source = new_template_source;
+        self.template_source = retained::shared_source(&new_template_source);
         // Bindings from the old source cannot authorize the new template.
         if self.authenticated_partial_root {
             self.authenticated_model_fields.clear();
@@ -942,7 +944,7 @@ impl RustLiveViewBackend {
                 return Ok(self.authenticated_model_fields.clone());
             }
             use djust_templates::inheritance::FilesystemTemplateLoader;
-            let key = (self.template_source.clone(), self.template_dirs.clone());
+            let key = (self.template_source.to_string(), self.template_dirs.clone());
             if cache {
                 if let Some(hit) = DJ_MODEL_FIELDS_CACHE.get(&key) {
                     return Ok(hit.value().clone());
@@ -1917,7 +1919,7 @@ impl RustLiveViewBackend {
 
         // Convert to serializable struct
         let serializable = SerializableViewState {
-            template_source: self.template_source.clone(),
+            template_source: self.template_source.to_string(),
             // Deref THEN clone: the wire carries a plain map, exactly as
             // before. Paid once per save, not once per render.
             state: self
@@ -1982,7 +1984,7 @@ impl RustLiveViewBackend {
         // Convert back to RustLiveViewBackend
         // Note: template_dirs must be re-set after deserialization via set_template_dirs()
         Ok(Self {
-            template_source: serializable.template_source,
+            template_source: retained::shared_source(&serializable.template_source),
             authenticated_partial_root: serializable.authenticated_partial_root,
             authenticated_model_fields: serializable.authenticated_model_fields,
             potential_authenticated_partial_root: serializable.potential_authenticated_partial_root,
@@ -2017,6 +2019,28 @@ impl RustLiveViewBackend {
             // next framework render post-restore.
             render_env: None,
         })
+    }
+
+    /// What this view holds between turns, in bytes per owner (#3998).
+    ///
+    /// Deterministic accounting from capacities and `size_of` (see
+    /// `djust_core::retained`): the same view reports the same numbers on
+    /// every machine, and they are a lower bound on what the allocator holds.
+    /// Read-only. The parsed template is NOT here: it lives in the
+    /// process-wide template cache, one copy per distinct source, shared by
+    /// every view of that source. So is the source text: `template_source`
+    /// is what THIS view owns of it (zero: the text is shared), and
+    /// `shared_template_source` / `template_source_holders` say how large the
+    /// one shared copy is and how many views read it. `raw_py_values` holds
+    /// references to Python objects the view owns, counted on the Python side.
+    ///
+    /// `vdom` is `vdom_node_structs + vdom_tags + vdom_attrs + vdom_text +
+    /// vdom_ids` (`vdom_nodes` and `vdom_text_nodes` are counts, not bytes);
+    /// `total` is the sum of the owners (`template_source`, `state`, `vdom`,
+    /// `last_html`, `node_html_cache`, `text_node_index`,
+    /// `fragment_text_map`, `loop_render_cache`, `other`).
+    fn retained_bytes(&self) -> HashMap<String, usize> {
+        retained::report(self)
     }
 
     /// Get per-phase timing from the last render_with_diff() call.
@@ -9438,7 +9462,7 @@ mod state_is_shared_not_copied_2737 {
         // stepped around, and the wrapper's own body is one `PyBytes::new` over
         // exactly these bytes.
         let serializable = SerializableViewState {
-            template_source: view.template_source.clone(),
+            template_source: view.template_source.to_string(),
             state: view
                 .state
                 .iter()

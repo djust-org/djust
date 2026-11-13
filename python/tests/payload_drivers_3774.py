@@ -104,12 +104,12 @@ def assets(mode):
     from djust.components.base import Component
 
     class WithAssets(Component):
-        requires_assets = ("xterm",)
+        requires_assets = ("leaflet",)
 
         def _render_custom(self):  # pragma: no cover - not rendered
             return ""
 
-    return [asset_tags("xterm"), WithAssets().asset_tags()]
+    return [asset_tags("leaflet"), WithAssets().asset_tags()]
 
 
 def sticky_child(mode):

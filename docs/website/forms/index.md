@@ -129,3 +129,9 @@ See [guides/forms.md](../guides/forms.md) for:
 - Confirmation dialogs (`dj-confirm`)
 - `dj-model` vs `dj-submit` comparison
 - Draft mode auto-save (see [State Management](../state/index.md))
+
+## Markdown editor
+
+See the [Markdown Editor guide](../guides/markdown-editor.md) for optional Visual/Markdown editing,
+native form integration, asset loading, table actions, the `bubble_menu` and `floating_menu`
+options, theme variables and editing limitations.

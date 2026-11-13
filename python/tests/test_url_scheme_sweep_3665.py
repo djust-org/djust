@@ -46,8 +46,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
-from djust._removed_settings import REMOVED_TEMPLATE_TAGS
 from django.template.library import import_library
 
 from scripts.lib.template_library_parity import url_sweep
@@ -511,8 +509,6 @@ class TestTheSweep:
         for label, dotted in LIBRARIES.items():
             tags = import_library(dotted).tags
             for name in tags:
-                if name in REMOVED_TEMPLATE_TAGS:
-                    continue  # registered only to refuse itself (#4002)
                 registered.add("%s:%s" % (label, name))
         closing = {
             key
@@ -540,8 +536,10 @@ class TestTheSweep:
             ("djust_components:avatar", "src"),
             ("djust_components:responsive_image", "src"),
             ("djust_components:responsive_image", "srcset"),
+            ("djust_components:breadcrumb_dropdown", "items"),
             ("djust_components:sidebar_item", "href"),
             ("theme_components:theme_breadcrumb", "items"),
+            ("djust_components:error_page", "action_url"),
             ("theme_components:theme_button", "href"),
             ("theme_components:theme_avatar", "src"),
             ("theme_pages:theme_login_page", "action"),
