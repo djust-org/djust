@@ -111,6 +111,10 @@ def make_staff_user(
 def generous_save_timeout(monkeypatch):
     """Raise the event-save bound so save assertions test logic, not the clock.
 
+    Since #4098 the default bound is already the 10 s stuck cap (a turn waits
+    for its own save), so this only matters to a test that lowered it. The
+    history below is why it exists.
+
     The save is bounded by ``asyncio.wait_for(..., EVENT_STATE_SAVE_TIMEOUT_S)``
     (``runtime.py``, #1475) — deliberately, so a slow session backend cannot
     stall event handling. That makes a save BEST-EFFORT: under enough load the

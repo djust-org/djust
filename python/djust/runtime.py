@@ -94,22 +94,32 @@ from .websocket_utils import (
     get_handler_coerce_setting,
 )
 
-# How long an event-path state save may take (#1475).
+# How long an explicit turn waits for its own state save, by default (#4098).
 #
-# Deliberately bounded: a slow session backend must never stall event handling.
+# An ADR-038 explicit save is the turn's commit: the success frame is withheld
+# until storage has the state. So the turn WAITS for the save, under the
+# runtime's event lock, and the next event of the same page starts after it.
+# Back-to-back events therefore all take effect in order, each with its own
+# frame, however slow one write is.
 #
-# It is a named constant because a test that asserts a save *landed* is
-# otherwise asserting an unconditional outcome from a time-bounded operation,
-# which makes it pass everywhere except a loaded machine. Such a test should
-# raise this bound so it exercises the save LOGIC rather than racing a wall
-# clock (#2154).
+# The default is the stuck cap (``MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S``; a test
+# pins the two together): a save still running after that long is storage not
+# answering, and ends in the reload error.
 #
-# ADR-038 explicit saves are not best-effort (a missed save withholds the
-# success frame). They use this value as the DEFAULT of a configurable
-# deadline that counts only the save's own running time, never its queueing
-# on the Django thread: see explicit_state_save_timeout / _run_explicit_save
-# (#3200).
-EVENT_STATE_SAVE_TIMEOUT_S = 0.150
+# Until #4098 this was 0.150, inherited from the best-effort legacy save
+# (#1475) that 2.0 removed. For an explicit turn that bound did not shorten
+# anything the user waits for: a save that took longer (one slow fsync, a
+# loaded process) had its frame replaced by a transient ``state_error`` and a
+# later full-HTML catch-up, which discards the event's own patch and whatever
+# the user typed in the meantime. A project that prefers that early answer
+# sets ``DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`` below the cap; the deferral path
+# (:class:`ExplicitSaveDeferred`, #3200) is unchanged for it.
+#
+# The deadline counts only the save's own running time, never its queueing on
+# the Django thread: see explicit_state_save_timeout / _run_explicit_save.
+#
+# It stays a module constant, read at call time, so a test can lower it.
+EVENT_STATE_SAVE_TIMEOUT_S = 10.0
 
 
 logger = logging.getLogger(__name__)
@@ -119,8 +129,9 @@ def explicit_state_save_timeout() -> float:
     """The storage deadline of an explicit turn's save, in seconds (#3200).
 
     ``DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`` when set to a valid value, otherwise
-    :data:`EVENT_STATE_SAVE_TIMEOUT_S` (read at call time, so tests that raise
-    the module bound raise this one too). An invalid setting falls back to the
+    :data:`EVENT_STATE_SAVE_TIMEOUT_S`, the stuck cap: by default a turn waits
+    for its own save (#4098). The constant is read at call time, so a test
+    that changes it changes this. An invalid setting falls back to the
     default rather than failing every save; system check ``djust.C024``
     reports it at startup.
     """
@@ -134,7 +145,8 @@ def explicit_state_save_timeout() -> float:
     return EVENT_STATE_SAVE_TIMEOUT_S
 
 
-#: The static error an explicit turn sends when its save outran the deadline.
+#: The static error an explicit turn sends when its save outran a deadline
+#: configured BELOW the stuck cap (or waited too long for a save thread).
 #: Not "reload": the values are kept and the next turn saves them (#3200).
 _EXPLICIT_SAVE_DEFERRED_MESSAGE = (
     "Your last change is still being saved. It will appear with your next update."
@@ -151,9 +163,15 @@ class ExplicitSaveDeferred(Exception):
 
     ``work`` is that running save (``None`` when this save never started,
     because the previous one was still running at the deadline).
+
+    ``waited`` is the storage deadline the turn waited out, in seconds:
+    ``None`` when no storage time was used (the save was still queued for a
+    pool thread at the start bound). A turn that waited the stuck cap has
+    nothing left to promise, so its deferral is the reload error (#4098).
     """
 
     work: "Optional[asyncio.Future[None]]" = None
+    waited: Optional[float] = None
 
 
 async def _await_save(work: "asyncio.Future[None]", timeout: float) -> None:
@@ -405,7 +423,9 @@ async def _run_explicit_save(
             await _await_save(previous, deadline)
         except asyncio.TimeoutError:
             if not previous.done():
-                raise ExplicitSaveDeferred("Previous explicit save still running") from None
+                behind = ExplicitSaveDeferred("Previous explicit save still running")
+                behind.waited = deadline
+                raise behind from None
         except Exception:  # noqa: BLE001 — its failure is logged by its own callback
             logger.debug("Previous explicit save failed; this save writes current values")
 
@@ -430,6 +450,7 @@ async def _run_explicit_save(
     start_bound = _SAVE_START_TIMEOUT_S if _in_request_scoped_executor() else None
     work = _spawn_save(run)
     owner._explicit_save_pending = work
+    waited: Optional[float] = None
     try:
         # Bounded for a request-scoped save: queued past the bound (every pool
         # thread busy), it is deferred rather than holding the turn. It still
@@ -439,6 +460,7 @@ async def _run_explicit_save(
         )
         if not started.done() and not work.done():
             raise asyncio.TimeoutError
+        waited = deadline
         await _await_save(work, deadline)
     except asyncio.TimeoutError:
         if work.done():
@@ -446,6 +468,7 @@ async def _run_explicit_save(
         work.add_done_callback(_log_unobserved_save_failure)
         deferred = ExplicitSaveDeferred("Explicit state save exceeded its storage deadline")
         deferred.work = work
+        deferred.waited = waited
         raise deferred from None
     except asyncio.CancelledError:
         # The turn was cancelled (socket closed) while the save runs on.
@@ -5994,13 +6017,20 @@ class ViewRuntime(RuntimeTurnPort):
         reconnect (another process, a restart) can only restore what the user
         last saw or something newer, never something older.
 
-        A save that outruns its storage deadline (#3200) keeps that guarantee
-        but is not a failure: the values stay on the view, the error is
-        ``transient`` and does not tell the user to reload, and one catch-up
-        turn (:meth:`_schedule_explicit_catch_up`) later commits them and sends
+        The turn waits for its save while holding the runtime's event lock,
+        so the page's next event starts only once this one is stored (#4098):
+        a burst of events is applied, saved and acknowledged one by one, in
+        order. By default the wait ends only at the stuck cap, in the terminal
+        reload error.
+
+        With ``DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`` set below the cap, a save
+        that outruns that deadline (#3200) keeps the guarantee but is not a
+        failure: the values stay on the view, the error is ``transient`` and
+        does not tell the user to reload, and one catch-up turn
+        (:meth:`_schedule_explicit_catch_up`) later commits them and sends
         full HTML. Storage that keeps missing the deadline, or a catch-up that
-        cannot finish, ends in the terminal reload error, as before #3200. A
-        refused save (identity changed) or a storage exception is terminal too.
+        cannot finish, ends in the terminal reload error. A refused save
+        (identity changed) or a storage exception is terminal too.
         """
         from ._exposure import ExposureError, uses_legacy_exposure
 
@@ -6016,8 +6046,8 @@ class ViewRuntime(RuntimeTurnPort):
                 lambda: self._save_explicit_root(view, request),
                 deadline=self._explicit_save_deadline(),
             )
-        except ExplicitSaveDeferred:
-            await self._explicit_save_deferred(view, extra, child=False)
+        except ExplicitSaveDeferred as deferred:
+            await self._explicit_save_deferred(view, extra, child=False, waited=deferred.waited)
             return False
         except LateSaveDropped:
             # Another request logged the session out while this save ran: the
@@ -6082,16 +6112,17 @@ class ViewRuntime(RuntimeTurnPort):
         self._explicit_deferrals = 0
 
     async def _explicit_save_deferred(
-        self, view: Any, extra: Dict[str, Any], *, child: bool
+        self, view: Any, extra: Dict[str, Any], *, child: bool, waited: Optional[float] = None
     ) -> None:
         """Answer a turn whose save missed its deadline (#3200).
 
         Normally a transient error plus one catch-up turn. It escalates to the
         terminal reload error when the save is the catch-up's own, after
-        ``_EXPLICIT_MAX_DEFERRALS`` consecutive deferrals, or when the pending
-        save has been running for the 10 s cap: storage is not recovering, and
-        promising an update that will not come is worse than asking for a
-        reload (review I-a).
+        ``_EXPLICIT_MAX_DEFERRALS`` consecutive deferrals, when the pending
+        save has been running for the 10 s cap, or when the turn itself
+        ``waited`` that cap for storage (the default, #4098): storage is not
+        recovering, and promising an update that will not come is worse than
+        asking for a reload (review I-a).
         """
         from ._exposure_sessions import MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
 
@@ -6100,7 +6131,9 @@ class ViewRuntime(RuntimeTurnPort):
         pending = self._explicit_save_pending
         # Stuck counts from when the save started RUNNING: one that is only
         # queued for a thread has not used any storage time (#3229 R1).
-        stuck = _save_running_for(pending) >= MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
+        stuck = _save_running_for(pending) >= MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S or (
+            waited is not None and waited >= MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
+        )
         if (
             self._in_explicit_catch_up
             or self._explicit_deferrals >= _EXPLICIT_MAX_DEFERRALS
@@ -6257,7 +6290,7 @@ class ViewRuntime(RuntimeTurnPort):
                 lambda: self._save_explicit_children(view, request),
                 deadline=self._explicit_save_deadline(),
             )
-        except ExplicitSaveDeferred:
+        except ExplicitSaveDeferred as deferred:
             if not mounted:
                 # No mount frame will be sent, so there is nothing to catch up.
                 logger.warning("Explicit child state save at mount exceeded its storage deadline")
@@ -6266,7 +6299,9 @@ class ViewRuntime(RuntimeTurnPort):
                 )
                 return False
             # Same contract as the root (#3200): withheld, not failed.
-            await self._explicit_save_deferred(view, child_extra, child=True)
+            await self._explicit_save_deferred(
+                view, child_extra, child=True, waited=deferred.waited
+            )
             return False
         except Exception:  # noqa: BLE001 — no provider values or success frame on failure
             # Rendering may already have advanced the server VDOM. The browser
