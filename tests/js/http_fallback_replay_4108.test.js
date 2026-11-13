@@ -45,8 +45,69 @@ describe('page-POST fallback replay', () => {
         });
     }
 
-    it('covers every transport outcome the server test pins', () => {
+    it('covers both kinds of answer', () => {
         const kinds = new Set(Object.values(fixture.scenarios).flatMap(s => s.kinds));
-        expect(kinds.has('html')).toBe(true);
+        expect([...kinds].sort()).toEqual(['html', 'patches']);
+        // Structural patches (rows inserted and removed), not only text changes.
+        const types = new Set(fixture.scenarios.list.answers.flatMap(a => (a.patches || []).map(p => p.type)));
+        expect(types.has('InsertChild') && types.has('RemoveChild')).toBe(true);
+    });
+
+    it('patch answers carry no version and no generated-id hint', () => {
+        for (const scenario of Object.values(fixture.scenarios)) {
+            for (const answer of scenario.answers) {
+                if (!answer.patches) {
+                    expect(answer.version).toBe(1);
+                    continue;
+                }
+                expect('version' in answer).toBe(false);
+                for (const patch of answer.patches) {
+                    expect(Object.keys(patch).filter(k => ['d', 'ref_d', 'child_d'].includes(k))).toEqual([]);
+                }
+            }
+        }
+    });
+
+    it('the counter page keeps an unsent value, an opened <details> and a client-set class through its patch answers', async () => {
+        const scenario = fixture.scenarios.counter;
+        expect(scenario.kinds).toEqual(['patches', 'patches', 'patches']);
+        const page = await loadPage(scenario.get, scenario.url);
+        try {
+            const doc = page.win.document;
+            const note = doc.querySelector('[name="note"]');
+            const details = doc.querySelector('details');
+            const button = doc.querySelector('[dj-click="increment"]');
+            note.value = 'typed, not sent';
+            details.setAttribute('open', '');
+            button.classList.add('client-set');
+            for (let i = 0; i < scenario.events.length; i++) {
+                await page.send(scenario.events[i][0], scenario.events[i][1], scenario.answers[i], button);
+            }
+            expect(doc.querySelector('strong').textContent).toBe('3');
+            expect(doc.querySelector('[name="note"]')).toBe(note);
+            expect(note.value).toBe('typed, not sent');
+            expect(details.hasAttribute('open')).toBe(true);
+            expect(button.classList.contains('client-set')).toBe(true);
+        } finally { page.close(); }
+    });
+
+    it('a stale dj-id in the page does not misdirect a patch answer', async () => {
+        // The page may hold ids from an earlier whole-page answer; a patch
+        // answer addresses nodes by path, so an id that now belongs to
+        // another node is never looked up.
+        const scenario = fixture.scenarios.counter;
+        const page = await loadPage(scenario.get, scenario.url);
+        try {
+            const doc = page.win.document;
+            // Every id a baseline render could name, put on the wrong node.
+            doc.querySelector('summary').setAttribute('dj-id', '0');
+            doc.querySelector('details p').setAttribute('dj-id', '4');
+            doc.querySelector('h1').setAttribute('dj-id', '5');
+            await page.send(scenario.events[0][0], {}, scenario.answers[0],
+                doc.querySelector('[dj-click="increment"]'));
+            expect(doc.querySelector('strong').textContent).toBe('1');
+            expect(doc.querySelector('h1').textContent).toBe('Counter');
+            expect(doc.querySelector('details p').textContent).toBe('Static body');
+        } finally { page.close(); }
     });
 });

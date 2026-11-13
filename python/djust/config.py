@@ -324,6 +324,15 @@ class LiveViewConfig:
         # that is not a number from above 0 up to ``threading.TIMEOUT_MAX`` means
         # no deadline (system check ``djust.C028``). Does not touch the socket or SSE transports.
         "http_fallback_background_timeout": None,
+        # #4108: the page-POST fallback answers an event with patches when it
+        # can show that the browser displays the render it diffs against (the
+        # client echoes a keyed digest of that render). It costs a second
+        # render per event; the answer is the difference instead of the whole
+        # page, and the page's client state (unsent input, opened <details>,
+        # client-set classes) is left alone. ``False`` keeps the whole-page
+        # answer for every view; a view opts out alone with
+        # ``http_fallback_patches = False``.
+        "http_fallback_patches": True,
         # `virtual_keyed_ops`, `django_value_repr` and `template_auto_call`
         # were kill switches that defaulted ON; 2.0 hard-wired all three and
         # removed the keys (see `djust._removed_settings`).

@@ -1744,6 +1744,17 @@ class RequestMixin:
             # can be invoked via POST (matches WS security)
             t_handler_ms = 0.0
             observation_before = None
+            # #4108: whether the pre-handler render is the page the client shows.
+            baseline_matched = False
+            # A view object that has rendered before this request (a test that
+            # calls get() and post() on one instance; ``as_view()`` never does)
+            # already holds a diff baseline. It keeps the answer it always got:
+            # the patches from that baseline, numbered by its renderer.
+            reused_renderer = getattr(self, "_rust_view", None) is not None
+            # Whether this request's first render binds the page's embedded
+            # children (an explicit page names them in ``owned_children``).
+            # Read before any render of this request.
+            cold_children = not getattr(self, "_explicit_child_vdom_tracking", False)
             # ADR-031: an event carrying ``component_id`` targets the
             # registered component, as ``runtime._dispatch_component_event``
             # does over WebSocket (#1646 — the HTTP fallback must not differ).
@@ -1916,6 +1927,19 @@ class RequestMixin:
                 if mount_work_pending:
                     _run_http_background_work(self, bg_budget)
                     mount_work_pending = False
+                # #4108: the view is now what the page GET (or the previous
+                # answer) rendered. Render it once before the handler; if the
+                # client shows that render (it echoed its digest), the render
+                # after the handler diffs against it and the answer is patches.
+                # After every refusal, so a refused request renders nothing;
+                # for the page's own handlers only (a component or embedded
+                # child event is answered as before). Not for an ``@cache``
+                # request: the client stores that answer's patches and replays
+                # them later without asking, which no digest can vouch for.
+                if owner is self and not reused_renderer and not params.get("_cacheRequestId"):
+                    from .._http_fallback_baseline import prepare_baseline
+
+                    baseline_matched = prepare_baseline(self, request)
                 from ..components._interactive import DropdownMenu
 
                 if isinstance(owner, DropdownMenu) and event_name == "observe_toggle":
@@ -2013,12 +2037,22 @@ class RequestMixin:
             # like {% if user.is_authenticated %} evaluate to false and the HTTP
             # fallback returns logged-out HTML. Fixes #705.
             # Unified via _processor_context context manager (#717).
+            if baseline_matched:
+                # #4108: this is the request's second render. The renderer
+                # re-renders the nodes whose keys changed, and a value a context
+                # processor supplies as an object (``messages``, ``user``,
+                # ``perms``, the request) is never compared, so a handler that
+                # added a message or signed a user in would leave those nodes
+                # as the baseline rendered them. Name them changed: the answer
+                # then holds what a single render after the handler shows.
+                from .._http_fallback_baseline import rerender_request_scoped
+
+                rerender_request_scoped(self)
             with self._processor_context(request):
                 from .._child_rendering import render_view_with_diff
 
                 t0_render = time.perf_counter()
                 self._prepare_child_ids()
-                cold_children = not getattr(self, "_explicit_child_vdom_tracking", False)
                 html, patches_json, version = render_view_with_diff(self, request)
                 if cold_children and getattr(self, "_explicit_child_vdom_tracking", False):
                     response_fields["owned_children"] = [
@@ -2074,12 +2108,15 @@ class RequestMixin:
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
 
-                # Zero patches is a render with no DOM change. Answer with
-                # the new version and no patches, as the socket runtime's
-                # no-op does. Resetting the diff baseline here restarted the
-                # server's version at 1, so the client's next version check
-                # failed and it reloaded the page, losing its state.
-                if 0 <= patch_count <= PATCH_THRESHOLD:
+                # #4108: patches exist only when the pre-handler render was
+                # the page the client shows (``baseline_matched``); a fresh
+                # renderer has nothing to diff against. They carry no
+                # ``version``: each request numbers its own renders, so a
+                # counter says nothing here, and the digest the client echoed
+                # is what tied these patches to its DOM. They are addressed by
+                # path (``path_addressed``). Zero patches is a render with no
+                # DOM change: an empty list, and the same digest.
+                if reused_renderer and 0 <= patch_count <= PATCH_THRESHOLD:
                     response_data = {
                         "patches": patches,
                         "version": version,
@@ -2091,11 +2128,27 @@ class RequestMixin:
                     _inject_side_channels(response_data)
                     _inject_debug(response_data)
                     return JsonResponse(response_data)
+                if baseline_matched and 0 <= patch_count <= PATCH_THRESHOLD:
+                    from .._render_digest import path_addressed
+
+                    response_data = {
+                        "patches": path_addressed(patches),
+                        **contract_fields,
+                        **response_fields,
+                    }
+                    if cache_request_id:
+                        response_data["cache_request_id"] = cache_request_id
+                    _inject_side_channels(response_data)
+                    _inject_debug(response_data)
+                    return JsonResponse(response_data)
                 else:
+                    # More patches than a whole page is worth: the whole page,
+                    # numbered as every whole-page answer of this transport is
+                    # (v1; the client re-bases on it).
                     self._rust_view.reset()
                     response_data = {
                         "html": html,
-                        "version": version,
+                        "version": version if reused_renderer else 1,
                         **contract_fields,
                         **response_fields,
                     }

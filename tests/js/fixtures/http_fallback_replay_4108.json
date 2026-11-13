@@ -14,19 +14,49 @@
   "counter": {
    "answers": [
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><header dj-id=\"1\"><h1 dj-id=\"2\">Counter</h1></header><main dj-id=\"3\"><p class=\"lead\" dj-id=\"4\">Value: <strong dj-id=\"5\">1</strong></p><input dj-id=\"6\" name=\"note\" value=\"\" /><details dj-id=\"7\"><summary dj-id=\"8\">More</summary><p dj-id=\"9\">Static body</p></details><button dj-click=\"increment\" dj-id=\"a\">+</button></main></div>",
-     "render_digest": "digest-2",
-     "version": 1
+     "patches": [
+      {
+       "path": [
+        1,
+        0,
+        1,
+        0
+       ],
+       "text": "1",
+       "type": "SetText"
+      }
+     ],
+     "render_digest": "digest-2"
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><header dj-id=\"1\"><h1 dj-id=\"2\">Counter</h1></header><main dj-id=\"3\"><p class=\"lead\" dj-id=\"4\">Value: <strong dj-id=\"5\">2</strong></p><input dj-id=\"6\" name=\"note\" value=\"\" /><details dj-id=\"7\"><summary dj-id=\"8\">More</summary><p dj-id=\"9\">Static body</p></details><button dj-click=\"increment\" dj-id=\"a\">+</button></main></div>",
-     "render_digest": "digest-3",
-     "version": 1
+     "patches": [
+      {
+       "path": [
+        1,
+        0,
+        1,
+        0
+       ],
+       "text": "2",
+       "type": "SetText"
+      }
+     ],
+     "render_digest": "digest-3"
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><header dj-id=\"1\"><h1 dj-id=\"2\">Counter</h1></header><main dj-id=\"3\"><p class=\"lead\" dj-id=\"4\">Value: <strong dj-id=\"5\">3</strong></p><input dj-id=\"6\" name=\"note\" value=\"\" /><details dj-id=\"7\"><summary dj-id=\"8\">More</summary><p dj-id=\"9\">Static body</p></details><button dj-click=\"increment\" dj-id=\"a\">+</button></main></div>",
-     "render_digest": "digest-4",
-     "version": 1
+     "patches": [
+      {
+       "path": [
+        1,
+        0,
+        1,
+        0
+       ],
+       "text": "3",
+       "type": "SetText"
+      }
+     ],
+     "render_digest": "digest-4"
     }
    ],
    "equal_to_socket": true,
@@ -48,19 +78,19 @@
    "fallback_final": "<div dj-root=\"\"><header><h1>Counter</h1></header><main><p class=\"lead\">Value: <strong>3</strong></p><input name=\"note\" value=\"\" /><details><summary>More</summary><p>Static body</p></details><button dj-click=\"increment\">+</button></main></div>",
    "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Counter\">\n<header><h1>Counter</h1></header>\n<main><p class=\"lead\">Value: <strong>0</strong></p>\n<input name=\"note\" value=\"\">\n<details><summary>More</summary><p>Static body</p></details>\n<button dj-click=\"increment\">+</button></main>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"increment\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
    "kinds": [
-    "html",
-    "html",
-    "html"
+    "patches",
+    "patches",
+    "patches"
    ],
    "renders": [
-    1,
-    1,
-    1
+    2,
+    2,
+    2
    ],
    "sent_digests": [
     "digest-1",
     "digest-2",
-    null
+    "digest-3"
    ],
    "socket_final": "<div dj-root=\"\"><header><h1>Counter</h1></header><main><p class=\"lead\">Value: <strong>3</strong></p><input name=\"note\" value=\"\" /><details><summary>More</summary><p>Static body</p></details><button dj-click=\"increment\">+</button></main></div>",
    "url": "/m/counter/"
@@ -110,9 +140,46 @@
   "form": {
    "answers": [
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><form dj-id=\"1\" dj-submit=\"submit_form\"><div class=\"row\" dj-id=\"2\"><label dj-id=\"3\">name</label><input dj-change=\"validate_field\" dj-id=\"4\" name=\"name\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"5\"></div></div><div class=\"row\" dj-id=\"6\"><label dj-id=\"7\">email</label><input dj-change=\"validate_field\" dj-id=\"8\" name=\"email\" type=\"text\" value=\"not-an-email\" /><div class=\"err\" dj-id=\"9\"><span dj-id=\"a\">Enter a valid email address.</span></div></div><div class=\"row\" dj-id=\"b\"><label dj-id=\"c\">city</label><input dj-change=\"validate_field\" dj-id=\"d\" name=\"city\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"e\"></div></div><button dj-id=\"f\" type=\"submit\">Send</button></form></div>",
-     "render_digest": "digest-2",
-     "version": 1
+     "patches": [
+      {
+       "key": "value",
+       "path": [
+        0,
+        1,
+        1
+       ],
+       "type": "SetAttr",
+       "value": "not-an-email"
+      },
+      {
+       "index": 0,
+       "node": {
+        "attrs": {
+         "dj-id": "p"
+        },
+        "children": [
+         {
+          "attrs": {},
+          "children": [],
+          "key": null,
+          "tag": "#text",
+          "text": "Enter a valid email address."
+         }
+        ],
+        "djust_id": "p",
+        "key": null,
+        "tag": "span",
+        "text": null
+       },
+       "path": [
+        0,
+        1,
+        2
+       ],
+       "type": "InsertChild"
+      }
+     ],
+     "render_digest": "digest-2"
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><form dj-id=\"1\" dj-submit=\"submit_form\"><div class=\"row\" dj-id=\"2\"><label dj-id=\"3\">name</label><input dj-change=\"validate_field\" dj-id=\"4\" name=\"name\" type=\"text\" value=\"Al\" /><div class=\"err\" dj-id=\"5\"><span dj-id=\"6\">Ensure this value has at least 3 characters (it has 2).</span></div></div><div class=\"row\" dj-id=\"7\"><label dj-id=\"8\">email</label><input dj-change=\"validate_field\" dj-id=\"9\" name=\"email\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"a\"></div></div><div class=\"row\" dj-id=\"b\"><label dj-id=\"c\">city</label><input dj-change=\"validate_field\" dj-id=\"d\" name=\"city\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"e\"></div></div><button dj-id=\"f\" type=\"submit\">Send</button></form></div>",
@@ -153,19 +220,19 @@
    "fallback_final": "<div dj-root=\"\"><form dj-submit=\"submit_form\"><div class=\"row\"><label>name</label><input dj-change=\"validate_field\" name=\"name\" type=\"text\" value=\"\" /><div class=\"err\"></div></div><div class=\"row\"><label>email</label><input dj-change=\"validate_field\" name=\"email\" type=\"text\" value=\"\" /><div class=\"err\"></div></div><div class=\"row\"><label>city</label><input dj-change=\"validate_field\" name=\"city\" type=\"text\" value=\"Lyon\" /><div class=\"err\"></div></div><button type=\"submit\">Send</button></form></div>",
    "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.ContactForm\">\n<form dj-submit=\"submit_form\">\n<div class=\"row\"><label>name</label><input type=\"text\" name=\"name\" value=\"\" dj-change=\"validate_field\"><div class=\"err\"></div></div>\n<div class=\"row\"><label>email</label><input type=\"text\" name=\"email\" value=\"\" dj-change=\"validate_field\"><div class=\"err\"></div></div>\n<div class=\"row\"><label>city</label><input type=\"text\" name=\"city\" value=\"\" dj-change=\"validate_field\"><div class=\"err\"></div></div>\n<button type=\"submit\">Send</button></form>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"reset_form\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"Reset the form to its initial state.\\n\\nAn event handler, so a template can call it directly\\n(``dj-click=\\\"reset_form\\\"``), and safe to call from ``form_valid``:\\n``submit_form`` does not sync the submitted values back over a reset\\n(#2974).\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"submit_form\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"Handle form submission.\\n\\nThis is called when the form is submitted (dj-submit event).\\nValidates all fields and calls form_valid() or form_invalid().\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"validate_field\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"field_name\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"field_name\", \"value\"], \"description\": \"Validate a single field in real-time.\\n\\nThis is called when a field changes (dj-change / dj-input event).\\n\\nThe client sends the field name under the key ``field``, because\\n``buildFormEventParams`` (``09-event-binding.js:525``) HARDCODES that\\nkey, sourcing the value from ``getFieldName`` \\u2014 ``data-field``, then\\nthe element's ``name``, then its ``id``. It merges only ``dj-value-*``;\\nit does NOT collect ``data-*``, which is what ``extractTypedParams``\\ndoes on the click/poll/mount paths. (An earlier version of this\\ndocstring said \\\"djust maps ``data-*`` attributes to handler\\nparameters\\\" \\u2014 true for those other paths, false for this one, and a\\nmaintainer acting on it would expect ``data-foo`` on an input to reach\\nthe handler. It does not.) ``field_name`` is\\naccepted for backwards compatibility and is what this signature used\\nto take EXCLUSIVELY \\u2014 which meant the client's payload matched nothing,\\n``**kwargs`` swallowed it instead of raising ``TypeError``, and the\\nhandler ran on every keystroke doing nothing at all (#2137). No error,\\nno warning; the form looked live and was inert.\\n\\n``WizardMixin.validate_field`` already had this coalesce; this is the\\nsame shape, applied to the two implementations that did not (#1646).\\n\\nPOSITIONAL CALLERS: ``field`` is the first parameter, so\\n``validate_field(\\\"email\\\", \\\"text\\\")`` binds ``field_name=\\\"text\\\"`` and\\nleaves ``value`` as ``None`` \\u2014 a filled field then reports \\\"required\\\".\\nCall with keywords. The order is deliberate: djust admin's own adapters\\nemit ``validate_field('\\u003cname\\u003e', value)`` (``admin_ext/adapters.py``, 8\\nsites), whose second positional token is the literal string\\n``\\\"value\\\"``; with ``field`` first that junk lands in ``field_name`` and\\nthe real value survives as a keyword. Under the previous order it\\noverwrote the real value, so the admin validated the string \\\"value\\\" on\\nevery change.\\n\\nArgs:\\n    field: Name of the field to validate \\u2014 what the client sends\\n    field_name: Legacy alias for ``field``\\n    value: Current field value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"field_name\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
    "kinds": [
-    "html",
+    "patches",
     "html",
     "html"
    ],
    "renders": [
-    1,
-    1,
-    1
+    2,
+    2,
+    2
    ],
    "sent_digests": [
     "digest-1",
     "digest-2",
-    null
+    "digest-3"
    ],
    "socket_final": "<div dj-root=\"\"><form dj-submit=\"submit_form\"><div class=\"row\"><label>name</label><input dj-change=\"validate_field\" name=\"name\" type=\"text\" value=\"Al\" /><div class=\"err\"><span>Ensure this value has at least 3 characters (it has 2).</span></div></div><div class=\"row\"><label>email</label><input dj-change=\"validate_field\" name=\"email\" type=\"text\" value=\"not-an-email\" /><div class=\"err\"><span>Enter a valid email address.</span></div></div><div class=\"row\"><label>city</label><input dj-change=\"validate_field\" name=\"city\" type=\"text\" value=\"Lyon\" /><div class=\"err\"></div></div><button type=\"submit\">Send</button></form></div>",
    "url": "/m/form/"
@@ -173,29 +240,235 @@
   "list": {
    "answers": [
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><h1 dj-id=\"1\">Rows</h1><ul dj-id=\"2\"><li data-key=\"1\" dj-id=\"3\"><span dj-id=\"4\">Item 1</span> <b dj-id=\"5\">1</b></li><li data-key=\"2\" dj-id=\"6\"><span dj-id=\"7\">Item 2</span> <b dj-id=\"8\">2</b></li><li data-key=\"3\" dj-id=\"9\"><span dj-id=\"a\">Item 3</span> <b dj-id=\"b\">3</b></li><li data-key=\"4\" dj-id=\"c\"><span dj-id=\"d\">Item 4</span> <b dj-id=\"e\">0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><p class=\"many\" dj-id=\"f\">Many rows</p><!--/dj-if--><button dj-click=\"add\" dj-id=\"g\">add</button></div>",
-     "render_digest": "digest-2",
-     "version": 1
+     "patches": [
+      {
+       "index": 3,
+       "node": {
+        "attrs": {
+         "class": "many",
+         "dj-id": "s"
+        },
+        "children": [
+         {
+          "attrs": {},
+          "children": [],
+          "key": null,
+          "tag": "#text",
+          "text": "Many rows"
+         }
+        ],
+        "djust_id": "s",
+        "key": null,
+        "tag": "p",
+        "text": null
+       },
+       "path": [],
+       "type": "InsertChild"
+      },
+      {
+       "index": 3,
+       "node": {
+        "attrs": {
+         "data-key": "4",
+         "dj-id": "p"
+        },
+        "children": [
+         {
+          "attrs": {
+           "dj-id": "q"
+          },
+          "children": [
+           {
+            "attrs": {},
+            "children": [],
+            "key": null,
+            "tag": "#text",
+            "text": "Item 4"
+           }
+          ],
+          "djust_id": "q",
+          "key": null,
+          "tag": "span",
+          "text": null
+         },
+         {
+          "attrs": {},
+          "children": [],
+          "key": null,
+          "tag": "#text",
+          "text": " "
+         },
+         {
+          "attrs": {
+           "dj-id": "r"
+          },
+          "children": [
+           {
+            "attrs": {},
+            "children": [],
+            "key": null,
+            "tag": "#text",
+            "text": "0"
+           }
+          ],
+          "djust_id": "r",
+          "key": null,
+          "tag": "b",
+          "text": null
+         }
+        ],
+        "djust_id": "p",
+        "key": "4",
+        "tag": "li",
+        "text": null
+       },
+       "path": [
+        1
+       ],
+       "type": "InsertChild"
+      }
+     ],
+     "render_digest": "digest-2"
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><h1 dj-id=\"1\">Rows</h1><ul dj-id=\"2\"><li data-key=\"1\" dj-id=\"3\"><span dj-id=\"4\">Item 1</span> <b dj-id=\"5\">1</b></li><li data-key=\"2\" dj-id=\"6\"><span dj-id=\"7\">Item 2</span> <b dj-id=\"8\">3</b></li><li data-key=\"3\" dj-id=\"9\"><span dj-id=\"a\">Item 3</span> <b dj-id=\"b\">3</b></li><li data-key=\"4\" dj-id=\"c\"><span dj-id=\"d\">Item 4</span> <b dj-id=\"e\">0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><p class=\"many\" dj-id=\"f\">Many rows</p><!--/dj-if--><button dj-click=\"add\" dj-id=\"g\">add</button></div>",
-     "render_digest": "digest-3",
-     "version": 1
+     "patches": [
+      {
+       "path": [
+        1,
+        1,
+        2,
+        0
+       ],
+       "text": "3",
+       "type": "SetText"
+      }
+     ],
+     "render_digest": "digest-3"
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><h1 dj-id=\"1\">Rows</h1><ul dj-id=\"2\"><li data-key=\"2\" dj-id=\"3\"><span dj-id=\"4\">Item 2</span> <b dj-id=\"5\">3</b></li><li data-key=\"3\" dj-id=\"6\"><span dj-id=\"7\">Item 3</span> <b dj-id=\"8\">3</b></li><li data-key=\"4\" dj-id=\"9\"><span dj-id=\"a\">Item 4</span> <b dj-id=\"b\">0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><!--/dj-if--><button dj-click=\"add\" dj-id=\"c\">add</button></div>",
-     "render_digest": "digest-4",
-     "version": 1
+     "patches": [
+      {
+       "index": 3,
+       "path": [],
+       "type": "RemoveChild"
+      },
+      {
+       "index": 0,
+       "path": [
+        1
+       ],
+       "type": "RemoveChild"
+      }
+     ],
+     "render_digest": "digest-4"
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><h1 dj-id=\"1\">Rows</h1><ul dj-id=\"2\"><li data-key=\"2\" dj-id=\"3\"><span dj-id=\"4\">Item 2</span> <b dj-id=\"5\">3</b></li><li data-key=\"3\" dj-id=\"6\"><span dj-id=\"7\">Item 3</span> <b dj-id=\"8\">3</b></li><li data-key=\"4\" dj-id=\"9\"><span dj-id=\"a\">Item 4</span> <b dj-id=\"b\">0</b></li><li data-key=\"5\" dj-id=\"c\"><span dj-id=\"d\">Item 5</span> <b dj-id=\"e\">0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><p class=\"many\" dj-id=\"f\">Many rows</p><!--/dj-if--><button dj-click=\"add\" dj-id=\"g\">add</button></div>",
-     "render_digest": "digest-5",
-     "version": 1
+     "patches": [
+      {
+       "index": 3,
+       "node": {
+        "attrs": {
+         "class": "many",
+         "dj-id": "s"
+        },
+        "children": [
+         {
+          "attrs": {},
+          "children": [],
+          "key": null,
+          "tag": "#text",
+          "text": "Many rows"
+         }
+        ],
+        "djust_id": "s",
+        "key": null,
+        "tag": "p",
+        "text": null
+       },
+       "path": [],
+       "type": "InsertChild"
+      },
+      {
+       "index": 3,
+       "node": {
+        "attrs": {
+         "data-key": "5",
+         "dj-id": "p"
+        },
+        "children": [
+         {
+          "attrs": {
+           "dj-id": "q"
+          },
+          "children": [
+           {
+            "attrs": {},
+            "children": [],
+            "key": null,
+            "tag": "#text",
+            "text": "Item 5"
+           }
+          ],
+          "djust_id": "q",
+          "key": null,
+          "tag": "span",
+          "text": null
+         },
+         {
+          "attrs": {},
+          "children": [],
+          "key": null,
+          "tag": "#text",
+          "text": " "
+         },
+         {
+          "attrs": {
+           "dj-id": "r"
+          },
+          "children": [
+           {
+            "attrs": {},
+            "children": [],
+            "key": null,
+            "tag": "#text",
+            "text": "0"
+           }
+          ],
+          "djust_id": "r",
+          "key": null,
+          "tag": "b",
+          "text": null
+         }
+        ],
+        "djust_id": "p",
+        "key": "5",
+        "tag": "li",
+        "text": null
+       },
+       "path": [
+        1
+       ],
+       "type": "InsertChild"
+      }
+     ],
+     "render_digest": "digest-5"
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><h1 dj-id=\"1\">Rows</h1><ul dj-id=\"2\"><li data-key=\"2\" dj-id=\"3\"><span dj-id=\"4\">Item 2</span> <b dj-id=\"5\">3</b></li><li data-key=\"3\" dj-id=\"6\"><span dj-id=\"7\">Item 3</span> <b dj-id=\"8\">3</b></li><li data-key=\"5\" dj-id=\"9\"><span dj-id=\"a\">Item 5</span> <b dj-id=\"b\">0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><!--/dj-if--><button dj-click=\"add\" dj-id=\"c\">add</button></div>",
-     "render_digest": "digest-6",
-     "version": 1
+     "patches": [
+      {
+       "index": 3,
+       "path": [],
+       "type": "RemoveChild"
+      },
+      {
+       "index": 2,
+       "path": [
+        1
+       ],
+       "type": "RemoveChild"
+      }
+     ],
+     "render_digest": "digest-6"
     }
    ],
    "equal_to_socket": true,
@@ -231,25 +504,25 @@
    "fallback_final": "<div dj-root=\"\"><h1>Rows</h1><ul><li data-key=\"2\"><span>Item 2</span> <b>3</b></li><li data-key=\"3\"><span>Item 3</span> <b>3</b></li><li data-key=\"5\"><span>Item 5</span> <b>0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><!--/dj-if--><button dj-click=\"add\">add</button></div>",
    "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.ListEdit\">\n<h1>Rows</h1>\n<ul>\n<li data-key=\"1\"><span>Item 1</span> <b>1</b></li>\n<li data-key=\"2\"><span>Item 2</span> <b>2</b></li>\n<li data-key=\"3\"><span>Item 3</span> <b>3</b></li></ul>\n<!--dj-if id=\"if-441412b0-0\"--><!--/dj-if-->\n<button dj-click=\"add\">add</button>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"add\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"bump\": {\"event_handler\": {\"params\": [{\"name\": \"row\", \"type\": \"int\", \"required\": false, \"default\": \"0\"}], \"param_names\": [\"row\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"row\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"remove\": {\"event_handler\": {\"params\": [{\"name\": \"row\", \"type\": \"int\", \"required\": false, \"default\": \"0\"}], \"param_names\": [\"row\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"row\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
    "kinds": [
-    "html",
-    "html",
-    "html",
-    "html",
-    "html"
+    "patches",
+    "patches",
+    "patches",
+    "patches",
+    "patches"
    ],
    "renders": [
-    1,
-    1,
-    1,
-    1,
-    1
+    2,
+    2,
+    2,
+    2,
+    2
    ],
    "sent_digests": [
     "digest-1",
     "digest-2",
-    null,
-    null,
-    null
+    "digest-3",
+    "digest-4",
+    "digest-5"
    ],
    "socket_final": "<div dj-root=\"\"><h1>Rows</h1><ul><li data-key=\"2\"><span>Item 2</span> <b>3</b></li><li data-key=\"3\"><span>Item 3</span> <b>3</b></li><li data-key=\"5\"><span>Item 5</span> <b>0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><!--/dj-if--><button dj-click=\"add\">add</button></div>",
    "url": "/m/list/"
@@ -257,14 +530,32 @@
   "paged": {
    "answers": [
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><nav dj-id=\"1\"><a dj-id=\"2\" href=\"?page=4\">next</a></nav><p dj-id=\"3\">Page <b dj-id=\"4\">3</b>, starred: <i dj-id=\"5\">1</i></p><button dj-click=\"star\" dj-id=\"6\">star</button></div>",
-     "render_digest": "digest-2",
-     "version": 1
+     "patches": [
+      {
+       "path": [
+        1,
+        3,
+        0
+       ],
+       "text": "1",
+       "type": "SetText"
+      }
+     ],
+     "render_digest": "digest-2"
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><nav dj-id=\"1\"><a dj-id=\"2\" href=\"?page=4\">next</a></nav><p dj-id=\"3\">Page <b dj-id=\"4\">3</b>, starred: <i dj-id=\"5\">2</i></p><button dj-click=\"star\" dj-id=\"6\">star</button></div>",
-     "render_digest": "digest-3",
-     "version": 1
+     "patches": [
+      {
+       "path": [
+        1,
+        3,
+        0
+       ],
+       "text": "2",
+       "type": "SetText"
+      }
+     ],
+     "render_digest": "digest-3"
     }
    ],
    "equal_to_socket": true,
@@ -282,12 +573,12 @@
    "fallback_final": "<div dj-root=\"\"><nav><a href=\"?page=4\">next</a></nav><p>Page <b>3</b>, starred: <i>2</i></p><button dj-click=\"star\">star</button></div>",
    "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Paged\">\n<nav><a href=\"?page=4\">next</a></nav>\n<p>Page <b>3</b>, starred: <i>0</i></p>\n<button dj-click=\"star\">star</button>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"star\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
    "kinds": [
-    "html",
-    "html"
+    "patches",
+    "patches"
    ],
    "renders": [
-    1,
-    1
+    2,
+    2
    ],
    "sent_digests": [
     "digest-1",
@@ -299,12 +590,12 @@
   "stamped": {
    "answers": [
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">1</b></p><p class=\"stamp\" dj-id=\"3\">4</p></div>",
+     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">1</b></p><p class=\"stamp\" dj-id=\"3\">6</p></div>",
      "render_digest": "digest-2",
      "version": 1
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">2</b></p><p class=\"stamp\" dj-id=\"3\">6</p></div>",
+     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">2</b></p><p class=\"stamp\" dj-id=\"3\">10</p></div>",
      "render_digest": "digest-3",
      "version": 1
     }
@@ -328,8 +619,8 @@
     "html"
    ],
    "renders": [
-    1,
-    1
+    2,
+    2
    ],
    "sent_digests": [
     "digest-1",
@@ -341,12 +632,12 @@
   "unstable": {
    "answers": [
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">1</b></p><p class=\"serial\" dj-id=\"3\">render 2</p></div>",
+     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">1</b></p><p class=\"serial\" dj-id=\"3\">render 3</p></div>",
      "render_digest": "digest-2",
      "version": 1
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">2</b></p><p class=\"serial\" dj-id=\"3\">render 3</p></div>",
+     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">2</b></p><p class=\"serial\" dj-id=\"3\">render 5</p></div>",
      "render_digest": "digest-3",
      "version": 1
     }
@@ -370,8 +661,8 @@
     "html"
    ],
    "renders": [
-    1,
-    1
+    2,
+    2
    ],
    "sent_digests": [
     "digest-1",
@@ -383,9 +674,27 @@
   "volatile": {
    "answers": [
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Kept: <b dj-id=\"2\">1</b>, lost: <i dj-id=\"3\">1</i></p></div>",
-     "render_digest": "digest-2",
-     "version": 1
+     "patches": [
+      {
+       "path": [
+        0,
+        1,
+        0
+       ],
+       "text": "1",
+       "type": "SetText"
+      },
+      {
+       "path": [
+        0,
+        3,
+        0
+       ],
+       "text": "1",
+       "type": "SetText"
+      }
+     ],
+     "render_digest": "digest-2"
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Kept: <b dj-id=\"2\">2</b>, lost: <i dj-id=\"3\">1</i></p></div>",
@@ -417,19 +726,19 @@
    "fallback_final": "<div dj-root=\"\"><p>Kept: <b>3</b>, lost: <i>1</i></p></div>",
    "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Volatile\">\n<p>Kept: <b>0</b>, lost: <i>0</i></p>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"bump\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
    "kinds": [
-    "html",
+    "patches",
     "html",
     "html"
    ],
    "renders": [
-    1,
-    1,
-    1
+    2,
+    2,
+    2
    ],
    "sent_digests": [
     "digest-1",
     "digest-2",
-    null
+    "digest-3"
    ],
    "socket_final": "<div dj-root=\"\"><p>Kept: <b>3</b>, lost: <i>3</i></p></div>",
    "url": "/m/volatile/"

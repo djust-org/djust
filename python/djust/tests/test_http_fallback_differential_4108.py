@@ -47,22 +47,31 @@ SETTINGS = {
     "DEBUG": False,
 }
 
-#: What each fallback answer is, per scenario. Before #4108's server change
-#: every answer is the whole page.
+#: What each fallback answer is, per scenario: patches where the pre-handler
+#: render is the page the client shows, the whole page otherwise.
 EXPECTED_KINDS = {
-    "counter": ["html", "html", "html"],
-    "list": ["html", "html", "html", "html", "html"],
-    "form": ["html", "html", "html"],
-    "paged": ["html", "html"],
+    "counter": ["patches", "patches", "patches"],
+    # Rows added and removed, an ``{% if %}`` block appearing and disappearing.
+    "list": ["patches", "patches", "patches", "patches", "patches"],
+    # The first event meets the page GET's form. Its error is not persisted, so
+    # the next request's baseline (a clean form) is not what the client shows.
+    "form": ["patches", "html", "html"],
+    "paged": ["patches", "patches"],
+    # ``temporary_assigns``: a render consumes the rows, so there is no pre-render.
     "feed": ["html", "html"],
+    # A different value on every render: the digest never matches.
     "unstable": ["html", "html"],
-    "volatile": ["html", "html", "html"],
+    # The first event meets the page GET's state; then a plain attribute the
+    # handler set is gone, and the baseline differs from the client's page.
+    "volatile": ["patches", "html", "html"],
     "stamped": ["html", "html"],
 }
 
-#: Diff renders per fallback request (the handler's render; a pre-handler
-#: baseline render adds one).
-EXPECTED_RENDERS = {name: [1] * len(kinds) for name, kinds in EXPECTED_KINDS.items()}
+#: Diff renders per fallback request: the pre-handler baseline and the render
+#: after the handler, or that one alone when no baseline is rendered.
+EXPECTED_RENDERS = {
+    name: [1 if name == "feed" else 2] * len(kinds) for name, kinds in EXPECTED_KINDS.items()
+}
 
 #: Scenarios whose final DOM over the fallback differs from the socket's, with
 #: the reason. Both are state the handler set that no later request can see:
