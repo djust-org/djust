@@ -700,8 +700,11 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "request_binding"): plumbing(_SESSION),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "codec.capture"): plumbing(_RENDER),
-    # The same three calls (binding, codec, signature) in one hop (#3997).
-    ("runtime.py", "ViewRuntime._explicit_event_snapshot", "capture"): plumbing(_RENDER),
+    # The same three calls in one hop (#3997): the session binding read, then
+    # the codec and the signature (render plumbing, as the entries above).
+    ("runtime.py", "ViewRuntime._explicit_event_snapshot", "capture"): plumbing(
+        _SESSION + "; then " + _RENDER
+    ),
     ("runtime.py", "ViewRuntime.authorize_explicit_turn", "fresh_socket_request"): plumbing(
         _SESSION
     ),

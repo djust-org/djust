@@ -23,7 +23,7 @@ from ..utils import get_template_dirs
 from ..render_env import apply_render_env
 from ..request_scoped import is_request_scoped_data
 from .. import _per_turn
-from .context import _keeps_out_of_state
+from .context import PROCESSOR_RECORD_ATTR, PROCESSOR_REPLAY_ATTR, _keeps_out_of_state
 from .context import _request_scoped_keys as request_scoped_keys
 
 logger = logging.getLogger(__name__)
@@ -315,7 +315,21 @@ def request_scoped_data_changed(view: Any, context: Dict[str, Any]) -> Optional[
     previous = _trusted_request_scoped_fingerprints(view, getattr(view, "_prev_context_refs", None))
     if previous is None:
         return "<no previous request-scoped values>"
-    full = view._apply_context_processors(dict(context), request)
+    # Record what each processor returns. When the scoped render is refused,
+    # the caller renders the page in this same event, and that render's sync
+    # takes these outputs instead of calling every processor a second time.
+    # They are dropped when the scoped patch is sent, and by the caller once
+    # the page render is over (``runtime._drop_processor_replay``), and
+    # ``_apply_context_processors`` takes them at most once and only for this
+    # request object, so they cannot reach a later turn.
+    view.__dict__.pop(PROCESSOR_REPLAY_ATTR, None)
+    record: Dict[Any, Any] = {}
+    view.__dict__[PROCESSOR_RECORD_ATTR] = record
+    try:
+        full = view._apply_context_processors(dict(context), request)
+    finally:
+        view.__dict__.pop(PROCESSOR_RECORD_ATTR, None)
+    reason: Optional[str] = None
     seen: Set[str] = set()
     for key in request_scoped_keys(view):
         if key not in full:
@@ -325,11 +339,17 @@ def request_scoped_data_changed(view: Any, context: Dict[str, Any]) -> Optional[
             continue
         seen.add(key)
         if previous.get(key, _MISSING) != fingerprint:
-            return str(key)
-    for key in previous:
-        if key not in seen:
-            return str(key)
-    return None
+            reason = str(key)
+            break
+    else:
+        for key in previous:
+            if key not in seen:
+                reason = str(key)
+                break
+    # Whatever the answer: a scoped render can still be refused after this
+    # (no single node, a failed patch), and the page render then follows.
+    view.__dict__[PROCESSOR_REPLAY_ATTR] = (request, record)
+    return reason
 
 
 def _unassigned_temporary_keys(view: Any) -> Set[str]:

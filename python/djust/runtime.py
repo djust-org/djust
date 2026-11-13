@@ -370,6 +370,17 @@ def _save_running_for(pending: "Optional[asyncio.Future[None]]") -> float:
 _EXPLICIT_MAX_DEFERRALS = 3
 
 
+def _drop_processor_replay(view: Any) -> None:
+    """End of the page render that follows a refused scoped component render:
+    the processor outputs the check recorded for it are dropped, used or not,
+    so they cannot be taken by a later turn (#3996)."""
+    from .mixins.context import PROCESSOR_REPLAY_ATTR
+
+    storage = getattr(view, "__dict__", None)
+    if storage is not None:
+        storage.pop(PROCESSOR_REPLAY_ATTR, None)
+
+
 def _mints_no_client_snapshot(view: Any) -> bool:
     """True when ``snapshot_codec`` would return None for *view*: an explicit
     view whose contract compiles and declares no ``persist="client"`` field.
@@ -5163,7 +5174,10 @@ class ViewRuntime(RuntimeTurnPort):
         # to full HTML and emit a ``component_event`` frame (websocket.py:4024-4032).
         from .websocket import _emit_full_html_update
 
-        html, _patches, version = await sync_to_async(view.render_with_diff)()
+        try:
+            html, _patches, version = await sync_to_async(view.render_with_diff)()
+        finally:
+            _drop_processor_replay(view)
         # The forced full HTML this render honoured is consumed here, as
         # ``_render_and_send`` consumes it on the view route; left set, every
         # later component_id event would bypass the noop and scoped branches
@@ -6423,6 +6437,8 @@ class ViewRuntime(RuntimeTurnPort):
                 )
                 await self.transport.send(response)
                 return
+            finally:
+                _drop_processor_replay(view)
         from ._exposure_diagnostics import restrict_diagnostics
 
         restrict_diagnostics(view)
@@ -6773,6 +6789,9 @@ class ViewRuntime(RuntimeTurnPort):
         if timing is not None:
             view._rust_render_timing = timing()
         html_out, patches_json, version = result
+        # No page render follows a scoped patch: nothing will take the
+        # processor outputs the check recorded, so they are dropped here.
+        _drop_processor_replay(view)
         return (str(html_out), str(patches_json), int(version))
 
     async def _send_scoped_patch_frame(

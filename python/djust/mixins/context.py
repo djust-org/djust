@@ -260,6 +260,13 @@ def _guard_unserialized_recursive_models(
             )
 
 
+#: A dict the processors' outputs are recorded into while the scoped component
+#: check runs them, and the ``(request, outputs)`` pair the page render of the
+#: same event then takes instead of running them a second time (#3996).
+PROCESSOR_RECORD_ATTR = "_djust_processor_record"
+PROCESSOR_REPLAY_ATTR = "_djust_processor_replay"
+
+
 def _is_json_serializable(value: Any) -> bool:
     """Return True if *value* can survive a JSON round-trip.
 
@@ -1279,6 +1286,21 @@ class ContextMixin:
             warn_shadowed_authorization_names,
         )
 
+        # What the scoped component check just got from the processors, for the
+        # page render of the SAME event (#3996): taken here, once, and used only
+        # for this request object. See ``processor_outputs_for_page_render``.
+        replay = self.__dict__.pop(PROCESSOR_REPLAY_ATTR, None)
+        outputs: Dict[Any, Any] = replay[1] if replay and replay[0] is request else {}
+        record = self.__dict__.get(PROCESSOR_RECORD_ATTR)
+
+        def run(processor: Any) -> Any:
+            if processor in outputs:
+                return outputs.pop(processor)
+            supplied = processor(request)
+            if record is not None:
+                record[processor] = supplied
+            return supplied
+
         if not uses_legacy_exposure(self):
             policy = getattr(self, "exposure_policy", None)
             if type(policy) is not str or policy != "explicit":
@@ -1292,7 +1314,7 @@ class ContextMixin:
             )
             if request is not None:
                 for processor in self._get_resolved_processors(self._get_context_processors()):
-                    supplied = processor(request)
+                    supplied = run(processor)
                     if not supplied:
                         continue
                     for key in reserved.intersection(supplied):
@@ -1331,7 +1353,7 @@ class ContextMixin:
 
         for processor in resolved:
             try:
-                processor_context = processor(request)
+                processor_context = run(processor)
                 if processor_context:
                     # Only add keys not already set by the view — view context
                     # takes precedence over context processors (e.g. Django's

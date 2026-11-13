@@ -281,10 +281,14 @@ class _ClassFacts:
     * Each declared field's ``exposure`` object, by identity: reassigning
       ``descriptor.exposure`` leaves the class dictionary as it was.
 
-    The key is the class object, so a class built by ``type()``, a subclass and
-    a hot-replaced class each have their own entry. Nothing here reads an
-    instance, so a per-instance attribute cannot reach it (nor could it reach
-    the uncompiled contract).
+    The table is keyed by ``id()`` of the class and every hit checks that the
+    entry was built for that very class object (``ClassSnapshot.is_for``), so a
+    class built by ``type()``, a subclass and a hot-replaced class each have
+    their own entry, whatever ``__eq__`` / ``__hash__`` a metaclass gives them:
+    keyed by the class itself, two classes a metaclass calls equal would share
+    one contract, and one's ``client=True`` grant would be served for the
+    other. Nothing here reads an instance, so a per-instance attribute cannot
+    reach it (nor could it reach the uncompiled contract).
 
     Not seen: a change inside an object a provider callable reads (a function's
     ``_djust_decorators`` edited after class creation, a class-level list
@@ -315,23 +319,24 @@ class _ClassFacts:
 # cells), so a weak-keyed table would never let a replaced class go. A bounded
 # plain dict does (the ``_parameter_metadata._PLANS`` shape): past the limit the
 # table is emptied, which costs a recompile and never a wrong answer.
+#
+# Keyed by ``id()``: the entry holds the class, so the id cannot be reused
+# while the entry lives, and a lookup never calls a metaclass's ``__eq__``.
 _FACTS_LIMIT = 512
-_FACTS: dict[type, _ClassFacts] = {}
+_FACTS: dict[int, _ClassFacts] = {}
 
 
 def _class_facts(view_class: Any) -> _ClassFacts | None:
     """The current facts for *view_class*, or None when they are not kept."""
     if not _per_turn.on("contract_cache") or not isinstance(view_class, type):
         return None
-    try:
-        facts = _FACTS.get(view_class)
-    except TypeError:  # a metaclass that made the class unhashable
-        return None
-    if facts is None or not facts.fresh():
+    key = id(view_class)
+    facts = _FACTS.get(key)
+    if facts is None or not facts.snapshot.is_for(view_class) or not facts.fresh():
         facts = _ClassFacts(view_class)
         if len(_FACTS) >= _FACTS_LIMIT:
             _FACTS.clear()
-        _FACTS[view_class] = facts
+        _FACTS[key] = facts
     return facts
 
 

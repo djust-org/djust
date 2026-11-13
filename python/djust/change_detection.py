@@ -407,6 +407,10 @@ CHANGE_DETECTION_IGNORED: frozenset = frozenset(
         # The fingerprints of the context processors' plain-data values the
         # last sync sent (#3996), kept beside ``_prev_context_refs``.
         "_prev_request_scoped",
+        # Context processor outputs handed from the scoped component check to
+        # the page render of the same event (#3996); gone when it ends.
+        "_djust_processor_record",
+        "_djust_processor_replay",
         "_djust_computed_cache",
         "_djust_computed_deps",
         "_djust_computed_lock",

@@ -13,9 +13,15 @@ container, a nested change, a model field written under a stable ``id()``,
 component's state, an embedded child, and state changed in ``handle_params``,
 ``handle_info``, a server push, a background result and a tick.
 
-One difference is intended and is NOT in this file: a context processor value
-that changes between turns now renders (it used to be stored and left stale).
-``test_per_turn_invalidation.py`` pins that, with the old behaviour beside it.
+One difference is intended: a context processor value that changes between
+turns now renders (it used to be stored and left stale). It cannot be an
+equality case, since the old path's frames are the stale ones.
+``test_a_time_varying_processor_on_the_scoped_component_path`` states the
+difference exactly, and ``test_per_turn_invalidation.py`` pins the rest of it.
+
+Also covered: a ``FormMixin`` validation and submit turn, and stream inserts
+and deletes. NOT covered: an upload (its progress frames need the binary upload
+protocol), presence, time travel, the actor path and hot reload.
 
 Is the oracle blind? ``test_a_shortcut_that_served_a_stale_value_fails_the_oracle``
 breaks each shortcut on purpose (a contract cache that never re-checks, change
@@ -35,6 +41,7 @@ from typing import Any, Callable, Dict, List, Tuple
 import pytest
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
+from django import forms
 from django.contrib.auth.models import AnonymousUser, User
 from django.contrib.sessions.backends.db import SessionStore
 from django.core import signing
@@ -45,6 +52,7 @@ from django.utils.safestring import mark_safe
 from djust import LiveView, _per_turn, event_handler
 from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import state
+from djust.forms import FormMixin
 from djust.tests import _per_turn_harness as harness
 from djust.tests._ws_frames import drain_extra, has_type, receive_until
 
@@ -667,6 +675,75 @@ class Processors(Counter):
         ]
 
 
+# --- a form and a stream --------------------------------------------------------------
+
+
+class SignupForm(forms.Form):
+    name = forms.CharField(max_length=5, required=False)
+    email = forms.EmailField()
+
+
+class FormView(FormMixin, _Base):
+    exposure_policy = "explicit"
+    form_class = SignupForm
+    template = (
+        '<div dj-root><form dj-submit="submit_form">'
+        '<input name="name" value="{{ form_data.name }}">'
+        '<input name="email" value="{{ form_data.email }}">'
+        "{% for e in field_errors.name %}<i>name:{{ e }}</i>{% endfor %}"
+        "{% for e in field_errors.email %}<i>email:{{ e }}</i>{% endfor %}"
+        "<p>valid={{ is_valid }}</p></form></div>"
+    )
+
+
+FORM_SCRIPT = [
+    ("event", "validate_field", {"field": "name", "value": "TOOLONG"}),
+    ("event", "validate_field", {"field": "name", "value": "Al"}),
+    ("event", "validate_field", {"field": "email", "value": "nope"}),
+    ("event", "submit_form", {"name": "Al", "email": "not-an-email"}),
+    ("event", "submit_form", {"name": "Al", "email": "al@example.com"}),
+]
+
+
+class StreamView(_Base):
+    exposure_policy = "legacy"
+    template = (
+        '<div dj-root><div id="list" dj-stream="rows">'
+        '{% for r in streams.rows %}<div id="rows-{{ r.id }}">{{ r.body }}</div>{% endfor %}'
+        "</div><i>{{ n }}</i></div>"
+    )
+
+    def mount(self, request, **kwargs):
+        self.stream("rows", [{"id": i, "body": f"B{i}"} for i in range(3)])
+        self.n = 0
+
+    @event_handler()
+    def insert(self, **kwargs):
+        self.n += 1
+        self.stream_insert("rows", {"id": 100 + self.n, "body": f"NEW{self.n}"})
+
+    @event_handler()
+    def insert_only(self, **kwargs):
+        self.stream_insert("rows", {"id": 500, "body": "ONLY"})
+
+    @event_handler()
+    def remove(self, **kwargs):
+        self.stream_delete("rows", {"id": 1, "body": "B1"})
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.n += 1
+
+
+STREAM_SCRIPT = [
+    ("event", "insert"),
+    ("event", "insert_only"),
+    ("event", "bump"),
+    ("event", "remove"),
+    ("event", "insert"),
+]
+
+
 # --- running a case -------------------------------------------------------------------
 
 Script = List[Tuple[Any, ...]]
@@ -691,6 +768,8 @@ WS_CASES: List[Tuple[str, type, Script]] = [
     ("lifecycle", Lifecycle, LIFECYCLE_SCRIPT),
     ("tick", Ticker, TICK_SCRIPT),
     ("processors", Processors, COUNTER_SCRIPT),
+    ("form", FormView, FORM_SCRIPT),
+    ("stream", StreamView, STREAM_SCRIPT),
 ]
 
 
@@ -1020,6 +1099,106 @@ async def test_sse_frames_are_identical(monkeypatch, label, view_class, script):
     assert as_bytes(after) == as_bytes(before)
     assert sum("patch" in as_bytes(f).decode() for f in after) > 1, after
     FRAMES_COMPARED.append(len(after) - 1)
+
+
+# --- the intended difference, on the scoped component path ----------------------------
+
+CLOCK = {"n": 0, "calls": 0}
+
+
+def clock_processor(request):
+    """A fresh plain value on every call, as a time string would be."""
+    CLOCK["calls"] += 1
+    CLOCK["n"] += 1
+    return {"now": f"T{CLOCK['n']}"}
+
+
+class ClockPage(_Base):
+    exposure_policy = "legacy"
+    template = "<div dj-root><h1>{{ now }}</h1>{{ nav }}<i>{{ title }}</i></div>"
+    nav = Tabs()
+
+    def mount(self, request, **kwargs):
+        self.title = "t"
+
+    def _get_context_processors(self):
+        return [MODULE + ".clock_processor"]
+
+    @event_handler()
+    def rename(self, value: str = "", **kwargs):
+        self.title = value
+
+
+CLOCK_SCRIPT = [
+    ("event", "select", {"component_id": "nav", "value": "a"}),
+    ("event", "select", {"component_id": "nav", "value": "b"}),
+    ("event", "rename", {"value": "r"}),
+    ("event", "select", {"component_id": "nav", "value": "c"}),
+]
+
+
+async def test_a_time_varying_processor_on_the_scoped_component_path(monkeypatch):
+    """What changes, exactly, when a processor returns a new value every turn.
+
+    Old path: a component event sends the component's own scoped patch and the
+    page keeps the processor value of the last page render. New path: every
+    turn's frame carries the current value. A component event cannot do that
+    with a scoped patch, so it takes the page render, which on the
+    ``component_id`` route is a full ``html_update`` frame (the route's
+    existing answer whenever a scoped patch is not exact). Each turn still
+    sends exactly one frame: no turn triggers another.
+    """
+
+    async def run() -> List[Dict[str, Any]]:
+        CLOCK["n"] = CLOCK["calls"] = 0
+        return (await observe(lambda: run_ws(ClockPage, CLOCK_SCRIPT)))[:-1]
+
+    with harness.shortcuts(monkeypatch, "request_scoped_changes"):
+        old = await run()
+        old_calls = CLOCK["calls"]
+    with harness.shortcuts(monkeypatch):
+        new = await run()
+        new_calls = CLOCK["calls"]
+
+    def shown(frame: Dict[str, Any]) -> List[str]:
+        return re.findall(r"T\d+", as_bytes([frame.get("patches"), frame.get("html")]).decode())
+
+    events = [step[1] for step in CLOCK_SCRIPT]
+    assert len(old) == len(new) == 1 + len(events)
+    assert [f["event_name"] for f in new[1:]] == [f["event_name"] for f in old[1:]] == events
+    # Old: component events are scoped patches that never mention the value;
+    # the one view event renders the page and happens to carry it.
+    assert [f["type"] for f in old[1:]] == ["patch"] * len(events)
+    assert [shown(f) for f in old[1:]] == [[], [], ["T2"], []]
+    # New: every frame carries the value its own processor run returned, and a
+    # component event pays for that with the page's HTML.
+    assert [f["type"] for f in new[1:]] == ["html_update", "html_update", "patch", "html_update"]
+    assert [shown(f) for f in new[1:]] == [["T2"], ["T3"], ["T4"], ["T5"]]
+    # Processor runs. Old: the mount and the view event; a scoped patch ran
+    # none. New: the mount and ONE per event, because the page render that
+    # follows the scoped check takes the check's outputs instead of running
+    # the processors a second time.
+    assert old_calls == 2
+    assert new_calls == 1 + len(events)
+
+
+async def test_the_page_render_after_a_refused_scoped_patch_reuses_the_processor_run(monkeypatch):
+    """The gate-off for that reuse: without the recorded outputs, a component
+    event whose scoped patch is refused runs every processor twice."""
+    from djust.mixins import context
+
+    async def calls() -> int:
+        CLOCK["n"] = CLOCK["calls"] = 0
+        await run_ws(ClockPage, CLOCK_SCRIPT)
+        return CLOCK["calls"]
+
+    with harness.shortcuts(monkeypatch):
+        reused = await calls()
+        with monkeypatch.context() as patch:
+            patch.setattr(context, "PROCESSOR_REPLAY_ATTR", "_djust_processor_replay_unused")
+            twice = await calls()
+    component_events = sum(step[1] == "select" for step in CLOCK_SCRIPT)
+    assert twice - reused == component_events
 
 
 # --- the oracle can fail ---------------------------------------------------------------

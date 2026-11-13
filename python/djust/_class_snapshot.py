@@ -18,6 +18,7 @@ instead of ``dir()``. Both cost one dict copy per class; neither takes a lock.
 
 from __future__ import annotations
 
+import operator
 from typing import Any, Dict, List
 
 _OBJECT_DIR = object.__dir__
@@ -87,6 +88,18 @@ class ClassSnapshot:
     therefore fail :meth:`fresh`, and the fact is derived again. The metaclass
     chain is included because ``inspect.getattr_static`` on a class reads it.
 
+    Each value is also held with its TYPE, so reassigning ``__class__`` on an
+    object a class dictionary holds (a ``state()`` descriptor turned into
+    something else, or the reverse) fails the check though the dictionary still
+    holds the same object. And the class's ``__name__`` and ``__qualname__``
+    are compared: they live in type slots, not in the class dictionary.
+
+    :meth:`is_for` says whether the snapshot was taken of a given class OBJECT.
+    A table of snapshots must ask it on every hit and must be keyed by
+    ``id()``: a metaclass may define ``__eq__`` / ``__hash__`` (by name, say),
+    and a table keyed by the class itself would then hand one class another
+    class's facts.
+
     What it cannot see is a change INSIDE an object a class attribute holds
     (appending to a class-level list, editing a function's ``__dict__``): the
     attribute still holds the same object. A fact that depends on such
@@ -96,13 +109,14 @@ class ClassSnapshot:
     fact is being derived fails the next :meth:`fresh` instead of never.
     """
 
-    __slots__ = ("cls", "meta", "mro", "meta_mro", "dicts")
+    __slots__ = ("cls", "meta", "mro", "meta_mro", "names", "dicts")
 
     def __init__(self, cls: type) -> None:
         self.cls = cls
         self.meta = type(cls)
         self.mro = cls.__mro__
         self.meta_mro = self.meta.__mro__
+        self.names = (cls.__name__, cls.__qualname__)
         classes = dict.fromkeys(self.mro + self.meta_mro)
         dicts = []
         for klass in classes:
@@ -110,20 +124,34 @@ class ClassSnapshot:
                 continue
             # One atomic copy, so keys and values come from the same instant (#3151).
             current = namespace(klass)
-            dicts.append((klass, tuple(current), tuple(current.values())))
+            values = tuple(current.values())
+            dicts.append((klass, tuple(current), values, tuple(map(type, values))))
         self.dicts = tuple(dicts)
+
+    def is_for(self, cls: Any) -> bool:
+        """Whether this is the snapshot of *cls* itself, by identity."""
+        return self.cls is cls
+
+    @staticmethod
+    def _same(left: tuple, right: tuple) -> bool:
+        """Element-wise identity; never calls a class's ``__eq__``."""
+        return len(left) == len(right) and all(map(operator.is_, left, right))
 
     def fresh(self) -> bool:
         cls = self.cls
-        if type(cls) is not self.meta or cls.__mro__ != self.mro:
+        if type(cls) is not self.meta:
             return False
-        if self.meta.__mro__ != self.meta_mro:
+        if not self._same(cls.__mro__, self.mro) or not self._same(
+            self.meta.__mro__, self.meta_mro
+        ):
             return False
-        for klass, keys, values in self.dicts:
+        if (cls.__name__, cls.__qualname__) != self.names:
+            return False
+        for klass, keys, values, kinds in self.dicts:
             current = namespace(klass)
             if len(current) != len(values) or tuple(current) != keys:
                 return False
-            for now, then in zip(current.values(), values):
-                if now is not then:
+            for now, then, kind in zip(current.values(), values, kinds):
+                if now is not then or type(now) is not kind:
                     return False
         return True

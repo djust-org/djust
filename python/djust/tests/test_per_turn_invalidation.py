@@ -167,6 +167,61 @@ def _mutable_class() -> type:
     )
 
 
+class _EqualByName(type(LiveView)):  # type: ignore[misc]
+    """A metaclass under which two classes of one name are equal."""
+
+    def __eq__(cls, other: Any) -> bool:
+        return isinstance(other, type) and cls.__name__ == other.__name__
+
+    def __hash__(cls) -> int:
+        return hash(cls.__name__)
+
+
+def _equal_by_name(grant: bool) -> type:
+    class Named(LiveView, metaclass=_EqualByName):
+        exposure_policy = "explicit"
+        template = "<div dj-root></div>"
+        secret = state("", client=grant)
+
+        @event_handler()
+        def only_when_granted(self, **kwargs: Any) -> None:
+            pass
+
+    if not grant:
+        del Named.only_when_granted
+    return Named
+
+
+class TestHandlerPlans:
+    """``_parameter_metadata._PLANS`` had the same lookup-by-equality."""
+
+    def test_classes_a_metaclass_calls_equal_do_not_share_a_plan(self):
+        from djust._parameter_metadata import _event_methods
+
+        with_handler, without = _equal_by_name(True), _equal_by_name(False)
+        assert with_handler == without and with_handler is not without
+        assert "only_when_granted" in _event_methods(with_handler())
+        assert "only_when_granted" not in _event_methods(without())
+        # And the other way round: a handler that exists is not hidden.
+        without, with_handler = _equal_by_name(False), _equal_by_name(True)
+        assert "only_when_granted" not in _event_methods(without())
+        assert "only_when_granted" in _event_methods(with_handler())
+
+    def test_the_premise_a_table_keyed_by_the_class_conflates_them(self):
+        """Why the tables are keyed by ``id()``: a dict keyed by the classes
+        themselves answers for one with the other's entry. (Reverting
+        ``_class_plan`` to that key makes the test above fail; checked when
+        this was written.)"""
+        from djust import _parameter_metadata
+
+        with_handler, without = _equal_by_name(True), _equal_by_name(False)
+        assert {with_handler: "first"}.get(without) == "first"
+        _parameter_metadata._event_methods(with_handler())
+        _parameter_metadata._event_methods(without())
+        keys = [k for k in _parameter_metadata._PLANS if k[0] in (id(with_handler), id(without))]
+        assert len(keys) == 2 and all(type(k[0]) is int for k in _parameter_metadata._PLANS)
+
+
 class TestContractCache:
     def test_an_unchanged_class_is_compiled_once(self):
         cls = new_view_class()
@@ -257,6 +312,68 @@ class TestContractCache:
             assert summary(cls) == uncached(cls)
         assert len(_exposure._FACTS) <= 4
         assert summary(classes[0]) == uncached(classes[0])
+
+    def test_classes_a_metaclass_calls_equal_do_not_share_a_contract(self):
+        """A metaclass may define ``__eq__`` / ``__hash__``. Two classes it
+        calls equal are still two classes: looked up by equality, the second
+        was handed the first one's contract, and a ``client=True`` grant on one
+        became a grant on the other."""
+        granted, withheld = _equal_by_name(True), _equal_by_name(False)
+        assert granted == withheld and granted is not withheld
+        assert ExposureContract.from_view_class(granted).fields["secret"].client is True
+        second = ExposureContract.from_view_class(withheld)
+        assert second.fields["secret"].client is False
+        assert second is not ExposureContract.from_view_class(granted)
+        # In the other order too, and for the provider manifest.
+        withheld, granted = _equal_by_name(False), _equal_by_name(True)
+        assert ExposureContract.from_view_class(withheld).fields["secret"].client is False
+        assert ExposureContract.from_view_class(granted).fields["secret"].client is True
+        assert summary(granted) == uncached(granted) != summary(withheld) == uncached(withheld)
+
+    def test_without_the_identity_check_the_other_class_s_grant_is_served(self, monkeypatch):
+        """The sibling: a table that trusts a hit (as one keyed by the class
+        did) serves the first class's grant for the second."""
+        monkeypatch.setattr(_exposure, "id", lambda cls: hash(cls), raising=False)
+        monkeypatch.setattr(_exposure.ClassSnapshot, "is_for", lambda self, cls: True)
+        granted, withheld = _equal_by_name(True), _equal_by_name(False)
+        ExposureContract.from_view_class(granted)
+        assert ExposureContract.from_view_class(withheld).fields["secret"].client is True
+
+    @pytest.mark.parametrize("attribute", ["__qualname__", "__name__", "__module__"])
+    def test_a_renamed_class_gets_a_new_owner_and_schema(self, attribute):
+        """``__name__`` and ``__qualname__`` live in type slots, not in the
+        class dictionary; the contract's owner and schema digest use them."""
+        cls = new_view_class()
+        before = ExposureContract.from_view_class(cls)
+        setattr(cls, attribute, "Renamed" if attribute != "__module__" else "renamed.module")
+        after = ExposureContract.from_view_class(cls)
+        if attribute == "__name__":
+            # The owner is module + qualname: a new ``__name__`` alone changes
+            # nothing the contract says, cached or not.
+            assert summary(cls) == uncached(cls)
+            return
+        assert after.owner != before.owner and after.schema != before.schema
+        assert summary(cls) == uncached(cls)
+
+    def test_a_value_whose_class_is_reassigned_fails_the_snapshot(self):
+        """The class dictionary still holds the same object, so identity alone
+        would call the snapshot fresh."""
+        from djust._class_snapshot import ClassSnapshot
+
+        class Before:
+            pass
+
+        class After:
+            pass
+
+        class Holder:
+            held = Before()
+
+        snapshot = ClassSnapshot(Holder)
+        assert snapshot.fresh() and snapshot.is_for(Holder)
+        Holder.__dict__["held"].__class__ = After
+        assert not snapshot.fresh()
+        assert not snapshot.is_for(type("Holder", (), {}))
 
     def test_the_uncached_compilers_have_one_caller_each(self):
         """Caching sits inside the two functions every caller already uses, so
