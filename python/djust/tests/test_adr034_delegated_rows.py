@@ -82,7 +82,9 @@ def test_rows_carry_their_record_id_and_forged_ids_are_refused():
     ):
         response, view = _post(initial, params)
         assert response.status_code >= 400, params
-        assert (view.selected_project, view.selected_action) == (87, "activity")
+        # 2.0 keeps no legacy view state between requests: the refused POST's
+        # view is still at its mount() values, so the handler never ran.
+        assert (view.selected_project, view.selected_action) == (0, ""), params
 
 
 @pytest.mark.django_db
