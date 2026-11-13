@@ -230,8 +230,92 @@ ROWS: dict[str, tuple[str, bool]] = {
         "def w(*a):\n    return f'<p>{a[0]}</p>'\ndef f(x):\n    return mark_safe(f'<div>{w(escape(x))}</div>')\n",
         True,
     ),
+    # -- the review of db1add19b
+    # review of db1add19b, finding 1: a helper's result is not free in every position
+    "a helper's own quoted attribute, placed in a quoted attribute": (
+        'class V:\n    def w(self, k):\n        return f\'<i title="{escape(self.q)}" data-k="{k}">\'\n'
+        "    def f(self, x):\n        self.q = x\n        return mark_safe(f'<div title=\"{self.w(1)}\">d</div>')\n"
+        "def f(x):\n    return V().f(x)\n",
+        True,
+    ),
+    "a helper's escaped module value, placed in a quoted attribute": (
+        'S = {}\ndef w(k):\n    return f\'<i title="{escape(S["q"])}" data-k="{k}">\'\n'
+        "def f(x):\n    S['q'] = x\n    return mark_safe(f'<div title=\"{w(1)}\">d</div>')\n",
+        True,
+    ),
+    "a helper's escaped text, placed in an unquoted attribute": (
+        "class V:\n    def label(self, n):\n        return f'{n}-{escape(self.name)}'\n"
+        "    def f(self, x):\n        self.name = x\n        return mark_safe(f'<div title={self.label(1)}>d</div>')\n"
+        "def f(x):\n    return V().f(x)\n",
+        True,
+    ),
+    "a zero-argument helper's markup, placed in a quoted attribute": (
+        "S = ['']\ndef w():\n    return f'<i title=\"{escape(S[0])}\">'\n"
+        "def f(x):\n    S[0] = x\n    return mark_safe(f'<div title=\"{w()}\">d</div>')\n",
+        True,
+    ),
+    "a helper's whole attributes, placed between attributes": (
+        "S = ['']\ndef w():\n    return f' title=\"{escape(S[0])}\"'\n"
+        "def f(x):\n    S[0] = x\n    return mark_safe(f'<div{w()}>d</div>')\n",
+        False,
+    ),
+    # finding 2: a bound argument that is only HTML-escaped, in a URL / script / style
+    "an escaped argument in the helper's href": (
+        "def tag(u):\n    return f'<a href=\"{u}\">l</a>'\ndef f(x):\n    return mark_safe(tag(escape(x)))\n",
+        True,
+    ),
+    "an escaped argument in the helper's iframe src": (
+        "def tag(u):\n    return f'<iframe src=\"{u}\"></iframe>'\ndef f(x):\n    return mark_safe(tag(escape(x)))\n",
+        True,
+    ),
+    "an escaped argument in the helper's event handler": (
+        "def tag(u):\n    return f'<b onclick=\"go(\\'{u}\\')\">b</b>'\ndef f(x):\n    return mark_safe(tag(escape(x)))\n",
+        True,
+    ),
+    "an escaped pass-through in a script body": (
+        "def ident(u):\n    return u\ndef f(x):\n    return mark_safe(f'<script>var a={ident(escape(x))};</script>')\n",
+        True,
+    ),
+    "an escaped argument in the helper's style body": (
+        "def css(u):\n    return f'<style>.c{{color:{u}}}</style>'\ndef f(x):\n    return mark_safe(css(escape(x)))\n",
+        True,
+    ),
+    "safe_url handed to the helper's href stays clean": (
+        "def tag(u):\n    return f'<a href=\"{u}\">l</a>'\ndef f(x):\n    return mark_safe(tag(safe_url(x)))\n",
+        False,
+    ),
+    # finding 3: the refusals, pinned
+    "a starred call binds nothing": (
+        "def w(a, u=''):\n    return f'<p>{u}</p>'\ndef f(x):\n    return mark_safe(f'<div>{w(*(escape(x), x))}</div>')\n",
+        True,
+    ),
+    "a call with an unknown keyword binds nothing": (
+        "def w(u):\n    return f'<p>{u}</p>'\ndef f(x):\n    return mark_safe(f'<div>{w(escape(x), v=x)}</div>')\n",
+        True,
+    ),
 }
 
+
+ROWS["json in one case, a built safe_url in another, in a quoted attribute"] = (
+    "import json\nfrom djust.security.json_script import escape_json_for_script\n"
+    "def f(x):\n    v = escape_json_for_script(json.dumps(x)) if len(x) > 0 else 'a' + safe_url(x)\n"
+    "    return mark_safe(f'<b title=\"{v}\">b</b>')\n",
+    True,
+)
+
+#: Unsafe, and clean on main and here: an HTML escaper written IN PLACE where HTML escaping is not
+#: enough (a URL, an event handler, a script body). Pinned so the day the guard learns one it moves.
+KNOWN_GAPS = {
+    "escape() written into an href": (
+        "def f(x):\n    return mark_safe(f'<a href=\"{escape(x)}\">l</a>')\n",
+    ),
+    "escape() written into an event handler string": (
+        "def f(x):\n    return mark_safe(f'<b onclick=\"go(\\'{escape(x)}\\')\">b</b>')\n",
+    ),
+    "escape() written into a script body": (
+        "def f(x):\n    return mark_safe(f'<script>var a={escape(x)};</script>')\n",
+    ),
+}
 
 #: Unsafe only across calls (another caller put a raw value into the shared container): the row pins
 #: the guard's rule, one run of ``f`` cannot show it.
@@ -240,8 +324,9 @@ ACROSS_CALLS = {
     "a module list keeps what every call appended",
     "an attribute the helper stores keeps what every call stored",
 }
-#: Flagged although this run is safe: the guard does not bind ``*args``.
-CONSERVATIVE = {"*args are raw"}
+#: Flagged although this run is safe: the guard does not bind ``*args``; a call with a keyword the
+#: function does not take raises (``TypeError``) and binds nothing.
+CONSERVATIVE = {"*args are raw", "a call with an unknown keyword binds nothing"}
 
 
 def flagged(source: str) -> bool:
@@ -277,28 +362,76 @@ class TestTheRowsAreTrue:
         assert not fuzz.injected(run_case(ROWS[label][0])), label
 
 
+class TestKnownGaps:
+    """Unsafe and cleared, here and on main: an HTML escaper written in place where HTML escaping is
+    not enough. Through a helper's parameter the same values are flagged (``ROWS``)."""
+
+    @pytest.mark.parametrize("label", sorted(KNOWN_GAPS))
+    def test_the_gap_is_real(self, label):
+        assert fuzz.injected(run_case(KNOWN_GAPS[label][0])), label
+
+    @pytest.mark.parametrize("label", sorted(KNOWN_GAPS))
+    def test_the_guard_still_clears_it(self, label):
+        assert not flagged(KNOWN_GAPS[label][0]), f"the guard learned {label}: move it to ROWS"
+
+
 class TestTheCallFuzz:
     """``safe_markup_call_fuzz_3864``: (source) x (helper chain) x (placement), RUN against hostile
-    payloads. The one miss left is the guard's documented limit: ``escape()`` output written straight
-    into an unquoted attribute (``<div title={escape(x)}>``) is trusted anywhere, with or without this
-    change."""
+    payloads. The misses left are the guard's documented limit, the same on main: an escaper written
+    IN PLACE (no helper in between) where its escaping is not enough: ``escape(x)`` in an unquoted
+    attribute, a URL, an event handler or a style body; ``safe_url(x)`` in an event handler or a style
+    body."""
 
-    @staticmethod
-    def known(case: tuple) -> bool:
-        """``<div title={escape(x)}>`` written in place (no helper in between)."""
+    GAPS = {
+        ("escape", "unquoted"),
+        ("escape", "url"),
+        ("escape", "event"),
+        ("escape", "style"),
+        ("url", "event"),
+        ("url", "style"),
+    }
+
+    @classmethod
+    def known(cls, case: tuple) -> bool:
         source, helpers, placement = case
-        return source == "escape" and placement == "unquoted" and set(helpers) == {"none"}
+        return set(helpers) == {"none"} and (source, placement) in cls.GAPS
 
-    def test_every_single_helper_in_every_placement(self):
-        """The whole product of one helper: no miss but the known one, and not vacuous."""
-        result = fuzz.survey(samples=0, seed=0)
+    @pytest.mark.parametrize("placement", sorted(fuzz.PLACEMENTS))
+    def test_every_single_helper(self, placement):
+        """The whole product of one helper, per placement: no miss but the known ones."""
+        result = fuzz.survey(samples=0, seed=0, placement=placement)
         assert [c for c in result["false_negatives"] if not self.known(c)] == []
-        assert result["cases"] == len(fuzz.SOURCES) * len(fuzz.HELPERS) * len(fuzz.PLACEMENTS)
-        assert result["unsafe"] >= 80  # cases that really let a payload through
-        assert result["cases"] - result["flagged"] >= 60  # cases the guard cleared
+        assert result["cases"] == len(fuzz.SOURCES) * len(fuzz.HELPERS)
+
+    def test_the_product_is_not_vacuous(self):
+        """Enough cases let a payload through, and enough are cleared, for a miss to show."""
+        unsafe = cleared = 0
+        for placement in ("text", "url"):
+            result = fuzz.survey(samples=0, seed=0, placement=placement)
+            unsafe += result["unsafe"]
+            cleared += result["cases"] - result["flagged"]
+        assert unsafe >= 40 and cleared >= 40, (unsafe, cleared)
 
     @pytest.mark.parametrize("seed", [3864, 1])
     def test_random_two_helper_chains(self, seed):
         result = fuzz.survey(samples=200, seed=seed, exhaustive=False)
         assert [c for c in result["false_negatives"] if not self.known(c)] == []
         assert result["unsafe"] >= 30 and result["cases"] - result["flagged"] >= 30
+
+
+class TestTheGateOffListApplies:
+    """``scripts/safe-markup-call-binding-gateoff.json`` turns each mechanism off in turn (run it with
+    ``scripts/gate_off.py``); this keeps the list from rotting as the guard changes."""
+
+    def test_every_mutation_text_still_applies(self):
+        import json
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        spec = json.loads((root / "scripts/safe-markup-call-binding-gateoff.json").read_text())
+        assert len(spec["mutations"]) >= 20
+        for entry in spec["mutations"]:
+            source = (root / entry["file"]).read_text()
+            found = source.count(entry["old"])
+            assert found == entry.get("expect", 1), f"{entry['label']!r}: found {found} time(s)"
+            assert entry["old"] != entry["new"], entry["label"]

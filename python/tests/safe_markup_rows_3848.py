@@ -909,10 +909,12 @@ row(
     f'{_URL}def link(p):\n    return safe_url(p)\ndef f(x):\n    return mark_safe(f"<a href={{link(x)}}>go</a>")\n',
     True,
 )
+# Since #3864 a call of a helper is placed by what it returns: ``link`` returns ``safe_url`` output,
+# which a quoted ``href`` is for (the position check no longer stops at the call)
 row(
     "safe_url chosen between a direct call and a helper that returns it (the position check stops at the call)",
     f"{_URL}def link(p):\n    return safe_url(p)\ndef f(x, c):\n    u = safe_url(x) if c else link(x)\n    return mark_safe(f'<a href=\"{{u}}\">go</a>')\n",
-    True,
+    False,
 )
 
 # --- #3850 round 2: a string BUILT from an escaper's output is judged where it is placed ------

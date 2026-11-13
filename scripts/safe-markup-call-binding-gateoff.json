@@ -1,0 +1,175 @@
+{
+  "_comment": "Each mechanism of the call-site binding of the safe-markup guard (#3864, #3845) gate-off'd: every mutation must turn a test red. Run: .venv/bin/python scripts/gate_off.py scripts/safe-markup-call-binding-gateoff.json (about 25 runs of 40-70 s). python/tests/test_safe_markup_guard_3864.py pins that every mutation text still applies.",
+  "root": ".",
+  "command": [
+    "env",
+    "PYTHONDONTWRITEBYTECODE=1",
+    "{python}",
+    "-m",
+    "pytest",
+    "-q",
+    "-x",
+    "-p",
+    "no:cacheprovider",
+    "python/tests/test_safe_markup_guard_3864.py",
+    "python/tests/test_safe_markup_guard_3848.py",
+    "python/tests/test_safe_markup_guard_3766.py",
+    "python/tests/test_safe_markup_guard_3820.py",
+    "-k",
+    "not TestTheDifferentialFuzz"
+  ],
+  "deadline": 400,
+  "rss_mb": 4096,
+  "mutations": [
+    {
+      "label": "tainted direction: a call's result is not judged with its arguments",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "if local is not None and self._returns_tainted(local, e, sc, d, seen):",
+      "new": "if False and local is not None and self._returns_tainted(local, e, sc, d, seen):"
+    },
+    {
+      "label": "clean direction: a call placed in text is not specialized",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if not placed:\n",
+      "new": "            if True:\n"
+    },
+    {
+      "label": "a lambda bound once is not a function of the file",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            and isinstance(bound[0], ast.Lambda)\n",
+      "new": "            and False\n"
+    },
+    {
+      "label": "a method of a fresh instance is not resolved",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            and isinstance(func.value, ast.Call)\n            and isinstance(func.value.func, ast.Name)\n",
+      "new": "            and False\n"
+    },
+    {
+      "label": "a starred call is bound",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if id(fscope) in self._actuals or self._has_star(call):",
+      "new": "        if id(fscope) in self._actuals:"
+    },
+    {
+      "label": "an unknown keyword is ignored",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            elif kw.arg in by_keyword or a.kwarg is None:\n                return None  # given twice, or an unknown keyword: the call raises",
+      "new": "            elif kw.arg in by_keyword:\n                return None  # given twice, or an unknown keyword: the call raises"
+    },
+    {
+      "label": "a recursive call borrows the outer call's binding",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if id(fscope) in self._actuals or self._has_star(call):",
+      "new": "        if self._has_star(call):"
+    },
+    {
+      "label": "a recursive call's result is judged under the outer binding (tainted)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "return self._unbound(fscope, judge) if verdict is None else verdict",
+      "new": "return judge() if verdict is None else verdict"
+    },
+    {
+      "label": "a bound argument needs no checked position",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "if isinstance(e, _Actual) and _CTX_OK not in seen:",
+      "new": "if False and isinstance(e, _Actual):"
+    },
+    {
+      "label": "containers that outlive the call are judged under the binding",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "if not self._actuals or self._fresh(owner, name):",
+      "new": "if True:"
+    },
+    {
+      "label": "no container is fresh",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        return bool(values) and all(\n            isinstance(v, (ast.List,",
+      "new": "        return False and all(\n            isinstance(v, (ast.List,"
+    },
+    {
+      "label": "a literal parameter decides no branch",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if truth is not holds:\n",
+      "new": "            if False:\n"
+    },
+    {
+      "label": "a rebound parameter decides a branch",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            and len(fscope.assigns.get(p, [])) == 1\n",
+      "new": "            and True\n"
+    },
+    {
+      "label": "a call clean for literal arguments is free in any position (review finding 1)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        verdict = self._specialized(local, e, sc, judge)\n        return bool(verdict) if verdict is not None else False",
+      "new": "        verdict = self._specialized(\n            local, e, sc, lambda: self._returns_clean(local, 0, frozenset())\n        )\n        return bool(verdict) if verdict is not None else False"
+    },
+    {
+      "label": "a part of whole attributes may sit in any attribute",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if kind is not None and self._place(\"<x \" + text) not in _PLACES[kind]:\n                return \"call\"",
+      "new": "            if False:\n                return \"call\""
+    },
+    {
+      "label": "literal markup in a returned string is not markup",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if not _MARKUP_CHARS & set(literal):\n            return _strictest([self._value_kind(p, sc, d) for p in parts])",
+      "new": "        if True:\n            return _strictest([self._value_kind(p, sc, d) for p in parts])"
+    },
+    {
+      "label": "an escaped value returned by a helper is free in any position",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if origin in _TEXT_ESCAPERS:\n                return \"bound\"  # escaped text",
+      "new": "            if origin in _TEXT_ESCAPERS:\n                return None  # escaped text"
+    },
+    {
+      "label": "a bound argument is fine in a URL / script / style attribute (review finding 2)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if attr in _URL_ATTRIBUTES:\n                return \"url\"\n            return \"code\" if _code_attribute(attr) else \"quoted\"",
+      "new": "            return \"quoted\""
+    },
+    {
+      "label": "a script or style body is element text (review finding 2)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    state, raw = (\"rawtext\", tag) if tag in (\"script\", \"style\") else (\"text\", \"\")",
+      "new": "                    state, raw = \"text\", \"\""
+    },
+    {
+      "label": "a URL escaper handed to a helper may go into its script",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                if level and via and kind == \"sens\":\n                    found.append(\"bsens\")",
+      "new": "                if False:\n                    found.append(\"bsens\")"
+    },
+    {
+      "label": "calls and bound arguments are not placed",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                kind = self._value_kind(alt, asc, 0)\n                if kind in (\"bound\", \"attrs\", \"call\"):\n                    found.append(kind)",
+      "new": "                kind = self._value_kind(alt, asc, 0)\n                if False:\n                    found.append(kind)"
+    },
+    {
+      "label": "the escapers' order: a value escaper before the JSON escaper (review finding 3)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        for kind in (\"json*\", \"json\", \"sens*\", \"sens\"):",
+      "new": "        for kind in (\"json*\", \"sens*\", \"json\", \"sens\"):"
+    },
+    {
+      "label": "whole attributes are not allowed between attributes",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        return \"attrs\" if state == \"tag\" and text[:1].isspace() else \"call\"",
+      "new": "        return \"call\""
+    },
+    {
+      "label": "position-free ignores names",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if isinstance(e, ast.Name):  # a name that only ever holds such values",
+      "new": "        if False:"
+    },
+    {
+      "label": "a trusted fixed-alphabet value is markup",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                return None  # a value of a fixed alphabet: a colour, a date, a token",
+      "new": "                return \"call\""
+    }
+  ]
+}

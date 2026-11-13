@@ -507,7 +507,72 @@ class _Actual(_Foreign):
 #: Pseudo-origins for :meth:`_Module._hold_level`: a value bound from a call site (:class:`_Actual`)
 #: and a call of a function of this file that is clean only for the arguments it is given.
 _BOUND = frozenset({"<a parameter bound from its call>"})
-_SPEC = frozenset({"<a call clean only for its arguments>"})
+_SPEC = frozenset({"<a call of a function of this file>"})
+
+
+#: Characters that make literal text MARKUP: it ends or opens a tag or a quoted value
+_MARKUP_CHARS = frozenset("<>\"'`")
+#: Escapers whose output is text with no markup character (quotes included), but spaces kept
+_TEXT_ESCAPERS = frozenset(
+    {"django.utils.html.escape", "django.utils.html.conditional_escape", "html.escape"}
+)
+#: Attributes whose value a browser reads as a URL, as script or as CSS: HTML escaping does not make
+#: a value safe there (``javascript:``; ``&#x27;`` is a quote again once the attribute is decoded)
+_URL_ATTRIBUTES = frozenset(
+    {
+        "href",
+        "src",
+        "action",
+        "formaction",
+        "srcset",
+        "poster",
+        "background",
+        "cite",
+        "data",
+        "codebase",
+        "ping",
+        "manifest",
+        "xlink:href",
+        "dynsrc",
+        "lowsrc",
+        "longdesc",
+        "usemap",
+    }
+)
+
+
+def _code_attribute(name: str) -> bool:
+    """A browser runs the value of this attribute as script or CSS (an event handler, ``style``)."""
+    name = name.lower()
+    return name.startswith("on") or name == "style"
+
+
+#: Where a value of each placement kind may land (see ``_Module._place``): ``None`` anywhere;
+#: ``"bound"`` escaped text: element text or a quoted value that is not a URL / script / style;
+#: ``"attrs"`` whole attributes (`` aria-x="..."``): element text or between two attributes;
+#: ``"call"`` markup or text the guard cannot read: element text only.
+_PLACES: dict = {
+    None: frozenset({"text", "quoted", "url", "code", "between", "unquoted", "rawtext"}),
+    "bound": frozenset({"text", "quoted"}),
+    "attrs": frozenset({"text", "between"}),
+    "call": frozenset({"text"}),
+    # a URL escaper's output handed to a helper: a URL attribute is what it is for, script is not
+    "bsens": frozenset({"text", "quoted", "url"}),
+    # the value escapers keep the rules they have when written in place (``_position_ok``)
+    "sens": frozenset({"text", "quoted", "url", "code", "rawtext"}),
+    "json": frozenset({"text", "rawtext"}),
+}
+
+
+def _strictest(kinds: list) -> str | None:
+    """The kind of a value that may be any of ``kinds``: where ALL of them may land."""
+    allowed = _PLACES[None]
+    for k in kinds:
+        allowed = allowed & _PLACES[k]
+    for kind, places in _PLACES.items():
+        if places == allowed:
+            return kind
+    return "call"
 
 
 class _AnyOf:
@@ -727,6 +792,8 @@ class _Module:
         self._raw_clean_busy: set[int] = set()
         #: (id(callee expression), id(scope)) -> the function a call reaches (``_local_function``)
         self._locals: dict[tuple[int, int], tuple] = {}
+        self._kind_busy: set[tuple] = set()
+        self._kinds: dict[tuple, str | None] = {}
         self._build(self.tree, "<module>", None)
         self._closure_writes()
         self._bind_nested_parameters()
@@ -2054,7 +2121,9 @@ class _Module:
         if self._needs_arguments(value, sc):
             return 1 if origins is _SPEC else (2 if many(args) else 0)
         if self._local_function(value.func, sc) is not None:
-            return 0  # clean whatever it is given: its result carries none of them
+            # clean whatever it is given: its result carries none of them, but it is placed by what
+            # it returns (markup or escaped text is not clean in every position)
+            return 1 if origins is _SPEC else 0
         name = _callee(value.func)
         if origin in CLEAN_IF_ARGS_CLEAN:
             return 2 if many(args) else 0
@@ -2063,6 +2132,178 @@ class _Module:
         ):
             return 2 if many([*args, value.func.value]) else 0
         return 0
+
+    def _return_kind(self, call: ast.Call, sc: _Scope, depth: int = 0) -> str | None:
+        """Where the result of a call of a function of this file may be placed, judged by what it
+        returns (any argument): ``None`` anywhere (literals, digits), ``"bound"`` in text or a quoted
+        value that is not a URL / event handler / style (escaped text keeps its spaces), ``"call"`` in
+        element text only (markup, or text the guard cannot read)."""
+        local = self._local_function(call.func, sc)
+        if local is None:
+            return "call"
+        fn, fscope = local
+        key = ("return-kind", id(fn))
+        if not self._actuals and key in self._kinds:
+            return self._kinds[key]
+        if depth > 6 or key in self._kind_busy:
+            return "call"
+        self._kind_busy.add(key)
+        try:
+            kinds = self._unbound(
+                fscope,
+                lambda: [
+                    self._value_kind(v, fscope, depth + 1)
+                    for v in self._live_returns(fn, fscope)
+                    if v is not None
+                ],
+            )
+        finally:
+            self._kind_busy.discard(key)
+        kind = _strictest(kinds)
+        if not self._actuals and not self._kind_busy:  # not cut short by a recursion
+            self._kinds[key] = kind
+        return kind
+
+    def _value_kind(self, e: ast.expr, sc: _Scope, depth: int) -> str | None:
+        """:meth:`_return_kind` of one returned expression."""
+        if depth > 8:
+            return "call"
+        if self._position_free(e, sc):
+            return None
+        d = depth + 1
+        if isinstance(e, (ast.JoinedStr, ast.BinOp, ast.Constant)):
+            segments = self._segments(e)
+            if segments is not None:
+                return self._segments_kind(segments, sc, d)
+        if isinstance(e, ast.IfExp):
+            return _strictest([self._value_kind(e.body, sc, d), self._value_kind(e.orelse, sc, d)])
+        if isinstance(e, ast.BoolOp):
+            return _strictest([self._value_kind(v, sc, d) for v in e.values])
+        if isinstance(e, ast.Name):
+            owner = sc.find(e.id)
+            if owner is None or owner.contents.get(e.id):
+                return "call"
+            values, _ = self._bindings(e, e.id, owner, sc)
+            found = [x for v in values for x in _foreign_values(v, owner)]
+            if not values or len(found) != len(values):
+                return "call"
+            # ``s += piece``: each piece is placed after the others, so each must be a whole
+            # fragment on its own (whole attributes stay whole attributes when concatenated)
+            pieces = [(p, owner) for p in owner.pieces.get(e.id, [])]
+            return _strictest([self._value_kind(x, xsc, d) for x, xsc in [*found, *pieces]])
+        if isinstance(e, (ast.Attribute, ast.Subscript)):
+            values = self._table_values(e, sc)
+            if values is not None:
+                return _strictest([self._value_kind(v, vsc, d) for v, vsc in values])
+        if isinstance(e, ast.Call):
+            origin = self.origin(e.func, sc)
+            if origin in _TEXT_ESCAPERS:
+                return "bound"  # escaped text: no quote, no tag, but its spaces and its scheme
+            if origin in CONTEXT_SENSITIVE_ORIGINS:
+                return "sens"  # a value escaper: text or a quoted value (``_PLACES``)
+            if origin in JSON_ESCAPERS:
+                return "json"
+            if self._local_function(e.func, sc) is not None:
+                return self._return_kind(e, sc, d)
+            name = _callee(e.func)
+            args = [*e.args, *(k.value for k in e.keywords)]
+            if origin in CLEAN_IF_ARGS_CLEAN and not self._has_star(e):
+                return _strictest([self._value_kind(a, sc, d) for a in args])  # ``str(x)``
+            if isinstance(e.func, ast.Attribute):
+                recv = e.func.value
+                if name == "join" and len(e.args) == 1 and not e.keywords:
+                    elements = self._elements_of(e.args[0], sc)
+                    if elements is not None:
+                        return _strictest(
+                            [self._value_kind(recv, sc, d)]
+                            + [self._value_kind(x, xsc, d) for x, xsc in elements]
+                        )
+                if name in PURE_TRANSFORMS and not args:  # ``x.strip()``: the text of ``x``
+                    return self._value_kind(recv, sc, d)
+            if (
+                self._trusted_call(e, sc)
+                and origin not in CLEAN_ORIGINS
+                and origin not in CLEAN_RECORD_ORIGINS
+                and _callee(e.func) not in RENDER_CALLS
+            ):
+                return None  # a value of a fixed alphabet: a colour, a date, a token
+        return "call"
+
+    def _table_values(self, e: ast.expr, sc: _Scope) -> list[tuple[ast.expr, _Scope]] | None:
+        """What ``self.TABLE`` (a class attribute the class writes out) or ``TABLE[k]`` /
+        ``self.TABLE[k]`` of a display can be; ``None`` when that is not known."""
+        if isinstance(e, ast.Attribute):
+            found = self.class_attribute(e, sc)
+            if found is None or not all(isinstance(v, ast.expr) for v in found[1]):
+                return None
+            return [(v, found[0]) for v in found[1]]  # type: ignore[misc]
+        if isinstance(e, ast.Subscript) and not isinstance(e.slice, ast.Slice):
+            holders = (
+                self._table_values(e.value, sc)
+                if isinstance(e.value, ast.Attribute)
+                else [(e.value, sc)]
+            )
+            if holders is None:
+                return None
+            out: list[tuple[ast.expr, _Scope]] = []
+            for holder, hsc in holders:
+                if isinstance(holder, ast.Dict):
+                    if any(v is None for v in holder.values):
+                        return None
+                    out.extend((v, hsc) for v in holder.values)  # type: ignore[misc]
+                    continue
+                elements = self._elements_of(holder, hsc)
+                if elements is None:
+                    return None
+                out.extend(elements)
+            return out
+        return None
+
+    @staticmethod
+    def _segments(e: ast.expr) -> list | None:
+        """``e`` as literal text and the parts between: an f-string, a ``+`` chain, a literal."""
+        if isinstance(e, ast.Constant):
+            return [e.value] if isinstance(e.value, str) else None
+        if isinstance(e, ast.JoinedStr):
+            out: list = []
+            for v in e.values:
+                if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                    out.append(v.value)
+                elif isinstance(v, ast.FormattedValue):
+                    out.append(v.value)
+                else:
+                    return None
+            return out
+        if isinstance(e, ast.BinOp) and isinstance(e.op, ast.Add):
+            left = _Module._segments(e.left)
+            right = _Module._segments(e.right)
+            return [
+                *(left if left is not None else [e.left]),
+                *(right if right is not None else [e.right]),
+            ]
+        return None
+
+    def _segments_kind(self, segments: list, sc: _Scope, d: int) -> str | None:
+        """Literal text with parts in it. Text with no markup character: the strictest part. Whole
+        attributes (every part inside a quote the text opens and fit for that attribute, every quote
+        closed, no ``<`` / ``>``, a leading space): ``"attrs"``. Any other markup: ``"call"``."""
+        literal = "".join(x for x in segments if isinstance(x, str))
+        parts = [x for x in segments if not isinstance(x, str)]
+        if not _MARKUP_CHARS & set(literal):
+            return _strictest([self._value_kind(p, sc, d) for p in parts])
+        if set("<>`") & set(literal):
+            return "call"
+        text = ""
+        for x in segments:
+            if isinstance(x, str):
+                text += x
+                continue
+            kind = self._value_kind(x, sc, d)
+            if kind is not None and self._place("<x " + text) not in _PLACES[kind]:
+                return "call"
+            text += "0"
+        state, _ = self._context("<x " + text)
+        return "attrs" if state == "tag" and text[:1].isspace() else "call"
 
     def _returns_hold(self, fn: ast.AST, fscope: _Scope, origins: frozenset) -> bool:
         return any(
@@ -2172,23 +2413,24 @@ class _Module:
         found: list[str] = []
         for alt, asc, via in self._alternatives(value, sc):
             escaper = False  # an escaper's output was found: the other escaper is not looked for
-            for origins, kind in (
-                (JSON_ESCAPERS, "json"),
-                (CONTEXT_SENSITIVE_ORIGINS, "sens"),
-                (_SPEC, "call"),
-                (_BOUND, "bound"),
+            # a call of a function of this file, or an argument bound from the call being judged:
+            # placed by what it holds (``_value_kind``: escaped text, whole attributes, markup)
+            if (
+                (via and not self._position_free(alt, asc))
+                or self._hold_level(alt, asc, _SPEC)
+                or self._hold_level(alt, asc, _BOUND)
             ):
-                if escaper and origins is CONTEXT_SENSITIVE_ORIGINS:
+                kind = self._value_kind(alt, asc, 0)
+                if kind in ("bound", "attrs", "call"):
+                    found.append(kind)
+            for origins, kind in ((JSON_ESCAPERS, "json"), (CONTEXT_SENSITIVE_ORIGINS, "sens")):
+                if escaper:
                     continue
                 level = self._hold_level(alt, asc, origins)
-                if level == 0 and origins is _BOUND and via:
-                    level = 0 if self._position_free(alt, asc) else 1
+                if level and via and kind == "sens":
+                    found.append("bsens")  # handed to a helper: not into its script or CSS
                 if level == 1:
                     found.append(kind)
-                elif level == 2 and origins in (_SPEC, _BOUND):
-                    # built from a bound argument or such a call: judged again where it is placed
-                    # (no balanced-fragment exemption: an argument may be markup with quotes)
-                    found.append(kind + "*")
                 elif level == 2 and self._joined_elements_kind(alt, asc, kind, found):
                     pass
                 elif level == 2:
@@ -2215,11 +2457,13 @@ class _Module:
                     if not balanced:
                         found.append(kind + "*")
                 if level:
-                    # an escaper's output is placed by the rules of the first escaper found; a call
-                    # or a bound argument in the same value is still looked for: the strictest wins
-                    escaper = True
+                    escaper = True  # placed by the rules of the first escaper found
         # the strictest first: element text only, then anything but an unquoted attribute
-        for kind in ("json*", "json", "call*", "call", "sens*", "bound*", "sens", "bound"):
+        bases = {k.rstrip("*") for k in found}
+        if bases & {"call", "attrs", "bound", "bsens"}:
+            # a call or a bound argument among them: where EVERY one of them may land
+            return _strictest(sorted(bases)) or "call"
+        for kind in ("json*", "json", "sens*", "sens"):
             if kind in found:
                 return kind
         return None
@@ -2295,10 +2539,25 @@ class _Module:
         """A ``kind`` of escaper output (or a string built from it, ``kind`` + ``"*"``) may sit after
         ``prefix``: text for ``"json"``; text or a quoted value for ``"sens"``; never an unquoted
         attribute or a tag name."""
-        where = self._position(prefix)
-        if kind.startswith(("json", "call")):
-            return where == "text"
-        return where != "tag"
+        if kind.startswith("json"):
+            return self._position(prefix) == "text"
+        if kind in ("call", "bound", "attrs", "bsens"):
+            # a bound argument is escaped text at best: a quoted value, but not one a browser reads
+            # as a URL, as script or as CSS, where HTML escaping is not enough; a call's markup is
+            # placed by what it returns; element text is never a <script> / <style> body
+            return self._place(prefix) in _PLACES[kind]
+        return self._position(prefix) != "tag"
+
+    def _place(self, prefix: str) -> str:
+        """``_context`` folded to the places of ``_PLACES``."""
+        state, attr = self._context(prefix)
+        if state == "quoted":
+            if attr in _URL_ATTRIBUTES:
+                return "url"
+            return "code" if _code_attribute(attr) else "quoted"
+        if state == "tag":
+            return "unquoted" if prefix.rstrip().endswith("=") else "between"
+        return state
 
     def _add_clean(self, e: ast.BinOp, sc: _Scope, d: int, seen: frozenset) -> bool:
         """``a + b + c``: each part clean, and a context-sensitive part (``safe_url(x)``) only where the
@@ -2403,6 +2662,35 @@ class _Module:
             elif not self.clean(arg, sc, d, seen):
                 return False
         return True
+
+    @staticmethod
+    def _context(prefix: str) -> tuple[str, str]:
+        """``(state, attribute)`` after ``prefix``: ``"text"``, ``"rawtext"`` (the body of a
+        ``<script>`` / ``<style>`` element), ``"quoted"`` or ``"tag"``, and the name of the attribute a
+        quoted value belongs to (``""`` elsewhere)."""
+        state, quote, attr, tag, raw = "text", "", "", "", ""
+        low = prefix.lower()
+        start = 0  # where the open tag began
+        i = 0
+        while i < len(low):
+            ch = low[i]
+            if state == "rawtext":
+                if low.startswith("</" + raw, i):
+                    state = "text"
+            elif state == "text":
+                if ch == "<" and (i + 1 == len(low) or low[i + 1].isalpha() or low[i + 1] in "/!?"):
+                    state, start = "tag", i
+                    tag = re.match(r"<([a-z0-9-]*)", low[i:]).group(1)  # type: ignore[union-attr]
+            elif state == "tag":
+                if ch == ">":
+                    state, raw = ("rawtext", tag) if tag in ("script", "style") else ("text", "")
+                elif ch in "\"'":
+                    found = re.search(r"([^\s=\"'<>/]+)\s*=\s*$", low[start:i])
+                    state, quote, attr = "quoted", ch, found.group(1) if found else ""
+            elif ch == quote:
+                state, attr = "tag", ""
+            i += 1
+        return state, attr
 
     @staticmethod
     def _position(prefix: str) -> str:
@@ -2862,11 +3150,15 @@ class _Module:
                     return None  # a required argument is missing: the call raises
                 binding[param] = _Actual(defaults[param], holder)
         binding = {k: v for k, v in binding.items() if isinstance(fscope.params.get(k), _Param)}
+        outer = self._actuals.get(id(fscope))
         self._actuals[id(fscope)] = binding
         try:
             return judge()
         finally:
-            del self._actuals[id(fscope)]
+            if outer is None:
+                self._actuals.pop(id(fscope), None)
+            else:
+                self._actuals[id(fscope)] = outer
 
     def _position_free(self, e: ast.expr, sc: _Scope, depth: int = 0) -> bool:
         """A value that may sit in ANY position, as it may when written in place: a literal the
@@ -2877,6 +3169,16 @@ class _Module:
             return False
         if isinstance(e, ast.Constant):
             return True
+        if isinstance(e, ast.JoinedStr):  # an f-string of literal text and such values
+            return all(
+                self._position_free(v.value, sc, depth + 1)
+                for v in e.values
+                if isinstance(v, ast.FormattedValue)
+            )
+        if isinstance(e, ast.BinOp) and isinstance(e.op, ast.Add):
+            return self._position_free(e.left, sc, depth + 1) and self._position_free(
+                e.right, sc, depth + 1
+            )
         if isinstance(e, ast.Name):  # a name that only ever holds such values
             owner = sc.find(e.id)
             if owner is None or owner.pieces.get(e.id) or owner.contents.get(e.id):
@@ -2903,9 +3205,19 @@ class _Module:
             return False
         if not all(self._position_free(a, sc, depth + 1) for a in args):
             return False
-        return bool(
-            self._specialized(local, e, sc, lambda: self._returns_clean(local, 0, frozenset()))
-        ) or not self._needs_arguments(e, sc)
+        fn, fscope = local
+        # every value it can return, for THESE arguments, is itself free: being clean is not enough
+        # (``def w(k): return f'<i title="{escape(S)}" data-k="{k}">'`` is clean for ``w(1)``, and its
+        # own quote ends an attribute it is placed in)
+
+        def judge() -> bool:
+            returns = self._live_returns(fn, fscope)
+            return bool(returns) and all(
+                v is not None and self._position_free(v, fscope, depth + 1) for v in returns
+            )
+
+        verdict = self._specialized(local, e, sc, judge)
+        return bool(verdict) if verdict is not None else False
 
     def _needs_arguments(self, e: ast.Call, sc: _Scope) -> bool:
         """``e`` calls a function of this file whose result is NOT clean for any argument: whether it
