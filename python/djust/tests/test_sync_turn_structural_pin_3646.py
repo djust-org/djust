@@ -540,9 +540,9 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("_exposure_auth.py", "aauthorize_event", "authorize_event"): plumbing(_SESSION, _TENANT),
     ("_exposure_child_persistence.py", "asave_child_states", "_capture_batch"): plumbing(_STATE),
     ("_exposure_sessions.py", "asave_server_state", "server_state_adapter"): plumbing(_RENDER),
-    ("_exposure_sessions.py", "asave_server_state", "adapter.contract.project_view"): plumbing(
-        _RENDER
-    ),
+    ("_exposure_sessions.py", "asave_server_state", "_project_for_save"): plumbing(_RENDER),
+    # #4095: names the over-limit field by projecting declared fields one by one.
+    ("_exposure_sessions.py", "asave_server_state", "_limit_culprit"): plumbing(_RENDER),
     ("_session_merge.py", "asave_merged", "save_merged"): plumbing(_SESSION),
     ("_turn_ports.py", "run_http_turn.run_body", "call_body"): entry(_HTTP_BODY),
     ("_view_hooks.py", "call_async_result", "handler"): refused_async(),
@@ -663,6 +663,8 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "snapshot_codec"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._render_and_send", "render_view_with_diff"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "load_server_state"): plumbing(_SESSION),
+    # #4095: an over-limit turn goes back to the stored state.
+    ("runtime.py", "ViewRuntime._refuse_over_limit_turn", "load_server_state"): plumbing(_SESSION),
     (
         "runtime.py",
         "ViewRuntime._dispatch_mount_body",

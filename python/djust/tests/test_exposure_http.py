@@ -134,10 +134,14 @@ def test_cookie_backend_rejects_server_persistence(staged, rf):
     session = CookieStore()
     with pytest.raises(ExposureError, match="server-side"):
         server_state_adapter(HTTPView(), request(rf, session))
-    # Through the HTTP entry the refusal is a generic 500 (ADR-038 D-a).
-    response = HTTPView.as_view()(request(rf, session))
-    assert response.status_code == 500
-    assert b"server-side" not in response.content
+    # Through the HTTP entry it is a configuration error that reaches the
+    # developer, like ImproperlyConfigured (#4092): framework-authored and
+    # value-free, so Django's handler answers it (a 500 page without it in
+    # production) and logs the reason.
+    from django.core.exceptions import ImproperlyConfigured
+
+    with pytest.raises(ImproperlyConfigured, match="signed_cookies"):
+        HTTPView.as_view()(request(rf, session))
     assert "SENTINEL" not in json.dumps(dict(session.items()))
 
 

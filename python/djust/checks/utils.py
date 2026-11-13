@@ -3,6 +3,7 @@
 Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 """
 
+from djust._framework_code import is_djust_module
 import ast
 import os
 import re
@@ -319,7 +320,7 @@ def _is_framework_internal_class(cls: type) -> bool:
     djust's test and example modules are still checked (dogfooding).
     """
     module = getattr(cls, "__module__", "") or ""
-    if not (module.startswith("djust.") or module.startswith("djust_")):
+    if not is_djust_module(module):
         return False
     return "test" not in module and "example" not in module
 

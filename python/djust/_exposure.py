@@ -42,6 +42,18 @@ class ExposureError(ValueError):
     """Invalid declaration or payload; messages deliberately omit input values."""
 
 
+class StateLimitError(ExposureError):
+    """A projection is over its :class:`StateLimits` (#4095).
+
+    ``limit`` is ``"bytes"`` (encoded size) or ``"structure"`` (values or
+    nesting depth). The message names no value.
+    """
+
+    def __init__(self, message: str, limit: str) -> None:
+        super().__init__(message)
+        self.limit = limit
+
+
 @dataclass(frozen=True)
 class FieldExposure:
     """Independent permissions for one declared state field."""
@@ -492,11 +504,11 @@ def clone_json_state(value: Any, *, limits: StateLimits = _DEFAULT_LIMITS) -> An
         nonlocal remaining_bytes
         remaining_bytes -= size
         if remaining_bytes < 0:
-            raise ExposureError("State projection exceeds its encoded size limit")
+            raise StateLimitError("State projection exceeds its encoded size limit", "bytes")
 
     def text_size(text: str) -> None:
         if len(text) > remaining_bytes:
-            raise ExposureError("State projection exceeds its encoded size limit")
+            raise StateLimitError("State projection exceeds its encoded size limit", "bytes")
         try:
             encoded = json.dumps(text, ensure_ascii=False).encode("utf-8")
         except UnicodeEncodeError:
@@ -507,7 +519,7 @@ def clone_json_state(value: Any, *, limits: StateLimits = _DEFAULT_LIMITS) -> An
         nonlocal remaining_nodes
         remaining_nodes -= 1
         if remaining_nodes < 0 or depth > limits.max_depth:
-            raise ExposureError("State projection exceeds its structural limits")
+            raise StateLimitError("State projection exceeds its structural limits", "structure")
         kind = type(item)
         if item is None or kind is bool:
             consume(4 if item is None or item is True else 5)
@@ -528,7 +540,7 @@ def clone_json_state(value: Any, *, limits: StateLimits = _DEFAULT_LIMITS) -> An
         if kind is not list and kind is not dict:
             raise ExposureError("Unsupported state value; an explicit codec is required")
         if len(item) > remaining_nodes:
-            raise ExposureError("State projection exceeds its structural limits")
+            raise StateLimitError("State projection exceeds its structural limits", "structure")
         consume(2 + max(0, len(item) - 1))  # brackets and comma separators
         if kind is list:
             return [walk(child, depth + 1) for child in item]

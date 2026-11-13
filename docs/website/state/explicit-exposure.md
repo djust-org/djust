@@ -107,7 +107,24 @@ token = state("", persist="server", render=False)  # handlers only, never templa
 
 - **Sessions.** Server persistence needs a server-side session backend: `db`,
   `cached_db`, `cache` or `file`. Cookie sessions are browser-readable, so they
-  are rejected.
+  are rejected: a request of a view with `persist="server"` state raises
+  `UnsupportedSessionEngine` (an `ImproperlyConfigured`) naming the engine, and
+  system check `djust.C030` reports the combination at startup.
+- **Size.** Persisted state is bounded: 64 KB encoded, 10,000 values and
+  nesting depth 16 per view. A change that would take the declared
+  `persist="server"` fields over the limit is refused for that event: nothing
+  is saved, the user gets an error naming the field and the limit
+  (`code="state_too_large"`; HTTP status 413 on the fallback), and the view goes
+  back to the last saved state (and `handle_restore()` runs, as after a
+  reconnect), so later events work. What the refused handler queued for after
+  its turn (`start_async` work, push events, flash, navigation, deferred
+  callbacks) is discarded with it. Saved state is per session and route, not
+  per browser tab: going back to "the last saved state" means what any tab of
+  that session last saved on that route, so a refusal in one tab can bring in
+  another tab's change. If an earlier turn's save was deferred and has not
+  landed, the refusal is the reload error instead, so that turn's change is not
+  dropped silently. Bound what a field can hold in your handler (a count cap
+  does not bound bytes: one long text value is enough).
 - **`DJUST_SERVER_STATE_MAX_AGE`.** The lifetime of a server envelope in
   seconds, from 1 to 86400. The default is 3600. System check `djust.C020`
   validates it.

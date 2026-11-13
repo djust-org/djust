@@ -14,6 +14,8 @@ import html as html_lib
 import pytest
 from django.contrib.auth.models import Group, User
 
+from djust.decorators import event_handler
+
 from python.tests.test_queryset_all_followups_3788 import MAKE_CONTEXT, RENDERS  # noqa: F401
 from python.tests.test_queryset_all_traversal_3777 import _django_render, world  # noqa: F401
 
@@ -168,6 +170,7 @@ class TestTheMethodReadWidensNothing3801:
             def mount(self, request, **kwargs):
                 self.users = _users()
 
+            @event_handler
             def join(self, **kwargs):
                 User.objects.get(username="u2").groups.add(Group.objects.get(name="ops"))
 
@@ -212,6 +215,7 @@ class TestTheMethodReadWidensNothing3801:
             def mount(self, request, **kwargs):
                 self.users = _users()
 
+            @event_handler
             def clear(self, **kwargs):
                 self.users = []
 

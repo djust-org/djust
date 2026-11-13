@@ -154,11 +154,10 @@ def test_the_value_survives_three_fallback_events(path, handler, params, read, e
     assert _three_fallback_events(import_string(path), handler, params, read) == expected
 
 
-#: The demo project's own apps. ``djust.checks.utils._is_framework_internal_class``
-#: classes every ``djust_*`` module (other than test/example ones) as djust's own
-#: code, so ``manage.py djust_check`` skips the routed ``djust_demos``,
-#: ``djust_forms``, ``djust_rentals``, ``djust_docs`` and ``djust_homepage`` views
-#: entirely; the checks below are run with them classed as user code.
+#: The demo project's own apps. Until #4094 the checks classed every ``djust_*``
+#: module as djust's own code and skipped the routed ``djust_demos``,
+#: ``djust_forms``, ``djust_rentals``, ``djust_docs`` and ``djust_homepage`` views;
+#: they are project code now, and the fixture below asserts the checks see them.
 DEMO_APPS = (
     "demo_app",
     "demo_project",
@@ -178,22 +177,14 @@ def _is_demo(cls):
 
 
 @pytest.fixture
-def demo_views_as_user_code(monkeypatch):
-    """Import every demo view module and let the checks see the djust_* apps."""
+def demo_views_as_user_code():
+    """Import every demo view module; the checks see the djust_* apps as project code."""
     import importlib
     import pkgutil
 
-    import djust.checks.components as components
-    import djust.checks.parameters as parameters
-    import djust.checks.utils as utils
+    from djust.checks.utils import _is_framework_internal_class
+    from djust.live_view import LiveView
 
-    original = utils._is_framework_internal_class
-
-    def internal(cls):
-        return False if _is_demo(cls) else original(cls)
-
-    for module in (utils, components, parameters):
-        monkeypatch.setattr(module, "_is_framework_internal_class", internal)
     for app in DEMO_APPS:
         package = importlib.import_module(app)
         for info in pkgutil.walk_packages(package.__path__, app + "."):
@@ -203,7 +194,22 @@ def demo_views_as_user_code(monkeypatch):
                 importlib.import_module(info.name)
             except ImportError:
                 continue  # a module whose optional dependency is not installed
-    return internal
+
+    def subclasses(cls):
+        for sub in cls.__subclasses__():
+            yield sub
+            yield from subclasses(sub)
+
+    demo_views = [cls for cls in subclasses(LiveView) if _is_demo(cls)]
+    assert {cls.__module__.split(".")[0] for cls in demo_views} >= {
+        "djust_demos",
+        "djust_forms",
+        "djust_rentals",
+        "djust_docs",
+    }
+    # No monkeypatch: the checks' own rule classes the demo apps as project code (#4094).
+    assert not [cls for cls in demo_views if _is_framework_internal_class(cls)]
+    return _is_framework_internal_class
 
 
 def test_the_demo_checks_report_nothing_on_any_demo_app(demo_views_as_user_code):
