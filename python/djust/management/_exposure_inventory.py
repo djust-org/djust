@@ -25,19 +25,28 @@ import inspect
 import textwrap
 from typing import Any, Iterable, Optional
 
-#: Destination names and what each means under the legacy policy.
+#: Destination names and what each means under the legacy policy on 2.0.
+#:
+#: 2.0 removed the shared render cache (the Rust view kept in the state
+#: backend), the page's ``liveview_<path>`` session copy and its
+#: ``__private`` copy (#4087). A legacy view's state is written to the session
+#: only when it renders as a ``lazy=True`` child and an event reaches it over
+#: the page-POST fallback (``_lazy_containers.py``); whether a view is used that
+#: way is not visible from its class, so those two destinations are always
+#: reported as conditional.
 DESTINATIONS: dict[str, str] = {
     "template_context": "legacy get_context_data(): rendered into HTML and the Rust render state",
-    "render_cache": "the Rust view (with its render state) kept in the shared state backend",
-    "session_state": "session key liveview_<path>: the context copy saved after HTTP GET/POST",
     "client_state": "get_state(): client/debug state and API assign diffs",
     "snapshot": "_capture_snapshot_state(): time-travel history (on 1.3.x also the "
     "signed browser snapshot of an enable_state_snapshot view)",
-    "private_session": "session key liveview_<path>__private: _get_private_state()",
+    "session_state": "only as a lazy=True child on the page-POST fallback: session key "
+    "liveview_<path>__lazy__<id>, the context copy",
+    "private_session": "only as a lazy=True child on the page-POST fallback: the same "
+    "session entry's private part, _get_private_state()",
 }
 
-_PUBLIC_INSTANCE = ("template_context", "render_cache", "session_state", "client_state", "snapshot")
-_RENDER_ONLY = ("template_context", "render_cache", "session_state")
+_PUBLIC_INSTANCE = ("template_context", "client_state", "snapshot")
+_RENDER_ONLY = ("template_context",)
 # Class-level values legacy context keeps only when JSON-serializable (#694).
 _JSON_TYPES = (str, int, float, bool, type(None), list, dict, tuple)
 _LITERAL_TYPES = {
@@ -282,12 +291,12 @@ def inventory_view(view_class: type) -> dict[str, Any]:
     for name, types in scan.mount_stored.items():
         stored.setdefault(name, set()).update(types)
 
-    # Declared state() fields: legacy reads them into context. A PUBLIC field's
-    # backing slot (_state_<name>) reaches the session through the public
-    # state, so the private session keeps it only when its value holds a
-    # Django model (#2959, #1994). A ``_``-named field, or one in
-    # ``static_assigns``, never reaches the public context: its slot is a
-    # private attribute once touched in mount().
+    # Declared state() fields: legacy reads them into context. As a lazy=True
+    # child on the page-POST fallback a PUBLIC field reaches the session's
+    # context copy, and its backing slot (_state_<name>) the private part only
+    # when its value holds a Django model (#2959, #1994). A ``_``-named field,
+    # or one in ``static_assigns``, never reaches the public context: its slot
+    # is a private attribute there.
     static_assigns = attrs.get("static_assigns") or ()
     try:
         static_skip = set(static_assigns)
@@ -295,15 +304,15 @@ def inventory_view(view_class: type) -> dict[str, Any]:
         static_skip = set()
     for name, obj in attrs.items():
         if issubclass(type(obj), StateProperty):
-            touched = name in scan.mount_stored or name in scan.mount_loaded
             slot_private = name.startswith("_") or name in static_skip
             add(
                 name,
                 kind="state",
                 type=scan.annotations.get(name) or _state_type(obj),
-                destinations=list(_RENDER_ONLY)
-                + (["private_session"] if slot_private and touched else []),
-                conditional=[] if slot_private and touched else ["private_session"],
+                destinations=list(_RENDER_ONLY),
+                conditional=(
+                    ["private_session"] if slot_private else ["session_state", "private_session"]
+                ),
                 storage_key=f"_state_{name}",
                 declared={"persist": obj.exposure.persist, "client": obj.exposure.client},
                 suggestion=_suggest(name, "state", None, obj.exposure != type(obj.exposure)()),
@@ -314,13 +323,12 @@ def inventory_view(view_class: type) -> dict[str, Any]:
             continue
         type_name = scan.annotations.get(name) or _join_types(types)
         if name.startswith("_"):
-            in_mount = name in scan.mount_stored
             add(
                 name,
                 kind="private",
                 type=type_name,
-                destinations=["private_session"] if in_mount else [],
-                conditional=[] if in_mount else ["private_session"],
+                destinations=[],
+                conditional=["private_session"],
                 suggestion=_suggest(name, "private", type_name, False),
             )
         else:
@@ -329,7 +337,7 @@ def inventory_view(view_class: type) -> dict[str, Any]:
                 kind="instance",
                 type=type_name,
                 destinations=list(_PUBLIC_INSTANCE),
-                conditional=[],
+                conditional=["session_state"],
                 suggestion=_suggest(name, "instance", type_name, False),
             )
 
@@ -348,7 +356,7 @@ def inventory_view(view_class: type) -> dict[str, Any]:
                 kind="property",
                 type=None,
                 destinations=list(_RENDER_ONLY),
-                conditional=[],
+                conditional=["session_state"],
                 suggestion=_suggest(name, "property", None, False),
             )
             continue
@@ -360,7 +368,7 @@ def inventory_view(view_class: type) -> dict[str, Any]:
             kind="class_value",
             type=type(obj).__name__,
             destinations=list(_RENDER_ONLY) if serializable else [],
-            conditional=[] if serializable else ["template_context"],
+            conditional=["session_state"] if serializable else ["template_context"],
             suggestion=_suggest(name, "class_value", None, False),
         )
 

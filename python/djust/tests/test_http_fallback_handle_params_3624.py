@@ -21,14 +21,13 @@ import sys
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.db import SessionStore
-from django.test import RequestFactory, override_settings
+from django.test import RequestFactory
 
 from djust import LiveView
 from djust.decorators import event_handler, state
 
 pytestmark = pytest.mark.django_db
 
-STATELESS = override_settings(LIVEVIEW_CONFIG={})
 PATH = "/scoped/"
 
 ROWS = {"all": ["a", "b", "c"], "mine": ["a"]}
@@ -103,14 +102,13 @@ def _answer_text(response) -> str:
 class TestHandleParamsOnTheFallbackPost:
     def test_the_event_meets_the_page_the_url_names(self):
         """The reproducer: the handler sees ``?scope=mine``, not ``mount()``'s default."""
-        with STATELESS:
-            url = PATH + "?scope=mine"
-            initial = _get_request(url)
-            ScopedView().get(initial)
-            ScopedView.handle_params_calls = []
+        url = PATH + "?scope=mine"
+        initial = _get_request(url)
+        ScopedView().get(initial)
+        ScopedView.handle_params_calls = []
 
-            view = ScopedView()
-            response = _post(initial, view, "archive", url=url)
+        view = ScopedView()
+        response = _post(initial, view, "archive", url=url)
 
         assert response.status_code == 200, response.content
         assert view.note == "mine:a"
@@ -118,13 +116,12 @@ class TestHandleParamsOnTheFallbackPost:
 
     def test_the_answer_keeps_the_rows_the_user_was_acting_on(self):
         """The render the answer diffs is the page's, not the defaults'."""
-        with STATELESS:
-            url = PATH + "?scope=mine"
-            initial = _get_request(url)
-            get_html = _answer_text(ScopedView().get(initial))
-            assert "<p>a</p>" in get_html and "a,b,c" not in get_html
+        url = PATH + "?scope=mine"
+        initial = _get_request(url)
+        get_html = _answer_text(ScopedView().get(initial))
+        assert "<p>a</p>" in get_html and "a,b,c" not in get_html
 
-            response = _post(initial, ScopedView(), "archive", url=url)
+        response = _post(initial, ScopedView(), "archive", url=url)
 
         body = _answer_text(response)
         # Whatever shape the answer takes (patches or html), it never carries
@@ -134,20 +131,18 @@ class TestHandleParamsOnTheFallbackPost:
 
     def test_params_have_the_shape_the_get_passes(self):
         """A repeated key stays a list, a single value is a scalar (as on GET)."""
-        with STATELESS:
-            url = PATH + "?tag=x&tag=y&scope=mine"
-            initial = _get_request(url)
-            _post(initial, ScopedView(), "archive", url=url)
+        url = PATH + "?tag=x&tag=y&scope=mine"
+        initial = _get_request(url)
+        _post(initial, ScopedView(), "archive", url=url)
 
         [(params, uri)] = ScopedView.handle_params_calls
         assert params == {"tag": ["x", "y"], "scope": "mine"}
         assert uri == url
 
     def test_no_query_string_still_calls_handle_params_with_empty_params(self):
-        with STATELESS:
-            initial = _get_request()
-            view = ScopedView()
-            _post(initial, view, "archive")
+        initial = _get_request()
+        view = ScopedView()
+        _post(initial, view, "archive")
 
         assert ScopedView.handle_params_calls == [({}, PATH)]
         assert view.note == "all:a,b,c"
@@ -163,11 +158,10 @@ setattr(sys.modules[__name__], "ExplicitScopedView", ExplicitScopedView)
 class TestExplicitExposure:
     def test_an_explicit_exposure_view_gets_handle_params_after_mount(self):
         """Explicit exposure re-mounts on every POST: the URL is read again too."""
-        with STATELESS:
-            url = PATH + "?scope=mine"
-            initial = _get_request(url)
-            view = ExplicitScopedView()
-            response = _post(initial, view, "archive", url=url)
+        url = PATH + "?scope=mine"
+        initial = _get_request(url)
+        view = ExplicitScopedView()
+        response = _post(initial, view, "archive", url=url)
 
         assert response.status_code == 200, response.content
         assert view.scope == "mine"

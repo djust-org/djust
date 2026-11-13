@@ -30,7 +30,7 @@ ROWS = 60
 
 class VirtualKeyedDemoView(LiveView):
     exposure_policy = "explicit"
-    items = state()
+    items = state(persist="server")
     log = state("mounted")
     template_name = "tests/virtual_keyed_demo.html"
 

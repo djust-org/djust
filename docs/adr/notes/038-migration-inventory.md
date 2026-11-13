@@ -35,23 +35,28 @@ Framework classes are skipped. `--view` names classes directly.
 
 ## Destinations (legacy policy)
 
+2.0 removed the shared render cache (the Rust view kept in the state backend)
+and the page's `liveview_<path>` and `liveview_<path>__private` session copies
+(#4087). A legacy view's state reaches the session only when it renders as a
+`lazy=True` child and an event reaches it over the page-POST fallback
+(`_lazy_containers.py`). Whether a view is used that way is not visible from
+its class, so the two session destinations are always conditional.
+
 | Destination | Where it goes under legacy |
 | --- | --- |
 | `template_context` | `get_context_data()`: rendered HTML and the Rust render state |
-| `render_cache` | The Rust view, with its render state, stored in the shared state backend |
-| `session_state` | Session key `liveview_<path>`: the context copy saved after an HTTP GET or POST |
 | `client_state` | `get_state()`: client and debug state, and API assign diffs |
-| `snapshot` | `_capture_snapshot_state()`: the signed browser snapshot (`enable_state_snapshot`) and time-travel history |
-| `private_session` | Session key `liveview_<path>__private`: `_get_private_state()` |
+| `snapshot` | `_capture_snapshot_state()`: time-travel history (on 1.3.x also the signed browser snapshot of an `enable_state_snapshot` view) |
+| `session_state` | Only as a `lazy=True` child on the page-POST fallback: session key `liveview_<path>__lazy__<id>`, the context copy |
+| `private_session` | Only as a `lazy=True` child on the page-POST fallback: the same entry's private part, `_get_private_state()` |
 
 | Kind of name | Destinations |
 | --- | --- |
-| Public `self.x` assigned in any method (`instance`) | all five public destinations |
-| Public class value, JSON-serializable type (`class_value`) | `template_context`, `render_cache`, `session_state`. Other types are conditional, because legacy drops values that are not JSON-serializable (#694). |
-| `@property` and other non-callable descriptors (`property`) | `template_context`, `render_cache`, `session_state`. Evaluated at render, never by this command. |
-| `state()` field (`state`) | `template_context`, `render_cache`, `session_state`. A public field's `_state_<name>` slot is saved in `private_session` only when its value holds a Django model (#2959, #1994), so that destination is conditional. A `_`-named field, or one in `static_assigns`, adds `private_session` under `storage_key` `_state_<name>` when `mount()` reads or assigns it; otherwise that is conditional. |
-| `_x` assigned in `mount()` (`private`) | `private_session` |
-| `_x` assigned only after `mount()` | `private_session` is conditional: legacy persists it only if it is added to `_user_private_keys` |
+| Public `self.x` assigned in any method (`instance`) | `template_context`, `client_state`, `snapshot`; `session_state` is conditional |
+| Public class value, JSON-serializable type (`class_value`) | `template_context`; `session_state` is conditional. Other types are conditional on `template_context`, because legacy drops values that are not JSON-serializable (#694). |
+| `@property` and other non-callable descriptors (`property`) | `template_context`; `session_state` is conditional. Evaluated at render, never by this command. |
+| `state()` field (`state`) | `template_context`. `session_state` and `private_session` are conditional: a public field's `_state_<name>` slot is saved in the private part only when its value holds a Django model (#2959, #1994). A `_`-named field, or one in `static_assigns`, has only `private_session`, under `storage_key` `_state_<name>`. |
+| `_x` (`private`) | `private_session` is conditional |
 
 The command leaves out framework-defined names: anything on `LiveView`'s MRO,
 `_FRAMEWORK_INTERNAL_ATTRS`, `exposure_policy` and `request`. Legacy does
@@ -64,7 +69,7 @@ application state, so the command does not list them.
 the inventory against the real APIs:
 - every `template_context` name appears in `get_context_data()`;
 - the `client_state` names equal `get_state()`;
-- the `private_session` storage keys appear in `_get_private_state()`.
+- the conditional `private_session` storage keys include what `_get_private_state()` returns.
 
 ## Suggestions
 

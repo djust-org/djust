@@ -173,20 +173,23 @@ it prints:
 ADR-038 exposure inventory (legacy destinations; values redacted)
 
 shop.views.CartView  [policy: legacy; reconnect: fresh mount]
-  coupon  str  instance  -> template_context, render_cache, session_state, client_state, snapshot
+  coupon  str  instance  -> template_context, client_state, snapshot (conditional: session_state)
       suggest: coupon: str = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
-  items  list  instance  -> template_context, render_cache, session_state, client_state, snapshot
+  items  list  instance  -> template_context, client_state, snapshot (conditional: session_state)
       suggest: items: list = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
-  page  int  instance  -> template_context, render_cache, session_state, client_state, snapshot
+  page  int  instance  -> template_context, client_state, snapshot (conditional: session_state)
       suggest: page: int = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
-  _audit_note  str  private  -> private_session
+  _audit_note  str  private  -> - (conditional: private_session)
       suggest: explicit mode never persists underscore attributes, and this view does not restore them on a reconnect today; leave it instance-only
 ```
 
 Read it this way:
 
 - **The arrow list** is where the name goes today. Those are the places it
-  stops going once the view is explicit.
+  stops going once the view is explicit. `session_state` and
+  `private_session` are always conditional on 2.0: a legacy view's state
+  reaches the session only when it renders as a `lazy=True` child and an event
+  reaches it over the HTTP fallback.
 - **`reconnect: fresh mount`** means the view runs `mount()` again when the
   socket reconnects, so nothing needs a persistence grant to behave as it does
   now. On 2.0 every view reads `fresh mount`, because nothing restores a
@@ -892,4 +895,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: ea54a3f329a9 -->
+<!-- generated-doc prose-sha256: d9acd17b7baf -->

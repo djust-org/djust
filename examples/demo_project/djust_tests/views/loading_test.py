@@ -29,8 +29,8 @@ class LoadingTestView(LiveView):
     tests_passed = state(0)
     tests_failed = state(0)
     all_tests_passed = state(False)
-    slow_call_count = state(0)
-    fast_call_count = state(0)
+    slow_call_count = state(0, persist="server")
+    fast_call_count = state(0, persist="server")
     result_message = state("")
     template_name = 'tests/loading_test.html'
 

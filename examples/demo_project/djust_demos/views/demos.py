@@ -12,39 +12,6 @@ from .counter_demo import CounterView  # Counter demo in separate file
 from djust_demos.demo_classes import CounterDemo, DropdownDemo, DebounceDemo, CacheDemo
 
 
-class DemosIndexView(BaseViewWithNavbar):
-    """
-    Unified demos page with multiple embedded interactive examples.
-
-    This page contains inline working demos similar to NiceGUI's documentation style.
-    Each demo section is interactive and updates in real-time.
-
-    Each demo is a self-contained class that manages its own state and code examples.
-    The view automatically routes events to the appropriate demo instance.
-    """
-    template_name = 'demos/index.html'
-
-
-class DemosIndexDesign1View(BaseViewWithNavbar):
-    """Design Proposal 1: Modern Card-Based Layout"""
-    template_name = 'demos/index_design1.html'
-
-
-class DemosIndexDesign2View(BaseViewWithNavbar):
-    """Design Proposal 2: Showcase/Portfolio Style"""
-    template_name = 'demos/index_design2.html'
-
-
-class DemosIndexDesign3View(BaseViewWithNavbar):
-    """Design Proposal 3: Interactive Playground"""
-    template_name = 'demos/index_design3.html'
-
-
-class DemosIndexHybridView(BaseViewWithNavbar):
-    """Hybrid Design: Showcase + Playground"""
-    template_name = 'demos/index_design_hybrid.html'
-
-
 class DemosIndexShadcnView(BaseViewWithNavbar):
     """shadcn/ui Design: Modern component system"""
     template_name = 'demos/index_shadcn.html'
@@ -119,6 +86,42 @@ class DemosIndexShadcnView(BaseViewWithNavbar):
         return context
 
 
+# The index pages below embed the counter, dropdown, debounce and cache demos,
+# whose handlers live on DemosIndexShadcnView: without them those pages' buttons
+# named handlers the view did not have (#4086).
+class DemosIndexView(DemosIndexShadcnView):
+    """
+    Unified demos page with multiple embedded interactive examples.
+
+    This page contains inline working demos similar to NiceGUI's documentation style.
+    Each demo section is interactive and updates in real-time.
+
+    Each demo is a self-contained class that manages its own state and code examples.
+    The view automatically routes events to the appropriate demo instance.
+    """
+    template_name = 'demos/index.html'
+
+
+class DemosIndexDesign1View(BaseViewWithNavbar):
+    """Design Proposal 1: Modern Card-Based Layout"""
+    template_name = 'demos/index_design1.html'
+
+
+class DemosIndexDesign2View(DemosIndexShadcnView):
+    """Design Proposal 2: Showcase/Portfolio Style"""
+    template_name = 'demos/index_design2.html'
+
+
+class DemosIndexDesign3View(DemosIndexShadcnView):
+    """Design Proposal 3: Interactive Playground"""
+    template_name = 'demos/index_design3.html'
+
+
+class DemosIndexHybridView(DemosIndexShadcnView):
+    """Hybrid Design: Showcase + Playground"""
+    template_name = 'demos/index_design_hybrid.html'
+
+
 class TodoView(BaseViewWithNavbar):
     """
     Todo list demo - showcases list manipulation and forms
@@ -130,7 +133,7 @@ class TodoView(BaseViewWithNavbar):
         self.next_id = 1
 
     @event_handler
-    def add_todo(self, text=""):
+    def add_todo(self, text="", **kwargs):
         if text.strip():
             self.todos.append({
                 'id': self.next_id,
@@ -168,11 +171,12 @@ class ChatView(BaseViewWithNavbar):
         self.next_id = 1
 
     @event_handler
-    def send_message(self, text=""):
-        if text.strip():
+    def send_message(self, message="", **kwargs):
+        # The form's input is named "message" (it used to arrive as nothing).
+        if message.strip():
             self.messages.append({
                 'id': self.next_id,
-                'text': text,
+                'text': message,
                 'user': 'You',
                 'time': 'Just now',
             })
@@ -197,7 +201,7 @@ class ReactDemoView(BaseViewWithNavbar):
         self.server_count += 1
 
     @event_handler
-    def add_todo_item(self, text=""):
+    def add_todo_item(self, text="", **kwargs):
         """Add todo item from server-side"""
         if text.strip():
             self.todo_items.append({

@@ -233,7 +233,7 @@ class StatusChangeFormView(FormMixin, LiveView):
             'supervisor_changes': True,
             'project_info': True,
             'meals_per_diem': True,
-        })
+        }, persist="server")
     form_class = StatusChangeForm
     template_name = 'forms/status_change_djust.html'
 
@@ -268,13 +268,16 @@ class StatusChangeFormView(FormMixin, LiveView):
     # ========================================================================
 
     @event_handler
-    def on_employee_change(self, employee_id):
+    def on_employee_change(self, value="", employee_id=None, **kwargs):
         """
         Handle employee selection change.
         Auto-populates fields from employee profile.
 
         Replaces: handle_employee_change() callback
+
+        A dj-change event sends the new value as ``value``.
         """
+        employee_id = employee_id or value or None
         self.employee_id = employee_id
 
         if employee_id:
@@ -295,25 +298,25 @@ class StatusChangeFormView(FormMixin, LiveView):
                 pass
 
     @event_handler
-    def on_business_line_change(self, business_line_id):
+    def on_business_line_change(self, value="", business_line_id=None, **kwargs):
         """
         Handle business line change.
         Filters executive_approver dropdown.
 
         Replaces: field_dependencies in React config
         """
-        self.business_line_id = business_line_id
+        self.business_line_id = business_line_id or value or None
         # Form will re-render with filtered executive_approver options
 
     @event_handler
-    def on_project_duration_change(self, duration):
+    def on_project_duration_change(self, value="", duration=None, **kwargs):
         """
         Handle project duration change.
         Shows/hides expected_end_date field.
 
         Replaces: when() conditional logic
         """
-        self.show_expected_end_date = (duration == 'over_12')
+        self.show_expected_end_date = (duration or value) == 'over_12'
 
     @event_handler
     def on_needs_company_toggle(self, checked):
@@ -336,7 +339,7 @@ class StatusChangeFormView(FormMixin, LiveView):
         self.show_meals_fields = checked
 
     @event_handler
-    def calculate_monthly_per_diem(self):
+    def calculate_monthly_per_diem(self, **kwargs):
         """
         Calculate total monthly per diem.
 

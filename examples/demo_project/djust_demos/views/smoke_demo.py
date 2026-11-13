@@ -34,7 +34,7 @@ class BrowserSmokeView(LiveView):
     """Minimal mounting LiveView for the browser-smoke canary."""
 
     exposure_policy = "explicit"
-    clicks = state(0)
+    clicks = state(0, persist="server")
     template_name = "demos/browser_smoke.html"
 
     def mount(self, request, **kwargs):

@@ -389,7 +389,18 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
     The helper calls pytest-split's installed collection hook for every group;
     it does not copy the algorithm. Its small-corpus tests compare this probe
     against normal --splits/--group CLI invocations.
+
+    It collects the whole suite, which the local load guard refuses outside CI, so a
+    local run without ``DJUST_FULL_LOCAL=1`` skips here instead of failing with the
+    guard's refusal (#4089). ``make test-early`` and CI set the variable.
     """
+    from tests import local_load_guard
+
+    if local_load_guard.active():
+        pytest.skip(
+            "collects the whole suite, which the local load guard refuses: set CI=1 or "
+            "DJUST_FULL_LOCAL=1 to run it (make test-early sets DJUST_FULL_LOCAL=1)"
+        )
     output = tmp_path / "shards.json"
     assert DURATIONS_TEXT is not None, ".test_durations is missing"
     durations = tmp_path / "test_durations.json"
@@ -487,3 +498,31 @@ def test_generated_template_lists_run_only_on_reference_django() -> None:
     condition = str(step.get("if", ""))
     assert "matrix.group == 1" in condition
     assert "matrix.django-version == '5.2'" in condition
+
+
+def test_shard_balance_pin_skips_locally_naming_the_variable(tmp_path: Path, monkeypatch) -> None:
+    """Outside CI the whole-suite collection is refused by the local load guard (#4089).
+
+    The pin must then skip and say which variable runs it, not fail with the guard's
+    refusal, which reads like a real failure. Gate-off: without the skip the call
+    below runs the probe, which the guard refuses, and the assertion fails.
+    """
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("DJUST_FULL_LOCAL", raising=False)
+    with pytest.raises(pytest.skip.Exception) as skipped:
+        test_shards_cover_current_collection_with_balanced_durations(tmp_path)
+    assert "DJUST_FULL_LOCAL=1" in str(skipped.value)
+    assert "CI=1" in str(skipped.value)
+
+
+@pytest.mark.parametrize("target", ["merge-gates", "test-harness", "test-early"])
+def test_the_make_targets_that_run_the_shard_pin_opt_in_to_the_full_collection(target) -> None:
+    """The pin skips without ``DJUST_FULL_LOCAL=1`` (#4089), so each target that
+    runs it on purpose must set the variable, or it would skip there silently."""
+    recipe = re.search(
+        r"^%s:.*?\n((?:\t.*\n?)+)" % re.escape(target),
+        (ROOT / "Makefile").read_text(),
+        re.MULTILINE,
+    )
+    assert recipe, "Makefile target %s not found" % target
+    assert "DJUST_FULL_LOCAL=1" in recipe.group(1), recipe.group(1)

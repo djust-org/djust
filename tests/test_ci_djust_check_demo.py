@@ -110,3 +110,14 @@ def test_clean_payload_passes():
 def test_empty_payload_passes():
     """No checks at all -> exit 0."""
     assert evaluate(_payload([])) == 0
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("check_id", ["djust.T019", "djust.T020", "djust.V029"])
+def test_zero_finding_ids_block(check_id):
+    """The demo is kept at zero T019 (handler without @event_handler), T020
+    (parameters a handler does not accept) and V029 (a handler change the HTTP
+    fallback loses) findings (#4086). Tautology guard: the clean payload passes."""
+    assert evaluate(_payload([_check(check_id, "warning", "synthetic")])) == 1

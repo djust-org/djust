@@ -158,8 +158,10 @@ def test_destinations_types_and_suggestions(no_construction):
     report = json.loads(run("--view", VIEW, "--json"))
     names = names_of(report, VIEW)
 
-    public = {"template_context", "render_cache", "session_state", "client_state", "snapshot"}
+    public = {"template_context", "client_state", "snapshot"}
     assert set(names["count"]["destinations"]) == public
+    # 2.0 writes a legacy view to the session only as a lazy=True child (#4087).
+    assert names["count"]["conditional"] == ["session_state"]
     assert names["count"]["type"] == "int"
     assert names["count"]["suggestion"].startswith("count: int = state(...)")
     assert set(names["secret_key"]["destinations"]) == public
@@ -168,28 +170,42 @@ def test_destinations_types_and_suggestions(no_construction):
     assert names["first"]["type"] == "int" and names["second"]["type"] is None
     assert set(names["dynamic"]["destinations"]) == public
 
-    # Assigned in mount(): persisted as private session state.
-    assert names["_token"]["destinations"] == ["private_session"]
-    # Assigned only after mount(): persisted only if registered by the app.
+    # Underscore attributes: the private session part of a lazy=True child only.
+    assert names["_token"]["destinations"] == []
+    assert names["_token"]["conditional"] == ["private_session"]
     assert names["_later"]["destinations"] == []
     assert names["_later"]["conditional"] == ["private_session"]
 
-    # Class values reach render context and the context-derived session copy only.
-    render_only = {"template_context", "render_cache", "session_state"}
-    assert set(names["api_token"]["destinations"]) == render_only
+    # Class values reach render context (and a lazy child's session copy) only.
+    assert names["api_token"]["destinations"] == ["template_context"]
+    assert names["api_token"]["conditional"] == ["session_state"]
     assert names["api_token"]["type"] == "str"
-    assert set(names["label"]["destinations"]) == render_only
+    assert names["label"]["destinations"] == ["template_context"]
     assert names["label"]["kind"] == "property"
     assert names["helper"]["destinations"] == []  # not JSON-serializable
 
-    # Public state() fields: context; their backing slot is saved privately
-    # only when it holds a Django model (#2959, #1994), so conditionally.
-    assert set(names["total"]["destinations"]) == render_only
-    assert set(names["rows"]["destinations"]) == render_only
-    assert names["rows"]["conditional"] == ["private_session"]
+    # Public state() fields: context; a lazy child's session copy, and its
+    # backing slot only when it holds a Django model (#2959, #1994).
+    assert names["total"]["destinations"] == ["template_context"]
+    assert names["rows"]["destinations"] == ["template_context"]
+    assert names["rows"]["conditional"] == ["session_state", "private_session"]
     assert names["rows"]["type"] == "list"
     assert names["lazy"]["type"] is None
     assert "get_context_data" in names["label"]["suggestion"]
+
+
+def test_no_destination_describes_the_removed_1x_stores():
+    """The render cache and the page's session copies are gone in 2.0 (#4087)."""
+    from djust.management._exposure_inventory import DESTINATIONS
+
+    assert "render_cache" not in DESTINATIONS
+    report = json.loads(run("--view", VIEW, "--json"))
+    for item in names_of(report, VIEW).values():
+        assert "render_cache" not in item["destinations"] + item["conditional"], item
+        assert "session_state" not in item["destinations"], item
+        assert "private_session" not in item["destinations"], item
+    assert "lazy=True" in DESTINATIONS["session_state"]
+    assert "lazy=True" in DESTINATIONS["private_session"]
 
 
 def test_explicit_views_are_reported_with_their_policy(no_construction):
@@ -225,6 +241,9 @@ def test_inventory_matches_the_legacy_runtime():
     def listed(destination):
         return {n for n, item in names.items() if destination in item["destinations"]}
 
+    def maybe(destination):
+        return {n for n, item in names.items() if destination in item["conditional"]}
+
     assert listed("template_context") <= set(context)
     assert {"count", "items", "heading", "level"} <= listed("template_context")
     assert listed("client_state") == client == {"count", "items"}
@@ -234,8 +253,9 @@ def test_inventory_matches_the_legacy_runtime():
     expected_private = {"_cursor"}
     assert expected_private <= private
     assert "_state_level" not in private
-    assert {names[n].get("storage_key", n) for n in listed("private_session")} == expected_private
-    assert names["level"]["conditional"] == ["private_session"]
+    assert listed("private_session") == set()
+    assert expected_private <= {names[n].get("storage_key", n) for n in maybe("private_session")}
+    assert "level" in maybe("private_session")
 
 
 def _shape_report(view_name):

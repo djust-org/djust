@@ -25,7 +25,7 @@ class DraftModeTestView(DraftModeMixin, LiveView):
     title = state("")
     content = state("")
     author = state("")
-    save_count = state(0)
+    save_count = state(0, persist="server")
     last_saved = state(None)
     test_results = state(default_factory=list)
     tests_run = state(0)

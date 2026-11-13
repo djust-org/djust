@@ -3,6 +3,7 @@ Cache Demo - demonstrates @cache decorator with debounced search
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 from djust.decorators import cache, debounce
 from djust import state
 
@@ -41,8 +42,8 @@ class CacheDemoView(LiveView):
     exposure_policy = "explicit"
     query = state("")
     results = state(default_factory=list)
-    server_calls = state(0)
-    total_searches = state(0)
+    server_calls = state(0, persist="server")
+    total_searches = state(0, persist="server")
     template = """
     <div dj-root class="container mt-5">
         <div class="row">
@@ -101,7 +102,7 @@ class CacheDemoView(LiveView):
                                 <div class="card bg-light">
                                     <div class="card-body">
                                         <h6 class="card-title text-muted small mb-1">Last Query</h6>
-                                        <p class="h6 mb-0">{{ query or '(none)' }}</p>
+                                        <p class="h6 mb-0">{{ query|default:'(none)' }}</p>
                                     </div>
                                 </div>
                             </div>
@@ -200,6 +201,7 @@ def search(self, query: str = "", **kwargs):
         context['cache_efficiency'] = cache_efficiency
         return context
 
+    @event_handler
     @debounce(wait=0.5)
     @cache(ttl=300, key_params=["query"])
     def search(self, query: str = "", **kwargs):

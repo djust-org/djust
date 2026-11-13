@@ -6,9 +6,16 @@ djust's reactive capabilities in action.
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 import time
 import random
 from djust import state
+
+
+# A persisted list a client can grow is capped: persist="server" state is kept
+# in the session and is bounded (64 KB per view), and every event re-saves it,
+# so the oldest entries are dropped instead of letting it grow without limit.
+MAX_TODOS = 20
 
 
 class HomeCounterDemo(LiveView):
@@ -16,7 +23,7 @@ class HomeCounterDemo(LiveView):
     Simple counter demo for homepage - showcases instant reactivity
     """
     exposure_policy = "explicit"
-    count = state(0)
+    count = state(0, persist="server")
     template = """
     <div class="text-center">
         <div class="display-1 fw-bold mb-3" style="color: #667eea;">{{ count }}</div>
@@ -40,12 +47,15 @@ class HomeCounterDemo(LiveView):
     def mount(self, request, **kwargs):
         self.count = 0
 
+    @event_handler
     def increment(self):
         self.count += 1
 
+    @event_handler
     def decrement(self):
         self.count -= 1
 
+    @event_handler
     def reset(self):
         self.count = 0
 
@@ -55,6 +65,7 @@ class HomeSearchDemo(LiveView):
     Live search/filter demo - showcases real-time filtering
     """
     exposure_policy = "explicit"
+    search_query = state("")
     items = state(default_factory=lambda: [
             {"name": "djust", "description": "Reactive Django with Rust", "speed": "⚡ 100x"},
             {"name": "Phoenix LiveView", "description": "Elixir real-time framework", "speed": "🚀 Fast"},
@@ -103,7 +114,8 @@ class HomeSearchDemo(LiveView):
         ]
         self.filtered_items = self.items.copy()
 
-    def filter_items(self, value=""):
+    @event_handler
+    def filter_items(self, value="", **kwargs):
         self.search_query = value
         query_lower = value.lower()
         if query_lower:
@@ -200,6 +212,7 @@ class HomeLiveDataDemo(LiveView):
 
         self.last_update = datetime.datetime.now().strftime("%H:%M:%S")
 
+    @event_handler
     def refresh_data(self):
         """Refresh the metrics data"""
         self.generate_metrics()
@@ -213,8 +226,8 @@ class HomeTodoDemo(LiveView):
     todos = state(default_factory=lambda: [
             {'id': 1, 'text': 'Try djust for your next project', 'done': False},
             {'id': 2, 'text': 'Read the documentation', 'done': False},
-        ])
-    next_id = state(3)
+        ], persist="server")
+    next_id = state(3, persist="server")
     template = """
     <div>
         <form dj-submit="add_todo" class="mb-3">
@@ -282,7 +295,8 @@ class HomeTodoDemo(LiveView):
         ]
         self.next_id = 3
 
-    def add_todo(self, text=""):
+    @event_handler
+    def add_todo(self, text="", **kwargs):
         if text.strip():
             self.todos.append({
                 'id': self.next_id,
@@ -290,7 +304,9 @@ class HomeTodoDemo(LiveView):
                 'done': False,
             })
             self.next_id += 1
+            del self.todos[:-MAX_TODOS]  # keep the newest MAX_TODOS
 
+    @event_handler
     def toggle_todo(self, id=None, **kwargs):
         todo_id = int(id or kwargs.get('todo_id', 0))
         for todo in self.todos:
@@ -298,10 +314,12 @@ class HomeTodoDemo(LiveView):
                 todo['done'] = not todo['done']
                 break
 
+    @event_handler
     def delete_todo(self, id=None, **kwargs):
         todo_id = int(id or kwargs.get('todo_id', 0))
         self.todos = [t for t in self.todos if t['id'] != todo_id]
 
+    @event_handler
     def clear_completed(self):
         self.todos = [t for t in self.todos if not t['done']]
 
@@ -312,3 +330,10 @@ class HomeTodoDemo(LiveView):
     @property
     def done_count(self):
         return sum(1 for t in self.todos if t['done'])
+
+    def get_context_data(self, **kwargs):
+        # The two counts are properties, not declared state: supplied here.
+        context = super().get_context_data(**kwargs)
+        context["active_count"] = self.active_count
+        context["done_count"] = self.done_count
+        return context

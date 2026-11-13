@@ -22,6 +22,7 @@ from djust.components import (
     TableComponent,
     PaginationComponent,
 )
+from djust.decorators import event_handler
 
 
 class KitchenSinkView(BaseViewWithNavbar):
@@ -283,6 +284,7 @@ class KitchenSinkView(BaseViewWithNavbar):
         """Handle tag dismissal"""
         self.badge_dismissible.dismiss()
 
+    @event_handler
     def show_modal(self):
         """Show the example modal"""
         self.modal_open_count += 1
@@ -293,6 +295,7 @@ class KitchenSinkView(BaseViewWithNavbar):
         """Close the example modal"""
         self.modal_example.hide()
 
+    @event_handler
     def increment_progress(self):
         """Increment progress bar"""
         if self.current_progress < 100:
@@ -300,6 +303,7 @@ class KitchenSinkView(BaseViewWithNavbar):
             self.progress_simple.set_value(self.current_progress)
             self.progress_striped.set_value(min(self.current_progress + 20, 100))
 
+    @event_handler
     def reset_progress(self):
         """Reset progress bars"""
         self.current_progress = 0

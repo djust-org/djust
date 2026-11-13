@@ -25,8 +25,10 @@ class ComponentShowcaseView(LiveView):
     """Interactive showcase of all djust components."""
 
     exposure_policy = "explicit"
-    counter = state(0)
-    switch_enabled = state(True)
+    counter = state(0, persist="server")
+    switch_enabled = state(True, persist="server")
+    active_category = state("all")
+    search_query = state("")
     slider_value = state(50)
     selected_radio = state("medium")
     alert_success = state()
@@ -336,33 +338,26 @@ class ComponentShowcaseView(LiveView):
 
     @event_handler
     def toggle_switch(self):
-        """Toggle the switch state."""
-        import sys
-        print(f"\n[toggle_switch] BEFORE: switch_enabled={self.switch_enabled}", file=sys.stderr)
-        print(f"[toggle_switch] Switch HTML BEFORE toggle:", file=sys.stderr)
-        print(f"{self.switch_notifications.render()}", file=sys.stderr)
+        """Toggle the switch state.
 
+        The form components are rebuilt from the declared values rather than
+        updated in place: they are not persisted, so on the HTTP fallback the
+        ones mount() built do not know the restored values (#4086).
+        """
         self.switch_enabled = not self.switch_enabled
-        # Update component in-place (proper pattern)
-        self.switch_notifications.update(checked=self.switch_enabled)
-
-        print(f"\n[toggle_switch] AFTER: switch_enabled={self.switch_enabled}", file=sys.stderr)
-        print(f"[toggle_switch] Switch HTML AFTER toggle:", file=sys.stderr)
-        print(f"{self.switch_notifications.render()}", file=sys.stderr)
+        self._init_form_components()
 
     @event_handler
     def update_slider(self, value: str = "50", **kwargs):
         """Update slider value."""
         self.slider_value = float(value)
-        # Update component in-place
-        self.range_volume.update(value=self.slider_value)
+        self._init_form_components()
 
     @event_handler
     def update_radio(self, size: str = "medium", **kwargs):
         """Update radio selection."""
         self.selected_radio = size
-        # Update component in-place
-        self.radio_size.update(value=self.selected_radio)
+        self._init_form_components()
 
     @event_handler
     def search_components(self, query: str = "", **kwargs):

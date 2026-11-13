@@ -25,6 +25,10 @@ The gate fails (exit 1) on, and ONLY on:
     ``@click``/``@input``) and ``djust.T014`` (deprecated ``data-dj-id``).
     This is exactly the #1683 / #1697 bug class. (``djust.T015``, legacy root
     attributes, was removed in 2.0.)
+  * any ``djust.T019`` / ``djust.T020`` finding (a template event the default
+    strict mode refuses, or sends parameters its handler does not accept) and
+    any ``djust.V029`` finding (a handler changes state the HTTP fallback
+    loses, #4053). The demo was brought to zero for all three in #4086.
 
 It deliberately does NOT fail on the demo's other warnings/info (e.g. S005
 public-view-without-auth, T012 partial fragments, V004 informational) — those
@@ -49,6 +53,11 @@ import sys
 
 # Deprecated-attribute / dead-binding check IDs — the #1683 / #1697 bug class.
 DEPRECATED_ATTR_IDS = frozenset({"djust.T001", "djust.T014"})
+# Other warnings the demo is kept at zero for (#4086): T019, a template event
+# naming a method without @event_handler, which the default strict mode
+# refuses; T020, an event sending parameters its handler does not accept; V029,
+# a handler's change to state the HTTP fallback loses (#4053).
+ZERO_FINDING_IDS = frozenset({"djust.T019", "djust.T020", "djust.V029"})
 
 
 def _extract_json(stdout):
@@ -72,7 +81,7 @@ def evaluate(data):
     ``{"checks": [{"id", "severity", "message", ...}], "summary": {...}}``.
 
     Returns ``0`` when the demo is clean (no error-severity checks and no
-    deprecated-attribute findings T001/T014) and ``1`` otherwise. This
+    findings T001/T014/T019/T020/V029) and ``1`` otherwise. This
     is the single decision point shared by ``main()`` and the unit tests so
     both gate arms (error-severity and deprecated-attr ID-set) are exercised
     end-to-end without spawning a subprocess (#1713, #252 empirical canary).
@@ -81,7 +90,7 @@ def evaluate(data):
     summary = data.get("summary", {})
 
     errors = [c for c in checks if c.get("severity") == "error"]
-    deprecated = [c for c in checks if c.get("id") in DEPRECATED_ATTR_IDS]
+    deprecated = [c for c in checks if c.get("id") in DEPRECATED_ATTR_IDS | ZERO_FINDING_IDS]
 
     print(
         "djust_check (demo): %d total, %d error(s), %d warning(s), %d info"
@@ -98,15 +107,16 @@ def evaluate(data):
         print("")
         print(
             "FAIL: %d blocking finding(s) (errors + deprecated-attribute "
-            "classes T001/T014):" % len(blocking)
+            "classes T001/T014, T019/T020/V029):" % len(blocking)
         )
         for c in blocking:
             print("  - %s [%s] %s" % (c.get("id"), c.get("severity"), c.get("message")))
         print("")
-        print("This is the #1683 dead-@click bug class. Fix the templates above.")
+        print("T001/T014: the #1683 dead-@click class (fix the templates). T019/T020: add")
+        print("@event_handler / **kwargs to the handler. V029: declare the field persist=\"server\".")
         return 1
 
-    print("OK: no errors and no deprecated-attribute findings (T001/T014).")
+    print("OK: no errors and no T001/T014/T019/T020/V029 findings.")
     return 0
 
 

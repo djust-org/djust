@@ -6,6 +6,7 @@ No HTML in the template - everything is composed from reusable components.
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 from djust.components.layout import NavbarComponent, NavItem, TabsComponent, TabItem
 from djust.components.ui import (
     AlertComponent,
@@ -442,14 +443,16 @@ def mount(self, request):
         """
         self._build_modal()
 
-    def open_modal(self):
+    @event_handler
+    def open_modal(self, **kwargs):
         """Open the confirmation modal"""
         self.show_modal = True
         self.modal_title = "Component Modal"
         self.modal_message = "This modal was created using the ModalComponent. No HTML needed!"
         self._build_modal()
 
-    def close_modal(self):
+    @event_handler
+    def close_modal(self, **kwargs):
         """Close the modal"""
         self.show_modal = False
         self._build_modal()

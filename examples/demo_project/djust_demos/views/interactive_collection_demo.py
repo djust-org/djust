@@ -39,7 +39,7 @@ class InteractiveCollectionView(LiveView):
     result = state("none")
     calls = state(0)
     observed = state("none")
-    order = state()
+    order = state(persist="server")
     template_name = "demos/interactive_collection.html"
     rows = DropdownMenu.collection()
 
