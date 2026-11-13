@@ -103,7 +103,9 @@ A page POST has no earlier render to diff against, because the view is built aga
 That is only correct if the render before the handler is the page the browser is showing, node for node. The server checks both halves of that without storing anything. The page and every answer carry a token in two parts:
 
 - a **digest** of the render they deliver, keyed from `SECRET_KEY` and bound to the session, the signed-in user, the path and the view. The client sends the latest one back; it matches only if a fresh render of the saved state reproduces what the client was last sent.
-- the **shape** of that render: a checksum of its element tree (tags, `id` and key attributes, which children are text). The client computes the shape of its own DOM and sends that. Patches are addressed by position, so a DOM that a script, a hook or a still-playing `dj-remove` exit has changed would take them on the wrong node; while its DOM has another shape the client sends no token at all, and it checks the shape again before it applies an answer.
+- the **shape** of that render: a checksum of its element tree (tags, `id` and key attributes, which children are text). The client computes the shape of its own DOM and sends that. Patches are addressed by position, so a DOM that a script, a hook or a still-playing `dj-remove` exit has changed would take them on the wrong node.
+
+The client also remembers which elements made up the page each time it showed a server render, and in what order. While its DOM has another shape, or an element has been moved, swapped or replaced by a copy since then, it sends no token at all; and it checks both again at the moment it applies an answer.
 
 - **Both match:** the answer is the patches.
 - **Anything else:** the answer is the whole page, exactly as before this existed. That covers a first request with no token, a second tab that changed the state the tabs share, a template changed by a deploy between two requests, a page that renders differently each time, and a page whose DOM something else has rearranged.
@@ -123,7 +125,13 @@ If a patch answer cannot be applied after all (the DOM changed while the request
 
 **What is never patched** (the answer is the whole page, with no extra render): a view with `temporary_assigns` or streams, a page whose template embeds another view (`{% live_render %}`, `dj-lazy`), an event addressed to a component or an embedded child, and an `@cache` request. A page whose render contains a `dj-update` container or a virtual list is answered with the whole page too.
 
-**The cost** is the second render: `get_context_data()` and the context processors run twice for an event that is answered with patches (once on the copy, once on the view), and so do the queries they make. A view that cannot be copied (it holds a lock, an open file, a connection) is answered with the whole page. A view whose context is expensive, or acts on something outside the view, can keep the single render:
+**The cost** is the second render. An event answered with patches takes up to about twice the server time of the same event answered with the whole page: we measured between 1.2 and 2.2 times on tables of 1,000 rows (70 → 86 ms on one page, 63 → 140 ms on another). `get_context_data()` and the context processors run twice (once on the copy, once on the view), and so does everything they do: their queries, and any side effect such as an audit log entry, a counter or a write. Copying the view and computing the shape are a small part of it (well under a millisecond on a small page, a few milliseconds on a page of a thousand rows). A view that cannot be copied (it holds a lock, an open file, a connection) is answered with the whole page.
+
+**When to turn it off.** Keep the whole-page answer and the single render for a view when:
+
+- `get_context_data()` or a context processor has a side effect that must happen once per event;
+- the render is expensive enough that doubling it matters more than the smaller answer;
+- client scripts or widgets restructure the DOM inside the root. Nothing breaks (the client then sends no token and gets whole pages), but nothing is gained either; put such DOM under `dj-update="ignore"` or outside the root if you want patches.
 
 ```python
 from djust import LiveView
