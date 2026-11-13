@@ -3,6 +3,7 @@
 Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 """
 
+from djust._framework_code import is_djust_module
 import inspect
 import logging
 import os
@@ -1668,7 +1669,7 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         for cls in _walk_subclasses(LiveView):
             module = getattr(cls, "__module__", "") or ""
-            if module.startswith("djust.") or module.startswith("djust_"):
+            if is_djust_module(module):
                 if "test" not in module and "example" not in module:
                     continue
 

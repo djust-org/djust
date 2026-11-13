@@ -12,6 +12,7 @@ Anything more than class-walking / user-vs-framework filtering belongs elsewhere
 
 from __future__ import annotations
 
+from djust._framework_code import is_djust_module
 from typing import Iterable
 
 
@@ -40,7 +41,7 @@ def is_user_class(cls: type) -> bool:
     included when reachable.
     """
     mod = getattr(cls, "__module__", "") or ""
-    if mod.startswith("djust.") or mod.startswith("djust_"):
+    if is_djust_module(mod):
         if "test" not in mod and "example" not in mod:
             return False
     return True
