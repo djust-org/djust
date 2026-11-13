@@ -20,7 +20,7 @@ import sys
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.db import SessionStore
-from django.test import RequestFactory, override_settings
+from django.test import RequestFactory
 
 from djust import LiveView
 from djust.decorators import background, event_handler, permission_required, rate_limit
@@ -29,7 +29,6 @@ from djust.rate_limit import reset_handler_buckets
 
 pytestmark = pytest.mark.django_db
 
-STATELESS = override_settings(LIVEVIEW_CONFIG={})
 PATH = "/bg/"
 
 LOG: list = []
@@ -174,25 +173,21 @@ def _post(view_cls, event, initial=None, params=None, url=PATH):
 
 class TestHandlerWork:
     def test_start_async_work_runs_before_the_answer_is_rendered(self):
-        with STATELESS:
-            view, response, body = _post(BackgroundView, "kick_off")
+        view, response, body = _post(BackgroundView, "kick_off")
         assert response.status_code == 200, body
         assert view.status == "done"
         assert "done" in body and "working" not in body, body
 
     def test_the_result_handler_sees_the_outcome(self):
-        with STATELESS:
-            _post(BackgroundView, "kick_off")
+        _post(BackgroundView, "kick_off")
         assert LOG == [("result", "work", "ok", None)]
 
     def test_a_background_decorated_handler_runs(self):
-        with STATELESS:
-            view, _, body = _post(BackgroundView, "decorated")
+        view, _, body = _post(BackgroundView, "decorated")
         assert view.status == "decorated", body
 
     def test_an_async_def_callback_runs(self):
-        with STATELESS:
-            view, _, body = _post(BackgroundView, "kick_off_async_def")
+        view, _, body = _post(BackgroundView, "kick_off_async_def")
         assert view.status == "async-done", body
 
     def test_default_policy_runs_it_too(self):
@@ -201,7 +196,7 @@ class TestHandlerWork:
         assert view.status == "done", body
 
     def test_a_failure_goes_to_handle_async_result_not_to_a_500(self, caplog):
-        with STATELESS, caplog.at_level(logging.ERROR, logger="djust.mixins.request"):
+        with caplog.at_level(logging.ERROR, logger="djust.mixins.request"):
             view, response, body = _post(BackgroundView, "kick_off_failing")
         assert response.status_code == 200, body
         assert view.status == "failed"
@@ -209,19 +204,17 @@ class TestHandlerWork:
         assert any("start_async task boom" in r.getMessage() for r in caplog.records)
 
     def test_a_cancelled_task_does_not_run(self):
-        with STATELESS:
-            view, _, body = _post(BackgroundView, "kick_off_then_cancel")
+        view, _, body = _post(BackgroundView, "kick_off_then_cancel")
         assert view.status == "cancelled", body
         assert LOG == []
 
     def test_a_task_cancelled_by_an_earlier_one_is_skipped(self):
-        with STATELESS:
-            view, _, body = _post(BackgroundView, "kick_off_two")
+        view, _, body = _post(BackgroundView, "kick_off_two")
         assert LOG == [("first-ran",), ("result", "first", None, None)], LOG
         assert view.status == "idle", body
 
     def test_work_that_keeps_queueing_work_is_bounded_and_says_so(self, caplog):
-        with STATELESS, caplog.at_level(logging.WARNING, logger="djust.mixins.request"):
+        with caplog.at_level(logging.WARNING, logger="djust.mixins.request"):
             _, response, body = _post(BackgroundView, "chain")
         assert response.status_code == 200, body
         pages = [entry for entry in LOG if entry[0] == "page"]
@@ -231,7 +224,7 @@ class TestHandlerWork:
         assert any("kept queueing background work" in r.getMessage() for r in caplog.records)
 
     def test_no_work_no_noise(self, caplog):
-        with STATELESS, caplog.at_level(logging.WARNING, logger="djust.mixins.request"):
+        with caplog.at_level(logging.WARNING, logger="djust.mixins.request"):
             view, _, _ = _post(BackgroundView, "plain")
         assert view.status == "plain"
         assert LOG == []
@@ -240,15 +233,13 @@ class TestHandlerWork:
 
 class TestWorkMountQueued:
     def test_a_page_that_loads_after_its_first_render_is_loaded_for_the_event(self):
-        with STATELESS:
-            view, response, body = _post(LoadsAfterFirstRender, "select")
+        view, response, body = _post(LoadsAfterFirstRender, "select")
         assert response.status_code == 200, body
         assert view.status == "saw:rows"
 
     def test_the_answer_carries_the_loaded_rows_not_the_loading_state(self):
         """The one answer holds the rows; it does not leave ``-`` on the page."""
-        with STATELESS:
-            _, _, body = _post(LoadsAfterFirstRender, "select")
+        _, _, body = _post(LoadsAfterFirstRender, "select")
         # A whole-page answer (2.0 keeps no legacy renderer to diff against).
         assert ">rows</p>" in body, body
         assert "saw:rows" in body, body
@@ -263,8 +254,7 @@ class TestWorkMountQueued:
 
         setattr(sys.modules[__name__], "Denied", Denied)
         Denied.loads = 0
-        with STATELESS:
-            _, response, _ = _post(Denied, "select")
+        _, response, _ = _post(Denied, "select")
         assert response.status_code == 403
         assert Denied.loads == 0, "mount's background read ran for an object the user may not see"
 
@@ -382,36 +372,31 @@ class TestMountWorkWaitsForEveryRefusal:
         reset_handler_buckets()
 
     def test_a_handler_the_caller_may_not_run_starts_no_work(self):
-        with STATELESS:
-            _, response, _ = _post(RefusalView, "guarded")
+        _, response, _ = _post(RefusalView, "guarded")
         assert response.status_code == 403
         assert RefusalView.loads == 0
 
     def test_a_rate_limited_post_starts_no_work(self, frozen_rate_limit_clock):
         initial = _get_request()
-        with STATELESS:
-            _, first, _ = _post(RefusalView, "limited", initial=initial)
-            _, second, _ = _post(RefusalView, "limited", initial=initial)
+        _, first, _ = _post(RefusalView, "limited", initial=initial)
+        _, second, _ = _post(RefusalView, "limited", initial=initial)
         assert first.status_code == 200
         assert second.status_code == 429
         assert RefusalView.loads == 1, "only the admitted POST may start mount's reads"
 
     def test_an_invalid_parameter_starts_no_work(self):
-        with STATELESS:
-            _, response, _ = _post(RefusalView, "needs_int", params={"n": "notanint"})
+        _, response, _ = _post(RefusalView, "needs_int", params={"n": "notanint"})
         assert response.status_code == 400
         assert RefusalView.loads == 0
 
     def test_an_admitted_post_still_gets_the_loaded_page(self):
-        with STATELESS:
-            view, response, _ = _post(RefusalView, "needs_int", params={"n": "3"})
+        view, response, _ = _post(RefusalView, "needs_int", params={"n": "3"})
         assert response.status_code == 200
         assert RefusalView.loads == 1 and view.data == "rows"
 
     def test_an_event_the_view_does_not_define_starts_no_work(self):
         """It passes no ``@rate_limit`` check, so it must not start the page's reads."""
-        with STATELESS:
-            _, response, body = _post(RefusalView, "no_such_handler")
+        _, response, body = _post(RefusalView, "no_such_handler")
         # Refused outright (400), as the socket transports do; nothing runs.
         assert response.status_code == 400, body
         assert RefusalView.loads == 0
@@ -439,8 +424,7 @@ setattr(sys.modules[__name__], "SerialLoaders", SerialLoaders)
 class TestTasksRunSeriallyInQueueOrder:
     def test_each_task_finishes_before_the_next_starts(self):
         """The guide says latency is the sum, not the longest: pin the order."""
-        with STATELESS:
-            _post(SerialLoaders, "plain")
+        _post(SerialLoaders, "plain")
         loads = [entry for entry in LOG if entry[0] in ("start", "end")]
         assert loads == [
             ("start", 0),
@@ -494,8 +478,7 @@ class TestOtherWaysToQueueWork:
     def test_the_legacy_single_task_tuple_is_refused(self, caplog):
         """2.0 removed the 1.x tuple (#3515); the fallback refuses it as the
         socket does, instead of running work the socket would drop (#4031)."""
-        with STATELESS:
-            view, response, body = _post(LegacyPendingView, "legacy")
+        view, response, body = _post(LegacyPendingView, "legacy")
         assert response.status_code == 500, body
         assert view.status != "done", body
         assert LOG == []
@@ -505,14 +488,12 @@ class TestOtherWaysToQueueWork:
         ), caplog.text
 
     def test_work_handle_params_queued_runs_before_the_event(self):
-        with STATELESS:
-            view, response, body = _post(ParamsQueuedView, "select", url=PATH + "?scope=mine")
+        view, response, body = _post(ParamsQueuedView, "select", url=PATH + "?scope=mine")
         assert response.status_code == 200, body
         assert view.status == "saw:scope:mine"
 
     def test_assign_async_is_loaded_when_the_event_arrives(self):
-        with STATELESS:
-            view, response, body = _post(AssignAsyncView, "select")
+        view, response, body = _post(AssignAsyncView, "select")
         assert response.status_code == 200, body
         assert view.status == "saw:True:loaded"
 
@@ -577,8 +558,7 @@ setattr(sys.modules[__name__], "WatcherView", WatcherView)
 
 class TestTheGuideSGuardForLongLivedWork:
     def test_the_documented_guard_keeps_a_watcher_off_the_fallback(self):
-        with STATELESS:
-            _, response, body = _post(WatcherView, "plain")
+        _, response, body = _post(WatcherView, "plain")
         assert response.status_code == 200, body
         assert ("watcher-skipped",) in LOG
 
@@ -614,19 +594,18 @@ setattr(sys.modules[__name__], "PokePage", PokePage)
 
 class TestChildEventDoesNotRunThePagesMountWork:
     def test_only_the_work_the_childs_handler_queued_runs(self):
-        with STATELESS:
-            initial = _get_request()
-            PokePage.as_view()(initial)
-            initial.session.save()
-            LOG.clear()
-            request = RequestFactory().post(
-                PATH,
-                data=json.dumps({"view_id": "kid"}),
-                content_type="application/json",
-                HTTP_X_DJUST_EVENT="poke",
-            )
-            request.user, request.session, request.tenant = initial.user, initial.session, None
-            response = PokePage.as_view()(request)
+        initial = _get_request()
+        PokePage.as_view()(initial)
+        initial.session.save()
+        LOG.clear()
+        request = RequestFactory().post(
+            PATH,
+            data=json.dumps({"view_id": "kid"}),
+            content_type="application/json",
+            HTTP_X_DJUST_EVENT="poke",
+        )
+        request.user, request.session, request.tenant = initial.user, initial.session, None
+        response = PokePage.as_view()(request)
         assert response.status_code == 200, response.content
         assert ("PAGE-MOUNT-TASK-RAN",) not in LOG, LOG
         assert ("kid-task",) in LOG, LOG

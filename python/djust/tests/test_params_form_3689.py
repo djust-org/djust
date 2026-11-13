@@ -807,9 +807,6 @@ class TestTheSocket:
 # --------------------------------------------------------------------------- #
 
 
-STATELESS = override_settings(LIVEVIEW_CONFIG={})
-
-
 def _get_request(url):
     request = RequestFactory().get(url)
     request.user = AnonymousUser()
@@ -829,25 +826,23 @@ def _post(initial, view, event, url):
 
 class TestTheFallbackPost:
     def test_the_event_meets_the_cleaned_params(self):
-        with STATELESS:
-            url = "/list/?page=2&category=books"
-            initial = _get_request(url)
-            ListView().get(initial)
-            CALLS.clear()
-            view = ListView()
-            response = _post(initial, view, "mark", url)
+        url = "/list/?page=2&category=books"
+        initial = _get_request(url)
+        ListView().get(initial)
+        CALLS.clear()
+        view = ListView()
+        response = _post(initial, view, "mark", url)
         assert response.status_code == 200, response.content
         assert view.note == "books/2"
         assert CALLS == [({"category": "books", "page": 2}, url)]
 
     def test_a_bad_value_does_not_500_the_event(self):
-        with STATELESS:
-            url = "/list/?page=abc"
-            initial = _get_request(url)
-            ListView().get(initial)
-            CALLS.clear()
-            view = ListView()
-            response = _post(initial, view, "mark", url)
+        url = "/list/?page=abc"
+        initial = _get_request(url)
+        ListView().get(initial)
+        CALLS.clear()
+        view = ListView()
+        response = _post(initial, view, "mark", url)
         assert response.status_code == 200, response.content
         assert view.note == "all/1"
         assert view.params_errors == {"page": ["Enter a whole number."]}

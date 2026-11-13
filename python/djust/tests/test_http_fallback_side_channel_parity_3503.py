@@ -23,14 +23,13 @@ import sys
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.db import SessionStore
-from django.test import RequestFactory, override_settings
+from django.test import RequestFactory
 
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.mixins import layout as layout_mixin
 from djust import state
 
-STATELESS = override_settings(LIVEVIEW_CONFIG={})
 PATH = "/channels/"
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 
@@ -69,21 +68,20 @@ class TestOneTurnCarriesEveryQueue:
     def test_the_stateless_fallback_answers_with_every_side_effect(self, monkeypatch):
         monkeypatch.setattr(layout_mixin, "render_pending_layout", lambda view, path: "<main/>")
         RAN.clear()
-        with STATELESS:
-            initial = RequestFactory().get(PATH)
-            initial.user, initial.tenant = AnonymousUser(), None
-            initial.session = SessionStore()
-            initial.session.create()
-            EverythingView().get(initial)
+        initial = RequestFactory().get(PATH)
+        initial.user, initial.tenant = AnonymousUser(), None
+        initial.session = SessionStore()
+        initial.session.create()
+        EverythingView().get(initial)
 
-            request = RequestFactory().post(
-                PATH,
-                data=json.dumps({}),
-                content_type="application/json",
-                HTTP_X_DJUST_EVENT="all_at_once",
-            )
-            request.user, request.session, request.tenant = initial.user, initial.session, None
-            response = EverythingView().post(request)
+        request = RequestFactory().post(
+            PATH,
+            data=json.dumps({}),
+            content_type="application/json",
+            HTTP_X_DJUST_EVENT="all_at_once",
+        )
+        request.user, request.session, request.tenant = initial.user, initial.session, None
+        response = EverythingView().post(request)
 
         assert response.status_code == 200, response.content
         data = json.loads(response.content)
