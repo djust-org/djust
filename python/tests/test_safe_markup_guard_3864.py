@@ -272,7 +272,7 @@ KNOWN_GAPS: dict[str, tuple[str]] = {
 
 #: Flagged although one run is safe: the guard of main flags them too (a call's result is not
 #: cleared), or the call cannot be bound (``*args``, a keyword it does not take).
-CONSERVATIVE = set(
+CONSERVATIVE = {"bare: a call with a keyword the helper does not take binds nothing"} | set(
     [
         "*args are raw",
         "a call that only returns a literal, put in the helper's unquoted attribute",
@@ -360,8 +360,19 @@ ROWS.update(
         ),
         "bare: a prefix a closure reads from a bound parameter": (
             "def tag(p, v):\n    def pre():\n        return p\n    return pre() + v + '>l</a>'\n"
-            "def g(x):\n    return mark_safe(tag('<b title=\"', safe_url(x)))\n"
-            "def f(x):\n    return mark_safe(tag('<a href=', safe_url(x)))\n",
+            "def f(x):\n    return mark_safe(tag('<a href=', safe_url(x)))\n"
+            # judged FIRST (scopes are visited last-defined first): what it reads must not be
+            # remembered for ``f``
+            "def g(x):\n    return mark_safe(tag('<b title=\"', safe_url(x)))\n",
+            True,
+        ),
+        "bare: a starred call binds nothing": (
+            "def w(a, u=''):\n    return f'<p>{u}</p>'\n"
+            "def f(x):\n    return mark_safe(w(*(escape(x), x)))\n",
+            True,
+        ),
+        "bare: a call with a keyword the helper does not take binds nothing": (
+            "def w(u):\n    return f'<p>{u}</p>'\ndef f(x):\n    return mark_safe(w(escape(x), v=x))\n",
             True,
         ),
         "bare: a fresh instance's method that quotes the URL": (
@@ -474,6 +485,21 @@ class TestRecursionStaysLinear:
             src += (
                 f"def h{i}(v, d=0):\n    if d > 3:\n        return escape(v)\n"
                 f"    return h{(i + 1) % n}(v, d + 1) + h{(i + 2) % n}(v, d + 1)\n"
+            )
+        src += "def f(x):\n    return mark_safe(h0(x))\n"
+        start = time.monotonic()
+        find_unsafe_markup(src)
+        assert time.monotonic() - start < 2.0
+
+    def test_128_helpers_each_calling_six(self):
+        """A wide web of helpers: no ``RecursionError`` (the depth bound is carried into a callee's
+        hold level), and done in time."""
+        src = PRELUDE
+        n = 128
+        for i in range(n):
+            calls = " + ".join(f"h{(i + j + 1) % n}(v, d + 1)" for j in range(6))
+            src += (
+                f"def h{i}(v, d=0):\n    if d > 9:\n        return escape(v)\n    return {calls}\n"
             )
         src += "def f(x):\n    return mark_safe(h0(x))\n"
         start = time.monotonic()

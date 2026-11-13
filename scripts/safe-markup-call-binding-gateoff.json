@@ -143,12 +143,6 @@
       "new": "                return None"
     },
     {
-      "label": "the call budget is unlimited",
-      "file": "scripts/lib/safe_markup_taint.py",
-      "old": "        if self._budget < 0:",
-      "new": "        if False:"
-    },
-    {
       "label": "literal text read through a binding is remembered",
       "file": "scripts/lib/safe_markup_taint.py",
       "old": "                    if self._actuals and not self._reads_a_binding(fscope)",
@@ -159,6 +153,12 @@
       "file": "scripts/lib/safe_markup_taint.py",
       "old": "        for kind in (\"json*\", \"json\", \"sens*\", \"sens\"):",
       "new": "        for kind in (\"json*\", \"sens*\", \"json\", \"sens\"):"
+    },
+    {
+      "label": "the depth bound is not carried into a helper's hold level",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                            self._hold_level(r.value, fscope, origins, d)\n",
+      "new": "                            self._hold_level(r.value, fscope, origins)\n"
     }
   ]
 }

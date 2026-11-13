@@ -72,8 +72,7 @@ A piece is clean when it is:
   a call's result is clean exactly when it was before. Containers that outlive the call are judged
   with every binding off; a parameter the call binds to a literal decides ``if p`` / ``if p is None``
   when the function never rebinds it; a recursive call, ``*args`` / ``**kw`` and a call that does not
-  fit the signature are judged with the parameters raw; past ``_CALL_BUDGET`` calls for one sink the
-  sink is flagged;
+  fit the signature are judged with the parameters raw; past the depth bound the sink is flagged;
 * type facts of the standard library and the project (#3847): a ``date`` / ``datetime`` value's
   ``isoformat()`` / ``weekday()`` / ``.year`` / ``(a - b).days`` (a ``date`` accepts ints only), the
   elements (at any depth) of ``calendar.Calendar(...).monthdayscalendar(...)``, and
@@ -449,8 +448,6 @@ _DEPTH = 40
 #: ``clean`` carries this in ``seen`` when the caller has checked WHERE a context-sensitive escaper's
 #: output (``safe_url``, ``escape_json_for_script``) lands; the call consumes it, any other call strips it
 _CTX_OK = ("position-checked",)
-#: How many calls ``_returns_tainted`` follows for one sink before it flags it (fail closed)
-_CALL_BUDGET = 400
 #: one conversion of a ``%`` format string: ``%s``, ``%d``, ``%-5.2f``, ``%(name)s`` (``%%`` is group 2)
 _PERCENT_SPEC = re.compile(
     r"%(\([^)]*\))?[-#0 +]*(?:\d+|\*)?(?:\.(?:\d+|\*))?[hlL]?([diouxXeEfFgGcrsa%])"
@@ -709,9 +706,6 @@ class _Module:
         #: (id(callee expression), id(scope)) -> what ``_local_function`` found (it reads only
         #: what the file says); the entry holds the scope so its id cannot be reused meanwhile
         self._locals: dict[tuple[int, int], tuple] = {}
-        #: how many more calls one sink may follow before it is flagged (``_returns_tainted``):
-        #: a call's verdict depends on the path of calls that bound it, so it is not memoised
-        self._budget = _CALL_BUDGET
         self._build(self.tree, "<module>", None)
         self._closure_writes()
         self._bind_nested_parameters()
@@ -1760,7 +1754,6 @@ class _Module:
                 else:
                     args = [*call.args, *(kw.value for kw in call.keywords)]
                 for arg in args:
-                    self._budget = _CALL_BUDGET
                     if self.tainted(arg, scope, 0, frozenset()):
                         out.append(
                             Finding(
@@ -1783,7 +1776,6 @@ class _Module:
                     value = value.args[-1]
                 if value is None or id(value) in judged:
                     continue  # ``return mark_safe(..)``: that sink is judged (and counted) already
-                self._budget = _CALL_BUDGET
                 if self.tainted(ret.value, scope, 0, frozenset()):
                     out.append(
                         Finding(
@@ -1950,12 +1942,18 @@ class _Module:
                     if key in self._fn_hold_busy:
                         return 0  # recursion adds nothing new
                     self._fn_hold_busy.add(key)
-                    held = any(
-                        self._hold_level(r.value, fscope, origins)
-                        for r in _own_nodes(fn)
-                        if isinstance(r, ast.Return) and r.value is not None
-                    )
-                    self._fn_hold_busy.discard(key)
+                    try:
+                        # the depth carries on into the callee (#3864: a chain of helpers each
+                        # calling the next ran Python out of stack); past the bound it is ``2``
+                        held = any(
+                            self._hold_level(r.value, fscope, origins, d)
+                            for r in _own_nodes(fn)
+                            if isinstance(r, ast.Return) and r.value is not None
+                        )
+                    finally:
+                        self._fn_hold_busy.discard(key)
+                    if d > 30:
+                        return 2 if held else 0  # cut short by the bound: not remembered
                     self._fn_hold[key] = 2 if held else 0
                 return self._fn_hold[key]
             return 0
@@ -2748,9 +2746,6 @@ class _Module:
             return False  # a recursive call adds nothing new
         if d > _DEPTH:
             return True  # beyond what it can follow, flag
-        self._budget -= 1
-        if self._budget < 0:
-            return True  # more calls than it follows for one sink: flag, never run away
         return self._judge_returns(local, call, sc, d, seen | {key})
 
     def _judge_returns(
