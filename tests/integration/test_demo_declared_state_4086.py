@@ -15,6 +15,7 @@ mount() value three times.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from django.contrib.auth.models import AnonymousUser
@@ -217,7 +218,11 @@ def test_the_demo_checks_report_nothing_on_any_demo_app(demo_views_as_user_code)
         for m in list(check_event_bindings(None)) + list(check_undeclared_handler_state(None))
         if m.id in ("djust.T019", "djust.T020", "djust.V029")
     ]
-    demo = [line for line in found if any(app in line for app in DEMO_APPS)]
+    # A finding belongs to a demo app when it names a demo class (``<app>.<module>.<Class>``),
+    # not merely a demo template: a LiveView defined elsewhere in the same process (a doc snippet
+    # run by another test, for instance) can render a demo template under its own class.
+    demo_class = re.compile(r"(?<![\w.])(?:%s)\.[\w.]+" % "|".join(map(re.escape, DEMO_APPS)))
+    demo = [line for line in found if demo_class.search(line)]
     assert demo == []
 
 
