@@ -778,8 +778,12 @@ no longer has between requests and reconnects:
   back at its `mount()` value. An event addressed to an interactive component
   (`DropdownMenu`) the previous answer rendered is refused with 400
   `"Component not found"`, because the new mount gives it a new identity, as
-  it already did on an explicit view. `handle_restore()` is not called for a
-  legacy view, since nothing is restored.
+  it already did on an explicit view. For the same reason a client-owned
+  component's visibility report (`observe_toggle`) sent over the fallback no
+  longer reaches the view: each POST mounts the component with a new identity
+  and a new observation lifetime, so the report is refused or dropped and an
+  `on.toggled` observer does not run. `handle_restore()` is
+  not called for a legacy view, since nothing is restored.
 - **Its cached renderer.** The compiled template, render state and diff
   baseline were kept in the state backend (`DJUST_CONFIG['STATE_BACKEND']`)
   under the session and page and reused by the next request or reconnect. Each

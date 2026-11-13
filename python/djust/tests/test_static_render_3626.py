@@ -239,9 +239,12 @@ class TestTheHttpFallback:
             assert "patches" not in frame, frame.keys()
             assert "table_1999" in frame["html"]
         # 2.0 keeps no legacy renderer in the backend between requests, so each
-        # POST's fresh instance numbers its whole-page answer on its own (as an
-        # explicit view does).
-        assert all("version" in frame for frame in (first, second, third))
+        # POST's fresh instance numbers its whole-page answer v1 (as an explicit
+        # view does); the client re-bases its cursor on a whole-page fallback
+        # answer instead of checking it against the previous one
+        # (tests/js/http-fallback-whole-page-version-4086.test.js).
+        assert [frame["version"] for frame in (first, second, third)] == [1, 1, 1]
+        assert ">open<" in first["html"] and ">closed<" in second["html"]
         assert backend._cache == {}
 
     def test_a_normal_view_answers_the_whole_page_too(self, backend):

@@ -1722,11 +1722,11 @@ class RequestMixin:
                     status=403,
                 )
 
-            # The view was rebuilt from the session (all of it, or mount()
-            # first and the saved state on top): let it read again what the
-            # session does not hold, from the restored state. After the object
-            # check, so it never reads for a denied object. An explicit view
-            # whose declared state was restored gets it too (#3989).
+            # An explicit view whose declared persist="server" state was put
+            # back on top of mount() reads again what that state does not hold
+            # (#3989). After the object check, so it never reads for a denied
+            # object. A legacy view keeps nothing between requests (2.0), so
+            # nothing was restored and the hook does not run for it.
             if explicit_restored:
                 handle_restore = getattr(self, "handle_restore", None)
                 if callable(handle_restore):
@@ -1983,9 +1983,8 @@ class RequestMixin:
             # WebSocket / SSE routes resolve that through
             # ``_resolve_skip_render`` (#2834, #2924); the HTTP fallback never
             # consulted it, so the same flag rendered here and was never reset
-            # (#3038, the #1646 parallel-path class). The state above is already
-            # saved, so the next render diffs from the last one the client has.
-            # The answer is an empty patch list with no ``version``: nothing was
+            # (#3038, the #1646 parallel-path class). An explicit view's
+            # declared state above is already saved. The answer is an empty patch list with no ``version``: nothing was
             # rendered, so the client's VDOM cursor must not move. Side channels
             # (flash, page metadata) still go out, as they do with the WS noop.
             # No ``cache_request_id``: the WS/SSE noop carries none, so a
