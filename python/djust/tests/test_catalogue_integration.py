@@ -206,10 +206,11 @@ class TestCardThumbnails:
         "export_dialog",
         "image_lightbox",
         "server_event_toast",
+        "tour",
     }
     #: Known gaps: no registry example yet. Kept explicit so the number
     #: cannot creep up unnoticed.
-    NO_EXAMPLE_YET = {"form_validation"}
+    NO_EXAMPLE_YET = {"form_validation", "prompt_editor"}
 
     def _names(self):
         from djust.theming.gallery.component_registry import COMPONENT_CATEGORIES
@@ -436,6 +437,7 @@ class TestIconStyleStaysOffComponentArtwork:
             "gauge",
             "progress_circle",
             "treemap",
+            "gantt_chart",
             "calendar_heatmap",
             "heatmap",
         ):

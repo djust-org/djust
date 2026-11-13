@@ -1,5 +1,6 @@
 /**
- * #2985 batch 4 — MentionsInput and DashboardGrid answer their dj-hook, and an app's own hook of the same name
+ * #2985 batch 4 — CursorsOverlay, CollabSelection, MentionsInput and
+ * DashboardGrid answer their dj-hook, and an app's own hook of the same name
  * still wins.
  *
  * The markup is what the components render (python/djust/tests/
@@ -58,6 +59,22 @@ const frame = (env) => new Promise((resolve) => env.window.requestAnimationFrame
 // Fixtures (as rendered)
 // ---------------------------------------------------------------------------
 
+const CURSOR = (name, x, y, color = '#3b82f6') =>
+    `<div class="dj-cursors__cursor" style="left:${x}px;top:${y}px" data-user="${name}">` +
+    `<svg class="dj-cursors__arrow" width="16" height="20" viewBox="0 0 16 20" fill="${color}"><path d="M0 0L16 12L8 12L12 20L8 18L4 12L0 16Z"/></svg>` +
+    `<span class="dj-cursors__label" style="background:${color}">${name}</span></div>`;
+const CURSORS = (users = [['Alice', 120, 340], ['Bob', 450, 200]]) =>
+    `<div class="dj-cursors" role="group" aria-label="${users.length} cursor${users.length === 1 ? '' : 's'}" dj-hook="CursorsOverlay">` +
+    users.map((u) => CURSOR(...u)).join('') + '</div>';
+
+
+const COLLAB_RANGE = (name, start, end, text, color = '#3b82f6') =>
+    `<span class="dj-collab-sel__range" style="--dj-collab-sel-color:${color}" data-user="${name}" data-start="${start}" data-end="${end}">` +
+    `<span class="dj-collab-sel__highlight">${text}</span><span class="dj-collab-sel__label" style="background:${color}">${name}</span></span>`;
+const COLLAB = (users = [['Alice', 0, 5, 'Hello'], ['Bob', 6, 11, 'brave']], target = '') =>
+    `<div class="dj-collab-sel" role="group" aria-label="${users.length} selections" dj-hook="CollabSelection"${target ? ` data-target="${target}"` : ''}>` +
+    users.map((u) => COLLAB_RANGE(...u)).join('') + '</div>';
+
 const USERS = [
     { id: '1', name: 'Alice Cooper' }, { id: '2', name: 'Bob' }, { id: '3', name: 'Cora Lee' },
     { id: '4', name: 'Albert' }, { id: '5', name: 'Dan' },
@@ -83,6 +100,8 @@ describe('the shipped hooks never replace an app hook (#2985 batch 4)', () => {
     const COMPONENTS = [
         { hook: 'DashboardGrid', file: 'dashboard-grid.js', markup: DASH(), probe: (el) => el.querySelector('.dj-dashboard-grid__panel').getAttribute('draggable') === 'false' },
         { hook: 'MentionsInput', file: 'mentions-input.js', markup: MENTIONS(), probe: (el) => el.querySelector('input').getAttribute('role') === 'combobox' },
+        { hook: 'CollabSelection', file: 'collab-selection.js', markup: COLLAB(), probe: (el) => el.querySelector('.dj-collab-sel__range').getAttribute('role') === 'group' },
+        { hook: 'CursorsOverlay', file: 'cursors-overlay.js', markup: CURSORS(), probe: (el) => el.querySelector('.dj-cursors__cursor').getAttribute('aria-hidden') === 'true' },
     ];
     for (const c of COMPONENTS) {
         describe(c.hook, () => {
@@ -126,6 +145,601 @@ describe('the shipped hooks never replace an app hook (#2985 batch 4)', () => {
             });
         });
     }
+});
+
+// ---------------------------------------------------------------------------
+// CursorsOverlay
+// ---------------------------------------------------------------------------
+
+describe('CursorsOverlay', () => {
+    const patch = (env, users) => {
+        const root = env.$('.dj-cursors');
+        root.innerHTML = users.map((u) => CURSOR(...u)).join('');
+        root.setAttribute('aria-label', `${users.length} cursors`);
+        env.window.djust.updateHooks();
+    };
+
+    it('marks the cursors decoration (aria-hidden) and keeps the group label', () => {
+        const env = boot(CURSORS(), 'cursors-overlay.js');
+        expect(env.$$('.dj-cursors__cursor').every((c) => c.getAttribute('aria-hidden') === 'true')).toBe(true);
+        expect(env.$('.dj-cursors').getAttribute('aria-label')).toBe('2 cursors');
+        expect(env.$('.dj-cursors').getAttribute('role')).toBe('group');
+    });
+
+    it('announces nobody on the first render', () => {
+        const env = boot(CURSORS(), 'cursors-overlay.js');
+        expect(env.live()).toBeUndefined();
+    });
+
+    it('announces who joined and who left, never a movement', () => {
+        const env = boot(CURSORS(), 'cursors-overlay.js');
+        patch(env, [['Alice', 130, 350], ['Bob', 460, 210]]); // both moved
+        expect(env.live()).toBeUndefined();
+        patch(env, [['Alice', 130, 350], ['Bob', 460, 210], ['Carol', 5, 5]]);
+        expect(env.live()).toBe('Carol joined');
+        patch(env, [['Alice', 130, 350], ['Carol', 5, 5]]);
+        expect(env.live()).toBe('Bob left');
+        patch(env, [['Dave', 1, 1], ['Carol', 5, 5]]);
+        expect(env.live()).toBe('Dave joined. Alice left');
+    });
+
+    it('summarises a crowd as a count', () => {
+        const env = boot(CURSORS(), 'cursors-overlay.js');
+        patch(env, [['Alice', 1, 1], ['Bob', 2, 2], ['A', 3, 3], ['B', 4, 4], ['C', 5, 5], ['D', 6, 6]]);
+        expect(env.live()).toBe('4 people joined');
+        patch(env, []);
+        expect(env.live()).toBe('6 people left');
+    });
+
+    it('two people with one name: the second joining is announced', () => {
+        const env = boot(CURSORS([['Sam', 1, 1]]), 'cursors-overlay.js');
+        patch(env, [['Sam', 1, 1], ['Sam', 9, 9]]);
+        expect(env.live()).toBe('Sam joined');
+    });
+
+    it('a name that is markup is announced as text, never parsed', () => {
+        const env = boot(CURSORS(), 'cursors-overlay.js');
+        const evil = '<img src=x onerror=window.__pwn=1>';
+        const root = env.$('.dj-cursors');
+        const c = env.window.document.createElement('div');
+        c.className = 'dj-cursors__cursor';
+        c.setAttribute('data-user', evil);
+        c.setAttribute('style', 'left:1px;top:1px');
+        root.appendChild(c);
+        env.window.djust.updateHooks();
+        expect(env.live()).toBe(`${evil} joined`);
+        expect(env.window.document.querySelector('#dj-component-live img')).toBeNull();
+        expect(env.window.__pwn).toBeUndefined();
+    });
+
+    it('re-applies aria-hidden to a cursor a patch added', () => {
+        const env = boot(CURSORS(), 'cursors-overlay.js');
+        patch(env, [['Alice', 1, 1], ['Bob', 2, 2], ['Carol', 3, 3]]);
+        expect(env.$$('.dj-cursors__cursor').every((c) => c.getAttribute('aria-hidden') === 'true')).toBe(true);
+    });
+
+    describe('label placement', () => {
+        // a 400 x 300 overlay, labels 60 x 18
+        const laid = (users, { width = 400, height = 300, label = [60, 18] } = {}) => {
+            const env = createEnv(CURSORS(users));
+            const root = env.window.document.querySelector('.dj-cursors');
+            Object.defineProperty(root, 'clientWidth', { get: () => width, configurable: true });
+            Object.defineProperty(root, 'clientHeight', { get: () => height, configurable: true });
+            const size = (l) => {
+                Object.defineProperty(l, 'offsetWidth', { get: () => label[0], configurable: true });
+                Object.defineProperty(l, 'offsetHeight', { get: () => label[1], configurable: true });
+            };
+            root.querySelectorAll('.dj-cursors__label').forEach(size);
+            env.window.eval(read('cursors-overlay.js'));
+            env.window.djust.mountHooks();
+            env.size = size;
+            env.$$ = (s) => Array.from(env.window.document.querySelectorAll(s));
+            return env;
+        };
+        const classes = (env) => env.$$('.dj-cursors__label').map((l) => [...l.classList].filter((c) => c !== 'dj-cursors__label').join(' '));
+
+        it('a cursor with room keeps the default placement', async () => {
+            const env = laid([['Alice', 50, 50]]);
+            await frame(env);
+            expect(classes(env)).toEqual(['']);
+        });
+
+        it('a cursor near the right edge puts its label on the left', async () => {
+            const env = laid([['Alice', 380, 50]]);
+            await frame(env);
+            expect(classes(env)).toEqual(['dj-cursors__label--left']);
+        });
+
+        it('a cursor near the bottom puts its label above', async () => {
+            const env = laid([['Alice', 50, 290]]);
+            await frame(env);
+            expect(classes(env)).toEqual(['dj-cursors__label--up']);
+        });
+
+        it('a cursor in the bottom-right corner goes left and up', async () => {
+            const env = laid([['Alice', 370, 295]]);
+            await frame(env);
+            expect(classes(env)).toEqual(['dj-cursors__label--left dj-cursors__label--up']);
+        });
+
+        it('two cursors on one spot do not stack their labels on top of each other', async () => {
+            const env = laid([['Alice', 50, 50], ['Bob', 50, 50]]);
+            await frame(env);
+            const [a, b] = classes(env);
+            expect(a).toBe('');
+            expect(b).not.toBe('');
+        });
+
+        it('a pile of cursors on one spot ends with a distinct placement for each as far as the room goes', async () => {
+            const env = laid([['A', 50, 50], ['B', 50, 50], ['C', 50, 50], ['D', 50, 50]]);
+            await frame(env);
+            expect(new Set(classes(env)).size).toBe(4);
+        });
+
+        it('is recomputed from scratch after a patch (positional patches hand classes to the wrong cursor)', async () => {
+            const env = laid([['Alice', 380, 50], ['Bob', 50, 50]]);
+            await frame(env);
+            expect(classes(env)).toEqual(['dj-cursors__label--left', '']);
+            // Alice leaves: Bob's data moves into the first node, which still carries Alice's class
+            const root = env.$$('.dj-cursors')[0];
+            const first = root.children[0];
+            first.setAttribute('data-user', 'Bob');
+            first.setAttribute('style', 'left:50px;top:50px');
+            root.removeChild(root.children[1]);
+            env.window.djust.updateHooks();
+            await frame(env);
+            expect(classes(env)).toEqual(['']);
+        });
+
+        it('does nothing where there is no layout (hidden, or jsdom)', async () => {
+            const env = createEnv(CURSORS([['Alice', 380, 50]]));
+            env.window.eval(read('cursors-overlay.js'));
+            env.window.djust.mountHooks();
+            await frame(env);
+            expect([...env.window.document.querySelector('.dj-cursors__label').classList]).toEqual(['dj-cursors__label']);
+        });
+
+        it('lays out once per frame however many patches arrived in it', async () => {
+            const env = laid([['Alice', 50, 50]]);
+            await frame(env);
+            let reads = 0;
+            const label = env.window.document.querySelector('.dj-cursors__label');
+            Object.defineProperty(label, 'offsetWidth', { get: () => { reads += 1; return 60; }, configurable: true });
+            for (let i = 0; i < 20; i++) env.window.djust.updateHooks();
+            expect(reads).toBe(0);
+            await frame(env);
+            expect(reads).toBe(1);
+        });
+
+        it('lays out again when the overlay is resized', async () => {
+            let notify;
+            const env = createEnv(CURSORS([['Alice', 380, 50]]));
+            env.window.ResizeObserver = class { constructor(cb) { notify = cb; } observe() {} disconnect() { this.gone = true; } };
+            const root = env.window.document.querySelector('.dj-cursors');
+            let width = 600;
+            Object.defineProperty(root, 'clientWidth', { get: () => width, configurable: true });
+            Object.defineProperty(root, 'clientHeight', { get: () => 300, configurable: true });
+            const label = root.querySelector('.dj-cursors__label');
+            Object.defineProperty(label, 'offsetWidth', { get: () => 60, configurable: true });
+            Object.defineProperty(label, 'offsetHeight', { get: () => 18, configurable: true });
+            env.window.eval(read('cursors-overlay.js'));
+            env.window.djust.mountHooks();
+            await frame(env);
+            expect(label.classList.contains('dj-cursors__label--left')).toBe(false);
+            width = 400;
+            notify();
+            await frame(env);
+            expect(label.classList.contains('dj-cursors__label--left')).toBe(true);
+        });
+
+        it('destroying the hook disconnects the observer and cancels a pending layout', async () => {
+            let observer;
+            const env = createEnv(CURSORS([['Alice', 380, 50]]));
+            env.window.ResizeObserver = class { constructor() { observer = this; } observe() {} disconnect() { this.gone = true; } };
+            env.window.eval(read('cursors-overlay.js'));
+            env.window.djust.mountHooks();
+            env.window.djust.destroyAllHooks();
+            expect(observer.gone).toBe(true);
+        });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// CollabSelection
+// ---------------------------------------------------------------------------
+
+describe('CollabSelection', () => {
+    const DOC = '<p id="doc">Hello brave <b>new</b> world</p>';
+    // The CSS Custom Highlight API and layout, which jsdom has neither of.
+    const anchored = (users, { target = '#doc', rect = { left: 100, top: 50, width: 40, height: 12 }, targetRect = { left: 0, top: 0, right: 600, bottom: 400 }, highlights = true, doc = DOC, before = null } = {}) => {
+        const env = createEnv(doc + COLLAB(users, target));
+        const w = env.window;
+        const registry = new Map();
+        if (highlights) {
+            w.CSS = { highlights: registry };
+            w.Highlight = class { constructor(...ranges) { this.ranges = ranges; } };
+        }
+        w.Range.prototype.getClientRects = function () { return [rect]; };
+        w.Range.prototype.getBoundingClientRect = function () { return rect; };
+        let targetEl = null;
+        try { targetEl = w.document.querySelector(target); } catch (_e) { /* an invalid selector, on purpose */ }
+        if (targetEl) targetEl.getBoundingClientRect = () => ({ ...targetRect, width: targetRect.right - targetRect.left, height: targetRect.bottom - targetRect.top });
+        if (before) before(w);
+        w.eval(read('collab-selection.js'));
+        w.djust.mountHooks();
+        env.registry = registry;
+        env.$ = (sel) => w.document.querySelector(sel);
+        env.$$ = (sel) => Array.from(w.document.querySelectorAll(sel));
+        env.live = () => (w.document.getElementById('dj-component-live') || {}).textContent;
+        env.texts = () => [...registry.entries()].sort().map(([k, h]) => h.ranges[0].toString());
+        return env;
+    };
+    const patch = (env, users, target = '#doc') => {
+        const root = env.$('.dj-collab-sel');
+        root.innerHTML = users.map((u) => COLLAB_RANGE(...u)).join('');
+        root.setAttribute('data-target', target);
+        env.window.djust.updateHooks();
+    };
+
+    describe('without a target', () => {
+        it('names each selection (a group) and hides the visual label and highlight from assistive tech', () => {
+            const env = boot(COLLAB(), 'collab-selection.js');
+            const r = env.$$('.dj-collab-sel__range');
+            expect(r.map((x) => x.getAttribute('role'))).toEqual(['group', 'group']);
+            expect(r.map((x) => x.getAttribute('aria-label'))).toEqual(['Alice selected: Hello', 'Bob selected: brave']);
+            expect(env.$$('.dj-collab-sel__highlight, .dj-collab-sel__label').every((e) => e.getAttribute('aria-hidden') === 'true')).toBe(true);
+        });
+
+        it('a selection with no text is named after the person, a long one is cut', () => {
+            const env = boot(COLLAB([['Alice', 3, 3, ''], ['Bob', 0, 500, 'x'.repeat(200)]]), 'collab-selection.js');
+            const [a, b] = env.$$('.dj-collab-sel__range');
+            expect(a.getAttribute('aria-label')).toBe("Alice's selection");
+            expect(b.getAttribute('aria-label')).toBe('Bob selected: ' + 'x'.repeat(80) + '\u2026');
+        });
+
+        it('draws nothing of its own: no highlight, no anchored class, the inline text stays', () => {
+            const env = anchored(undefined, { target: '' });
+            expect(env.registry.size).toBe(0);
+            expect(env.$('.dj-collab-sel').classList.contains('dj-collab-sel--anchored')).toBe(false);
+        });
+
+        it('announces who selected and who cleared, never a change of range', () => {
+            const env = boot(COLLAB(), 'collab-selection.js');
+            expect(env.live()).toBeUndefined();
+            const root = env.$('.dj-collab-sel');
+            const set = (users) => { root.innerHTML = users.map((u) => COLLAB_RANGE(...u)).join(''); env.window.djust.updateHooks(); };
+            set([['Alice', 1, 6, 'ello '], ['Bob', 6, 11, 'brave']]);
+            expect(env.live()).toBeUndefined();
+            set([['Alice', 1, 6, 'ello '], ['Bob', 6, 11, 'brave'], ['Carol', 0, 1, 'H']]);
+            expect(env.live()).toBe('Carol selected text');
+            set([['Carol', 0, 1, 'H']]);
+            expect(env.live()).toBe('Alice, Bob cleared their selection');
+            set([['A', 0, 1, 'a'], ['B', 0, 1, 'a'], ['C', 0, 1, 'a'], ['D', 0, 1, 'a']]);
+            expect(env.live()).toBe('4 people selected text. Carol cleared their selection');
+        });
+
+        it('a name that is markup is announced and named as text', () => {
+            const env = boot(COLLAB(), 'collab-selection.js');
+            const evil = '<img src=x onerror=window.__pwn=1>';
+            const root = env.$('.dj-collab-sel');
+            const r = env.window.document.createElement('span');
+            r.className = 'dj-collab-sel__range';
+            r.setAttribute('data-user', evil);
+            r.setAttribute('data-start', '0');
+            r.setAttribute('data-end', '1');
+            root.appendChild(r);
+            env.window.djust.updateHooks();
+            expect(env.live()).toBe(`${evil} selected text`);
+            expect(r.getAttribute('aria-label')).toBe(`${evil}'s selection`);
+            expect(env.$$('img')).toHaveLength(0);
+            expect(env.window.__pwn).toBeUndefined();
+        });
+    });
+
+    describe('with a target', () => {
+        it('highlights each range of the target text with the CSS Custom Highlight API, the page nodes untouched', async () => {
+            const env = anchored();
+            await frame(env);
+            expect(env.texts()).toEqual(['Hello', 'brave']);
+            expect(env.$('#doc').innerHTML).toBe('Hello brave <b>new</b> world'); // no marks, no wrappers
+            expect(env.$('.dj-collab-sel').classList.contains('dj-collab-sel--anchored')).toBe(true);
+        });
+
+        it('counts offsets over the textContent, across elements', async () => {
+            const env = anchored([['Alice', 6, 15, 'brave new']]);
+            await frame(env);
+            expect(env.texts()).toEqual(['brave new']);
+        });
+
+        it('counts UTF-16 code units (an emoji is two)', async () => {
+            const env = anchored([['Alice', 0, 3, 'x']], { doc: '<p id="doc">\u{1F600}b</p>' });
+            await frame(env);
+            expect(env.texts()).toEqual(['\u{1F600}b']);
+        });
+
+        it('does not count the text of the component itself when it sits inside the target', async () => {
+            // the component comes first, so its own text would shift every offset after it
+            const env = createEnv('<div id="doc">' + COLLAB([['Alice', 6, 11, 'world']], '#doc') + 'Hello world</div>');
+            const w = env.window;
+            w.CSS = { highlights: new Map() };
+            w.Highlight = class { constructor(...r) { this.ranges = r; } };
+            w.Range.prototype.getClientRects = () => [{ left: 10, top: 10, width: 5, height: 5 }];
+            w.document.querySelector('#doc').getBoundingClientRect = () => ({ left: 0, top: 0, right: 500, bottom: 500, width: 500, height: 500 });
+            w.eval(read('collab-selection.js'));
+            w.djust.mountHooks();
+            await frame(env);
+            expect([...w.CSS.highlights.values()][0].ranges[0].toString()).toBe('world');
+        });
+
+        it('hides a name whose text is inside the target but scrolled out of a scroll container around it', async () => {
+            const env = createEnv('<div id="scroller"><p id="doc">Hello brave new world</p></div>' + COLLAB([['Alice', 0, 5, 'Hello']], '#doc'));
+            const w = env.window;
+            w.CSS = { highlights: new Map() };
+            w.Highlight = class { constructor(...r) { this.ranges = r; } };
+            // the text is at y = 20 (inside #doc, which has scrolled up with its content), the container shows y 100..200
+            w.Range.prototype.getClientRects = () => [{ left: 10, top: 20, width: 40, height: 12 }];
+            w.document.querySelector('#doc').getBoundingClientRect = () => ({ left: 0, top: -300, right: 500, bottom: 500, width: 500, height: 800 });
+            const scroller = w.document.querySelector('#scroller');
+            scroller.getBoundingClientRect = () => ({ left: 0, top: 100, right: 500, bottom: 200, width: 500, height: 100 });
+            const real = w.getComputedStyle.bind(w);
+            w.getComputedStyle = (el, ...rest) => (el === scroller ? { overflowX: 'visible', overflowY: 'auto' } : real(el, ...rest));
+            w.eval(read('collab-selection.js'));
+            w.djust.mountHooks();
+            await frame(env);
+            const label = w.document.querySelector('.dj-collab-sel__label');
+            expect(label.style.visibility).toBe('hidden');
+            // scrolled back so the text is in view: shown
+            w.Range.prototype.getClientRects = () => [{ left: 10, top: 120, width: 40, height: 12 }];
+            w.document.querySelector('#doc').getBoundingClientRect = () => ({ left: 0, top: 100, right: 500, bottom: 900, width: 500, height: 800 });
+            w.dispatchEvent(new w.Event('scroll'));
+            await frame(env);
+            expect(label.style.visibility).toBe('');
+        });
+
+        it('clamps untrusted offsets to the text, and draws nothing for an empty or reversed range', async () => {
+            const env = anchored([['A', -50, 5, 'a'], ['B', 16, 9999, 'b'], ['C', 6, 6, 'c'], ['D', 10, 2, 'd'], ['E', 'x', 'y', 'e']]);
+            await frame(env);
+            expect(env.texts()).toEqual(['Hello', 'world']);
+            const labels = env.$$('.dj-collab-sel__label');
+            expect(labels.map((l) => l.style.visibility)).toEqual(['', '', 'hidden', 'hidden', 'hidden']);
+        });
+
+        it('puts each name above the start of its range, at the viewport position of that text', async () => {
+            const env = anchored([['Alice', 0, 5, 'Hello']], { rect: { left: 100, top: 50, width: 40, height: 12 } });
+            const label = env.$('.dj-collab-sel__label');
+            Object.defineProperty(label, 'offsetHeight', { get: () => 16, configurable: true });
+            await frame(env);
+            expect(label.style.position).toBe('fixed');
+            expect(label.style.left).toBe('100px');
+            expect(label.style.top).toBe('32px');
+            expect(label.style.visibility).toBe('');
+        });
+
+        it('corrects for an ancestor with a transform, which makes position: fixed relative to itself', async () => {
+            const env = anchored([['Alice', 0, 5, 'Hello'], ['Bob', 6, 11, 'brave']], { rect: { left: 100, top: 50, width: 40, height: 12 } });
+            const labels = env.$$('.dj-collab-sel__label');
+            labels.forEach((l) => {
+                Object.defineProperty(l, 'offsetHeight', { get: () => 16, configurable: true });
+                // an ancestor translated by (40, 25): the label is drawn that far from where left/top say
+                l.getBoundingClientRect = () => ({ left: parseFloat(l.style.left) + 40, top: parseFloat(l.style.top) + 25, width: 30, height: 16 });
+            });
+            env.window.dispatchEvent(new env.window.Event('resize'));
+            await frame(env);
+            expect(labels.map((l) => [l.style.left, l.style.top])).toEqual([['60px', '7px'], ['60px', '7px']]);
+        });
+
+        it('hides a name whose text is scrolled out of the target', async () => {
+            const env = anchored([['Alice', 0, 5, 'Hello']], { rect: { left: 100, top: 900, width: 40, height: 12 } });
+            await frame(env);
+            expect(env.$('.dj-collab-sel__label').style.visibility).toBe('hidden');
+        });
+
+        it('writes a colour into the highlight rule only when it is plainly a colour', async () => {
+            const env = anchored([
+                ['A', 0, 1, 'a', '#ef4444'], ['B', 1, 2, 'b', 'rgb(1, 2, 3)'], ['C', 2, 3, 'c', 'red; } body { display:none } .x {'],
+                ['D', 3, 4, 'd', 'url(https://evil.example/x)'],
+            ]);
+            await frame(env);
+            const css = env.$('style[data-dj-collab-sel]').textContent;
+            expect(css).toContain('#ef4444');
+            expect(css).toContain('rgb(1, 2, 3)');
+            expect(css).not.toContain('body');
+            expect(css).not.toContain('evil.example');
+            expect(css).not.toContain('url(');
+            expect(css.match(/::highlight\(/g)).toHaveLength(4);
+        });
+
+        it('falls back to the inline text where the browser has no CSS.highlights', async () => {
+            const env = anchored(undefined, { highlights: false });
+            await frame(env);
+            expect(env.registry.size).toBe(0);
+            expect(env.$('.dj-collab-sel').classList.contains('dj-collab-sel--anchored')).toBe(false);
+            expect(env.$('style[data-dj-collab-sel]')).toBeNull();
+        });
+
+        it('a selector that matches nothing, or is not a selector, is the same as no target (and does not throw)', async () => {
+            for (const target of ['#nope', '###', '[']) {
+                const env = anchored(undefined, { target });
+                await frame(env);
+                expect(env.registry.size).toBe(0);
+                expect(env.$('.dj-collab-sel').classList.contains('dj-collab-sel--anchored')).toBe(false);
+            }
+        });
+
+        it('re-anchors after a patch: a user leaving drops their highlight, new offsets are followed', async () => {
+            const env = anchored();
+            await frame(env);
+            patch(env, [['Bob', 12, 15, 'new']]);
+            await frame(env);
+            expect(env.texts()).toEqual(['new']);
+            expect(env.registry.size).toBe(1);
+        });
+
+        it('re-anchors when the target text changes', async () => {
+            let notify;
+            const env = createEnv(DOC + COLLAB([['Alice', 0, 5, 'Hello']], '#doc'));
+            const w = env.window;
+            w.CSS = { highlights: new Map() };
+            w.Highlight = class { constructor(...r) { this.ranges = r; } };
+            const RealMO = w.MutationObserver;
+            w.MutationObserver = class extends RealMO {
+                constructor(cb) { super(cb); this.cb = cb; }
+                observe(node, opts) { if (node && node.id === 'doc') notify = this.cb; return super.observe(node, opts); }
+            };
+            w.Range.prototype.getClientRects = () => [{ left: 10, top: 10, width: 5, height: 5 }];
+            w.document.querySelector('#doc').getBoundingClientRect = () => ({ left: 0, top: 0, right: 500, bottom: 500, width: 500, height: 500 });
+            w.eval(read('collab-selection.js'));
+            w.djust.mountHooks();
+            await frame(env);
+            expect([...w.CSS.highlights.values()][0].ranges[0].toString()).toBe('Hello');
+            w.document.querySelector('#doc').firstChild.nodeValue = 'Howdy brave ';
+            notify();
+            await frame(env);
+            expect([...w.CSS.highlights.values()][0].ranges[0].toString()).toBe('Howdy');
+        });
+
+        it('re-anchors on scroll (any scroller) and on resize, once per frame', async () => {
+            const env = anchored();
+            await frame(env);
+            let calls = 0;
+            const original = env.window.Range.prototype.getClientRects;
+            env.window.Range.prototype.getClientRects = function () { calls += 1; return original.call(this); };
+            const inner = env.window.document.createElement('div');
+            env.window.document.body.appendChild(inner);
+            for (let i = 0; i < 10; i++) inner.dispatchEvent(new env.window.Event('scroll'));
+            env.window.dispatchEvent(new env.window.Event('resize'));
+            await frame(env);
+            expect(calls).toBe(2); // one per selection, once
+        });
+
+        it('scrolling and resizing only move the names: the highlights and the rule are not rebuilt', async () => {
+            const env = anchored();
+            await frame(env);
+            const before = [...env.registry.values()];
+            const style = env.$('style[data-dj-collab-sel]');
+            const walker = [];
+            const real = env.window.document.createTreeWalker.bind(env.window.document);
+            env.window.document.createTreeWalker = (root, ...a) => { if (root.id === 'doc') walker.push(1); return real(root, ...a); };
+            env.window.dispatchEvent(new env.window.Event('resize'));
+            env.window.document.body.dispatchEvent(new env.window.Event('scroll'));
+            await frame(env);
+            expect([...env.registry.values()]).toEqual(before);
+            expect(env.$('style[data-dj-collab-sel]')).toBe(style);
+            expect(walker).toHaveLength(0); // the target's text was not walked again
+        });
+
+        it('anchors when a patch gives the component a target it did not have', async () => {
+            const env = anchored(undefined, { target: '' });
+            await frame(env);
+            expect(env.registry.size).toBe(0);
+            env.$('.dj-collab-sel').setAttribute('data-target', '#doc');
+            env.window.djust.updateHooks();
+            await frame(env);
+            expect(env.texts()).toEqual(['Hello', 'brave']);
+            env.$('.dj-collab-sel').removeAttribute('data-target');
+            env.window.djust.updateHooks();
+            await frame(env);
+            expect(env.registry.size).toBe(0);
+            expect(env.$('.dj-collab-sel').classList.contains('dj-collab-sel--anchored')).toBe(false);
+        });
+
+        it('follows a patch that changes the target selector', async () => {
+            const env = anchored(undefined, { doc: DOC + '<p id="other">Other words here</p>' });
+            await frame(env);
+            env.$('.dj-collab-sel').setAttribute('data-target', '#other');
+            env.window.djust.updateHooks();
+            await frame(env);
+            expect(env.texts()).toEqual(['Other', 'words']);
+        });
+
+        it('destroying the hook removes its highlights and rule and stops following the page', async () => {
+            const env = anchored();
+            await frame(env);
+            expect(env.registry.size).toBe(2);
+            env.window.djust.destroyAllHooks();
+            expect(env.registry.size).toBe(0);
+            expect(env.$('style[data-dj-collab-sel]')).toBeNull();
+            let calls = 0;
+            env.window.Range.prototype.getClientRects = () => { calls += 1; return []; };
+            env.window.dispatchEvent(new env.window.Event('resize'));
+            await frame(env);
+            expect(calls).toBe(0);
+        });
+
+        describe('where the highlight rules go (style policies)', () => {
+            const sheets = (w) => {
+                const added = [];
+                w.CSSStyleSheet = class { replaceSync(css) { this.css = css; } };
+                Object.defineProperty(w.document, 'adoptedStyleSheets', { value: added, writable: true, configurable: true });
+                return added;
+            };
+
+            it('uses a constructed stylesheet (not an inline <style>, which a style policy can refuse) and removes it with the hook', async () => {
+                let adopted;
+                const env = anchored(undefined, { before: (w) => { adopted = sheets(w); } });
+                await frame(env);
+                expect(env.window.document.adoptedStyleSheets).toHaveLength(1);
+                expect(env.window.document.adoptedStyleSheets[0].css).toMatch(/::highlight\(dj-collab-\d+-0\)/);
+                expect(env.$('style[data-dj-collab-sel]')).toBeNull();
+                // a redraw replaces it, it does not pile up
+                env.$('.dj-collab-sel').setAttribute('data-target', '#doc');
+                env.window.djust.updateHooks();
+                await frame(env);
+                expect(env.window.document.adoptedStyleSheets).toHaveLength(1);
+                env.window.djust.destroyAllHooks();
+                expect(env.window.document.adoptedStyleSheets).toHaveLength(0);
+                expect(adopted).toBeDefined();
+            });
+
+            it('leaves other adopted stylesheets alone', async () => {
+                const env = anchored(undefined, { before: (w) => { sheets(w).push({ css: 'mine' }); } });
+                await frame(env);
+                expect(env.window.document.adoptedStyleSheets).toHaveLength(2);
+                env.window.djust.destroyAllHooks();
+                expect(env.window.document.adoptedStyleSheets.map((x) => x.css)).toEqual(['mine']);
+            });
+
+            it('falls back to a <style> element when a constructed sheet cannot be made', async () => {
+                const env = anchored(undefined, { before: (w) => { sheets(w); w.CSSStyleSheet = class { replaceSync() { throw new Error('no'); } }; } });
+                await frame(env);
+                expect(env.$('style[data-dj-collab-sel]')).not.toBeNull();
+                expect(env.$('.dj-collab-sel').classList.contains('dj-collab-sel--anchored')).toBe(true);
+            });
+
+            it('rules a style policy refused (a <style> element with no sheet) mean no highlight and the inline text stays', async () => {
+                const env = anchored(undefined, {
+                    before: (w) => {
+                        const create = w.document.createElement.bind(w.document);
+                        w.document.createElement = (tag, ...rest) => {
+                            const el = create(tag, ...rest);
+                            if (String(tag).toLowerCase() === 'style') Object.defineProperty(el, 'sheet', { get: () => null });
+                            return el;
+                        };
+                    },
+                });
+                await frame(env);
+                expect(env.registry.size).toBe(0);
+                expect(env.$('style[data-dj-collab-sel]')).toBeNull();
+                expect(env.$('.dj-collab-sel').classList.contains('dj-collab-sel--anchored')).toBe(false);
+            });
+        });
+
+        it('two instances do not share highlight names', async () => {
+            const env = createEnv(DOC + COLLAB([['Alice', 0, 5, 'Hello']], '#doc') + COLLAB([['Bob', 6, 11, 'brave']], '#doc'));
+            const w = env.window;
+            const registry = new Map();
+            w.CSS = { highlights: registry };
+            w.Highlight = class { constructor(...r) { this.ranges = r; } };
+            w.Range.prototype.getClientRects = () => [{ left: 10, top: 10, width: 5, height: 5 }];
+            w.document.querySelector('#doc').getBoundingClientRect = () => ({ left: 0, top: 0, right: 500, bottom: 500, width: 500, height: 500 });
+            w.eval(read('collab-selection.js'));
+            w.djust.mountHooks();
+            await frame(env);
+            expect(registry.size).toBe(2);
+            w.djust.destroyAllHooks();
+            expect(registry.size).toBe(0);
+        });
+    });
 });
 
 // ---------------------------------------------------------------------------

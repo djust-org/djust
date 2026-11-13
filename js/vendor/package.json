@@ -7,9 +7,19 @@
     "test": "npm run build && node --test test/*.check.mjs"
   },
   "dependencies": {
+    "@tiptap/core": "3.31.3",
+    "@tiptap/extension-bubble-menu": "3.31.3",
+    "@tiptap/extension-floating-menu": "3.31.3",
+    "@tiptap/extension-image": "3.31.3",
+    "@tiptap/extension-table": "3.31.3",
+    "@tiptap/extension-task-item": "3.31.3",
+    "@tiptap/extension-task-list": "3.31.3",
+    "@tiptap/markdown": "3.31.3",
+    "@tiptap/starter-kit": "3.31.3",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
-    "highlight.js": "11.12.0"
+    "highlight.js": "11.12.0",
+    "leaflet": "1.9.4"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

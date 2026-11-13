@@ -327,6 +327,12 @@ def _avatar_group_class(user: Any) -> str:
     return str(AvatarGroup(users=[user]).render())
 
 
+def _live_indicator_class(user: Any) -> str:
+    from djust.components.components.live_indicator import LiveIndicator
+
+    return str(LiveIndicator(user=user).render())
+
+
 def _presence_avatars_class(user: Any) -> str:
     from djust.components.components.presence_avatars import PresenceAvatars
 
@@ -341,6 +347,7 @@ def _avatar_group_tag(user: Any) -> str:
 
 FULL_NAME_SINKS = [
     pytest.param(_avatar_group_class, id="AvatarGroup"),
+    pytest.param(_live_indicator_class, id="LiveIndicator"),
     pytest.param(_presence_avatars_class, id="PresenceAvatars"),
     pytest.param(_avatar_group_tag, id="avatar_group-tag"),
 ]

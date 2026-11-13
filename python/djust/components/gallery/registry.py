@@ -14,12 +14,9 @@ def discover_template_tags() -> Dict[str, Any]:
     """
     from djust.components.templatetags import djust_components as taglib
 
-    from djust._removed_settings import REMOVED_TEMPLATE_TAGS
-
     lib = taglib.register
-    # Library.tags contains both block tags and simple/inclusion tags. A tag 2.0 removed stays
-    # registered only to refuse itself (#4002), so it is not a component to show.
-    return {name: tag for name, tag in lib.tags.items() if name not in REMOVED_TEMPLATE_TAGS}
+    # Library.tags contains both block tags and simple/inclusion tags
+    return dict(lib.tags)
 
 
 def discover_component_classes() -> Dict[str, Any]:

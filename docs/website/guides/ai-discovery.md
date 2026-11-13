@@ -32,7 +32,7 @@ Beginning of actual output:
 djust 1.3.0rc7
 
 Bundled apps
-  djust.components: available, not enabled (add "djust.components" to INSTALLED_APPS) — ~170 template-tag UI components (tables, forms, overlays, feedback)
+  djust.components: available, not enabled (add "djust.components" to INSTALLED_APPS) — ~190 template-tag UI components (tables, forms, overlays, feedback)
   djust.theming: available, not enabled (add "djust.theming" to INSTALLED_APPS) — design systems + color presets via CSS tokens; {% theme_head %}
   djust.auth: available, not enabled (add "djust.auth" to INSTALLED_APPS) — account backends + page kit (ADR-039)
   djust.admin_ext: available, not enabled (add "djust.admin_ext" to INSTALLED_APPS) — LiveView-powered admin extensions

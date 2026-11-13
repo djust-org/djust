@@ -175,14 +175,10 @@ class TestTheRatchet:
         """Measured plus unmeasured is every tag of both libraries — derived, not typed."""
         from django.template.library import import_library
 
-        from djust._removed_settings import REMOVED_TEMPLATE_TAGS
-
         expected = {
             "%s:%s" % (label, name)
             for label, dotted in harness.LIBRARIES.items()
             for name in import_library(dotted).tags
-            # registered only to refuse itself (#4002): nothing to measure
-            if name not in REMOVED_TEMPLATE_TAGS
         }
         run = runs["check"]
         assert set(run.rows) | set(run.unmeasured) == expected

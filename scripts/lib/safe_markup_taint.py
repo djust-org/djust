@@ -378,14 +378,19 @@ CLEAN_IF_DEFAULT_CLEAN = {
     "djust.components.utils.safe_css_number": 1,
 }
 #: Origins whose result is a string, a tuple or a NamedTuple of strings built from constant markup,
-#: ``html.escape``d text and ``int()``-coerced numbers: ``pad_extras(...)`` and ``extras.root`` are clean. ``rich_html`` is here for its CONTRACT (a value
+#: ``html.escape``d text and ``int()``-coerced numbers: ``pad_extras(...)``, ``root, zone, field =
+#: upload_attrs(...)`` and ``extras.root`` are clean. ``rich_html`` is here for its CONTRACT (a value
 #: marked safe, else the Markdown component's allowlist sanitiser) and, like ``format_html``, is
 #: trusted without regard to WHERE the guard cannot see it placed: its output is markup, right in an
 #: element and wrong inside an attribute value.
 CLEAN_RECORD_ORIGINS = frozenset(
     {
         "djust.components.components.signature_pad.pad_extras",
+        "djust.components.components.voice_input.voice_extras",
+        "djust.components.components.image_upload_preview.upload_attrs",
+        "djust.components.components.map_picker.map_picker_attrs",
         "djust.components.components.image_cropper.cropper_extras",
+        "djust.components.components.markdown_editor.menu_attrs",  # two fixed "true" / "false"
         "djust.markdown.render_markdown",  # the Rust renderer: raw tags escaped, script URLs "#"
         "djust.components.components.dashboard_grid.clamp_columns",  # an int
         "djust.components.components.dashboard_grid.clamp_cells",  # a tuple of ints
@@ -401,7 +406,7 @@ CLEAN_RECORD_ORIGINS = frozenset(
 ENGINE_RENDERED_PARAMETERS = {"djust.components.rust_handlers": {("render", "content")}}
 #: Names imported from the module that DEFINES them as a literal string: markup the developer wrote.
 #: Pinned by ``test_safe_markup_guard_3820.py`` (the source still binds each to a string literal).
-CLEAN_NAME_ORIGINS: frozenset[str] = frozenset()
+CLEAN_NAME_ORIGINS = frozenset({"djust.components.components.image_upload_preview.ITEMS_HTML"})
 #: Builtins whose instances print only digits, ``True`` / ``False``, ``inf`` or ``nan``.
 NUMERIC_TYPES = frozenset({"int", "float", "bool"})
 #: Origins that are clean when EVERY argument is clean (a number out of numbers, text out of text).

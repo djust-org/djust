@@ -196,6 +196,13 @@ _COMPONENT_PREVIEW_NOTES = {
     "export_dialog": (
         "The dialog requires a host action and export payload, so it has no standalone preview."
     ),
+    "prompt_editor": (
+        "This composed editor receives its state from the host view, so it has "
+        "no standalone preview."
+    ),
+    "tour": (
+        "The tour requires host-page anchors and a current step, so it has no standalone preview."
+    ),
 }
 
 

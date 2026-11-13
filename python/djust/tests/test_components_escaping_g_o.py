@@ -19,6 +19,8 @@ from django.utils.safestring import mark_safe  # noqa: E402
 from djust.components.components.hover_card import HoverCard  # noqa: E402
 from djust.components.components.input_group import InputGroup  # noqa: E402
 from djust.components.components.loading_overlay import LoadingOverlay  # noqa: E402
+from djust.components.components.markdown_editor import MarkdownEditor  # noqa: E402
+from djust.components.components.masonry_grid import MasonryGrid  # noqa: E402
 from djust.components.components.meter import Meter  # noqa: E402
 from djust.components.components.modal import Modal  # noqa: E402
 from djust.components.components.nav_menu import NavMenu  # noqa: E402
@@ -33,6 +35,7 @@ FACTORIES: dict[str, Callable[[Any], Any]] = {
     "hover_card_content": lambda v: HoverCard(trigger="t", content=v),
     "input_group_content": lambda v: InputGroup(content=v),
     "loading_overlay_content": lambda v: LoadingOverlay(content=v),
+    "masonry_item_content": lambda v: MasonryGrid(items=[{"content": v}]),
     "meter_segment_value": lambda v: Meter(
         segments=[{"value": v, "label": "a"}], total=0, show_legend=True
     ),
@@ -43,6 +46,7 @@ FACTORIES: dict[str, Callable[[Any], Any]] = {
     "number_stepper_step": lambda v: NumberStepper(name="n", step=v),
     "number_stepper_min": lambda v: NumberStepper(name="n", min_val=v),
     "number_stepper_max": lambda v: NumberStepper(name="n", max_val=v),
+    "markdown_editor_rows": lambda v: MarkdownEditor(name="n", rows=v),
 }
 
 #: Slots whose value is rendered as element content (a marked-safe value keeps its markup).
@@ -50,6 +54,7 @@ CONTENT_SLOTS = [
     "hover_card_content",
     "input_group_content",
     "loading_overlay_content",
+    "masonry_item_content",
     "modal_content",
     "nav_menu_content",
 ]
