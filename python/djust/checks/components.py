@@ -3,6 +3,7 @@
 Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 """
 
+from djust._framework_code import is_djust_module
 import ast
 import inspect
 import logging
@@ -423,13 +424,9 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # Skip internal djust classes -- only check user classes, but still
         # check classes in djust's own examples/tests.
         module = getattr(cls, "__module__", "") or ""
+        # A project app named ``djust_*`` is project code, checked like any
+        # other (#4094); only djust's own production modules are skipped.
         if _is_framework_internal_class(cls):
-            # A user app or package named djust_* is not djust: V013 still
-            # inspects it (the other per-class checks keep skipping it).
-            from djust.auth.core import is_framework_module as _is_framework_module
-
-            if not _is_framework_module(module) and cls.__dict__.get("abstract") is not True:
-                errors.extend(_v013_warnings(cls, "%s.%s" % (module, cls.__qualname__)))
             continue
 
         # User-declared abstract base classes opt out of all per-class V/Q checks
@@ -782,7 +779,7 @@ def _check_tutorial_mixin_mro(errors: list[CheckMessage], LiveView: type) -> Non
 
     for cls in _walk_subclasses(LiveView):
         module = getattr(cls, "__module__", "") or ""
-        if module.startswith("djust.") or module.startswith("djust_"):
+        if is_djust_module(module):
             if "test" not in module and "example" not in module:
                 continue
 
@@ -921,7 +918,7 @@ def check_sticky_child_own_dj_view(app_configs: Any, **kwargs: Any) -> list[Chec
             continue
 
         module = getattr(cls, "__module__", "") or ""
-        if module.startswith("djust.") or module.startswith("djust_"):
+        if is_djust_module(module):
             # Skip internal djust classes — only check user classes (but still
             # check classes in djust's own tests/examples).
             if "test" not in module and "example" not in module:
@@ -1163,7 +1160,7 @@ def check_time_travel_pii_fields(app_configs: Any, **kwargs: Any) -> list[CheckM
             continue
 
         module = getattr(cls, "__module__", "") or ""
-        if module.startswith("djust.") or module.startswith("djust_"):
+        if is_djust_module(module):
             if "test" not in module and "example" not in module:
                 continue
 

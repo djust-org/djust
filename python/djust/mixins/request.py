@@ -1961,9 +1961,22 @@ class RequestMixin:
                 return JsonResponse(redirect_response)
 
             if not legacy_exposure:
-                from .._exposure_sessions import save_server_state
+                from .._exposure_sessions import StateLimitExceeded, save_server_state
 
-                save_server_state(self, request)
+                try:
+                    save_server_state(self, request)
+                except StateLimitExceeded as refused:
+                    # Refused before writing (#4095): the stored state is the
+                    # last one that fit, and the next request restores it. This
+                    # request's view is discarded, so nothing else to put back.
+                    logger.warning(
+                        "HTTP event state save refused: field %s over its %s limit",
+                        sanitize_for_log(refused.field),
+                        refused.limit,
+                    )
+                    return JsonResponse(
+                        {"error": str(refused), "code": "state_too_large"}, status=413
+                    )
 
             # Fields every response of this turn carries besides its payload.
             response_fields: Dict[str, Any] = {}
@@ -2107,8 +2120,14 @@ class RequestMixin:
 
             # uses_legacy_exposure is the module-level import; a local import
             # here would make the name local to all of post().
+            from .._exposure import ExposureConfigurationError
             from .._exposure_diagnostics import diagnostics_policy_allows
 
+            if isinstance(e, ExposureConfigurationError):
+                # A configuration error is framework-authored and value-free:
+                # it reaches the developer as on the GET path
+                # (``protected_http_outcome``), not as a generic answer (#4092).
+                raise
             if not diagnostics_policy_allows(self):
                 # ADR-038: undeclared state can occur in the exception's message,
                 # its traceback and the posted params, so in production a

@@ -83,6 +83,8 @@ class BaseViewWithNavbar(LiveView):
     """
 
     exposure_policy = "legacy"
+    # A base class, not a page: V001/V002 do not apply (not inherited).
+    abstract = True
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

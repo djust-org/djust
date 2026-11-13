@@ -295,7 +295,12 @@ def test_the_snapshot_restore_twin_forces_a_full_html_render() -> None:
             break
         branch.append(line)
     body = "\n".join(branch)
-    assert "safe_setattr(" in body, "the branch applies the restored values"
+    # The values are applied by ``apply_restored_state`` (shared with the
+    # over-limit rollback, #4095), whose own body assigns them.
+    assert "apply_restored_state(view_instance, restored, request)" in body, (
+        "the branch applies the restored values"
+    )
+    assert "safe_setattr(" in inspect.getsource(runtime.apply_restored_state)
     assert "view_instance._force_full_html = True" in body, (
         "dispatch_mount must set _force_full_html on a restore mount"
     )

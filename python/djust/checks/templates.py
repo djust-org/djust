@@ -3,6 +3,7 @@
 Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 """
 
+from djust._framework_code import is_djust_module
 import ast
 import inspect
 import logging
@@ -1283,9 +1284,7 @@ def _get_context_data_is_too_dynamic(cls: type) -> bool:
         if klass is object:
             continue
         mod = getattr(klass, "__module__", "") or ""
-        if (mod.startswith("djust.") or mod.startswith("djust_")) and (
-            "test" not in mod and "example" not in mod
-        ):
+        if is_djust_module(mod) and ("test" not in mod and "example" not in mod):
             continue
         method = klass.__dict__.get("get_context_data")
         if method is None:
@@ -1342,7 +1341,7 @@ def _static_template_source(cls: type) -> Optional[tuple[str, Optional[str], str
 def _is_application_view(cls: type) -> bool:
     """A view the project wrote: not shipped in djust, not marked ``abstract``."""
     module = getattr(cls, "__module__", "") or ""
-    if module.startswith("djust.") or module.startswith("djust_"):
+    if is_djust_module(module):
         if "test" not in module and "example" not in module:
             return False
     return cls.__dict__.get("abstract") is not True
@@ -1374,7 +1373,7 @@ def check_undefined_template_vars(app_configs: Any, **kwargs: Any) -> list[Check
         key=lambda c: (getattr(c, "__module__", ""), getattr(c, "__qualname__", "")),
     ):
         module = getattr(cls, "__module__", "") or ""
-        if module.startswith("djust.") or module.startswith("djust_"):
+        if is_djust_module(module):
             if "test" not in module and "example" not in module:
                 continue
 

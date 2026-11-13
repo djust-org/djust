@@ -38,6 +38,7 @@ or silence via ``# djust_typecheck: noqa`` in the template.
 
 from __future__ import annotations
 
+from djust._framework_code import is_djust_module
 import ast
 import json
 import re
@@ -180,9 +181,7 @@ def _extract_context_keys_from_ast(cls: type, *, attributes: bool = True) -> Set
         # Skip framework classes: djust internals, Django, DRF, and builtins.
         # Test / example modules that live under djust.* are kept so our own
         # test helpers work.
-        if (mod.startswith("djust.") or mod.startswith("djust_")) and (
-            "test" not in mod and "example" not in mod
-        ):
+        if is_djust_module(mod) and ("test" not in mod and "example" not in mod):
             continue
         if mod.startswith("django.") or mod == "django":
             continue

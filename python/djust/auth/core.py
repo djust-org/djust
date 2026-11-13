@@ -581,9 +581,9 @@ def is_framework_module(module: str) -> bool:
     """
     if module == "django" or module.startswith("django."):
         return True
-    if module == "djust" or module.startswith("djust."):
-        return "test" not in module and "example" not in module
-    return False
+    from .._framework_code import is_djust_production_module
+
+    return is_djust_production_module(module)
 
 
 def is_non_access_mixin(klass: Any) -> bool:

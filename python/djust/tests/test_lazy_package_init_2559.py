@@ -100,43 +100,47 @@ assert len(ALLOWLIST_BACKEND) == 35 + HAS_CSP_NONCE_TAG
 # registers the system checks, applies the differ flags, warms the filter
 # bridge (through ``djust.template_filters`` — NOT ``djust.mixins``, #2565)
 # and installs the ``{% load %}`` hooks. Exact, like the rows above.
-ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
-    {
-        "djust._removed_settings",  # 2.0 removed-settings startup guard (#3500)
-        "djust.apps",
-        "djust.assets",  # ADR-040 asset registry (setting_changed receiver)
-        "djust.checks",
-        "djust.checks.accessibility",
-        "djust.checks.ai_discovery",  # ADR-043 INFO checks; no heavy imports at setup
-        "djust.checks.assets",  # ADR-040 asset checks (B001-B010)
-        "djust.checks.audio",
-        "djust.checks.components",
-        "djust.checks.configuration",
-        "djust.checks.integrations",
-        "djust.checks.quality",
-        "djust.checks.sbom",  # ADR-040 asset checks (B011-B014)
-        "djust.checks.security",
-        "djust.checks.templates",
-        "djust.checks.updates",
-        "djust.checks.accounts",  # ADR-039 account checks (A100-A106)
-        "djust.checks.parameters",  # ADR-036 parameter contract checks (V016-V018)
-        "djust.checks.bindings",  # ADR-037 template event binding checks (T019-T022)
-        "djust.checks.utils",
-        "djust.config",
-        "djust.observability",
-        "djust.observability.log_handler",
-        "djust.observability.registry",
-        "djust.security",
-        "djust.security.attribute_guard",
-        "djust.security.error_handling",
-        "djust.security.event_guard",
-        "djust.security.json_script",
-        "djust.security.log_sanitizer",
-        "djust.security.mount",
-        "djust.template_filters",
-    }
+ALLOWLIST_SETUP = (
+    ALLOWLIST_BACKEND
+    | frozenset(
+        {
+            "djust._framework_code",  # which modules are djust's own, for the checks (#4094); stdlib only
+            "djust._removed_settings",  # 2.0 removed-settings startup guard (#3500)
+            "djust.apps",
+            "djust.assets",  # ADR-040 asset registry (setting_changed receiver)
+            "djust.checks",
+            "djust.checks.accessibility",
+            "djust.checks.ai_discovery",  # ADR-043 INFO checks; no heavy imports at setup
+            "djust.checks.assets",  # ADR-040 asset checks (B001-B010)
+            "djust.checks.audio",
+            "djust.checks.components",
+            "djust.checks.configuration",
+            "djust.checks.integrations",
+            "djust.checks.quality",
+            "djust.checks.sbom",  # ADR-040 asset checks (B011-B014)
+            "djust.checks.security",
+            "djust.checks.templates",
+            "djust.checks.updates",
+            "djust.checks.accounts",  # ADR-039 account checks (A100-A106)
+            "djust.checks.parameters",  # ADR-036 parameter contract checks (V016-V018)
+            "djust.checks.bindings",  # ADR-037 template event binding checks (T019-T022)
+            "djust.checks.utils",
+            "djust.config",
+            "djust.observability",
+            "djust.observability.log_handler",
+            "djust.observability.registry",
+            "djust.security",
+            "djust.security.attribute_guard",
+            "djust.security.error_handling",
+            "djust.security.event_guard",
+            "djust.security.json_script",
+            "djust.security.log_sanitizer",
+            "djust.security.mount",
+            "djust.template_filters",
+        }
+    )
 )
-assert len(ALLOWLIST_SETUP) == 67 + HAS_CSP_NONCE_TAG
+assert len(ALLOWLIST_SETUP) == 68 + HAS_CSP_NONCE_TAG
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).
