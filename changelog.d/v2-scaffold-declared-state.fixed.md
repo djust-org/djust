@@ -1,0 +1,1 @@
+- The `djust new` demo view declares `items` and `search_query` with `state(..., persist="server")`, so a fresh project passes `manage.py check` without `djust.V029` warnings and the to-do list survives the HTTP fallback.
