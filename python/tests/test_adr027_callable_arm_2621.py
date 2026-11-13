@@ -391,7 +391,6 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
     """
 
     # Stays legacy (split from the explicit migration): this test's subject is a legacy mechanism (see the legacy-subject worklist).
-    # Stays legacy (split from the explicit migration): this test's subject is a legacy mechanism (see the legacy-subject worklist).
     def test_the_client_state_payload_holds_no_function_address(self) -> None:
         """The other outbound channel, measured rather than assumed.
 

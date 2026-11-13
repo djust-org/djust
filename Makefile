@@ -345,6 +345,15 @@ test-selected: ## Run affected Python tests (FROM/TO optional; unknown/shared ch
 test-fast: ## Python fast tier: everything except `slow` (>1s in .test_durations, tests/slow_tier.py) and `nightly`
 	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto --dist loadfile -q -m "not slow and not nightly" --benchmark-disable
 
+# The early tier (tests/early_tier.py): every promotion-ledger entry (tests/promotion-ledger.json,
+# tests that failed late), every `pr_tier` test, and the pins the path rules select for this
+# branch's change (diff against origin/main plus the working tree). The local quick check before
+# handing work over; PR CI runs the same set inside its fast tier.
+.PHONY: test-early
+test-early: ## The early tier: promotion-ledger entries + pr_tier tests + the path-rule pins this change selects
+	@files=$$($(PYTHON) scripts/promotion_ledger.py early-files) || exit $$?; \
+	DJUST_FULL_LOCAL=1 DJUST_SWEEP_SAMPLE=1 PYTHONPATH=. $(PYTHON) -m pytest $$files --early-only -n 2 --dist loadfile -q -m "not nightly" --benchmark-disable
+
 .PHONY: test-integration
 test-integration: test ## Run the unchanged full integration gate before declaring a milestone ready
 
@@ -387,6 +396,20 @@ test-nightly: ## Run nightly/exhaustive differential tests (-m nightly)
 	@echo "$(GREEN)Running nightly differential tests...$(NC)"
 	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -m nightly
 
+# The exhaustive security sweeps (#4074): CI samples them before merge and runs every unit in
+# the nightly main-health suite. `make test-sweeps` re-runs the sample (SEED=<printed seed>,
+# CHANGED=<paths> reproduce a CI one); `make test-sweeps-full` runs every unit (about 70 min of
+# recorded runner time serially; the xdist workers split it by file).
+SWEEP_TEST_FILES = python/djust/tests/test_marked_safe_attribute_sweep_3898.py python/tests/test_safe_markup_audit_3774.py python/tests/test_safe_markup_guard_3820.py python/tests/test_sweep_tiers_4074.py
+
+.PHONY: test-sweeps
+test-sweeps: ## The exhaustive security sweeps as PR CI runs them: a seeded sample (SEED=, CHANGED= optional)
+	@DJUST_SWEEP_SAMPLE=1 DJUST_SWEEP_SEED='$(SEED)' $(if $(CHANGED),DJUST_SWEEP_CHANGED='$(CHANGED)') PYTHONPATH=. $(PYTHON) -m pytest $(SWEEP_TEST_FILES) -n 2 --dist loadfile -q
+
+.PHONY: test-sweeps-full
+test-sweeps-full: ## The exhaustive security sweeps in full, every unit (the nightly tier)
+	@DJUST_SWEEP_SAMPLE=0 PYTHONPATH=. $(PYTHON) -m pytest $(SWEEP_TEST_FILES) -n 2 --dist loadfile -q
+
 # The whole-tree meta tests: gates that read every test file (or the shard and
 # parity configuration built from them), so they pass on a PR's own tree and can
 # fail on the merge of two PRs (#3757; main went red on a54278ebd after a
@@ -401,12 +424,14 @@ MERGE_GATES := \
 	tests/test_corpus_shards.py \
 	tests/test_git_env_guard_3179.py \
 	tests/test_merge_gates_3757.py \
+	tests/test_promotion_ledger.py \
 	tests/test_reset_fixture_hygiene_2234.py \
 	python/djust/tests/test_communicator_timeouts_ratchet_3709.py \
 	python/djust/tests/test_marked_safe_attribute_sweep_3898.py \
 	python/djust/tests/test_no_absolute_time_bounds_3711.py \
 	python/tests/test_no_override_settings_with_fixture_3728.py \
 	python/tests/test_no_reported_crash_signals_2701.py \
+	python/tests/test_sweep_tiers_4074.py \
 	python/tests/test_safe_markup_gate_3848.py \
 	python/tests/test_template_library_parity_3663.py \
 	python/tests/test_user_rows_do_not_leak_between_tests.py
