@@ -1378,9 +1378,16 @@ for _label, _source, _bad in (
         "def f(raw):\n    parts = [f'<b>{raw}</b>']\n    return mark_safe(*parts)\n",
         True,
     ),
+    # #3864: a call of a function of the file is judged with what THIS call passes, so a helper that
+    # hands back its argument hands back the escaped value (it used to be judged with ``x`` raw)
     (
         "await of an escaped value",
         "async def ident(x):\n    return x\nasync def f(raw):\n    return mark_safe(f'<b>{await ident(escape(raw))}</b>')\n",
+        False,
+    ),
+    (
+        "await of a raw value through a helper",
+        "async def ident(x):\n    return x\nasync def f(raw):\n    return mark_safe(f'<b>{await ident(raw)}</b>')\n",
         True,
     ),
     (

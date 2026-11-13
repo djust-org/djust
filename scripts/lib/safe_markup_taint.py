@@ -63,6 +63,19 @@ A piece is clean when it is:
   whose name is only ever the callee of a plain call in that function (not handed to ``map``,
   returned or stored): every call site is in view, so its parameters hold what those calls pass (and
   a default, where a call omits one). A method is not bound that way: a subclass anywhere can call it;
+* the RESULT of such a call (also of a lambda bound to a name once, ``tag = lambda u: ...``, and of a
+  method of a fresh instance of a plain class of this file, ``Card().render(x)``) judged with its
+  parameters bound to what THAT call passes (#3845, #3864; ``_specialized``). A sink handed the call
+  is flagged when what it returns for these arguments is built from a raw value (``mark_safe(
+  helper(x))``) or puts an escaper's output where it does not belong (``tag(safe_url(x))`` of ``def
+  tag(u): return f"<a href={u}>"``). The result counts as clean for these arguments only where the
+  position it is placed at was checked, and only in element TEXT (it may be markup with quotes,
+  wrong inside an attribute value); a bound argument is clean in text or a quoted value, never in an
+  unquoted attribute, unless it is a literal or digits (escaped text keeps its spaces). What ``append``
+  / ``+=`` put into a container that outlives the call (a module list, a mutable default, a
+  parameter, an attribute) is judged with every binding off, and a parameter this call binds to a
+  literal decides ``if p:`` / ``if p is None:`` (when the function never rebinds it). A recursive call,
+  ``*args`` / ``**kw`` and a sink inside the function's OWN body are judged with the parameters raw;
 * type facts of the standard library and the project (#3847): a ``date`` / ``datetime`` value's
   ``isoformat()`` / ``weekday()`` / ``.year`` / ``(a - b).days`` (a ``date`` accepts ints only), the
   elements (at any depth) of ``calendar.Calendar(...).monthdayscalendar(...)``, and
@@ -95,12 +108,14 @@ unknown call, is raw.
 
 What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
 --------------------------------------------------------------------------
-* Anything that crosses a module or a file's own helper that is not clean: a string built in one
-  function and marked safe in another (``build_theme_head_context`` builds ``css_block``;
-  ``ThemeMixin`` marks it safe; the inline theme switcher builds ``preset_options`` into a returned
-  f-string that ``LazyThemeHTML`` marks safe, so the switcher is protected by its own tests, not by
-  this guard), a value stored on
-  ``self``, a helper that returns an interpolated string and is passed straight to the sink.
+* Anything that crosses a module, or a value stored on ``self`` and marked safe in another method: a
+  string built in one function and marked safe in another (``build_theme_head_context`` builds
+  ``css_block``; ``ThemeMixin`` marks it safe; the inline theme switcher builds ``preset_options`` into a
+  returned f-string that ``LazyThemeHTML`` marks safe, so the switcher is protected by its own tests,
+  not by this guard). A helper of the SAME file that returns an interpolated string and is passed
+  straight to the sink is seen since #3864, and so is one that takes an escaper's output as a parameter
+  and builds the tag, as a ``def``, a lambda or a method of a fresh instance (not of a class with a
+  base, a metaclass or a decorator: its ``__new__`` may return anything).
 * ``mark_safe(x)`` where ``x`` is a bare parameter or an unknown call's result: that is how trusted
   markup is passed in, and no syntax says whether ``x`` was escaped.
 * A sink reached through ``functools.reduce``, ``exec`` (code held in a string), and any builder not
@@ -142,10 +157,13 @@ What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
   (``join`` of bare outputs, an argument) is not clean. What that check still cannot see (#3850,
   #3864): a prefix the guard cannot read (any unknown earlier part is assumed position-neutral;
   treating markup-carrying parts as unknown flagged over a hundred correct sites in the tree, so it
-  was not done), a function that takes the output as a PARAMETER and builds the tag (the helper is
-  judged with its parameter raw, and a call of it with clean arguments is not a built string), a
-  lambda that does the same, ``format_map`` (flagged, not cleared), and a module attribute replaced
-  from outside the file (``sys.modules[__name__].helper = ...``, ``setattr`` on an imported module).
+  was not done), ``format_map`` (flagged, not cleared), and a module attribute replaced from outside
+  the file (``sys.modules[__name__].helper = ...``, ``setattr`` on an imported module). A function or
+  lambda that takes the output as a PARAMETER and builds the tag is seen since #3864 (above). The
+  plain escapers are not position-checked: ``escape(x)`` written straight into an unquoted attribute
+  (``<a title={escape(x)}>``) is cleared, although ``x onmouseover=1`` stays two attributes there
+  (making them position-checked flagged about seventy correct sites in the tree). Through a parameter
+  of a helper it is caught: a bound argument is never clean in an unquoted attribute.
   A metaclass data descriptor of a class attribute's name is no longer missed: ``cls.X`` / ``C.X`` of
   a class with a metaclass (or any class keyword) is not trusted (``self.X`` is, since an instance
   lookup never reaches the metaclass).
@@ -449,6 +467,16 @@ class _Raw:
 RAW = _Raw()
 
 
+class _Param(_Raw):
+    """A parameter's value on entry: raw, unless a call site in view binds it (:meth:`_Module._actuals`).
+    One object per parameter, so the entry binding is told apart from any other unknown binding."""
+
+    __slots__ = ("name",)
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
 class _ElementOf:
     """A name bound by iterating ``iterable`` (a ``for`` target or a comprehension variable)."""
 
@@ -467,6 +495,21 @@ class _Foreign:
         self.scope = scope
 
 
+class _Actual(_Foreign):
+    """A parameter bound to the argument of the ONE call whose result is being judged (#3845, #3864).
+    The argument is judged in the caller's scope, and only where its POSITION was checked: it may be
+    an escaped value, and escaped text is clean in element text or a quoted value, never in an
+    unquoted attribute (``x onmouseover=1`` stays two attributes there)."""
+
+    __slots__ = ()
+
+
+#: Pseudo-origins for :meth:`_Module._hold_level`: a value bound from a call site (:class:`_Actual`)
+#: and a call of a function of this file that is clean only for the arguments it is given.
+_BOUND = frozenset({"<a parameter bound from its call>"})
+_SPEC = frozenset({"<a call clean only for its arguments>"})
+
+
 class _AnyOf:
     """A parameter of a nested function bound from its call sites: it holds one of ``values``, each
     judged in the scope of its call (or, for a default, of the ``def``) (#3845)."""
@@ -483,14 +526,36 @@ def _unwrap(value: object, owner: _Scope) -> tuple[object, _Scope]:
     return value, owner
 
 
+def _foreign_values(value: object, owner: _Scope) -> list[tuple[ast.expr, _Scope]]:
+    """The expressions a binding stands for, each with the scope it is judged in: itself, or for a
+    parameter bound from call sites (``_Foreign`` / ``_AnyOf``) each argument. Nothing for a value
+    that is not an expression (RAW, an element of an iterable)."""
+    if isinstance(value, _Foreign):
+        return [(value.expr, value.scope)]
+    if isinstance(value, _AnyOf):
+        return [(v.expr, v.scope) for v in value.values]
+    if isinstance(value, ast.expr):
+        return [(value, owner)]
+    return []
+
+
+def _return_values(fn: ast.AST) -> list[ast.expr | None]:
+    """What a function returns: each ``return``'s value (``None`` for a bare one), or a lambda's body."""
+    if isinstance(fn, ast.Lambda):
+        return [fn.body]
+    return [n.value for n in _own_nodes(fn) if isinstance(n, ast.Return)]
+
+
 class _Def:
     """One binding of a name: what reaches a use is a SET of these (see :class:`_Flow`)."""
 
-    __slots__ = ("name", "value")
+    __slots__ = ("name", "value", "site")
 
-    def __init__(self, name: str, value: object) -> None:
+    def __init__(self, name: str, value: object, site: int | None = None) -> None:
         self.name = name
         self.value = value
+        #: id of the statement that binds it, for a binding the source makes (else ``None``)
+        self.site = site
 
 
 @dataclass(frozen=True)
@@ -652,6 +717,16 @@ class _Module:
         self.scope_of: dict[int, _Scope] = {}
         #: ids of ``str(x)`` calls that only run where ``str(x) in CONSTANT`` held (#3846)
         self.narrowed_exprs: set[int] = set()
+        #: id(scope) -> parameter name -> the argument ONE call site passes (a ``_Foreign`` judged in
+        #: the caller's scope), while that call's result is judged (#3845, #3864). A function's
+        #: parameters are raw everywhere else.
+        self._actuals: dict[int, dict[str, object]] = {}
+        self._facts: dict[int, dict[int, tuple[tuple[str, str, bool], ...]]] = {}
+        #: id(function) -> whether it returns a clean value for any argument; memoised
+        self._raw_clean: dict[int, bool] = {}
+        self._raw_clean_busy: set[int] = set()
+        #: (id(callee expression), id(scope)) -> the function a call reaches (``_local_function``)
+        self._locals: dict[tuple[int, int], tuple] = {}
         self._build(self.tree, "<module>", None)
         self._closure_writes()
         self._bind_nested_parameters()
@@ -1114,7 +1189,7 @@ class _Module:
                 every.append(args.kwarg)
             engine = self._engine_parameters(node)
             for arg in every:
-                value: object = ast.Constant("") if arg.arg in engine else RAW
+                value: object = ast.Constant("") if arg.arg in engine else _Param(arg.arg)
                 scope.assigns.setdefault(arg.arg, []).append(value)
                 scope.params[arg.arg] = value
         if self._returns_markup(node, parent):
@@ -1236,11 +1311,12 @@ class _Module:
             if not ok:
                 continue
             for param, values in bound.items():
-                if fscope.params.get(param) is not RAW:
+                entry = fscope.params.get(param)
+                if not isinstance(entry, _Param):
                     continue  # the engine vouched for it already
                 value = _AnyOf(values)
                 fscope.params[param] = value
-                fscope.assigns[param] = [value if v is RAW else v for v in fscope.assigns[param]]
+                fscope.assigns[param] = [value if v is entry else v for v in fscope.assigns[param]]
 
     def _only_called(self, name: str, holder: _Scope) -> list[tuple[ast.Call, _Scope]] | None:
         """Every use of ``name`` inside ``holder`` (nested scopes included), when each one is the
@@ -1736,6 +1812,9 @@ class _Module:
     def clean(self, e: object, sc: _Scope, depth: int, seen: frozenset) -> bool:
         if depth > _DEPTH or e is RAW:
             return False
+        if isinstance(e, _Actual) and _CTX_OK not in seen:
+            # an argument bound from the call (#3864): clean only where its position was checked
+            return self._position_free(e.expr, e.scope)
         if isinstance(e, _Foreign):
             return self.clean(e.expr, e.scope, depth + 1, seen)
         if isinstance(e, _AnyOf):
@@ -1824,7 +1903,7 @@ class _Module:
                 or self.origin(e.func, sc) in JSON_ESCAPERS
             ):
                 return False  # a context-sensitive escaper's output whose position nobody checked
-            return self._call_clean(e, sc, d, seen - {_CTX_OK})
+            return self._call_clean(e, sc, d, seen - {_CTX_OK}, placed=_CTX_OK in seen)
         return False
 
     def _origin_of_import(self, e: ast.Name, sc: _Scope) -> str | None:
@@ -1847,6 +1926,15 @@ class _Module:
         another call given it, a local helper that returns it): the position it was checked at is no
         longer the position it lands at (#3850), so it is judged again where it is placed. Past the
         depth bound the answer is ``2`` (fail closed)."""
+        if isinstance(value, _Actual) and origins is _BOUND:
+            return 0 if self._position_free(value.expr, value.scope) else 1
+        if isinstance(value, _Foreign):  # a parameter bound from a call site: the argument (#3864)
+            return self._hold_level(value.expr, value.scope, origins, depth + 1, visited)
+        if isinstance(value, _AnyOf):
+            return max(
+                (self._hold_level(v, sc, origins, depth + 1, visited) for v in value.values),
+                default=0,
+            )
         if not isinstance(value, ast.expr):
             return 0
         if depth > 30:
@@ -1862,6 +1950,8 @@ class _Module:
         if isinstance(value, ast.Call):
             if self.origin(value.func, sc) in origins:
                 return 1
+            if origins is _SPEC or origins is _BOUND:
+                return self._call_carries(value, sc, origins, many)
             if (
                 isinstance(value.func, ast.Name)
                 and value.func.id in ("len", "int", "float", "bool")
@@ -1881,15 +1971,22 @@ class _Module:
             if local is not None:
                 fn, fscope = local
                 key = (id(fn), id(origins))
+                if self._actuals:  # a call-site binding is in force: what it returns may differ
+                    if key in self._fn_hold_busy:
+                        return 0  # recursion adds nothing new
+                    self._fn_hold_busy.add(key)
+                    try:
+                        held = self._unbound(
+                            fscope, lambda: self._returns_hold(fn, fscope, origins)
+                        )
+                    finally:
+                        self._fn_hold_busy.discard(key)
+                    return 2 if held else 0
                 if key not in self._fn_hold:
                     if key in self._fn_hold_busy:
                         return 0  # recursion adds nothing new
                     self._fn_hold_busy.add(key)
-                    held = any(
-                        self._hold_level(r.value, fscope, origins)
-                        for r in _own_nodes(fn)
-                        if isinstance(r, ast.Return) and r.value is not None
-                    )
+                    held = self._returns_hold(fn, fscope, origins)
                     self._fn_hold_busy.discard(key)
                     self._fn_hold[key] = 2 if held else 0
                 return self._fn_hold[key]
@@ -1904,7 +2001,7 @@ class _Module:
             owner = sc.find(value.id)
             if owner is None:
                 return 0
-            key = ("name", value.id, id(owner))
+            key = ("name", value.id, id(owner), self._ctx(owner))
             if key in visited:
                 return 0
             values, _ = self._bindings(value, value.id, owner, sc)
@@ -1937,40 +2034,82 @@ class _Module:
             return 2 if self._hold_level(elt, inner_scope, origins, d, visited) else 0
         return 0
 
+    def _call_carries(self, value: ast.Call, sc: _Scope, origins: frozenset, many) -> int:
+        """:meth:`_hold_level` of a call for a bound argument / a call clean only for its arguments.
+
+        Only a call whose RESULT holds its arguments' text counts: a function of this file that needs
+        them, ``str`` / ``min`` / ... of them, ``x.strip()`` / ``.join`` / ``.format`` of them. Any
+        other call (an unknown one, ``d.get(k)``, ``escape(..)``) gives a value that is raw or clean
+        on its own terms, so nothing to place: what it may still need is judged by ``clean``."""
+        origin = self.origin(value.func, sc)
+        if (
+            origin in CLEAN_ORIGINS
+            or origin in CONTEXT_SENSITIVE_ORIGINS
+            or origin in JSON_ESCAPERS
+            or self._trusted_call(value, sc)
+            or self._position_free(value, sc)
+        ):
+            return 0  # an escaper trusted by its origin (placed by its own rules), or digits
+        args = [*value.args, *(k.value for k in value.keywords)]
+        if self._needs_arguments(value, sc):
+            return 1 if origins is _SPEC else (2 if many(args) else 0)
+        if self._local_function(value.func, sc) is not None:
+            return 0  # clean whatever it is given: its result carries none of them
+        name = _callee(value.func)
+        if origin in CLEAN_IF_ARGS_CLEAN:
+            return 2 if many(args) else 0
+        if isinstance(value.func, ast.Attribute) and (
+            name in STR_METHODS or name == "join" or name in FORMAT_METHODS
+        ):
+            return 2 if many([*args, value.func.value]) else 0
+        return 0
+
+    def _returns_hold(self, fn: ast.AST, fscope: _Scope, origins: frozenset) -> bool:
+        return any(
+            self._hold_level(v, fscope, origins) for v in _return_values(fn) if v is not None
+        )
+
     def _alternatives(
-        self, value: ast.expr, sc: _Scope, depth: int = 0, visited: frozenset = frozenset()
-    ) -> list[tuple[ast.expr, _Scope]]:
+        self,
+        value: ast.expr,
+        sc: _Scope,
+        depth: int = 0,
+        visited: frozenset = frozenset(),
+        via: bool = False,
+    ) -> list[tuple[ast.expr, _Scope, bool]]:
         """The expressions ``value`` can be: itself, or for a name / ``a if c else b`` / ``a or b`` /
-        ``(n := a)`` each value it can hold."""
+        ``(n := a)`` / ``await a`` each value it can hold. The flag says it was reached through a
+        parameter bound from the call whose result is judged (:class:`_Actual`)."""
         if depth > 8:
-            return [(value, sc)]
+            return [(value, sc, via)]
         d = depth + 1
         if isinstance(value, ast.IfExp):
             return [
-                *self._alternatives(value.body, sc, d, visited),
-                *self._alternatives(value.orelse, sc, d, visited),
+                *self._alternatives(value.body, sc, d, visited, via),
+                *self._alternatives(value.orelse, sc, d, visited, via),
             ]
         if isinstance(value, ast.BoolOp):
-            return [a for v in value.values for a in self._alternatives(v, sc, d, visited)]
-        if isinstance(value, ast.NamedExpr):
-            return self._alternatives(value.value, sc, d, visited)
+            return [a for v in value.values for a in self._alternatives(v, sc, d, visited, via)]
+        if isinstance(value, (ast.NamedExpr, ast.Await)):
+            return self._alternatives(value.value, sc, d, visited, via)
         if isinstance(value, ast.Name):
             owner = sc.find(value.id)
             if owner is None:
                 return []
-            key = ("alt", value.id, id(owner))
+            key = ("alt", value.id, id(owner), self._ctx(owner))
             if key in visited:
                 return []
             if owner.contents.get(value.id) or owner.pieces.get(value.id):
-                return [(value, sc)]  # a container / a string built up: judged as a whole
+                return [(value, sc, via)]  # a container / a string built up: judged as a whole
             values, _ = self._bindings(value, value.id, owner, sc)
-            return [
-                a
-                for v in values
-                if isinstance(v, ast.expr)
-                for a in self._alternatives(v, owner, d, visited | {key})
-            ]
-        return [(value, sc)]
+            out: list[tuple[ast.expr, _Scope, bool]] = []
+            for v in values:
+                # a parameter bound from its call sites: each argument, in its caller's scope
+                bound = via or isinstance(v, _Actual)
+                for x, xsc in _foreign_values(v, owner):
+                    out.extend(self._alternatives(x, xsc, d, visited | {key}, bound))
+            return out
+        return [(value, sc, via)]
 
     def _elements_of(
         self, e: ast.expr, sc: _Scope, depth: int = 0
@@ -2031,11 +2170,25 @@ class _Module:
         a trailing ``*`` marks a value BUILT from such an output whose position is the outer one
         (clean in text only). The strictest of the values it can hold."""
         found: list[str] = []
-        for alt, asc in self._alternatives(value, sc):
-            for origins, kind in ((JSON_ESCAPERS, "json"), (CONTEXT_SENSITIVE_ORIGINS, "sens")):
+        for alt, asc, via in self._alternatives(value, sc):
+            escaper = False  # an escaper's output was found: the other escaper is not looked for
+            for origins, kind in (
+                (JSON_ESCAPERS, "json"),
+                (CONTEXT_SENSITIVE_ORIGINS, "sens"),
+                (_SPEC, "call"),
+                (_BOUND, "bound"),
+            ):
+                if escaper and origins is CONTEXT_SENSITIVE_ORIGINS:
+                    continue
                 level = self._hold_level(alt, asc, origins)
+                if level == 0 and origins is _BOUND and via:
+                    level = 0 if self._position_free(alt, asc) else 1
                 if level == 1:
                     found.append(kind)
+                elif level == 2 and origins in (_SPEC, _BOUND):
+                    # built from a bound argument or such a call: judged again where it is placed
+                    # (no balanced-fragment exemption: an argument may be markup with quotes)
+                    found.append(kind + "*")
                 elif level == 2 and self._joined_elements_kind(alt, asc, kind, found):
                     pass
                 elif level == 2:
@@ -2062,8 +2215,11 @@ class _Module:
                     if not balanced:
                         found.append(kind + "*")
                 if level:
-                    break
-        for kind in ("json*", "sens*", "json", "sens"):
+                    # an escaper's output is placed by the rules of the first escaper found; a call
+                    # or a bound argument in the same value is still looked for: the strictest wins
+                    escaper = True
+        # the strictest first: element text only, then anything but an unquoted attribute
+        for kind in ("json*", "json", "call*", "call", "sens*", "bound*", "sens", "bound"):
             if kind in found:
                 return kind
         return None
@@ -2108,8 +2264,9 @@ class _Module:
             if owner is None:
                 return "\x00"
             values, _ = self._bindings(e, e.id, owner, sc)
-            if len(values) == 1 and isinstance(values[0], ast.expr):
-                return self._leaf_text(values[0], owner, d)
+            found = [x for v in values for x in _foreign_values(v, owner)]
+            if len(values) == 1 and len(found) == 1:
+                return self._leaf_text(found[0][0], found[0][1], d)
         if (
             isinstance(e, ast.Call)
             and isinstance(e.func, ast.Attribute)
@@ -2126,12 +2283,10 @@ class _Module:
             local = self._local_function(e.func, sc)
             if local is not None:
                 fn, fscope = local
-                returns = [
-                    r.value
-                    for r in _own_nodes(fn)
-                    if isinstance(r, ast.Return) and r.value is not None
-                ]
-                texts = {self._leaf_text(r, fscope, d) for r in returns}
+                returns = [v for v in _return_values(fn) if v is not None]
+                texts = self._unbound(
+                    fscope, lambda: {self._leaf_text(r, fscope, d) for r in returns}
+                )
                 if len(texts) == 1:
                     return texts.pop()
         return "\x00"
@@ -2141,7 +2296,9 @@ class _Module:
         ``prefix``: text for ``"json"``; text or a quoted value for ``"sens"``; never an unquoted
         attribute or a tag name."""
         where = self._position(prefix)
-        return where == "text" if kind.startswith("json") else where != "tag"
+        if kind.startswith(("json", "call")):
+            return where == "text"
+        return where != "tag"
 
     def _add_clean(self, e: ast.BinOp, sc: _Scope, d: int, seen: frozenset) -> bool:
         """``a + b + c``: each part clean, and a context-sensitive part (``safe_url(x)``) only where the
@@ -2421,7 +2578,9 @@ class _Module:
             values.append(call.args[position])
         return all(isinstance(v, ast.Constant) and v.value is True for v in values)
 
-    def _call_clean(self, e: ast.Call, sc: _Scope, d: int, seen: frozenset) -> bool:
+    def _call_clean(
+        self, e: ast.Call, sc: _Scope, d: int, seen: frozenset, placed: bool = False
+    ) -> bool:
         if self._trusted_call(e, sc):
             return True
         name = _callee(e.func)
@@ -2433,7 +2592,18 @@ class _Module:
             return len(e.args) == 1 and self._json_dumped(e.args[0], sc, d, seen)
         local = self._local_function(e.func, sc)
         if local is not None:
-            return self._returns_clean(local, d, seen)
+            if self._unbound(local[1], lambda: self._returns_clean(local, d, seen)):
+                return True  # clean whatever it is given
+            if not placed:
+                # clean for THESE arguments, so only where its position was checked (element text,
+                # ``_sens_kind``), unless they are literals or digits
+                return self._position_free(e, sc)
+            # what it returns lands where the call does: in element text
+            return bool(
+                self._specialized(
+                    local, e, sc, lambda: self._returns_clean(local, d, seen | {_CTX_OK})
+                )
+            )
         if origin in CLEAN_IF_DEFAULT_CLEAN:
             if self._has_star(e):
                 return False  # a ``default`` hidden in ``*args`` / ``**kw`` is never examined
@@ -2478,17 +2648,20 @@ class _Module:
             key = ("json-fn", id(fn))
             if key in seen:
                 return True
-            returns = [n for n in _own_nodes(fn) if isinstance(n, ast.Return)]
-            return bool(returns) and all(
-                r.value is not None and self._json_dumped(r.value, fscope, d + 1, seen | {key})
-                for r in returns
+            returns = _return_values(fn)
+            return bool(returns) and self._unbound(
+                fscope,
+                lambda: all(
+                    v is not None and self._json_dumped(v, fscope, d + 1, seen | {key})
+                    for v in returns
+                ),
             )
         if isinstance(e, ast.Name):
             owner = sc.find(e.id)
             if owner is None:
                 return False
             values, defs = self._bindings(e, e.id, owner, sc)
-            key = ("json", e.id, id(owner), defs)
+            key = ("json", e.id, id(owner), defs, self._ctx(owner))
             if key in seen:
                 return True
             seen = seen | {key}
@@ -2509,6 +2682,18 @@ class _Module:
         return [*call.args[1:], *(kw.value for kw in call.keywords)]
 
     def _local_function(
+        self, func: ast.expr, sc: _Scope
+    ) -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, _Scope] | None:
+        """:meth:`_resolve_local`, memoised: it reads only what the file says, never a binding."""
+        key = (id(func), id(sc))
+        hit = self._locals.get(key)
+        # the entry holds the scope itself, so a comprehension's short-lived scope cannot hand its id
+        # to another one while the entry is alive
+        if hit is None or hit[0] is not sc or hit[1] is not func:
+            hit = self._locals[key] = (sc, func, self._resolve_local(func, sc))
+        return hit[2]
+
+    def _resolve_local(
         self, func: ast.expr, sc: _Scope
     ) -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, _Scope] | None:
         """The ``def`` a call reaches, when it is a function or method THIS file defines exactly once.
@@ -2548,9 +2733,60 @@ class _Module:
             if self._falls_through(cls) and not self._defined_unconditionally(cls, func.attr):
                 return None
             name, holder = func.attr, cls
+        elif (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Call)
+            and isinstance(func.value.func, ast.Name)
+            and not self._mutated_or_rebound(func.attr)
+        ):
+            # ``Card().render(x)``: a method of a fresh instance of a class this file defines once
+            # (#3864). Only a plain class: no base (``__new__`` of a base may return anything else),
+            # no metaclass or decorator, no ``__new__`` / ``__getattribute__`` of its own.
+            cname = func.value.func.id
+            owner = sc.find(cname)
+            if (
+                owner is None
+                or cname in owner.opaque
+                or cname in self.rebound_names
+                or self.dynamic_globals
+                or len(owner.assigns.get(cname, [])) != 1
+            ):
+                return None
+            cdefs = owner.def_nodes.get(cname, [])
+            if len(cdefs) != 1 or not isinstance(cdefs[0], ast.ClassDef):
+                return None
+            cnode = cdefs[0]
+            target = self.scope_of.get(id(cnode))
+            if (
+                target is None
+                or cnode.bases
+                or cnode.keywords
+                or cnode.decorator_list
+                or self._class_dynamic(target)
+                or any(
+                    n in target.assigns or n in target.def_nodes
+                    for n in ("__new__", "__getattribute__")
+                )
+                or func.attr in self.assigned_attrs
+                or not self._defined_unconditionally(target, func.attr)
+            ):
+                return None
+            name, holder = func.attr, target
         else:
             return None
         defs = holder.def_nodes.get(name, [])
+        bound = holder.assigns.get(name, [])
+        if (
+            not defs
+            and len(bound) == 1
+            and isinstance(bound[0], ast.Lambda)
+            and name not in holder.opaque
+            and not holder.contents.get(name)
+            and not holder.pieces.get(name)
+            and id(bound[0]) in self.scope_of
+        ):
+            # ``tag = lambda u: f"<a href={u}>"``: a function too, bound once (#3864)
+            return bound[0], self.scope_of[id(bound[0])]  # type: ignore[return-value]
         if (
             len(defs) != 1
             or len(holder.assigns.get(name, [])) != 1
@@ -2576,12 +2812,192 @@ class _Module:
         is raw at every call site, and one that escapes ``x`` itself is clean at every call site.
         """
         fn, fscope = local
-        key = ("returns", id(fn))
+        key = ("returns", id(fn), self._ctx(fscope))
         if key in seen or d > _DEPTH:
             return key in seen  # a recursive call adds nothing new
         seen = seen | {key}
-        returns = [n for n in _own_nodes(fn) if isinstance(n, ast.Return)]
-        return all(r.value is None or self.clean(r.value, fscope, d + 1, seen) for r in returns)
+        return all(
+            v is None or self.clean(v, fscope, d + 1, seen) for v in self._live_returns(fn, fscope)
+        )
+
+    def _specialized(self, local: tuple, call: ast.Call, sc: _Scope, judge):
+        """``judge()`` with the function's parameters bound to what THIS call passes (#3845, #3864).
+
+        A function of this file is judged with its parameters raw, so the verdict holds for any call.
+        A call's RESULT is what this call makes of it: ``tag(safe_url(x))`` of ``def tag(u): return
+        f"<a href={u}>"`` puts the escaper's output in an unquoted attribute, and ``bold(escape(x))`` of
+        ``def bold(u): return f"<b>{u}</b>"`` is clean. Each parameter holds its argument (judged in the
+        caller's scope) or its default; ``self`` / ``cls`` and ``*args`` / ``**kw`` stay raw. Returns
+        ``None`` (nothing to bind) for a call that would raise, a ``*args`` / ``**kw`` call, or a
+        function already being judged for an outer call (recursion)."""
+        fn, fscope = local
+        if id(fscope) in self._actuals or self._has_star(call):
+            return None
+        a = fn.args  # type: ignore[attr-defined]
+        positional = [*a.posonlyargs, *a.args]
+        implicit = self._implicit_arguments(fn, call, fscope)
+        names = [p.arg for p in positional][implicit:]
+        if len(call.args) > len(names) and a.vararg is None:
+            return None
+        binding: dict[str, object] = {}
+        for param, value in zip(names, call.args):
+            binding[param] = _Actual(value, sc)
+        by_keyword = {p.arg for p in [*a.args, *a.kwonlyargs]} - set(
+            p.arg for p in positional[:implicit]
+        )
+        for kw in call.keywords:
+            if kw.arg in by_keyword and kw.arg not in binding:
+                binding[kw.arg] = _Actual(kw.value, sc)
+            elif kw.arg in by_keyword or a.kwarg is None:
+                return None  # given twice, or an unknown keyword: the call raises
+        holder = fscope.parent or fscope  # where the ``def`` (and its defaults) is evaluated
+        all_names = [p.arg for p in positional]
+        defaults = dict(zip(all_names[len(all_names) - len(a.defaults) :], a.defaults))
+        for p, default in zip(a.kwonlyargs, a.kw_defaults):
+            if default is not None:
+                defaults[p.arg] = default
+        for param in [*names, *(p.arg for p in a.kwonlyargs)]:
+            if param not in binding:
+                if param not in defaults:
+                    return None  # a required argument is missing: the call raises
+                binding[param] = _Actual(defaults[param], holder)
+        binding = {k: v for k, v in binding.items() if isinstance(fscope.params.get(k), _Param)}
+        self._actuals[id(fscope)] = binding
+        try:
+            return judge()
+        finally:
+            del self._actuals[id(fscope)]
+
+    def _position_free(self, e: ast.expr, sc: _Scope, depth: int = 0) -> bool:
+        """A value that may sit in ANY position, as it may when written in place: a literal the
+        developer wrote, digits (``int`` / ``len`` / ``str`` of them, a fixed alphabet), or a call of
+        a function of this file given only such values (what it returns is then the developer's
+        markup and values its own body made clean)."""
+        if depth > 6:
+            return False
+        if isinstance(e, ast.Constant):
+            return True
+        if isinstance(e, ast.Name):  # a name that only ever holds such values
+            owner = sc.find(e.id)
+            if owner is None or owner.pieces.get(e.id) or owner.contents.get(e.id):
+                return False
+            values, _ = self._bindings(e, e.id, owner, sc)
+            found = [x for v in values for x in _foreign_values(v, owner)]
+            return (
+                bool(values)
+                and len(found) == len(values)
+                and all(self._position_free(x, xsc, depth + 1) for x, xsc in found)
+            )
+        if not isinstance(e, ast.Call):
+            return False
+        args = [*e.args, *(k.value for k in e.keywords)]
+        if isinstance(e.func, ast.Name) and sc.find(e.func.id) is None:
+            if e.func.id in ("int", "float", "len", "bool"):
+                return True
+            if e.func.id == "str":
+                return all(self._position_free(a, sc, depth + 1) for a in args)
+        if self.origin(e.func, sc) in SAFE_ALPHABET_ORIGINS:
+            return True
+        local = self._local_function(e.func, sc)
+        if local is None or self._has_star(e):
+            return False
+        if not all(self._position_free(a, sc, depth + 1) for a in args):
+            return False
+        return bool(
+            self._specialized(local, e, sc, lambda: self._returns_clean(local, 0, frozenset()))
+        ) or not self._needs_arguments(e, sc)
+
+    def _needs_arguments(self, e: ast.Call, sc: _Scope) -> bool:
+        """``e`` calls a function of this file whose result is NOT clean for any argument: whether it
+        is clean depends on what this call passes (its result is then clean in element text only)."""
+        local = self._local_function(e.func, sc)
+        if local is None:
+            return False
+        key = id(local[0])
+        if key in self._raw_clean:
+            return not self._raw_clean[key]
+        if key in self._raw_clean_busy:
+            return True  # a recursive helper: the stricter answer
+        self._raw_clean_busy.add(key)
+        try:
+            clean = self._unbound(local[1], lambda: self._returns_clean(local, 0, frozenset()))
+        finally:
+            self._raw_clean_busy.discard(key)
+        if not self._actuals:  # what it returns for ANY argument may still read an outer binding
+            self._raw_clean[key] = clean
+        return not clean
+
+    def _raw_all(self, owner: _Scope, name: str, judge):
+        """``judge()`` with every call-site binding off, unless ``name`` is a container its function
+        makes afresh on every call. What ``+=`` / ``append`` / ``d[k] = v`` put into a container is
+        flow-insensitive: a module list, a mutable default, a parameter or a closure's list keeps what
+        EVERY call put there, so it is never judged as what one call passes."""
+        if not self._actuals or self._fresh(owner, name):
+            return judge()
+        saved = self._actuals
+        self._actuals = {}
+        try:
+            return judge()
+        finally:
+            self._actuals = saved
+
+    def _fresh(self, owner: _Scope, name: str) -> bool:
+        """``name`` is a local of a function, never a parameter, and every binding of it is a new
+        display or a literal: each call starts its own (``parts = []``, ``s = ""``)."""
+        if not isinstance(owner.node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            return False
+        if name in owner.params or name in owner.opaque or name in self.rebound_names:
+            return False
+        values = owner.assigns.get(name, [])
+        return bool(values) and all(
+            isinstance(v, (ast.List, ast.Dict, ast.Set, ast.Constant, ast.ListComp, ast.DictComp))
+            for v in values
+        )
+
+    def _unbound(self, fscope: _Scope, judge):
+        """``judge()`` with ``fscope``'s parameters raw: a call's result judged for ANY arguments must
+        not borrow the binding of an outer call of the same function (a recursive call)."""
+        saved = self._actuals.pop(id(fscope), None)
+        try:
+            return judge()
+        finally:
+            if saved is not None:
+                self._actuals[id(fscope)] = saved
+
+    @staticmethod
+    def _implicit_arguments(fn: ast.AST, call: ast.Call, fscope: _Scope) -> int:
+        """How many leading parameters the call fills by itself: ``self`` of ``self.m(..)``, ``cls`` of
+        a ``classmethod``; none for a plain function, a ``staticmethod`` or ``C.m(obj, ..)``."""
+        if not isinstance(call.func, ast.Attribute):
+            return 0
+        decorators = {d.id for d in getattr(fn, "decorator_list", []) if isinstance(d, ast.Name)}
+        if "staticmethod" in decorators:
+            return 0
+        if "classmethod" in decorators:
+            return 1
+        receiver = call.func.value
+        if isinstance(receiver, ast.Call):
+            return 1  # ``C().m(..)``: the fresh instance is ``self``
+        return 1 if isinstance(receiver, ast.Name) and receiver.id == "self" else 0
+
+    def _returns_tainted(
+        self, local: tuple, call: ast.Call, sc: _Scope, d: int, seen: frozenset
+    ) -> bool:
+        """What THIS call returns is a string built from a raw value (#3864: ``mark_safe(tag(x))``)."""
+        fn, fscope = local
+
+        def judge() -> bool:
+            key = ("returns-tainted", id(fn), self._ctx(fscope))
+            if key in seen:
+                return False  # a recursive call adds nothing new
+            inner = seen | {key}
+            return any(
+                v is not None and self.tainted(v, fscope, d + 1, inner)
+                for v in self._live_returns(fn, fscope)
+            )
+
+        verdict = self._specialized(local, call, sc, judge)
+        return self._unbound(fscope, judge) if verdict is None else verdict
 
     @staticmethod
     def _default_arg(call: ast.Call, position: int) -> ast.expr | None:
@@ -2605,13 +3021,125 @@ class _Module:
         if node is not None:
             hit = self.reach.get(id(node))
             if hit is not None and hit[0] is owner and hit[1]:
-                return self._unvouched(name, [x.value for x in hit[1]], owner, sc), tuple(
-                    sorted(id(x) for x in hit[1])
-                )
-        values = list(owner.assigns.get(name, []))
+                live = [x for x in hit[1] if self._feasible(owner, x.site)]
+                return self._unvouched(
+                    name, self._actual(name, owner, [x.value for x in live]), owner, sc
+                ), tuple(sorted(id(x) for x in live))
+        values = self._actual(name, owner, list(owner.assigns.get(name, [])))
         if name in owner.opaque:
             values.append(RAW)
         return self._unvouched(name, values, owner, sc), None
+
+    def _actual(self, name: str, owner: _Scope, values: list[object]) -> list[object]:
+        """``values`` with a parameter's entry binding replaced by the argument of the call whose result
+        is being judged, when there is one (:meth:`_specialized`)."""
+        bound = self._actuals.get(id(owner))
+        if bound is None or name not in bound:
+            return values
+        entry = owner.params.get(name)
+        if not isinstance(entry, _Param):
+            return values
+        return [bound[name] if v is entry else v for v in values]
+
+    def _feasible(self, owner: _Scope, site: int | None) -> bool:
+        """Whether the statement ``site`` can run under the call-site binding in force: not when an
+        ``if`` around it tests a parameter that THIS call binds to a constant the test rules out
+        (``if event_attrs is not None:`` of a call that leaves ``event_attrs=None``). Only a parameter
+        nothing rebinds counts, and only ``P is None``, ``P is not None``, ``P`` and ``not P``."""
+        bound = self._actuals.get(id(owner))
+        if not bound or site is None:
+            return True
+        for param, kind, holds in self._branch_facts(owner).get(site, ()):
+            value = bound.get(param)
+            if not (isinstance(value, _Foreign) and isinstance(value.expr, ast.Constant)):
+                continue
+            c = value.expr.value
+            truth = {
+                "none": c is None,
+                "notnone": c is not None,
+                "truthy": bool(c),
+                "falsy": not c,
+            }[kind]
+            if truth is not holds:
+                return False
+        return True
+
+    def _branch_facts(self, fscope: _Scope) -> dict[int, tuple[tuple[str, str, bool], ...]]:
+        """id(statement or expression) -> the parameter tests of the ``if`` statements around it, in
+        ``fscope``'s own body: ``(param, kind, holds)``; ``holds`` is ``False`` in an ``else``."""
+        cached = self._facts.get(id(fscope))
+        if cached is not None:
+            return cached
+        out: dict[int, tuple[tuple[str, str, bool], ...]] = {}
+        fn = fscope.node
+        stable = {
+            p
+            for p, entry in fscope.params.items()
+            if isinstance(entry, _Param)
+            and len(fscope.assigns.get(p, [])) == 1
+            and p not in fscope.opaque
+            and not fscope.pieces.get(p)
+            and not fscope.contents.get(p)
+            and p not in self.rebound_names
+        }
+
+        def fact(test: ast.expr) -> tuple[str, str] | None:
+            if isinstance(test, ast.Name) and test.id in stable:
+                return test.id, "truthy"
+            if (
+                isinstance(test, ast.UnaryOp)
+                and isinstance(test.op, ast.Not)
+                and isinstance(test.operand, ast.Name)
+                and test.operand.id in stable
+            ):
+                return test.operand.id, "falsy"
+            if (
+                isinstance(test, ast.Compare)
+                and len(test.ops) == 1
+                and isinstance(test.left, ast.Name)
+                and test.left.id in stable
+                and isinstance(test.comparators[0], ast.Constant)
+                and test.comparators[0].value is None
+                and isinstance(test.ops[0], (ast.Is, ast.IsNot))
+            ):
+                return test.left.id, "none" if isinstance(test.ops[0], ast.Is) else "notnone"
+            return None
+
+        def mark(node: ast.AST, facts: tuple) -> None:
+            out[id(node)] = facts
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                return
+            if isinstance(node, ast.If):
+                found = fact(node.test)
+                mark(node.test, facts)
+                for child in node.body:
+                    mark(child, facts + ((*found, True),) if found else facts)
+                for child in node.orelse:
+                    mark(child, facts + ((*found, False),) if found else facts)
+                return
+            for child in ast.iter_child_nodes(node):
+                mark(child, facts)
+
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for stmt in fn.body:
+                mark(stmt, ())
+        self._facts[id(fscope)] = out
+        return out
+
+    def _live_returns(self, fn: ast.AST, fscope: _Scope) -> list[ast.expr | None]:
+        """What the function can return under the call-site binding in force (:meth:`_feasible`)."""
+        if isinstance(fn, ast.Lambda):
+            return [fn.body]
+        return [
+            n.value
+            for n in _own_nodes(fn)
+            if isinstance(n, ast.Return) and self._feasible(fscope, id(n))
+        ]
+
+    def _ctx(self, owner: _Scope) -> int:
+        """Tells apart two judgements of one name made under different call-site bindings: a cycle
+        key must not let one stand in for the other."""
+        return id(self._actuals.get(id(owner)))
 
     def _unvouched(
         self, name: str, values: list[object], owner: _Scope, sc: _Scope | None
@@ -2665,16 +3193,20 @@ class _Module:
         if owner is None:
             return False
         values, defs = self._bindings(node, name, owner, sc)
-        key = ("clean", name, id(owner), defs)
+        key = ("clean", name, id(owner), defs, self._ctx(owner))
         if key in seen:
             return True  # a cycle adds nothing new
         seen = seen | {key}
         if not values and not owner.pieces.get(name) and not owner.contents.get(name):
             return False
-        return (
-            all(self.clean(v, owner, d, seen) for v in values)
-            and all(self.clean(p, owner, d, seen) for p in owner.pieces.get(name, []))
-            and all(self.clean(c, owner, d, seen) for c in owner.contents.get(name, []))
+        parts = seen - {_CTX_OK}  # what ``+=`` / ``append`` added is a part, not the whole
+        return all(self.clean(v, owner, d, seen) for v in values) and self._raw_all(
+            owner,
+            name,
+            lambda: (
+                all(self.clean(p, owner, d, parts) for p in owner.pieces.get(name, []))
+                and all(self.clean(c, owner, d, parts) for c in owner.contents.get(name, []))
+            ),
         )
 
     # elements_clean: every element / value pulled out of this container is clean
@@ -2718,18 +3250,23 @@ class _Module:
             if owner is None:
                 return False
             values, defs = self._bindings(e, e.id, owner, sc)
-            key = ("elements", e.id, id(owner), defs)
+            key = ("elements", e.id, id(owner), defs, self._ctx(owner))
             if key in seen:
                 return True
             seen = seen | {key}
             if not values and not owner.contents.get(e.id):
                 return False
-            return (
-                all(self.elements_clean(v, owner, d, seen) for v in values)
-                and all(self.clean(c, owner, d, seen) for c in owner.contents.get(e.id, []))
-                and all(self.clean(k, owner, d, seen) for k in owner.keys.get(e.id, []))
-                # ``items += more``: the elements of ``more`` join the container
-                and all(self.elements_clean(p, owner, d, seen) for p in owner.pieces.get(e.id, []))
+            return all(self.elements_clean(v, owner, d, seen) for v in values) and self._raw_all(
+                owner,
+                e.id,
+                lambda: (
+                    all(self.clean(c, owner, d, seen) for c in owner.contents.get(e.id, []))
+                    and all(self.clean(k, owner, d, seen) for k in owner.keys.get(e.id, []))
+                    # ``items += more``: the elements of ``more`` join the container
+                    and all(
+                        self.elements_clean(p, owner, d, seen) for p in owner.pieces.get(e.id, [])
+                    )
+                ),
             )
         if isinstance(e, ast.Attribute):
             found = self.class_attribute(e, sc)  # ``self.ICONS``: a table the class writes out
@@ -2828,6 +3365,9 @@ class _Module:
                     self.clean(a, sc, d, seen)
                     for a in [*e.args[1:], *(k.value for k in e.keywords)]
                 )
+            local = self._local_function(e.func, sc)
+            if local is not None and self._returns_tainted(local, e, sc, d, seen):
+                return True  # a function of this file that builds the string (#3864)
             if isinstance(e.func, ast.Attribute):
                 recv = e.func.value
                 if name in DUNDER_BUILDERS:
@@ -2868,14 +3408,17 @@ class _Module:
         if owner is None:
             return False
         values, defs = self._bindings(node, name, owner, sc)
-        key = ("tainted", name, id(owner), defs)
+        key = ("tainted", name, id(owner), defs, self._ctx(owner))
         if key in seen:
             return False
         seen = seen | {key}
-        return (
-            any(self.tainted(v, owner, d, seen) for v in values)
-            or any(not self.clean(p, owner, d, seen) for p in owner.pieces.get(name, []))
-            or any(self.tainted(c, owner, d, seen) for c in owner.contents.get(name, []))
+        return any(self.tainted(v, owner, d, seen) for v in values) or self._raw_all(
+            owner,
+            name,
+            lambda: (
+                any(not self.clean(p, owner, d, seen) for p in owner.pieces.get(name, []))
+                or any(self.tainted(c, owner, d, seen) for c in owner.contents.get(name, []))
+            ),
         )
 
 
@@ -3047,7 +3590,8 @@ class _Flow:
     def _def(self, key: tuple, name: str, value: object, counted: bool = True) -> _Def:
         found = self.defs.get(key)
         if found is None:
-            found = self.defs[key] = _Def(name, value)
+            site = key[0] if isinstance(key[0], int) else None
+            found = self.defs[key] = _Def(name, value, site)
             if counted:
                 self.created.setdefault(name, []).append(found)
         return found

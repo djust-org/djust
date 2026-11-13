@@ -381,12 +381,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         ),
         (DC, "f'href=\"{safe_url(href)}\">'", "SidebarNode._render_item"),
     ),
-    (DC, "FeedbackWidgetNode.render"): S(
-        1,
-        "mode is checked against VALID_MODES; the buttons are constants plus the conditional_escape'd event, an int star index and escaped emoji keys",
-        (DC, 'VALID_MODES = {"thumbs", "stars", "emoji"}', "FeedbackWidgetNode"),
-        (DC, "if mode not in self.VALID_MODES:"),
-    ),
     (DC, "render_dropdown_menu"): S(
         1,
         "label, event, class and align conditional_escape'd; items come from render_menu_item (labels escaped, href through url_attr); a block body is the rendered tag body",

@@ -429,14 +429,6 @@ KNOWN_MISSES = {
         "from functools import reduce\n"
         "def f(a, b):\n    return mark_safe(reduce(lambda p, q: p + q, [a, b]))\n"
     ),
-    "built-in-one-function-marked-safe-in-another (the switcher)": (
-        "def options(presets):\n    out = ''\n    for p in presets:\n"
-        "        out += f'<option value=\"{p}\">{p}</option>'\n    return f'<select>{out}</select>'\n"
-        "def chunk(presets):\n    return mark_safe(options(presets))\n"
-    ),
-    "a-helper-returning-an-interpolated-string": (
-        'def helper(x):\n    return f"<a {x}>"\ndef f(x):\n    return mark_safe(helper(x))\n'
-    ),
     "a-value-stored-on-self": (
         'class V:\n    def build(self, x):\n        self.html = f"<a {x}>"\n'
         "    def out(self):\n        return mark_safe(self.html)\n"
@@ -457,6 +449,22 @@ CAUGHT_SINCE_3850 = {
     "getattr-of-the-sink": (
         "from django.utils import safestring\n"
         'def f(x):\n    return getattr(safestring, "mark_safe")(f"<a {x}>")\n'
+    ),
+}
+
+#: Misses this list pinned that the guard catches since #3864: a call of a function of the same file
+#: is judged by what it returns for THIS call's arguments, so a string the helper builds out of its
+#: parameter is a built string at the sink. Label -> (source, the functions flagged).
+CAUGHT_SINCE_3864 = {
+    "built-in-one-function-marked-safe-in-another (the switcher)": (
+        "def options(presets):\n    out = ''\n    for p in presets:\n"
+        "        out += f'<option value=\"{p}\">{p}</option>'\n    return f'<select>{out}</select>'\n"
+        "def chunk(presets):\n    return mark_safe(options(presets))\n",
+        ["chunk"],
+    ),
+    "a-helper-returning-an-interpolated-string": (
+        'def helper(x):\n    return f"<a {x}>"\ndef f(x):\n    return mark_safe(helper(x))\n',
+        ["f"],
     ),
 }
 
@@ -564,6 +572,18 @@ class TestKnownMisses:
     @pytest.mark.parametrize("label", sorted(CAUGHT_SINCE_3850))
     def test_a_former_miss_is_caught(self, label):
         assert _flagged(CAUGHT_SINCE_3850[label]) == ["f"], label
+
+    @pytest.mark.parametrize("label", sorted(CAUGHT_SINCE_3864))
+    def test_a_helper_miss_is_caught_since_3864(self, label):
+        source, expected = CAUGHT_SINCE_3864[label]
+        assert _flagged(source) == expected, label
+        # ... and the same helper handed constants is clean at that call (an escaped value is not:
+        # ``<a {x}>`` puts it in the tag, where ``x onmouseover=1`` is two attributes)
+        escaped = source.replace("(presets))", "(('a', 'b')))").replace(
+            "helper(x))", "helper('k'))"
+        )
+        assert escaped != source
+        assert _flagged(escaped) == [], label
 
 
 class TestTheOriginalCode:
