@@ -58,7 +58,7 @@ class ComponentsDemoView(LiveView):
     badge_count_python = state()
     badge_count_python_ms = state()
     many_badges = state()
-    count = state(0)
+    count = state(0, persist="server")
     template = """
     <!DOCTYPE html>
     <html lang="en">

@@ -3,6 +3,7 @@ Debounce Demo - demonstrates @debounce decorator with search
 """
 
 from djust.decorators import debounce
+from djust.decorators import event_handler
 from djust_shared.views import BaseViewWithNavbar
 
 
@@ -59,6 +60,7 @@ class DebounceSearchView(LiveView):
 
         self.back_btn = BackButton(href="/demos/")
 
+    @event_handler
     @debounce(wait=0.5, max_wait=2.0)
     def search(self, value: str = "", **kwargs):
         """

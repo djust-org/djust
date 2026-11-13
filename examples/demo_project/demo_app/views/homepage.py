@@ -12,6 +12,12 @@ import random
 from djust import state
 
 
+# A persisted list a client can grow is capped: persist="server" state is kept
+# in the session and is bounded (64 KB per view), and every event re-saves it,
+# so the oldest entries are dropped instead of letting it grow without limit.
+MAX_TODOS = 20
+
+
 class HomeCounterDemo(LiveView):
     """
     Simple counter demo for homepage - showcases instant reactivity
@@ -298,6 +304,7 @@ class HomeTodoDemo(LiveView):
                 'done': False,
             })
             self.next_id += 1
+            del self.todos[:-MAX_TODOS]  # keep the newest MAX_TODOS
 
     @event_handler
     def toggle_todo(self, id=None, **kwargs):

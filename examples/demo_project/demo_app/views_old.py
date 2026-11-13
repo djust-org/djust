@@ -14,6 +14,12 @@ from djust.components.layout import NavbarComponent, NavItem
 from djust import state
 
 
+# A persisted list a client can grow is capped: persist="server" state is kept
+# in the session and is bounded (64 KB per view), and every event re-saves it,
+# so the oldest entries are dropped instead of letting it grow without limit.
+MAX_DEMO_TODOS = 20
+
+
 class IndexView(LiveView):
     """
     Landing page with links to demos.
@@ -82,6 +88,7 @@ class IndexView(LiveView):
                 'text': todo_text.strip(),
                 'done': False
             })
+            del self.demo_todos[:-MAX_DEMO_TODOS]  # keep the newest MAX_DEMO_TODOS
 
     @event_handler
     def toggle_todo(self, index=0, **kwargs):

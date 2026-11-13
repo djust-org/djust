@@ -28,6 +28,12 @@ from djust import state
 # ---------------------------------------------------------------------------
 
 
+# A persisted list a client can grow is capped: persist="server" state is kept
+# in the session and is bounded (64 KB per view), and every event re-saves it,
+# so the oldest entries are dropped instead of letting it grow without limit.
+MAX_NOTIFICATIONS = 20
+
+
 class AudioPlayerView(LiveView):
     """Persistent audio player. Survives Dashboard ↔ Settings navigation.
 
@@ -107,6 +113,7 @@ class NotificationCenterView(LiveView):
                 "text": f"Ad-hoc notification #{len(self.notifications) + 1}",
             }
         )
+        del self.notifications[:-MAX_NOTIFICATIONS]  # keep the newest MAX_NOTIFICATIONS
 
 
 # ---------------------------------------------------------------------------

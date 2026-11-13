@@ -5,6 +5,7 @@ Tenant-facing views for lease info, payments, and maintenance requests.
 """
 
 from djust_shared.views import BaseViewWithNavbar
+from djust.decorators import event_handler
 from djust.decorators import debounce
 from django.utils import timezone
 from ..models import Tenant, Lease, Payment, MaintenanceRequest, Property
@@ -150,6 +151,7 @@ class TenantMaintenanceListView(BaseViewWithNavbar):
 
         self.requests = requests.order_by('-created_at')
 
+    @event_handler
     def filter_by_status(self, status: str = "all", **kwargs):
         """Filter requests by status"""
         self.filter_status = status
@@ -208,6 +210,7 @@ class TenantMaintenanceCreateView(BaseViewWithNavbar):
         self.success_message = ""
         self.error_message = ""
 
+    @event_handler
     def submit_request(self, title="", description="", priority="medium", **kwargs):
         """Submit new maintenance request"""
         if not self.tenant or not self.current_property:

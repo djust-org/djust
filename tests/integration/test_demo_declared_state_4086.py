@@ -153,19 +153,135 @@ def test_the_value_survives_three_fallback_events(path, handler, params, read, e
     assert _three_fallback_events(import_string(path), handler, params, read) == expected
 
 
-def test_v029_reports_nothing_on_the_demo_project():
-    """The check that found these keeps the demo at zero findings."""
+#: The demo project's own apps. ``djust.checks.utils._is_framework_internal_class``
+#: classes every ``djust_*`` module (other than test/example ones) as djust's own
+#: code, so ``manage.py djust_check`` skips the routed ``djust_demos``,
+#: ``djust_forms``, ``djust_rentals``, ``djust_docs`` and ``djust_homepage`` views
+#: entirely; the checks below are run with them classed as user code.
+DEMO_APPS = (
+    "demo_app",
+    "demo_project",
+    "djust_demos",
+    "djust_docs",
+    "djust_forms",
+    "djust_homepage",
+    "djust_rentals",
+    "djust_shared",
+    "djust_tests",
+    "sticky_demo",
+)
+
+
+def _is_demo(cls):
+    return (getattr(cls, "__module__", "") or "").split(".")[0] in DEMO_APPS
+
+
+@pytest.fixture
+def demo_views_as_user_code(monkeypatch):
+    """Import every demo view module and let the checks see the djust_* apps."""
+    import importlib
+    import pkgutil
+
+    import djust.checks.components as components
+    import djust.checks.parameters as parameters
+    import djust.checks.utils as utils
+
+    original = utils._is_framework_internal_class
+
+    def internal(cls):
+        return False if _is_demo(cls) else original(cls)
+
+    for module in (utils, components, parameters):
+        monkeypatch.setattr(module, "_is_framework_internal_class", internal)
+    for app in DEMO_APPS:
+        package = importlib.import_module(app)
+        for info in pkgutil.walk_packages(package.__path__, app + "."):
+            if ".tests" in info.name or ".migrations" in info.name:
+                continue
+            try:
+                importlib.import_module(info.name)
+            except ImportError:
+                continue  # a module whose optional dependency is not installed
+    return internal
+
+
+def test_the_demo_checks_report_nothing_on_any_demo_app(demo_views_as_user_code):
+    """T019 (a handler the strict mode refuses), T020 (parameters it does not
+    accept) and V029 (a change the HTTP fallback loses) over every demo view,
+    the routed djust_* apps included (#4086)."""
+    from djust.checks.bindings import check_event_bindings
     from djust.checks.components import check_undeclared_handler_state
 
-    # Import every demo view module the check walks.
-    import demo_app.views  # noqa: F401
-    import djust_tests.views  # noqa: F401
-    import djust_tests.views.virtual_keyed_demo  # noqa: F401
-    import sticky_demo.views  # noqa: F401
+    found = [
+        "%s %s" % (m.id, m.msg)
+        for m in list(check_event_bindings(None)) + list(check_undeclared_handler_state(None))
+        if m.id in ("djust.T019", "djust.T020", "djust.V029")
+    ]
+    demo = [line for line in found if any(app in line for app in DEMO_APPS)]
+    assert demo == []
 
-    demo_prefixes = ("demo_app.", "djust_tests.", "sticky_demo.", "djust_demos.", "djust_homepage.")
-    found = [m.msg for m in check_undeclared_handler_state(None) if m.msg.startswith(demo_prefixes)]
-    assert found == []
+
+def test_every_routed_binding_names_a_decorated_handler(demo_views_as_user_code):
+    """Independent of the checks: every LiveView the root URLconf reaches, and every
+    LiveView in a demo app, has an @event_handler for each literal dj-* event its
+    template (and the templates it includes or extends) names."""
+    import re
+
+    from django.template.loader import get_template
+    from django.urls import URLResolver, get_resolver
+
+    from djust.decorators import is_event_handler
+    from djust.live_view import LiveView
+
+    routed = set()
+
+    def walk(resolver):
+        for pattern in resolver.url_patterns:
+            if isinstance(pattern, URLResolver):
+                walk(pattern)
+            else:
+                view = getattr(pattern.callback, "view_class", None)
+                if isinstance(view, type) and issubclass(view, LiveView):
+                    routed.add(view)
+
+    walk(get_resolver())
+
+    def subclasses(cls):
+        for sub in cls.__subclasses__():
+            yield sub
+            yield from subclasses(sub)
+
+    views = routed | {cls for cls in subclasses(LiveView) if _is_demo(cls)}
+    assert len(routed) > 50, len(routed)  # the walk reached the app URLconfs
+    # A binding inside a real tag (an escaped code sample, &lt;button ...&gt;, is not one).
+    event = re.compile(
+        r"<[a-zA-Z][^<>]*?\bdj-(?:click|input|submit|change|keydown|keyup|blur|focus|scroll)"
+        r"(?:\.[\w.-]+)?\s*=\s*\"([A-Za-z_]\w*)\""
+    )
+    nested = re.compile(r"{%\s*(?:include|extends)\s+[\"']([^\"']+)[\"']")
+
+    def source(name, seen):
+        if name in seen:
+            return ""
+        seen.add(name)
+        try:
+            template = get_template(name)
+        except Exception:  # noqa: BLE001 - a name built at runtime
+            return ""
+        text = getattr(getattr(template, "template", template), "source", "") or ""
+        return text + "".join("\n" + source(n, seen) for n in nested.findall(text))
+
+    missing = []
+    for view in views:
+        text = view.template if isinstance(getattr(view, "template", None), str) else ""
+        text += "".join("\n" + source(n, set()) for n in nested.findall(text))
+        if isinstance(getattr(view, "template_name", None), str):
+            text += "\n" + source(view.template_name, set())
+        for name in set(event.findall(text)):
+            handler = getattr(view, name, None)
+            if handler is None or not is_event_handler(handler):
+                missing.append("%s.%s.%s" % (view.__module__, view.__qualname__, name))
+    assert sorted(missing) == []
 
 
 # Handlers that had no @event_handler (the default strict mode refused them) and,
@@ -258,3 +374,77 @@ def test_the_custom_navbar_example_supplies_its_names_under_explicit_exposure():
     context = view.get_context_data()
     assert context["title"] == "Custom Navbar Example"
     assert "My App" in context["navbar"].render()
+
+
+CAPPED = [
+    ("demo_app.views.homepage.HomeTodoDemo", "add_todo", {"text": "t"}, "todos", "MAX_TODOS"),
+    (
+        "demo_app.views_old.IndexView",
+        "add_todo",
+        {"todo_text": "t"},
+        "demo_todos",
+        "MAX_DEMO_TODOS",
+    ),
+    ("djust_homepage.views.IndexView", "add_todo", {"todo_text": "t"}, "demo_todos", None),
+    (
+        "sticky_demo.views.NotificationCenterView",
+        "add_demo",
+        {},
+        "notifications",
+        "MAX_NOTIFICATIONS",
+    ),
+    ("demo_app.views.no_template_demo.NoTemplateDemo", "add_item", {}, "items", "MAX_ITEMS"),
+    ("djust_demos.views.no_template_demo.NoTemplateDemo", "add_item", {}, "items", "MAX_ITEMS"),
+]
+
+
+@pytest.mark.parametrize(
+    "path, handler, params, field, cap_name", CAPPED, ids=["%s.%s" % (c[0], c[1]) for c in CAPPED]
+)
+def test_a_persisted_list_a_client_grows_is_capped(path, handler, params, field, cap_name):
+    """Persisted state is re-saved on every event and bounded per view (#4086): the
+    demo drops the oldest entries rather than let a client grow it forever."""
+    import sys
+
+    from django.utils.module_loading import import_string
+
+    from djust.testing import LiveViewTestClient
+
+    view = import_string(path)
+    cap = getattr(sys.modules[view.__module__], cap_name or "MAX_DEMO_TODOS", None)
+    if cap is None:  # a subclass reusing its base's handler
+        cap = getattr(sys.modules[view.__mro__[1].__module__], "MAX_DEMO_TODOS")
+    client = LiveViewTestClient(view).mount()
+    for _ in range(cap + 5):
+        assert client.send_event(handler, **params)["success"]
+    assert len(getattr(client.view_instance, field)) == cap
+
+
+# A user on a routed page clicks a button whose handler had no @event_handler
+# (#4086): the page's own URL, a real GET, then the HTTP fallback POST the
+# client sends for the click. The default strict mode refused each of these.
+CLICKS = [
+    ("/demos/optimistic-counter/", "increment", {}, "6"),
+    ("/docs/components/", "increment_demo_count", {}, None),
+    ("/rentals/financials/", "change_period", {"period": "quarter"}, "quarter"),
+    # The demos index pages named handlers their view did not have.
+    ("/demos/", "increment", {}, None),
+    ("/demos/design2/", "toggle_dropdown", {}, None),
+    ("/demos/design3/", "reset", {}, None),
+    ("/demos/hybrid/", "decrement", {}, None),
+]
+
+
+@pytest.mark.parametrize("url, handler, params, shown", CLICKS, ids=[c[0] for c in CLICKS])
+def test_a_routed_page_answers_a_click_on_a_once_refused_handler(
+    client, url, handler, params, shown
+):
+    assert client.get(url).status_code == 200
+    response = client.post(
+        url, data=json.dumps(params), content_type="application/json", HTTP_X_DJUST_EVENT=handler
+    )
+    body = response.content.decode("utf-8")
+    assert response.status_code == 200, body[:500]
+    assert '"error"' not in body, body[:500]
+    if shown is not None:
+        assert shown in body, body[:500]

@@ -1289,9 +1289,13 @@ jobs:
   #
   # The helper wraps `manage.py djust_check --json` (which itself always
   # exits 0) and sets a real exit code. It fails ONLY on error-severity
-  # checks and the deprecated-attribute classes T001/T014/T015 (the exact
-  # #1683 bug class) — NOT on the demo's intentional warnings (public-view
-  # auth notices, partial-fragment templates).
+  # checks, the deprecated-attribute classes T001/T014 (the exact #1683 bug
+  # class) and T019/T020/V029 (a handler the strict mode refuses, parameters
+  # it does not accept, a change the HTTP fallback loses; #4086) — NOT on the
+  # demo's intentional warnings (public-view auth notices, partial-fragment
+  # templates). djust_check classes the demo's djust_* apps as framework code
+  # and skips them; tests/integration/test_demo_declared_state_4086.py runs
+  # T019/T020/V029 over those apps too.
   demo-checks:
     runs-on: ubuntu-latest
     # Installs python-build's py3.12 wheel instead of compiling djust in

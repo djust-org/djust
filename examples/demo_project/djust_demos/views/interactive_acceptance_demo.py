@@ -26,7 +26,7 @@ OBSERVED: list = []
 
 class InteractiveAcceptanceView(LiveView):
     exposure_policy = "explicit"
-    result = state("none")
+    result = state("none", persist="server")
     calls = state(0)
     observed = state(0)
     legacy = state()

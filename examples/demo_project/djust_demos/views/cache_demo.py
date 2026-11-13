@@ -3,6 +3,7 @@ Cache Demo - demonstrates @cache decorator with debounced search
 """
 
 from djust.decorators import cache, debounce
+from djust.decorators import event_handler
 from djust_shared.views import BaseViewWithNavbar
 
 
@@ -103,6 +104,7 @@ class CacheDemoView(LiveView):
         context['cache_efficiency'] = cache_efficiency
         return context
 
+    @event_handler
     @debounce(wait=0.5)
     @cache(ttl=300, key_params=["query"])
     def search(self, query: str = "", **kwargs):

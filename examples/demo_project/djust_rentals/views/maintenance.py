@@ -11,6 +11,7 @@ reads, so those handlers behave exactly as they would undecorated.
 """
 
 from djust_shared.views import BaseViewWithNavbar
+from djust.decorators import event_handler
 from djust.decorators import debounce
 from djust_shared.components.ui import HeroSection
 from django.db.models import Q
@@ -89,22 +90,26 @@ class MaintenanceListView(BaseViewWithNavbar):
         # We'll assign to self.requests in get_context_data() instead
         self._requests = requests
 
+    @event_handler
     @debounce(wait=0.5)
     def search(self, query: str = "", **kwargs):
         """Search requests with debouncing"""
         self.search_query = query
         self._refresh_requests()
 
+    @event_handler
     def filter_by_status(self, status: str = "all", **kwargs):
         """Filter requests by status (with client state sync)"""
         self.filter_status = status
         self._refresh_requests()
 
+    @event_handler
     def filter_by_priority(self, priority: str = "all", **kwargs):
         """Filter requests by priority"""
         self.filter_priority = priority
         self._refresh_requests()
 
+    @event_handler
     def sort_requests(self, sort: str = "created", **kwargs):
         """Sort requests"""
         self.sort_by = sort
@@ -303,6 +308,7 @@ class MaintenanceUpdateView(BaseViewWithNavbar):
         self.success_message = ""
         self.error_message = ""
 
+    @event_handler
     def update_status(self, status: str = "", **kwargs):
         """Update request status"""
         if status and status in dict(MaintenanceRequest.STATUS_CHOICES):
@@ -315,6 +321,7 @@ class MaintenanceUpdateView(BaseViewWithNavbar):
             self.maintenance_request.save()
             self.success_message = f"Status updated to {self.maintenance_request.get_status_display()}"
 
+    @event_handler
     def update_priority(self, priority: str = "", **kwargs):
         """Update request priority"""
         if priority and priority in dict(MaintenanceRequest.PRIORITY_CHOICES):
@@ -322,6 +329,7 @@ class MaintenanceUpdateView(BaseViewWithNavbar):
             self.maintenance_request.save()
             self.success_message = f"Priority updated to {self.maintenance_request.get_priority_display()}"
 
+    @event_handler
     def update_details(self, assigned_to="", estimated_cost=None, actual_cost=None, notes="", **kwargs):
         """Update request details"""
         try:

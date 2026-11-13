@@ -5,6 +5,7 @@ Income, expense, and profit/loss reporting.
 """
 
 from djust_shared.views import BaseViewWithNavbar
+from djust.decorators import event_handler
 from djust.decorators import cache
 from django.db.models import Sum, Count, Q
 from django.utils import timezone
@@ -121,6 +122,7 @@ class FinancialDashboardView(BaseViewWithNavbar):
         # Sort by total
         self.expenses_by_category.sort(key=lambda x: x['total'], reverse=True)
 
+    @event_handler
     def change_period(self, period: str = "month", **kwargs):
         """Change analysis period"""
         if period in ['month', 'quarter', 'year']:

@@ -513,3 +513,16 @@ def test_shard_balance_pin_skips_locally_naming_the_variable(tmp_path: Path, mon
         test_shards_cover_current_collection_with_balanced_durations(tmp_path)
     assert "DJUST_FULL_LOCAL=1" in str(skipped.value)
     assert "CI=1" in str(skipped.value)
+
+
+@pytest.mark.parametrize("target", ["merge-gates", "test-harness", "test-early"])
+def test_the_make_targets_that_run_the_shard_pin_opt_in_to_the_full_collection(target) -> None:
+    """The pin skips without ``DJUST_FULL_LOCAL=1`` (#4089), so each target that
+    runs it on purpose must set the variable, or it would skip there silently."""
+    recipe = re.search(
+        r"^%s:.*?\n((?:\t.*\n?)+)" % re.escape(target),
+        (ROOT / "Makefile").read_text(),
+        re.MULTILINE,
+    )
+    assert recipe, "Makefile target %s not found" % target
+    assert "DJUST_FULL_LOCAL=1" in recipe.group(1), recipe.group(1)

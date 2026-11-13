@@ -44,7 +44,7 @@ class ComponentsOnlyDemo(LiveView):
     alert_message = state("Welcome to the Components-Only demo! Everything you see is built with Python components.")
     alert_variant = state("info")
     task_progress = state(65)
-    tasks_completed = state(13)
+    tasks_completed = state(13, persist="server")
     tasks_total = state(20)
     user_status = state("active")
     selected_action = state(None)

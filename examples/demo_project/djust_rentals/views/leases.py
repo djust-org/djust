@@ -307,6 +307,7 @@ class LeaseFormView(BaseViewWithNavbar):
         self.properties = Property.objects.all().order_by('name')
         self.tenants = Tenant.objects.select_related('user').all().order_by('user__last_name')
 
+    @event_handler
     def save_lease(self, property_id=None, tenant_id=None, start_date=None,
                   end_date=None, monthly_rent=None, security_deposit=None,
                   rent_due_day=1, late_fee=0, status="active", terms="", **kwargs):

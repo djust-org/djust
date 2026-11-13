@@ -24,7 +24,7 @@ class DropdownDemo(LiveView):
 
     exposure_policy = "explicit"
     last_action = state("No action yet")
-    action_count = state(0)
+    action_count = state(0, persist="server")
     basic_dropdown = state()
     split_dropdown = state()
     dropdown_variants = state()

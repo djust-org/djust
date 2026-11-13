@@ -47,6 +47,11 @@ transport layer.
   your tests send a rate-limited handler more events than its `burst`. The
   client does not count refusals toward the connection's abuse disconnect
   (close code 4429) or apply the connection's global per-message limit.
+  Its refusal has the HTTP fallback's shape (`code="rate_limited"`, error
+  `"Rate limit exceeded"`) whatever `on_exceed` says. Over a WebSocket a
+  refused event gets an error frame, `"Rate limit exceeded, event dropped"`,
+  in both modes; only the default `on_exceed="disconnect"` also counts it
+  toward the 4429 close, which `on_exceed="drop"` never does.
   `LiveViewSmokeTest` resets the budget for each fuzz payload.
 - `assert_state(**expected)` — exact-match assertions on public view attrs.
 - `assert_state_contains(**expected)` — checks `expected in actual`: a

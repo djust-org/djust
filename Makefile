@@ -438,11 +438,11 @@ MERGE_GATES := \
 
 .PHONY: merge-gates
 merge-gates: ## Run the whole-tree meta tests (run on a scratch merge of a PR with main before merging; #3757)
-	@PYTHONPATH=python:. $(PYTHON) -m pytest $(MERGE_GATES) -q -p no:cacheprovider --durations=5
+	@DJUST_FULL_LOCAL=1 PYTHONPATH=python:. $(PYTHON) -m pytest $(MERGE_GATES) -q -p no:cacheprovider --durations=5
 
 .PHONY: test-harness
 test-harness: ## Validate and time doctor scenarios and CI shard collection
-	@PYTHONPATH=. $(PYTHON) -m pytest python/djust/tests/test_make_doctor_2061.py \
+	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest python/djust/tests/test_make_doctor_2061.py \
 		tests/test_ci_python_test_shards.py tests/test_collect_test_shards.py \
 		tests/test_corpus_shards.py tests/test_corpus_shards_url_sweep_3781.py -q --durations=10
 

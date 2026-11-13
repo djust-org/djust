@@ -22,7 +22,7 @@ class ThrottleScrollView(LiveView):
 
     exposure_policy = "explicit"
     scroll_y = state(0)
-    update_count = state(0)
+    update_count = state(0, persist="server")
     template_name = "demos/throttle.html"
 
     def mount(self, request):
