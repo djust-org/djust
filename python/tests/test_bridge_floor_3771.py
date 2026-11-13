@@ -102,9 +102,20 @@ def engines():
     return rust, django
 
 
+@pytest.fixture(scope="module")
+def password_hash() -> str:
+    """Hash the user's password once: PBKDF2 was most of each case's setup."""
+    from django.contrib.auth.hashers import make_password
+
+    return make_password("pw-3771")
+
+
 @pytest.fixture
-def user():
-    return get_user_model().objects.create_user("floor-user", "f@example.com", "pw-3771")
+def user(password_hash):
+    # ``create_user`` minus the per-case hash: the same row, with a module-wide hash.
+    return get_user_model().objects.create(
+        username="floor-user", email="f@example.com", password=password_hash
+    )
 
 
 @pytest.fixture(autouse=True)

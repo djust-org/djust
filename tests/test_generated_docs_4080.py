@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.git_env import isolated_git_env
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
 
@@ -245,6 +247,7 @@ def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
         check=check,
         capture_output=True,
         text=True,
+        env=isolated_git_env(),
     )
 
 
@@ -254,6 +257,7 @@ def _run_script(repo: Path, script: str, mode: str) -> subprocess.CompletedProce
         cwd=repo,
         capture_output=True,
         text=True,
+        env=isolated_git_env(),
     )
 
 
@@ -333,6 +337,7 @@ def _import(root: Path) -> str:
         cwd=root,
         capture_output=True,
         text=True,
+        env=isolated_git_env(),
     )
     assert out.returncode == 0, out.stderr
     return out.stdout

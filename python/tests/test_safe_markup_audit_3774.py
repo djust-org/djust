@@ -46,6 +46,7 @@ from payload_drivers_3774 import DRIVERS
 
 from scripts.lib import safe_markup_audit as audit
 from scripts.lib.safe_markup_taint import find_unsafe_markup
+from tests import sweep_sample
 
 pytestmark = pytest.mark.components
 
@@ -340,13 +341,54 @@ URL_PAYLOAD = sweepmod.URL_PAYLOAD
 injections = sweepmod.injections
 
 
+#: Tiers (#4074): the payload sweep is ``@pytest.mark.sweep``, so before merge it drives a seeded
+#: sample of these units (every unit nightly); the two tests that ask whether EVERY audited sink
+#: ran need the whole sweep and are ``nightly``. The site audit, the doc table and the rule
+#: tests run in full on every pull request.
+SWEEP_POPULATIONS = {"payload-sweep/units": lambda: sweepmod.units(DRIVERS)}
+#: Units a sampled run draws beyond the ones a change forces (about a minute).
+SWEEP_BUDGET = 60
+#: The sweep's own code: a change to it drives every unit even in a sampled run.
+SHARED_PATHS = (
+    "python/tests/payload_sweep_3774.py",
+    "python/tests/payload_drivers_3774.py",
+    "python/tests/test_safe_markup_audit_3774.py",
+    "tests/sweep_sample.py",
+)
+
+
+def _unit_paths(unit: str) -> list[str]:
+    """``kind:package.module.Name`` -> the module's file."""
+    kind, _, dotted = unit.partition(":")
+    if kind == "driver":
+        return []
+    module = dotted.rsplit(".", 1)[0]
+    return ["python/" + module.replace(".", "/") + ".py"]
+
+
+def _sampled_units() -> set[str] | None:
+    all_units = sweepmod.units(DRIVERS)
+    chosen = sweep_sample.select(
+        "payload-sweep/units",
+        all_units,
+        budget=SWEEP_BUDGET,
+        # the named drivers each pin a sink the generic drivers could not reach: always run
+        always=[u for u in all_units if u.startswith("driver:")],
+        paths=_unit_paths,
+        shared=SHARED_PATHS,
+    )
+    return None if len(chosen) == len(all_units) else set(chosen)
+
+
 @pytest.fixture(scope="module")
 def traced_sweep():
-    """The whole sweep once, with the lines of every audited file recorded."""
+    """The whole sweep once (a sample of it before merge), with the lines of every audited file
+    recorded."""
     files = {str(audit.ROOT / key[0]) for key in audit.AUDITED}
     executed: dict[str, set[int]] = {}
+    only = _sampled_units()
     with sweepmod.line_tracer(files, executed):
-        result = sweepmod.sweep(DRIVERS)
+        result = sweepmod.sweep(DRIVERS, only=only)
     return result, executed
 
 
@@ -450,19 +492,21 @@ class TestTheCheckerCanFail:
 # Mark each reader explicitly: once they share a shard, only the first
 # reader's recorded duration includes the expensive fixture setup.
 class TestPayloadSweep:
-    @pytest.mark.slow
+    @pytest.mark.sweep("payload-sweep/units")
     def test_no_audited_sink_turns_the_payload_into_markup_or_a_script_url(self, traced_sweep):
         result, _ = traced_sweep
         assert result["found"] == [], f"a payload became markup or a script URL: {result['found']}"
-        # A sweep that renders almost nothing proves nothing: most of the tags must have rendered.
-        assert result["rendered"] >= 0.85 * result["discovered"], result
+        # A sweep that renders almost nothing proves nothing: most of the tags must have rendered
+        # (half of a sample: a small draw can land on the quiet ones).
+        share = 0.85 if not sweep_sample.is_sampled() else 0.5
+        assert result["rendered"] >= share * result["sampled"], result
         # ... and the same for the Rust-native handlers (#3820). Since 2.0 only the kept native
         # twins remain (``NATIVE_INLINE_HANDLERS`` / ``NATIVE_BLOCK_HANDLERS``).
         from djust.components import rust_handlers as rh
 
         kept = len(rh.NATIVE_INLINE_HANDLERS) + len(rh.NATIVE_BLOCK_HANDLERS)
         assert result["handlers_discovered"] == kept, result
-        assert result["handlers_rendered"] >= 0.85 * result["handlers_discovered"], result
+        assert result["handlers_rendered"] >= share * result["handlers_sampled"], result
 
     def test_the_sweep_reads_a_real_handler_with_the_payload(self):
         from djust.components.rust_handlers import AppShellHandler
@@ -495,6 +539,11 @@ class TestPayloadSweep:
         assert out is not None and 'class="dj-slider' in str(out)
 
 
+def _needs_every_unit() -> None:
+    if _sampled_units() is not None:
+        pytest.skip("asks whether EVERY audited sink ran, so it needs the whole sweep (#4074)")
+
+
 class TestEverySinkIsReached:
     """The claim "the sweep covers the audited sinks" is checked, not assumed (review of #3821).
 
@@ -511,8 +560,9 @@ class TestEverySinkIsReached:
             out[key] = [bool(group & ran) for group in audit.sink_groups(key)]
         return out
 
-    @pytest.mark.slow
+    @pytest.mark.nightly
     def test_every_audited_sink_runs_unless_the_entry_says_why_not(self, traced_sweep):
+        _needs_every_unit()
         reached = self._reached(traced_sweep)
         unexplained = [
             k for k, flags in reached.items() if not all(flags) and not audit.AUDITED[k].unreached
@@ -522,8 +572,9 @@ class TestEverySinkIsReached:
             f"python/tests/payload_drivers_3774.py, or give the entry an `unreached` reason: {unexplained}"
         )
 
-    @pytest.mark.slow
+    @pytest.mark.nightly
     def test_an_entry_marked_unreached_really_is(self, traced_sweep):
+        _needs_every_unit()
         reached = self._reached(traced_sweep)
         stale = [k for k, entry in audit.AUDITED.items() if entry.unreached and all(reached[k])]
         assert stale == [], (

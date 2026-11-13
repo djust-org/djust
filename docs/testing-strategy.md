@@ -185,8 +185,8 @@ Two things differ from a pull request. `paths-ignore` is not evaluated for
 `merge_group`, so a docs-only queue entry starts the workflow and the `changes` job does
 the skipping (a docs-only *pull request* is still handled by `paths-ignore` and
 `test-summary-docs-shim.yml`). The queue has no PR labels, so it runs 3.12 only and the
-fast tier, like an unlabelled PR; the push to main after the merge still runs the full
-matrix and the slow tier. `external-pr-gate.yml` also listens to `merge_group` and
+fast tier, like an unlabelled PR; the push to main after the merge runs the slow tier on
+3.12 (the other interpreters run nightly; see "Tiers" below). `external-pr-gate.yml` also listens to `merge_group` and
 reports success there, because the PR passed it to be queued.
 
 **Hang dumps.** The Python shard step passes `-o faulthandler_timeout=1800`. If one test
@@ -199,6 +199,154 @@ last five green main runs, 15.4 minutes), so a hung shard ends in bounded time i
 of GitHub's 360-minute default; it must stay above the dump threshold so the dump can
 fire first. Neither is a diagnosis on its own: the dump needs a hang longer than 20
 minutes, the timeout only bounds it.
+
+### Tiers: what runs where (#4074)
+
+| event | interpreters x Django x shards | tier (`-m`) | exhaustive sweeps |
+|---|---|---|---|
+| pull request | 3.12 x Django 5.2 x 4, + the Django-6-only job, + 3.14t smoke | `not nightly and not slow` | sampled |
+| merge queue | same as a pull request | `not nightly and not slow` | sampled |
+| push to `main` | same as a pull request | `not nightly` (slow tier included) | sampled |
+| nightly `main-health` (07:00 UTC) | serial suite on 3.12, plus `test.yml` called with the full matrix (3.12-3.15 x 5.2/6.0/6.1 x 4) | serial: everything; matrix: `not nightly` | serial: **every unit**; matrix: sampled |
+| manual `test.yml` dispatch | full matrix | `not nightly` | every unit (untick `full_sweeps` to sample) |
+| PR labelled `full-tests` | 3.12 x Django 5.2 x 4 + the Django-6-only job | `not nightly` | every unit |
+
+**One Django series before merge.** The shards run on Django 5.2 (the LTS, and what the dev
+environment uses). About two hundred tests exist only on Django 6 (template partials, the 6.1 CSP
+nonce tag, the 6.1 tag-registration checks) and skip on 5.2, so `python-tests (Django 6.1, skipped
+on 5.2)` runs them: each 5.2 shard writes the node id of every test it skipped
+(`tests/skip_ledger.py`: a skip marker, a module that skips itself at import, a fixture or a test
+body that skips, all alike; not an xfail, not a sweep case the sample left out), and that job runs
+exactly those on Django 6.1, after the shards. A new Django-6-only file needs no registration. It
+refuses to run with fewer than four shard lists or an empty one, and `test-summary` requires it.
+A test skipped there too was skipped on every cell; `-rs` lists it with its reason.
+`tests/test_skip_ledger_4074.py` pins the ledger and the wiring. The trade: a break that shows only
+on Django 6.0, and a 6.x-only break in a test that also runs (and passes) on 5.2, are found by the
+next nightly instead of before merge.
+
+**The slow tier** is derived: `tests/slow_tier.py` marks every test recorded over 1 s in
+`.test_durations` as `slow`. `@pytest.mark.pr_tier` keeps a slow test in the PR tier (a
+structural pin: a ratchet, an inventory, a doc table, a census); `@pytest.mark.nightly` keeps it
+out of every `test.yml` run (only the serial `main-health` suite runs it).
+
+**The exhaustive sweeps** are `@pytest.mark.sweep("<population>")`: the marked-safe attribute
+sweep (`python/djust/tests/test_marked_safe_attribute_sweep_3898.py`: component classes, data
+tags, item parameters), the safe-markup payload sweep (`python/tests/test_safe_markup_audit_3774.py`:
+every tag, function, Rust handler and named driver) and the guard's differential fuzz
+(`python/tests/test_safe_markup_guard_3820.py`: extra seeds and analysis mutants). In full they were
+about 30% of all recorded test time. `tests/sweep_sample.py` runs them two ways:
+
+- **Full**, every unit: a bare `pytest` (no `-m`, as `main-health` runs it), `DJUST_SWEEP_SAMPLE=0`,
+  or `make test-sweeps-full`.
+- **Sampled**: whenever the run deselects `slow`, or with `DJUST_SWEEP_SAMPLE=1` (CI sets it on the
+  push to `main`). A sampled sweep always drives (1) the units whose source files the change touches
+  (CI lists them in `$RUNNER_TEMP/changed-paths.txt` from the PR's diff; locally it is the diff
+  against `origin/main` plus the working tree), (2) every unit, if a file the whole sweep runs
+  through changed (the sweep itself, its driver, `components/utils.py`, the taint analysis: each
+  file's `SHARED_PATHS`), (3) the regression-pinned units (the payload sweep's named drivers), and
+  (4) a seeded draw of a fixed number of the rest (`*_BUDGET` in each file, about a minute each).
+
+The census tests in those files (every class, pair and tag reached; the exact known-leak sets; the
+site audit; the doc table; the baseline ratchet) are `pr_tier` and run in full on every pull
+request. The two tests that ask whether EVERY audited sink ran need the whole payload sweep and are
+`nightly`. `python/tests/test_sweep_tiers_4074.py` pins all of it: every slow test in a sweep file
+has exactly one tier, every population has a size floor (a refactor cannot quietly sweep less), and
+a sampled selection is never empty.
+
+**Reproducing a sampled failure.** The seed is `DJUST_SWEEP_SEED`; CI sets
+`<commit sha>-py<version>-dj<django>`, so each cell draws a different sample and successive commits
+rotate through the population. The report header prints it, the summary lists every population's
+`chosen of total (forced)`, and a failing sweep test prints the exact command, for example:
+
+    DJUST_SWEEP_SAMPLE=1 DJUST_SWEEP_SEED=<seed> DJUST_SWEEP_CHANGED=<paths> \
+      .venv/bin/python -m pytest '<node id>'
+
+`make test-sweeps SEED=<seed> CHANGED=<paths>` does the same for all three files.
+
+**The cost of sampling.** A defect at one unit that no change touches is caught before merge only
+if the draw lands on it. Per pull-request run (three Django cells, three draws): about 54% for a
+payload-sweep unit, 51% for a data tag, 36% for an item parameter, 55% for an analysis mutant, 62%
+for a URL component class and 8% for one of the 165 component classes that are neither URL nor template classes. The nightly
+`main-health` suite catches it with certainty, so the worst case is a security regression found the
+next morning instead of before merge. A change to the unit's own file is always swept.
+
+**Starting the full tier on any branch** (a train checkpoint, a CI change, a branch with no PR):
+
+    gh workflow run test.yml --repo djust-org/djust --ref <branch>
+    gh workflow run main-health.yml --repo djust-org/djust --ref <branch>
+
+The first is the full `test.yml` run: every interpreter (3.12-3.15) x Django 5.2/6.0/6.1 x 4 shards,
+the slow tier, and every unit of the sweeps (`-f full_sweeps=false` samples them instead). It costs
+about 800 runner-minutes; on a free-plan organisation the price is the 20-job concurrency it holds
+for the better part of an hour, not money. The second is what the nightly runs: the serial full
+suite on that branch (every unit of the sweeps, definition order) plus the called matrix; on a
+branch it reports in the run instead of filing an issue. Follow either with `gh run watch <id>`.
+A dispatch never cancels a pull-request run of the same branch (their refs, and so their
+concurrency groups, differ); a second dispatch on the same branch cancels the first.
+
+**Nightly failures** are reported by `main-health.yml`: its `report` job opens (or comments on) the
+`main is RED` issue when the serial suite or the called cross-version matrix fails, and closes it
+when both are green. A manual run of `main-health` on a branch tests that branch and fails the run
+instead of filing an issue.
+
+### The early tier: tests that failed late run early
+
+A test that runs only late (the push to `main`, the nightly) fails after the change that broke it
+has merged. The early tier keeps such tests before merge. It is honoured where `pr_tier` is
+(`tests/slow_tier.py` does not mark an early test `slow`), so PR and merge-queue CI run it inside
+their fast tier, and `make test-early` runs exactly it locally. All numbers live in
+`tests/early_tier.py`.
+
+- **Promotion.** The nightly `main-health` suite writes a junit report in which every test carries
+  its node id and its pre-merge tier. When it is red, `scripts/promotion_ledger.py promote` adds
+  each failing test that is NOT already in the pre-merge tier to `tests/promotion-ledger.json`.
+  Not promoted: a test that is already early (a fast test failing on `main` is a merge
+  interaction, not a tier problem), a `nightly`-marked test (nightly-only by declaration), and a
+  test a path rule already selects (the report says so: if the breaking change did not match the
+  rule, extend the rule). A failure from a push to `main` can be promoted by hand:
+  `python scripts/promotion_ledger.py promote --failed-ids ids.txt` (one node id per line; without
+  a junit report the tier comes from `.test_durations`).
+- **The workflow never pushes.** `main-health` has `contents: read` and `issues: write` and gains no
+  permission: the ledger change is a patch, posted on the `main is RED` issue when a test is
+  promoted, and on a `promotion ledger: changes to apply` issue when a green night demotes one.
+  Apply it with `git apply` in a pull request (the one fixing the red, typically).
+- **Demotion.** On a green night `promotion_ledger.py demote` credits every entry whose test passed
+  with one green night; an entry that fails again restarts at zero. After `DEMOTE_AFTER_GREEN` (30)
+  consecutive green nights an unpinned entry leaves. The streaks between nights are kept in the
+  actions cache (no token permission); a lost cache restarts them, so an entry stays early longer,
+  never shorter.
+- **Pinned.** `"pinned": true` (set by hand) keeps an entry for good: never demoted, never evicted.
+- **Budget.** The ledger may cost at most `BUDGET_SECONDS` (180 s) of recorded duration. Over it,
+  unpinned entries leave in order of oldest last failure; pinned entries alone over it make the
+  script exit 2.
+- **Granularity.** An entry is a test function (`path::Class::test_name`, parameters stripped):
+  parametrized ids are derived from values and churn, and a whole file is too coarse for the
+  budget. `tests/test_promotion_ledger.py` fails, naming the entry, when an entry's test is renamed
+  or deleted.
+
+**Path rules** (`PATH_RULES` in `tests/early_tier.py`) are early by change shape rather than by
+failure. In a run that deselects `slow`, a rule whose change shape matches the run's changed paths
+(CI writes `$RUNNER_TEMP/changed-status.txt` with `git diff --name-status --no-renames`; locally it
+is the diff against `origin/main` plus the working tree and untracked files) keeps its pins in the
+fast tier:
+
+| rule | fires on | runs |
+|---|---|---|
+| `test-module-added-or-removed` | a test module added, deleted or renamed | every module in `MERGE_GATES` (Makefile) |
+| `system-check-changed` | `python/djust/checks/`, `docs/system-checks.md` | the check-ID uniqueness and C0xx docs-table pins |
+| `client-js-source-changed` | `python/djust/static/djust/src/` | `tests/test_client_size_manifest_2138.py` |
+
+Each rule names the incident that justifies it; add one the same way, with an `example` path the
+tests check fires it.
+
+**Running the early tier locally** before handing work over:
+
+    make test-early
+
+It collects the ledger entries' files, every file using `pr_tier` and the files the fired rules
+name, and keeps only the early tests (`pytest --early-only`) on two workers. A rule selects
+whole files, but the exhaustive sweep units in them are left to their own sampling (their
+`pr_tier` census tests stay).
 
 ### The merge queue is on (ruleset `merge-queue`)
 

@@ -24,6 +24,13 @@ permissions:
   contents: read
   issues: write
 
+# Two halves (#4074). `suite` is the serial full suite on 3.12: every test, every unit of the
+# exhaustive security sweeps (no `-m`, no DJUST_SWEEP_SAMPLE: tests/sweep_sample.py is full). It
+# is the ONLY place the full sweeps run. `matrix` calls test.yml, so the interpreter matrix
+# (3.13/3.14/3.15) and the Django spread run here, once a day, instead of on every push to main.
+# The report job below files one issue for either half, so a nightly failure reaches a human.
+# A manual run on another branch tests that branch and fails the run instead of filing an issue.
+
 concurrency:
   group: main-health
   cancel-in-progress: false
@@ -35,10 +42,12 @@ jobs:
     outputs:
       failed: ${{ steps.run.outputs.failed }}
       summary: ${{ steps.run.outputs.summary }}
+      ledger_changed: ${{ steps.ledger.outputs.membership_changed }}
+      ledger_summary: ${{ steps.ledger.outputs.summary }}
+      ledger_patch: ${{ steps.ledger.outputs.patch }}
     steps:
+      # The ref the run is for: `main` on the schedule; the dispatched branch on a manual run.
       - uses: actions/checkout@v7
-        with:
-          ref: main
 
       - uses: actions/setup-python@v7
         with:
@@ -92,7 +101,7 @@ jobs:
           # scheduled run reports it to the person who can act on it instead of
           # blocking an unrelated push.
           uv run --no-sync python -m pytest tests/ python/tests/ python/djust/tests/ -q \
-            > /tmp/suite.txt 2>&1
+            --junitxml=/tmp/suite-junit.xml > /tmp/suite.txt 2>&1
           STATUS=$?
           set -e
           tail -40 /tmp/suite.txt
@@ -133,9 +142,69 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           exit 0
 
+      # The promotion ledger (tests/early_tier.py, scripts/promotion_ledger.py): a test that failed
+      # here and is not in the pre-merge tier is promoted, so PR CI runs it from then on; a green
+      # night credits every entry that passed, and one green for DEMOTE_AFTER_GREEN nights leaves.
+      # This job cannot push (`contents: read`), and must never push to main: the change is a
+      # patch, which the report job posts on the "main is RED" issue (promotion) or on the
+      # "promotion ledger: changes to apply" issue (demotion), for a person to apply in a PR.
+      # The green streaks between nights live in the actions cache, which needs no token
+      # permission; a lost cache only restarts the streaks (an entry stays early longer).
+      - name: Restore the promotion-ledger streaks
+        if: ${{ steps.run.outcome == 'success' }}
+        uses: actions/cache/restore@v6
+        with:
+          path: .promotion-state/ledger.json
+          key: promotion-ledger-state-${{ github.run_id }}
+          restore-keys: promotion-ledger-state-
+
+      - name: Update the promotion ledger
+        id: ledger
+        if: ${{ steps.run.outcome == 'success' }}
+        env:
+          FAILED: ${{ steps.run.outputs.failed }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ ! -s /tmp/suite-junit.xml ]; then
+            echo "no junit report; the ledger is left as it is"
+            exit 0
+          fi
+          if [ "$FAILED" = "true" ]; then
+            set -- promote --reason "failed in the nightly main-health suite: $RUN_URL"
+          else
+            set -- demote
+          fi
+          uv run --no-sync python scripts/promotion_ledger.py "$@" \
+            --junit /tmp/suite-junit.xml --state .promotion-state/ledger.json \
+            --summary /tmp/ledger-summary.md
+          {
+            echo "summary<<LEDGER_EOF"
+            cat /tmp/ledger-summary.md
+            echo "LEDGER_EOF"
+            echo "patch<<LEDGER_EOF"
+            git diff -- tests/promotion-ledger.json
+            echo "LEDGER_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Save the promotion-ledger streaks
+        # Best effort: a failed save (a re-run attempt reuses the run id) only restarts streaks.
+        continue-on-error: true
+        if: ${{ steps.ledger.outcome == 'success' && github.ref == 'refs/heads/main' && hashFiles('.promotion-state/ledger.json') != '' }}
+        uses: actions/cache/save@v6
+        with:
+          path: .promotion-state/ledger.json
+          key: promotion-ledger-state-${{ github.run_id }}
+
+  matrix:
+    name: cross-version matrix (test.yml)
+    uses: ./.github/workflows/test.yml
+    with:
+      # main-health's `suite` above already sweeps every unit once; the matrix samples.
+      full_sweeps: false
+
   report:
     name: open or update the tracking issue
-    needs: suite
+    needs: [suite, matrix]
     # Runs even when `suite` FAILED. Without this, a job-level failure — a
     # broken `uv venv`, a network blip, a Rust build error — skips the report
     # entirely and nobody is told. "Nothing alerted" is the failure mode this
@@ -154,6 +223,11 @@ jobs:
           FAILED: ${{ needs.suite.outputs.failed }}
           SUMMARY: ${{ needs.suite.outputs.summary }}
           SUITE_RESULT: ${{ needs.suite.result }}
+          MATRIX_RESULT: ${{ needs.matrix.result }}
+          ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
+          LEDGER_CHANGED: ${{ needs.suite.outputs.ledger_changed }}
+          LEDGER_SUMMARY: ${{ needs.suite.outputs.ledger_summary }}
+          LEDGER_PATCH: ${{ needs.suite.outputs.ledger_patch }}
         with:
           script: |
             // Three states, not two: green, red, and "the check could not
@@ -162,8 +236,34 @@ jobs:
             const outcome = process.env.SUITE_RESULT;
             const ranAtAll = outcome === 'success';
             const infraFailure = !ranAtAll;
-            const failed = infraFailure || process.env.FAILED === 'true';
-            const summary = process.env.SUMMARY || '(no summary captured)';
+            // The cross-version matrix (#4074) is red when any of its gating jobs failed; a
+            // 3.15 cell is allowed to fail and does not make it red.
+            const matrixRed = process.env.MATRIX_RESULT === 'failure';
+            const failed = infraFailure || process.env.FAILED === 'true' || matrixRed;
+            const matrixLine = matrixRed
+              ? 'The cross-version matrix (test.yml on 3.12-3.15 x Django 5.2-6.1) FAILED: see its jobs in the run.'
+              : `Cross-version matrix: ${process.env.MATRIX_RESULT || 'not run'}.`;
+            const summary = (process.env.SUMMARY || '(no summary captured)') + '\n\n' + matrixLine;
+            // The promotion ledger (tests/early_tier.py): a patch for a person to apply in a PR.
+            const ledgerChanged = process.env.LEDGER_CHANGED === 'true' && !!process.env.LEDGER_PATCH;
+            const ledgerBlock = ledgerChanged ? [
+              '### Promotion ledger',
+              '',
+              process.env.LEDGER_SUMMARY || '',
+              'Apply in a pull request (save the diff below as `ledger.patch`, then `git apply ledger.patch`);',
+              'never pushed to main by this workflow. See docs/testing-strategy.md, "The early tier".',
+              '',
+              '```diff',
+              process.env.LEDGER_PATCH,
+              '```',
+            ].join('\n') : '';
+            // A manual run on a branch reports in the run, not in the tracking issue.
+            if (process.env.ON_MAIN !== 'true') {
+              core.summary.addRaw(ledgerBlock ? summary + '\n\n' + ledgerBlock : summary);
+              await core.summary.write();
+              if (failed) core.setFailed(`branch run is red: ${summary}`);
+              return;
+            }
             const LABEL = 'main-health';
             const RED_TITLE = 'main is RED — the full suite fails on main';
             const INFRA_TITLE = 'main-health check could not run';
@@ -206,6 +306,33 @@ jobs:
               await close(stale, 'Superseded — the check ran and reported a definite state');
             }
 
+            // Demotions are proposed on a green night, on their own issue (the red one closes).
+            const LEDGER_TITLE = 'promotion ledger: changes to apply';
+            const ledgerIssue = find(LEDGER_TITLE);
+            if (!failed && ledgerChanged) {
+              const ledgerBody = [
+                ledgerBlock,
+                '',
+                `Run: ${run}`,
+                '',
+                '_Opened automatically by `.github/workflows/main-health.yml`. Updated on each green',
+                'run that still proposes a change; closed when the checked-in ledger needs none._',
+              ].join('\n');
+              if (ledgerIssue) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: ledgerIssue.number, body: ledgerBody,
+                });
+              } else {
+                await github.rest.issues.create({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  title: LEDGER_TITLE, labels: [LABEL], body: ledgerBody,
+                });
+              }
+            } else if (!failed && ledgerIssue) {
+              await close(ledgerIssue, 'The checked-in promotion ledger needs no change');
+            }
+
             if (!failed) {
               if (existing) await close(existing, 'main is green again');
               return;
@@ -233,6 +360,7 @@ jobs:
               summary,
               '```',
               '',
+              ...(ledgerBlock ? [ledgerBlock, ''] : []),
               `Run: ${run}`,
               '',
               '_Opened automatically by `.github/workflows/main-health.yml` (#2139). It updates this',

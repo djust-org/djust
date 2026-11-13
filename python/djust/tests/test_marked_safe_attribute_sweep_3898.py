@@ -73,6 +73,7 @@ from django.utils.functional import lazy
 from django.utils.safestring import SafeString, mark_safe
 from djust.components.base import LiveComponent
 from scripts.lib.template_library_parity import harness, url_sweep
+from tests import sweep_sample
 
 pytestmark = pytest.mark.components
 
@@ -225,6 +226,55 @@ TEMPLATE_CLASSES = {
 }
 
 
+# --- tiers (#4074) ---------------------------------------------------------------------------
+# The class, tag and item-parameter sweeps below are ``@pytest.mark.sweep``: before merge they
+# drive a seeded sample (``tests/sweep_sample.py``), every unit in the nightly run. The census
+# tests (every class / pair / tag reached, the exact known-leak sets) are ``pr_tier``: they run
+# in full on every pull request. ``tests/test_sweep_tiers_4074.py`` pins the split.
+
+#: Code every class (or tag) of these sweeps runs through, and the sweep itself: a change to any
+#: of them drives every unit even in a sampled run.
+SHARED_PATHS = (
+    "python/djust/components/base.py",
+    "python/djust/components/utils.py",
+    "crates/djust_components/src/html.rs",
+    "scripts/lib/template_library_parity/url_sweep.py",
+    "python/djust/tests/test_marked_safe_attribute_sweep_3898.py",
+    "tests/sweep_sample.py",
+)
+#: Units each sampled run draws beyond the ones a change forces (budget: about a minute each).
+#: The class budget is per check of a :func:`sweep` call, so each family (URL classes, template
+#: classes, all classes) is represented and its "barely ran" floor has something to count.
+CLASS_BUDGET = 3
+TAG_BUDGET = 2
+ITEM_PARAMETER_BUDGET = 6
+#: class set of a check -> (classes of it the last ``sweep`` drove, its size), for :func:`_floor`
+_DRAWS: dict[frozenset[str], tuple[int, int]] = {}
+
+
+def _class_paths(key: str) -> list[str]:
+    """The class's module, and the crate source of the same name if it has one."""
+    cls = url_sweep.component_classes().get(key)
+    if cls is None:
+        return []
+    out = sweep_sample.module_paths(cls)
+    out.append("crates/djust_components/src/simple/%s.rs" % cls.__module__.rsplit(".", 1)[-1])
+    return out
+
+
+@lru_cache(maxsize=None)
+def _tag_files() -> dict[str, str]:
+    base = ROOT / "python/djust/components/templatetags"
+    return {p.relative_to(ROOT).as_posix(): p.read_text() for p in sorted(base.rglob("*.py"))}
+
+
+def _tag_paths(tag: str) -> list[str]:
+    """The template-tag modules that name the tag (``lib/tag/param`` keys name it second)."""
+    name = tag.split("/")[1] if "/" in tag else tag
+    word = re.compile(r"\b%s\b" % re.escape(name))
+    return [path for path, text in _tag_files().items() if word.search(text)]
+
+
 def _floor(classes: dict, full: int) -> int:
     """The least a sweep over ``classes`` must render before its "barely ran" assertion passes.
 
@@ -234,7 +284,7 @@ def _floor(classes: dict, full: int) -> int:
     baseline is red for the class I chose". A family that does have a class keeps a real floor.
     """
     if not ONLY:
-        return full
+        return sweep_sample.floor(full, *_DRAWS.get(frozenset(classes), (0, 0)))
     return 50 if classes else -1
 
 
@@ -633,7 +683,22 @@ def sweep(
     found: list[list[tuple]] = [[] for _ in checks]
     rendered = [0] * len(checks)
     classes = {key: cls for check in checks for key, cls in check.classes.items()}
+    chosen: set[str] = set()
+    for check in checks:
+        drawn = sweep_sample.select(
+            "marked-safe/classes",
+            sorted(check.classes),
+            budget=CLASS_BUDGET,
+            paths=_class_paths,
+            shared=SHARED_PATHS,
+        )
+        chosen.update(drawn)
+    for check in checks:
+        family = frozenset(check.classes)
+        _DRAWS[family] = (len(family & chosen), len(family))
     for key, cls in classes.items():
+        if key not in chosen:
+            continue
         if hybrid and getattr(cls, "template", None) is None:
             continue
         cases: dict[tuple[str, str, str], list[int]] = {}
@@ -695,7 +760,7 @@ def _report(found: list[tuple]) -> str:
 
 
 class TestTheSweep:
-    @pytest.mark.slow
+    @pytest.mark.sweep("marked-safe/classes")
     def test_the_default_render_of_a_template_class_lets_nothing_out_of_an_attribute(self) -> None:
         # Leave the render path selection to Component.render, including for classes
         # that fall back to a template when the crate rejects the value.
@@ -709,7 +774,7 @@ class TestTheSweep:
         assert template_rendered > _floor(TEMPLATE_CLASSES, 2_000), template_rendered
         assert not template_found, _report(template_found)
 
-    @pytest.mark.slow
+    @pytest.mark.sweep("marked-safe/classes")
     @pytest.mark.parametrize("companions", [False, True], ids=["bare", "companions"])
     def test_no_template_class_lets_a_marked_safe_value_out_of_its_attribute(
         self, companions: bool
@@ -822,6 +887,7 @@ class TestCallerSet:
     URL is data (an item, a row, a constructor argument) or a template tag's own keyword. So no
     call site may leave ``honor_safe`` at its default or pass ``True``."""
 
+    @pytest.mark.pr_tier
     def test_no_url_call_site_honours_a_marked_safe_value(self) -> None:
         sites = _call_sites()
         assert not sites, (
@@ -952,11 +1018,19 @@ def _both(src: str, ctx: dict) -> tuple[str | None, str | None]:
     return out[0], out[1]
 
 
+def _sample_tag(tag: str) -> None:
+    sweep_sample.skip_unless_sampled(
+        "marked-safe/tags", tag, TAGS, budget=TAG_BUDGET, paths=_tag_paths, shared=SHARED_PATHS
+    )
+
+
 class TestTags:
+    @pytest.mark.pr_tier
     def test_every_data_tag_exists(self) -> None:
         inv = _inventory()
         assert [t for t in DATA_TAGS if t not in inv] == []
 
+    @pytest.mark.pr_tier
     def test_each_tag_is_reached_by_the_driver(self) -> None:
         """The instrument sees a URL arrive at an attribute, for every tag (a sweep over tags it
         never reached would pass for nothing)."""
@@ -970,8 +1044,10 @@ class TestTags:
                     break
         assert reached == set(TAGS), sorted(set(TAGS) - reached)
 
+    @pytest.mark.sweep("marked-safe/tags")
     @pytest.mark.parametrize("tag", TAGS)
     def test_no_tag_lets_a_marked_safe_item_value_out_of_its_attribute(self, tag: str) -> None:
+        _sample_tag(tag)
         info = _inventory()[tag]
         calls = _tag_calls(info)
         holes: dict[tuple[str, str], set] = {}
@@ -990,10 +1066,12 @@ class TestTags:
         assert rendered > 100, f"{tag}: the sweep barely ran ({rendered})"
         assert not holes, "\n".join(f"{tag} {k}: {sorted(v)[:2]}" for k, v in sorted(holes.items()))
 
+    @pytest.mark.sweep("marked-safe/tags")
     @pytest.mark.parametrize("tag", TAGS)
     def test_no_tag_lets_a_marked_safe_scalar_url_through_as_a_script_url(self, tag: str) -> None:
         """The scalar URL arguments of these tags (``src=``, ``href=``) are checked too: the tags
         whose item URLs are data share the helper, and a script scheme is never honoured."""
+        _sample_tag(tag)
         info = _inventory()[tag]
         calls = _tag_calls(info, ("scalar",))
         holes = set()
@@ -1604,7 +1682,7 @@ class TestEveryClass:
     handler in an attribute, and no script URL a browser follows is printed. A scalar constructor
     argument is the developer's own (see ``wide`` in :func:`sweep`)."""
 
-    @pytest.mark.slow
+    @pytest.mark.sweep("marked-safe/classes")
     @pytest.mark.parametrize("companions", [False, True], ids=["bare", "companions"])
     def test_no_class_lets_a_marked_safe_item_value_out_of_an_attribute(
         self, companions: bool
@@ -1737,6 +1815,7 @@ def carried_differently() -> dict[str, set[str]]:
     return found
 
 
+@pytest.mark.pr_tier
 class TestEveryClassIsReached:
     """The class sweep skips a cell its component rejects. That is only honest if the skip is
     accounted for: this test fails a (class, parameter) pair that NO cell drew (so nothing was
@@ -1841,6 +1920,7 @@ class TestRawTextCells:
         } <= set(CLAIMS)
 
 
+@pytest.mark.pr_tier
 class TestHybridCellsAreReached:
     """The hybrid cells are accounted for the way ``TestEveryClassIsReached`` accounts for the
     ``_render_custom`` ones (#3900). Until that issue was fixed they were SET ASIDE: the sweep
@@ -2090,6 +2170,7 @@ def _reached(key: str) -> tuple[tuple[ReachedCase, ...], frozenset[str], bool]:
     return tuple(cases), frozenset(attributes), text
 
 
+@pytest.mark.pr_tier
 class TestEveryTag:
     def test_the_item_leaks_of_the_tags_are_exactly_the_listed_ones(self) -> None:
         leaks = wide_tag_leaks()
@@ -2104,10 +2185,12 @@ class TestEveryItemParameter:
     for it), and every way of marking a value safe leaves those attributes exactly as the plain
     string does, with no quote breakout and no script URL."""
 
+    @pytest.mark.pr_tier
     def test_the_table_lists_real_parameters(self) -> None:
         missing = [k for k in ITEM_PARAMETERS if "/".join(k.split("/")[:2]) not in _tag_infos()]
         assert not missing, missing
 
+    @pytest.mark.pr_tier
     @pytest.mark.parametrize("key", sorted(ITEM_PARAMETERS))
     def test_the_parameter_is_driven_and_its_slots_are_the_pinned_ones(self, key: str) -> None:
         cases, attributes, text = _reached(key)
@@ -2117,8 +2200,17 @@ class TestEveryItemParameter:
         assert attributes == set(pinned_attributes), (key, sorted(attributes))
         assert text == pinned_text, (key, text)
 
+    @pytest.mark.sweep("marked-safe/item-parameters")
     @pytest.mark.parametrize("key", sorted(ITEM_PARAMETERS))
     def test_a_marked_safe_item_is_neutralised_like_the_plain_string(self, key: str) -> None:
+        sweep_sample.skip_unless_sampled(
+            "marked-safe/item-parameters",
+            key,
+            sorted(ITEM_PARAMETERS),
+            budget=ITEM_PARAMETER_BUDGET,
+            paths=_tag_paths,
+            shared=SHARED_PATHS,
+        )
         cases, _attributes, _text = _reached(key)
         assert cases, f"{key}: not driven"
         slots = ITEM_PARAMETERS[key][0]
@@ -2342,6 +2434,7 @@ def canary_library(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     _source_facts.cache_clear()
 
 
+@pytest.mark.pr_tier
 class TestTheDerivationCanFail:
     """``TestEveryTag`` asserts that the derivation finds NOTHING in the package, which a
     derivation that finds nothing also satisfies. These plant a leak of each kind the first
@@ -2736,3 +2829,11 @@ class TestFormFieldChoices:
         assert out is not None
         names = {a.name for a in url_sweep.attributes(out) if REACH_PROBE in a.value}
         assert "value" in names, (engine, widget, sorted(names))
+
+
+#: The sweeps' full populations, for ``tests/test_sweep_tiers_4074.py`` (#4074).
+SWEEP_POPULATIONS = {
+    "marked-safe/classes": lambda: sorted(ALL_CLASSES),
+    "marked-safe/tags": lambda: list(TAGS),
+    "marked-safe/item-parameters": lambda: sorted(ITEM_PARAMETERS),
+}

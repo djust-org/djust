@@ -1,0 +1,4 @@
+{
+  "_doc": "Tests that failed late and run early until they stay green. Maintained by scripts/promotion_ledger.py (promote / demote); see tests/early_tier.py and docs/testing-strategy.md. Fields: test (path::[Class::]test_name, parameters stripped), promoted, last_failed (ISO dates), reason, green_streak (consecutive green nightlies), pinned (never demoted or evicted).",
+  "entries": []
+}
