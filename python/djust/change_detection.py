@@ -404,6 +404,9 @@ CHANGE_DETECTION_IGNORED: frozenset = frozenset(
         "_prev_context_refs",
         "_prev_context_immutables",
         "_prev_context_fingerprints",
+        # The fingerprints of the context processors' plain-data values the
+        # last sync sent (#3996), kept beside ``_prev_context_refs``.
+        "_prev_request_scoped",
         "_djust_computed_cache",
         "_djust_computed_deps",
         "_djust_computed_lock",

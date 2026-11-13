@@ -370,6 +370,14 @@ def _make_view():
 
 
 def _drive(monkeypatch, *, single_pass: bool):
+    # This comparison is about the fused walk alone. Two later shortcuts read
+    # its "converted" answer to decide what to send (#3996, #3999), and the
+    # two-pass stand-in below never gives one, so with them on the two runs
+    # would differ in which unchanged keys are re-sent, not in any value.
+    # ``test_per_turn_oracle.py`` compares those shortcuts on and off.
+    monkeypatch.setattr(
+        "djust._per_turn.disabled", frozenset({"request_scoped_changes", "plain_sub_ids"})
+    )
     if not single_pass:
         monkeypatch.setattr(
             rust_bridge, "fingerprint_and_convert", _original_fingerprint_and_convert

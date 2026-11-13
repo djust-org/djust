@@ -11,6 +11,7 @@ from django.db import models
 from django.test.signals import setting_changed
 from django.utils.datastructures import MultiValueDict
 
+from .. import _per_turn
 from .._class_snapshot import namespace as _class_namespace
 from .._exposure_providers import STREAMS_PROVIDER, actions_provider, components_provider
 from ..serialization import _crosses_as_encoded, normalize_django_value
@@ -274,7 +275,18 @@ def _is_json_serializable(value: Any) -> bool:
         return all(_is_json_serializable(item) for item in value)
     if isinstance(value, dict):
         return all(isinstance(k, str) and _is_json_serializable(v) for k, v in value.items())
-    # Fallback: try encoding — catches dataclasses, custom objects, etc.
+    # Anything else cannot be encoded, and the answer is known from the type
+    # (#3996). ``json.dumps`` without a ``default`` accepts ``None``, ``True``,
+    # ``False`` and instances of ``str`` / ``int`` / ``float`` / ``list`` /
+    # ``tuple`` / ``dict`` (by their real type), and raises ``TypeError`` for
+    # every other object. A value that reaches this line is an instance of none
+    # of them: the checks above use ``isinstance``, which is true for every
+    # real subclass (and, through ``__class__``, for a lazy proxy as well). So
+    # the probe below can only ever raise. It ran once per request-scoped
+    # object per turn (the request, the user, ``perms``, the lazy theme chunks)
+    # and built and discarded an exception each time.
+    if _per_turn.on("serializable_by_type"):
+        return False
     try:
         json.dumps(value)
         return True

@@ -69,6 +69,7 @@ from typing import (
 
 from asgiref.sync import sync_to_async
 
+from . import _per_turn
 from ._params_form import run_handle_params
 from ._view_hooks import call_async_result, call_hook
 
@@ -367,6 +368,25 @@ def _save_running_for(pending: "Optional[asyncio.Future[None]]") -> float:
 #: Consecutive deferred saves after which a deferral is reported as the terminal
 #: reload error, as before #3200: storage is not recovering (review I-a).
 _EXPLICIT_MAX_DEFERRALS = 3
+
+
+def _mints_no_client_snapshot(view: Any) -> bool:
+    """True when ``snapshot_codec`` would return None for *view*: an explicit
+    view whose contract compiles and declares no ``persist="client"`` field.
+
+    Anything else (an unreadable policy, a contract that does not compile) is
+    False, so the caller takes the path that reports it.
+    """
+    from ._exposure import ExposureContract
+
+    try:
+        policy = getattr(view, "exposure_policy", None)
+        if type(policy) is not str or policy != "explicit":
+            return False
+        fields = ExposureContract.from_view_class(type(view)).fields
+        return not any(field.persist == "client" for field in fields.values())
+    except Exception:  # noqa: BLE001 — the checked path raises and reports it
+        return False
 
 
 async def _run_explicit_save(
@@ -2954,6 +2974,9 @@ class ViewRuntime(RuntimeTurnPort):
         # catch-up turn scheduled after a deferred save.
         self._explicit_save_pending: Optional["asyncio.Future[None]"] = None
         self._explicit_commits = 0
+        # The request whose binding this turn's root save just checked against
+        # the mount binding; read once by ``_explicit_event_snapshot`` (#3997).
+        self._explicit_binding_verified: Any = None
         self._explicit_deferrals = 0
         self._explicit_catch_up: Optional["asyncio.Task[None]"] = None
         self._in_explicit_catch_up = False
@@ -5872,16 +5895,50 @@ class ViewRuntime(RuntimeTurnPort):
             "view": view._djust_mount_view_path,
             "state_snapshot_signed": None,
         }
-        try:
-            request = getattr(view, "_djust_event_request", None)
-            if request is None or (
-                await sync_to_async(request_binding)(request) != self._explicit_mount_binding
-            ):
+        # Read once: only the commit that ran in THIS turn may vouch for it.
+        verified, self._explicit_binding_verified = self._explicit_binding_verified, None
+        request = getattr(view, "_djust_event_request", None)
+        if not _per_turn.on("snapshot_single_hop"):
+            try:
+                if request is None or (
+                    await sync_to_async(request_binding)(request) != self._explicit_mount_binding
+                ):
+                    raise ExposureError("Explicit snapshot requires unchanged authorized identity")
+                if getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True):
+                    codec = await sync_to_async(snapshot_codec)(view, request)
+                    if codec is not None:
+                        fields["state_snapshot_signed"] = await sync_to_async(codec.capture)(view)
+            except Exception:
+                # Factories and codec errors may contain secrets. Never stringify
+                # them or fall back to reflective legacy state.
+                logger.warning("Explicit event snapshot unavailable; cached snapshot invalidated")
+            return fields
+
+        # No client-persisted field means no token can be minted: the answer is
+        # the invalidation above whatever the binding says, so the only thing
+        # the binding check adds is its warning. The root save of this turn
+        # checked the same request object a moment ago (``_save_explicit_root``);
+        # when it did, that warning cannot fire and the thread hops are skipped
+        # (#3997). Anything else takes the checked path below.
+        if request is not None and verified is request and _mints_no_client_snapshot(view):
+            return fields
+
+        def capture() -> Optional[str]:
+            # The binding check, the codec and the signature, in the order and
+            # on the thread they always ran, in ONE hop instead of three.
+            if request_binding(request) != self._explicit_mount_binding:
                 raise ExposureError("Explicit snapshot requires unchanged authorized identity")
             if getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True):
-                codec = await sync_to_async(snapshot_codec)(view, request)
+                codec = snapshot_codec(view, request)
                 if codec is not None:
-                    fields["state_snapshot_signed"] = await sync_to_async(codec.capture)(view)
+                    token: str = codec.capture(view)
+                    return token
+            return None
+
+        try:
+            if request is None:
+                raise ExposureError("Explicit snapshot requires unchanged authorized identity")
+            fields["state_snapshot_signed"] = await sync_to_async(capture)()
         except Exception:
             # Factories and codec errors may contain secrets. Never stringify
             # them or fall back to reflective legacy state.
@@ -5961,6 +6018,8 @@ class ViewRuntime(RuntimeTurnPort):
         if request_binding(request) != self._explicit_mount_binding:
             raise ExposureError("Explicit persistence requires current authorization")
         save_server_state(view, request)
+        # Set only after the check passed and the save returned (#3997).
+        self._explicit_binding_verified = request
 
     def _save_explicit_children(self, view: Any, request: Any) -> None:
         """Sync body of the child-tree save; same shape as the root's."""
@@ -6006,6 +6065,7 @@ class ViewRuntime(RuntimeTurnPort):
 
         if uses_legacy_exposure(view):
             return True
+        self._explicit_binding_verified = None
         extra = self._explicit_error_fields(view, source=source, async_batch=async_batch)
         try:
             request = getattr(view, "_djust_event_request", None)
@@ -6659,8 +6719,21 @@ class ViewRuntime(RuntimeTurnPort):
             # values DERIVED from it elsewhere on the view.
             from .sync_turn import sync_step
 
-            context = await sync_to_async(sync_step(view, "render", view.get_context_data))()
-            reason = _context_changed_besides(view, context, name)
+            from .mixins.rust_bridge import request_scoped_data_changed
+
+            def changed_besides() -> Tuple[Dict[str, Any], Optional[str]]:
+                context = view.get_context_data()
+                reason = _context_changed_besides(view, context, name)
+                if reason is None:
+                    # A context processor's value is not in ``context`` and is
+                    # not view state, so the check above did not compare it
+                    # (#3996). A changed one must render: the scoped patch
+                    # would leave the node that reads it stale. Processors can
+                    # query, so this runs in the same step as the context.
+                    reason = request_scoped_data_changed(view, context)
+                return context, reason
+
+            context, reason = await sync_to_async(sync_step(view, "render", changed_besides))()
             if reason is not None:
                 logger.debug("Scoped render of %r: %r changed too; full render", name, reason)
                 return None

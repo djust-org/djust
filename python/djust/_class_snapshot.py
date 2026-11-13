@@ -69,3 +69,61 @@ def attribute_names(obj: Any) -> List[str]:
         names.update(own.copy())
     _merge_classes(names, cls)
     return sorted(names)
+
+
+# ``Py_TPFLAGS_IMMUTABLETYPE``: a class whose dictionary can never change
+# (``object``, ``type``, the builtins), so it needs no re-check.
+_IMMUTABLE_TYPE = 1 << 8
+
+
+class ClassSnapshot:
+    """The class dictionaries a per-class fact was derived from, and whether
+    they still say the same thing (#3997).
+
+    The same rule as ``_parameter_metadata._ClassPlan.fresh``: the MRO, then
+    every class dictionary in it, keys in order and values by identity. A
+    hot-replaced view (a new class object), a reassigned ``__bases__``, and an
+    added, deleted or swapped class attribute on the class or on any base
+    therefore fail :meth:`fresh`, and the fact is derived again. The metaclass
+    chain is included because ``inspect.getattr_static`` on a class reads it.
+
+    What it cannot see is a change INSIDE an object a class attribute holds
+    (appending to a class-level list, editing a function's ``__dict__``): the
+    attribute still holds the same object. A fact that depends on such
+    contents must check them itself.
+
+    Take the snapshot BEFORE deriving the fact, so a class changed while the
+    fact is being derived fails the next :meth:`fresh` instead of never.
+    """
+
+    __slots__ = ("cls", "meta", "mro", "meta_mro", "dicts")
+
+    def __init__(self, cls: type) -> None:
+        self.cls = cls
+        self.meta = type(cls)
+        self.mro = cls.__mro__
+        self.meta_mro = self.meta.__mro__
+        classes = dict.fromkeys(self.mro + self.meta_mro)
+        dicts = []
+        for klass in classes:
+            if klass.__flags__ & _IMMUTABLE_TYPE:
+                continue
+            # One atomic copy, so keys and values come from the same instant (#3151).
+            current = namespace(klass)
+            dicts.append((klass, tuple(current), tuple(current.values())))
+        self.dicts = tuple(dicts)
+
+    def fresh(self) -> bool:
+        cls = self.cls
+        if type(cls) is not self.meta or cls.__mro__ != self.mro:
+            return False
+        if self.meta.__mro__ != self.meta_mro:
+            return False
+        for klass, keys, values in self.dicts:
+            current = namespace(klass)
+            if len(current) != len(values) or tuple(current) != keys:
+                return False
+            for now, then in zip(current.values(), values):
+                if now is not then:
+                    return False
+        return True

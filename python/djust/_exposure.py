@@ -16,7 +16,9 @@ from types import MappingProxyType
 from typing import Any, Literal, cast
 
 from django.core.exceptions import ImproperlyConfigured
-from ._class_snapshot import namespace
+
+from . import _per_turn
+from ._class_snapshot import ClassSnapshot, namespace
 
 Destination = Literal["server", "client", "snapshot", "debug"]
 Persistence = Literal["server", "client"] | None
@@ -211,7 +213,21 @@ def provider_contracts_for(view_class: type) -> tuple[ProviderContract, ...]:
     Reads only each class's own ``_djust_context_providers`` entry, so a mixin
     contributes its providers once however deep it sits in the MRO. Two
     providers may not declare the same rendered key.
+
+    Compiled once per class and re-checked on every call (:class:`_ClassFacts`).
     """
+    facts = _class_facts(view_class)
+    if facts is None:
+        return _compile_provider_contracts(view_class)
+    providers = facts.providers
+    if providers is None:
+        # A failure is not kept: the next call compiles, and raises, again.
+        providers = facts.providers = _compile_provider_contracts(view_class)
+    return providers
+
+
+def _compile_provider_contracts(view_class: type) -> tuple[ProviderContract, ...]:
+    """The uncached :func:`provider_contracts_for`."""
     contracts: list[ProviderContract] = []
     names: set[str] = set()
     keys: set[str] = set()
@@ -242,6 +258,81 @@ def provider_owners(view_class: type) -> dict[str, str]:
         for contract in provider_contracts_for(view_class)
         for key in contract.rendered
     }
+
+
+class _ClassFacts:
+    """What the exposure layer derives from a view CLASS, compiled once (#3997).
+
+    ``ExposureContract.from_view_class`` was called two or three times on every
+    explicit turn (the server-state adapter, the snapshot codec, and
+    ``project_view``'s own re-check), and the provider manifest a third time
+    for the render context. Each call walked every class dictionary in the MRO
+    and ran every provider callable, to produce a value that depends only on
+    the class.
+
+    Invalidation: :meth:`fresh` is checked on EVERY use, never assumed.
+
+    * ``ClassSnapshot`` (the rule ``_parameter_metadata._ClassPlan`` uses): the
+      MRO and every class dictionary in it, keys in order and values by
+      identity. A field added, removed or replaced after the class was
+      created, on the class or on a base or mixin, a changed
+      ``exposure_schema_version``, a replaced ``_djust_context_providers`` and
+      a reassigned ``__bases__`` all rebuild the facts.
+    * Each declared field's ``exposure`` object, by identity: reassigning
+      ``descriptor.exposure`` leaves the class dictionary as it was.
+
+    The key is the class object, so a class built by ``type()``, a subclass and
+    a hot-replaced class each have their own entry. Nothing here reads an
+    instance, so a per-instance attribute cannot reach it (nor could it reach
+    the uncompiled contract).
+
+    Not seen: a change inside an object a provider callable reads (a function's
+    ``_djust_decorators`` edited after class creation, a class-level list
+    appended to). ``_ClassPlan`` has the same limit. Such a change can only
+    alter the provider manifest, and a stale manifest refuses: a key it does
+    not list cannot be written by a provider, and one it still lists stays
+    reserved. Declared fields and what each may be sent to never come from a
+    provider.
+    """
+
+    __slots__ = ("snapshot", "providers", "contracts", "exposures")
+
+    def __init__(self, view_class: type) -> None:
+        # Before anything is compiled: see ``ClassSnapshot``.
+        self.snapshot = ClassSnapshot(view_class)
+        self.providers: tuple[ProviderContract, ...] | None = None
+        self.contracts: dict[int | None, "ExposureContract"] = {}
+        self.exposures: tuple[tuple[Any, Any], ...] = ()
+
+    def fresh(self) -> bool:
+        for descriptor, exposure in self.exposures:
+            if getattr(descriptor, "exposure", None) is not exposure:
+                return False
+        return self.snapshot.fresh()
+
+
+# Facts hold the class, and its functions hold the class back (``__class__``
+# cells), so a weak-keyed table would never let a replaced class go. A bounded
+# plain dict does (the ``_parameter_metadata._PLANS`` shape): past the limit the
+# table is emptied, which costs a recompile and never a wrong answer.
+_FACTS_LIMIT = 512
+_FACTS: dict[type, _ClassFacts] = {}
+
+
+def _class_facts(view_class: Any) -> _ClassFacts | None:
+    """The current facts for *view_class*, or None when they are not kept."""
+    if not _per_turn.on("contract_cache") or not isinstance(view_class, type):
+        return None
+    try:
+        facts = _FACTS.get(view_class)
+    except TypeError:  # a metaclass that made the class unhashable
+        return None
+    if facts is None or not facts.fresh():
+        facts = _ClassFacts(view_class)
+        if len(_FACTS) >= _FACTS_LIMIT:
+            _FACTS.clear()
+        _FACTS[view_class] = facts
+    return facts
 
 
 @dataclass(frozen=True)
@@ -487,10 +578,31 @@ class ExposureContract:
         class. Adding an exposed field to a base must not widen its descendants.
         Ordinary inherited reactive fields remain available with no permissions.
         The view's registered context providers are folded into the schema.
+
+        The result depends only on the class, so it is compiled once per class
+        and version and re-checked against the class on every call
+        (:class:`_ClassFacts`); a subclass of this dataclass is never cached.
         """
+        facts = _class_facts(view_class) if cls is ExposureContract else None
+        if facts is None or not (version is None or type(version) is int):
+            return cls._compile(view_class, version=version)[0]
+        contract = facts.contracts.get(version)
+        if contract is None:
+            contract, exposures = cls._compile(view_class, version=version)
+            # Every version of one class compiles the same fields.
+            facts.exposures = exposures
+            facts.contracts[version] = contract
+        return contract
+
+    @classmethod
+    def _compile(
+        cls, view_class: type, *, version: int | None = None
+    ) -> "tuple[ExposureContract, tuple[tuple[Any, Any], ...]]":
+        """Compile the contract, and name each field's descriptor and grant."""
         from ._state import StateProperty
 
         fields: dict[str, FieldExposure] = {}
+        exposures: list[tuple[Any, Any]] = []
         seen: set[str] = set()
         for owner in view_class.__mro__:
             for name, descriptor in namespace(owner).items():  # #3151
@@ -505,14 +617,16 @@ class ExposureContract:
                         "Inherited exposure grants require explicit field redeclaration"
                     )
                 fields[name] = policy
+                exposures.append((descriptor, policy))
         if version is None:
             version = declared_schema_version(view_class)
-        return cls(
+        contract = cls(
             f"{view_class.__module__}.{view_class.__qualname__}",
             fields,
             version=version,
             providers=provider_contracts_for(view_class),
         )
+        return contract, tuple(exposures)
 
     def __post_init__(self) -> None:
         reserved = reserved_state_names()
