@@ -97,29 +97,33 @@ from .websocket_utils import (
 # How long an explicit turn waits for its own state save, by default (#4098).
 #
 # An ADR-038 explicit save is the turn's commit: the success frame is withheld
-# until storage has the state. So the turn WAITS for the save, under the
-# runtime's event lock, and the next event of the same page starts after it.
-# Back-to-back events therefore all take effect in order, each with its own
-# frame, however slow one write is.
-#
-# The default is the stuck cap (``MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S``; a test
-# pins the two together): a save still running after that long is storage not
-# answering, and ends in the reload error.
+# until storage has the state. The turn waits this long for the save, under
+# the runtime's event lock, so the next event of the same page starts after
+# it: back-to-back events all take effect in order, each with its own frame.
 #
 # Until #4098 this was 0.150, inherited from the best-effort legacy save
-# (#1475) that 2.0 removed. For an explicit turn that bound did not shorten
-# anything the user waits for: a save that took longer (one slow fsync, a
-# loaded process) had its frame replaced by a transient ``state_error`` and a
-# later full-HTML catch-up, which discards the event's own patch and whatever
-# the user typed in the meantime. A project that prefers that early answer
-# sets ``DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`` below the cap; the deferral path
-# (:class:`ExplicitSaveDeferred`, #3200) is unchanged for it.
+# (#1475) that 2.0 removed. For an explicit turn that was too tight: one slow
+# fsync or a loaded process (#3200 measured a p95 near 200 ms) had the
+# event's frame replaced by a transient ``state_error`` and a later full-HTML
+# catch-up. 2 s absorbs those spikes, so nearly every event keeps its own
+# frame.
+#
+# It is deliberately NOT the 10 s stuck cap. While a turn waits, the page's
+# event lock is held: later events queue behind it with no timeout of their
+# own, a single-view socket's receive loop is in that turn, ticks and
+# ``db_notify`` turns are skipped and pushes are queued. With storage that is
+# slow but working (2 s writes) a 10 s wait would answer event k after about
+# k x 2 s and never escalate. Past this deadline the deferral path of #3200
+# takes over instead (:class:`ExplicitSaveDeferred`): a transient error, one
+# catch-up turn that saves the newest state, and the reload error after
+# ``_EXPLICIT_MAX_DEFERRALS`` deferrals in a row, so stuck storage is reported
+# within seconds. ``DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`` changes it.
 #
 # The deadline counts only the save's own running time, never its queueing on
 # the Django thread: see explicit_state_save_timeout / _run_explicit_save.
 #
-# It stays a module constant, read at call time, so a test can lower it.
-EVENT_STATE_SAVE_TIMEOUT_S = 10.0
+# It stays a module constant, read at call time, so a test can change it.
+EVENT_STATE_SAVE_TIMEOUT_S = 2.0
 
 
 logger = logging.getLogger(__name__)
@@ -129,9 +133,8 @@ def explicit_state_save_timeout() -> float:
     """The storage deadline of an explicit turn's save, in seconds (#3200).
 
     ``DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`` when set to a valid value, otherwise
-    :data:`EVENT_STATE_SAVE_TIMEOUT_S`, the stuck cap: by default a turn waits
-    for its own save (#4098). The constant is read at call time, so a test
-    that changes it changes this. An invalid setting falls back to the
+    :data:`EVENT_STATE_SAVE_TIMEOUT_S` (2 s since #4098). The constant is read
+    at call time, so a test that changes it changes this. An invalid setting falls back to the
     default rather than failing every save; system check ``djust.C024``
     reports it at startup.
     """
@@ -145,8 +148,8 @@ def explicit_state_save_timeout() -> float:
     return EVENT_STATE_SAVE_TIMEOUT_S
 
 
-#: The static error an explicit turn sends when its save outran a deadline
-#: configured BELOW the stuck cap (or waited too long for a save thread).
+#: The static error an explicit turn sends when its save outran the deadline
+#: (or waited too long for a save thread).
 #: Not "reload": the values are kept and the next turn saves them (#3200).
 _EXPLICIT_SAVE_DEFERRED_MESSAGE = (
     "Your last change is still being saved. It will appear with your next update."
@@ -166,8 +169,9 @@ class ExplicitSaveDeferred(Exception):
 
     ``waited`` is the storage deadline the turn waited out, in seconds:
     ``None`` when no storage time was used (the save was still queued for a
-    pool thread at the start bound). A turn that waited the stuck cap has
-    nothing left to promise, so its deferral is the reload error (#4098).
+    pool thread at the start bound). A turn that waited the stuck cap (a
+    deadline configured at 10 s) has nothing left to promise, so its deferral
+    is the reload error (#4098).
     """
 
     work: "Optional[asyncio.Future[None]]" = None
@@ -6020,12 +6024,11 @@ class ViewRuntime(RuntimeTurnPort):
         The turn waits for its save while holding the runtime's event lock,
         so the page's next event starts only once this one is stored (#4098):
         a burst of events is applied, saved and acknowledged one by one, in
-        order. By default the wait ends only at the stuck cap, in the terminal
-        reload error.
+        order. The wait is ``DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`` (2 s by
+        default).
 
-        With ``DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`` set below the cap, a save
-        that outruns that deadline (#3200) keeps the guarantee but is not a
-        failure: the values stay on the view, the error is ``transient`` and
+        A save that outruns that deadline (#3200) keeps the guarantee but is
+        not a failure: the values stay on the view, the error is ``transient`` and
         does not tell the user to reload, and one catch-up turn
         (:meth:`_schedule_explicit_catch_up`) later commits them and sends
         full HTML. Storage that keeps missing the deadline, or a catch-up that
@@ -6120,7 +6123,7 @@ class ViewRuntime(RuntimeTurnPort):
         terminal reload error when the save is the catch-up's own, after
         ``_EXPLICIT_MAX_DEFERRALS`` consecutive deferrals, when the pending
         save has been running for the 10 s cap, or when the turn itself
-        ``waited`` that cap for storage (the default, #4098): storage is not
+        ``waited`` that cap for storage (a deadline set to 10 s, #4098): storage is not
         recovering, and promising an update that will not come is worse than
         asking for a reload (review I-a).
         """

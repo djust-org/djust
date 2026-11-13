@@ -4,10 +4,12 @@ An explicit turn's success frame is withheld until storage has the turn's
 state. Until #4098 the turn waited 150 ms for that save and then answered a
 transient ``state_error`` instead, with a full-HTML catch-up later: one slow
 write (an fsync on a busy disk, a loaded process) lost the event's own frame,
-and the catch-up replaced whatever the user had typed since.
+and the catch-up's full HTML reset the unsent value of a field that did not
+have focus (a focused field keeps its text and caret: checked in a browser).
 
-Now the turn waits for its own save under the runtime's event lock, so the
-next event starts after it. The contract these tests pin, per transport:
+Now the turn waits 2 s by default for its own save under the runtime's event
+lock, so the next event starts after it. The contract these tests pin, per
+transport, for a save that lands within the deadline:
 
 * N events sent without waiting for replies all run, in order;
 * each gets its own frame, in order, and none gets an error;
@@ -19,6 +21,12 @@ for the gate to be ENTERED (an event), sends the rest of the burst, checks
 that nothing is answered while the save is held (``HOLD_S``, an absence
 window: a slow machine can only make it miss a frame, never fail a correct
 run), then releases. Nothing is ordered by a sleep.
+
+WHICH DEADLINE. The tests in ``AT_THE_DEFAULT`` run on the shipped default,
+so restoring 150 ms fails them. The others set the deadline to the 10 s cap:
+they pin the ordering, and must not fail on a runner that stalls for longer
+than the default while a save is held. What happens PAST the deadline is in
+``test_slow_save_backpressure_4098.py``.
 
 This module deliberately does NOT start with ``test_exposure_`` (the conftest
 changes the save bound for those modules, #3130).
@@ -59,6 +67,13 @@ MODULE = __name__
 #: Longer than the 150 ms the old deadline allowed, so the old behaviour (an
 #: error frame while the save is still held) shows up inside it.
 HOLD_S = 0.5
+
+#: Tests that run on the shipped default deadline (see the module docstring).
+AT_THE_DEFAULT = {
+    "test_a_burst_over_a_websocket_while_the_first_save_is_slow",
+    "test_a_burst_over_sse_while_the_first_save_is_slow",
+    "test_the_default_wait_is_two_seconds",
+}
 
 #: Handler runs, in order, across every view here (cleared per test).
 RAN: List[Any] = []
@@ -110,11 +125,14 @@ class WithComponent(LiveView):
 
 
 @pytest.fixture(autouse=True)
-def staged(monkeypatch):
+def staged(request, monkeypatch):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     RAN.clear()
+    extra = {}
+    if request.node.originalname not in AT_THE_DEFAULT:
+        extra["DJUST_EXPLICIT_STATE_SAVE_TIMEOUT"] = MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
     with override_settings(
-        LIVEVIEW_ALLOWED_MODULES=[MODULE, "djust"], DEBUG=False, DJUST_TENANTS=None
+        LIVEVIEW_ALLOWED_MODULES=[MODULE, "djust"], DEBUG=False, DJUST_TENANTS=None, **extra
     ):
         yield
 
@@ -224,13 +242,15 @@ def _event(ref: int, name: str = "increment", **params: Any) -> dict:
 
 
 # ------------------------------------------------------------------ #
-# The default is the cap (a mechanical pin of the fix itself)
+# The default (a mechanical pin of the fix itself)
 # ------------------------------------------------------------------ #
 
 
-def test_a_turn_waits_for_its_save_up_to_the_stuck_cap_by_default():
-    assert runtime_module.EVENT_STATE_SAVE_TIMEOUT_S == MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
-    assert runtime_module.explicit_state_save_timeout() == MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
+def test_the_default_wait_is_two_seconds():
+    assert runtime_module.EVENT_STATE_SAVE_TIMEOUT_S == 2.0
+    assert runtime_module.explicit_state_save_timeout() == 2.0
+    # Below the stuck cap: past it, the deferral path and its escalation run.
+    assert runtime_module.EVENT_STATE_SAVE_TIMEOUT_S < MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
     with override_settings(DJUST_EXPLICIT_STATE_SAVE_TIMEOUT=0.5):
         assert runtime_module.explicit_state_save_timeout() == 0.5
 
@@ -325,10 +345,11 @@ async def test_fifty_events_through_the_runtime_with_a_slow_first_save():
 
 
 async def test_waiting_the_cap_ends_in_the_reload_error_not_a_promise():
-    """A turn that waited the stuck cap for storage has no update to promise.
+    """A turn that waited the stuck cap for storage has no update to promise
+    (a deadline configured at 10 s).
 
-    A shorter configured deadline still gets the transient answer and its
-    catch-up (#3200); the catch-up is cancelled here, it is not under test.
+    A shorter deadline, the default included, gets the transient answer and
+    its catch-up (#3200); the catch-up is cancelled here, it is not under test.
     """
     runtime, transport, _ = await _mount_runtime()
     view = runtime.view_instance

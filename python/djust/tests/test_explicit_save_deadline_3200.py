@@ -31,9 +31,9 @@ from djust.tests.test_exposure_runtime import RuntimeView, make_request, mount
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
-#: What an unset or invalid ``DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`` means: the
-#: turn waits for its save up to the stuck cap (#4098; it was 0.150).
-DEFAULT_WAIT_S = 10.0
+#: What an unset or invalid ``DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`` means
+#: (#4098; it was 0.150).
+DEFAULT_WAIT_S = 2.0
 
 
 @pytest.fixture
@@ -71,7 +71,7 @@ async def test_a_busy_sync_thread_does_not_fail_the_save(staged):
     try:
         await asyncio.sleep(0.05)  # let the queue fill
         # The 150 ms deadline this was reported against. It is no longer the
-        # default (#4098: a turn waits for its save up to the stuck cap), so
+        # default (#4098 raised it to 2 s), so
         # it is set here to keep the queueing claim tested.
         with override_settings(DJUST_EXPLICIT_STATE_SAVE_TIMEOUT=0.150):
             await runtime.dispatch_event({"type": "event", "event": "increment", "params": {}})
