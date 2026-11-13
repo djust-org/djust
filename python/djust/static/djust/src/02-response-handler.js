@@ -303,7 +303,10 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             // ``handleStickyUpdate`` with a scoped ``rootEl``. No ambiguity
             // here — calling applyPatches(data.patches) with the default
             // null rootEl is correct for the root view.
-            const success = await applyPatches(data.patches);
+            // `_applyIf` is set by the page-POST fallback for a patch answer
+            // (11-event-handler.js): a function, so never from the wire.
+            const success = await applyPatches(data.patches, null,
+                typeof data._applyIf === 'function' ? data._applyIf : null);
             _isBroadcastUpdate = false;
 
             // For broadcast patches, sync textarea .value from .textContent.
@@ -322,7 +325,9 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 // Patches failed — likely due to {% if %} blocks shifting DOM structure.
                 // Request full HTML from server for DOM morphing (on-demand, not sent
                 // with every response to avoid bandwidth regression).
-                console.warn(
+                // (Not when the fallback withheld the patches because the DOM
+                // had changed: nothing failed, and the resync below is the plan.)
+                if (!data._applyIfRefused) console.warn(
                     '[LiveView] VDOM patches failed. This usually happens when {% if %} blocks ' +
                     'add/remove DOM elements, shifting sibling positions.\n' +
                     'Fix: Use style="display:none" toggling instead of {% if %} for elements:\n' +
@@ -331,10 +336,13 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 );
 
                 // Revert VDOM version — recovery response will set the correct version
-                clientVdomVersion = data.version - 1;
+                if (data.version !== undefined) clientVdomVersion = data.version - 1;
 
                 if (isWSConnected()) {
                     liveViewWS.sendMessage({ type: 'request_html', ...slotFrameFields(_activeSlot && _activeSlot.id) });
+                } else if (transport && transport === _localEventTransport) {
+                    // Page-POST fallback (#4108): fetch the page and morph it in.
+                    await _httpFallbackResync();
                 } else {
                     // No WebSocket available — last resort page reload
                     window.location.reload();
@@ -364,6 +372,11 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 globalLoadingManager.stopLoading(eventName, triggerElement);
                 window.location.reload();
                 return false;
+            }
+            // Page-POST fallback (#4108): elements still playing a dj-remove
+            // exit are not part of the page being morphed in.
+            if (transport && transport === _localEventTransport) {
+                globalThis.djust.djRemove?.finishPendingRemovals(liveviewRoot);
             }
             // Parsed in the root's namespace (an SVG / MathML root keeps its
             // children SVG / MathML), inert.

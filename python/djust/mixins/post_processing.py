@@ -538,6 +538,18 @@ class PostProcessingMixin:
                 head_inject += csrf_meta
             else:
                 full_script = csrf_meta + full_script
+        # #4108: the digest of the render this page shows, for the page-POST
+        # fallback (set by get(); see ``_render_digest``). Outside dj-root, so
+        # the VDOM baseline is unaffected.
+        page_digest = self.__dict__.pop("_page_render_digest", None)
+        if page_digest:
+            from .._render_digest import META_NAME
+
+            digest_meta = f'<meta name="{META_NAME}" content="{escape(page_digest)}">'
+            if head_close >= 0:
+                head_inject += digest_meta
+            else:
+                full_script = digest_meta + full_script
         if debug_css_link and head_close >= 0:
             head_inject += debug_css_link
         # #3036: what this page's shell loads, so a live navigation to a page

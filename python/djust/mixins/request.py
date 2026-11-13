@@ -527,6 +527,42 @@ def _run_http_deferred(view: Any) -> None:
 PARAMETER_CONTRACTS_HEADER = "X-Djust-Parameter-Contracts"
 
 
+#: A page POST carrying this header (value ``1``) and no event asks for the
+#: page as the saved state renders it now (#4108).
+RESYNC_HEADER = "X-Djust-Resync"
+#: What such a request is called where an event name is logged.
+RESYNC_EVENT = "djust:resync"
+
+
+def _compress_fallback_answer(request: Any, response: Any) -> Any:
+    """Gzip a page-POST answer for a client that accepts it (#4108).
+
+    A whole-page answer is the root's HTML as JSON: tens of kilobytes for a
+    page with a table, and it compresses about sevenfold. Whether a deployment
+    compresses ``application/json`` is a matter of its middleware and proxy
+    configuration (nginx's default ``gzip_types`` is ``text/html`` alone), so
+    the answer is compressed here, by Django's own ``GZipMiddleware`` applied
+    to this one response. That keeps its rules: only for a request that
+    accepts gzip, only a body of 200 bytes or more (a patch answer is usually
+    smaller and goes out as it is), ``Vary: Accept-Encoding``, and the random
+    padding that blunts BREACH. A response that already has a
+    ``Content-Encoding`` is left alone, and one this function compressed is
+    left alone by a ``GZipMiddleware`` the project installed.
+    ``LIVEVIEW_CONFIG["http_fallback_compress"] = False`` turns it off.
+    """
+    try:
+        from ..config import config
+
+        if config.get("http_fallback_compress", True) is False:
+            return response
+        from django.middleware.gzip import GZipMiddleware
+
+        return GZipMiddleware(lambda _request: response).process_response(request, response)
+    except Exception:  # noqa: BLE001 - compression is an optimisation, never a failure
+        logger.debug("HTTP fallback answer was not compressed", exc_info=False)
+        return response
+
+
 def _initial_parameter_contracts(view: Any, view_path: str) -> Optional[str]:
     """Escaped JSON for the initial page's contract element, or None if legacy.
 
@@ -889,7 +925,15 @@ class RequestMixin:
         if not prepared_page:
             t0 = time.perf_counter()
             self._prepare_child_ids()
-            _, _, _ = render_view_with_diff(self, request)
+            baseline_html, _, _ = render_view_with_diff(self, request)
+            # #4108: the digest of the render this page shows, which the client
+            # echoes with its fallback POSTs (emitted outside dj-root by
+            # ``_inject_client_script``). A page prepared in one evaluation
+            # (the branch not taken here) has no separate diff render; it gets
+            # its first digest from its first fallback answer.
+            from .._render_digest import render_token
+
+            self.__dict__["_page_render_digest"] = render_token(self, request, baseline_html)
             t_render_diff = (time.perf_counter() - t0) * 1000
             self._lazy_thunks = list(page_lazy_thunks)
             if not uses_legacy_exposure(self):
@@ -1524,6 +1568,10 @@ class RequestMixin:
         return JsonResponse(response)
 
     def post(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
+        """Handle POST requests: the event's turn, then the answer's compression (#4108)."""
+        return _compress_fallback_answer(request, self._post_turn(request, *args, **kwargs))
+
+    def _post_turn(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle POST requests - event handling, as one turn (ADR-044).
 
         An ``event`` turn (``http``/``client``), or a ``mount``/``lazy`` turn
@@ -1623,7 +1671,18 @@ class RequestMixin:
                 )
                 return JsonResponse({"redirect": redirect_url}, status=403)
 
-            data = json.loads(request.body)
+            # #4108: a resync request. The client's page no longer matches what
+            # the server last sent it (a patch answer did not fit its DOM), and
+            # it asks for the page as the saved state renders it now. No event:
+            # the view is restored as for any event, every view-level and
+            # object-level check below runs, no handler does, and the answer is
+            # the whole page with its digest. (The page GET is no substitute:
+            # it is a new page load, which mounts again and saves that state.)
+            render_only = request.headers.get(RESYNC_HEADER) == "1"
+
+            data = json.loads(request.body) if (request.body or not render_only) else {}
+            if render_only:
+                data = {"event": RESYNC_EVENT, "params": {}}
             # Support both formats:
             # 1. Standard: {"event": "name", "params": {...}}
             # 2. HTTP fallback: X-Djust-Event header + flat params in body
@@ -1644,7 +1703,7 @@ class RequestMixin:
                 return JsonResponse({"error": "No event name provided"}, status=400)
 
             # Security: validate event name format (blocks dunders, private methods)
-            if not is_safe_event_name(event_name):
+            if not render_only and not is_safe_event_name(event_name):
                 return JsonResponse({"error": "Invalid event name"}, status=400)
 
             legacy_exposure = uses_legacy_exposure(self)
@@ -1736,6 +1795,13 @@ class RequestMixin:
             # can be invoked via POST (matches WS security)
             t_handler_ms = 0.0
             observation_before = None
+            # #4108: whether the pre-handler render is the page the client shows.
+            baseline_matched = False
+            # A view object that has rendered before this request (a test that
+            # calls get() and post() on one instance; ``as_view()`` never does)
+            # already holds a diff baseline. It keeps the answer it always got:
+            # the patches from that baseline, numbered by its renderer.
+            reused_renderer = getattr(self, "_rust_view", None) is not None
             # ADR-031: an event carrying ``component_id`` targets the
             # registered component, as ``runtime._dispatch_component_event``
             # does over WebSocket (#1646 — the HTTP fallback must not differ).
@@ -1805,12 +1871,20 @@ class RequestMixin:
                     )
                     return JsonResponse({"error": "Component not found"}, status=400)
                 params = {k: v for k, v in params.items() if k != "component_id"}
-            handler = getattr(owner, event_name, None)
-            if handler is not None and is_push_only(owner, event_name, handler):
+            handler = None if render_only else getattr(owner, event_name, None)
+            if render_only:
+                # The page's own reads (``assign_async`` / ``start_async`` in
+                # mount() or handle_params()) finish before the render, as they
+                # do before an event's handler: the page the client asks for
+                # is the loaded one.
+                if mount_work_pending:
+                    _run_http_background_work(self, bg_budget)
+                    mount_work_pending = False
+            elif handler is not None and is_push_only(owner, event_name, handler):
                 # Server-push only (#3002): to a browser it is a method that
                 # does not exist, as on the WebSocket and SSE paths.
                 handler = None
-            if handler is None or not callable(handler):
+            if not render_only and (handler is None or not callable(handler)):
                 # Same answer for the page view as for a component: an event
                 # that resolves to no callable must not fall through to a
                 # render and a state save as if a handler had run (the socket
@@ -1908,6 +1982,20 @@ class RequestMixin:
                 if mount_work_pending:
                     _run_http_background_work(self, bg_budget)
                     mount_work_pending = False
+                # #4108: the view is now what the page GET (or the previous
+                # answer) rendered. Render a copy of it before the handler; if
+                # the client shows that render (it echoed its digest and its DOM
+                # has that shape), the render after the handler diffs against it
+                # and the answer is patches.
+                # After every refusal, so a refused request renders nothing;
+                # for the page's own handlers only (a component or embedded
+                # child event is answered as before). Not for an ``@cache``
+                # request: the client stores that answer's patches and replays
+                # them later without asking, which no digest can vouch for.
+                if owner is self and not reused_renderer and not params.get("_cacheRequestId"):
+                    from .._http_fallback_baseline import prepare_baseline
+
+                    baseline_matched = prepare_baseline(self, request)
                 from ..components._interactive import DropdownMenu
 
                 if isinstance(owner, DropdownMenu) and event_name == "observe_toggle":
@@ -2049,6 +2137,14 @@ class RequestMixin:
 
             PATCH_THRESHOLD = 100
 
+            # #4108: every render answer names the digest of the render it
+            # delivers; the client echoes it with its next fallback POST.
+            from .._render_digest import ANSWER_FIELD, render_token
+
+            answer_digest = render_token(self, request, html)
+            if answer_digest:
+                response_fields[ANSWER_FIELD] = answer_digest
+
             cache_request_id = params.get("_cacheRequestId")
 
             # Inject debug info for the debug panel (HTTP-only mode)
@@ -2071,12 +2167,15 @@ class RequestMixin:
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
 
-                # Zero patches is a render with no DOM change. Answer with
-                # the new version and no patches, as the socket runtime's
-                # no-op does. Resetting the diff baseline here restarted the
-                # server's version at 1, so the client's next version check
-                # failed and it reloaded the page, losing its state.
-                if 0 <= patch_count <= PATCH_THRESHOLD:
+                # #4108: patches exist only when the pre-handler render was
+                # the page the client shows (``baseline_matched``); a fresh
+                # renderer has nothing to diff against. They carry no
+                # ``version``: each request numbers its own renders, so a
+                # counter says nothing here, and the digest the client echoed
+                # is what tied these patches to its DOM. They are addressed by
+                # path (``path_addressed``). Zero patches is a render with no
+                # DOM change: an empty list, and the same digest.
+                if reused_renderer and 0 <= patch_count <= PATCH_THRESHOLD:
                     response_data = {
                         "patches": patches,
                         "version": version,
@@ -2088,11 +2187,27 @@ class RequestMixin:
                     _inject_side_channels(response_data)
                     _inject_debug(response_data)
                     return JsonResponse(response_data)
+                if baseline_matched and 0 <= patch_count <= PATCH_THRESHOLD:
+                    from .._render_digest import path_addressed
+
+                    response_data = {
+                        "patches": path_addressed(patches),
+                        **contract_fields,
+                        **response_fields,
+                    }
+                    if cache_request_id:
+                        response_data["cache_request_id"] = cache_request_id
+                    _inject_side_channels(response_data)
+                    _inject_debug(response_data)
+                    return JsonResponse(response_data)
                 else:
+                    # More patches than a whole page is worth: the whole page,
+                    # numbered as every whole-page answer of this transport is
+                    # (v1; the client re-bases on it).
                     self._rust_view.reset()
                     response_data = {
                         "html": html,
-                        "version": version,
+                        "version": version if reused_renderer else 1,
                         **contract_fields,
                         **response_fields,
                     }
