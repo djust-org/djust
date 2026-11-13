@@ -841,6 +841,14 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Fix**: Move the view to explicit exposure and delete the line; `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](migrating-to-2.0.md#1-move-each-view-to-explicit-exposure). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V028"]}`.
 
+### V029: a handler changes an attribute that is not declared state
+
+**Severity**: Warning
+
+**What causes it**: An event handler of an explicit view assigns `self.count` (or `self.count += 1`) where `count` is set in `mount()` or in the handler but is not declared with `state()`. On the HTTP fallback each event mounts a new view, so the change is lost there; over a WebSocket it is kept. Message: "<view> increment() changes self.count, which is not declared state: on the HTTP fallback each event builds a new view and runs mount() again, so the change is lost there (over a WebSocket it is kept)."
+
+**Fix**: Declare it on the class: `count = state(0, persist="server")`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V029"]}`.
+
 <!-- END GENERATED check-sections:V -->
 
 ---

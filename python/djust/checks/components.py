@@ -2265,3 +2265,117 @@ def check_legacy_exposure_policy(app_configs: Any, **kwargs: Any) -> list[CheckM
             )
         )
     return messages
+
+
+def _class_level_descriptor(cls: type, name: str) -> bool:
+    """Whether attribute lookup finds a descriptor for ``name`` on the class:
+    a ``state()`` field (declared on the view, a mixin or a base: the nearest
+    declaration wins, as the exposure contract reads it), a property,
+    ``@computed`` or a ``cached_property``. Assigning one is not a plain
+    instance attribute."""
+    for klass in cls.__mro__:
+        if name in vars(klass):
+            value = vars(klass)[name]
+            kind = type(value)
+            return any(
+                hasattr(kind, hook) for hook in ("__get__", "__set__", "__delete__")
+            ) and not (inspect.isfunction(value) or inspect.ismethod(value))
+    return False
+
+
+@register("djust")
+def check_undeclared_handler_state(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V029 (Warning): an explicit view's event handler changes an attribute
+    that is not declared state (#4053).
+
+    Under explicit exposure the HTTP page-POST fallback builds a new view for
+    each event and runs ``mount()`` again; only ``state(..., persist="server")``
+    fields are restored. A handler that changes a plain
+    attribute (``self.count += 1`` with ``count`` set in ``mount()``) answers
+    every fallback event from the ``mount()`` value, with no error. Over a
+    WebSocket the same view works, because the instance lives as long as the
+    socket.
+
+    Conservative: reads only methods decorated ``@event_handler`` / ``@action``
+    in application classes, and only direct ``self.<name> = / += ...``
+    assignments in them (not helpers they call, not ``setattr``). Not reported:
+    ``_private`` names, djust's own attributes (``reserved_state_names()``, any
+    name a djust class in the MRO defines, what ``LiveView()`` sets), and names
+    that resolve to a descriptor on the class: a ``state()`` field declared on
+    the view, a mixin or a base, a property, ``@computed``.
+    Legacy views are not checked.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V029"):
+        return messages
+    try:
+        from djust._exposure import reserved_state_names, uses_legacy_exposure
+        from djust.decorators import is_action, is_event_handler
+        from djust.live_view import LiveView
+
+        framework = set(reserved_state_names()) | set(vars(LiveView()))
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    seen: set[tuple[type, str]] = set()
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if _is_framework_internal_class(cls):
+            continue
+        try:
+            if uses_legacy_exposure(cls):
+                continue
+        except Exception:  # noqa: BLE001 — a class this cannot read is skipped
+            logger.debug("V029: could not read the exposure policy of a view class")
+            continue
+        own = set(framework)
+        for klass in cls.__mro__:
+            module = getattr(klass, "__module__", "") or ""
+            if klass is object or module == "builtins" or _is_framework_internal_class(klass):
+                own.update(vars(klass).copy())
+        label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        for klass in cls.__mro__:
+            module = getattr(klass, "__module__", "") or ""
+            if klass is object or module == "builtins" or _is_framework_internal_class(klass):
+                continue
+            if klass is not cls and klass in candidates:
+                continue  # a LiveView base that is itself checked reports its own code
+            for name, member in vars(klass).copy().items():
+                function = getattr(member, "__func__", member)
+                if not inspect.isfunction(function):
+                    continue
+                if not (is_event_handler(function) or is_action(function)):
+                    continue
+                for attr, line in _self_assignments(function):
+                    if (
+                        attr.startswith("_")
+                        or attr in own
+                        or (klass, attr) in seen
+                        or _class_level_descriptor(cls, attr)
+                    ):
+                        continue
+                    seen.add((klass, attr))
+                    where = "" if klass is cls else " (in %s)" % klass.__qualname__
+                    messages.append(
+                        DjustWarning(
+                            "%s %s()%s changes self.%s, which is not declared state: on "
+                            "the HTTP fallback each event builds a new view and runs "
+                            "mount() again, so the change is lost there (over a "
+                            "WebSocket it is kept)." % (label, name, where, attr),
+                            hint=(
+                                "Declare it on the class: %s = state(<default>, "
+                                'persist="server") keeps it between events on every '
+                                "transport. Name it with a leading underscore if it is "
+                                "per-event scratch. Suppress with DJUST_CONFIG = "
+                                "{'suppress_checks': ['V029']}." % attr
+                            ),
+                            id="djust.V029",
+                            fix_hint=(
+                                'Declare `%s = state(..., persist="server")` on `%s`.'
+                                % (attr, klass.__qualname__)
+                            ),
+                            file_path=inspect.getsourcefile(function) or "",
+                            line_number=line,
+                        )
+                    )
+    return messages

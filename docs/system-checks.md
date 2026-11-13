@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 114 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 115 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -75,6 +75,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V026 | LiveView | Warning | A legacy view declares a plain component in its class body: one object shared by every session, rendered for every user |
 | V027 | LiveView | Warning | An explicit view declares a `state()` field named `user` or `perms` (without `render=False`): it replaces `request.user` / the permission proxy in every template the view renders |
 | V028 | LiveView | Warning | An application class states `exposure_policy = "legacy"`, which is deprecated and removed before 2.0.0 |
+| V029 | LiveView | Warning | An explicit view's event handler changes an attribute that is not declared state, so the change is lost on the HTTP fallback |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -540,6 +541,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: an application class whose own body states `exposure_policy = "legacy"`, reported once for that class, wherever the views that use it inherit it from (a view, an abstract base or a mixin); the message names up to three of those views. Explicit exposure is the default since djust 2.0 and `"legacy"` is removed before 2.0.0. Stating it also raises a `DeprecationWarning` when the class is created, which most test runners and servers hide. djust's own classes (the legacy-pinned shipped views and djust's test modules) are not reported, and a subclass that states `"explicit"` is not either (#4047).
 - **Fix**: move the view to explicit exposure (declare persisted fields with `state()`, return template names from `get_context_data()`) and delete the line. `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](website/guides/migrating-to-2.0.md).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V028"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V028"]`
+
+### V029 — a handler changes an attribute that is not declared state
+- **Severity**: Warning
+- **Method**: Runtime (class inspection and the handler's source; no view is constructed).
+- **What it detects**: an `@event_handler` or `@action` of an explicit view that assigns `self.<name>` (`=`, `+=`, an annotated assignment) where `<name>` is not declared with `state()` on the view, a mixin or a base. Under explicit exposure the HTTP page-POST fallback builds a new view for each event and runs `mount()` again, and only `state(..., persist="server")` fields are restored, so a counter kept in an attribute set in `mount()` answers every fallback event from its `mount()` value, with no error. Over a WebSocket the same view works. Reported once per class and attribute, on the class whose handler assigns it. Not reported: `_private` names, djust's own attributes (`page_title`, `template_name` and every other name in `djust._exposure.reserved_state_names()`, and any name a djust class in the view's MRO defines), names that resolve to a descriptor (a `state()` field, a property, `@computed`), and legacy views. Only direct assignments in the handler body are read: an assignment in a helper the handler calls, or through `setattr()`, is not reported.
+- **Fix**: declare the attribute on the class, `count = state(0, persist="server")`; or name it with a leading underscore if it is per-event scratch.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V029"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V029"]`
 
 <!-- END GENERATED check-sections:V -->
 

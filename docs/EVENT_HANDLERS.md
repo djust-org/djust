@@ -752,10 +752,13 @@ def delete_item(self, item_id: int):
 By default, djust runs in **strict** security mode: only methods decorated with `@event_handler` are callable via WebSocket. Undecorated methods are blocked even if they pass the event name pattern check.
 
 ```python
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 
 class MyView(LiveView):
+    count = state(0, persist="server")
+    query = state("")
+
     @event_handler
     def increment(self):
         """Callable via WebSocket"""
@@ -768,7 +771,7 @@ class MyView(LiveView):
 
     def mount(self, request):
         """NOT callable via WebSocket (not decorated)"""
-        self.count = 0
+        self.query = ""
 
     def _internal_helper(self):
         """NOT callable — underscore prefix blocked by pattern guard"""
