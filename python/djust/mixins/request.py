@@ -1975,7 +1975,7 @@ class RequestMixin:
                         refused.limit,
                     )
                     return JsonResponse(
-                        {"error": str(refused), "code": "state_too_large"}, status=413
+                        {"error": refused.user_message, "code": "state_too_large"}, status=413
                     )
 
             # Fields every response of this turn carries besides its payload.
