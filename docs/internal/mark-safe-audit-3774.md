@@ -165,8 +165,9 @@ whose parameter the caller escaped (`_render_tree_node`'s `depth`, `_render_node
 value the standard library makes digits (`date.isoformat()`, `calendar.monthdayscalendar`), and a
 `str(x) in TABLE` test (narrowing reads `x`, not `str(x)`). Each needs a rule with its own proof
 obligation (all callers visible; a type fact), which is a different change. Since #3864 the RESULT of a helper call
-is judged with the arguments that call passes (only in element text, and a bound argument never in an
-unquoted attribute); a sink inside a helper METHOD's own body is still judged with its parameters raw,
+is judged with the arguments that call passes, and placed by what it can return (escaped text, whole
+attributes or other markup; an argument that is only HTML-escaped never in an unquoted, URL, event-handler
+or style attribute, nor a script or style body); a sink inside a helper METHOD's own body is still judged with its parameters raw,
 which is what binding them from their callers would need a "private to this class" contract for (#3845).
 
 **The review of the first version of this change** (#3848) found that it trusted too much, and 27 of what it

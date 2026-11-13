@@ -231,6 +231,16 @@ ROWS: dict[str, tuple[str, bool]] = {
         True,
     ),
     # -- the review of db1add19b
+    "a helper's whole attributes with an escaped value in a URL attribute": (
+        "S = ['']\ndef w():\n    return f' href=\"{escape(S[0])}\"'\n"
+        "def f(x):\n    S[0] = x\n    return mark_safe(f'<a{w()}>l</a>')\n",
+        True,
+    ),
+    "a helper's date, placed in an unquoted attribute": (
+        "import datetime\ndef w():\n    return datetime.date.today().isoformat()\n"
+        "def f(x):\n    return mark_safe(f'<time datetime={w()}>t</time>')\n",
+        False,
+    ),
     # review of db1add19b, finding 1: a helper's result is not free in every position
     "a helper's own quoted attribute, placed in a quoted attribute": (
         'class V:\n    def w(self, k):\n        return f\'<i title="{escape(self.q)}" data-k="{k}">\'\n'

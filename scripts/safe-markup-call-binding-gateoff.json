@@ -16,7 +16,9 @@
     "python/tests/test_safe_markup_guard_3766.py",
     "python/tests/test_safe_markup_guard_3820.py",
     "-k",
-    "not TestTheDifferentialFuzz"
+    "not TestTheDifferentialFuzz",
+    "--deselect",
+    "python/tests/test_safe_markup_guard_3864.py::TestTheGateOffListApplies::test_every_mutation_text_still_applies"
   ],
   "deadline": 400,
   "rss_mb": 4096,

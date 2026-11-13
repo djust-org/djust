@@ -68,10 +68,15 @@ A piece is clean when it is:
   parameters bound to what THAT call passes (#3845, #3864; ``_specialized``). A sink handed the call
   is flagged when what it returns for these arguments is built from a raw value (``mark_safe(
   helper(x))``) or puts an escaper's output where it does not belong (``tag(safe_url(x))`` of ``def
-  tag(u): return f"<a href={u}>"``). The result counts as clean for these arguments only where the
-  position it is placed at was checked, and only in element TEXT (it may be markup with quotes,
-  wrong inside an attribute value); a bound argument is clean in text or a quoted value, never in an
-  unquoted attribute, unless it is a literal or digits (escaped text keeps its spaces). What ``append``
+  tag(u): return f"<a href={u}>"``). The result of ANY call of a function of the file (a zero-argument
+  one too) is placed by what it can return (``_value_kind``): literals and digits anywhere; escaped
+  text in element text or a plain quoted value; whole attributes (`` aria-x="..."``) between
+  attributes; any other markup, or text the guard cannot read, in element text only. "Clean for these
+  arguments" is never "free in any position". A bound argument that is only HTML-escaped is clean in
+  text or a plain quoted value: not in an unquoted attribute (escaped text keeps its spaces), a URL
+  attribute (``javascript:``), an event handler or ``style`` (the browser decodes the attribute before
+  it runs it), nor a ``<script>`` / ``<style>`` body, which is not element text; a URL escaper's
+  output handed to a helper may go into its URL attribute. What ``append``
   / ``+=`` put into a container that outlives the call (a module list, a mutable default, a
   parameter, an attribute) is judged with every binding off, and a parameter this call binds to a
   literal decides ``if p:`` / ``if p is None:`` (when the function never rebinds it). A recursive call,
@@ -159,11 +164,12 @@ What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
   treating markup-carrying parts as unknown flagged over a hundred correct sites in the tree, so it
   was not done), ``format_map`` (flagged, not cleared), and a module attribute replaced from outside
   the file (``sys.modules[__name__].helper = ...``, ``setattr`` on an imported module). A function or
-  lambda that takes the output as a PARAMETER and builds the tag is seen since #3864 (above). The
-  plain escapers are not position-checked: ``escape(x)`` written straight into an unquoted attribute
-  (``<a title={escape(x)}>``) is cleared, although ``x onmouseover=1`` stays two attributes there
-  (making them position-checked flagged about seventy correct sites in the tree). Through a parameter
-  of a helper it is caught: a bound argument is never clean in an unquoted attribute.
+  lambda that takes the output as a PARAMETER and builds the tag is seen since #3864 (above). An
+  escaper WRITTEN IN PLACE where its escaping is not enough is cleared, as it always was: ``escape(x)``
+  in an unquoted attribute, a URL attribute, an event handler, a ``style`` attribute or body, and a
+  value escaper in an event handler or a ``style`` body (pinned in ``TestKnownGaps`` of
+  ``test_safe_markup_guard_3864.py``; making the plain escapers position-checked flagged about seventy
+  correct sites in the tree). Through a parameter of a helper each of them is caught.
   A metaclass data descriptor of a class attribute's name is no longer missed: ``cls.X`` / ``C.X`` of
   a class with a metaclass (or any class keyword) is not trusted (``self.X`` is, since an instance
   lookup never reaches the metaclass).
