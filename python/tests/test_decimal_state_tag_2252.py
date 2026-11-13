@@ -41,7 +41,8 @@ the set is pinned mechanically in `TestTheDecodeSiteInventory`.
 grep matters: it names `mixins/rust_bridge.py`, which has no restore path at
 all, and omits three that do — `runtime.py`'s `_restore_snapshot` call (the
 legacy signed back-navigation snapshot, removed in 2.0), `time_travel.py`'s
-replay restores, and `_restore_component_state`.
+replay restores, and `_restore_component_state` (removed in 2.0 with the
+component session state).
 
 Every template assertion is a differential against real Django, and the curated
 matrix is paired with a randomized sweep (v1.1.1-2 retro: a table samples the

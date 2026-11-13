@@ -421,32 +421,3 @@ def test_multi_template_caveat_sub_template_edit_does_not_flip_primary_hash(tmp_
         "templates), which is a contract change that affects deploy-time "
         "invalidation semantics."
     )
-
-
-# -----------------------------------------------------------------
-# Framework-integration test — exercise the actual
-# ``_initialize_rust_view`` code path. This is the test that would
-# FAIL on ``main``: pre-fix, two LiveView instances with different
-# templates but the same session+path produced the same cache key,
-# so the second one would HIT the first's cache and inherit a stale
-# diff baseline. Post-fix, the cache key includes the template hash
-# slot, so different templates yield different keys.
-# -----------------------------------------------------------------
-
-
-# -----------------------------------------------------------------
-# Perf-regression tests for Stage 12 fix.
-#
-# Background: the initial v0.9.4-2 Iter 1 implementation hoisted
-# ``self.get_template()`` to BEFORE the cache lookup so the per-template
-# hash could be computed for the cache key. That regressed the cache HIT
-# path: pre-#1362 it never called ``get_template()``, post-#1362 every
-# WS reconnect ate the Django template loader + inheritance resolution
-# cost even when the cache hit.
-#
-# Fix: cache the ``_t<8hex>`` slot on the view CLASS (one-time per
-# class lifetime) via ``_get_cached_template_hash_slot``. First call
-# pays the cost, subsequent calls return the memoized slot in O(1).
-# The cache HIT path no longer calls ``get_template()`` after the
-# class warmup.
-# -----------------------------------------------------------------
