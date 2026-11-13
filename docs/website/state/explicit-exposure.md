@@ -110,6 +110,14 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   are rejected: a request of a view with `persist="server"` state raises
   `UnsupportedSessionEngine` (an `ImproperlyConfigured`) naming the engine, and
   system check `djust.C030` reports the combination at startup.
+- **Size.** Persisted state is bounded: 64 KB encoded, 10,000 values and
+  nesting depth 16 per view. A change that would take the declared
+  `persist="server"` fields over the limit is refused for that event: nothing
+  is saved, the user gets an error naming the field and the limit
+  (`code="state_too_large"`; HTTP status 413 on the fallback), and the view goes
+  back to the last saved state, so later events work. Bound what a field can
+  hold in your handler (a count cap does not bound bytes: one long text value
+  is enough).
 - **`DJUST_SERVER_STATE_MAX_AGE`.** The lifetime of a server envelope in
   seconds, from 1 to 86400. The default is 3600. System check `djust.C020`
   validates it.

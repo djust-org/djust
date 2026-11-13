@@ -6109,6 +6109,7 @@ class ViewRuntime(RuntimeTurnPort):
         (identity changed) or a storage exception is terminal too.
         """
         from ._exposure import ExposureError, uses_legacy_exposure
+        from ._exposure_sessions import StateLimitExceeded
 
         if uses_legacy_exposure(view):
             return True
@@ -6135,6 +6136,8 @@ class ViewRuntime(RuntimeTurnPort):
                 "State unavailable. Please reload the page.", code="state_error", **extra
             )
             return False
+        except StateLimitExceeded as refused:
+            return await self._refuse_over_limit_turn(view, refused, extra)
         except Exception as exc:  # noqa: BLE001 — storage errors can carry server-only values
             from ._exposure_diagnostics import log_failure_for
 
@@ -6156,6 +6159,48 @@ class ViewRuntime(RuntimeTurnPort):
         if children:
             return await self._persist_explicit_children_after_event(view, async_batch=async_batch)
         return True
+
+    async def _refuse_over_limit_turn(self, view: Any, refused: Any, extra: Dict[str, Any]) -> bool:
+        """A turn whose declared server state is over its limits (#4095).
+
+        Nothing was written: the store still holds the last state that fit.
+        The view's declared server fields are put back to that stored state,
+        so the view, the store and the page (whose success frame is withheld)
+        agree, and the next event starts from what is saved. Keeping the
+        oversized value in memory only would fail every later save and show
+        the user a value a reconnect silently loses. The user gets an error
+        naming the field and the limit; the next update is full HTML. Values
+        the handler set on fields that are not persisted stay, as after any
+        turn. With no stored state to go back to (or a store that cannot be
+        read), the answer is the reload error, as for any failed save.
+        """
+        from ._exposure_sessions import load_server_state
+        from .security import safe_setattr
+
+        view._force_full_html = True
+        request = getattr(view, "_djust_event_request", None)
+        try:
+            restored = await sync_to_async(load_server_state)(view, request)
+        except Exception as exc:  # noqa: BLE001 — storage errors can carry server-only values
+            from ._exposure_diagnostics import log_failure_for
+
+            log_failure_for(logger, (view,), exc, "Reading saved state failed: %s", exc)
+            restored = None
+        if restored is None:
+            logger.warning("Explicit state over its limits and no saved state to go back to")
+            await self.transport.send_error(
+                "State unavailable. Please reload the page.", code="state_error", **extra
+            )
+            return False
+        for key, value in restored.items():
+            safe_setattr(view, key, value, allow_private=False, raise_on_blocked=True)
+        logger.warning(
+            "Explicit state save refused: field %s over its %s limit; the saved state was kept",
+            sanitize_for_log(refused.field),
+            refused.limit,
+        )
+        await self.transport.send_error(str(refused), code="state_too_large", **extra)
+        return False
 
     @staticmethod
     def _explicit_error_fields(

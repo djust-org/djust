@@ -32,6 +32,8 @@ from ._exposure import (
     ExposureConfigurationError,
     ExposureContract,
     ExposureError,
+    StateLimitError,
+    StateLimits,
     clone_json_state,
 )
 
@@ -233,11 +235,80 @@ def server_state_adapter(
     )
 
 
+class StateLimitExceeded(ExposureError):
+    """A save refused because the declared server state is over its limits (#4095).
+
+    Raised before anything is written: the stored state is the last one that
+    fit. ``field`` is the declared field that does not fit (alone, or the
+    largest one when only the fields together are over); ``limit`` is
+    ``"bytes"`` or ``"structure"``. The message names the field and the limit,
+    never a value, so a transport can show it to the user.
+    """
+
+    def __init__(self, field: str, limit: str, limits: StateLimits) -> None:
+        self.field = field
+        self.limit = limit
+        if limit == "bytes":
+            bound = "the %d-byte limit for persisted state" % limits.max_bytes
+        else:
+            bound = "the persisted-state limit of %d values and nesting depth %d" % (
+                limits.max_nodes,
+                limits.max_depth,
+            )
+        super().__init__(
+            "The change was not saved: state field '%s' would exceed %s." % (field, bound)
+        )
+
+
+def _limit_culprit(contract: ExposureContract, view: Any) -> str:
+    """Which declared server field makes the projection go over its limits.
+
+    The first field that is over the limits on its own; else (only the
+    fields together are over) the one with the largest encoded size.
+    """
+    largest, largest_size = "", -1
+    for name, policy in contract.fields.items():
+        if not policy.permits("server"):
+            continue
+        value = getattr(view, name, None)
+        try:
+            clone_json_state({name: value}, limits=contract.limits)
+        except StateLimitError:
+            return name
+        except ExposureError:
+            continue
+        try:
+            size = len(json.dumps(value, ensure_ascii=False))
+        except (TypeError, ValueError):
+            continue
+        if size > largest_size:
+            largest, largest_size = name, size
+    return largest
+
+
+def _project_for_save(adapter: "ServerStateSession", view: Any) -> dict[str, Any]:
+    try:
+        return adapter.contract.project_view(view, "server")
+    except StateLimitError as error:
+        field = _limit_culprit(adapter.contract, view)
+        raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
+
+
 def save_server_state(view: Any, request: Any) -> None:
-    """Persist only declared server fields after the transport's authorization."""
+    """Persist only declared server fields after the transport's authorization.
+
+    Raises :class:`StateLimitExceeded`, before writing anything, when the
+    declared server state is over its limits.
+    """
     adapter = server_state_adapter(view, request, create=True)
     if adapter is not None:
-        adapter.save(adapter.contract.project_view(view, "server"))
+        values = _project_for_save(adapter, view)
+        try:
+            adapter.save(values)
+        except StateLimitError as error:
+            # The envelope's own overhead tipped it over: the fields are the cause.
+            field = _limit_culprit(adapter.contract, view)
+            raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
 
 
 def load_server_state(view: Any, request: Any) -> dict[str, Any] | None:
@@ -263,8 +334,12 @@ async def asave_server_state(view: Any, request: Any) -> None:
 
     adapter = await sync_to_async(server_state_adapter)(view, request, create=True)
     if adapter is not None:
-        values = await sync_to_async(adapter.contract.project_view)(view, "server")
-        await adapter.asave(values)
+        values = await sync_to_async(_project_for_save)(adapter, view)
+        try:
+            await adapter.asave(values)
+        except StateLimitError as error:
+            field = await sync_to_async(_limit_culprit)(adapter.contract, view)
+            raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
 
 
 @dataclass(frozen=True)

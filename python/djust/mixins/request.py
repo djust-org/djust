@@ -1961,9 +1961,22 @@ class RequestMixin:
                 return JsonResponse(redirect_response)
 
             if not legacy_exposure:
-                from .._exposure_sessions import save_server_state
+                from .._exposure_sessions import StateLimitExceeded, save_server_state
 
-                save_server_state(self, request)
+                try:
+                    save_server_state(self, request)
+                except StateLimitExceeded as refused:
+                    # Refused before writing (#4095): the stored state is the
+                    # last one that fit, and the next request restores it. This
+                    # request's view is discarded, so nothing else to put back.
+                    logger.warning(
+                        "HTTP event state save refused: field %s over its %s limit",
+                        sanitize_for_log(refused.field),
+                        refused.limit,
+                    )
+                    return JsonResponse(
+                        {"error": str(refused), "code": "state_too_large"}, status=413
+                    )
 
             # Fields every response of this turn carries besides its payload.
             response_fields: Dict[str, Any] = {}
