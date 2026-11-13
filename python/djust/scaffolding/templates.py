@@ -456,7 +456,7 @@ VIEWS_PY_BASE = """\
 \"\"\"LiveView for %(app_name)s.\"\"\"
 
 import djust
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from djust.theming.theme_packs import get_all_theme_packs
 %(extra_imports)s
@@ -487,6 +487,12 @@ class %(view_class)s(%(view_bases)s):
     # explicitly (silences djust.S005). When you add real, user-scoped state,
     # set ``login_required = True`` (or add ``permission_required``) instead.
     login_required = False
+
+    # Declared state a later event reads (djust.V029): kept between events on
+    # every transport, the HTTP fallback included, where each event builds a
+    # new view and runs mount() again.
+    items = state(default_factory=list, persist="server")
+    search_query = state("", persist="server")
 
     def mount(self, request, **kwargs):
         self.items = [
