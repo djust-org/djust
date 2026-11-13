@@ -58,11 +58,35 @@ class OpenView(_Base):
     pass
 
 
+HOOK_CALLS: list = []
+
+
+def require_staff(view, request, **kwargs):
+    HOOK_CALLS.append(("require_staff", dict(kwargs)))
+    if not getattr(request.user, "is_staff", False):
+        return "/staff-only/"
+    return None
+
+
+def note_mount(view, request, **kwargs):
+    HOOK_CALLS.append(("note_mount", dict(kwargs)))
+
+
+class HookRedirectView(_Base):
+    on_mount = [require_staff]
+
+
+class HookPassView(_Base):
+    on_mount = [note_mount]
+
+
 @pytest.fixture(autouse=True)
 def _reset():
     MOUNTED.clear()
+    HOOK_CALLS.clear()
     yield
     MOUNTED.clear()
+    HOOK_CALLS.clear()
 
 
 def _user(name="u", perm=None):
@@ -137,3 +161,42 @@ def test_the_parity_helper_instance_is_refused_too():
     with pytest.raises(MountRedirect):
         client._build_mounted_instance()
     assert MOUNTED == []
+
+
+def test_an_on_mount_hook_redirect_raises_mount_redirect_and_mount_never_runs():
+    """Every transport runs the ``on_mount`` hooks between the auth and
+    ``mount()``; a hook that returns a URL refuses the mount (302 / navigate)."""
+    client = LiveViewTestClient(HookRedirectView, user=_user())
+    with pytest.raises(MountRedirect) as excinfo:
+        client.mount(item=3)
+    assert excinfo.value.url == "/staff-only/"
+    assert HOOK_CALLS == [("require_staff", {"item": 3})]
+    assert MOUNTED == []
+
+
+def test_an_on_mount_hook_that_passes_runs_with_the_mount_kwargs_then_mount_runs():
+    LiveViewTestClient(HookPassView).mount(item=3)
+    assert HOOK_CALLS == [("note_mount", {"item": 3})]
+    assert MOUNTED == ["HookPassView"]
+
+
+def test_an_on_mount_hook_redirect_refuses_the_parity_helper_instance_too():
+    with pytest.raises(MountRedirect):
+        LiveViewTestClient(HookRedirectView, user=_user())._build_mounted_instance()
+    assert MOUNTED == []
+
+
+def test_the_hooks_do_not_run_when_the_auth_refused():
+    class GatedHook(_Base):
+        login_required = True
+        on_mount = [note_mount]
+
+    with pytest.raises(MountRedirect):
+        LiveViewTestClient(GatedHook).mount()
+    assert HOOK_CALLS == []
+
+
+@pytest.mark.asyncio
+async def test_an_async_check_permissions_from_a_running_loop_says_what_to_do():
+    with pytest.raises(RuntimeError, match="sync_to_async"):
+        LiveViewTestClient(AsyncHookView).mount()

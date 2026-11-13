@@ -124,7 +124,8 @@ def _path_with_query(query_params: Any) -> str:
 
 class MountRedirect(Exception):
     """Raised by :meth:`LiveViewTestClient.mount` when the view's pre-mount auth
-    sends the user to log in (#4073).
+    sends the user to log in, or one of its ``on_mount`` hooks returns a
+    redirect URL (#4073).
 
     Every transport runs the same pre-mount sequence
     (:func:`djust.auth.core.run_pre_mount_auth`) before ``mount()``. For an
@@ -152,8 +153,21 @@ def _run_pre_mount_auth(view: Any, request: Any) -> None:
     from .auth.core import arun_pre_mount_auth, has_async_check_permissions, run_pre_mount_auth
 
     if has_async_check_permissions(view):
+        import asyncio
+
         from asgiref.sync import async_to_sync
 
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass  # no loop in this thread: async_to_sync can run it
+        else:
+            raise RuntimeError(
+                "%s has an async check_permissions(), and LiveViewTestClient.mount() "
+                "was called from a running event loop (an async test), where it cannot "
+                "await it. Call it from a sync test, or wrap the call: "
+                "await sync_to_async(client.mount)(...)." % type(view).__qualname__
+            )
         redirect_url = async_to_sync(arun_pre_mount_auth)(view, request)
     else:
         redirect_url = run_pre_mount_auth(view, request)
@@ -166,10 +180,9 @@ def _tenant_scope() -> Any:
     import contextlib
 
     try:
-        from .tenants.middleware import tenant_context
-    except Exception:  # noqa: BLE001 — tenants is optional
+        from .tenants.middleware import get_current_tenant, tenant_context
+    except ImportError:  # tenants is optional
         return contextlib.nullcontext()
-    from .tenants.middleware import get_current_tenant
 
     return tenant_context(get_current_tenant())
 
@@ -180,16 +193,26 @@ def _mount_and_apply_params(
     mount_kwargs: Dict[str, Any],
     route_kwargs: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Pre-mount auth, then the route, ``mount()``, the params hook and the object check.
+    """Pre-mount auth, ``on_mount`` hooks, then the route, ``mount()``, the params
+    hook and the object check.
 
     The pre-mount sequence every transport runs (``run_pre_mount_auth``:
     ``login_required``, ``permission_required``, ``check_permissions`` and the
-    tenant resolve/bind) runs first; a refusal raises ``PermissionDenied`` or
-    :class:`MountRedirect` and ``mount()`` never runs (#4073). The tenant it
-    binds is restored when the mount returns, as the runtime scopes it.
+    tenant resolve/bind) runs first, then the view's ``on_mount`` hooks
+    (``run_on_mount_hooks``). A refusal raises ``PermissionDenied`` or
+    :class:`MountRedirect` (a login redirect, or the URL a hook returned) and
+    ``mount()`` never runs (#4073). The tenant it binds is restored when the
+    mount returns, as the runtime scopes it.
     """
     with _tenant_scope():
         _run_pre_mount_auth(view, request)
+        # The ``on_mount`` hooks every transport runs between the auth and
+        # ``mount()``, with the mount kwargs; a hook's redirect refuses the mount.
+        from .hooks import run_on_mount_hooks
+
+        hook_redirect = run_on_mount_hooks(view, request, **mount_kwargs)
+        if hook_redirect:
+            raise MountRedirect(hook_redirect)
         _mount_and_apply_params_inner(view, request, mount_kwargs, route_kwargs)
 
 
@@ -358,7 +381,8 @@ class LiveViewTestClient:
         Raises:
             MountRedirect: the pre-mount auth every transport runs before
                 ``mount()`` sent the user to log in (an anonymous user on a
-                ``login_required`` view); ``mount()`` did not run (#4073).
+                ``login_required`` view), or one of the view's ``on_mount``
+                hooks returned a redirect URL; ``mount()`` did not run (#4073).
             PermissionDenied: the pre-mount auth refused the user
                 (``permission_required``, ``check_permissions``), or the
                 object-permission check (ADR-017) that every

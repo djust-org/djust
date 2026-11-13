@@ -620,12 +620,31 @@ def _run_view(
     # like; an AnonymousUser would turn every such read into a false defect.
     from django.contrib.auth import get_user_model
 
+    from djust.testing import MountRedirect
+
     user, _created = get_user_model().objects.get_or_create(
         username="doc-snippet-reader", defaults={"first_name": "Doc"}
     )
     client = LiveViewTestClient(cls, user=user)
     try:
-        client.mount()
+        try:
+            client.mount()
+        except PermissionDenied as denied:
+            if denied.__cause__ is not None:
+                raise
+            # The mount runs the transports' pre-mount auth (#4073): a block
+            # gated on ``permission_required`` is mounted the way a reader who
+            # holds the permission would see it, by a superuser (Django grants
+            # it every permission). A custom ``check_permissions()`` that still
+            # refuses is the block's own verdict, skipped below.
+            admin, _ = get_user_model().objects.get_or_create(
+                username="doc-snippet-admin",
+                defaults={"first_name": "Doc", "is_staff": True, "is_superuser": True},
+            )
+            client = LiveViewTestClient(cls, user=admin)
+            client.mount()
+    except MountRedirect as exc:
+        raise _Skip("redirected before mount()", f"{name}: {_exc_text(exc)}") from exc
     except TypeError as exc:
         if _MISSING_ARGS_RE.search(str(exc)) or _UNEXPECTED_KW_RE.search(str(exc)):
             raise _Skip("mount() requires URL kwargs", f"{name}: {_exc_text(exc)}") from exc

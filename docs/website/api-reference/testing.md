@@ -32,10 +32,12 @@ default `via_websocket=True` mounts as the WebSocket path does; pass
 
 Before `mount()` it runs the pre-mount sequence every transport runs
 (`login_required`, `permission_required`, `check_permissions()` and the tenant
-resolve): a user the view refuses raises `PermissionDenied`, and an anonymous user on a
-`login_required` view raises `djust.testing.MountRedirect` (its `url` is the login URL;
+resolve), then the view's `on_mount` hooks with the mount kwargs: a user the view
+refuses raises `PermissionDenied`, and an anonymous user on a `login_required` view, or
+a hook that returns a URL, raises `djust.testing.MountRedirect` (its `url` is that URL;
 the HTTP GET answers a 302 there and the socket a `navigate` frame). In both cases
-`mount()` does not run. Pass `user=` to mount as a user the view admits. After `mount()`
+`mount()` does not run. An `async def check_permissions()` is awaited for you from a
+sync test; from an async test, call `await sync_to_async(client.mount)()`. Pass `user=` to mount as a user the view admits. After `mount()`
 and `handle_params()` the object-permission check every transport runs follows: a view
 whose `get_object()` / `has_object_permission()` denies raises `PermissionDenied` (a
 transport answers 403 or a `permission_denied` frame).
