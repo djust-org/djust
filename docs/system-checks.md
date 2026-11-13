@@ -1,12 +1,18 @@
 # djust System Checks Reference
 
-Quick reference for all 43 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+<!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
+
+Quick reference for all 114 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+
+<!-- END GENERATED check-count -->
 
 Run checks with: `python manage.py check --deploy` or `python manage.py djust_check`
 
 ---
 
 ## Quick-Reference Table
+
+<!-- BEGIN GENERATED check-table: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 | ID | Category | Severity | Summary |
 |----|----------|----------|---------|
@@ -22,6 +28,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C014 | Config | Warning | Multi-tenant ASGI without TENANT_LIMIT_SET_CALLS |
 | C015 | Config | Error | Unknown adapter name in DJUST_CONFIG['extensions'] |
 | C016 | Config | Warning | DjangoTemplates listed before DjustTemplateBackend, no DjangoTemplates fallback for admin, or a djust-first entry lacking the admin's context processors |
+| C018 | Config | Retired | Retired in 2.0 with the unused `LIVEVIEW_CONFIG` keys it warned about (#3519). Never emitted; the ID is not reused |
 | C019 | Config | Error | Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (the first presence call raises `ImproperlyConfigured`) |
 | C020 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
 | C021 | Config | Error | `LIVEVIEW_CONFIG['worker_threads']` is not `None`, `False`, `True`, `"auto"` or an integer >= 0 |
@@ -33,6 +40,13 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C027 | Config | Retired | Retired in 2.0 with `view_state_in_session`: the setting was not `True` or `False`. Never emitted; the ID is not reused |
 | C028 | Config | Error | `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is not `None` or a number of seconds greater than 0 |
 | C029 | Config | Error | `LIVEVIEW_CONFIG['query_budget']` is not `None`, `"off"`, `"warn"` or `"error"` |
+| C301 | Config | Error | Invalid VDOM cache TTL |
+| C302 | Config | Error | Invalid VDOM cache size |
+| C303 | Config | Info | VDOM cache disabled |
+| C304 | Config | Warning | Client state with PII-like field names |
+| C401 | Config | Warning | Hot View Replacement without watchdog |
+| C501 | Config | Info | Time-travel debugging enabled globally |
+| C502 | Config | Error | Invalid time_travel_max_events |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -41,6 +55,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V006 | LiveView | Warning | Service instance assigned in mount() of a legacy-exposure view — high-confidence subset of V008 |
 | V007 | LiveView | Retired | Retired in 1.3 (ADR-037): recommended `**kwargs` on every handler. Never emitted; the ID is not reused |
 | V008 | LiveView | Info | Non-primitive type assigned in mount() of a legacy-exposure view — broader, lower-confidence (skips V006 patterns) |
+| V009 | LiveView | Warning | Invalid on_mount hooks |
+| V010 | LiveView | Error | TutorialMixin after LiveView in the bases |
 | V011 | LiveView | Retired | Retired in 2.0 with `enable_state_snapshot`: a sticky child opted in to state snapshots and its parent did not. Never emitted; the ID is not reused |
 | V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
 | V013 | LiveView | Warning | HTTP-only setup()/dispatch()/get()/post() override or URLconf wrapper never runs on a WebSocket mount |
@@ -64,7 +80,9 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
 | S004 | Security | Warning | DEBUG=True with non-localhost ALLOWED_HOSTS |
 | S005 | Security | Warning | LiveView exposes state without authentication |
+| S006 | Security | Warning | Tenant isolation is fail-open |
 | S007 | Security | Warning | `client_name\|safe` renders an unsanitised upload filename (stored XSS) |
+| S008 | Security | Warning | Upload client_name used in a storage path |
 | S009 | Security | Warning | View-auth'd LiveView exposes a public `@event_handler` with no per-handler gate |
 | S011 | Security | Warning | Inline executable `<script>` inside a `dj-root` with no CSP configured (#1848) |
 | S012 | Security | Error | A LiveView the runtime refuses on live transports because access control that only the HTTP request runs is not covered by its declared djust auth: a custom `AccessMixin` subclass's `dispatch()`, a `setup()`/`dispatch()`/`get()`/`post()` override, decorator or URLconf wrapper that checks the user and denies, and unknown decorators and URLconf wrappers. Django's own auth decorators, wrappers and mixins are replayed; the rest is V013 (#14; reallocated from a duplicate S004, #2070) |
@@ -80,6 +98,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T012 | Templates | Warning | Template with dj-* directives but no `dj-root` or `dj-view`, so the page never connects (`dj-root` accepted since #3171; every client directive covered since #3225) |
 | T013 | Templates | Warning | dj-view with empty or dynamic value |
 | T014 | Templates | Warning | Deprecated data-dj-id attribute |
+| T015 | Templates | Retired | Retired in 2.0 with the legacy `data-djust-root` / `data-djust-view` attributes it detected (#3533). Never emitted; the ID is not reused |
+| T016 | Templates | Warning | dj-navigate with no LiveView routes |
 | T017 | Templates | Warning | dj-view / dj-root on a table-section element (foster-parented to silent garbage) |
 | T018 | Templates | Warning | Template references a variable that resolves nowhere (renders blank, no error) |
 | T019 | Templates | Warning | An event binding names no browser-callable handler on its owner (ADR-037) |
@@ -89,6 +109,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T023 | Templates | Info | T019-T022 were skipped: no usable template engine (none configured, or it could not be built) |
 | T024 | Templates | Warning | A template an owner renders reads `is_staff`, `is_superuser` or `password` through a `user` variable; djust never serializes them |
 | T025 | Templates | Warning | `dj-view` / `dj-root` on `<html>` or `<head>`: unsupported and ignored, no live view is mounted and the page stays a plain HTTP page (`<body>` is a supported root) |
+| T026 | Templates | Warning | Two loaded template libraries register one tag or filter name |
 | T027 | Templates | Warning | An explicit-exposure view's template reads a name the view holds as an attribute but does not supply (renders blank, no error), or an `X_count` that 1.x generated from a supplied `X` |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
@@ -117,6 +138,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | B013 | Vendored Assets | Error | `djust` after `django.contrib.staticfiles`, SBOM set but won't be written (`--deploy` only) |
 | B014 | Vendored Assets | Error | On-disk SBOM missing or its digest no longer matches declared assets (`--deploy` only) |
 
+<!-- END GENERATED check-table -->
+
 ---
 
 ## Suppression Patterns
@@ -144,6 +167,8 @@ console.log("debug info"); // noqa: Q003
 ---
 
 ## Configuration Checks (C)
+
+<!-- BEGIN GENERATED check-sections:C: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### C001 — ASGI_APPLICATION not set
 - **Severity**: Error
@@ -271,6 +296,8 @@ console.log("debug info"); // noqa: Q003
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C029"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C029"]` (the runtime still reads it as `"warn"`)
 - **False positives**: None
 
+<!-- END GENERATED check-sections:C -->
+
 ---
 
 ## LiveView Checks (V)
@@ -302,6 +329,8 @@ Semantics (mirrors Django's `Meta.abstract` for models):
 - Setting `abstract = False` explicitly is the same as not setting it — the class is concrete.
 
 Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_CONFIG['suppress_checks']`) still works and is the right choice if you want to suppress a check **globally** across all classes rather than mark a specific class as abstract.
+
+<!-- BEGIN GENERATED check-sections:V: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### V001 — LiveView missing template_name
 - **Severity**: Warning
@@ -512,9 +541,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Fix**: move the view to explicit exposure (declare persisted fields with `state()`, return template names from `get_context_data()`) and delete the line. `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](website/guides/migrating-to-2.0.md).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V028"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V028"]`
 
+<!-- END GENERATED check-sections:V -->
+
 ---
 
 ## Security Checks (S)
+
+<!-- BEGIN GENERATED check-sections:S: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### S001 — mark_safe() with f-string (XSS risk)
 - **Severity**: Error
@@ -738,9 +771,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `# noqa: S014` on the `class` line, or
   `DJUST_CONFIG = {'suppress_checks': ['S014']}`.
 
+<!-- END GENERATED check-sections:S -->
+
 ---
 
 ## Template Checks (T)
+
+<!-- BEGIN GENERATED check-sections:T: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### T001 — Deprecated @click/@input syntax
 - **Severity**: Warning
@@ -899,6 +936,69 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Scope**: Static check only; abstract base LiveViews (`abstract = True`)
   are skipped, matching the other V/T checks' convention.
 
+### T019–T022 — Template event bindings (ADR-037)
+- **Severity**: Warning (all four, in 1.3)
+- **Method**: Each LiveView's and LiveComponent's template is compiled with
+  Django's parser, never rendered. `{% extends %}` and constant
+  `{% include %}` are followed, every `{% if %}` branch and `{% for %}` body
+  is kept, and the result is parsed as HTML. Each literal `dj-*` event binding
+  is then checked against its owner. The owner is the view, or the component
+  whose template it is. Handlers are resolved through the same discovery
+  dispatch uses. Arguments go through the runtime's own parameter policy,
+  coercion and strict contract. Nothing is constructed or mounted, no handler
+  runs and no queryset is evaluated.
+- **What each detects**:
+  - `T019`: the name resolves to no browser-callable handler on the owner. This
+    covers a missing method, one without `@event_handler` (under the default
+    strict `event_security`), an output-subscription callback, and a `@push_handler` method (in every `event_security` mode). It also
+    covers an action or output of a declared interactive component, which a
+    view-owned binding never reaches. The last cases are an invalid event name,
+    and arguments on a directive that sends its value verbatim (`dj-submit`,
+    `dj-keydown`, `dj-keyup`, `dj-click-away`).
+  - `T020`: a required argument the binding never sends; an argument the
+    handler does not accept (under the legacy policy, `dj-input`, `dj-change`
+    and `dj-submit` always send `field` and `_target`); extra positional
+    arguments; or two attributes that send the same name. Under the strict
+    policy, `data-*` attributes are not sent at all: use `dj-value-*`. A
+    `data-*` attribute naming a declared parameter is reported whether the
+    parameter is required or has a default; with a default the handler would
+    otherwise run with it and no error (#4033). A `data-*` attribute that names
+    no declared parameter is not reported, even on a `**kwargs` handler, since
+    most are unrelated (`data-testid`, `data-bs-toggle`).
+  - `T021`: a literal the handler's annotation rejects (`data-count="abc"` for
+    `count: int`). Also an unknown wire hint, or one that does not fit the
+    declared type (`dj-value-id:bool` for `id: int`), and a field name that is
+    not in a static `form_class` for `validate_field` / `submit_form`.
+  - `T022`: `data-view-id`, `dj-value-component-id` or similar in markup.
+    These are routing context the framework attaches itself, and could
+    redirect the event.
+- **Not reported** (counted in the coverage report instead):
+  - a binding whose name is computed by the template;
+  - one inside markup a component or child view owns;
+  - one outside the live root;
+  - a handler with a `**kwargs` catch-all, whose unknown arguments cannot be
+    checked;
+  - an attribute set that is itself conditional (missing arguments are then
+    unknown).
+- **Engine**: a project that lists `DjangoTemplates` is scanned with its
+  engine. A project that lists only `DjustTemplateBackend` (the `djust new`
+  default) is scanned with a compile-only Django engine built from the same
+  directories, installed-app tag libraries, `OPTIONS["libraries"]` and
+  builtins. If `TEMPLATES` configures neither, or the engine cannot be built, `T023` (Info) says the checks
+  were skipped; silence it with `DJUST_CONFIG = {"suppress_checks": ["T023"]}`.
+- **Not seen**: markup rendered by a third-party template tag or a dynamic
+  `{% include %}`. Each is recorded as a gap, and the owner's event graph is
+  reported as incomplete.
+- **Coverage**: `manage.py djust_check` prints a summary line of how many
+  bindings were checked, dynamic or unsupported. `djust_check --format json`
+  adds a `coverage` object with per-owner counts, per-binding status and gaps.
+  Its binding findings carry `owner`, `binding`, `expected` and `supplied`.
+- **Suppression**: a local comment with a reason, on the binding's line or the
+  line above: `{# noqa: T019 -- rendered by the date-picker widget #}`. A
+  noqa without a reason does not suppress these IDs; the message says so.
+  `DJUST_CONFIG = {"suppress_checks": ["T019"]}` turns a check off
+  project-wide.
+
 ### T024 — Floor-excluded user field in a template
 - **Severity**: Warning
 - **Detects**: `{{ request.user.is_staff }}`, `user.is_superuser`,
@@ -983,72 +1083,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   logger; at render time the `X_count` notice is given only when `X` is a
   QuerySet, list, tuple or set (the values 1.x counted).
 
-### T019–T022 — Template event bindings (ADR-037)
-- **Severity**: Warning (all four, in 1.3)
-- **Method**: Each LiveView's and LiveComponent's template is compiled with
-  Django's parser, never rendered. `{% extends %}` and constant
-  `{% include %}` are followed, every `{% if %}` branch and `{% for %}` body
-  is kept, and the result is parsed as HTML. Each literal `dj-*` event binding
-  is then checked against its owner. The owner is the view, or the component
-  whose template it is. Handlers are resolved through the same discovery
-  dispatch uses. Arguments go through the runtime's own parameter policy,
-  coercion and strict contract. Nothing is constructed or mounted, no handler
-  runs and no queryset is evaluated.
-- **What each detects**:
-  - `T019`: the name resolves to no browser-callable handler on the owner. This
-    covers a missing method, one without `@event_handler` (under the default
-    strict `event_security`), an output-subscription callback, and a `@push_handler` method (in every `event_security` mode). It also
-    covers an action or output of a declared interactive component, which a
-    view-owned binding never reaches. The last cases are an invalid event name,
-    and arguments on a directive that sends its value verbatim (`dj-submit`,
-    `dj-keydown`, `dj-keyup`, `dj-click-away`).
-  - `T020`: a required argument the binding never sends; an argument the
-    handler does not accept (under the legacy policy, `dj-input`, `dj-change`
-    and `dj-submit` always send `field` and `_target`); extra positional
-    arguments; or two attributes that send the same name. Under the strict
-    policy, `data-*` attributes are not sent at all: use `dj-value-*`. A
-    `data-*` attribute naming a declared parameter is reported whether the
-    parameter is required or has a default; with a default the handler would
-    otherwise run with it and no error (#4033). A `data-*` attribute that names
-    no declared parameter is not reported, even on a `**kwargs` handler, since
-    most are unrelated (`data-testid`, `data-bs-toggle`).
-  - `T021`: a literal the handler's annotation rejects (`data-count="abc"` for
-    `count: int`). Also an unknown wire hint, or one that does not fit the
-    declared type (`dj-value-id:bool` for `id: int`), and a field name that is
-    not in a static `form_class` for `validate_field` / `submit_form`.
-  - `T022`: `data-view-id`, `dj-value-component-id` or similar in markup.
-    These are routing context the framework attaches itself, and could
-    redirect the event.
-- **Not reported** (counted in the coverage report instead):
-  - a binding whose name is computed by the template;
-  - one inside markup a component or child view owns;
-  - one outside the live root;
-  - a handler with a `**kwargs` catch-all, whose unknown arguments cannot be
-    checked;
-  - an attribute set that is itself conditional (missing arguments are then
-    unknown).
-- **Engine**: a project that lists `DjangoTemplates` is scanned with its
-  engine. A project that lists only `DjustTemplateBackend` (the `djust new`
-  default) is scanned with a compile-only Django engine built from the same
-  directories, installed-app tag libraries, `OPTIONS["libraries"]` and
-  builtins. If `TEMPLATES` configures neither, or the engine cannot be built, `T023` (Info) says the checks
-  were skipped; silence it with `DJUST_CONFIG = {"suppress_checks": ["T023"]}`.
-- **Not seen**: markup rendered by a third-party template tag or a dynamic
-  `{% include %}`. Each is recorded as a gap, and the owner's event graph is
-  reported as incomplete.
-- **Coverage**: `manage.py djust_check` prints a summary line of how many
-  bindings were checked, dynamic or unsupported. `djust_check --format json`
-  adds a `coverage` object with per-owner counts, per-binding status and gaps.
-  Its binding findings carry `owner`, `binding`, `expected` and `supplied`.
-- **Suppression**: a local comment with a reason, on the binding's line or the
-  line above: `{# noqa: T019 -- rendered by the date-picker widget #}`. A
-  noqa without a reason does not suppress these IDs; the message says so.
-  `DJUST_CONFIG = {"suppress_checks": ["T019"]}` turns a check off
-  project-wide.
+<!-- END GENERATED check-sections:T -->
 
 ---
 
 ## Code Quality Checks (Q)
+
+<!-- BEGIN GENERATED check-sections:Q: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### Q001 — print() statement found
 - **Severity**: Info
@@ -1100,6 +1141,8 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.Q010"]` or `# noqa: Q010` inline
 - **False positives**: Low-confidence heuristic — fires on any handler that sets state variables with navigation-sounding names, even when those variables are not URL parameters
 
+<!-- END GENERATED check-sections:Q -->
+
 ---
 
 ## Accessibility Checks (Y)
@@ -1111,6 +1154,8 @@ extensible — each check is a single-function-body addition. Templates that sho
 literal HTML inside `{% verbatim %}` blocks are skipped to avoid false
 positives. See the [Accessibility guide](website/guides/accessibility.md) for
 the full narrative.
+
+<!-- BEGIN GENERATED check-sections:Y: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### Y001 — interactive element missing an accessible name
 - **Severity**: Warning
@@ -1154,11 +1199,15 @@ the full narrative.
 - **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y006']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y006"]`
 - **False positives**: Low — only `<li>` items inside a legend are checked; text, interpolation or a name attribute clears an item; the form `<legend>` element is not a chart legend
 
+<!-- END GENERATED check-sections:Y -->
+
 ---
 
 ## Vendored Assets Checks (B)
 
 See [Vendoring third-party JS](website/guides/vendored-assets.md), [Scanning a djust app](website/guides/scanning.md) and [ADR-040](adr/040-vendored-assets-and-sboms.md) for the full manifest schema and SBOM setup.
+
+<!-- BEGIN GENERATED check-sections:B: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
 ### B001 — manifest unparseable or fails schema
 - **Severity**: Error
@@ -1259,6 +1308,8 @@ See [Vendoring third-party JS](website/guides/vendored-assets.md), [Scanning a d
 - **Suppression**: Cannot be suppressed meaningfully — run `collectstatic` (or `manage.py djust_sbom -o PATH`) as part of the build
 - **False positives**: None
 
+<!-- END GENERATED check-sections:B -->
+
 ---
 
 ## Suppression Examples
@@ -1295,3 +1346,5 @@ def mount(self, request, **kwargs):
 // noqa: Q003
 console.log("permanent debug output intentional here");
 ```
+
+<!-- generated-doc prose-sha256: 4b4e1c9657f6 -->

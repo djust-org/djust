@@ -454,7 +454,11 @@ class ContextMixin:
         def _get_template_content(self) -> Optional[str]: ...
 
         def _jit_serialize_queryset(
-            self, queryset: Any, template_content: str, variable_name: str
+            self,
+            queryset: Any,
+            template_content: str,
+            variable_name: str,
+            context: Optional[Dict[str, Any]] = None,
         ) -> List[Any]: ...
 
         def _jit_serialize_model(
@@ -462,7 +466,11 @@ class ContextMixin:
         ) -> Dict[str, Any]: ...
 
         def _jit_serialize_model_list(
-            self, items: Any, template_content: str, variable_name: str
+            self,
+            items: Any,
+            template_content: str,
+            variable_name: str,
+            context: Optional[Dict[str, Any]] = None,
         ) -> List[Any]: ...
 
     def _context_for_render(
@@ -735,7 +743,9 @@ class ContextMixin:
 
                     for key, value in list(context.items()):
                         if isinstance(value, QuerySet):
-                            serialized = self._jit_serialize_queryset(value, template_content, key)
+                            serialized = self._jit_serialize_queryset(
+                                value, template_content, key, context
+                            )
                             context[key] = serialized
                             jit_serialized_keys.add(key)
 
@@ -755,7 +765,7 @@ class ContextMixin:
 
                             if _recursive_queryset_relation(template_content, key):
                                 context[key] = self._jit_serialize_model_list(
-                                    value, template_content, key
+                                    value, template_content, key, context
                                 )
                                 jit_serialized_keys.add(key)
                                 continue
@@ -766,8 +776,30 @@ class ContextMixin:
                                 optimize_queryset,
                             )
 
+                            from ..mixins.jit import (
+                                drop_callable_sort_keys,
+                                resolve_variable_keys,
+                                split_variable_keys,
+                            )
+
                             model_class = value[0].__class__
-                            paths = variable_paths_map.get(key, []) if variable_paths_map else []
+                            paths, key_variables = split_variable_keys(
+                                variable_paths_map.get(key, []) if variable_paths_map else []
+                            )
+                            # ``dictsort:<variable>``: the ONE column the variable
+                            # names this render (#3910).
+                            sort_keys = (
+                                tuple(
+                                    resolve_variable_keys(key_variables, context, model_class, self)
+                                )
+                                if paths
+                                else ()
+                            )
+                            if sort_keys:
+                                paths = sorted(set(paths) | set(sort_keys))
+                            paths = drop_callable_sort_keys(
+                                model_class, template_content, key, paths
+                            )
                             optimization = (
                                 analyze_queryset_optimization(model_class, paths) if paths else None
                             )
@@ -798,7 +830,7 @@ class ContextMixin:
                             if paths:
                                 # Use codegen serializer directly — avoids DjangoJSONEncoder fallback
                                 model_hash = _get_model_hash(model_class)
-                                cache_key = (template_hash, key, model_hash, "list")
+                                cache_key = (template_hash, key, model_hash, "list", sort_keys)
                                 if cache_key in _jit_serializer_cache:
                                     serializer, _ = _jit_serializer_cache[cache_key]
                                 else:
@@ -816,7 +848,7 @@ class ContextMixin:
                                 # contract, not the single-model identity map
                                 # (#2736).
                                 context[key] = self._jit_serialize_model_list(
-                                    value, template_content, key
+                                    value, template_content, key, context
                                 )
                             jit_serialized_keys.add(key)
             except Exception as e:

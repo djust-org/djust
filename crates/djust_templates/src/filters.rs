@@ -4403,11 +4403,49 @@ fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
     // (a Python call), and `sort_by` compares each item O(log n) times.
     let mut keyed: Vec<(Value, &Value)> = items
         .iter()
-        .map(|item| (get_dict_value(item, sort_key), item))
+        .map(|item| (sort_key_value(item, sort_key), item))
         .collect();
     // `sort_by` is stable, as Python's `sorted` is.
-    keyed.sort_by(|a, b| compare_sort_values(&a.0, &b.0));
+    merge_sort_by(&mut keyed, |a, b| compare_sort_values(&a.0, &b.0));
     keyed.into_iter().map(|(_, item)| item.clone()).collect()
+}
+
+/// A stable merge sort that tolerates a comparator that is not a total order.
+///
+/// `dictsort` asks Python's own `<` for keys the engine has no comparison of its own
+/// for (#3919 review), and Python lets a type define one that is not a total order:
+/// two sets neither of which contains the other are neither less nor greater, yet not
+/// equal. `slice::sort_by` may panic on such a comparator ("does not correctly
+/// implement a total order"), which would fail the whole render; Python's `sorted()`
+/// does not raise there, it returns SOME order. This never panics and, like
+/// `sort_by`, keeps equal elements in input order. Which order it returns for an
+/// inconsistent comparator need not match CPython's timsort, which is itself an
+/// accident of that algorithm.
+fn merge_sort_by<T: Clone>(items: &mut Vec<T>, cmp: impl Fn(&T, &T) -> std::cmp::Ordering) {
+    fn sort<T: Clone>(items: &[T], cmp: &dyn Fn(&T, &T) -> std::cmp::Ordering) -> Vec<T> {
+        if items.len() <= 1 {
+            return items.to_vec();
+        }
+        let (left, right) = items.split_at(items.len() / 2);
+        let (left, right) = (sort(left, cmp), sort(right, cmp));
+        let mut out = Vec::with_capacity(items.len());
+        let (mut i, mut j) = (0, 0);
+        while i < left.len() && j < right.len() {
+            // Take from the right only when it is strictly less: stable.
+            if cmp(&right[j], &left[i]) == std::cmp::Ordering::Less {
+                out.push(right[j].clone());
+                j += 1;
+            } else {
+                out.push(left[i].clone());
+                i += 1;
+            }
+        }
+        out.extend_from_slice(&left[i..]);
+        out.extend_from_slice(&right[j..]);
+        out
+    }
+    let sorted = sort(items, &cmp);
+    *items = sorted;
 }
 
 /// The one ordering used by every `dictsort` path (#1646).
@@ -4435,10 +4473,26 @@ fn compare_sort_values(a_val: &Value, b_val: &Value) -> std::cmp::Ordering {
             // catches the `TypeError` and returns `""` where this returns the
             // list unsorted, a divergence that predates this variant and is
             // not this fix's (#1079).
+            // A pair the engine has no comparison for asks Python's own `<`
+            // (a `UUID`, a lazy string), as `sorted()` does (#3919 review). A
+            // pair Python refuses never reaches here: `keys_are_orderable`
+            // turned the whole sort into Django's `""` first.
             (Value::Encoded(a_enc), Value::Encoded(b_enc)) => {
                 crate::renderer::encoded_partial_cmp(a_enc, b_enc)
+                    .or_else(|| a_enc.python_order(b_enc).and_then(|order| order.ok()))
                     .unwrap_or(std::cmp::Ordering::Equal)
             }
+            // A tuple or list key orders element by element, then by length,
+            // as Python's sequence comparison does.
+            (
+                Value::List(a_items) | Value::Tuple(a_items),
+                Value::List(b_items) | Value::Tuple(b_items),
+            ) => a_items
+                .iter()
+                .zip(b_items.iter())
+                .map(|(a, b)| compare_sort_values(a, b))
+                .find(|ordering| *ordering != std::cmp::Ordering::Equal)
+                .unwrap_or_else(|| a_items.len().cmp(&b_items.len())),
             // Any pair that is numeric on BOTH sides. Two deltas, not one:
             // a Decimal column used to sort as all-Equal, i.e. not at all
             // (#2214) — and so did a MIXED int/float column, since the arms
@@ -4451,11 +4505,38 @@ fn compare_sort_values(a_val: &Value, b_val: &Value) -> std::cmp::Ordering {
             // reason, unlike `values_equal`'s wildcard, which was restricted to
             // Decimal pairs because widening it there CHANGED answers for the
             // worse (#2240 round 6).
-            _ => match (a_val.as_f64(), b_val.as_f64()) {
+            // A `bool` is an `int` to Python (`True < 1.5`), which `as_f64`
+            // does not answer; a column mixing them sorted as all-Equal.
+            _ => match (sort_number(a_val), sort_number(b_val)) {
                 (Some(a), Some(b)) => a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal),
                 _ => std::cmp::Ordering::Equal,
             },
         }
+    }
+}
+
+/// Does Python's `a < b` raise for two sequences? It walks to the first pair of
+/// elements that are not equal and compares those; `None` equals `None`.
+fn sequence_comparison_raises(a: &[Value], b: &[Value]) -> bool {
+    for (x, y) in a.iter().zip(b.iter()) {
+        if matches!((x, y), (Value::None, Value::None)) {
+            continue;
+        }
+        let pair = [x.clone(), y.clone()];
+        if !keys_are_orderable(&pair) {
+            return true;
+        }
+        if compare_sort_values(x, y) != std::cmp::Ordering::Equal {
+            return false;
+        }
+    }
+    false
+}
+
+fn sort_number(value: &Value) -> Option<f64> {
+    match value {
+        Value::Bool(b) => Some(f64::from(u8::from(*b))),
+        other => other.as_f64(),
     }
 }
 
@@ -4481,11 +4562,8 @@ fn compare_sort_values(a_val: &Value, b_val: &Value) -> std::cmp::Ordering {
 /// would turn a cell that agrees with Django into `""`.
 ///
 /// A key that resolves for no item is Django's raise, and the caller returns
-/// `""` there. Deliberately NARROWER than Django in one direction: djust does
-/// not walk dotted paths, so `dictsort:"a.b"` over a dict-of-dicts answers
-/// `None` here where Django would sort. That is the fail-CLOSED direction (the
-/// value is discarded rather than emitted), and it is the same answer djust
-/// already gave for the security-relevant shapes.
+/// `""` there. A dotted key is a PATH, walked one segment at a time by
+/// [`sort_key_value`] as `_property_resolver` walks it (#3912).
 fn dictsort_by_key(items: &[Value], key: &str, reverse: bool) -> Option<Vec<Value>> {
     // Django's `_property_resolver` refuses private access before touching any
     // item, so it raises even for an empty sequence.
@@ -4494,14 +4572,104 @@ fn dictsort_by_key(items: &[Value], key: &str, reverse: bool) -> Option<Vec<Valu
     }
     // `itemgetter(key)` / `getattr` raises for any item that cannot resolve it,
     // and one raise discards the WHOLE sequence.
+    let mut keys = Vec::with_capacity(items.len());
     for item in items {
-        if matches!(get_dict_value(item, key), Value::Missing) {
+        let key_value = sort_key_value(item, key);
+        if matches!(key_value, Value::Missing) {
             return None;
         }
+        keys.push(key_value);
+    }
+    if !keys_are_orderable(&keys) {
+        return None;
     }
     Some(stable_reverse(items, reverse, |items| {
         sort_dicts_by_key(items, key)
     }))
+}
+
+/// Can Python's `sorted()` order these keys without raising `TypeError`?
+///
+/// Django's `dictsort` is `sorted(value, key=...)` inside `except (TypeError,
+/// AttributeError): return ""`, so keys Python cannot order render an EMPTY
+/// loop. Refused here are only the kinds Python really refuses: `None` beside
+/// any value (a nullable column, `None < None` raises), a dict, text beside a
+/// number, and a pair of carried objects for which Python's own `<` RAISES
+/// (two models, two managers, a `date` beside a `datetime`) (#3919, and the
+/// nullable column the #3911 sweep found). A method or manager key never gets
+/// here as a value: `live_attr` and the JIT refuse it earlier. A comparison
+/// sort compares at least one pair across two classes that cannot be compared,
+/// so with two or more keys the class rule is the answer whatever the item
+/// order; one key is never compared, as in Python.
+///
+/// Limit: a pair of carried objects is asked only as the FIRST carried key against
+/// each other one, not every pair, so a column whose first value orders with all
+/// the others but where two later values refuse each other is not refused here.
+/// Python would raise on such a column only if `sorted()` happened to compare that
+/// pair; the sort then still completes (`merge_sort_by` never panics) and renders
+/// the rows, where Django may render `""`. Sequence keys are checked pairwise.
+///
+/// Anything the engine merely has no comparison for is NOT refused: a pair
+/// with no live object to ask keeps its previous answer (shown, in input
+/// order), so a key Django sorts is never turned from "rows shown" into
+/// "nothing shown".
+fn keys_are_orderable(keys: &[Value]) -> bool {
+    if keys.len() < 2 {
+        return true;
+    }
+    let mut text = false;
+    let mut number = false;
+    for key in keys {
+        match key {
+            Value::Missing | Value::None | Value::Object(_) | Value::DictView { .. } => {
+                return false
+            }
+            Value::String(_) | Value::SafeString(_) => text = true,
+            Value::Bool(_)
+            | Value::Integer(_)
+            | Value::Float(_)
+            | Value::Decimal(_)
+            | Value::BigInt(_) => number = true,
+            _ => {}
+        }
+    }
+    if text && number {
+        return false;
+    }
+    // Two sequences compare element by element and raise at the first pair of
+    // elements that differ and cannot be ordered (`(1, 'a') < (1, 2)`). Asked of
+    // every pair (of the first key against every other past 64 keys).
+    let sequences: Vec<&Vec<Value>> = keys
+        .iter()
+        .filter_map(|key| match key {
+            Value::List(items) | Value::Tuple(items) => Some(items),
+            _ => None,
+        })
+        .collect();
+    for (i, a) in sequences.iter().enumerate() {
+        let others = if sequences.len() <= 64 {
+            &sequences[i + 1..]
+        } else if i == 0 {
+            &sequences[1..]
+        } else {
+            break;
+        };
+        if others.iter().any(|b| sequence_comparison_raises(a, b)) {
+            return false;
+        }
+    }
+    let mut carried = keys.iter().filter_map(|key| match key {
+        Value::Encoded(e) => Some(e),
+        _ => None,
+    });
+    if let Some(first) = carried.next() {
+        for other in carried {
+            if let Some(Err(())) = first.python_order(other) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Python's `reverse=True`: equal elements keep their input order. Sorting
@@ -4548,12 +4716,35 @@ fn dictsort_by_index(items: &[Value], n: usize, reverse: bool) -> Option<Vec<Val
         }?;
         keyed.push((k, item.clone()));
     }
-    keyed.sort_by(|a, b| compare_sort_values(&a.0, &b.0));
+    merge_sort_by(&mut keyed, |a, b| compare_sort_values(&a.0, &b.0));
     let mut out: Vec<Value> = keyed.into_iter().map(|(_, item)| item).collect();
     if reverse {
         out.reverse();
     }
     Some(out)
+}
+
+/// The value `dictsort` orders an item by: Django's `_property_resolver`
+/// splits the key on `.` and resolves each part in turn (`item['ct']['m']`, or
+/// `item.ct.m`), so `dictsort:'ct.m'` sorts dict rows by a nested key (#3912).
+/// It looked the whole string up as ONE key, found none, and rendered `""`.
+///
+/// A carried object resolves the whole path through its live handle, which
+/// already walks it the same way (`Encoded::live_attr`).
+/// A list part is never an index here, as in Django: `list['0']` raises and
+/// `getattr(list, '0')` does too.
+fn sort_key_value(item: &Value, key: &str) -> Value {
+    if !key.contains('.') || matches!(item, Value::Encoded(_)) {
+        return get_dict_value(item, key);
+    }
+    let mut current = item.clone();
+    for part in key.split('.') {
+        current = get_dict_value(&current, part);
+        if matches!(current, Value::Missing) {
+            return Value::Missing;
+        }
+    }
+    current
 }
 
 fn get_dict_value(value: &Value, key: &str) -> Value {

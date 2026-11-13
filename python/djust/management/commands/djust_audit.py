@@ -333,8 +333,15 @@ def _describe_query_budget(audit: dict[str, Any]) -> str:
 
 
 def _extract_vars(cls: type) -> Optional[Any]:
-    """Extract template variables using the Rust extension."""
-    from djust._rust import extract_template_variables
+    """Extract template variables using the Rust extension.
+
+    The JIT's internal paths (a whole-read text path, a variable sort key) are
+    taken out: the audit lists what the template reads (#3911/#3910)."""
+    from djust._rust import extract_template_variables as _extract
+    from djust.mixins.jit import public_template_paths
+
+    def extract_template_variables(source: str) -> Any:
+        return public_template_paths(_extract(source))
 
     template_name = getattr(cls, "template_name", None)
     if not isinstance(template_name, str) or not template_name:

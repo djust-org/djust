@@ -571,6 +571,8 @@ Every replacement works on 1.3.x, so make the change there.
 
 ### Python names
 
+<!-- BEGIN GENERATED removed-table:python: do not edit by hand; edit docs/removed/2.0/migration/ and run make generated-docs -->
+
 | Removed | Use |
 | --- | --- |
 | `@event` (`djust.event`, `djust.decorators.event`) | `@event_handler` |
@@ -594,6 +596,8 @@ Every replacement works on 1.3.x, so make the change there.
 | `PersistentLiveView` (`djust.PersistentLiveView`, `djust.live_view.PersistentLiveView`) | `LiveView`, with the fields to keep declared as above. Importing it raises `ImportError` with this advice. |
 | System check `djust.V011` (sticky child and parent snapshot opt-in) | Remove it from `SILENCED_SYSTEM_CHECKS`; nothing reports it. `djust.C304` now warns about a `client=True` field with a credential-like name. |
 | `NonPersistableStateError`, and the `strict=` argument of `LiveView._capture_snapshot_state()` | Nothing. A client field has to be JSON, and a model or `Decimal` is refused when the token is built. |
+
+<!-- END GENERATED removed-table:python -->
 
 A component mixin becomes a class attribute. This replaces
 `class DocsView(TabsMixin, LiveView)` with `self.init_tabs("nav", active="overview")`
@@ -702,6 +706,8 @@ To open or close from your own handler, set the state:
 
 ### Settings
 
+<!-- BEGIN GENERATED removed-table:settings: do not edit by hand; edit docs/removed/2.0/migration/ and run make generated-docs -->
+
 | Removed | Use |
 | --- | --- |
 | `DJUST_WS_COMPRESSION` | `LIVEVIEW_CONFIG['websocket_compression']` |
@@ -712,7 +718,11 @@ To open or close from your own handler, set the state:
 | `template_auto_call`, `virtual_keyed_ops`, `django_value_repr` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the key. What each one could switch off is always on. |
 | `view_state_in_session` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the key. No view state is kept in the session any more ([below](#state-a-legacy-view-no-longer-keeps)), so there is nothing to switch off. System check `djust.C027`, which validated it, is retired. |
 
+<!-- END GENERATED removed-table:settings -->
+
 ### Templates and client code
+
+<!-- BEGIN GENERATED removed-table:templates: do not edit by hand; edit docs/removed/2.0/migration/ and run make generated-docs -->
 
 | Removed | Use |
 | --- | --- |
@@ -721,6 +731,8 @@ To open or close from your own handler, set the state:
 | `window.LiveViewWebSocket`, `window.setCacheConfig`, `window.globalLoadingManager` | The same names on `window.djust` |
 | `block["super"]` and `dict(block)` inside a custom tag that receives `block` | `context["block"].super()` |
 | System checks `djust.C018` and `djust.T015` | Remove them from `SILENCED_SYSTEM_CHECKS`; nothing reports them. |
+
+<!-- END GENERATED removed-table:templates -->
 
 ### Behaviour that now raises
 
@@ -869,3 +881,5 @@ looking for a replacement.
 
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
+
+<!-- generated-doc prose-sha256: b1c21d089577 -->

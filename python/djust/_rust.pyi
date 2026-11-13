@@ -408,6 +408,7 @@ below it is flattened to its text content."""
 def resolve_template_inheritance(
     template_path: str,
     template_dirs: List[str],
+    source: Optional[str] = None,
 ) -> str:
     """
     Resolve template inheritance ({% extends %} and {% block %}).
@@ -474,6 +475,10 @@ def extract_template_variables(template: str) -> Dict[str, List[str]]:
         vars = extract_template_variables("{{ user.name }}")
         # Returns: {"user": ["name"]}
     """
+    ...
+
+def extract_item_key_only_reads(template: str) -> Dict[str, List[str]]:
+    """The ``dictsort`` / ``regroup`` key paths nothing else in the template reads (#3919)."""
     ...
 
 def compute_template_hash(source: str) -> str:
@@ -1541,6 +1546,7 @@ __all__ = [
     # Serialization
     "fast_json_dumps",
     "extract_template_variables",
+    "extract_item_key_only_reads",
     "compute_template_hash",
     "crosses_as_encoded",
     "crosses_as_encoded_by_conversion",

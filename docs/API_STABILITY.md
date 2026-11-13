@@ -285,6 +285,8 @@ deprecated in 1.3, were removed too, as were the eight component mixins and the
 The inert `@optimistic` and `@client_state` decorators were removed without a
 1.3 warning; see their section.
 
+<!-- BEGIN GENERATED removed-sections:2.0: do not edit by hand; edit docs/removed/2.0/stability/ and run make generated-docs -->
+
 ### `@event` → `@event_handler`
 
 `@event` was a deprecated alias for `@event_handler`, with identical behavior.
@@ -717,6 +719,8 @@ class FeedView(LiveView):
         return {"offset": self.offset}
 ```
 
+<!-- END GENERATED removed-sections:2.0 -->
+
 ## Template-Syntax Deprecations
 
 djust has a **second** deprecation track, separate from Python
@@ -794,3 +798,5 @@ release**. They are an explicit exception to the stable 1.x surface while the
 API is evaluated. Existing per-session ticks and push/presence behavior retain
 their stability commitments. Phases 1–3 are process-local; distributed ownership
 is deferred.
+
+<!-- generated-doc prose-sha256: cbd4879d771a -->
