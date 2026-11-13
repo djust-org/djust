@@ -58,6 +58,7 @@ MODES = ("markup", "url")
 TAG_MODULES = (
     "djust.components.templatetags.djust_components",
     "djust.components.templatetags._forms",
+    "djust.components.templatetags._advanced",
     "djust.components.templatetags._charts",
     "djust.components.templatetags._dev_tools",
     "djust.templatetags.djust_pwa",

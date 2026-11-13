@@ -689,6 +689,8 @@ EXPECTED_DECODE_SITES = {
     ("_lazy_containers.py", "mount_http_lazy"),
     # #4107: a view's saved state, read back from the session.
     ("_automatic_state.py", "_read"),
+    # ... and the in-memory copy an over-limit refusal rolls back to.
+    ("_automatic_state.py", "_decoded"),
     # The body of `_restore_private_state`, which enters its `lifecycle` step around it (#3646).
     ("live_view.py", "_apply_private_state"),
     # 2.0 removed the page-POST fallback's session restore and the component

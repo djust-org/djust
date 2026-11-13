@@ -7,9 +7,9 @@ This drives the same markup through the real consumer
 two events that each swap the deep markup, then a plain event that must still
 be answered, so the connection and the render loop survived.
 
-The two sources are the ways deep markup reaches a page in practice: raw
-HTML passed through ``|safe`` and user Markdown (one nested ``<blockquote>`` per
-``>``).
+The three sources are the ways deep markup reaches a page in practice: raw
+HTML passed through ``|safe``, user Markdown (one nested ``<blockquote>`` per
+``>``), and terminal output (one nested ``<span>`` per SGR style).
 """
 
 from __future__ import annotations
@@ -28,9 +28,13 @@ DEPTH = 40_000  # far past any stack, far below any request-size limit
 def _body(kind: str, salt: str) -> str:
     if kind == "spans":
         return "<span>" * DEPTH + f"deep {salt}" + "</span>" * DEPTH
-    from djust import render_markdown
+    if kind == "markdown":
+        from djust import render_markdown
 
-    return render_markdown("> " * DEPTH + f"deep {salt}")
+        return render_markdown("> " * DEPTH + f"deep {salt}")
+    from djust.components.components.terminal import Terminal
+
+    return Terminal(output=["\x1b[" + ";".join(["1"] * DEPTH) + f"mdeep {salt}"]).render()
 
 
 class _DeepView(LiveView):
@@ -102,7 +106,7 @@ async def _render_for(communicator, ref: int) -> None:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["spans", "markdown"])
+@pytest.mark.parametrize("kind", ["spans", "markdown", "terminal"])
 async def test_deep_markup_is_rendered_and_the_connection_stays_up(kind):
     from django.test import override_settings
 

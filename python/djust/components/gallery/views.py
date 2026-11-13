@@ -415,6 +415,8 @@ def _render_head(mode: str, theme_css: str, title: str = "djust-components Galle
         .variant-preview .dj-cookie-consent--top,
         .variant-preview .dj-export-dialog__backdrop,
         .variant-preview .dj-lightbox,
+        .variant-preview .dj-tour__overlay,
+        .variant-preview .dj-tour__popover,
         .variant-preview .palette {{
             position: absolute !important;
         }}

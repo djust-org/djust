@@ -6314,7 +6314,7 @@ class ViewRuntime(RuntimeTurnPort):
             sanitize_for_log(refused.field),
             refused.limit,
         )
-        await self.transport.send_error(str(refused), code="state_too_large", **extra)
+        await self.transport.send_error(refused.user_message, code="state_too_large", **extra)
         # Work ``handle_restore`` queued belongs to the restored state.
         from .mixins.async_work import has_pending_async_work
 

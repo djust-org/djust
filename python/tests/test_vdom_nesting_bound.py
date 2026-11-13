@@ -9,6 +9,10 @@ what the WebSocket mount and every event use) on a thread with the SMALLEST
 stack a walker runs on (2 MiB, tokio's default worker size), in a child
 process, so that a failure inside the native code is an exit code and does not end
 the test run.
+
+Terminal's ANSI conversion nests one span per style, so a short line could
+nest as deep as it was long; those cases render through the same path here, and
+the conversion's own cap is pinned in ``test_terminal_ansi_span_cap.py``.
 """
 
 from __future__ import annotations
@@ -149,6 +153,24 @@ def test_deeply_nested_raw_html_renders_and_diffs(n):
     )
     assert got["depth"] <= MAX
     assert got["patches"] is True
+
+
+def test_a_line_of_ansi_parameters_through_terminal_renders_and_diffs():
+    line = "\x1b[" + ";".join(["1"] * 20_000) + "mhello"
+    got = _render_twice(
+        f"__import__('djust.components.components.terminal', fromlist=['x']).Terminal(output=[{line!r}]).render()",
+        f"__import__('djust.components.components.terminal', fromlist=['x']).Terminal(output=[{line!r} + '!']).render()",
+    )
+    assert got["depth"] <= MAX
+
+
+def test_many_ansi_sequences_through_terminal_render_and_diff():
+    line = "\x1b[1m" * 5_000 + "x"
+    got = _render_twice(
+        f"__import__('djust.components.components.terminal', fromlist=['x']).Terminal(output=[{line!r}]).render()",
+        f"__import__('djust.components.components.terminal', fromlist=['x']).Terminal(output=[{line!r} + '!']).render()",
+    )
+    assert got["depth"] <= MAX
 
 
 def test_nested_markdown_renders_and_diffs():

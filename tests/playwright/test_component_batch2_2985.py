@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Real-browser check of the ImageLightbox and ResizablePanel hooks (#2985, batch 2).
+"""Real-browser check of the ImageLightbox, FileTree, ResizablePanel and AnimatedNumber hooks (#2985, batch 2).
 
-Those two components rendered a ``dj-hook`` that no shipped script answered.
+Those four components rendered a ``dj-hook`` that no shipped script answered.
 Each now has a script under ``djust_components/``. This drives them, as a
 reader would, against a real LiveView over a real WebSocket:
 
 * ImageLightbox: opens with focus inside, arrows and Escape reach the server
   through the component's own controls, Tab stays inside, the new image is
   announced, focus returns to the opener, page scroll is locked while open;
+* FileTree: click and keyboard expand/collapse, tree navigation, Enter on a
+  file selects it on the server, the reader's open folders survive the
+  server's re-render of the selection, and a 10,000-row tree stays responsive;
 * ResizablePanel: mouse drag, arrow keys, clamping, double-click reset,
   disabled, horizontal and vertical;
-* hostile text (alt, caption) stays text;
+* AnimatedNumber: counts, ends on the server's exact text, re-counts from the
+  number on screen when the server changes it, reduced motion skips it;
+* hostile text (names, alt, caption) stays text;
 * a page whose app registered its OWN hook of the same name keeps it.
 
 Self-contained: builds a three-page LiveView project in a temp directory, serves
@@ -38,7 +43,7 @@ from playwright.sync_api import sync_playwright
 
 SCRIPTS = "".join(
     f'<script src="/static/djust_components/{name}.js" defer></script>'
-    for name in ("image-lightbox", "resizable-panel")
+    for name in ("image-lightbox", "file-tree", "resizable-panel", "animated-number")
 )
 
 PROJECT = {
@@ -76,7 +81,10 @@ PROJECT = {
         urlpatterns = [
             path("", views.Demo.as_view()),
             path("custom/", views.Custom.as_view()),
+            path("big/", views.Big.as_view()),
             path("rtl/", views.Rtl.as_view()),
+            path("nocss/", views.NoCss.as_view()),
+            path("dup/", views.Dup.as_view()),
         ]
     """,
     "cmpapp/views.py": (
@@ -92,6 +100,16 @@ PROJECT = {
           <button id="open-lb" dj-click="open_lb">open lightbox</button>
           <p>active: <span id="lb-active">{{ active }}</span> open: <span id="lb-open">{{ lb_open }}</span></p>
           {%% lightbox images=images active=active open=lb_open %%}
+          <section id="tree-box">
+            {%% file_tree nodes=nodes selected=selected event="select_file" %%}
+            <p>selected: <span id="sel">{{ selected }}</span></p>
+          </section>
+          <button id="move-sel" dj-click="move_selection">move selection</button>
+          <button id="insert-folder" dj-click="insert_folder">insert folder</button>
+          <button id="reverse-nodes" dj-click="reverse_nodes">reverse nodes</button>
+          <button id="rename-src" dj-click="rename_src">rename src</button>
+          <button id="swap-first" dj-click="swap_first">swap first two</button>
+          <button id="remove-main" dj-click="remove_main">remove main.py</button>
           <section id="panels">
             <div id="p-h-box" style="width:800px">
               {%% resizable_panel direction="horizontal" min_size="100px" max_size="500px" initial_size="300px" %%}<p>horizontal</p>{%% endresizable_panel %%}
@@ -103,8 +121,18 @@ PROJECT = {
               {%% resizable_panel direction="horizontal" min_size="100px" initial_size="200px" disabled=True %%}<p>disabled</p>{%% endresizable_panel %%}
             </div>
           </section>
-          <p>total: <span id="total">{{ total }}</span></p>
-          <button id="bump" dj-click="bump">bump</button>
+          <section id="num-box">
+            <p>total: {%% animated_number value=total prefix="$" decimals=2 duration=700 %%}</p>
+            <button id="bump" dj-click="bump">bump</button>
+          </section>
+        </div>
+        """
+
+        BIG_BODY = """
+        <div dj-root>
+          <h1>big tree</h1>
+          {%% file_tree nodes=nodes selected=selected event="select_file" %%}
+          <p>selected: <span id="sel">{{ selected }}</span></p>
         </div>
         """
 
@@ -127,11 +155,19 @@ PROJECT = {
                 ]
                 self.active = 0
                 self.lb_open = False
+                self.nodes = [
+                    {"name": "src", "type": "folder", "children": [
+                        {"name": "main.py", "type": "file"},
+                        {"name": "sub", "type": "folder", "expanded": False, "children": [
+                            {"name": "deep.txt", "type": "file"}]},
+                        {"name": "utils.py", "type": "file"},
+                    ]},
+                    {"name": "docs", "type": "folder", "children": [
+                        {"name": HOSTILE, "type": "file"}, {"name": "guide.md", "type": "file"}]},
+                    {"name": "README.md", "type": "file"},
+                ]
+                self.selected = "main.py"
                 self.total = 1234.5
-
-            @event_handler()
-            def bump(self, **kwargs):
-                self.total = 98765.43
 
             @event_handler()
             def open_lb(self, **kwargs):
@@ -149,21 +185,87 @@ PROJECT = {
                     return
                 self.active = max(0, min(value, len(self.images) - 1))
 
+            @event_handler()
+            def select_file(self, name="", **kwargs):
+                self.selected = str(name)
+
+            @event_handler()
+            def move_selection(self, **kwargs):
+                self.selected = "utils.py"
+
+            @event_handler()
+            def insert_folder(self, **kwargs):
+                self.nodes = [
+                    {"name": "aaa", "type": "folder", "children": [{"name": "a.py", "type": "file"}]}
+                ] + self.nodes
+
+            @event_handler()
+            def rename_src(self, **kwargs):
+                self.nodes = [dict(self.nodes[0], name="source")] + self.nodes[1:]
+
+            @event_handler()
+            def swap_first(self, **kwargs):
+                self.nodes = [self.nodes[1], self.nodes[0]] + self.nodes[2:]
+
+            @event_handler()
+            def remove_main(self, **kwargs):
+                src = self.nodes[0]
+                self.nodes = [dict(src, children=[c for c in src["children"] if c["name"] != "main.py"])] + self.nodes[1:]
+
+            @event_handler()
+            def reverse_nodes(self, **kwargs):
+                self.nodes = list(reversed(self.nodes))
+
+            @event_handler()
+            def bump(self, **kwargs):
+                self.total = 98765.43
+
         class Demo(Base):
             template = page(SCRIPTS)
+
+        class NoCss(Base):
+            # No stylesheet at all: the hook has to do the collapsing itself.
+            template = page(SCRIPTS, css=False)
+
+        class Dup(Base):
+            template = page(SCRIPTS)
+
+            def mount(self, request, **kwargs):
+                super().mount(request, **kwargs)
+                self.nodes = [
+                    {"name": "a", "type": "folder", "children": [
+                        {"name": "lib", "type": "folder", "children": [{"name": "x.py", "type": "file"}]},
+                        {"name": "lib", "type": "folder", "children": [{"name": "y.py", "type": "file"}]}]},
+                    {"name": "b", "type": "folder", "children": [
+                        {"name": "lib", "type": "folder", "children": [{"name": "z.py", "type": "file"}]}]},
+                ]
 
         class Rtl(Base):
             template = page(SCRIPTS).replace("<div dj-root>", '<div dj-root dir="rtl">')
 
         class Custom(Base):
-            # The app registered its own hooks: one in window.djust.hooks, one in window.DjustHooks.
+            # The app registered its own hooks: two in window.djust.hooks, two in window.DjustHooks.
             template = page(
                 "<script>window.djust = window.djust || {}; window.djust.hooks = {"
+                "FileTree: {mounted() { (window.__appHooks = window.__appHooks || []).push('tree'); }},"
                 "ResizablePanel: {mounted() { (window.__appHooks = window.__appHooks || []).push('panel'); }}};"
                 "window.DjustHooks = {"
-                "ImageLightbox: {mounted() { (window.__appHooks = window.__appHooks || []).push('lightbox'); }}};"
+                "ImageLightbox: {mounted() { (window.__appHooks = window.__appHooks || []).push('lightbox'); }},"
+                "AnimatedNumber: {mounted() { (window.__appHooks = window.__appHooks || []).push('number'); }}};"
                 "</script>" + SCRIPTS
             )
+
+        class Big(Base):
+            template = page(SCRIPTS, BIG_BODY)
+
+            def mount(self, request, **kwargs):
+                super().mount(request, **kwargs)
+                self.nodes = [
+                    {"name": f"dir{d:03d}", "type": "folder", "children": [
+                        {"name": f"file{d:03d}_{i:03d}.txt", "type": "file"} for i in range(100)]}
+                    for d in range(100)
+                ]
+                self.selected = "file000_000.txt"
         '''
         % SCRIPTS
     ),
@@ -300,7 +402,7 @@ def main() -> int:
                 load("/")
                 check(
                     not [t for k, t in console if "No hook registered" in t],
-                    "no 'No hook registered' warning with both scripts",
+                    "no 'No hook registered' warning with all four scripts",
                 )
                 page.focus("#open-lb")
                 page.click("#open-lb")
@@ -400,6 +502,236 @@ def main() -> int:
                 )
                 page.keyboard.press("Escape")
                 wait_text("#lb-open", "False", "lightbox: closes again")
+
+                # ======================= FileTree =======================
+                tree = ".dj-file-tree"
+
+                def row(name):
+                    return f'{tree} .dj-file-tree__node[data-name="{name}"]'
+
+                def hidden_children(name):
+                    return page.evaluate(
+                        "s => getComputedStyle(document.querySelector(s).nextElementSibling).display === 'none'",
+                        row(name),
+                    )
+
+                check(
+                    page.evaluate(
+                        "() => document.querySelectorAll('.dj-file-tree [tabindex=\"0\"]').length"
+                    )
+                    == 1,
+                    "tree: exactly one tab stop",
+                )
+                check(
+                    page.get_attribute(row("main.py"), "tabindex") == "0",
+                    "tree: the tab stop is the selected row",
+                )
+                check(
+                    hidden_children("sub"), "tree: a folder the server collapsed starts collapsed"
+                )
+                page.click(f"{row('sub')} .dj-file-tree__name")
+                check(not hidden_children("sub"), "tree: clicking a folder row expands it")
+                check(
+                    page.get_attribute(row("sub"), "aria-expanded") == "true",
+                    "tree: aria-expanded follows",
+                )
+                page.click(f"{row('sub')} .dj-file-tree__toggle")
+                check(hidden_children("sub"), "tree: clicking the arrow collapses it")
+                page.focus(row("main.py"))
+                page.keyboard.press("ArrowDown")
+                check(active().endswith("[sub]"), "tree: ArrowDown moves to the next visible row")
+                page.keyboard.press("ArrowRight")
+                check(not hidden_children("sub"), "tree: ArrowRight expands a collapsed folder")
+                page.keyboard.press("ArrowRight")
+                check(active().endswith("[deep.txt]"), "tree: ArrowRight again steps into it")
+                page.keyboard.press("ArrowLeft")
+                check(active().endswith("[sub]"), "tree: ArrowLeft steps out to the parent")
+                page.keyboard.press("ArrowLeft")
+                check(hidden_children("sub"), "tree: ArrowLeft collapses an open folder")
+                page.keyboard.press("End")
+                check(active().endswith("[README.md]"), "tree: End goes to the last visible row")
+                page.keyboard.press("Home")
+                check(active().endswith("[src]"), "tree: Home goes to the first row")
+                page.focus(row("utils.py"))
+                page.keyboard.press("Enter")
+                wait_text(
+                    "#sel",
+                    "utils.py",
+                    "tree: Enter on a file fires the row's own event (server selects it)",
+                )
+                # The reader opens a folder; a server-side selection change must not close it
+                page.click(f"{row('sub')} .dj-file-tree__name")
+                check(not hidden_children("sub"), "tree: the reader opened sub")
+                page.evaluate("() => document.getElementById('move-sel').click()")
+                page.wait_for_timeout(500)
+                page.keyboard.press("Escape")
+                check(
+                    not hidden_children("sub"),
+                    "tree: a server re-render of the selection leaves the reader's open folder open",
+                )
+                check(
+                    page.get_attribute(row("utils.py"), "aria-selected") == "true"
+                    and page.get_attribute(row("main.py"), "aria-selected") == "false",
+                    "tree: aria-selected follows the server's selection",
+                )
+                page.focus(row("src"))
+                page.keyboard.press("d")
+                check(
+                    active().endswith("[deep.txt]"),
+                    f"tree: typing a letter jumps to the next row starting with it ({active()})",
+                )
+                page.wait_for_timeout(800)
+                page.keyboard.press("d")
+                check(
+                    active().endswith("[docs]"),
+                    f"tree: the same letter again moves on ({active()})",
+                )
+                check(
+                    page.evaluate(
+                        "() => window.__pwn === undefined && !document.querySelector('.dj-file-tree img')"
+                    ),
+                    "tree: a hostile file name stays text",
+                )
+                page.screenshot(
+                    path=str(shots / "02-tree.png"),
+                    clip={"x": 0, "y": 0, "width": 1000, "height": 700},
+                )
+
+                # ---- the server re-renders and rows shift (positional diff) ----
+                load("/")
+                page.click(f"{row('src')} .dj-file-tree__toggle")
+                check(hidden_children("src"), "tree re-render: the reader collapses src")
+                page.evaluate("() => document.getElementById('insert-folder').click()")
+                page.wait_for_selector(row("aaa"), timeout=6000)
+                page.wait_for_timeout(300)
+                check(
+                    not hidden_children("aaa")
+                    and hidden_children("src")
+                    and not hidden_children("docs"),
+                    "tree re-render: a folder inserted above does not move the reader's collapse (aaa open, src still closed, docs open)",
+                )
+                check(
+                    page.get_attribute(row("src"), "aria-expanded") == "false"
+                    and page.get_attribute(row("docs"), "aria-expanded") == "true",
+                    "tree re-render: aria-expanded follows the right folders",
+                )
+                page.focus(row("README.md"))
+                page.evaluate("() => document.getElementById('reverse-nodes').click()")
+                page.wait_for_timeout(600)
+                check(
+                    active().endswith("[README.md]"),
+                    f"tree re-render: keyboard focus stays on README.md when the server reverses the rows ({active()})",
+                )
+                check(
+                    page.evaluate(
+                        "() => document.querySelectorAll('.dj-file-tree__node[tabindex=\"0\"]').length"
+                    )
+                    == 1,
+                    "tree re-render: still exactly one tab stop",
+                )
+                check(
+                    hidden_children("src"),
+                    "tree re-render: and src is still collapsed after the reverse",
+                )
+
+                # ---- more server re-renders: rename, swap, remove the focused row / its parent ----
+                load("/")
+                page.click(f"{row('src')} .dj-file-tree__toggle")
+                page.evaluate("() => document.getElementById('rename-src').click()")
+                page.wait_for_selector(row("source"), timeout=6000)
+                page.wait_for_timeout(300)
+                check(
+                    not hidden_children("source")
+                    and page.get_attribute(row("source"), "aria-expanded") == "true",
+                    "tree re-render: a folder renamed in place takes the server's state (open), not the old slot's collapse",
+                )
+                load("/")
+                page.click(f"{row('src')} .dj-file-tree__toggle")
+                page.evaluate("() => document.getElementById('swap-first').click()")
+                page.wait_for_timeout(600)
+                names = page.eval_on_selector_all(
+                    ".dj-file-tree > .dj-file-tree__node--folder",
+                    "els => els.map(e => e.getAttribute('data-name'))",
+                )
+                check(
+                    names[:2] == ["docs", "src"]
+                    and hidden_children("src")
+                    and not hidden_children("docs"),
+                    f"tree re-render: two folders swapped in place keep their own state ({names[:2]}, src closed, docs open)",
+                )
+                load("/")
+                page.focus(row("main.py"))
+                page.evaluate("() => document.getElementById('remove-main').click()")
+                page.wait_for_timeout(600)
+                check(
+                    page.evaluate(
+                        "() => !!document.activeElement.closest('.dj-file-tree') && document.activeElement.classList.contains('dj-file-tree__node')"
+                    ),
+                    f"tree re-render: removing the focused row leaves focus on a row of the tree ({active()})",
+                )
+                check(
+                    page.evaluate(
+                        "() => document.querySelectorAll('.dj-file-tree__node[tabindex=\"0\"]').length"
+                    )
+                    == 1,
+                    "tree re-render: and one tab stop",
+                )
+
+                # ---- the same name under different parents and twice under one parent ----
+                load("/dup/")
+                libs = ".dj-file-tree__node[data-name=lib]"
+                hidden_libs = (
+                    "() => [...document.querySelectorAll('.dj-file-tree__node[data-name=lib]')]"
+                    ".map(l => getComputedStyle(l.nextElementSibling).display === 'none')"
+                )
+                page.locator(libs).nth(1).locator(".dj-file-tree__toggle").click()
+                check(
+                    page.evaluate(hidden_libs) == [False, True, False],
+                    "tree duplicates: collapsing the second lib under a leaves the first and b/lib open",
+                )
+                page.evaluate("() => document.getElementById('insert-folder').click()")
+                page.wait_for_selector(row("aaa"), timeout=6000)
+                page.wait_for_timeout(300)
+                check(
+                    page.evaluate(hidden_libs) == [False, True, False],
+                    "tree duplicates: and each keeps its own state after a folder is inserted above",
+                )
+
+                # ---- no stylesheet at all: the hook collapses and expands by itself ----
+                load("/nocss/")
+                check(
+                    page.evaluate(
+                        "() => ![...document.querySelectorAll('link[rel=stylesheet]')].some((l) => l.href.includes('components.css'))"
+                    ),
+                    "no stylesheet: components.css is not loaded on this page",
+                )
+                page.click(f"{row('docs')} .dj-file-tree__toggle")
+                check(
+                    hidden_children("docs"),
+                    "no stylesheet: collapsing an open folder hides its children",
+                )
+                page.click(f"{row('sub')} .dj-file-tree__name")
+                check(
+                    not hidden_children("sub"),
+                    "no stylesheet: opening a server-collapsed folder shows its children",
+                )
+                check(
+                    page.get_attribute(row("sub"), "aria-expanded") == "true"
+                    and page.evaluate(
+                        "s => document.querySelector(s).nextElementSibling.getBoundingClientRect().height > 0",
+                        row("sub"),
+                    ),
+                    "no stylesheet: aria and layout agree",
+                )
+                page.evaluate("() => document.getElementById('insert-folder').click()")
+                page.wait_for_selector(row("aaa"), timeout=6000)
+                page.wait_for_timeout(300)
+                check(
+                    hidden_children("docs")
+                    and not hidden_children("sub")
+                    and not hidden_children("aaa"),
+                    "no stylesheet: and a re-render that inserts a folder above leaves each state in place",
+                )
 
                 # ======================= ResizablePanel =======================
                 load("/")
@@ -561,13 +893,132 @@ def main() -> int:
                 page.keyboard.press("ArrowRight")
                 check(abs(width(prt) - (before - 10)) < 2, "rtl panel: ArrowRight shrinks it")
 
+                # ======================= AnimatedNumber =======================
+                load("/")
+                value = "#num-box .dj-animated-number__value"
+                samples = []
+                for _ in range(12):
+                    samples.append(text(value))
+                    page.wait_for_timeout(70)
+                check(
+                    "1,234.50" == samples[-1],
+                    f"number: ends on the server's exact text ({samples[-1]!r})",
+                )
+                check(
+                    any(s not in ("1,234.50",) for s in samples[:6]),
+                    f"number: counts through intermediate values ({samples[:6]})",
+                )
+                page.wait_for_timeout(300)
+                page.evaluate("() => document.getElementById('bump').click()")
+                mids = []
+                for _ in range(14):
+                    mids.append(text(value))
+                    page.wait_for_timeout(60)
+                check(
+                    mids[-1] == "98,765.43",
+                    f"number: a server change counts to the new exact text ({mids[-1]!r})",
+                )
+                moving = [m for m in mids if m not in ("1,234.50", "98,765.43")]
+                check(
+                    bool(moving)
+                    and all(1234.5 <= float(m.replace(",", "")) <= 98765.43 for m in moving),
+                    f"number: re-counts from the number on screen to the new one ({moving[:4]})",
+                )
+                check(
+                    page.text_content("#num-box .dj-animated-number__prefix") == "$",
+                    "number: the prefix is untouched",
+                )
+                reduced = browser.new_context(
+                    reduced_motion="reduce", viewport={"width": 1000, "height": 1500}
+                )
+                rpage = reduced.new_page()
+                load("/", rpage)
+                rpage.wait_for_timeout(100)
+                check(
+                    (rpage.text_content(value) or "").strip() == "1,234.50",
+                    "number: prefers-reduced-motion shows the final value at once",
+                )
+                reduced.close()
+                page.screenshot(
+                    path=str(shots / "04-number.png"),
+                    clip={"x": 0, "y": 1300, "width": 1000, "height": 200},
+                )
+
+                # ======================= large tree =======================
+                load("/big/")
+                rows = page.evaluate(
+                    "() => document.querySelectorAll('.dj-file-tree__node').length"
+                )
+                check(rows == 100 + 10000, f"big tree: {rows} rows rendered")
+                stops = page.evaluate(
+                    "() => document.querySelectorAll('.dj-file-tree__node[tabindex=\"0\"]').length"
+                )
+                check(stops == 1, f"big tree: exactly one tab stop across 10,100 rows ({stops})")
+                timings = page.evaluate(
+                    """() => {
+                        const tree = document.querySelector('.dj-file-tree');
+                        const hook = window.djust.getHook(tree);
+                        const tIdle = performance.now();
+                        hook._sync();
+                        const idle = performance.now() - tIdle;
+                        // worst case: a morph reset every row to the server's markup
+                        tree.querySelectorAll('.dj-file-tree__node').forEach((n) => {
+                            n.setAttribute('tabindex', '0');
+                            n.removeAttribute('aria-level');
+                            n.removeAttribute('aria-selected');
+                        });
+                        const t0 = performance.now();
+                        hook._sync();
+                        const sync = performance.now() - t0;
+                        const first = tree.querySelector('.dj-file-tree__node');
+                        first.focus();
+                        const key = (k) => document.activeElement.dispatchEvent(
+                            new KeyboardEvent('keydown', {key: k, bubbles: true, cancelable: true}));
+                        const t1 = performance.now();
+                        for (let i = 0; i < 20; i++) key('ArrowDown');
+                        const nav = (performance.now() - t1) / 20;
+                        const t2 = performance.now();
+                        key('End');
+                        const end = performance.now() - t2;
+                        const folder = tree.querySelectorAll('.dj-file-tree__node--folder')[50];
+                        const t3 = performance.now();
+                        folder.click();
+                        const expand = performance.now() - t3;
+                        return {idle, sync, nav, end, expand, focused: document.activeElement.getAttribute('data-name')};
+                    }"""
+                )
+                check(
+                    timings["sync"] < 400,
+                    f"big tree: re-applying every attribute on 10,100 rows takes {timings['sync']:.0f} ms (< 400)",
+                )
+                check(
+                    timings["idle"] < 100,
+                    f"big tree: a sync with nothing to change takes {timings['idle']:.0f} ms (< 100)",
+                )
+                check(
+                    timings["nav"] < 40,
+                    f"big tree: ArrowDown takes {timings['nav']:.1f} ms per press (< 40)",
+                )
+                check(timings["end"] < 120, f"big tree: End takes {timings['end']:.0f} ms (< 120)")
+                check(
+                    timings["expand"] < 120,
+                    f"big tree: expanding a 100-row folder takes {timings['expand']:.0f} ms (< 120)",
+                )
+                page.locator(".dj-file-tree__node[data-name='file000_001.txt']").focus()
+                page.keyboard.press("Enter")
+                wait_text(
+                    "#sel",
+                    "file000_001.txt",
+                    "big tree: Enter on a file in a 10,000-row tree selects it",
+                )
+
                 # ======================= app hooks win =======================
                 console.clear()
                 load("/custom/")
                 ran = page.evaluate("() => window.__appHooks || []")
                 check(
-                    sorted(set(ran)) == ["panel"],
-                    f"custom: the app's own ResizablePanel hook (djust.hooks) ran ({ran})",
+                    sorted(set(ran)) == ["number", "panel", "tree"],
+                    f"custom: the app's own FileTree, ResizablePanel (djust.hooks) and AnimatedNumber (DjustHooks) hooks ran ({ran})",
                 )
                 page.click("#open-lb")
                 page.wait_for_selector(".dj-lightbox", timeout=6000)
@@ -583,10 +1034,16 @@ def main() -> int:
                 )
                 check(
                     page.eval_on_selector(
+                        ".dj-file-tree .dj-file-tree__node", "e => e.hasAttribute('aria-level')"
+                    )
+                    is False
+                    and page.eval_on_selector(
                         ".dj-resizable-panel__handle", "e => e.hasAttribute('aria-valuenow')"
                     )
-                    is False,
-                    "custom: the shipped hook left that element alone (no aria)",
+                    is False
+                    and page.eval_on_selector(".dj-animated-number__value", "e => e.textContent")
+                    == "1,234.50",
+                    "custom: the shipped hooks left those elements alone (no aria, no counting)",
                 )
                 check(
                     not [t for k, t in console if "No hook registered" in t],

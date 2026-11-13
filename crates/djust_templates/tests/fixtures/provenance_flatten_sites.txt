@@ -633,6 +633,7 @@ Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
 .flatten()
 self.dj_if_id_namespace = namespace.to_string();
 let prefix = format!("{key}.");
+let key = (self.template_source.to_string(), self.template_dirs.clone());
 Ok(dict.into())
 page.rendered.html,
 let html = page.rendered.html.clone();
@@ -655,6 +656,7 @@ Some(PyBytes::new(py, &bytes).into())
 None => "body".to_string(),
 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 self.last_html = Some(full_html.clone());
+template_source: self.template_source.to_string(),
 PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
 Ok(PyBytes::new(py, &bytes).into())
 PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -843,6 +845,7 @@ view.set_state("n".to_string(), Value::Integer(1));
 v.set_state("k".to_string(), Value::Integer(9))
 v.update_state_rust(HashMap::from([("k".to_string(), Value::Integer(9))]))
 v.set_component_html("k".to_string(), "<i>k</i>".to_string())
+template_source: view.template_source.to_string(),
 let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
 "rows".to_string(),
 Value::List((0..n).map(|i| Value::String(format!("row {i}"))).collect()),

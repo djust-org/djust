@@ -1,4 +1,4 @@
-"""Switches for the per-turn shortcuts (#3996, #3997, #3999).
+"""Switches for the per-turn shortcuts (#3996, #3997, #3999) and per-view memory (#3998).
 
 Each name below is one place where a turn reuses a value it already has, or
 skips work whose result is already known. Every one is on. The switch exists
@@ -29,7 +29,20 @@ setting, and there is no supported way to do it.
                             session when its encoding equals what the store
                             already holds (or, with nothing stored, what
                             ``mount()`` produced).
+``compact_fingerprints``    A structural fingerprint keeps a ``str`` / ``int``
+                            / ``bytes`` / ``None`` leaf as the value itself and
+                            a dict's items as one flat tuple, in place of a
+                            tuple per leaf and per item (#3998). Off: the wide
+                            encoding ``main`` had.
+``shared_fingerprints``     A context value's fingerprint that equals the one
+                            the dirty baseline holds for the same attribute is
+                            stored as that same object, and an unchanged key
+                            keeps the object it had, so a socket holds one
+                            tree where it held two (#3998).
 ==========================  ==================================================
+
+The last two change what a socket holds between turns, not what a turn does;
+they are here because the same oracle proves them (no frame may differ).
 """
 
 from __future__ import annotations
@@ -44,6 +57,8 @@ ALL: FrozenSet[str] = frozenset(
         "serializable_by_type",
         "plain_sub_ids",
         "unchanged_save_skip",
+        "compact_fingerprints",
+        "shared_fingerprints",
     }
 )
 

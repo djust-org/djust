@@ -202,7 +202,7 @@ window.DjustHooks.Chart = {
 >
 > For one name, `window.djust.hooks` wins over `window.DjustHooks`. The hook
 > scripts djust ships for components (`SortableList`, `SortableGrid`,
-> `JsonViewer`, `ImageLightbox`, `ResizablePanel`) register in `window.DjustHooks` and only when
+> `JsonViewer`, `LogViewer`) register in `window.DjustHooks` and only when
 > neither registry already has that name, so a hook of your own in either
 > registry replaces the shipped one. Add yours with `Object.assign` rather than
 > assigning a new `window.DjustHooks` object, which would discard the shipped hooks.

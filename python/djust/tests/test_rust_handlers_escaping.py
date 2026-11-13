@@ -83,6 +83,20 @@ HREF_CASES: list[tuple[str, Any, bool, list[str], Callable[[object], dict[str, o
         lambda v: {"u": v},
     ),
     (
+        "error_page",
+        _kept("ErrorPageHandler"),
+        False,
+        ["code=404", "action_url=u"],
+        lambda v: {"u": v},
+    ),
+    (
+        "breadcrumb_dropdown",
+        _kept("BreadcrumbDropdownHandler"),
+        False,
+        ["items=items"],
+        lambda v: {"items": [{"label": "Home", "url": v}, {"label": "Here"}]},
+    ),
+    (
         "breadcrumb_dropdown_collapsed",
         _kept("BreadcrumbDropdownHandler"),
         False,
@@ -143,6 +157,41 @@ IMG_CASES: list[tuple[str, Any, bool, list[str], Callable[[object], dict[str, ob
         False,
         ["images=imgs", "open=True"],
         lambda v: {"imgs": [{"src": v, "alt": "A"}]},
+    ),
+    (
+        "org_chart",
+        _kept("OrgChartHandler"),
+        False,
+        ["nodes=nodes"],
+        lambda v: {"nodes": [{"id": "1", "name": "Ann", "avatar": v}]},
+    ),
+    (
+        "live_indicator",
+        _kept("LiveIndicatorHandler"),
+        False,
+        ["user=u"],
+        lambda v: {"u": {"name": "Ann", "avatar": v}},
+    ),
+    (
+        "activity_feed",
+        _kept("ActivityFeedHandler"),
+        False,
+        ["events=ev"],
+        lambda v: {"ev": [{"user": "Ann", "action": "did", "avatar": v}]},
+    ),
+    (
+        "image_upload_preview",
+        _kept("ImageUploadPreviewHandler"),
+        False,
+        ["previews=p"],
+        lambda v: {"p": [v]},
+    ),
+    (
+        "data_card_grid",
+        _kept("DataCardGridHandler"),
+        False,
+        ["items=items"],
+        lambda v: {"items": [{"title": "T", "image": v}]},
     ),
 ]
 

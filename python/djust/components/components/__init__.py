@@ -70,6 +70,10 @@ from .scroll_to_top import ScrollToTop
 from .server_event_toast import ServerEventToastMixin
 from .dependent_select import DependentSelect
 from .currency_input import CurrencyInput
+from .conversation_thread import ConversationThread
+from .thinking_indicator import ThinkingIndicator
+from .multimodal_input import MultimodalInput
+from .feedback_widget import FeedbackWidget
 from .form_validation import FormErrors, FieldError
 from .approval_gate import ApprovalGate
 from .source_citation import SourceCitation
@@ -94,7 +98,6 @@ from .scroll_spy import ScrollSpy
 from .page_alert import PageAlert
 from .dropdown_menu import DropdownMenu
 from .meter import Meter
-from .json_viewer import JsonViewer
 from .export_dialog import ExportDialog
 from .import_wizard import ImportWizard
 from .audit_log import AuditLog
@@ -113,6 +116,36 @@ from .sparkline import Sparkline
 from .heatmap import Heatmap
 from .treemap import Treemap
 from .calendar_heatmap import CalendarHeatmap
+from .terminal import Terminal
+from .markdown_editor import MarkdownEditor
+from .json_viewer import JsonViewer
+from .log_viewer import LogViewer
+from .file_tree import FileTree
+from .tour import Tour
+from .calendar_view import CalendarView
+from .gantt_chart import GanttChart
+from .diff_viewer import DiffViewer
+from .pivot_table import PivotTable
+from .org_chart import OrgChart
+from .comparison_table import ComparisonTable
+from .masonry_grid import MasonryGrid
+from .cursors_overlay import CursorsOverlay
+from .live_indicator import LiveIndicator
+from .collab_selection import CollabSelection
+from .activity_feed import ActivityFeed
+from .reactions import Reactions
+from .map_picker import MapPicker
+from .prompt_editor import PromptEditor
+from .voice_input import VoiceInput
+from .cron_input import CronInput
+from .error_page import ErrorPage
+from .image_upload_preview import ImageUploadPreview
+from .animated_number import AnimatedNumber
+from .ribbon import Ribbon
+from .breadcrumb_dropdown import BreadcrumbDropdown
+from .data_card_grid import DataCardGrid
+from .agent_step import AgentStep
+from .qr_code import QRCode
 from .accordion import Accordion
 from .announcement_bar import AnnouncementBar
 from .app_shell import AppShell
@@ -210,6 +243,10 @@ __all__ = [
     "FormErrors",
     "HoverCard",
     "NotificationPopover",
+    "ConversationThread",
+    "ThinkingIndicator",
+    "MultimodalInput",
+    "FeedbackWidget",
     "ApprovalGate",
     "SourceCitation",
     "ModelSelector",
@@ -233,7 +270,6 @@ __all__ = [
     "PageAlert",
     "DropdownMenu",
     "Meter",
-    "JsonViewer",
     "ExportDialog",
     "ImportWizard",
     "AuditLog",
@@ -252,6 +288,36 @@ __all__ = [
     "Heatmap",
     "Treemap",
     "CalendarHeatmap",
+    "Terminal",
+    "MarkdownEditor",
+    "JsonViewer",
+    "LogViewer",
+    "FileTree",
+    "Tour",
+    "CalendarView",
+    "GanttChart",
+    "DiffViewer",
+    "PivotTable",
+    "OrgChart",
+    "ComparisonTable",
+    "MasonryGrid",
+    "CursorsOverlay",
+    "LiveIndicator",
+    "CollabSelection",
+    "ActivityFeed",
+    "Reactions",
+    "MapPicker",
+    "PromptEditor",
+    "VoiceInput",
+    "CronInput",
+    "ErrorPage",
+    "ImageUploadPreview",
+    "AnimatedNumber",
+    "Ribbon",
+    "BreadcrumbDropdown",
+    "DataCardGrid",
+    "AgentStep",
+    "QRCode",
     "Accordion",
     "AnnouncementBar",
     "AppShell",
@@ -314,11 +380,3 @@ __all__ = [
     "TreeView",
     "VirtualList",
 ]
-
-
-def __getattr__(name: str) -> object:
-    """Name the replacement of a component class 2.0 removed (#4002)."""
-    from djust._removed_settings import refuse_removed_name
-
-    refuse_removed_name(__name__, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

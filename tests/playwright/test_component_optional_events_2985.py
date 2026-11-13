@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-"""Real-browser check of ResizablePanel ``resize_event`` (#2985).
+"""Real-browser check of ResizablePanel ``resize_event`` and FileTree
+``toggle_event`` (#2985).
 
-It is optional: with the kwarg the component also sends what the reader did
+Both are optional: with the kwarg the component also sends what the reader did
 to the server, which can remember it and render it back; without it nothing is
-sent. This drives it, as a reader would, against a real LiveView over a real
+sent. This drives them, as a reader would, against a real LiveView over a real
 WebSocket:
 
 * ResizablePanel: a drag sends ``{size}`` once, when it ends, and the server's
   clamped value is what the panel shows; arrow keys and Home/End send once per
   key; a panel without the kwarg sends nothing; a server re-render sends
-  nothing; forged sizes are clamped or ignored by the documented handler.
+  nothing; forged sizes are clamped or ignored by the documented handler;
+* FileTree: expanding and collapsing a folder by click and by keyboard sends
+  ``{path, expanded}`` once per change (a nested folder has its parents in the
+  path), moving focus and selecting a file send no toggle, a server re-render
+  with the stored state agrees with the page and sends nothing, a tree without
+  the kwarg sends nothing, forged paths are ignored by the documented handler,
+  a hostile folder name arrives as text.
 
 Self-contained: builds a LiveView project in a temp directory, serves it with
 uvicorn and drives it with headless Chromium::
@@ -35,7 +42,7 @@ from playwright.sync_api import sync_playwright
 
 SCRIPTS = "".join(
     f'<script src="/static/djust_components/{name}.js" defer></script>'
-    for name in ("resizable-panel",)
+    for name in ("resizable-panel", "file-tree")
 )
 
 PROJECT = {
@@ -79,6 +86,38 @@ PROJECT = {
 
         SCRIPTS = '%s'
 
+        HOSTILE = "<img src=x onerror=window.__pwn=1>"
+
+        TREE = [
+            {"name": "src", "type": "folder", "children": [
+                {"name": "utils", "type": "folder", "children": [{"name": "deep.py", "type": "file"}]},
+                {"name": "main.py", "type": "file"},
+            ]},
+            {"name": "docs", "type": "folder", "children": [{"name": "guide.md", "type": "file"}]},
+            {"name": HOSTILE, "type": "folder", "children": [{"name": "x.txt", "type": "file"}]},
+            {"name": "README.md", "type": "file"},
+        ]
+
+        def folder_paths(nodes, prefix=()):
+            out = []
+            for n in nodes:
+                if n.get("type") == "folder":
+                    p = prefix + (n["name"],)
+                    out.append(p)
+                    out += folder_paths(n.get("children", []), p)
+            return out
+
+        def with_open(nodes, open_paths, prefix=()):
+            out = []
+            for n in nodes:
+                n = dict(n)
+                if n.get("type") == "folder":
+                    p = prefix + (n["name"],)
+                    n["expanded"] = p in open_paths
+                    n["children"] = with_open(n.get("children", []), open_paths, p)
+                out.append(n)
+            return out
+
         BODY = """
         <div dj-root>
           <h1>optional events</h1>
@@ -88,7 +127,11 @@ PROJECT = {
             <div id="rp-a">{%% resizable_panel direction="horizontal" min_size="120px" max_size="600px" initial_size=initial resize_event="panel_resized" %%}<p>with event</p>{%% endresizable_panel %%}</div>
             <div id="rp-b">{%% resizable_panel direction="horizontal" min_size="120px" max_size="600px" initial_size="300px" %%}<p>no event</p>{%% endresizable_panel %%}</div>
           </div>
+          <p>open: <span id="ft-open">{{ open_text }}</span> events: <span id="ft-n">{{ ft_n }}</span>
+             rejected: <span id="ft-rejected">{{ ft_rejected }}</span></p>
           <button id="redraw" dj-click="redraw">redraw</button>
+          <div id="ft-a">{%% file_tree nodes=nodes selected="" event="select_file" toggle_event="folder_toggled" %%}</div>
+          <div id="ft-b">{%% file_tree nodes=plain selected="" event="select_file" %%}</div>
         </div>
         """
 
@@ -104,10 +147,17 @@ PROJECT = {
                 self.size = 300
                 self.rp_n = 0
                 self.rp_rejected = 0
+                self.known = set(folder_paths(TREE))
+                self.open_paths = {("src",)}
+                self.ft_n = 0
+                self.ft_rejected = 0
                 self._derive()
 
             def _derive(self):
                 self.initial = "%%dpx" %% self.size
+                self.nodes = with_open(TREE, self.open_paths)
+                self.plain = with_open(TREE, {("src",)})
+                self.open_text = ";".join(sorted("/".join(p) for p in self.open_paths))
 
             @event_handler()
             def panel_resized(self, size=0, **kwargs):
@@ -123,9 +173,25 @@ PROJECT = {
                 self._derive()
 
             @event_handler()
+            def folder_toggled(self, path=None, expanded=None, **kwargs):
+                self.ft_n += 1
+                if not isinstance(path, list) or tuple(path) not in self.known or not isinstance(expanded, bool):
+                    self.ft_rejected += 1
+                    return
+                if expanded:
+                    self.open_paths = self.open_paths | {tuple(path)}
+                else:
+                    self.open_paths = self.open_paths - {tuple(path)}
+                self._derive()
+
+            @event_handler()
             def redraw(self, **kwargs):
                 self._derive()
                 self.initial = "%%dpx" %% self.size
+
+            @event_handler()
+            def select_file(self, **kwargs):
+                pass
         '''
         % SCRIPTS
     ),
@@ -344,6 +410,103 @@ def main() -> int:
                     f"panel: forged sizes are clamped or rejected by the handler ({text('#rp-size')}, rejected {text('#rp-rejected')})",
                 )
 
+                # ===================== FileTree =====================
+                tree = "#ft-a .dj-file-tree"
+                row = lambda name: f'{tree} .dj-file-tree__node[data-name="{name}"]'  # noqa: E731
+                check(
+                    page.get_attribute(tree, "data-toggle-event") == "folder_toggled"
+                    and page.get_attribute("#ft-b .dj-file-tree", "data-toggle-event") is None,
+                    "tree: the attribute is on the tree that asked for the event only",
+                )
+                check(
+                    text("#ft-open") == "src",
+                    f"tree: the server starts with src open ({text('#ft-open')!r})",
+                )
+                page.click(row("docs"))
+                wait_text(
+                    "#ft-open",
+                    "docs;src",
+                    "tree: opening a folder sends {path, expanded: true} and the server remembers it",
+                )
+                check(text("#ft-n") == "1", "tree: one event for one click")
+                page.click(row("src"))
+                wait_text("#ft-open", "docs", "tree: closing sends expanded: false")
+                page.click(row("src"))
+                wait_text("#ft-open", "docs;src", "tree: and opening it again")
+                page.click(row("utils"))
+                wait_text(
+                    "#ft-open",
+                    "docs;src;src/utils",
+                    "tree: a nested folder has its parents in the path",
+                )
+                check(
+                    page.evaluate(
+                        f"() => getComputedStyle(document.querySelector('{tree} .dj-file-tree__children .dj-file-tree__children')).display"
+                    )
+                    != "none",
+                    "tree: the page and the server's re-render agree (the nested folder is open)",
+                )
+                n = text("#ft-n")
+                page.click(row("main.py"))
+                page.wait_for_timeout(300)
+                check(text("#ft-n") == n, "tree: selecting a file sends no toggle")
+                page.focus(row("docs"))
+                page.keyboard.press("ArrowRight")  # already open: steps into it
+                page.keyboard.press("ArrowDown")
+                page.keyboard.press("ArrowUp")
+                page.wait_for_timeout(300)
+                check(text("#ft-n") == n, "tree: moving focus sends no toggle")
+                page.focus(row("docs"))
+                page.keyboard.press("ArrowLeft")
+                wait_text("#ft-open", "src;src/utils", "tree: ArrowLeft closes and sends it")
+                page.keyboard.press("ArrowRight")
+                wait_text("#ft-open", "docs;src;src/utils", "tree: ArrowRight opens and sends it")
+                page.keyboard.press("Enter")
+                wait_text("#ft-open", "src;src/utils", "tree: Enter toggles and sends it")
+                page.keyboard.press("Space")
+                wait_text("#ft-open", "docs;src;src/utils", "tree: Space toggles and sends it")
+
+                n = text("#ft-n")
+                page.click("#redraw")
+                page.wait_for_timeout(400)
+                check(text("#ft-n") == n, "tree: a server re-render sends nothing")
+                # the hostile folder name arrives as text
+                page.click(row("<img src=x onerror=window.__pwn=1>"))
+                wait_text(
+                    "#ft-open",
+                    "<img src=x onerror=window.__pwn=1>;docs;src;src/utils",
+                    "tree: a hostile folder name is remembered as the text it is",
+                )
+                check(
+                    page.evaluate(
+                        "() => window.__pwn === undefined && document.querySelectorAll('#ft-open img').length === 0"
+                    ),
+                    "tree: and runs nothing",
+                )
+                # a tree without the event sends nothing
+                n = text("#ft-n")
+                page.click('#ft-b .dj-file-tree__node[data-name="docs"]')
+                page.click('#ft-b .dj-file-tree__node[data-name="src"]')
+                page.wait_for_timeout(400)
+                check(text("#ft-n") == n, "tree: one without toggle_event sends nothing")
+                # forged paths against the documented handler
+                rejected = int(text("#ft-rejected"))
+                for params in (
+                    {"path": ["nope"], "expanded": True},
+                    {"path": "src", "expanded": True},
+                    {"path": ["src"], "expanded": "yes"},
+                    {"path": ["src", "main.py"], "expanded": True},
+                ):
+                    page.evaluate("p => window.djust.handleEvent('folder_toggled', p)", params)
+                page.wait_for_function(
+                    "n => parseInt(document.querySelector('#ft-rejected').textContent) >= n + 4",
+                    arg=rejected,
+                    timeout=6000,
+                )
+                check(
+                    "nope" not in text("#ft-open"),
+                    f"tree: forged paths are rejected by the handler ({text('#ft-open')!r})",
+                )
                 check(
                     not [t for k, t in console if k == "pageerror"],
                     f"no page errors ({[t for k, t in console if k == 'pageerror']})",

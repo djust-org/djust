@@ -1,4 +1,4 @@
-"""ImageLightbox and ResizablePanel ship their interactions (#2985, batch 2).
+"""ImageLightbox, FileTree, ResizablePanel and AnimatedNumber ship their interactions (#2985, batch 2).
 
 Each component rendered a ``dj-hook`` that no shipped script answered; each
 now has a script under ``djust_components/``. The scripts add nothing to the
@@ -17,6 +17,8 @@ import pytest
 from django.template import Context, Template
 
 from djust.components import rust_handlers as rh
+from djust.components.components.animated_number import AnimatedNumber
+from djust.components.components.file_tree import FileTree
 from djust.components.components.image_lightbox import ImageLightbox
 from djust.components.components.resizable_panel import ResizablePanel
 
@@ -32,12 +34,35 @@ IMAGES = [
     {"src": "/b.jpg", "alt": "B"},
     {"src": "/c.jpg", "alt": "C"},
 ]
+NODES = [
+    {
+        "name": "src",
+        "type": "folder",
+        "children": [
+            {"name": "main.py", "type": "file"},
+            {
+                "name": "sub",
+                "type": "folder",
+                "expanded": False,
+                "children": [{"name": "deep.txt", "type": "file"}],
+            },
+        ],
+    },
+    {"name": "README.md", "type": "file"},
+]
 
 
 def _lightbox_paths() -> dict[str, str]:
     return {
         "class": ImageLightbox(images=IMAGES, active=1, open=True).render(),
         "tag": _tag("{% lightbox images=images active=1 open=True %}", images=IMAGES),
+    }
+
+
+def _tree_paths() -> dict[str, str]:
+    return {
+        "class": FileTree(nodes=NODES, selected="main.py").render(),
+        "tag": _tag("{% file_tree nodes=nodes selected='main.py' %}", nodes=NODES),
     }
 
 
@@ -50,6 +75,13 @@ def _panel_paths() -> dict[str, str]:
             '{% resizable_panel min_size="100px" max_size="600px" initial_size="300px" %}'
             "<p>x</p>{% endresizable_panel %}"
         ),
+    }
+
+
+def _number_paths() -> dict[str, str]:
+    return {
+        "class": AnimatedNumber(value=1234.5, decimals=1, prefix="$").render(),
+        "tag": _tag("{% animated_number value=1234.5 decimals=1 prefix='$' %}"),
     }
 
 
@@ -84,6 +116,21 @@ class TestTheStructureTheScriptsRead:
         assert ImageLightbox(images=IMAGES, open=False).render() == ""
         assert _tag("{% lightbox images=images open=False %}", images=IMAGES) == ""
 
+    def test_file_tree(self):
+        for path, html in _tree_paths().items():
+            assert 'dj-hook="FileTree"' in html and 'role="tree"' in html, path
+            assert 'class="dj-file-tree__toggle" role="button"' in html, path
+            # a collapsed folder: its children block is hidden by an inline style
+            assert 'class="dj-file-tree__children" style="display:none"' in html, path
+            # an expanded one is not
+            assert re.search(r'class="dj-file-tree__children">', html), path
+            assert "dj-file-tree__node--expanded" in html, path
+            assert 'dj-click="select_file"' in html or "select_file" in html, path
+            # a folder row is followed by its children block
+            assert re.search(
+                r'data-type="folder">.*?</div><div class="dj-file-tree__children"', html
+            ), path
+
     def test_resizable_panel(self):
         for path, html in _panel_paths().items():
             assert 'dj-hook="ResizablePanel"' in html, path
@@ -98,12 +145,30 @@ class TestTheStructureTheScriptsRead:
         html = ResizablePanel(content="x", disabled=True).render()
         assert 'data-disabled="true"' in html
 
+    def test_animated_number(self):
+        for path, html in _number_paths().items():
+            assert 'dj-hook="AnimatedNumber"' in html, path
+            assert 'data-value="1234.5"' in html, path
+            assert 'data-duration="800"' in html and 'data-decimals="1"' in html, path
+            assert 'data-separator=","' in html, path
+            assert '<span class="dj-animated-number__value">1,234.5</span>' in html, path
+            assert '<span class="dj-animated-number__prefix">$</span>' in html, path
+
+    def test_the_server_text_the_animation_ends_on_is_python_formatting(self):
+        """Python rounds half to even and truncates without decimals; JavaScript's
+        toFixed does not, which is why the script ends on the server's text."""
+        assert "0.12" in AnimatedNumber(value=0.125, decimals=2).render()
+        assert ">1<" in AnimatedNumber(value=1.9).render()
+        assert ">-1<" in AnimatedNumber(value=-1.9).render()
+
 
 @pytest.mark.parametrize(
     "component, hook, script",
     [
         ("image_lightbox", "ImageLightbox", "image-lightbox.js"),
+        ("file_tree", "FileTree", "file-tree.js"),
         ("resizable_panel", "ResizablePanel", "resizable-panel.js"),
+        ("animated_number", "AnimatedNumber", "animated-number.js"),
     ],
 )
 class TestScriptsAreShippedAndFound:

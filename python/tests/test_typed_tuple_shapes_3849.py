@@ -153,11 +153,12 @@ class TestEveryShapeRendersAsDjangoPrintsIt:
         assert "Spelled" not in out and "(1, 2)" in out, out
 
 
-#: The cells the review named (seven; `map_picker height` went with #4002): a namedtuple in a CSS-length slot used to flip from the
+#: The seven cells the review named: a namedtuple in a CSS-length slot used to flip from the
 #: default to ``(1, 2)``. Equal to Django's now, whatever Django does with them.
 SEVEN_CELLS = [
     ("dashboard_grid gap", "{% dashboard_grid gap=v %}x{% enddashboard_grid %}"),
     ("dashboard_grid row_height", "{% dashboard_grid row_height=v %}x{% enddashboard_grid %}"),
+    ("map_picker height", "{% map_picker height=v %}"),
     (
         "resizable_panel initial_size",
         "{% resizable_panel initial_size=v %}x{% endresizable_panel %}",

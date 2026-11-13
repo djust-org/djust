@@ -205,6 +205,21 @@ class TestUsageSnippetsAreCodeThatWorks:
         assert "(self._component.month - 2) % 12 + 1" in snippet
 
 
+class TestComponentsRenderWhatTheirParametersSay:
+    def test_prompt_editor_renders_the_editor_not_the_prompt(self):
+        """`template` is the prompt text; the base class took it for the
+        component's own Django template and rendered "Summarise  for ."."""
+        from djust.components import PromptEditor
+
+        html = str(
+            PromptEditor(
+                template="Summarise {{topic}} for {{audience}}.", variables={"topic": "x"}
+            ).render()
+        )
+        assert 'class="dj-prompt-editor' in html
+        assert "Summarise {{topic}} for {{audience}}." in html
+
+
 class TestEveryPreviewShowsSomethingOrSaysWhy:
     def test_a_component_without_examples_has_a_specific_reason(self):
         from djust.theming.gallery.component_registry import (
@@ -224,7 +239,7 @@ class TestEveryPreviewShowsSomethingOrSaysWhy:
 
     @pytest.mark.parametrize(
         "name",
-        ["aspect_ratio", "error_boundary", "presence_avatars", "sticky_header"],
+        ["aspect_ratio", "error_boundary", "presence_avatars", "prompt_editor", "sticky_header"],
     )
     def test_an_example_that_rendered_an_empty_box_now_shows_content(self, name):
         import re
@@ -306,7 +321,7 @@ class TestParameterNotesAreTrue:
         assert "identity is `name`" not in self._types("signature_pad")["save_event"]
 
     def test_a_push_event_is_not_described_as_one_the_view_receives(self):
-        note = self._types("live_counter")["stream_event"]
+        note = self._types("conversation_thread")["stream_event"]
         assert "pushes" in note and "renames" not in note
 
 

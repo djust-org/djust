@@ -2016,7 +2016,9 @@ class RequestMixin:
                     sanitize_for_log(refused.field),
                     refused.limit,
                 )
-                return JsonResponse({"error": str(refused), "code": "state_too_large"}, status=413)
+                return JsonResponse(
+                    {"error": refused.user_message, "code": "state_too_large"}, status=413
+                )
 
             # Fields every response of this turn carries besides its payload.
             response_fields: Dict[str, Any] = {}

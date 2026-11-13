@@ -141,10 +141,12 @@ async def turn(monkeypatch, view_class, event_name, *off) -> Dict[str, Any]:
                 await harness.event(comm, event_name)  # warm-up: first event after mount
                 counts.reset()
                 reply = await harness.event(comm, event_name)
+                held = harness.fingerprint_bytes(counts.view)
             finally:
                 await comm.disconnect()
     out = counts.snapshot()
     out["reply"] = reply["type"]
+    out["fingerprints.retained_bytes"] = held
     return out
 
 
@@ -345,6 +347,33 @@ async def test_an_unchanged_turn_neither_serializes_nor_writes_the_saved_state(m
     assert seen == {"project": 4, "write": 3}
     # The snapshots change detection takes are the same two per turn either way.
     assert now["snapshot_assigns.calls"] == off["snapshot_assigns.calls"] == 2
+
+
+# --- what the socket holds after the turn (#3998) -------------------------------------
+
+
+async def test_the_compact_fingerprint_is_a_third_of_the_wide_one(monkeypatch):
+    """Counted, not weighed on a scale: the bytes of the fingerprint tuples a
+    socket holds for 1,000 rows. Each leaf was a 3-tuple and each dict item a
+    2-tuple; a leaf is now the value and a dict's items one flat tuple."""
+    now = await turn(monkeypatch, Table, "cell")
+    wide = await turn(monkeypatch, Table, "cell", "compact_fingerprints")
+    assert wide["reply"] == now["reply"] == "patch"
+    assert wide["fingerprints.retained_bytes"] > 3 * now["fingerprints.retained_bytes"]
+    # The walk itself is the same walk: no node more, none fewer.
+    assert wide["fingerprint_and_convert.nodes"] == now["fingerprint_and_convert.nodes"]
+    assert wide["fingerprint.snapshot.nodes"] == now["fingerprint.snapshot.nodes"]
+
+
+async def test_one_fingerprint_tree_is_held_where_two_were(monkeypatch):
+    """The dirty baseline and the last render's fingerprint of the rows are
+    built from the same row tuples, so the second costs one changed row and a
+    tuple of references. Turned off, the socket holds two whole trees."""
+    now = await turn(monkeypatch, Table, "cell")
+    apart = await turn(monkeypatch, Table, "cell", "shared_fingerprints")
+    assert apart["reply"] == now["reply"] == "patch"
+    assert apart["fingerprints.retained_bytes"] > 1.8 * now["fingerprints.retained_bytes"]
+    assert apart["sent_keys"] == now["sent_keys"]
 
 
 def test_every_shortcut_has_a_gate_off_in_this_file():

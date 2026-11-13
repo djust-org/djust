@@ -26,6 +26,7 @@ import pytest
 from django.utils.http import url_has_allowed_host_and_scheme
 
 import djust
+from djust.components.components.map_picker import _plain_url
 from djust.components.utils import url_allowed
 from djust.security.urls import url_as_parsed, url_is_protocol_relative
 from djust.mixins.navigation import same_origin_target
@@ -102,6 +103,7 @@ _OUTPUTS = {
     for out in (
         _decide(same_origin_target, value),
         _decide(validate_mount_url, value),
+        _decide(_plain_url, value),
     )
     if out
 }
@@ -253,6 +255,18 @@ def test_the_helper_is_at_least_as_strict_as_django_for_a_leading_slash(browser)
 
 
 # --- the decisions built on it ----------------------------------------------------------------
+
+
+def test_the_map_picker_tile_url_never_names_another_host_through_a_relative_path(browser):
+    allowed = 0
+    for value in _INPUTS:
+        out = _plain_url(value)
+        if not out or out.startswith(("http://", "https://")):
+            continue
+        allowed += 1
+        assert out == value.strip()
+        assert browser[out][0] != "other", f"_plain_url let {value!r} through: leaves this origin"
+    assert allowed > 50
 
 
 def test_the_row_click_guard_agrees_with_the_helper_and_the_browser(browser):

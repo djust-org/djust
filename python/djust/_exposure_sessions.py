@@ -273,9 +273,14 @@ class StateLimitExceeded(ExposureError):
                 limits.max_nodes,
                 limits.max_depth,
             )
-        super().__init__(
-            "The change was not saved: state field '%s' would exceed %s." % (field, bound)
+        # Built from the field name and the limit only, never from a value, so a
+        # transport can show it to the user. Transports send ``user_message``,
+        # not ``str(exception)``.
+        self.user_message = "The change was not saved: state field '%s' would exceed %s." % (
+            field,
+            bound,
         )
+        super().__init__(self.user_message)
 
 
 def _limit_culprit(contract: ExposureContract, view: Any) -> str:

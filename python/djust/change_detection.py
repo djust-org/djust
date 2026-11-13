@@ -36,8 +36,11 @@ from __future__ import annotations
 
 from typing import Any, Hashable, List, Tuple
 
+from . import _per_turn
+
 __all__ = [
     "deep_fingerprint",
+    "share_structure",
     "warn_fingerprint_truncated",
     "DEFAULT_BUDGET",
     "FINGERPRINT_FIELDS",
@@ -62,6 +65,9 @@ _TAG_TUPLE = "T"
 _TAG_DICT = "D"
 _TAG_SET = "S"
 _TAG_TRUNCATED = "x"
+
+#: The container tags whose second element is a tuple of children.
+_SHARED_TAGS = frozenset({_TAG_LIST, _TAG_TUPLE, _TAG_DICT})
 
 
 def warn_fingerprint_truncated(cls: type, name: str, value: Any) -> None:
@@ -136,9 +142,68 @@ def deep_fingerprint(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Hashable
     ``truncated`` is True when *budget* ran out and part of the structure was
     reduced to root identity. Callers must conservatively invalidate it.
     """
-    counter: List[int] = [budget]
+    t = type(value)
+    if t in _EXACT_SCALARS:
+        # A scalar ROOT keeps its tagged form in both encodings: a caller may
+        # store the fingerprint beside a "nothing stored" default, and a bare
+        # ``None`` or ``0`` must never be mistaken for one.
+        if budget < 1:
+            return (_TAG_TRUNCATED, id(value)), True
+        return (_TAG_VALUE, t, value), False
+    counter: List[Any] = [budget, _BARE if _per_turn.on("compact_fingerprints") else _NO_BARE]
     fp = _walk(value, counter, 0, ())
     return fp, counter[0] < 0
+
+
+_SHARE_DEPTH = 3
+
+
+def share_structure(fp: Any, held: Any, depth: int = _SHARE_DEPTH) -> Any:
+    """*fp*, built from *held*'s own subtrees wherever the two are equal (#3998).
+
+    The result is EQUAL to *fp*; only which objects it is made of differs. A
+    list of a thousand rows of which one changed since *held* was taken is
+    then one new row and a tuple of references, not a second tree. Children
+    are matched by position, down to ``depth`` levels, so a row inserted at
+    the head shares nothing (it costs what it cost before, never more).
+
+    Fingerprints are immutable and hold no reference into the state, so one
+    subtree can stand in two fingerprints without either seeing the other
+    change.
+    """
+    if fp is held:
+        return fp
+    if (
+        type(fp) is not tuple
+        or type(held) is not tuple
+        or len(fp) != 2
+        or len(held) != 2
+        or fp[0] != held[0]
+        or fp[0] not in _SHARED_TAGS
+        or type(fp[1]) is not tuple
+        or type(held[1]) is not tuple
+    ):
+        return fp
+    old = held[1]
+    limit = len(old)
+    out: List[Any] = []
+    append = out.append
+    reused = False
+    for index, child in enumerate(fp[1]):
+        if index < limit and type(child) is tuple:
+            other = old[index]
+            if other is child:
+                pass
+            elif other == child:
+                child = other
+                reused = True
+            elif depth > 1:
+                shared = share_structure(child, other, depth - 1)
+                if shared is not child:
+                    child = shared
+                    reused = True
+        append(child)
+    return (fp[0], tuple(out)) if reused else fp
 
 
 #: Exact builtin scalar types: no subclass, so no ``STATE_MARKER`` either. The
@@ -147,8 +212,28 @@ def deep_fingerprint(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Hashable
 #: it the same way.
 _EXACT_SCALARS = frozenset(_IMMUTABLE_LEAVES)
 
+#: The compact encoding (#3998). A fingerprint tree is retained per view for as
+#: long as its socket is open (the previous render's, and the dirty baseline),
+#: so its size is per-socket memory. In the wide encoding every leaf was a
+#: 3-tuple ``("v", type, value)`` and every dict item a 2-tuple of two such
+#: leaves: 184 bytes of tuples for one ``"name": "x"``. In the compact encoding
+#:
+#: * a leaf INSIDE a container whose exact type is ``str``, ``int``, ``bytes``
+#:   or ``NoneType`` is the value itself. Values of those four types are never
+#:   equal across types and never equal to a tuple, so nothing that differed
+#:   before compares equal now. ``bool`` and ``float`` keep the tagged tuple:
+#:   ``True == 1 == 1.0``, and the tag is what tells them apart;
+#: * a dict's items are one flat tuple ``(k1, v1, k2, v2, ...)``.
+#:
+#: Two values have equal compact fingerprints exactly when their wide ones are
+#: equal (``test_fingerprint_encoding.py`` runs both over the same values).
+#: The wide encoding stays reachable through ``_per_turn`` for that comparison
+#: and for the frame oracle; nothing else selects it.
+_BARE = frozenset({str, int, bytes, type(None)})
+_NO_BARE: frozenset = frozenset()
 
-def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...]) -> Hashable:
+
+def _walk(value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...]) -> Hashable:
     """Fingerprint *value*; same result as :func:`_walk_general`, faster.
 
     Every snapshot walks the whole view state several times per event (the
@@ -165,11 +250,15 @@ def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...])
     (``test_state_single_pass.py`` compares the two).
     """
     t = type(value)
+    bare = counter[1]
     if t in _EXACT_SCALARS:
+        # Reached for a scalar inside a set or a component's state (the
+        # general walk calls back here per child); a scalar root never gets
+        # this far (``deep_fingerprint``).
         counter[0] -= 1
         if counter[0] < 0:
             return (_TAG_TRUNCATED, id(value))
-        return (_TAG_VALUE, t, value)
+        return value if t in bare else (_TAG_VALUE, t, value)
     if t is not dict and t is not list and t is not tuple:
         return _walk_general(value, counter, depth, path_ids)
     counter[0] -= 1
@@ -187,7 +276,7 @@ def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...])
             tk = type(k)
             if tk in _EXACT_SCALARS:
                 counter[0] -= 1
-                kf: Hashable = (_TAG_VALUE, tk, k)
+                kf: Hashable = k if tk in bare else (_TAG_VALUE, tk, k)
             else:
                 kf = _walk(k, counter, child_depth, inner)
             if counter[0] < 0:
@@ -195,12 +284,16 @@ def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...])
             tv = type(v)
             if tv in _EXACT_SCALARS:
                 counter[0] -= 1
-                vf: Hashable = (_TAG_VALUE, tv, v)
+                vf: Hashable = v if tv in bare else (_TAG_VALUE, tv, v)
             else:
                 vf = _walk(v, counter, child_depth, inner)
             if counter[0] < 0:
                 return (_TAG_TRUNCATED, vid)
-            append((kf, vf))
+            if bare:
+                append(kf)
+                append(vf)
+            else:
+                append((kf, vf))
         return (_TAG_DICT, tuple(out))
     for v in value:
         tv = type(v)
@@ -208,7 +301,7 @@ def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...])
             counter[0] -= 1
             if counter[0] < 0:
                 return (_TAG_TRUNCATED, vid)
-            append((_TAG_VALUE, tv, v))
+            append(v if tv in bare else (_TAG_VALUE, tv, v))
         else:
             append(_walk(v, counter, child_depth, inner))
             if counter[0] < 0:
@@ -217,7 +310,7 @@ def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...])
 
 
 def _walk_general(
-    value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...]
+    value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...]
 ) -> Hashable:
     fields: Any = None
     if getattr(type(value), STATE_MARKER, False):
@@ -253,7 +346,11 @@ def _walk_general(
                     vf = _walk(v, counter, depth + 1, inner)
                 if counter[0] < 0:
                     return (_TAG_TRUNCATED, vid)
-                out.append((kf, vf))
+                if counter[1]:
+                    out.append(kf)
+                    out.append(vf)
+                else:
+                    out.append((kf, vf))
             return (_TAG_DICT, tuple(out))
         if isinstance(value, (set, frozenset)):
             try:

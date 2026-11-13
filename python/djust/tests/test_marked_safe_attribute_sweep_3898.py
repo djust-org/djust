@@ -42,7 +42,7 @@ What each class here proves, and what it does NOT:
   net, not the first: a numeric key it does not know, a branch chosen by a named constant or a
   membership test, a numeric threshold, or a child tag missing from ``variants.PARENT`` can each
   hide a site from it, and the hunt does not depend on any of them.
-* ``TestEveryItemParameter``: the 35 tag parameters (43 before #4002) that print an item in an attribute (#3904),
+* ``TestEveryItemParameter``: the 43 tag parameters that print an item in an attribute (#3904),
   one cell each: driven (a plain probe lands in the pinned attributes), and every way of marking a
   value safe leaves those attributes as the plain string does. ``TestFormFieldChoices`` does the
   same for a form field's choice value in ``dj_form``, under both engines (the native engine
@@ -934,9 +934,9 @@ class TestCallerSet:
 #: The tags with a ``data_url_attr`` site (a URL read out of a dict item or a list). Each name must
 #: exist in the tag inventory (a rename fails ``test_every_data_tag_exists``).
 DATA_TAGS = (
-    "avatar_group", "carousel", "chat_bubble", "dropdown_menu",
-    "image_cropper", "lightbox", "mentions_input",
-    "menu_item", "presence_avatars", "rich_select", "sortable_grid",
+    "activity_feed", "avatar_group", "carousel", "chat_bubble", "data_card_grid", "dropdown_menu",
+    "image_cropper", "image_upload_preview", "lightbox", "live_indicator", "mentions_input",
+    "menu_item", "org_chart", "presence_avatars", "rich_select", "sortable_grid",
     "avatar", "responsive_image",
 )  # fmt: skip
 #: The tags under test (all of them unless ``MARKED_SAFE_SWEEP_ONLY`` narrows the sweep).
@@ -965,6 +965,9 @@ def _tag_calls(info, shapes: tuple[str, ...] = DATA_SHAPES) -> list[tuple[str, s
         # an ``event`` makes a card / node clickable (more attributes carry the item's id/title)
         if "event" in names and name != "event":
             base += ' event="ev"'
+        # an org chart draws from its ``root`` id: the item ids are the payload, so is the root
+        if info.name == "org_chart" and name == "nodes":
+            base += " root=p_scalar"
         # DATA shapes (a list of items, an item) are swept for every hole. A SCALAR is the
         # developer's own tag argument (written in the template): its marked-safe value is
         # honoured by every tag's text and attributes (the tag-argument policy), so a scalar is
@@ -1186,14 +1189,18 @@ class TestTextSlotsKeepTheirMarkup:
     @pytest.mark.parametrize(
         ("src", "key"),
         [
-            # data_card_grid, org_chart and activity_feed were the first three; they went with
-            # #4002, so the text slot is pinned on surviving tags that draw an item's text.
+            ("{% data_card_grid items=p_list_dict %}", "title"),
+            ("{% org_chart nodes=p_list_dict root=p_scalar %}", "name"),
+            ("{% activity_feed events=p_list_dict %}", "user"),
             ("{% kanban_board columns=p_list_dict %}", "title"),
             ("{% audit_log entries=p_list_dict %}", "user"),
             ("{% chat_bubble message=p_dict %}", "text"),
         ],
-        ids=["kanban_board", "audit_log", "chat_bubble"],
-    )
+        ids=[
+            "data_card_grid", "org_chart", "activity_feed", "kanban_board", "audit_log",
+            "chat_bubble",
+        ],
+    )  # fmt: skip
     def test_a_tag_text_slot(self, claim: str, src: str, key: str) -> None:
         from djust.tests.test_component_dj_attr_parity_3669 import _django
 
@@ -1720,6 +1727,7 @@ UNREACHED = {
     "components.bar_chart.BarChart.data": "numbers",
     "components.calendar_heatmap.CalendarHeatmap.year": "a year",
     "components.markdown.Markdown.extensions": "module names (ModuleNotFoundError)",
+    "components.markdown_editor.MarkdownEditor.mode": "two allowed words (ValueError)",
     "components.meter.Meter.segments": "numbers",
     "data.pagination.PaginationComponent.max_visible_pages": "a number",
     "data.pagination.PaginationComponent.total_items": "a number",
@@ -1744,6 +1752,7 @@ CARRIED_DIFFERENTLY = {
     "components.dashboard_grid.DashboardGrid.panels": {
         "col=number", "height=number", "row=number", "width=number",
     },
+    "components.org_chart.OrgChart.nodes": {"parent=number"},
     "components.table_of_contents.TableOfContents.items": {"level=number"},
     "ui.list_group_simple.ListGroup.items": {"badge=left out"},
 }  # fmt: skip
@@ -1856,8 +1865,7 @@ class TestEveryClassIsReached:
         assert echoed | silent | unreached == derived
         assert not (echoed & silent or echoed & unreached or silent & unreached)
         assert len(echoed) + len(silent) + len(unreached) == len(derived)
-        # 700 before #4002 removed 33 component classes; 696 measured after.
-        assert ONLY or len(echoed) >= 696, len(echoed)
+        assert ONLY or len(echoed) > 700, len(echoed)
 
     def test_the_keys_a_cell_could_not_carry_are_exactly_the_listed_ones(self, outcome) -> None:
         """A crash is searched per KEY, and what the search leaves out or turns into a number
@@ -2027,8 +2035,11 @@ ITEM_PARAMETERS: dict[str, tuple[tuple[str, ...], bool]] = {
     "djust_components/audit_log/columns": (("class",), False),
     "djust_components/audit_log/entries": (("class",), True),
     "djust_components/autocomplete/suggestions": (("data-value",), True),
+    "djust_components/collab_selection/users": (("data-user",), True),
     "djust_components/combobox/options": (("data-value", "value"), True),
     "djust_components/combobox/selected": (("data-value", "value"), True),
+    "djust_components/comparison_table/plans": (("data-value",), True),
+    "djust_components/cursors/users": (("data-user",), True),
     "djust_components/dashboard_grid/panels": (("data-panel-id",), True),
     "djust_components/data_grid/columns": (("data-col-key", "data-type"), True),
     "djust_components/data_grid/rows": (("data-row-key", "data-value"), False),
@@ -2039,17 +2050,21 @@ ITEM_PARAMETERS: dict[str, tuple[tuple[str, ...], bool]] = {
     "djust_components/fab/actions": (("aria-label", "dj-click"), True),
     "djust_components/filter_select/options": (("value",), True),
     "djust_components/form_array/rows": (("value",), False),
+    "djust_components/file_tree/nodes": (("class", "data-name", "data-type"), True),
+    "djust_components/gantt_chart/tasks": (("fill",), True),
     "djust_components/import_wizard/model_fields": (("name",), True),
     "djust_components/kanban_board/columns": (
         ("class", "data-card-id", "data-col-id", "data-value", "dj-key"),
         True,
     ),
     "djust_components/line_chart/series": (("fill", "stroke"), True),
+    "djust_components/masonry_grid/items": (("class",), True),
     "djust_components/meter/segments": (("aria-label",), True),
     "djust_components/model_selector/options": (("data-value",), True),
     "djust_components/multi_select/options": (("data-value", "dj-value-option", "value"), True),
     "djust_components/notification_center/notifications": (("data-value",), True),
     "djust_components/pie_chart/segments": (("fill",), True),
+    "djust_components/reactions/options": (("aria-label", "dj-value-emoji"), True),
     "djust_components/scroll_spy/sections": (("data-section", "data-sections", "href"), True),
     "djust_components/sortable_list/items": (("data-id",), True),
     "djust_components/split_button/options": (("dj-click",), True),
@@ -2058,6 +2073,7 @@ ITEM_PARAMETERS: dict[str, tuple[tuple[str, ...], bool]] = {
     "djust_components/tag_input/tags": (("data-value", "value"), True),
     "djust_components/toast_container/toasts": (("class", "data-value"), True),
     "djust_components/toggle_group/options": (("data-value",), True),
+    "djust_components/tour/steps": (("data-target",), True),
     "djust_components/tree_view/nodes": (("data-value",), True),
     "djust_components/wizard/steps": (("data-value",), True),
     "theme_components/theme_radio/options": (("for", "id", "value"), True),
@@ -2658,7 +2674,13 @@ CHILD_SCALAR = "the id= keyword of a child tag: a scalar argument, the developer
 #: written to an attribute, with the reason. Exactly these: a new finding fails, and so does an
 #: entry the hunt no longer reports.
 STATIC_SINK_ALLOWED: dict[str, str] = {
+    "components/templatetags/_advanced.py:render: conditional_escape(label)": CONST,
+    "components/templatetags/_advanced.py:render: conditional_escape(v)": PLAIN,
+    "components/templatetags/_advanced.py:render: conditional_escape(val)": PLAIN,
     "components/templatetags/_charts.py:render: conditional_escape(str(self.COLORS[idx % len(self.COLORS)]))": CONST,
+    "components/templatetags/_dev_tools.py:render: conditional_escape(prefix)": CONST,
+    "components/templatetags/_dev_tools.py:render: conditional_escape(suffix)": CONST,
+    "components/templatetags/djust_components.py:_render_emoji: conditional_escape(val)": CONST,
     "components/templatetags/djust_components.py:render: conditional_escape(tid)": CHILD_SCALAR,
     "components/templatetags/djust_components.py:rich_text_editor: conditional_escape(arg)": CONST,
     "components/templatetags/djust_components.py:rich_text_editor: conditional_escape(cmd)": CONST,
