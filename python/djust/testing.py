@@ -192,9 +192,11 @@ def _mount_and_apply_params(
     request: Any,
     mount_kwargs: Dict[str, Any],
     route_kwargs: Optional[Dict[str, Any]] = None,
+    *,
+    live: bool = False,
 ) -> None:
     """Pre-mount auth, ``on_mount`` hooks, then the route, ``mount()``, the params
-    hook and the object check.
+    hook and the object check; then, for a ``live`` mount, ``connected()``.
 
     The pre-mount sequence every transport runs (``run_pre_mount_auth``:
     ``login_required``, ``permission_required``, ``check_permissions`` and the
@@ -203,6 +205,13 @@ def _mount_and_apply_params(
     :class:`MountRedirect` (a login redirect, or the URL a hook returned) and
     ``mount()`` never runs (#4073). The tenant it binds is restored when the
     mount returns, as the runtime scopes it.
+
+    A ``live`` mount (the WebSocket/SSE simulation) then enters the connected
+    phase the way ``ViewRuntime.dispatch_mount`` does, through
+    ``_child_lifecycle.begin_live_connection``, and runs the view's
+    ``connected()`` hook before the first render (#4085). An exception from it
+    fails the mount as on a transport: the view's ``disconnected()`` runs and the
+    exception propagates.
     """
     with _tenant_scope():
         _run_pre_mount_auth(view, request)
@@ -214,6 +223,28 @@ def _mount_and_apply_params(
         if hook_redirect:
             raise MountRedirect(hook_redirect)
         _mount_and_apply_params_inner(view, request, mount_kwargs, route_kwargs)
+        if live:
+            _run_connected(view)
+
+
+def _run_connected(view: Any) -> None:
+    """The runtime's ``connected()`` step for a live mount (#4085).
+
+    The same functions ``ViewRuntime.dispatch_mount`` calls: ``begin_live_connection``
+    marks the view (so ``disconnected()`` runs for it) and returns the hook, already
+    wrapped in its ``"lifecycle"`` sync-turn step. A failure is handled as the
+    runtime's failed mount handles it: ``run_view_disconnected``, then the error.
+    """
+    from ._child_lifecycle import begin_live_connection, run_view_disconnected
+
+    hook = begin_live_connection(view)
+    if hook is None:
+        return
+    try:
+        _call_hook(hook)
+    except Exception:
+        run_view_disconnected(view)
+        raise
 
 
 def _mount_and_apply_params_inner(
@@ -445,8 +476,10 @@ class LiveViewTestClient:
 
         # mount(), then handle_params() the way the transports do (#3706)
         try:
-            _mount_and_apply_params(self.view_instance, request, params, route_kwargs)
-        except (PermissionDenied, MountRedirect):
+            _mount_and_apply_params(
+                self.view_instance, request, params, route_kwargs, live=via_websocket
+            )
+        except Exception:
             self._mounted = False
             raise
 
@@ -565,6 +598,37 @@ class LiveViewTestClient:
             return {
                 "success": False,
                 "error": error_msg,
+                "state_before": state_before,
+                "state_after": state_before,
+                "duration_ms": 0,
+            }
+
+        # The handler's @rate_limit, before the permission gates as in the
+        # transports' _validate_event_security (#4085): the shared per-caller
+        # store through the same helper the page-POST fallback and the HTTP API
+        # call, so the budget is per caller (user, anonymous session or IP)
+        # across clients, and a refused event does not run.
+        from .rate_limit import http_handler_rate_check
+
+        if not http_handler_rate_check(
+            getattr(self.view_instance, "request", None), self.view_instance, event_name, handler
+        ):
+            refusal = "Rate limit exceeded"
+            self.events.append(
+                {
+                    "type": "event",
+                    "name": event_name,
+                    "params": params,
+                    "timestamp": time.time(),
+                    "duration_ms": 0,
+                    "error": refusal,
+                    "code": "rate_limited",
+                }
+            )
+            return {
+                "success": False,
+                "error": refusal,
+                "code": "rate_limited",
                 "state_before": state_before,
                 "state_after": state_before,
                 "duration_ms": 0,
@@ -722,7 +786,6 @@ class LiveViewTestClient:
         permission is denied, and a view that overrides ``get_object`` has its
         object permission re-checked on every event, failing closed.
         """
-        from django.core.exceptions import PermissionDenied
 
         from .auth import check_handler_permission
         from .auth.core import _has_custom_get_object, check_object_permission_for_event
@@ -2130,7 +2193,17 @@ class LiveViewSmokeTest:
         return [v for v in views if v not in skip_set]
 
     def _make_client(self, view_class: Type[Any]) -> LiveViewTestClient:
-        """Create and mount a test client for a view."""
+        """Create and mount a test client for a view.
+
+        The smoke and fuzz tests send one event per payload, each on a fresh
+        client: many events from one caller. They check how a handler takes its
+        input, not its ``@rate_limit``, which the client applies through the
+        shared per-caller store (#4085), so each fresh client starts with a full
+        budget.
+        """
+        from .rate_limit import reset_handler_buckets
+
+        reset_handler_buckets()
         config = self.view_config.get(view_class, {})
         user = config.get("user")
         mount_params = config.get("mount_params", {})

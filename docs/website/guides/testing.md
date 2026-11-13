@@ -27,13 +27,27 @@ transport layer.
 - `mount(via_websocket=True, **params)` — instantiate the view and run
   `mount()`. Returns `self`. The default simulates the WebSocket/SSE mount
   (the view gets the identity attributes a live connection sets); pass
-  `via_websocket=False` to mount it the way the HTTP GET path does.
+  `via_websocket=False` to mount it the way the HTTP GET path does. The
+  default mount runs the view's `connected()` hook after `mount()` and
+  `handle_params()`, as a live mount does; an exception from it propagates,
+  after the view's `disconnected()` has run. `via_websocket=False` does not run
+  it, as the HTTP render does not.
 - `send_event(name, raise_on_missing=True, **params)` — call a handler by
   name. Returns a dict with `state_before`, `state_after`, `duration_ms`,
   `success`, `error`. An unknown handler raises `NoHandlerFoundError` unless
   you pass `raise_on_missing=False`. An exception raised *inside* the handler
   is not re-raised: it comes back as `success=False` with the message in
   `error`, so assert on `result["success"]`.
+- A handler's `@rate_limit` applies, through the same per-caller store the
+  transports use: an event past the budget does not run and comes back as
+  `success=False` with `code="rate_limited"`. The budget is per caller (the
+  user, else the anonymous session, else the client IP), so separate clients
+  for the same user share it, and it carries over between tests in one
+  process: call `djust.rate_limit.reset_handler_buckets()` in a fixture if
+  your tests send a rate-limited handler more events than its `burst`. The
+  client does not count refusals toward the connection's abuse disconnect
+  (close code 4429) or apply the connection's global per-message limit.
+  `LiveViewSmokeTest` resets the budget for each fuzz payload.
 - `assert_state(**expected)` — exact-match assertions on public view attrs.
 - `assert_state_contains(**expected)` — checks `expected in actual`: a
   substring for strings, one element for lists, a key for dicts. It is not a
