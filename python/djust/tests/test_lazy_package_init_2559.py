@@ -346,7 +346,7 @@ class TestImportFootprint:
         """Collision case B: ``import djust.live_view`` BEFORE any lazy name
         has resolved leaves the attribute bound to the MODULE (the import
         system's own ``setattr`` on the parent, which cannot be intercepted)
-        -- the same contract ``djust.rate_limit`` has always had. This is the
+        -- ``djust.rate_limit`` instead stays callable as the decorator (#3993). This is the
         one order that differs from the eager pre-#2559 init, where the
         rebind always won."""
         report = _fresh_import(
@@ -393,17 +393,72 @@ class TestImportFootprint:
         assert report["extra"]["kind"] == "function"
         assert report["extra"]["same"] is True
 
-    def test_rate_limit_name_is_the_module_once_dispatch_is_imported(self):
-        """Pins today's order contract that ``test_api_dispatch.py`` relies on:
-        after ``djust.api.dispatch`` imports the ``djust.rate_limit`` submodule,
-        ``from djust import rate_limit`` is the MODULE."""
+    # #3993 (owner decision 2026-11-12): ``djust.rate_limit`` is usable as the
+    # decorator in every import order. Before the submodule loads it is the
+    # decorator; once the runtime has imported the submodule it is that module,
+    # which is callable as the decorator, so ``import djust.rate_limit as rl``,
+    # ``importlib.import_module`` and ``from djust.rate_limit import X`` keep
+    # giving the module. (Re-binding the name to the decorator FUNCTION, as
+    # ``live_view`` is, would make ``import djust.rate_limit as rl`` yield the
+    # function: ``import a.b as c`` reads ``getattr(a, "b")`` first.)
+    _RATE_LIMIT_PRELUDES = {
+        "submodule-not-loaded": "",
+        "runtime-imported-it": "import djust.api.dispatch; ",
+        "lazy-name-then-runtime": "import djust; djust.LiveView; import djust.websocket; ",
+        "submodule-first-then-lazy-name": "import djust.rate_limit; import djust; djust.LiveView; ",
+    }
+    _DECORATE = (
+        "from djust import rate_limit as _deco; "
+        "def _h(self, **kw): pass\n"
+        "_d = _deco(rate=1, burst=2, on_exceed='drop')(_h); "
+        "DECO={'meta': _d._djust_decorators.get('rate_limit')}; "
+    )
+    _MODULE_FORMS = (
+        "import importlib; import djust.rate_limit as _rl; "
+        "import djust.rate_limit; "
+        "from djust.rate_limit import TokenBucket as _tb; "
+        "MODS={'as': hasattr(_rl, '_HANDLER_BUCKET_CAP'), "
+        "'attr': hasattr(djust.rate_limit, '_HANDLER_BUCKET_CAP'), "
+        "'import_module': hasattr(importlib.import_module('djust.rate_limit'), '_HANDLER_BUCKET_CAP'), "
+        "'same': _rl is sys.modules['djust.rate_limit'], 'from': _tb.__name__}; "
+    )
+
+    @pytest.mark.parametrize("prelude", sorted(_RATE_LIMIT_PRELUDES))
+    @pytest.mark.parametrize("order", ["decorator-first", "module-forms-first"])
+    def test_rate_limit_is_the_decorator_and_the_submodule_still_imports(self, prelude, order):
+        body = (
+            (self._DECORATE + self._MODULE_FORMS)
+            if order == "decorator-first"
+            else (self._MODULE_FORMS + self._DECORATE)
+        )
+        # ``def`` needs its own line; build a small multi-line program.
+        stmt = self._RATE_LIMIT_PRELUDES[prelude] + body + "EXTRA={'deco': DECO, 'mods': MODS}"
+        stmt = stmt.replace("; def ", "\ndef ").replace("\n_d = ", "\n_d = ")
+        report = _fresh_import(stmt)
+        assert report["extra"]["deco"]["meta"] == {"rate": 1, "burst": 2, "on_exceed": "drop"}
+        assert report["extra"]["mods"] == {
+            "as": True,
+            "attr": True,
+            "import_module": True,
+            "same": True,
+            "from": "TokenBucket",
+        }
+
+    def test_rate_limit_name_once_dispatch_is_imported_is_the_callable_submodule(self):
+        """``from djust import rate_limit`` after ``djust.api.dispatch`` loaded
+        the submodule is the module (unchanged), and calling it is the
+        decorator (#3993: it used to raise ``'module' object is not callable``)."""
         report = _fresh_import(
             "import djust.api.dispatch; from djust import rate_limit; "
+            "import inspect, djust.decorators as d; "
             "EXTRA={'kind': type(rate_limit).__name__, "
-            "'cap': hasattr(rate_limit, '_HANDLER_BUCKET_CAP')}"
+            "'cap': hasattr(rate_limit, '_HANDLER_BUCKET_CAP'), "
+            "'callable': callable(rate_limit), "
+            "'sig': str(inspect.signature(rate_limit)) == str(inspect.signature(d.rate_limit))}"
         )
-        assert report["extra"]["kind"] == "module"
         assert report["extra"]["cap"] is True
+        assert report["extra"]["callable"] is True
+        assert report["extra"]["sig"] is True
 
 
 # --------------------------------------------------------------------------- #

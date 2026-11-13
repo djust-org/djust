@@ -393,29 +393,52 @@ def _is_framework_class(cls: type) -> bool:
     )
 
 
-#: #4070 (owner decision pending): when True, a view class that declares a
-#: ``state()`` field named in :func:`djust._exposure.reserved_state_names` is
-#: refused when the class is created. Today such a class imports; the exposure
-#: contract refuses the field when it is compiled (at render or mount), and a
-#: system check or management command that reads the setting off the class
-#: first can trip over it. Off: turning it on makes a module that imports today
-#: fail to import.
-_REFUSE_RESERVED_STATE_NAMES_AT_CLASS_CREATION = False
+def reserved_state_field_error(view_class: type, owner: type, name: str) -> Exception:
+    """The error for a ``state()`` field declared under a reserved name (#4070)."""
+    from ._exposure import ExposureConfigurationError
+
+    where = (
+        ""
+        if owner is view_class
+        else " (declared on %s.%s)"
+        % (
+            owner.__module__,
+            owner.__qualname__,
+        )
+    )
+    return ExposureConfigurationError(
+        "%s.%s declares a state() field named %r%s, a name djust reserves for a "
+        "framework setting, a view method or per-request identity. Rename the field, "
+        "for example to %r."
+        % (view_class.__module__, view_class.__qualname__, name, where, "%s_value" % name)
+    )
 
 
 def _refuse_reserved_state_names(cls: type) -> None:
-    """Refuse a ``state()`` field ``cls`` declares under a reserved name (#4070)."""
-    from ._exposure import ExposureConfigurationError, reserved_state_names
+    """Refuse a ``state()`` field ``cls`` declares under a reserved name (#4070).
+
+    Reads the fields the way the exposure contract compiles them: most-derived
+    first across the MRO, so a field a plain mixin declares is refused on the
+    view that uses it, and a mixin field a subclass replaces with a plain value
+    is not a field. Runs when the class is created (``__init_subclass__``) and
+    again on the mount path (``_params_form._refuse_removed_configuration``),
+    which catches what class creation cannot: a mixin whose
+    ``__init_subclass__`` skips ``super()``, or a ``state()`` assigned to the
+    class afterwards. ``StateProperty.__set_name__`` refuses a field in a view's
+    own class body even when ``__init_subclass__`` does not run.
+    """
+    from ._exposure import reserved_state_names
     from ._state import StateProperty
 
     reserved = reserved_state_names()
-    for name, value in _class_namespace(cls).items():
-        if name in reserved and issubclass(type(value), StateProperty):
-            raise ExposureConfigurationError(
-                "%s.%s declares a state() field named %r, a name djust reserves "
-                "(a framework setting or per-request identity). Rename the field."
-                % (cls.__module__, cls.__qualname__, name)
-            )
+    seen: set[str] = set()
+    for owner in cls.__mro__:
+        for name, value in _class_namespace(owner).items():
+            if name in seen:
+                continue
+            seen.add(name)
+            if name in reserved and issubclass(type(value), StateProperty):
+                raise reserved_state_field_error(cls, owner, name)
 
 
 def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None:
@@ -927,10 +950,8 @@ class LiveView(
 
         cls._component_subscriptions = compile_subscriptions(cls)
         _warn_legacy_exposure_policy(cls, at_class_statement=True)
-        # #4070: refusing a reserved state() name here is a behaviour change
-        # the owner has not decided on; off until then.
-        if _REFUSE_RESERVED_STATE_NAMES_AT_CLASS_CREATION:
-            _refuse_reserved_state_names(cls)
+        # #4070: a state() field may not take a reserved name.
+        _refuse_reserved_state_names(cls)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)

@@ -236,7 +236,10 @@ def _audit_class(
 ) -> dict[str, Any]:
     """Introspect a LiveView or LiveComponent class and return an audit dict."""
     raw_template = getattr(cls, "template_name", None)
-    # Only a string is a template; a state() field may shadow the name (#4050).
+    # Only a string is a template. A class statement can no longer declare a
+    # state() field named template_name (#4070), but one assigned to the class
+    # afterwards, a property, or a super()-skipping mixin's field still reaches
+    # here (python/djust/tests/test_reserved_state_names_4070.py).
     template: Any = raw_template if isinstance(raw_template, str) else None
     if template is None:
         if isinstance(getattr(cls, "template", None), str):

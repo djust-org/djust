@@ -127,8 +127,7 @@ def reserved_state_names() -> frozenset[str]:
 
     One list (#4070) for the exposure contract (refused when the contract is
     compiled), the rendered-state names (never rendered from a declaration) and
-    the class-creation refusal the owner has not decided on
-    (``live_view._REFUSE_RESERVED_STATE_NAMES_AT_CLASS_CREATION``, off).
+    the class-creation refusal (``live_view._refuse_reserved_state_names``).
     :data:`RESERVED_STATE_NAMES`, the context keys djust reserves, the
     client-unsafe keys and every name in the ``LiveView`` class namespace.
     """

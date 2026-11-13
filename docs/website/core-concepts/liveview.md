@@ -11,7 +11,7 @@ from djust.decorators import event_handler
 
 class MyView(LiveView):
     template_name = "myapp/my_view.html"
-    count = state(0)
+    count = state(0, persist="server")
     items = state(default_factory=list)
 
     @event_handler()

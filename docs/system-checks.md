@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 114 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 115 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -75,6 +75,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V026 | LiveView | Warning | A legacy view declares a plain component in its class body: one object shared by every session, rendered for every user |
 | V027 | LiveView | Warning | An explicit view declares a `state()` field named `user` or `perms` (without `render=False`): it replaces `request.user` / the permission proxy in every template the view renders |
 | V028 | LiveView | Warning | An application class states `exposure_policy = "legacy"`, which is deprecated and removed before 2.0.0 |
+| V029 | LiveView | Warning | An explicit view's event handler changes a value a later event reads, and the value is not kept on the HTTP fallback (not declared state, or a `state()` field without `persist`) |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -540,6 +541,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: an application class whose own body states `exposure_policy = "legacy"`, reported once for that class, wherever the views that use it inherit it from (a view, an abstract base or a mixin); the message names up to three of those views. Explicit exposure is the default since djust 2.0 and `"legacy"` is removed before 2.0.0. Stating it also raises a `DeprecationWarning` when the class is created, which most test runners and servers hide. djust's own classes (the legacy-pinned shipped views and djust's test modules) are not reported, and a subclass that states `"explicit"` is not either (#4047).
 - **Fix**: move the view to explicit exposure (declare persisted fields with `state()`, return template names from `get_context_data()`) and delete the line. `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](website/guides/migrating-to-2.0.md).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V028"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V028"]`
+
+### V029 — a handler changes a value a later event reads, and the fallback does not keep it
+- **Severity**: Warning
+- **Method**: Runtime (class inspection and the handlers' source). It builds one bare `LiveView()` to list djust's own instance attributes; no application view is constructed.
+- **What it detects**: an `@event_handler` or `@action` of an explicit view that changes `self.<name>` (assigns it, or mutates it in place: `.append()`, `self.d[k] = v`, ...) when a later event reads that value: the handler reads the old value before changing it (`self.count += 1`, `self.x = f(self.x)`, `self.items.append(...)`), or another handler or `get_context_data()` reads it. Under explicit exposure the HTTP page-POST fallback builds a new view for each event and runs `mount()` again, and only `state(..., persist="server")` fields are restored, so such a value answers every fallback event from its `mount()` value, with no error. Over a WebSocket the same view works. Two messages: a plain attribute ("not declared state"), and a `state()` field declared without `persist` that a handler reads and then changes ("declared without persist"; `count = state(0)` + `self.count += 1` is stuck the same way). Not reported: a value a handler recomputes from its own arguments and only it reads (`self.results = query(value)`), `_private` names, keys of `temporary_assigns`, djust's own attributes (`page_title`, `template_name` and every other name in `djust._exposure.reserved_state_names()`, and any name a djust class in the view's MRO defines), descriptors other than `state()` (a property, `@computed`), a `state()` field with `persist`, and legacy views. Only the handlers' own bodies are read: a change in a helper the handler calls, or through `setattr()`, is not reported. Reported once per class and attribute, on the class whose handler changes it.
+- **Fix**: declare the value on the class with `persist`, `count = state(0, persist="server")` (or add `persist="server"` to the existing `state()`); or name it with a leading underscore if it is per-event scratch.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V029"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V029"]`
 
 <!-- END GENERATED check-sections:V -->
 

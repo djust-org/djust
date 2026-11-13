@@ -96,6 +96,21 @@ This means a user can be typing in a form, briefly lose connection, reconnect, a
 | Checkbox / radio | `field.checked` | Presence of `checked` attribute |
 | Select | `field.value` | `option[selected]` value, or first option |
 
+### Fields that are not recovered
+
+- **Password fields** (`type="password"`, or any field with
+  `autocomplete="new-password"` / `"current-password"`): their value is not held
+  across the reconnect, not written back into the new markup and not sent to the
+  server, so a user re-types it. Drafts and `dj-auto-recover` apply the same rule
+  (one shared check).
+- **Disabled fields** and `type="file"` fields.
+- Fields marked `dj-no-recover` or `dj-force-value`.
+
+Hidden fields keep being recovered when they carry `dj-change` / `dj-input`; drafts
+and the `dj-auto-recover` envelope keep saving and sending hidden and disabled
+fields, whose values are server-rendered (a hidden field often carries the record
+id).
+
 ### Opting Out with `dj-no-recover`
 
 Add `dj-no-recover` to any field that should **not** be automatically recovered:
@@ -151,7 +166,8 @@ On reconnect, djust fires the `restore_state` handler with two dict arguments
 - `_form_values`: the container's form field values, keyed by `name`. A group of
   same-named checkboxes and a `<select multiple>` are a list of the checked or
   selected values, a radio group is the checked radio's value, and a lone checkbox
-  is a boolean
+  is a boolean. Password fields are left out; hidden and disabled fields are
+  included
 - `_data_attrs`: the container element's `data-*` attributes, keyed without the
   `data-` prefix (`dj-value-*` attributes are **not** collected)
 

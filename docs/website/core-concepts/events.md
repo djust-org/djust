@@ -27,7 +27,7 @@ from djust import state
 from djust.decorators import event_handler
 
 class MyView(LiveView):
-    count = state(0)
+    count = state(0, persist="server")
     query = state("")
     items = state(default_factory=list)
 
