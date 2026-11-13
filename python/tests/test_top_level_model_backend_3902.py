@@ -86,8 +86,16 @@ def _observe(render, src: str, ctx: dict) -> str:
 
 
 # -- the world ------------------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def password_hashes() -> tuple[str, str]:
+    """Hash the two users' passwords once: PBKDF2 was most of each case's setup."""
+    from django.contrib.auth.hashers import make_password
+
+    return make_password(SECRET), make_password(SECRET + "-b")
+
+
 @pytest.fixture
-def world(db, scratch_models):
+def world(db, scratch_models, password_hashes):
     """A user in two groups, a permission, and scratch models for the shapes ``auth`` has none of."""
 
     class Probe3902(models.Model):
@@ -147,14 +155,21 @@ def world(db, scratch_models):
         class Meta:
             app_label = "auth"
 
-    alice = User.objects.create_user(
-        "alice", "a@example.com", SECRET, is_staff=True, is_superuser=True, first_name="Alice"
+    alice_hash, bob_hash = password_hashes
+    # ``create_user`` minus the per-case hash: the same rows, with module-wide hashes.
+    alice = User.objects.create(
+        username="alice",
+        email="a@example.com",
+        password=alice_hash,
+        is_staff=True,
+        is_superuser=True,
+        first_name="Alice",
     )
     alice.groups.add(Group.objects.create(name="g1"), Group.objects.create(name="g2"))
     return {
         "user": alice,
         "same": User.objects.get(pk=alice.pk),
-        "other": User.objects.create_user("bob", "b@example.com", SECRET + "-b"),
+        "other": User.objects.create(username="bob", email="b@example.com", password=bob_hash),
         "users": [alice],
         "perm": Permission.objects.order_by("pk").first(),
         "nobody": None,

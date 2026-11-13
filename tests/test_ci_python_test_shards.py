@@ -448,9 +448,16 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
 
 
 def test_django_compatibility_matrix_tests_each_supported_series() -> None:
-    """The shipped support range must exercise every modern Django series."""
+    """The shipped support range must exercise every modern Django series.
+
+    #4074: all three nightly and on a manual run; before merge only 5.2, with the tests 5.2
+    skips run on 6.1 by ``python-tests-django6-only``."""
     matrix = _python_tests()["strategy"]["matrix"]
-    assert set(matrix["django-version"]) == {"5.2", "6.0", "6.1"}
+    expr = str(matrix["django-version"])
+    full = expr.split("&&", 1)[1].split("||", 1)[0]
+    assert all(f'"{v}"' in full for v in ("5.2", "6.0", "6.1")), expr
+    assert "github.event_name == 'schedule'" in expr and "workflow_dispatch" in expr, expr
+    assert expr.rstrip("} ").endswith("""fromJSON('["5.2"]')"""), expr
     setup = next(
         s
         for s in _python_tests()["steps"]
