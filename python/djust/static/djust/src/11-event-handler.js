@@ -69,9 +69,11 @@ function _noteRenderDigest(data, sent) {
 }
 
 // A patch answer did not fit this DOM (a script changed its structure). The
-// event's state is already saved, so the page GET shows the result: fetch it
-// and morph its root in, keeping what a reload would drop. Reload only when
-// that cannot be done.
+// socket transports ask the server for the whole page; here the only request
+// that returns one without an event is the page GET. It is the same new page
+// load a reload makes (the view mounts again), but its root is morphed in, so
+// what lives outside the root or under dj-update="ignore" survives. Reload
+// only when that cannot be done.
 async function _httpFallbackResync() {
     const url = window.location.href;
     _httpRenderDigest = null;

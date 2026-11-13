@@ -302,29 +302,78 @@ def meta_digest(document: str) -> str | None:
     return match.group(1) if match else None
 
 
+class DigestEcho:
+    """The client's rule for echoing the render digest (``11-event-handler.js``).
+
+    Kept in step with the client by the jsdom replay, which asserts that the
+    built client sends exactly the digests recorded here.
+    """
+
+    HOLD = 8
+
+    def __init__(self, digest: str | None) -> None:
+        self.digest = digest
+        self.misses = 0
+        self.hold = 0
+
+    def to_send(self) -> str | None:
+        if not self.digest:
+            return None
+        if self.hold > 0:
+            self.hold -= 1
+            return None
+        return self.digest
+
+    def note(self, answer: dict, sent: str | None) -> None:
+        whole = isinstance(answer.get("html"), str)
+        changed = whole or bool(answer.get("patches"))
+        if answer.get("render_digest"):
+            self.digest = answer["render_digest"]
+        elif changed:
+            self.digest = None
+        if not sent or not changed:
+            return
+        if not whole:
+            self.misses = 0
+        else:
+            self.misses += 1
+            if self.misses >= 2:
+                self.hold = self.HOLD
+
+
+def post_event(
+    client: Client, url: str, event: str, params: dict, digest: str | None = None, **extra: Any
+) -> Any:
+    """One fallback POST, as the client sends it."""
+    headers = {"HTTP_X_DJUST_EVENT": event, **extra}
+    if digest:
+        headers[DIGEST_HEADER] = digest
+    return client.post(url, data=json.dumps(params), content_type="application/json", **headers)
+
+
 def run_fallback(
     url: str,
     events: list[tuple[str, dict]],
     log: RenderLog,
     *,
     client: Client | None = None,
-    echo_digest: bool = True,
 ) -> dict:
     """GET the page, then POST each event the way the client's fallback does.
 
-    The digest each answer carries is echoed with the next POST, as the client
-    does. Returns the GET document, the answers, each answer's kind, the number
-    of diff renders each request made, and the server's final root HTML.
+    The digest the page and each answer carry is echoed as the client echoes it
+    (``DigestEcho``). Returns the GET document, the answers, each answer's kind,
+    the number of diff renders each request made, and the server's root HTML
+    after each request.
     """
     client = client or Client()
     got = client.get(url)
     assert got.status_code == 200, got.status_code
     document = got.content.decode()
-    digest = meta_digest(document)
+    echo = DigestEcho(meta_digest(document))
     out: dict = {
         "url": url,
         "get": document,
-        "get_digest": digest,
+        "get_digest": echo.digest,
         "events": [list(e) for e in events],
         "answers": [],
         "kinds": [],
@@ -334,20 +383,16 @@ def run_fallback(
     }
     for event, params in events:
         before = len(log.htmls)
-        headers = {"HTTP_X_DJUST_EVENT": event}
-        if echo_digest and digest:
-            headers[DIGEST_HEADER] = digest
-        out["sent_digests"].append(headers.get(DIGEST_HEADER))
-        response = client.post(
-            url, data=json.dumps(params), content_type="application/json", **headers
-        )
+        sent = echo.to_send()
+        out["sent_digests"].append(sent)
+        response = post_event(client, url, event, params, sent)
         assert response.status_code == 200, (response.status_code, response.content[:300])
         answer = json.loads(response.content)
+        echo.note(answer, sent)
         out["answers"].append(answer)
         out["kinds"].append(answer_kind(answer))
         out["renders"].append(len(log.htmls) - before)
         out["html_after"].append(log.htmls[-1])
-        digest = answer.get("render_digest", None if echo_digest else digest)
     out["final"] = out["html_after"][-1] if out["html_after"] else None
     return out
 

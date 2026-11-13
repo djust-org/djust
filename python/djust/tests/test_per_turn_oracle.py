@@ -987,13 +987,16 @@ def run_http(view_class: type, script: Script) -> List[Any]:
     out: List[Any] = []
     with harness.ws_settings(MODULE):
         response = view_class.as_view()(request(session))
-        # The page carries a freshly masked CSRF token; nothing else varies.
-        page = re.sub(
-            r'(<meta name="djust-csrf-token" content=")[^"]*',
-            r"\1<token>",
-            response.content.decode(),
-        )
-        out.append([response.status_code, page])
+
+        # The page carries a freshly masked CSRF token, and it and every answer
+        # carry a render digest bound to this run's session (#4108); nothing
+        # else varies.
+        def stable(text: str) -> str:
+            text = re.sub(r'(<meta name="djust-csrf-token" content=")[^"]*', r"\1<token>", text)
+            text = re.sub(r'(<meta name="djust-render-digest" content=")[^"]*', r"\1<digest>", text)
+            return re.sub(r'("render_digest": ")[^"]*', r"\1<digest>", text)
+
+        out.append([response.status_code, stable(response.content.decode())])
         for step in script:
             if step[0] != "event":
                 continue
@@ -1001,7 +1004,7 @@ def run_http(view_class: type, script: Script) -> List[Any]:
                 SessionStore(session.session_key), step[1], step[2] if len(step) > 2 else None
             )
             response = view_class.as_view()(posted)
-            out.append([response.status_code, response.content.decode()])
+            out.append([response.status_code, stable(response.content.decode())])
     return out
 
 

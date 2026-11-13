@@ -889,7 +889,15 @@ class RequestMixin:
         if not prepared_page:
             t0 = time.perf_counter()
             self._prepare_child_ids()
-            _, _, _ = render_view_with_diff(self, request)
+            baseline_html, _, _ = render_view_with_diff(self, request)
+            # #4108: the digest of the render this page shows, which the client
+            # echoes with its fallback POSTs (emitted outside dj-root by
+            # ``_inject_client_script``). A page prepared in one evaluation
+            # (the branch not taken here) has no separate diff render; it gets
+            # its first digest from its first fallback answer.
+            from .._render_digest import render_digest
+
+            self.__dict__["_page_render_digest"] = render_digest(self, request, baseline_html)
             t_render_diff = (time.perf_counter() - t0) * 1000
             self._lazy_thunks = list(page_lazy_thunks)
             if not uses_legacy_exposure(self):
@@ -2035,6 +2043,14 @@ class RequestMixin:
             import json as json_module
 
             PATCH_THRESHOLD = 100
+
+            # #4108: every render answer names the digest of the render it
+            # delivers; the client echoes it with its next fallback POST.
+            from .._render_digest import ANSWER_FIELD, render_digest
+
+            answer_digest = render_digest(self, request, html)
+            if answer_digest:
+                response_fields[ANSWER_FIELD] = answer_digest
 
             cache_request_id = params.get("_cacheRequestId")
 
