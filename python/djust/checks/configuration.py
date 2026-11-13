@@ -674,6 +674,37 @@ def _check_ws_path(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_view_state_in_session(errors: list[CheckMessage]) -> None:
+    """C027 — ``LIVEVIEW_CONFIG['view_state_in_session']`` must be a bool.
+
+    Only ``False`` turns the session copy of view state off. Any other value
+    (``"false"``, ``0``, ``None``) keeps the default, so a typo would silently
+    keep writing view state into ``django_session``.
+    """
+    from ..config import config
+
+    if _is_check_suppressed("djust.C027"):
+        return
+    value = config.get("view_state_in_session", True)
+    if type(value) is bool:
+        return
+    errors.append(
+        DjustError(
+            "LIVEVIEW_CONFIG['view_state_in_session'] is %s; it must be True or False."
+            % repr(value)[:80],
+            hint=(
+                "Only False keeps view state out of the Django session. With any other "
+                "value djust keeps the default and saves each view's state in the session."
+            ),
+            id="djust.C027",
+            fix_hint=(
+                "Set `LIVEVIEW_CONFIG['view_state_in_session']` to `False` (stateless) "
+                "or `True`, or remove it."
+            ),
+        )
+    )
+
+
 def _check_http_fallback_background_timeout(errors: list[CheckMessage]) -> None:
     """C028 — ``LIVEVIEW_CONFIG['http_fallback_background_timeout']`` is ``None`` or a number in (0, TIMEOUT_MAX].
 
@@ -1373,6 +1404,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # C025 -- DJUST_WS_PATH is not a root-relative path (#3186)
     _check_ws_path(errors)
     _check_liveview_middleware(errors)
+
+    # C027 -- LIVEVIEW_CONFIG['view_state_in_session'] is not a bool
+    _check_view_state_in_session(errors)
 
     # C028 -- LIVEVIEW_CONFIG['http_fallback_background_timeout'] is not None or a number > 0
     _check_http_fallback_background_timeout(errors)

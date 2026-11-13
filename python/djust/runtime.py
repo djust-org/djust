@@ -3471,10 +3471,13 @@ class ViewRuntime(RuntimeTurnPort):
                 request.tenant = getattr(view_instance, "_tenant", None)
             self._explicit_mount_binding = await sync_to_async(request_binding)(request)
 
-        # _capture_dirty_baseline: record the dirty-tracking baseline so
-        # subsequent renders/change-detection see the correct "since mount"
-        # delta. A pure view method (no transport), hasattr-guarded to stay safe
-        # against duck-typed test views.
+        # _snapshot_user_private_attrs + _capture_dirty_baseline (WS
+        # websocket.py:2598-2603): record the post-mount private-attr name set
+        # and the dirty-tracking baseline so subsequent renders/change-detection
+        # see the correct "since mount" delta. Both are pure view methods (no
+        # transport), hasattr-guarded to stay safe against duck-typed test views.
+        if hasattr(view_instance, "_snapshot_user_private_attrs"):
+            await sync_to_async(view_instance._snapshot_user_private_attrs)()
         if hasattr(view_instance, "_capture_dirty_baseline"):
             await sync_to_async(view_instance._capture_dirty_baseline)()
 

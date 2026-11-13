@@ -14,9 +14,9 @@ apps trip people up. The dev server (`uvicorn --reload`) runs a
 single process with in-memory state — perfect for local hacking,
 which can be too small for production traffic. A multi-process
 deployment needs shared durable Django sessions and a cross-process
-channel layer. A Redis state backend shares the interactive-component
-visibility ledger (2.0 removed the compiled-view cache it used to hold),
-but it does not transfer a LiveView's Python state to another process. Persist state that must survive a
+channel layer. A Redis state backend can share the compiled-view
+cache used as a diff baseline, but it does not transfer a LiveView's
+Python state to another process. Persist state that must survive a
 reconnect, and use stickiness only for app-level state that lives in one
 process's memory (a dict of rooms, a game clock).
 Then put Nginx in front and serve the WebSocket upgrade over HTTPS.
@@ -118,7 +118,7 @@ The production swap-outs:
 |---|---|---|
 | `DEBUG = True` | `DEBUG = False` | Stack traces are info disclosure; templates cache; auto-reload off |
 | `SECRET_KEY` in settings.py | `SECRET_KEY` from the environment | Signs sessions, CSRF and password-reset tokens; a key checked into the repository is a key an attacker has |
-| `STATE_BACKEND='memory'` | `STATE_BACKEND='redis'` | Workers share the interactive-component visibility ledger; persist view state separately if it must survive a reconnect on another process |
+| `STATE_BACKEND='memory'` | `STATE_BACKEND='redis'` | Workers share the compiled-view diff cache; persist view state separately if it must survive a reconnect on another process |
 | In-memory channel layer | `RedisChannelLayer` with `socket_timeout` > 5 | Pushes and presence reach clients on every worker |
 | Per-process sessions (`locmem` cache, files) | `db` or `cached_db` sessions | The page load and the WebSocket may hit different workers |
 | `ALLOWED_HOSTS=['*']` | Real domain list | Defense against host-header attacks |

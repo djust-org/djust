@@ -213,12 +213,99 @@ class TestHTTPFallbackProtocol:
 
 
 @pytest.mark.django_db
+class TestHTTPOnlySessionState:
+    """Test that GET saves session state when use_websocket is False (Issue #264)."""
+
+    def test_http_only_mode_saves_state_on_get(self, settings):
+        """When use_websocket=False, GET saves state to session so POST doesn't re-mount."""
+        view = CounterView()
+        factory = RequestFactory()
+        get_request = factory.get("/test/")
+        get_request = add_session_to_request(get_request)
+
+        from djust.config import config as lv_config
+
+        original = lv_config.get("use_websocket", True)
+        lv_config.set("use_websocket", False)
+        try:
+            view.get(get_request)
+
+            # Check that state was saved in the session
+            view_key = "liveview_/test/"
+            saved_state = get_request.session.get(view_key, {})
+            assert "count" in saved_state
+            assert saved_state["count"] == 0
+
+            # Now POST should NOT re-mount (saved state found)
+            post_request = factory.post(
+                "/test/",
+                data='{"event":"increment","params":{}}',
+                content_type="application/json",
+            )
+            post_request.session = get_request.session
+            response = view.post(post_request)
+            assert response.status_code == 200
+
+            # Modify saved session count so we can distinguish restore (5 -> 6)
+            # from re-mount (0 -> 1)
+            get_request.session[view_key] = {"count": 5}
+
+            post_request = factory.post(
+                "/test/",
+                data='{"event":"increment","params":{}}',
+                content_type="application/json",
+            )
+            post_request.session = get_request.session
+            response = view.post(post_request)
+            assert response.status_code == 200
+
+            data = json.loads(response.content.decode("utf-8"))
+            # If state was restored from session, count is 5+1=6, not 0+1=1
+            if "html" in data:
+                assert "6" in data["html"]
+            else:
+                assert "patches" in data
+        finally:
+            lv_config.set("use_websocket", original)
+
+    def test_websocket_mode_saves_state_on_get(self, settings):
+        """When use_websocket=True (default), GET saves state to session so WS mount can restore it."""
+        view = CounterView()
+        factory = RequestFactory()
+        get_request = factory.get("/test/")
+        get_request = add_session_to_request(get_request)
+
+        from djust.config import config as lv_config
+
+        original = lv_config.get("use_websocket", True)
+        lv_config.set("use_websocket", True)
+        try:
+            view.get(get_request)
+
+            # State SHOULD be in session (WS mount restores it to skip redundant mount())
+            view_key = "liveview_/test/"
+            saved_state = get_request.session.get(view_key, {})
+            assert saved_state != {}, "State should be saved to session for WS mount restoration"
+            assert "count" in saved_state
+        finally:
+            lv_config.set("use_websocket", original)
+
+
+@pytest.mark.django_db
 class TestWSMountSkip:
     """The WS mount beside the HTTP GET's saved state. (The WS consumer no
     longer restores that state in lieu of ``mount()``: 2.0 removed
     ``enable_state_snapshot``. What is left to pin is the session key the GET
     writes and the order of the pre-mount sequence.)
     """
+
+    def test_session_key_format_uses_path(self):
+        """GET saves state under liveview_{path}, where the HTTP POST fallback reads it."""
+        get_request = add_session_to_request(RequestFactory().get("/counter/"))
+        CounterView().get(get_request)
+        assert "liveview_/counter/" in get_request.session, (
+            "Session key must use liveview_{path} format so the POST fallback can find it"
+        )
 
     def test_ensure_tenant_called_before_mount(self):
         """The pre-mount auth+tenant sequence must run before ``mount()`` and

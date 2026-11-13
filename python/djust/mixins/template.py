@@ -681,6 +681,8 @@ class TemplateMixin:
 
         def _initialize_rust_view(self, request: Any = None) -> None: ...
 
+        def _refresh_cached_rust_view(self) -> None: ...
+
         def _sync_state_to_rust(
             self, preloaded_context: Optional[Dict[str, Any]] = None
         ) -> None: ...
@@ -1903,6 +1905,7 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
                 if request is None:
                     self._rust_view.commit_authenticated_page()
                     self._pending_authenticated_page = False
+                    self._refresh_cached_rust_view()
                     self._record_dj_model_fields_from_rust(self._rust_view)
                 return rendered_page
             with library_render_scope():
@@ -2333,13 +2336,18 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
                 preloaded_context=None,
             )
         html, patches_json, version = result
-        # ``static_render`` (#3626): keep no diff baseline.
+        # ``static_render`` (#3626): keep no diff baseline. Released before the
+        # re-store below, so the backend's snapshot holds no tree and no context.
         from .._static_render import release_render_baseline
 
         release_render_baseline(self)
+        # The state backend holds a snapshot, not this object; record the
+        # render so the next reader of the key starts from it.
         from .._render_provenance import RenderedDiffHTML
 
         pending_owned = isinstance(html, RenderedDiffHTML)
+        if not pending_owned:
+            self._refresh_cached_rust_view()
 
         # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
         # mass-assignment guard). This is the dominant render path — HTTP-GET

@@ -1,7 +1,8 @@
 """Thread-safe snapshots of class namespaces (#3151).
 
 djust caches per-class facts on the class itself the first time they are
-needed (``_djust_descriptor_fields_cache``, ``_djust_component_opaque``, ``_djust_warned_*``). On free-threaded CPython
+needed (``_djust_descriptor_fields_cache``, ``_djust_template_hash_slot``,
+``_djust_component_opaque``, ``_djust_warned_*``). On free-threaded CPython
 (3.14t, GIL off) such a ``setattr(cls, ...)`` can land while another thread is
 walking the same class's ``__dict__``, and the walk raises ``RuntimeError:
 dictionary changed size during iteration`` -- the first simultaneous page loads

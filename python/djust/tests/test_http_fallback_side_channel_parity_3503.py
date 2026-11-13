@@ -30,7 +30,7 @@ from djust.decorators import event_handler
 from djust.mixins import layout as layout_mixin
 from djust import state
 
-STATELESS = override_settings(LIVEVIEW_CONFIG={})
+STATELESS = override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False})
 PATH = "/channels/"
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 

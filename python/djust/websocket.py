@@ -410,7 +410,7 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
     are leaves compared by id(): a reassignment is seen, an in-place attribute
     write on them is not — call ``self.set_changed_keys('items')`` for that.
     Setting ``self._changed_keys`` directly does NOT help: it is excluded from
-    this snapshot (``CHANGE_DETECTION_IGNORED``), so the pre/post skip still
+    this snapshot (``_FRAMEWORK_INTERNAL_ATTRS``), so the pre/post skip still
     fires — the render-forcing mechanism is the ``_force_full_html`` flag that
     ``set_changed_keys()`` sets.
 
@@ -428,7 +428,7 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
     # #762: Filter framework-internal attrs so change detection doesn't fire
     # on attrs like ``template_name`` / ``http_method_names`` that the user
     # never touches.
-    from .change_detection import CHANGE_DETECTION_IGNORED
+    from .live_view import _FRAMEWORK_INTERNAL_ATTRS
 
     _static_skip = set(getattr(view_instance, "static_assigns", []))
     _fw_attrs: frozenset[str] = getattr(view_instance, "_framework_attrs", frozenset())
@@ -443,7 +443,7 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
         if isinstance(bound, ComponentDeclaration):
             items.append((name, bound))
     for k, v in items:
-        if k in _fw_attrs or k in _static_skip or k in CHANGE_DETECTION_IGNORED:
+        if k in _fw_attrs or k in _static_skip or k in _FRAMEWORK_INTERNAL_ATTRS:
             continue
         # Identity + STRUCTURAL fingerprint for mutable containers (#2664):
         # ``deep_fingerprint`` walks dict/list/tuple/set down to the leaves

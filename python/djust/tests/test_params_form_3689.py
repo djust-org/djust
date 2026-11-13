@@ -807,7 +807,7 @@ class TestTheSocket:
 # --------------------------------------------------------------------------- #
 
 
-STATELESS = override_settings(LIVEVIEW_CONFIG={})
+STATELESS = override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False})
 
 
 def _get_request(url):

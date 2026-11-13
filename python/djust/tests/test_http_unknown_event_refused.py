@@ -78,7 +78,7 @@ def test_a_real_handler_still_runs_over_http(session):
     Page.as_view()(_request("get", session))
     response = _post(session, "got_click")
     assert response.status_code == 200
-    assert "click" in response.content.decode()
+    assert session.get("liveview_" + PATH, {}).get("received") == "click"
 
 
 @pytest.mark.django_db
@@ -86,8 +86,8 @@ def test_a_real_handler_still_runs_over_http(session):
 def test_an_unknown_or_non_callable_event_is_refused_and_saves_nothing(session, event):
     """No attribute, or a plain attribute: 400, no render, no state write."""
     Page.as_view()(_request("get", session))
-    before = dict(session.items())
+    before = dict(session.get("liveview_" + PATH, {}))
     response = _post(session, event)
     assert response.status_code == 400
     assert json.loads(response.content) == {"error": "Event handler not found"}
-    assert dict(session.items()) == before
+    assert dict(session.get("liveview_" + PATH, {})) == before

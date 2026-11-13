@@ -1441,6 +1441,14 @@ class UploadMixin:
     """
 
     _upload_manager: Optional[UploadManager] = None
+    # Issue #889: each ``allow_upload()`` call recorded as a JSON-
+    # serializable dict. Its replay (``_restore_upload_configs``) ran on
+    # the WebSocket session restore, which 2.0 removed with
+    # ``enable_state_snapshot``; the record is still saved with the
+    # private state, which goes with PR 5 of the exposure-flip plan.
+    _upload_configs_saved: Optional[List[Dict[str, Any]]] = None
+    # Issue #892: version tag for those saved config dicts. See ADR-009.
+    _upload_configs_version: int = 1
     # ADR-038 E2-6: under the explicit policy, ``uploads`` is a registered,
     # render-only provider key (see ``_get_upload_context``). Legacy views
     # have no ``uploads`` context, exactly as before.
@@ -1500,6 +1508,12 @@ class UploadMixin:
                 ``UploadWriter`` and ``BufferedUploadWriter`` in
                 ``djust.uploads``. When omitted (default), uploads are
                 buffered to a temp file and validated by magic bytes.
+                ⚠️ Not session-serializable — views that use a
+                non-default writer and rely on the HTTP→WS state
+                restoration path (the default production flow) will
+                get a warning at restoration time and fall back to the
+                buffered writer. If you need a custom writer, ensure
+                your app uses a fresh-mount WS flow.
 
         Returns:
             UploadConfig object
@@ -1515,6 +1529,30 @@ class UploadMixin:
             writer=writer,
             resumable=resumable,
             allow_active_content=allow_active_content,
+        )
+        # Issue #889: track the call args in a JSON-serializable list
+        # so the WS consumer's state-restoration path can replay them.
+        # ``writer=`` is intentionally excluded — classes don't
+        # JSON-serialize; documented above.
+        if self._upload_configs_saved is None:
+            self._upload_configs_saved = []
+        self._upload_configs_saved.append(
+            {
+                "name": name,
+                "accept": accept,
+                "max_entries": max_entries,
+                "max_file_size": max_file_size,
+                "chunk_size": chunk_size,
+                "auto_upload": auto_upload,
+                "resumable": resumable,
+                "allow_active_content": allow_active_content,
+                # writer deliberately omitted — see docstring caveat.
+                "_had_writer": writer is not None,
+                # Issue #892: tag each saved dict with the schema
+                # version that produced it, so restores in a later
+                # djust version can decide how defensively to replay.
+                "_version": self._upload_configs_version,
+            }
         )
         return cfg
 

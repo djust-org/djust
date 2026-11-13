@@ -389,7 +389,7 @@ def test_partial_root_tracks_dynamic_template_changes_and_binding_authority(tmp_
     assert view.first == "first-value"
 
 
-@pytest.mark.parametrize("policy", ["explicit"])  # 2.0 removed the legacy cache arm
+@pytest.mark.parametrize("policy", ["legacy", "explicit"])
 def test_partial_root_restoration_respects_exposure_cache_isolation(
     tmp_path, rf, monkeypatch, policy
 ):
@@ -650,14 +650,31 @@ def test_forged_wrapper_failure_does_not_advance_cached_baseline(tmp_path, monke
         assert response.status_code == 200
         html = response.content.decode()
         assert "dj-view=" in html and "CachedWrappedView" in html
+        assert backend._cache, "the test must exercise an existing cached baseline"
+        baseline = {key: value[0] for key, value in backend._cache.items()}
         with pytest.raises(ImproperlyConfigured):
             CachedWrappedView.as_view()(
                 request('<main dj-root dj-view="attacker.View">FORGED</main>')
             )
-        # 2.0: no legacy baseline is kept in the backend to advance at all.
-        assert backend._cache == {}
+        # `serialize_msgpack` writes a fresh timestamp on every cache refresh.
+        # Compare all persisted state, VDOM, version and authority fields while
+        # excluding only that timestamp (the fifth field in SerializableViewState).
+        import msgpack
+
+        current = {key: value[0] for key, value in backend._cache.items()}
+        assert current.keys() == baseline.keys()
+        for key in baseline:
+            before = msgpack.unpackb(baseline[key], raw=False, strict_map_key=False)
+            after = msgpack.unpackb(current[key], raw=False, strict_map_key=False)
+            assert before[:4] == after[:4]
+            assert before[5:] == after[5:]
         response = CachedWrappedView.as_view()(request("<header>WRAPPER</header>"))
         assert response.status_code == 200 and b"before" in response.content
+        restored = CachedWrappedView()
+        restored._initialize_rust_view(request(""))
+        restored.value = "after"
+        html, patches, _ = restored.render_with_diff(request(""))
+        assert "after" in html and patches and "after" in str(patches)
 
 
 def test_named_partial_root_resolves_relative_include_for_http_and_ws(tmp_path):
@@ -799,6 +816,7 @@ def test_dynamic_root_attribute_cannot_authorize_injected_model_binding(tmp_path
 
 def test_stateful_include_is_evaluated_once_for_http_and_cached_baseline(tmp_path, monkeypatch):
     """The page and diff baseline must come from the same selected template."""
+    import msgpack
 
     from django.contrib.auth.models import AnonymousUser
     from django.contrib.sessions.backends.db import SessionStore
@@ -845,8 +863,14 @@ def test_stateful_include_is_evaluated_once_for_http_and_cached_baseline(tmp_pat
     page = response.content.decode()
     assert "FIRST" in page and "SECOND" not in page
     assert chooser.reads == 1, "HTTP page and its baseline must share one template evaluation"
-    # 2.0: the baseline is the view's own; nothing is persisted in the backend.
-    assert backend._cache == {}
+    assert backend._cache, "the test must inspect the persisted WebSocket baseline"
+    snapshots = [
+        msgpack.unpackb(value[0], raw=False, strict_map_key=False)
+        for value in backend._cache.values()
+    ]
+    assert any(
+        "FIRST" in str(snapshot[2]) and "SECOND" not in str(snapshot[2]) for snapshot in snapshots
+    )
 
 
 def test_injected_duplicate_model_binding_does_not_borrow_literal_binding_authority(tmp_path):
@@ -1042,6 +1066,14 @@ def test_http_dynamic_include_transitions_between_fragment_and_partial_root(tmp_
         assert mounted[-1]._rust_view.authenticated_partial_root()
         assert "query" in mounted[-1]._dj_model_fields
         assert "is_admin" not in mounted[-1]._dj_model_fields
+
+        # The saved baseline must be the root sent to the browser.
+        restored = DynamicIncludeView()
+        restored._initialize_rust_view(request("root.html"))
+        restored.selected = "root.html"
+        restored.query = "CHANGED"
+        html, patches, _ = restored.render_with_diff(request("root.html"))
+        assert "CHANGED" in html and patches and "CHANGED" in str(patches)
 
         third = DynamicIncludeView.as_view()(request("fragment.html"))
         assert third.status_code == 200 and b"PLAIN" in third.content

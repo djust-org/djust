@@ -94,6 +94,8 @@ class TestHttpSkipRender:
         assert "version" not in body
         # Side channels still go out, as with the WebSocket noop.
         assert body["_page_metadata"] == [{"action": "title", "value": "Renamed"}]
+        # The state change is saved; the next render shows it.
+        assert session[f"liveview_{PATH}"]["title"] == "Y"
         follow_up = _post(session, "rename", value="Z")
         assert follow_up.get("patches") or follow_up.get("html"), follow_up
 

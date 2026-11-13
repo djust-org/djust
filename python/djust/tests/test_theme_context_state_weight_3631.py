@@ -141,6 +141,13 @@ class TestTheStoredSnapshotOmitsThePresets:
                 f"preset {preset['name']!r} is inside the stored snapshot"
             )
 
+    def test_the_session_save_does_not_hold_it(self):
+        from djust._tenant_state import session_view_key
+
+        view, request, _response = _get(Counter)
+        saved = request.session[session_view_key(view, request.path)]
+        assert "theme_presets" not in saved, sorted(saved)
+
     def test_the_instance_dict_does_not_hold_it(self):
         view, _request_, _response = _get(Counter)
         assert "theme_presets" not in view.__dict__
@@ -224,6 +231,25 @@ class TestThePageShell:
         view, _request_, _response = _get(ShellView)
         _blob, state = _snapshot(view)
         assert "theme_presets" not in state
+
+    def test_no_normalizer_call_receives_the_list(self, shell_templates):
+        from unittest.mock import patch
+
+        import djust.serialization as serialization
+        from djust.request_scoped import RequestScopedList
+
+        seen = []
+        real = serialization.normalize_django_value
+
+        def spy(value, *args, **kwargs):
+            seen.append(value)
+            return real(value, *args, **kwargs)
+
+        with patch.object(serialization, "normalize_django_value", spy):
+            _get(ShellView)
+        assert seen, "the spy never ran, so it measured nothing"
+        assert not any(isinstance(v, RequestScopedList) for v in seen)
+        assert not any(isinstance(v, dict) and "theme_presets" in v for v in seen)
 
 
 class TestACustomProcessorsPlainListIsStillStored:
@@ -333,9 +359,7 @@ class Bumps(ReadsPresets):
 
 
 class TestTheHttpPostFallback:
-    def test_a_post_turn_renders_the_list_with_the_counter(self):
-        """2.0 keeps no legacy renderer between requests, so the fresh instance
-        answers with the whole page, as an explicit view does."""
+    def test_a_post_turn_renders_the_list_and_patches_only_the_counter(self):
         request = _request()
         view = Bumps()
         view.setup(request)
@@ -353,9 +377,11 @@ class TestTheHttpPostFallback:
         assert response.status_code == 200
         body = json.loads(response.content)
         presets = ThemeManager(request=post).get_available_presets()
+        patches = json.dumps(body.get("patches") or [])
         # The fallback render read the list (the text node carries its length and
-        # first name).
-        assert f"C1|n{len(presets)}|first={presets[0]['name']}" in body["html"], body
+        # first name), and only that one text node moved.
+        assert f"C1|n{len(presets)}|first={presets[0]['name']}" in patches, patches
+        assert len(body["patches"]) == 1, patches
 
     def test_processor_context_injects_the_list_and_removes_it_again(self):
         request = _request()
@@ -528,6 +554,20 @@ async def _drive_ws(view_name):
 
 @pytest.mark.asyncio
 class TestTheWebSocketPath:
+    async def test_every_store_after_the_mount_and_each_event_omits_the_presets(self):
+        from asgiref.sync import sync_to_async
+        from django.test import override_settings
+
+        presets_bytes = await sync_to_async(lambda: len(_presets_bytes(_request())))()
+        with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+            _frames, stored = await _drive_ws("WsCounter")
+        refreshed = [entry for entry in stored if entry[2] == "refresh"]
+        assert len(refreshed) >= 3, f"the post-render store never ran: {stored}"
+        for size, keys, _kind, blob in refreshed:
+            assert "theme_presets" not in keys, keys
+            assert size < presets_bytes, f"{size} bytes stored; the list alone is {presets_bytes}"
+            assert b"primary_hsl" not in blob
+
     async def test_the_events_still_patch_the_counter(self):
         from django.test import override_settings
 

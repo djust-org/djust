@@ -4,6 +4,8 @@ ComponentMixin - Component lifecycle and management for LiveView.
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from .._class_snapshot import attribute_names
+from ..serialization import normalize_django_value
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -89,6 +91,70 @@ class ComponentMixin:
 
             component._set_parent_callback(component_callback)
 
+    def _extract_component_state(self, component: Any) -> Dict[str, Any]:
+        """
+        Extract state from a component for session storage.
+        """
+        import json as json_module
+
+        from ..components.base import BoundComponent, Component
+        from ..components._interactive import DropdownMenu
+
+        if isinstance(component, DropdownMenu):
+            return component._dump_session_binding()
+        if getattr(type(component), "_djust_component_collection", False):
+            return component._dump_session_collection()  # type: ignore[no-any-return]
+
+        if isinstance(component, BoundComponent):
+            # ADR-031 D7: a bound component is saved as its State, nothing else.
+            return dict(component.state)
+        if isinstance(component, Component):
+            # ADR-033 D6: a plain component's kwargs are its state; the
+            # restore writes them back through ``__setattr__``.
+            return dict(component.state)
+
+        state: Dict[str, Any] = {}
+        for key in attribute_names(component):  # dir() races class writes (#3151)
+            if not key.startswith("_") and key not in ("template_name",):
+                try:
+                    value = getattr(component, key)
+                    if not callable(value):
+                        try:
+                            json_module.dumps(value)
+                            state[key] = value
+                        except (TypeError, ValueError):
+                            pass  # Value not JSON-serializable; skip
+                except (AttributeError, TypeError):
+                    pass  # Attribute not accessible; skip
+        return state
+
+    def _restore_component_state(self, component: Any, state: Dict[str, Any]) -> None:
+        """
+        Restore state to a component from session storage.
+
+        #2252: the session write ran through ``normalize_django_value(...,
+        state_roundtrip=True)``, so a ``Decimal`` arrives here in the tagged
+        form. Decode before assigning — the single decode point for both
+        callers (``mixins/request.py``'s POST restore and ``runtime.py``'s
+        mount restore).
+        """
+        from ..serialization import decode_state_roundtrip
+        from ..components._interactive import DropdownMenu
+
+        state = decode_state_roundtrip(state)
+        if isinstance(component, DropdownMenu):
+            component._restore_session_binding(state)
+            return
+        if getattr(type(component), "_djust_component_collection", False):
+            component._restore_session_collection(state)
+            return
+        for key, value in state.items():
+            if not key.startswith("_"):
+                try:
+                    setattr(component, key, value)
+                except (AttributeError, TypeError):
+                    pass
+
     def _assign_component_ids(self) -> None:
         """
         Automatically assign IDs to components based on their attribute names.
@@ -100,3 +166,36 @@ class ComponentMixin:
                 # _auto_id is a dynamic framework slot read via hasattr in
                 # components/base.py (_generate_id); not declared on the class.
                 value._auto_id = key  # type: ignore[union-attr]
+
+    def _save_components_to_session(self, request: "HttpRequest", context: Dict[str, Any]) -> None:
+        """
+        Save component state to session with stable IDs.
+        """
+        from ..components.base import is_session_component
+        from ..components._interactive import DropdownMenu
+
+        from .._tenant_state import session_view_key
+
+        from ..config import view_state_in_session
+
+        view_key = session_view_key(self, request.path)
+        if view_key is None:  # tenant view, no tenant resolved: save nothing (#2973)
+            return
+        if not view_state_in_session():  # stateless view-state mode
+            return
+        component_state: Dict[str, Any] = {}
+
+        for key, component in context.items():
+            if component is not None and is_session_component(component):
+                # component_id is declared on LiveComponent; on the plain
+                # Component branch it is set dynamically here (stable session ID).
+                if not isinstance(component, DropdownMenu) and not getattr(
+                    type(component), "_djust_component_collection", False
+                ):
+                    component.component_id = key
+                component_state[key] = self._extract_component_state(component)
+
+        request.session[f"{view_key}_components"] = normalize_django_value(
+            component_state, state_roundtrip=True
+        )
+        request.session.modified = True

@@ -412,13 +412,13 @@ def rendered_state_names(view_class: type) -> tuple:
         return cast(tuple, cached)
     from inspect import getattr_static
 
-    from .._exposure import _NAME, provider_owners, reserved_state_names
-    from ..live_view import _descriptor_fields
+    from .._exposure import _NAME, _RESERVED_CONTEXT_KEYS, _UNSAFE_KEYS, provider_owners
+    from ..live_view import _FRAMEWORK_INTERNAL_ATTRS, LiveView, _descriptor_fields
 
-    # The same list the exposure contract refuses (#4070), plus ``streams``,
-    # which the streams provider renders.
-    reserved = set(reserved_state_names())
+    reserved = set(_FRAMEWORK_INTERNAL_ATTRS) | _RESERVED_CONTEXT_KEYS | _UNSAFE_KEYS
     reserved.add("streams")
+    for base in LiveView.__mro__:
+        reserved.update(_class_namespace(base))
     owned = provider_owners(view_class)
     names = []
     for name, (kind, _slot) in _descriptor_fields(view_class).items():

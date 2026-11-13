@@ -91,6 +91,26 @@ def test_named_partial_missing_name_raises(debug, tmp_path):
             MissingView().get_template()
 
 
+@pytest.mark.parametrize("debug", [False, True])
+def test_named_partial_template_hash_tracks_source_change(debug, tmp_path):
+    files(tmp_path)
+
+    class Before(LiveView):
+        exposure_policy = "legacy"
+        template_name = "sub/page.html#card"
+
+    class After(LiveView):
+        exposure_policy = "legacy"
+        template_name = "sub/page.html#card"
+
+    with override_settings(TEMPLATES=settings_for(tmp_path, debug)):
+        first = Before()._get_cached_template_hash_slot()
+    files(tmp_path, "SECOND")
+    with override_settings(TEMPLATES=settings_for(tmp_path, debug)):
+        second = After()._get_cached_template_hash_slot()
+    assert first != second
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("debug", [False, True])
 async def test_named_partial_websocket_mount_and_event(debug, tmp_path):
@@ -188,6 +208,21 @@ def test_named_partial_queryset_jit_omits_sibling_fields(tmp_path):
             User.objects.filter(username="selected"), template, "people"
         )
     assert rows == [{"username": "selected", "first_name": "First", "last_name": "Last"}]
+
+
+def test_named_partial_hash_tracks_base_changes_on_same_view_class(tmp_path):
+    files(tmp_path)
+
+    class NamedView(LiveView):
+        exposure_policy = "legacy"
+        template_name = "sub/page.html#card"
+
+    with override_settings(TEMPLATES=settings_for(tmp_path, False)):
+        first = NamedView()._get_cached_template_hash_slot()
+    files(tmp_path, "SECOND")
+    with override_settings(TEMPLATES=settings_for(tmp_path, False)):
+        second = NamedView()._get_cached_template_hash_slot()
+    assert first != second
 
 
 def test_named_partial_jit_ignores_uninvoked_nested_verbatim_and_comments(tmp_path):

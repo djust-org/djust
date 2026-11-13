@@ -29,7 +29,7 @@ from djust.rate_limit import reset_handler_buckets
 
 pytestmark = pytest.mark.django_db
 
-STATELESS = override_settings(LIVEVIEW_CONFIG={})
+STATELESS = override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False})
 PATH = "/bg/"
 
 LOG: list = []
@@ -196,7 +196,7 @@ class TestHandlerWork:
         assert view.status == "async-done", body
 
     def test_default_policy_runs_it_too(self):
-        """Any POST is one response."""
+        """Not only ``view_state_in_session=False``: any POST is one response."""
         view, _, body = _post(BackgroundView, "kick_off")
         assert view.status == "done", body
 
@@ -249,8 +249,7 @@ class TestWorkMountQueued:
         """The one answer holds the rows; it does not leave ``-`` on the page."""
         with STATELESS:
             _, _, body = _post(LoadsAfterFirstRender, "select")
-        # A whole-page answer (2.0 keeps no legacy renderer to diff against).
-        assert ">rows</p>" in body, body
+        assert '"text": "rows"' in body, body
         assert "saw:rows" in body, body
 
     def test_a_denied_object_is_never_read(self):
@@ -322,10 +321,16 @@ class RebuiltWithSavedState(LoadsAfterFirstRender):
 setattr(sys.modules[__name__], "RebuiltWithSavedState", RebuiltWithSavedState)
 
 
-class TestMountWorkRunsOnEveryPost:
-    def test_default_policy_runs_mount_s_reads_on_every_post(self):
-        """2.0 keeps no legacy view state, so every POST mounts again and the
-        work ``mount()`` queued runs each time, before the handler."""
+class TestMountWorkIsNotRepeatedOverRestoredState:
+    def test_default_policy_with_saved_state_does_not_run_mount_s_reads_again(self):
+        """Mount's tasks are dropped when ``mount()`` reruns over a LOADED saved state.
+
+        The saved state is put back on top of ``mount()``, so mount's queued
+        read would only repeat; its tasks are discarded. The first POST after a
+        GET is the exception (#3635, ``test_http_fallback_default_policy_load_3635``):
+        the state the GET saved is a loading state, so its work runs once. Here
+        the first POST has run it; the second finds the loaded state saved.
+        """
         RebuiltWithSavedState.loads = 0
         initial = _get_request()
         RebuiltWithSavedState().get(initial)
@@ -345,7 +350,7 @@ class TestMountWorkRunsOnEveryPost:
         assert RebuiltWithSavedState.loads == 1
         response = post_again()
         assert response.status_code == 200, response.content
-        assert RebuiltWithSavedState.loads == 2
+        assert RebuiltWithSavedState.loads == 1, "the loaded state is saved: nothing to run again"
 
 
 class RefusalView(LoadsAfterFirstRender):

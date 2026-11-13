@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Iterator, Sequence
 from copy import deepcopy
 import inspect
+import re
 from types import FunctionType
 from typing import Literal, NoReturn, Protocol, TypeVar, TypedDict
 from uuid import uuid4
@@ -60,6 +61,21 @@ D = TypeVar("D", bound="DropdownMenu")
 _SELECTED = OutputContract("selected", (("value", str),))
 _TOGGLED = OutputContract("toggled", (("open", bool),))
 _SOURCE = frozenset({SOURCE_PARAMETER})
+
+
+def _binding_values(state: object) -> tuple[str, bool, str]:
+    """Validate a persisted record without materializing or mutating a binding."""
+    if type(state) is not dict or set(state) != {"binding_id", "open", "selected"}:
+        raise ValueError("Invalid interactive component snapshot")
+    identity, opened, selected = state["binding_id"], state["open"], state["selected"]
+    if (
+        type(identity) is not str
+        or re.fullmatch(r"cmp_[0-9a-f]{32}", identity) is None
+        or type(opened) is not bool
+        or type(selected) is not str
+    ):
+        raise ValueError("Invalid interactive component snapshot")
+    return identity, opened, selected
 
 
 class Outputs:
@@ -358,6 +374,41 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         self._selected, self._open = value, False
         await self._emit(_SELECTED, {"value": value})
 
+    def _dump_binding(self) -> dict[str, object]:
+        self._bound_owner()
+        return {"binding_id": self.component_id, **self.state}
+
+    def _dump_session_binding(self) -> dict[str, object]:
+        state = self._dump_binding()
+        if self.visibility == "client":
+            state["observation"] = {
+                "lifetime": self._observation_lifetime,
+                "sequence": self._observation_sequence,
+            }
+        return state
+
+    def _restore_session_binding(self, state: dict[str, object]) -> None:
+        if type(state) is not dict:
+            raise ValueError("Invalid interactive component snapshot")
+        record = dict(state)
+        observation = record.pop("observation", None)
+        if "observation" in state and (
+            type(observation) is not dict
+            or set(observation) != {"lifetime", "sequence"}
+            or type(observation["lifetime"]) is not str
+            or re.fullmatch(r"obs_[0-9a-f]{32}", observation["lifetime"]) is None
+            or type(observation["sequence"]) is not int
+            or not 0 <= observation["sequence"] <= 2**53 - 1
+        ):
+            raise ValueError("Invalid visibility observation snapshot")
+        self._restore_binding(record)
+        if type(observation) is dict and self.visibility == "client":
+            self._observation_lifetime = observation["lifetime"]
+            self._observation_sequence = observation["sequence"]
+            # A restored session cannot resurrect an expired/evicted ledger
+            # entry. Only a fresh rendered binding lifetime may register one.
+            self._observation_registered = True
+
     def _restore_state(self, state: object) -> None:
         """Restore state within this lifetime, without callbacks or identity changes."""
         self._bound_owner()
@@ -369,6 +420,18 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         ):
             raise ValueError("Invalid interactive component state")
         opened, selected = state["open"], state["selected"]
+        self._open = opened if self.visibility == "server" else False
+        self._selected = selected if self._allowed(selected) else ""
+
+    def _restore_binding(self, state: dict[str, object]) -> None:
+        owner = self._bound_owner()
+        identity, opened, selected = _binding_values(state)
+        collision = owner._components.get(identity)
+        if collision is not None and collision is not self:
+            raise ValueError("Interactive component identity collision")
+        owner._components.pop(self.component_id)
+        self.component_id = identity
+        owner._components[identity] = self
         self._open = opened if self.visibility == "server" else False
         self._selected = selected if self._allowed(selected) else ""
 
@@ -437,6 +500,9 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
 
 
 C = TypeVar("C", bound="DropdownMenuCollection")
+_MEMBER_FIELDS = frozenset(
+    {"key", "label", "items", "visibility", "binding_id", "open", "selected"}
+)
 
 
 class DropdownMenuCollection(ComponentDeclaration):
@@ -609,3 +675,89 @@ class DropdownMenuCollection(ComponentDeclaration):
         for member in self.values:
             if member.visibility == "client":
                 member._renew_observation_lifetime()
+
+    # -- server session persistence (legacy policy) ---------------------------
+
+    def _dump_session_collection(self) -> dict[str, object]:
+        self._bound_owner()
+        return {
+            "version": 1,
+            "members": [
+                {
+                    "key": member.key,
+                    "label": member.label,
+                    "items": member.items,
+                    "visibility": member.visibility,
+                    **member._dump_session_binding(),
+                }
+                for member in self.values
+            ],
+        }
+
+    def _restore_session_collection(self, state: object) -> None:
+        """Replace the members with a saved record, validated in full first.
+
+        The record is server-written session state: the membership of the last
+        ``sync()``, never a client snapshot. No callback or class is read from
+        it; an invalid record changes nothing.
+        """
+        view = self._bound_owner()
+        if (
+            type(state) is not dict
+            or set(state) != {"version", "members"}
+            or state["version"] != 1
+            or type(state["members"]) is not list
+        ):
+            raise ValueError("Invalid interactive collection snapshot")
+        restored: list[DropdownMenu] = []
+        keys: set[str] = set()
+        identities: set[str] = set()
+        current = set(id(member) for member in self._members.values())
+        for record in state["members"]:
+            if type(record) is not dict or not _MEMBER_FIELDS <= set(record):
+                raise ValueError("Invalid interactive collection snapshot")
+            if set(record) - _MEMBER_FIELDS - {"observation"}:
+                raise ValueError("Invalid interactive collection snapshot")
+            key = record["key"]
+            if type(key) is not str or not key or key in keys:
+                raise ValueError("Invalid interactive collection snapshot")
+            if record["visibility"] not in ("server", "client") or type(record["label"]) is not str:
+                raise ValueError("Invalid interactive collection snapshot")
+            try:
+                member = self._new_member(
+                    key, record["label"], record["items"], record["visibility"]
+                )
+            except (TypeError, ValueError):
+                raise ValueError("Invalid interactive collection snapshot") from None
+            identity, opened, selected = _binding_values(
+                {name: record[name] for name in ("binding_id", "open", "selected")}
+            )
+            occupied = view._components.get(identity)
+            if identity in identities or (occupied is not None and id(occupied) not in current):
+                raise ValueError("Interactive component identity collision")
+            observation = record.get("observation")
+            if "observation" in record and (
+                type(observation) is not dict
+                or set(observation) != {"lifetime", "sequence"}
+                or type(observation["lifetime"]) is not str
+                or re.fullmatch(r"obs_[0-9a-f]{32}", observation["lifetime"]) is None
+                or type(observation["sequence"]) is not int
+                or not 0 <= observation["sequence"] <= 2**53 - 1
+            ):
+                raise ValueError("Invalid visibility observation snapshot")
+            member.component_id = identity
+            member._open = opened if member.visibility == "server" else False
+            member._selected = selected if member._allowed(selected) else ""
+            if type(observation) is dict and member.visibility == "client":
+                member._observation_lifetime = observation["lifetime"]
+                member._observation_sequence = observation["sequence"]
+                member._observation_registered = True
+            keys.add(key)
+            identities.add(identity)
+            restored.append(member)
+        for member in self.values:
+            self._retire(view, member)
+        for member in restored:
+            self._install(view, member)
+        self._members = {member.key: member for member in restored}
+        self._order = [member.key for member in restored]

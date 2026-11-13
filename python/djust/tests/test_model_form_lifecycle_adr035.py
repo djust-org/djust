@@ -230,10 +230,12 @@ def test_object_and_configuration_never_reach_the_session():
     alice, mine, _ = _world()
     request, response = _get(EditGroupView, alice, mine.pk)
     assert response.status_code == 200
-    # 2.0 keeps no legacy view state in the session at all (no public copy,
-    # no private copy), so neither the object nor the view's configuration
-    # can reach it.
-    assert not [k for k in request.session.keys() if k.startswith("liveview_")]
+    saved = request.session["liveview_" + request.path]
+    for name in ("object", "kwargs", "model", "queryset", "pk_url_kwarg", "slug_field"):
+        assert name not in saved, name
+    assert "form_data" in saved
+    private = request.session.get("liveview_%s__private" % request.path, {})
+    assert not any("authorized" in key or key == "_object" for key in private), private
 
 
 @pytest.mark.django_db

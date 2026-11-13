@@ -47,6 +47,8 @@ from typing import Any, Callable
 import pytest
 from django.template import Context as DjangoContext
 from django.template import Template as DjangoTemplate
+from django.test import RequestFactory
+from django.contrib.sessions.middleware import SessionMiddleware
 
 from djust import LiveView, _rust
 from djust.serialization import _crosses_as_encoded, normalize_django_value
@@ -391,6 +393,35 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
     """
 
     # Stays legacy (split from the explicit migration): this test's subject is a legacy mechanism (see the legacy-subject worklist).
+    def test_the_session_snapshot_holds_no_function_address(self) -> None:
+        """The REAL GET path: `mixins/request.py` writes
+        `request.session[view_key]` through
+        `normalize_django_value(..., state_roundtrip=True)`."""
+
+        class _CallableStateView(LiveView):
+            exposure_policy = "legacy"
+            template = "<div dj-root>{{ cb }}</div>"
+
+            def mount(self, request, **kwargs):
+                self.cb = plain_lambda
+
+            def get_context_data(self, **kwargs):
+                return {"cb": self.cb}
+
+        factory = RequestFactory()
+        request = factory.get("/callable-2621/")
+        SessionMiddleware(lambda _r: None).process_request(request)
+        request.session.save()
+        _CallableStateView().get(request)
+
+        saved = request.session["liveview_/callable-2621/"]
+        assert saved["cb"] is None, f"a live callable reached the session: {saved['cb']!r}"
+        # The strong form: the whole snapshot is JSON-encodable with no
+        # address anywhere in it, which is what the encoder-less session
+        # serializer actually requires.
+        blob = json.dumps(saved)
+        assert "0x" not in blob and "<function" not in blob, blob
+
     # Stays legacy (split from the explicit migration): this test's subject is a legacy mechanism (see the legacy-subject worklist).
     def test_the_client_state_payload_holds_no_function_address(self) -> None:
         """The other outbound channel, measured rather than assumed.

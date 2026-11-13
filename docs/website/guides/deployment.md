@@ -153,7 +153,7 @@ When a VDOM patch fails on the client, djust falls back to the server-rendered "
 
 | Concern | Setting | What it does |
 |---|---|---|
-| **State backend** | `DJUST_CONFIG['STATE_BACKEND']` (and `DJUST_CONFIG['REDIS_URL']`) | Holds the visibility ledger of client-owned interactive components (`DropdownMenu`). Until 2.0 it also cached each legacy view's compiled view (`RustLiveView`) as the diff baseline for its next mount; 2.0 removed that cache, so no view's renderer is stored there. It does not restore a view's state (its assigns) on another process: that needs `state(..., persist="server")` plus a session store every process shares (see [Option B](scaling.md#option-b-redis-between-processes)). |
+| **State backend** | `DJUST_CONFIG['STATE_BACKEND']` (and `DJUST_CONFIG['REDIS_URL']`) | Caches each session's compiled view (`RustLiveView`) as the diff baseline for its next WebSocket mount. It does not restore a view's state (its assigns) on another process: that needs `state(..., persist="server")` plus a session store every process shares (see [Option B](scaling.md#option-b-redis-between-processes)). |
 | **Channel layer** | `CHANNEL_LAYERS` (Django Channels) | Carries messages between sessions: `push_to_view()`, presence, cursor tracking and DB-change notifications. Messages between processes need a Redis layer. |
 
 **Required configuration** any time more than one process serves WebSockets, **or** any code calls [`push_to_view` / `apush_to_view`](../advanced/server-push.md) from another process (Celery workers, management commands, cron jobs):
@@ -780,7 +780,7 @@ def clear_django_sessions():
 
 ### Choosing `SESSION_TTL`
 
-`DJUST_CONFIG["SESSION_TTL"]` (default 3600 s) is how long the state backend keeps an entry after it was last written. (2.0 removed the per-session cached view of a legacy view, which was most of what it held; the sizing below describes that 1.x cache.) Set it to your **reconnect window**: how long after a disconnect a client should still find its cached view. Longer only costs memory. The multiplayer game in [Scaling djust](scaling.md#memory) uses 120 s.
+`DJUST_CONFIG["SESSION_TTL"]` (default 3600 s) is how long the state backend keeps a session's cached view after it was last written. Set it to your **reconnect window**: how long after a disconnect a client should still find its cached view. Longer only costs memory. The multiplayer game in [Scaling djust](scaling.md#memory) uses 120 s.
 
 Size for it: the backend keeps one entry per session **and** LiveView page, so it holds about *new (session, page) visits per second × `SESSION_TTL`* entries: sessions × the LiveView pages each visits within the TTL. That is about 270 KB each in-process in one load test (see [In-Memory](#in-memory-one-process)). At 5 new page visits a second, 120 s is 600 entries (about 160 MB) and the default hour is 18,000 (about 5 GB). Redis expires keys with the same TTL.
 

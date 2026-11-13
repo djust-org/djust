@@ -16,6 +16,10 @@ import time
 import warnings
 
 import pytest
+from asgiref.sync import sync_to_async
+from channels.testing import WebsocketCommunicator
+from django.contrib.sessions.backends.db import SessionStore
+from django.test import override_settings
 
 from djust import LiveView
 from djust._rust import RustLiveView
@@ -403,3 +407,72 @@ class Grows(LiveView):
     def grow(self, **kwargs):
         self.n += 1
         self.rows = [*self.rows, *("row-%d-" % i + "z" * 400 for i in range(60))]
+
+
+async def _mount_then_grow(events: int):
+    from djust.websocket import LiveViewConsumer
+
+    from .test_ws_send_version_1788 import _receive_until
+
+    def make_key():
+        session = SessionStore()
+        session.create()
+        return session.session_key
+
+    key = await sync_to_async(make_key)()
+
+    class Session:
+        session_key = key
+
+    communicator = WebsocketCommunicator(
+        LiveViewConsumer.as_asgi(),
+        "/ws/",
+        headers=[(b"host", b"testserver"), (b"origin", b"http://testserver")],
+    )
+    communicator.scope["session"] = Session()
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
+        connected, _ = await communicator.connect()
+        assert connected
+        await communicator.receive_json_from()
+        await communicator.send_json_to({"type": "mount", "view": f"{MODULE}.Grows", "url": "/"})
+        await _receive_until(communicator, "mount")
+        for ref in range(1, events + 1):
+            await communicator.send_json_to(
+                {"type": "event", "event": "grow", "params": {}, "ref": ref}
+            )
+            await _receive_until(communicator, "patch")
+        await communicator.disconnect()
+    return key
+
+
+@pytest.mark.asyncio
+class TestTheRealConsumer:
+    async def test_a_view_that_grows_during_its_life_is_reported_once(self):
+        from djust import state_backends
+
+        backend = InMemoryStateBackend(state_size_warning_kb=20)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(state_backends, "get_backend", lambda: backend)
+                session_key = await _mount_then_grow(events=6)
+        messages = _large_warnings(caught)
+        assert len(messages) == 1, messages
+        assert "Large LiveView state detected" in messages[0]
+        # The cache key holds the Django session key (a bearer credential); the
+        # warning must not carry it. Prove the key really is in the cache key.
+        assert any(session_key in cache_key for cache_key in backend._cache), list(backend._cache)
+        assert session_key not in messages[0]
+        for cache_key in backend._cache:
+            assert cache_key not in messages[0]
+
+    async def test_a_view_that_stays_small_is_never_reported(self):
+        from djust import state_backends
+
+        backend = InMemoryStateBackend(state_size_warning_kb=20)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(state_backends, "get_backend", lambda: backend)
+                await _mount_then_grow(events=0)
+        assert _large_warnings(caught) == []

@@ -80,7 +80,9 @@ async def test_tail_mutation_reaches_browser_on_real_event():
     from django.test import override_settings
     from .test_in_place_mutation_2664 import _mounted, _receive_until
 
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DJUST_CONFIG={}):
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[__name__], DJUST_CONFIG={"view_state_in_session": False}
+    ):
         socket = await _mounted(f"{__name__}.LargeTailView", "/large-tail/")
         try:
             await socket.send_json_to(

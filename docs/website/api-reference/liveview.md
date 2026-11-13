@@ -15,7 +15,7 @@ from djust import LiveView
 | `template_name`     | `str`  | —       | Path to a Django template file                                                |
 | `template`          | `str`  | —       | Inline HTML template string                                                   |
 | `temporary_assigns` | `dict` | `{}`    | State that resets to the default after each render (e.g., `{"messages": []}`) |
-| `static_render`     | `bool` | `False` | Keep no diff baseline: the rendered tree and context copy are dropped after every render, so the view holds only the template and a counter, and any later render sends the whole page (see [Large LiveView state](../guides/BEST_PRACTICES.md#6-large-liveview-state)) |
+| `static_render`     | `bool` | `False` | Keep no diff baseline: the rendered tree and context copy are dropped after every render, so the stored snapshot is the template and a counter, and any later render sends the whole page (see [Large LiveView state](../guides/BEST_PRACTICES.md#6-large-liveview-state)) |
 | `query_budget`      | `int` or `dict` | `None` | Query budget: an int caps mount + first render together; a dict caps each phase (`"mount"`, `"render"`, `"event"`, `"events": {handler: n}`). Read by `LiveViewSmokeTest` and measured at run time in `DEBUG` (see [Per-view query budgets](../testing/index.md#per-view-query-budgets)) |
 | `params_form`       | `Form` class | `None` | Django form that declares the URL's query parameters; `handle_params()` receives its `cleaned_data` (see [`handle_params`](#handle_paramsparams-uri)) |
 | `params_form_fallback` | `str` | `"initial"` | What the default `handle_invalid_params()` hands `handle_params()` when `params_form` rejects the URL: `"initial"` (every field's initial value) or `"fields"` (keep the fields that validated; see [Navigation](../guides/navigation.md#declared-parameters-params_form)). Anything else raises `ImproperlyConfigured` and is a V023 error |
@@ -99,13 +99,13 @@ def get_context_data(self, **kwargs):
     return context
 ```
 
-A key your override adds on top of `super()`'s result renders and is computed again on every render; it is never state.
+A key your override adds on top of `super()`'s result renders but is never saved in the session: it is computed again on every render. Only the view's attributes are state.
 
 ---
 
 #### `get_render_only_context() -> dict`
 
-Template values that render on every transport but are never saved (2.0 saves nothing of a legacy view between requests anyway; the legacy lazy child's session save leaves them out). Models, QuerySets and lists of models in it go through the JIT like public attributes (only the paths the template reads, with `djust_exclude_fields` applied). Use it for content that must not persist (a conversation's messages, a document's text) or for rows a handler already holds on a private attribute:
+Template values that render on every transport but are never saved: not by the HTTP GET, not by the page-POST fallback, not by a socket turn's session save. Models, QuerySets and lists of models in it go through the JIT like public attributes (only the paths the template reads, with `djust_exclude_fields` applied). Use it for content that must not persist (a conversation's messages, a document's text) or for rows a handler already holds on a private attribute:
 
 ```python
 class ChatView(LiveView):

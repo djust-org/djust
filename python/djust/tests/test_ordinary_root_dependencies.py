@@ -1,6 +1,7 @@
 """Ordinary roots reached through includes remain ordinary LiveViews on Django 6."""
 
 import django
+import msgpack
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.db import SessionStore
@@ -56,8 +57,14 @@ def test_stateful_ordinary_include_uses_one_page_and_baseline(tmp_path, monkeypa
     assert "FIRST" in response.content.decode()
     assert "SECOND" not in response.content.decode()
     assert chooser.reads == 1
-    # 2.0: the baseline is the view's own; nothing is persisted in the backend.
-    assert backend._cache == {}
+    assert backend._cache
+    snapshots = [
+        msgpack.unpackb(value[0], raw=False, strict_map_key=False)
+        for value in backend._cache.values()
+    ]
+    assert any(
+        "FIRST" in str(snapshot[2]) and "SECOND" not in str(snapshot[2]) for snapshot in snapshots
+    )
 
 
 @pytest.mark.django_db
@@ -242,7 +249,14 @@ def test_ordinary_wrapper_competing_root_does_not_advance_baseline(tmp_path, mon
 
     with override_settings(TEMPLATES=templates):
         assert View.as_view()(request("<header>OK</header>")).status_code == 200
+        before = {
+            key: msgpack.unpackb(value[0], raw=False)[2:4] for key, value in backend._cache.items()
+        }
+        assert before
         with pytest.raises(ImproperlyConfigured):
             View.as_view()(request('<div dj-root dj-view="outside.Page">OUTSIDE</div>'))
-        # 2.0: no legacy baseline is kept in the backend to advance at all.
-        assert backend._cache == {}
+        # Snapshot timestamps may refresh during state synchronization; the delivered
+        # VDOM and its wire version must remain exactly the last successful baseline.
+        assert {
+            key: msgpack.unpackb(value[0], raw=False)[2:4] for key, value in backend._cache.items()
+        } == before

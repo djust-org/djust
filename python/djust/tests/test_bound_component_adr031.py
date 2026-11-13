@@ -51,7 +51,7 @@ from django.utils.html import escape  # noqa: E402
 
 from djust import LiveView  # noqa: E402
 from djust._rust import render_template  # noqa: E402
-from djust.components.base import BoundComponent  # noqa: E402
+from djust.components.base import BoundComponent, SESSION_COMPONENT_TYPES  # noqa: E402
 from djust.components.base import LiveComponent as BaseLiveComponent  # noqa: E402
 from djust.components.descriptors import (  # noqa: E402
     Accordion,
@@ -161,7 +161,7 @@ class Page(LiveView):
 
     def mount(self, request: Any, **kwargs: Any) -> None:
         # Touching the component in mount puts its slot in the view's private
-        # state (``_get_private_state``, still used by the legacy lazy child).
+        # state, the path the HTTP round trip persists.
         self.nav.active = self.nav.active
 
 
@@ -470,8 +470,8 @@ class TestBoundComponentHttpPost:
         )
         assert response.status_code == 200, response.content
         assert b"http" in response.content
-        # 2.0 keeps no legacy view or component state between requests.
-        assert not [k for k in session.keys() if k.startswith("liveview_")]
+        assert session["liveview_/probe/"]["nav"]["active"] == "http"
+        assert session["liveview_/probe/"]["nav"]["count"] == 1
 
     def test_unknown_component_and_undecorated_method_are_400(self):
         session = self._get()
@@ -485,6 +485,7 @@ class TestBoundComponentHttpPost:
         assert undecorated.status_code == 400
         absent = self._post(session, {"event": "no_such", "params": {"component_id": "nav"}})
         assert absent.status_code == 400
+        assert session["liveview_/probe/"]["nav"]["active"] == "a"
 
     def test_meta_event_alias_still_works_over_http(self):
         session = self._get()
@@ -492,6 +493,7 @@ class TestBoundComponentHttpPost:
         # No component_id: the view has no ``set_active`` (only the component
         # does), so the request is refused rather than silently succeeding.
         assert response.status_code in (200, 400)
+        assert session["liveview_/probe/"]["nav"]["active"] == "a"
 
 
 # ------------------------------------------------------------------ #
@@ -510,6 +512,21 @@ class TestBoundComponentPersistence:
         # The restore loop (time_travel.py) applies each key with safe_setattr.
         assert safe_setattr(view.nav, "active", "back", allow_private=False) is True
         assert view.nav.state["active"] == "back"
+
+    def test_session_save_writes_the_state_and_restore_reads_it(self):
+        view = Page()
+        view.nav.active = "s"
+        request = _request()
+        view._save_components_to_session(request, view.get_context_data())
+        saved = request.session["liveview_/page/_components"]
+        assert saved["nav"] == {"active": "s", "count": 0, "component_id": "nav"}
+        json.dumps(saved)  # no bound-object leak
+
+        fresh = Page()
+        assert isinstance(fresh.nav, SESSION_COMPONENT_TYPES)
+        fresh._restore_component_state(fresh.nav, saved["nav"])
+        assert fresh.nav.active == "s"
+        assert isinstance(fresh.nav.state, Toggle.State)
 
     def test_private_state_round_trip_persists_a_component_touched_in_mount(self):
         view = Page()
@@ -596,3 +613,22 @@ class TestBoundComponentParity:
             if p.resolve() != this_file and pattern.search(p.read_text(errors="ignore"))
         ]
         assert hits == []
+
+    def test_session_gates_share_one_type_tuple(self):
+        """The save gate and the restore gate must not drift apart (#1646).
+
+        The save (``mixins/components.py``) and the HTTP page-POST fallback
+        restore (``mixins/request.py``) share the predicate. ``runtime.py`` had
+        the socket restore's gate, removed in 2.0 with ``enable_state_snapshot``;
+        it is pinned at 0, so a restore added back there has to update this pin."""
+        sources = {
+            "python/djust/mixins/components.py": 1,
+            "python/djust/mixins/request.py": 1,
+            "python/djust/runtime.py": 0,
+        }
+        for rel, expected in sources.items():
+            text = (REPO / rel).read_text()
+            # One shared predicate: SESSION_COMPONENT_TYPES plus ADR-034 keyed
+            # collections (components.base.is_session_component).
+            assert text.count("is_session_component(component)") == expected, rel
+            assert "isinstance(component, (Component, LiveComponent))" not in text, rel

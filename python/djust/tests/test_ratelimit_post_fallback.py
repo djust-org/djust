@@ -70,9 +70,7 @@ class _PostFallbackThrottled(LiveView):
     )
 
     def mount(self, request, **kwargs):
-        # 2.0 mounts again on every fallback POST; the tests reuse one
-        # instance, so the count it already has is kept.
-        self.calls = self.__dict__.get("calls", 0)
+        self.calls = 0
 
     @event_handler()
     @rate_limit(rate=1, burst=2)
@@ -95,9 +93,7 @@ class _PostFallbackAliased(LiveView):
     )
 
     def mount(self, request, **kwargs):
-        # 2.0 mounts again on every fallback POST; the tests reuse one
-        # instance, so the count it already has is kept.
-        self.calls = self.__dict__.get("calls", 0)
+        self.calls = 0
 
     @event_handler()
     @rate_limit(rate=1, burst=2)
@@ -140,9 +136,7 @@ class _PostFallbackFactoryCollision(LiveView):
     )
 
     def mount(self, request, **kwargs):
-        # 2.0 mounts again on every fallback POST; the tests reuse one
-        # instance, so the count it already has is kept.
-        self.calls = self.__dict__.get("calls", 0)
+        self.calls = 0
 
     cheap = _make_limited(10)
     sensitive = _make_limited(2)
@@ -193,9 +187,7 @@ def _make_dynamic_descriptor_view():
         )
 
         def mount(self, request, **kwargs):
-            # 2.0 mounts again on every fallback POST; the tests reuse one
-            # instance, so the count it already has is kept.
-            self.calls = self.__dict__.get("calls", 0)
+            self.calls = 0
 
         @property
         def fresh_wrapper(self):
@@ -260,9 +252,7 @@ def _make_minting_descriptor_view():
         )
 
         def mount(self, request, **kwargs):
-            # 2.0 mounts again on every fallback POST; the tests reuse one
-            # instance, so the count it already has is kept.
-            self.calls = self.__dict__.get("calls", 0)
+            self.calls = 0
 
         minted = _MintingDescriptor()
 
@@ -310,9 +300,7 @@ class _ShadowedAliasHost(LiveView):
     )
 
     def mount(self, request, **kwargs):
-        # 2.0 mounts again on every fallback POST; the tests reuse one
-        # instance, so the count it already has is kept.
-        self.calls = self.__dict__.get("calls", 0)
+        self.calls = 0
         self.send_alias = self.expensive_send  # shadow the declaration
 
     @event_handler()
@@ -336,9 +324,7 @@ class _PostFallbackUnthrottled(LiveView):
     )
 
     def mount(self, request, **kwargs):
-        # 2.0 mounts again on every fallback POST; the tests reuse one
-        # instance, so the count it already has is kept.
-        self.calls = self.__dict__.get("calls", 0)
+        self.calls = 0
 
     @event_handler()
     def cheap_read(self, **kwargs):

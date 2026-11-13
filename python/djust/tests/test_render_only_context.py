@@ -13,9 +13,8 @@ Reported downstream (Point Guard, djust 1.3.0rc11):
   keys, so content an override added (a chat's messages, a run's preview)
   landed in ``django_session``.
 
-2.0 removed the legacy view's session save, so nothing of it is saved; the lazy
-child's save (``_lazy_containers.py``) still keeps only what the base
-``get_context_data()`` built from the view's attributes.
+A legacy save keeps what the base ``get_context_data()`` built from the view's
+attributes; render-only values and keys an override adds are never saved.
 """
 
 from __future__ import annotations
@@ -135,8 +134,10 @@ def people(db):
 def test_get_saves_no_key_an_override_added(people):
     view, request, html = _get(OverrideAddsView)
 
-    # 2.0: a legacy view saves nothing of itself in the session.
-    assert "liveview_/ro/" not in request.session
+    saved = request.session["liveview_/ro/"]
+    assert saved["count"] == 1
+    assert "people" not in saved
+    assert "secret_note" not in saved
     assert "ada@example.com" not in _session_text(request.session)
     assert SECRET not in _session_text(request.session)
     # ...and the page still shows them.
@@ -148,7 +149,9 @@ def test_fallback_post_saves_no_key_an_override_added(people):
 
     answer = _post(OverrideAddsView, request, "bump")
 
-    assert "liveview_/ro/" not in request.session
+    saved = request.session["liveview_/ro/"]
+    assert saved["count"] == 2
+    assert "people" not in saved and "secret_note" not in saved
     assert SECRET not in _session_text(request.session)
     assert "ada@example.com" not in _session_text(request.session)
     assert answer
@@ -176,11 +179,17 @@ def test_get_and_post_never_save_render_only_values(people):
     _view, request, html = _get(RenderOnlyView)
     assert "<i>n35-ada</i><i>n35-grace</i>" in html and SECRET in html
 
-    assert "liveview_/ro/" not in request.session
+    saved = request.session["liveview_/ro/"]
+    assert saved["count"] == 1
+    for key in ("owner", "people", "people_count", "note"):
+        assert key not in saved
 
     _post(RenderOnlyView, request, "bump")
 
-    assert "liveview_/ro/" not in request.session
+    saved = request.session["liveview_/ro/"]
+    assert saved["count"] == 2
+    for key in ("owner", "people", "people_count", "note"):
+        assert key not in saved
     assert SECRET not in _session_text(request.session)
     assert "ada@example.com" not in _session_text(request.session)
 
@@ -194,7 +203,7 @@ def test_a_render_only_key_wins_over_an_attribute_and_is_not_saved(people):
     _view, request, html = _get(Shadow)
 
     assert SECRET in html and "attribute value" not in html
-    assert "liveview_/ro/" not in request.session
+    assert "note" not in request.session["liveview_/ro/"]
 
 
 def test_default_hook_is_empty():
@@ -223,11 +232,10 @@ def test_legacy_unsaved_keys_without_a_recorded_render():
 
 def test_every_legacy_save_site_filters_through_legacy_unsaved_keys():
     """One producer (#1646): the legacy save sites use the same filter. The
-    runtime's per-event save and the page GET / POST saves were removed in 2.0;
-    the lazy child's save is the one left."""
+    runtime's per-event save, the fourth, was removed in 2.0."""
     package = pathlib.Path(__file__).resolve().parents[1]
     expected = {
-        "mixins/request.py": 0,
+        "mixins/request.py": 2,
         "runtime.py": 0,
         "_lazy_containers.py": 1,
     }

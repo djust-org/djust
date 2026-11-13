@@ -544,8 +544,10 @@ EXPECTED_ROUNDTRIP_SITES = {
     # #3252: legacy lazy-child public/private state is written to the Django
     # session and restored onto the child by mount_http_lazy.
     ("_lazy_containers.py", "save_http_lazy"),
-    # 2.0 removed the page GET / POST session saves and the component session
-    # save (``mixins/request.py``, ``mixins/components.py``).
+    ("mixins/components.py", "_save_components_to_session"),
+    # ADR-044: the GET / POST bodies run inside their turn wrappers.
+    ("mixins/request.py", "_get_turn_body"),
+    ("mixins/request.py", "_post_turn_body"),
     # ADR-033 D6: the tagged form of a plain component's state, reached only
     # from the writers above (and `StateRoundtripJSONEncoder`), so a Decimal
     # or a nested component INSIDE the state takes its tagged form too.

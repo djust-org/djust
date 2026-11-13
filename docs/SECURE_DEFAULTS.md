@@ -511,11 +511,10 @@ if envelope is None or envelope.get("binding") != binding:
 The signature covers **declared client fields only**. Nothing a view does not
 declare with `persist="client"` is ever in the signed token.
 
-A legacy view's private (`_*`) attributes are not saved at all in 2.0 (the
-page-POST fallback runs `mount()` again). The one exception is a legacy
-`lazy=True` child on the page-POST fallback: `_restore_private_state()`
-(`python/djust/live_view.py`) assigns each of its saved `_*` keys from the
-**server-side Django session**. That path is trusted *because it is
+A legacy view's private (`_*`) attributes travel on a **separate, unsigned**
+path: `_restore_private_state()` (`python/djust/live_view.py`) assigns each
+saved `_*` key from the **server-side Django session**
+(`request.session[...__private]`). That path is trusted *because it is
 server-side session storage*, not because it is signed.
 
 **Implication:** do **not** store auth/ownership/PII state in `_*` attributes
