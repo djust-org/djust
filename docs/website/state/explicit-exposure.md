@@ -112,14 +112,15 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   seconds, from 1 to 86400. The default is 3600. System check `djust.C020`
   validates it.
 - **`DJUST_EXPLICIT_STATE_SAVE_TIMEOUT`.** How long a turn waits for its
-  state save, in seconds: greater than 0 and at most 10. The default is 10:
-  a turn waits for its own save, and a save still running after 10 seconds
-  is the reload error. Set a smaller value to answer a slow save early with
-  the `transient` error described under
-  [What changes at runtime](#what-changes-at-runtime); the event then gets no
-  frame of its own, and a full-HTML update follows. The time counts from when
-  the save starts running, not from when it is queued behind other sessions'
-  work. System check `djust.C024` validates it.
+  state save, in seconds: greater than 0 and at most 10. The default is 2
+  (it was 0.15 before 2.0). A save that takes longer gets the `transient`
+  error described under [What changes at runtime](#what-changes-at-runtime).
+  A larger value keeps more events' own updates when storage is slow, at the
+  price of holding the page's other events, ticks and pushes for that long;
+  a smaller one answers sooner and falls back to the full-HTML catch-up more
+  often. The time counts from when the save starts running, not from when it
+  is queued behind other sessions' work. System check `djust.C024` validates
+  it.
 - **`DJUST_STATE_SNAPSHOT_MAX_AGE` / `DJUST_STATE_SNAPSHOT_ENABLED`.** The
   signed back-navigation snapshot's lifetime, and its master switch. The
   lifetime is a whole number of seconds from 1 to 86400, 3600 by default; a
@@ -155,16 +156,35 @@ token = state("", persist="server", render=False)  # handlers only, never templa
 - **Events on one page are saved one at a time, in order.** A turn waits for
   its save before it answers, and the page's next event starts after that.
   So events sent in quick succession (fast clicks, typing) all take effect,
-  each gets its own update, and storage ends with the last one, however slow
-  a single write is. A late write never replaces a newer one. A save still
-  running after 10 seconds is the reload error.
-  With `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` set below 10, a save that outruns
-  it is marked `transient` instead and does not ask the user to reload: the
-  change is kept on the server, and once storage answers one catch-up update
-  saves it and sends full HTML. If the catch-up cannot do that, or storage
-  keeps missing the deadline (three deferrals in a row), the error is the
-  reload error. At mount there is no page to update yet, so a save that
-  outruns the deadline there is also the reload error.
+  each gets its own update, and storage ends with the last one. A late write
+  never replaces a newer one.
+- **A save slower than `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is deferred.** The
+  event gets a `state_error` marked `transient` instead of its update, which
+  does not ask the user to reload: the change is kept on the server, and once
+  storage answers one catch-up update saves the newest state and sends full
+  HTML. If the catch-up cannot finish, storage keeps missing the deadline
+  (three deferrals in a row), or a save has been running for 10 seconds, the
+  error is the reload error instead. At mount there is no page to update yet,
+  so a save that outruns the deadline there is also the reload error.
+- **What waits while a save is in storage.**
+  - *Over a WebSocket* the save runs on the session's synchronous thread,
+    and reading the socket's next frame needs that thread too. So the page's
+    later events are not read until the write returns; they then run in
+    order. They are not refused (the 64-turn `view_busy` cap of a page with
+    several views is not reached this way) and do not count as further
+    deferrals. With the default `worker_threads = None` that thread is shared
+    by every WebSocket session of the process, so one slow write delays the
+    synchronous work of all of them until it returns (see
+    [Scaling](../guides/scaling.md)).
+  - *Over SSE* each event POST has a thread of its own and saves run on a
+    separate pool, so other sessions are not held. A later event of the same
+    page runs while the earlier save is still in storage, waits the deadline
+    for it and is deferred as well (this is where three deferrals in a row
+    happen); the one catch-up covers them. A save that waits more than 5
+    seconds for a pool thread is deferred too, so an SSE event can be held for
+    up to those 5 seconds plus the save deadline before it is answered.
+  - A `tick` and a `db_notify` that arrive meanwhile are skipped, not queued.
+    A `server_push` is queued and applied afterwards, in order.
 - **A save still running after a logout is dropped.** Over SSE a save can
   outlive the request that started it. Before it writes, it looks the session
   up once, and it writes nothing if the session was logged out, flushed or
