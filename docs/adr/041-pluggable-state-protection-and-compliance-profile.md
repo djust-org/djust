@@ -33,7 +33,10 @@ for one.
    Django session (`liveview_<path>`, `liveview_<path>__private`,
    `..._components`). A plain reconnect, and Back, restore from it. It works
    across processes when the session store is shared, and the scaling guide
-   relies on it. It is best effort and bounded (150 ms per save).
+   relies on it. It is best effort and bounded (150 ms per save). 2.0 removed
+   this copy; an explicit view's save is not best effort, and its deadline is
+   2 s by default since #4098 (150 ms cost events their update on one slow
+   write).
 2. **Signed client token (browser-side).** The server sends the same public
    state to the browser as a blob signed with Django's `TimestampSigner`
    (`SECRET_KEY`, bound to the view slug and a keyed digest of the session
@@ -45,7 +48,8 @@ for one.
 The session copy wins whenever it exists (`navigation.md`, "Back restores the
 state the user left"). The client token therefore matters only when the server
 copy is gone: the session expired or was evicted, the store was flushed, or
-the save missed its 150 ms deadline (#3098, #3246).
+the save missed its deadline (#3098, #3246; 150 ms when this was written,
+2 s by default since #4098).
 
 Explicit-exposure views (ADR-038) already separate the two: a field is
 `persist="server"` or `persist="client"`, and `persist="client"` requires
