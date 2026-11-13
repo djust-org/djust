@@ -1,12 +1,14 @@
-"""The HTTP fallback answers a render with no DOM change without resetting.
+"""The HTTP fallback answers a render with no DOM change without a reload.
 
-A handler whose render changes nothing produced zero patches. The fallback
-then reset the diff baseline and sent full HTML, so the server's next version
-restarted at 1 while the client expected the next number: the client's
-version check failed and it reloaded the page, losing its state. An ADR-034
-client-owned dropdown hits this on every selection (the choice changes no
-markup). The answer is now an empty patch list carrying the new version, as
-the socket runtime's no-op is.
+Until 2.0 a legacy view's fallback POST diffed against the renderer the
+previous request left in the state backend, so a handler whose render changed
+nothing had to answer an empty patch list carrying the next version, or the
+client's version check failed and it reloaded the page. 2.0 removed that
+cache: every fallback request renders on a fresh renderer and answers with the
+whole page as v1, which the client re-bases on instead of checking
+(``tests/js/http-fallback-whole-page-version-4086.test.js``). An explicit view
+always answered this way. Pinned here: every answer, changing or not, is that
+whole page.
 """
 
 import json
@@ -51,22 +53,20 @@ def _post(initial, event, params):
 
 
 @pytest.mark.django_db
-def test_versions_stay_consecutive_across_renders_without_changes():
+def test_every_answer_is_a_whole_page_the_client_rebases_on():
     from djust.tests.test_exposure_runtime import make_request
 
     initial = make_request()
-    html = QuietPage().get(initial).content.decode()
-    component_id = html.split('data-component-id="', 1)[1].split('"', 1)[0]
+    QuietPage().get(initial)
 
     frames = [
         _post(initial, "bump", {}),
-        _post(initial, "select", {"component_id": component_id, "value": "one"}),
         _post(initial, "touch_private", {}),
         _post(initial, "bump", {}),
     ]
-    versions = [frame["version"] for frame in frames]
-    assert versions == list(range(versions[0], versions[0] + 4)), frames
-    # The unchanged renders answer with no patches and no full HTML.
-    assert frames[1]["patches"] == [] and "html" not in frames[1]
-    assert frames[2]["patches"] == [] and "html" not in frames[2]
-    assert frames[3]["patches"], frames[3]
+    for frame in frames:
+        assert "patches" not in frame and frame["version"] == 1, frame
+    # Nothing is kept between requests: each POST mounts again (count 0 + 1).
+    assert ">1</p>" in frames[0]["html"]
+    assert ">0</p>" in frames[1]["html"]
+    assert ">1</p>" in frames[2]["html"]
