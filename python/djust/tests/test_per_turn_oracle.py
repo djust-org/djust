@@ -83,6 +83,8 @@ TABLE = (
 
 
 class _Base(LiveView):
+    exposure_policy = "explicit"  # every subclass states its own; the guard reads the base too
+
     def _get_context_processors(self):
         return []
 
