@@ -4406,8 +4406,46 @@ fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
         .map(|item| (sort_key_value(item, sort_key), item))
         .collect();
     // `sort_by` is stable, as Python's `sorted` is.
-    keyed.sort_by(|a, b| compare_sort_values(&a.0, &b.0));
+    merge_sort_by(&mut keyed, |a, b| compare_sort_values(&a.0, &b.0));
     keyed.into_iter().map(|(_, item)| item.clone()).collect()
+}
+
+/// A stable merge sort that tolerates a comparator that is not a total order.
+///
+/// `dictsort` asks Python's own `<` for keys the engine has no comparison of its own
+/// for (#3919 review), and Python lets a type define one that is not a total order:
+/// two sets neither of which contains the other are neither less nor greater, yet not
+/// equal. `slice::sort_by` may panic on such a comparator ("does not correctly
+/// implement a total order"), which would fail the whole render; Python's `sorted()`
+/// does not raise there, it returns SOME order. This never panics and, like
+/// `sort_by`, keeps equal elements in input order. Which order it returns for an
+/// inconsistent comparator need not match CPython's timsort, which is itself an
+/// accident of that algorithm.
+fn merge_sort_by<T: Clone>(items: &mut Vec<T>, cmp: impl Fn(&T, &T) -> std::cmp::Ordering) {
+    fn sort<T: Clone>(items: &[T], cmp: &dyn Fn(&T, &T) -> std::cmp::Ordering) -> Vec<T> {
+        if items.len() <= 1 {
+            return items.to_vec();
+        }
+        let (left, right) = items.split_at(items.len() / 2);
+        let (left, right) = (sort(left, cmp), sort(right, cmp));
+        let mut out = Vec::with_capacity(items.len());
+        let (mut i, mut j) = (0, 0);
+        while i < left.len() && j < right.len() {
+            // Take from the right only when it is strictly less: stable.
+            if cmp(&right[j], &left[i]) == std::cmp::Ordering::Less {
+                out.push(right[j].clone());
+                j += 1;
+            } else {
+                out.push(left[i].clone());
+                i += 1;
+            }
+        }
+        out.extend_from_slice(&left[i..]);
+        out.extend_from_slice(&right[j..]);
+        out
+    }
+    let sorted = sort(items, &cmp);
+    *items = sorted;
 }
 
 /// The one ordering used by every `dictsort` path (#1646).
@@ -4564,6 +4602,13 @@ fn dictsort_by_key(items: &[Value], key: &str, reverse: bool) -> Option<Vec<Valu
 /// so with two or more keys the class rule is the answer whatever the item
 /// order; one key is never compared, as in Python.
 ///
+/// Limit: a pair of carried objects is asked only as the FIRST carried key against
+/// each other one, not every pair, so a column whose first value orders with all
+/// the others but where two later values refuse each other is not refused here.
+/// Python would raise on such a column only if `sorted()` happened to compare that
+/// pair; the sort then still completes (`merge_sort_by` never panics) and renders
+/// the rows, where Django may render `""`. Sequence keys are checked pairwise.
+///
 /// Anything the engine merely has no comparison for is NOT refused: a pair
 /// with no live object to ask keeps its previous answer (shown, in input
 /// order), so a key Django sorts is never turned from "rows shown" into
@@ -4671,7 +4716,7 @@ fn dictsort_by_index(items: &[Value], n: usize, reverse: bool) -> Option<Vec<Val
         }?;
         keyed.push((k, item.clone()));
     }
-    keyed.sort_by(|a, b| compare_sort_values(&a.0, &b.0));
+    merge_sort_by(&mut keyed, |a, b| compare_sort_values(&a.0, &b.0));
     let mut out: Vec<Value> = keyed.into_iter().map(|(_, item)| item).collect();
     if reverse {
         out.reverse();

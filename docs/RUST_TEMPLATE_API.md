@@ -291,8 +291,10 @@ serializes its own column. The value is a key only when it names one of the
 model's own non-relation columns: a property, a `get_*()` method, a relation
 path, a private or numeric name resolves to no column and the loop renders
 empty. The serialization floor still decides whether the column ships, so a
-floored or `djust_exclude_fields` column also renders an empty loop where
-Django sorts. Only a top-level list gets `*key`; it is filed even when the rows
+floored or `djust_exclude_fields` column, or one a `djust_serializable_fields`
+allowlist leaves out, also renders an empty loop where Django sorts. A list of
+plain (non-model) objects passed through `serialize_for_template` and sorted by
+a variable key renders an empty loop too: only model rows resolve the key. Only a top-level list gets `*key`; it is filed even when the rows
 are read whole, so that a method the variable names is kept out of the whole row
 (Django's `dictsort` cannot order bound methods and renders an empty loop).
 

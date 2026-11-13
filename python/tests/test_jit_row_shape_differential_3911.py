@@ -454,6 +454,20 @@ class TestKeysTheEngineHasNoComparisonFor:
             want = _outcome(lambda: _django_render(source, {"rows": rows}))
             assert got == want, (name, keys)
 
+    @pytest.mark.parametrize("render", ENTRIES)
+    def test_keys_with_no_total_order_never_fail_the_render(self, render) -> None:
+        """Two sets neither of which contains the other are neither ``<`` nor ``>``, yet
+        not equal: Python's ``<`` on sets is not a total order. ``sorted()`` does not raise
+        on it and Django renders every row in SOME order; a Rust ``sort_by`` may panic on
+        such a comparator and fail the render. djust renders every row too, in an order
+        that need not match CPython's (both are accidents of the algorithm)."""
+        rows = [{"pk": i, "k": {i % 7, i % 5, 100 + i % 3}} for i in range(40)]
+        source = "{% for r in rows|dictsort:'k' %}{{ r.pk }},{% endfor %}"
+        got = _clean(render(source, {"rows": rows}))
+        want = _django_render(source, {"rows": rows})
+        assert sorted(got.split(",")[:-1], key=int) == [str(i) for i in range(40)]
+        assert sorted(want.split(",")[:-1], key=int) == [str(i) for i in range(40)]
+
 
 # ---------------------------------------------------------------------------------------------
 # A variable sort key carries ONE column (#3910 review)
@@ -492,6 +506,27 @@ class TestAVariableKeyCarriesOneColumn:
             context = {"users": _users(shape), "key": key}
             got, want = _agrees(render, self.SOURCE, context)
             assert got == want, key
+
+    def test_the_expected_key_count_is_cached_per_resolved_sort_key(self, world) -> None:
+        """The JIT's expected-key count decides whether a row the Rust serializer built short
+        (a path it could not read) is rebuilt through the Python codegen. The path set now
+        depends on the resolved sort key, so the count is cached per key: cached per template
+        alone, the count from ``key="pk"`` (a field the template already reads) stood for
+        ``key="email"`` too, one short, and a missing path there went unnoticed."""
+        from djust.mixins import jit
+
+        source = "{% for u in users|dictsort:key %}{{ u.pk }}:{{ u.is_authenticated }},{% endfor %}"
+        jit._expected_keys_cache.clear()
+        for key in ("pk", "email"):
+            context = {"users": _users("QuerySet"), "key": key}
+            got, want = _agrees(_liveview_render, source, context)
+            assert got == want, key
+        counts = {
+            cache_key[-1]: count
+            for cache_key, count in jit._expected_keys_cache.items()
+            if cache_key[1] == "users"
+        }
+        assert counts == {("pk",): 2, ("email",): 3}
 
     @pytest.mark.parametrize("render", [_backend_render, _liveview_render])
     def test_a_floored_column_renders_empty_where_django_sorts(self, world, render) -> None:

@@ -31,8 +31,10 @@ logger = logging.getLogger(__name__)
 _template_hash_cache: Dict[str, str] = {}
 _TEMPLATE_HASH_CACHE_MAX = 256
 
-# Cache (template_hash, variable_name) → expected top-level key count
-_expected_keys_cache: Dict[Tuple[str, str], int] = {}
+# Cache (template_hash, variable_name, resolved sort keys) → expected top-level key count.
+# The resolved sort keys are part of the key because the path set depends on them
+# (``dictsort:<variable>``, #3910): a count cached for one key is wrong for the next.
+_expected_keys_cache: Dict[Tuple[str, str, Tuple[str, ...]], int] = {}
 
 # Pre-compiled regex for {% include %} — handles normal and doubled quotes from Rust resolver
 _INCLUDE_RE = re.compile(
@@ -1186,7 +1188,7 @@ class JITMixin:
 
             # Check if Rust serializer captured all expected paths
             # (Rust can't access @property attributes, only model fields)
-            ek_cache_key = (template_hash, variable_name)
+            ek_cache_key = (template_hash, variable_name, tuple(sort_keys))
             if ek_cache_key not in _expected_keys_cache:
                 _expected_keys_cache[ek_cache_key] = len(
                     set(p.split(".")[0] for p in paths_for_var)
