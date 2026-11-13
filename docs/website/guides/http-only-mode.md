@@ -98,24 +98,32 @@ Browser                               Server
 
 ### Patches over the page POST
 
-A page POST has no earlier render to diff against, because the view is built again for each request. djust renders the restored view once **before** the handler, runs the handler, renders again and answers with the difference: a few hundred bytes instead of the page, and the browser's own state (text typed into other inputs, an opened `<details>`, classes a script set) is left alone, as it is over a socket.
+A page POST has no earlier render to diff against, because the view is built again for each request. djust renders the restored view once **before** the handler, runs the handler, renders again and answers with the difference: about a hundred bytes instead of the page, and the browser's own state (text typed into other inputs, an opened `<details>`, classes a script set) is left alone, as it is over a socket.
 
-That is only correct if the render before the handler is the page the browser is showing. The server checks it without storing anything: the page and every answer carry a keyed digest of the render they deliver, the client sends the latest one back with its next POST, and the server compares it with the digest of its own pre-handler render.
+That is only correct if the render before the handler is the page the browser is showing, node for node. The server checks both halves of that without storing anything. The page and every answer carry a token in two parts:
 
-- **Equal:** the answer is the patches.
-- **Anything else:** the answer is the whole page, exactly as before this existed. That covers a first request with no digest, a second tab that changed the state the tabs share, a template changed by a deploy between two requests, and a page that renders differently each time.
+- a **digest** of the render they deliver, keyed from `SECRET_KEY` and bound to the session, the signed-in user, the path and the view. The client sends the latest one back; it matches only if a fresh render of the saved state reproduces what the client was last sent.
+- the **shape** of that render: a checksum of its element tree (tags, `id` and key attributes, which children are text). The client computes the shape of its own DOM and sends that. Patches are addressed by position, so a DOM that a script, a hook or a still-playing `dj-remove` exit has changed would take them on the wrong node; while its DOM has another shape the client sends no token at all, and it checks the shape again before it applies an answer.
 
-Nothing in the digest is secret or trusted. It is an HMAC (keyed from `SECRET_KEY`) over HTML the browser was already sent, bound to the session, the signed-in user, the path and the view; the patches are always computed from the server's own two renders, so a forged or replayed digest can only select the whole page.
+- **Both match:** the answer is the patches.
+- **Anything else:** the answer is the whole page, exactly as before this existed. That covers a first request with no token, a second tab that changed the state the tabs share, a template changed by a deploy between two requests, a page that renders differently each time, and a page whose DOM something else has rearranged.
+
+Nothing in the token is secret or trusted. The patches are always computed from the server's own two renders, so a forged or replayed token can only select the whole page.
+
+The render before the handler runs on a **copy** of the view, which is then thrown away; only its compiled template and rendered tree are kept. So nothing it evaluates (a queryset's rows, a `cached_property`, a paginator's count) is there when the handler's render runs: a row the handler changed in the database is in the answer, as it is in a whole-page answer.
+
+If a patch answer cannot be applied after all (the DOM changed while the request was out), the client asks for the page again with a POST that carries no event (`X-Djust-Resync: 1`). The server restores the saved state, runs every check an event passes and no handler, and answers with the whole page. Nothing is lost: unlike a reload, which is a new page load and mounts the view again.
 
 **What makes a page reproducible.** The pre-handler render must equal what the browser shows, so everything the last answer showed has to come back on the next request:
 
 - State an event changes must be declared `state(..., persist="server")`. A plain attribute a handler set is back at its `mount()` value on the next request, so the next answer is the whole page (which is also the correct page).
 - `FormMixin` errors and input are not persisted by default: after a validation error the next answer is the whole page.
-- Output that differs on every render (a clock, a random id) never matches. After two whole-page answers in a row the client stops sending the digest for a while, so such a page costs one render per event, as before.
+- Output that differs on every render (a clock, a random id) never matches. After two whole-page answers in a row the client stops sending the token for a while, so such a page costs one render per event, as before.
+- DOM that client code adds inside the root (a widget library, a hook's `mounted()`) changes the page's shape, so that page is answered with whole pages. Put such DOM under `dj-update="ignore"`, or outside the root.
 
 **What is never patched** (the answer is the whole page, with no extra render): a view with `temporary_assigns` or streams, a page whose template embeds another view (`{% live_render %}`, `dj-lazy`), an event addressed to a component or an embedded child, and an `@cache` request. A page whose render contains a `dj-update` container or a virtual list is answered with the whole page too.
 
-**The cost** is the second render: `get_context_data()` and the context processors run twice for an event that is answered with patches. A view whose context is expensive, or has effects of its own, can keep the single render:
+**The cost** is the second render: `get_context_data()` and the context processors run twice for an event that is answered with patches (once on the copy, once on the view), and so do the queries they make. A view that cannot be copied (it holds a lock, an open file, a connection) is answered with the whole page. A view whose context is expensive, or acts on something outside the view, can keep the single render:
 
 ```python
 from djust import LiveView
