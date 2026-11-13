@@ -718,6 +718,7 @@ class FeedView(LiveView):
     def get_context_data(self, **kwargs):
         return {"offset": self.offset}
 ```
+
 ### The unused component tags, their classes and assets (#4002)
 
 33 `djust_components` template tags that no app in the 2026-10 usage scan of
