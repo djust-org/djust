@@ -66,6 +66,8 @@ _KEY_PREFIX = "_djust_auto_"
 _MISSING: Any = object()
 #: Public names a transport sets per connection, and this module's own settings.
 _NOT_STATE = frozenset({"client_timezone", "automatic_state_max_kb"})
+#: The names Django's ``View.setup()`` sets on a dispatched view.
+_VIEW_SETUP_NAMES = frozenset({"head"})
 _PRIVATE = re.compile(r"_[A-Za-z][A-Za-z0-9_]*\Z", re.ASCII)
 #: Framework slots that exist after ``mount()`` on some paths: never saved.
 _PRIVATE_BOOKKEEPING = frozenset(
@@ -296,12 +298,13 @@ def _candidates(view: Any) -> Dict[str, Any]:
     def take(name: str, value: Any) -> None:
         if not names.application(name):
             return
-        if inspect.ismethod(value) and value.__self__ is view:
+        if name in _VIEW_SETUP_NAMES and inspect.ismethod(value) and value.__self__ is view:
             # Not state: Django's ``View.setup()`` sets ``self.head = self.get``
             # on every dispatched view. Any OTHER callable (a class, a partial,
-            # an object with ``__call__``) is a value the view holds: it goes
-            # on to the encoder, which refuses it, so it is reported and the
-            # next request mounts again.
+            # an object with ``__call__``, the view's own method kept under
+            # another name) is a value the view holds: it goes on to the
+            # encoder, which refuses it, so it is reported and the next request
+            # mounts again.
             return
         if names.sensitive(name):
             _report(
@@ -598,7 +601,9 @@ def project(view: Any) -> Projection:
             remount = True
             # A component is rebuilt by mount(); a private attribute was
             # skipped silently in 1.3 too.
-            if not quiet and not isinstance(value, LiveComponent):
+            # ... but a private callable is reported like a public one: it
+            # makes every request mount again, which the author should know.
+            if (not quiet or callable(value)) and not isinstance(value, LiveComponent):
                 _unsaveable(view, name, value, error.reason)
             return _MISSING
 
@@ -886,7 +891,16 @@ class _Basis:
     empty again.
     """
 
-    __slots__ = ("text", "created", "public", "private", "changed", "deleted", "components")
+    __slots__ = (
+        "text",
+        "created",
+        "public",
+        "private",
+        "changed",
+        "deleted",
+        "components",
+        "names",
+    )
 
     def __init__(
         self,
@@ -897,6 +911,7 @@ class _Basis:
         changed: frozenset,
         deleted: frozenset = frozenset(),
         components: Optional[Dict[str, Any]] = None,
+        names: Optional[frozenset] = None,
     ) -> None:
         self.text = text
         self.created = created
@@ -905,6 +920,18 @@ class _Basis:
         self.changed = changed
         self.deleted = deleted
         self.components = components or {}
+        # Every application attribute the view had then, saveable or not
+        # (None: read from the store, where that is not known).
+        self.names = names
+
+
+def _present(view: Any) -> frozenset:
+    """The application attributes a view has now, public and private, whatever
+    their values."""
+    names = _Names(view)
+    return frozenset(
+        name for name in list(vars(view)) if names.application(name) or names.private(name)
+    )
 
 
 def _basis(view: Any) -> Optional[_Basis]:
@@ -934,13 +961,17 @@ def saved(view: Any, request: Any) -> Optional[Saved]:
         # A well-formed tab id with no state of its own, while other tabs of
         # this page have one: this tab's state expired or was evicted.
         owner = type(view)
-        logger.warning(
-            "djust: no saved state for this tab of %s.%s at %s (expired, or evicted "
-            "past the limit of tab states kept per page); the view starts from mount().",
-            owner.__module__,
-            owner.__qualname__,
-            str(getattr(request, "path", ""))[:200].replace("\n", " ").replace("\r", " "),
-        )
+        route = str(getattr(request, "path", ""))[:200].replace("\n", " ").replace("\r", " ")
+        # Once per view class and route per process, as the other reports are:
+        # a client can send any number of well-formed ids.
+        if _first_time(view, route, "evicted"):
+            logger.warning(
+                "djust: no saved state for this tab of %s.%s at %s (expired, or evicted "
+                "past the limit of tab states kept per page); the view starts from mount().",
+                owner.__module__,
+                owner.__qualname__,
+                route,
+            )
     return found
 
 
@@ -969,13 +1000,21 @@ def load(view: Any, request: Any) -> Optional[Dict[str, Any]]:
         # (kept in memory). Not to the store: after a socket mount the store
         # may still hold the page GET's mount()-computed values, which this
         # connection's mount() has since replaced (a revoked permission flag).
-        return put_back(
+        restored = put_back(
             view,
             _decoded(view, settled.public),
             _decoded(view, settled.private),
             _decoded(view, settled.components),
             over_mount=True,
         )
+        if settled.names is not None:
+            # What the refused handler ADDED goes too: left on the view, an
+            # oversized new attribute would refuse every later save, and a
+            # small one would be saved by the next event though its turn was
+            # refused.
+            for name in _present(view) - settled.names:
+                vars(view).pop(name, None)
+        return restored
     found = saved(view, request)
     if found is None:
         if first:
@@ -1155,6 +1194,7 @@ def settle(view: Any) -> None:
         frozenset() if basis is None else basis.changed,
         frozenset() if basis is None else basis.deleted,
         state.components,
+        _present(view),
     )
     view.__dict__["_djust_auto_settled"] = state.text
 
@@ -1260,7 +1300,14 @@ def stage(view: Any, request: Any, *, create: bool = True) -> Optional[Callable[
     previous_basis = view.__dict__.get("_djust_auto_basis")
     previous_settled = settled
     view.__dict__["_djust_auto_basis"] = _Basis(
-        state.text, now, state.public, state.private, changed, deleted, state.components
+        state.text,
+        now,
+        state.public,
+        state.private,
+        changed,
+        deleted,
+        state.components,
+        _present(view),
     )
     view.__dict__["_djust_auto_settled"] = None
     view.__dict__["_djust_auto_bytes"] = len(_encode(envelope))

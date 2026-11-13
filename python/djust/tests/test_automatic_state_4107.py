@@ -2179,19 +2179,23 @@ def test_expired_states_are_dropped_at_the_next_write(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_an_evicted_tab_is_said_once_per_request_without_values(caplog):
+def test_an_evicted_tab_is_said_once_per_view_and_route_without_values(caplog):
+    _automatic_state._NOTICED.clear()
     key = _request("GET", None).session.session_key
     Counter().post(_request("POST", key, "inc", tab=TAB_A))
     with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
-        view = Counter()
-        assert view.post(_request("POST", key, "nothing", tab="tab-evicted1")).status_code == 200
-    assert view.count == 0
+        for n in range(12):  # a client can send any number of well-formed ids
+            view = Counter()
+            request = _request("POST", key, "nothing", tab="tab-random%03d" % n)
+            assert view.post(request).status_code == 200
+            assert view.count == 0
     lines = [
         r.getMessage() for r in caplog.records if "no saved state for this tab" in r.getMessage()
     ]
-    assert len(lines) == 1 and "Counter" in lines[0] and harness.PATH in lines[0]
-    assert SECRET not in lines[0]
+    assert len(lines) == 1, lines
+    assert "Counter" in lines[0] and harness.PATH in lines[0] and SECRET not in lines[0]
     caplog.clear()
+    _automatic_state._NOTICED.clear()
     with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
         Counter().post(_request("POST", _request("GET", None).session.session_key, "nothing"))
     assert not [r for r in caplog.records if "no saved state for this tab" in r.getMessage()]
@@ -2309,3 +2313,95 @@ def test_an_event_addressed_to_a_component_reaches_it_over_the_fallback():
         assert response.status_code == 200, response.content
         assert view.bumper.state.n == expected
     assert _saved_envelope(key)["components"] == {"bumper": {"n": 3}}
+
+
+# ---------------------------------------------------------------------------
+# Verification residuals
+# ---------------------------------------------------------------------------
+
+
+class KeepsOwnMethod(_Base):
+    """The view's own bound method under another name, and a private callable."""
+
+    shown = ("count",)
+
+    def mount(self, request, **kwargs):
+        CALLS.append("mount")
+        self.count = 0
+        self.cb = self.refresh
+        self._pfn = len
+
+    def refresh(self):
+        return 2
+
+    @event_handler()
+    def add(self, **kwargs):
+        self.count += self.cb() + self._pfn("x")
+
+
+@pytest.mark.django_db
+def test_a_views_own_method_under_another_name_is_unsaveable_not_dropped(caplog):
+    """Was a 500 on every fallback POST: ``self.cb = self.refresh`` was skipped
+    silently like Django's ``self.head``, so mount() did not run again and the
+    handler found no ``self.cb``."""
+    CALLS.clear()
+    _automatic_state._NOTICED.clear()
+    entry = KeepsOwnMethod.as_view()
+    first = _request("GET", None)
+    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
+        assert entry(first).status_code == 200
+        key = first.session.session_key
+        assert _saved_envelope(key)["remount"] is True
+        for _ in range(2):
+            assert entry(_request("POST", key, "add")).status_code == 200
+    assert CALLS == ["mount", "mount", "mount"]
+    assert _saved_envelope(key)["values"] == {"count": 6}
+    text = "\n".join(record.getMessage() for record in caplog.records)
+    assert text.count("KeepsOwnMethod.cb ") == 1
+    assert text.count("KeepsOwnMethod._pfn ") == 1  # a private callable is said too
+    assert "KeepsOwnMethod.head " not in text  # the name Django's setup() sets
+
+
+class AddsNames(_Base):
+    automatic_state_max_kb = 16
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    def get_context_data(self, **kwargs):
+        present = sorted(n for n in ("blob", "extra", "_note") if n in vars(self))
+        return {"probe": json.dumps([self.count, present])}
+
+    @event_handler()
+    def too_big(self, **kwargs):
+        self.count += 1
+        self.extra = "x"
+        self._note = "n"
+        self.blob = ["item-%05d" % n for n in range(4000)]
+
+    @event_handler()
+    def inc(self, **kwargs):
+        self.count += 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_refused_change_also_takes_back_the_names_the_handler_added():
+    """Left on the view, the oversized ``blob`` refused every later event of the
+    connection, and the small ``extra`` was saved by the next event though the
+    turn that set it was refused."""
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE):
+        comm, _mount = await harness.mount_view(AddsNames, key)
+        try:
+            refused = await _event_or_error(comm, "too_big")
+            assert refused["code"] == "state_too_large", refused
+            after = await _event_or_error(comm, "inc")
+            assert after["type"] != "error", after  # not refused for blob again
+            later = await _event_or_error(comm, "inc")
+            assert later["type"] != "error", later
+        finally:
+            await comm.disconnect()
+    stored = await sync_to_async(_saved_envelope)(key)
+    assert stored["values"] == {"count": 2}  # neither blob nor extra; the refused +1 undone
+    assert "_note" not in stored["private"]

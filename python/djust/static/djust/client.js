@@ -221,7 +221,8 @@ const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
 function djustTabId() {
     // The LAST one: a navigation that merges a new page's <head> into the
     // document may leave the previous page's tag in front of the new one.
-    const metas = document.querySelectorAll('meta[name="djust-tab"]');
+    // Inside <head> only: a <meta> in the body is page content, not the id.
+    const metas = document.head ? document.head.querySelectorAll('meta[name="djust-tab"]') : [];
     const meta = metas[metas.length - 1];
     return (meta && meta.getAttribute('content')) || '';
 }

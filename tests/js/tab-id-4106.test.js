@@ -47,6 +47,17 @@ it('after a navigation that merged a new head in, the newest tab id is the one s
     } finally { dom.window.close(); }
 });
 
+it('a djust-tab meta in the body is page content, not the id', async () => {
+    const dom = page('<meta name="djust-tab" content="tab-in-head1">');
+    try {
+        const stray = dom.window.document.createElement('meta');
+        stray.setAttribute('name', 'djust-tab');
+        stray.setAttribute('content', 'tab-from-body');
+        dom.window.document.body.appendChild(stray);
+        expect((await postedHeaders(dom))['X-Djust-Tab']).toBe('tab-in-head1');
+    } finally { dom.window.close(); }
+});
+
 it('a page without a tab id sends an empty one, which selects nothing', async () => {
     const dom = page('');
     try {
