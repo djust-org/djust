@@ -318,13 +318,12 @@ Saved view state is keyed by tenant. A view that uses `TenantMixin` keeps its
 state in two places, and both are scoped by `TenantMixin.get_state_key_prefix()`
 (`tenant:<id>`, the id percent-encoded):
 
-- **The state backend** (`memory` or `redis`), under
-  `tenant:<id>:<session>_<page>...`: the Rust view the framework stores per
-  session and page.
-- **The Django session**, under `liveview_tenant:<id>:<path>` (plus the
-  `__private` and `_components` siblings): the saved public and private state
-  that the HTTP fallback POST restores. (A WebSocket or SSE reconnect no longer
-  reads it: 2.0 removed `enable_state_snapshot`.)
+- **The Django session**, under `liveview_tenant:<id>:<path>`: the state of a
+  legacy `lazy=True` child on the page-POST fallback. (2.0 removed the other
+  saved state of a legacy view: the Rust view the framework stored per session
+  and page in the state backend, and the public, private and component state
+  the page-POST fallback restored. Nothing is saved for those to leak across
+  tenants.)
 
 A session that reaches two tenants on the same URL (a cookie shared across
 `*.example.com`, a header or session resolver, or `set_tenant()`) therefore
