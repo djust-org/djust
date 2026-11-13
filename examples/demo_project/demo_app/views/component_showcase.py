@@ -3,6 +3,7 @@ Comprehensive Component Showcase - All 26 djust components in one interactive pa
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 from djust.components.ui import (
     # Display Components
     Alert, Avatar, Badge, Button, Card, Spinner, Progress, Tooltip, Toast, Divider, Icon,
@@ -24,8 +25,8 @@ class ComponentShowcaseView(LiveView):
     """Interactive showcase of all djust components."""
 
     exposure_policy = "explicit"
-    counter = state(0)
-    switch_enabled = state(True)
+    counter = state(0, persist="server")
+    switch_enabled = state(True, persist="server")
     slider_value = state(50)
     selected_radio = state("medium")
     alert_success = state()
@@ -323,28 +324,31 @@ class ComponentShowcaseView(LiveView):
             hover=True
         )
 
+    @event_handler
     def increment(self):
         """Increment the counter (for interactive demo)."""
         self.counter += 1
 
+    @event_handler
     def decrement(self):
         """Decrement the counter."""
         self.counter -= 1
 
+    @event_handler
     def toggle_switch(self):
-        """Toggle the switch state."""
-        import sys
-        print(f"\n[toggle_switch] BEFORE: switch_enabled={self.switch_enabled}", file=sys.stderr)
-        print(f"[toggle_switch] Switch HTML BEFORE toggle:", file=sys.stderr)
-        print(f"{self.switch_notifications.render()}", file=sys.stderr)
+        """Toggle the switch state.
 
+        ``switch_enabled`` is the declared state; the component is set from it.
+        """
         self.switch_enabled = not self.switch_enabled
-        # Update component in-place (proper pattern)
-        self.switch_notifications.update(checked=self.switch_enabled)
-
-        print(f"\n[toggle_switch] AFTER: switch_enabled={self.switch_enabled}", file=sys.stderr)
-        print(f"[toggle_switch] Switch HTML AFTER toggle:", file=sys.stderr)
-        print(f"{self.switch_notifications.render()}", file=sys.stderr)
+        # Rebuilt from the declared state rather than updated in place: the
+        # component is not persisted, so on the HTTP fallback the one mount()
+        # built does not know the restored value.
+        self.switch_notifications = Switch(
+            name="notifications",
+            label="Enable notifications",
+            checked=self.switch_enabled,
+        )
 
     def update_slider(self, value: str = "50", **kwargs):
         """Update slider value."""

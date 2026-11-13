@@ -21,7 +21,7 @@ class CacheTestView(LiveView):
 
     exposure_policy = "explicit"
     query = state("")
-    server_calls = state(0)
+    server_calls = state(0, persist="server")
     total_searches = state(0)
     test_results = state(default_factory=list)
     tests_run = state(0)

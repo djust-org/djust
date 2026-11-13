@@ -30,16 +30,17 @@ def counted(monkeypatch):
 
 @pytest.fixture
 def homepage_view():
-    from demo_app.views import IndexView
+    from django.urls import resolve
 
-    IndexView.__dict__.get("_djust_normalized_sources", {}).clear()
-    return IndexView
+    view = resolve("/").func.view_class
+    view.__dict__.get("_djust_normalized_sources", {}).clear()
+    return view
 
 
-def test_a_get_normalizes_its_source_once_and_its_response_once(
-    client, settings, counted, homepage_view
-):
-    settings.SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
+# The homepage declares persist="server" state (#4086), which needs a
+# server-side session, so this runs on the database session engine.
+@pytest.mark.django_db
+def test_a_get_normalizes_its_source_once_and_its_response_once(client, counted, homepage_view):
     first = client.get("/")
     assert first.status_code == 200
     # The template source (first) and the rendered response (second).

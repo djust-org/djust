@@ -6,6 +6,7 @@ No template file exists - everything is generated from template_string and compo
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 from djust.components.layout import NavbarComponent, NavItem, TabsComponent, TabItem
 from djust.components.ui import (
     AlertComponent,
@@ -33,11 +34,11 @@ class NoTemplateDemo(LiveView):
     """
 
     exposure_policy = "explicit"
-    counter = state(0)
-    items = state(default_factory=lambda: ["Buy groceries", "Walk the dog", "Write code"])
+    counter = state(0, persist="server")
+    items = state(default_factory=lambda: ["Buy groceries", "Walk the dog", "Write code"], persist="server")
     show_success = state(False)
     notification_count = state(3)
-    progress = state(45)
+    progress = state(45, persist="server")
     selected_theme = state("Default")
     navbar = state()
     theme_dropdown = state()
@@ -382,24 +383,29 @@ class NoTemplateDemo(LiveView):
     # === Event Handlers ===
     # Note: Just update state variables - VDOM will automatically patch!
 
+    @event_handler
     def increment(self):
         """Increment counter - VDOM patches the badge and stats automatically"""
         self.counter += 1
 
+    @event_handler
     def decrement(self):
         """Decrement counter - VDOM patches the badge and stats automatically"""
         self.counter -= 1
 
+    @event_handler
     def reset_counter(self):
         """Reset counter - VDOM patches the badge and stats automatically"""
         self.counter = 0
 
+    @event_handler
     def add_item(self, **kwargs):
         """Add item to todo list - VDOM patches the list automatically"""
         import random
         items = ["Read a book", "Exercise", "Learn Python", "Build a project", "Drink water"]
         self.items.append(random.choice(items))
 
+    @event_handler
     def remove_item(self, index: str = None, **kwargs):
         """Remove item from todo list - VDOM patches the list automatically"""
         if index is not None:
@@ -407,10 +413,12 @@ class NoTemplateDemo(LiveView):
             if 0 <= idx < len(self.items):
                 self.items.pop(idx)
 
+    @event_handler
     def increase_progress(self):
         """Increase progress by 10% - VDOM patches the progress bar automatically"""
         self.progress = min(100, self.progress + 10)
 
+    @event_handler
     def decrease_progress(self):
         """Decrease progress by 10% - VDOM patches the progress bar automatically"""
         self.progress = max(0, self.progress - 10)
@@ -441,7 +449,8 @@ class NoTemplateDemo(LiveView):
         self.notification_count = 3
         self.show_success = True
 
-    def add_random_items(self):
+    @event_handler
+    def add_random_items(self, **kwargs):
         """Add random items - VDOM patches the list automatically"""
         import random
         items = ["Debug code", "Review PR", "Update docs", "Fix tests", "Deploy app"]
@@ -452,6 +461,7 @@ class NoTemplateDemo(LiveView):
         """Show success alert - VDOM adds the alert automatically"""
         self.show_success = True
 
+    @event_handler
     def dismiss_alert(self):
         """Dismiss alert - VDOM removes the alert automatically"""
         self.show_success = False

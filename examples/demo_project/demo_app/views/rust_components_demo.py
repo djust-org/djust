@@ -6,6 +6,7 @@ components are instantiated in Python code and have state/behavior.
 """
 
 from djust import LiveView
+from djust.decorators import event_handler
 from djust.components.layout import NavbarComponent, NavItem, TabsComponent, TabItem
 from djust.components.ui import DropdownComponent, DropdownItem
 from djust import state
@@ -25,7 +26,7 @@ class RustComponentsDemo(LiveView):
 
     exposure_policy = "explicit"
     dropdown_message = state("")
-    counter = state(0)
+    counter = state(0, persist="server")
     selected_option = state("opt1")
     selected_country = state("United States")
     variant_selections = state(default_factory=lambda: {
@@ -33,7 +34,7 @@ class RustComponentsDemo(LiveView):
             'success': None,
             'warning': None,
             'danger': None
-        })
+        }, persist="server")
     selected_location = state("Canada")
     basic_dropdown = state()
     dropdown_primary = state()
@@ -340,6 +341,7 @@ class RustComponentsDemo(LiveView):
 
     # === Event Handlers ===
 
+    @event_handler
     def select_basic_option(self, value: str = None, **kwargs):
         """Handle basic dropdown selection"""
         if value:
@@ -357,6 +359,7 @@ class RustComponentsDemo(LiveView):
                 ]
             )
 
+    @event_handler
     def select_country(self, country: str = None, **kwargs):
         """Handle country selection - updates all size dropdowns"""
         if country:
@@ -402,6 +405,7 @@ class RustComponentsDemo(LiveView):
                 ]
             )
 
+    @event_handler
     def select_variant(self, variant: str = None, option: str = None, **kwargs):
         """Handle variant dropdown selection"""
         if variant and option:
@@ -438,6 +442,7 @@ class RustComponentsDemo(LiveView):
                 ]
                 self.dropdown_danger = DropdownComponent(label=label, variant=variant, items=items)
 
+    @event_handler
     def select_location(self, location: str = None, **kwargs):
         """Handle location dropdown selection"""
         if location:
@@ -455,6 +460,7 @@ class RustComponentsDemo(LiveView):
                 ]
             )
 
+    @event_handler
     def increment_counter(self):
         """Increment counter and update interactive tabs"""
         self.counter += 1
@@ -487,6 +493,7 @@ class RustComponentsDemo(LiveView):
             action='switch_interactive_tab'
         )
 
+    @event_handler
     def reset_counter(self):
         """Reset counter"""
         self.counter = 0
@@ -518,6 +525,7 @@ class RustComponentsDemo(LiveView):
             action='switch_interactive_tab'
         )
 
+    @event_handler
     def clear_messages(self):
         """Clear all messages"""
         self.dropdown_message = ""

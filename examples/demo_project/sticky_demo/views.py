@@ -38,8 +38,8 @@ class AudioPlayerView(LiveView):
 
     exposure_policy = "explicit"
     track_title = state("Demo Track — Ambient 1")
-    is_playing = state(False)
-    elapsed_seconds = state(0)
+    is_playing = state(False, persist="server")
+    elapsed_seconds = state(0, persist="server")
     sticky = True
     sticky_id = "audio-player"
     template_name = "sticky_demo/audio_player.html"
@@ -73,7 +73,7 @@ class NotificationCenterView(LiveView):
     """
 
     exposure_policy = "explicit"
-    notifications = state()
+    notifications = state(persist="server")
     sticky = True
     sticky_id = "notification-center"
     template_name = "sticky_demo/notification_center.html"
@@ -118,8 +118,8 @@ class DashboardView(LiveView):
     """Dashboard — embeds BOTH stickies and shows some metrics."""
 
     exposure_policy = "explicit"
-    metric_visitors = state(42)
-    metric_orders = state(7)
+    metric_visitors = state(42, persist="server")
+    metric_orders = state(7, persist="server")
     template_name = "sticky_demo/dashboard.html"
 
     def mount(self, request, **kwargs):
