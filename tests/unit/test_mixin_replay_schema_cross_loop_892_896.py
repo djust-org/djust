@@ -2,8 +2,9 @@
 
 (2.0: the replays these issues hardened, ``_restore_upload_configs`` and
 ``_restore_listen_channels``, ran only on the WebSocket session restore,
-removed with ``enable_state_snapshot``. They went with it; what is left here
-is the recording ``allow_upload()`` still does and the listener's loop reset.)
+removed with ``enable_state_snapshot``. They went with it, and the upload
+recording they replayed went with the private-state session save; what is left
+here is the listener's loop reset.)
 
 Both harden the mixin-side-effect replay pattern (ADR-009) against
 failure modes that #889 / #893 / #894 didn't address:
@@ -36,27 +37,6 @@ failure modes that #889 / #893 / #894 didn't address:
 """
 
 from __future__ import annotations
-
-
-# ---------------------------------------------------------------------------
-# Issue #892 — UploadMixin defensive replay for schema-changed configs
-# ---------------------------------------------------------------------------
-
-
-from djust.uploads import UploadMixin
-
-
-class _UploadView(UploadMixin):
-    """Concrete UploadMixin host."""
-
-
-class TestUploadConfigsSchemaDrift:
-    def test_saved_dict_has_version_tag(self):
-        """Every saved dict carries ``_version`` so future restores can
-        branch on it."""
-        v = _UploadView()
-        v.allow_upload("docs", accept=".jpg")
-        assert v._upload_configs_saved[0]["_version"] == 1
 
 
 # ---------------------------------------------------------------------------

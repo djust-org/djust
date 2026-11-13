@@ -65,9 +65,11 @@ on the `djust.exposure` logger.
 
 A name a framework provider owns (`online_count` on a `PresenceMixin` view, a
 formset name, `streams`, `csrf_token`) is rendered by its provider, never from
-a declaration of the same name, and a framework-reserved name (`request`,
-`view`, `kwargs`, `template_name`) never becomes template context through
-`state()`. A `get_context_data()` that returns a new dict without calling
+a declaration of the same name. A framework-reserved name (`request`,
+`view`, `kwargs`, `template_name`, `temporary_assigns`, a `LiveView` method)
+cannot be a `state()` field at all: the view class raises
+`ExposureConfigurationError` naming the field when it is created, whether the
+field is declared on the view, a mixin or a base class (#4070). A `get_context_data()` that returns a new dict without calling
 `super().get_context_data()` supplies no declared field (nor any provider).
 
 The rule applies to `state()` only. A `@computed` value, an `assign_async()`

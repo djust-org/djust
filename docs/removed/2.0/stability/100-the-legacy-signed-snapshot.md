@@ -18,7 +18,6 @@ with `ImproperlyConfigured`, when the class is created and on the mount path. A 
 longer sends a token, and a token a 1.x server signed is refused.
 The session copy `enable_state_snapshot` also restored from is removed with
 the attribute (next section), so a legacy view mounts fresh on Back.
-The HTTP page-POST fallback still restores a legacy view's public and private state from the session between requests; that goes later in 2.0 (rows 5 and 6 of the exposure-flip plan).
 Declare what the browser may hold:
 
 <!-- doc-snippet-check: anti-pattern -->

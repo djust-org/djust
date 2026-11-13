@@ -368,10 +368,8 @@ heartbeat plumbing.
 
 ## Where to go next
 
-- **Live cursors:** swap `PresenceMixin` for `LiveCursorMixin` and drop the
-  `{% cursors %}` overlay into the template. That tag ships in the optional
-  components package, so add `djust.components` to `INSTALLED_APPS` and
-  `{% load djust_components %}` first. You get Figma-style remote cursors. See [Real-Time Presence § cursors](presence.md).
+- **Live cursors:** swap `PresenceMixin` for `LiveCursorMixin` for Figma-style
+  remote cursors. See [Real-Time Presence § cursors](presence.md).
 - **Typing indicators:** put `is_typing: true` in the meta dict
   while the user is in the textarea (set on focus, clear on blur
   or after a debounce). Other viewers see a "alice is typing…"

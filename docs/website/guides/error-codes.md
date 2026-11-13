@@ -348,13 +348,9 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
-### C027: Invalid view_state_in_session
+### C027: Invalid view_state_in_session (removed in 2.0)
 
-**Severity**: Error
-
-**What causes it**: `LIVEVIEW_CONFIG['view_state_in_session']` is set to something other than `True` or `False`, such as the string `"false"`. Only `False` turns the session copy of view state off, so with any other value djust keeps saving each view's state in the session.
-
-**Fix**: Set it to `False` (stateless) or `True`, or remove it. See [Keeping view state out of the session](http-only-mode.md#keeping-view-state-out-of-the-session). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C027"]}`.
+Retired in 2.0 with the `view_state_in_session` setting it validated: no view state is kept in the session any more, and the setting is refused at startup. Nothing reports C027; remove it from `suppress_checks` or `SILENCED_SYSTEM_CHECKS`. See [Nothing of the view is kept in the session](http-only-mode.md#nothing-of-the-view-is-kept-in-the-session).
 
 ---
 
@@ -844,6 +840,14 @@ On an explicit view the same declaration is refused when the class is created, w
 **What causes it**: an application class states `exposure_policy = "legacy"` in its own body. Explicit exposure is the default since djust 2.0 and `"legacy"` is removed before 2.0.0 ([#4047](https://github.com/djust-org/djust/issues/4047)). Reported once per stating class; the message names the views that inherit it. Message: '<class> states exposure_policy = "legacy", which is deprecated and is removed before djust 2.0.0: ...'
 
 **Fix**: Move the view to explicit exposure and delete the line; `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](migrating-to-2.0.md#1-move-each-view-to-explicit-exposure). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V028"]}`.
+
+### V029: a handler changes a value a later event reads, and the fallback does not keep it
+
+**Severity**: Warning
+
+**What causes it**: An event handler of an explicit view changes `self.count` (`self.count += 1`, `self.items.append(...)`, or a value another handler or `get_context_data()` reads), and `count` is either not declared state or a `state()` field without `persist`. On the HTTP fallback each event mounts a new view, so the change is lost there; over a WebSocket it is kept. Message: "<view> increment() changes self.count, which a later event reads, but it is not declared state: on the HTTP fallback each event builds a new view and runs mount() again, so the change is lost there (over a WebSocket it is kept)."
+
+**Fix**: Declare it on the class: `count = state(0, persist="server")`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V029"]}`.
 
 <!-- END GENERATED check-sections:V -->
 

@@ -26,8 +26,7 @@ djust itself, a component package, or your own project — declares it in a
 
 If you never write `<script src="...">` or `<link href="...">` by hand for
 third-party code, you don't need this guide — djust's own components already
-declare their assets, and `{% code_block %}`, the ttyd terminal and
-`MapPicker` (Leaflet) already use them.
+declare their assets, and `{% code_block %}` and the ttyd terminal already use them.
 
 ## The schema
 
@@ -37,16 +36,16 @@ A manifest is `<app>/djust_assets.json`, next to the app's `apps.py`:
 {
   "schema": 1,
   "assets": {
-    "markdown-visual": {
+    "xterm": {
       "files": [
         {
-          "path": "djust_components/markdown-visual.js",
+          "path": "djust_components/vendor/xterm/xterm.mjs",
           "integrity": "sha384-…"
         }
       ],
-      "license_file": "djust_components/markdown-visual.LICENSE.txt",
+      "license_file": "djust_components/vendor/xterm/xterm.LICENSE.txt",
       "packages": [
-        {"purl": "pkg:npm/%40tiptap/core@3.31.3", "license": "MIT"}
+        {"purl": "pkg:npm/%40xterm/xterm@6.0.0", "license": "MIT"}
       ]
     },
     "chart.js": {

@@ -1,13 +1,10 @@
-"""CursorsOverlay, CollabSelection, MentionsInput and DashboardGrid ship their
-interactions (#2985, batch 4).
+"""MentionsInput and DashboardGrid ship their interactions (#2985, batch 4).
 
 Each component rendered a ``dj-hook`` that no shipped script answered; each now
 has a script under ``djust_components/``. What has to hold on every render path
 (the component class, the Django template tag and the Rust-engine handler) is
-that the structure the scripts read is still emitted, that the one additive
-attribute (``data-target`` on a CollabSelection that was given a ``target``)
-appears identically everywhere and nowhere else, and that the catalogue finds
-each script.
+that the structure the scripts read is still emitted, and that the catalogue
+finds each script.
 """
 
 from __future__ import annotations
@@ -19,21 +16,11 @@ import pytest
 from django.template import Context, Template
 
 from djust.components import rust_handlers as rh
-from djust.components.components.collab_selection import CollabSelection
-from djust.components.components.cursors_overlay import CursorsOverlay
 from djust.components.components.dashboard_grid import DashboardGrid
 from djust.components.components.mentions_input import MentionsInput
 
 STATIC = Path(rh.__file__).resolve().parent / "static" / "djust_components"
 
-CURSOR_USERS = [
-    {"name": "Alice", "color": "#3b82f6", "x": 120, "y": 340},
-    {"name": "Bob", "color": "#ef4444", "x": 450, "y": 200},
-]
-SELECTION_USERS = [
-    {"name": "Alice", "color": "#3b82f6", "start": 0, "end": 5, "text": "Hello"},
-    {"name": "Bob", "color": "#ef4444", "start": 6, "end": 11, "text": "brave"},
-]
 MENTION_USERS = [{"id": "1", "name": "Alice Cooper"}, {"id": "2", "name": "Bob"}]
 PANELS = [
     {
@@ -51,22 +38,6 @@ PANELS = [
 
 def _tag(source: str, **context) -> str:
     return Template("{% load djust_components %}" + source).render(Context(context))
-
-
-def _cursor_paths() -> dict[str, str]:
-    return {
-        "class": CursorsOverlay(users=CURSOR_USERS).render(),
-        "tag": _tag("{% cursors users=users %}", users=CURSOR_USERS),
-    }
-
-
-def _selection_paths(target: str | None = None) -> dict[str, str]:
-    kw_class = {"target": target} if target is not None else {}
-    kw_tag = f" target={target!r}" if target is not None else ""
-    return {
-        "class": CollabSelection(users=SELECTION_USERS, **kw_class).render(),
-        "tag": _tag("{% collab_selection users=users" + kw_tag + " %}", users=SELECTION_USERS),
-    }
 
 
 def _mentions_paths(disabled: bool = False) -> dict[str, str]:
@@ -93,75 +64,6 @@ def _dashboard_paths() -> dict[str, str]:
             panels=PANELS,
         ),
     }
-
-
-class TestCursorsOverlayMarkup:
-    def test_the_structure_the_hook_reads(self):
-        for path, html in _cursor_paths().items():
-            assert 'dj-hook="CursorsOverlay"' in html, path
-            assert 'class="dj-cursors"' in html and 'role="group"' in html, path
-            assert 'aria-label="2 cursors"' in html, path
-            assert html.count('class="dj-cursors__cursor"') == 2, path
-            assert 'style="left:120px;top:340px"' in html, path  # the hook reads px from here
-            assert 'data-user="Alice"' in html and 'data-user="Bob"' in html, path
-            assert html.count('<span class="dj-cursors__label"') == 2, path
-
-    def test_the_three_render_paths_agree(self):
-        paths = _cursor_paths()
-        assert paths["class"] == paths["tag"]
-
-    def test_a_name_is_escaped(self):
-        for html in (
-            CursorsOverlay(users=[{"name": '<b onclick="x">', "x": 1, "y": 2}]).render(),
-            _tag("{% cursors users=users %}", users=[{"name": '<b onclick="x">', "x": 1, "y": 2}]),
-        ):
-            assert "<b onclick" not in html
-
-
-class TestCollabSelectionMarkup:
-    def test_a_target_is_an_additive_data_attribute_on_every_path(self):
-        for path, html in _selection_paths(target="#doc").items():
-            assert 'data-target="#doc"' in html, path
-            assert 'dj-hook="CollabSelection" data-target="#doc">' in html, path
-
-    def test_no_target_no_attribute_and_the_markup_is_what_it_was(self):
-        for path, html in _selection_paths().items():
-            assert "data-target" not in html, path
-        for path, html in _selection_paths(target="").items():
-            assert "data-target" not in html, path
-
-    def test_removing_the_attribute_leaves_the_old_markup(self):
-        with_target = _selection_paths(target="#doc")
-        without = _selection_paths()
-        for path in with_target:
-            assert with_target[path].replace(' data-target="#doc"', "") == without[path], path
-
-    def test_the_three_render_paths_agree(self):
-        for target in (None, "#doc", "main .body > p"):
-            paths = _selection_paths(target=target)
-            assert paths["class"] == paths["tag"], target
-
-    def test_the_target_is_escaped(self):
-        for path, html in _selection_paths(target='"><script>alert(1)</script>').items():
-            assert "<script>" not in html, path
-            assert 'data-target="&quot;&gt;&lt;script&gt;' in html, path
-
-    def test_the_structure_the_hook_reads(self):
-        for path, html in _selection_paths().items():
-            assert 'dj-hook="CollabSelection"' in html, path
-            assert html.count('class="dj-collab-sel__range"') == 2, path
-            assert 'data-user="Alice" data-start="0" data-end="5"' in html, path
-            assert '<span class="dj-collab-sel__highlight">Hello</span>' in html, path
-            assert '<span class="dj-collab-sel__label"' in html, path
-            assert "--dj-collab-sel-color:#3b82f6" in html, path
-
-    def test_a_non_integer_offset_renders_as_zero(self):
-        users = [{"name": "A", "start": "x", "end": None, "text": "t"}]
-        for html in (
-            CollabSelection(users=users).render(),
-            _tag("{% collab_selection users=users %}", users=users),
-        ):
-            assert 'data-start="0" data-end="0"' in html
 
 
 class TestMentionsInputMarkup:
@@ -308,8 +210,6 @@ class TestDashboardGridBounds:
 @pytest.mark.parametrize(
     "component, hook, script",
     [
-        ("cursors_overlay", "CursorsOverlay", "cursors-overlay.js"),
-        ("collab_selection", "CollabSelection", "collab-selection.js"),
         ("mentions_input", "MentionsInput", "mentions-input.js"),
         ("dashboard_grid", "DashboardGrid", "dashboard-grid.js"),
     ],

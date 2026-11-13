@@ -287,22 +287,6 @@ class TestPrivateStateSlots2959:
         assert v.level == 7
         assert "_state_level" not in v._get_private_state()
 
-    @pytest.mark.django_db
-    def test_http_fallback_round_trip_keeps_state_value(self):
-        view = LevelView()
-        get = _session_request("get")
-        view.get(get)
-        view_key = "liveview_/state-2959/"
-        assert "_state_level" not in get.session.get(f"{view_key}__private", {})
-        assert get.session[view_key]["level"] == 3
-
-        post = _session_request("post", {"event": "bump", "params": {}}, session=get.session)
-        view2 = LevelView()
-        response = view2.post(post)
-        assert response.status_code == 200
-        assert view2.level == 4
-        assert view2._quiet == 5
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # #2974 — reset_form is a handler and survives form_valid

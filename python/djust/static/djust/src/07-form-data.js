@@ -1,8 +1,12 @@
 
 /**
  * A password field (or one the page marks as holding a password) is never
- * read into a draft, an auto-recover envelope or `_collectFormData`, and never
- * written back from one.
+ * read into a draft, an auto-recover envelope, `_collectFormData` or the
+ * reconnect form-recovery snapshot, and never written back or replayed from
+ * one (#4067, #4078). This is the ONE predicate for every path that keeps or
+ * re-sends form values: `_readControls`, `_writeControl` and
+ * `_formRecoveryFields` call it. A live `dj-input` / `dj-change` event and a
+ * `dj-submit` still send the value the user typed, as a native post would.
  */
 function _isSecretControl(field) {
     if (field.type === 'password') return true;

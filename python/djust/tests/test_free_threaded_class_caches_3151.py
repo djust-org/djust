@@ -1,7 +1,7 @@
 """Class-namespace walks survive concurrent first-use class caches (#3151).
 
 djust caches per-class facts on the class itself the first time they are
-needed (``_djust_descriptor_fields_cache``, ``_djust_template_hash_slot``,
+needed (``_djust_descriptor_fields_cache``,
 ``_djust_component_opaque``, ``_djust_warned_*``). On free-threaded CPython
 (3.14t, GIL off) that ``setattr(cls, ...)`` can land while another thread is
 iterating the same class's ``__dict__`` -- the first simultaneous page loads

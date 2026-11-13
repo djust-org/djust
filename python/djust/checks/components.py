@@ -627,8 +627,13 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 )
 
         # Q007 -- overlapping static_assigns and temporary_assigns
-        static = set(getattr(cls, "static_assigns", []))
-        temporary = set(getattr(cls, "temporary_assigns", {}).keys())
+        # Only a collection is a setting. A class statement can no longer
+        # declare a state() field under either name (#4070), but one assigned to
+        # the class afterwards, or a property, still reaches here.
+        raw_static = getattr(cls, "static_assigns", [])
+        raw_temporary = getattr(cls, "temporary_assigns", {})
+        static = set(raw_static) if isinstance(raw_static, (list, tuple, set, frozenset)) else set()
+        temporary = set(raw_temporary.keys()) if isinstance(raw_temporary, dict) else set()
         overlap = static & temporary
         if overlap and not _is_check_suppressed("djust.Q007"):
             cls_file = ""
@@ -2264,4 +2269,307 @@ def check_legacy_exposure_policy(app_configs: Any, **kwargs: Any) -> list[CheckM
                 line_number=owner_line,
             )
         )
+    return messages
+
+
+_V029_MUTATORS = frozenset(
+    {
+        "add",
+        "append",
+        "clear",
+        "discard",
+        "extend",
+        "insert",
+        "pop",
+        "popitem",
+        "remove",
+        "reverse",
+        "setdefault",
+        "sort",
+        "update",
+    }
+)
+
+
+class _SelfAccess(ast.NodeVisitor):
+    """How one function uses ``<receiver>.<name>``, in evaluation order.
+
+    ``changed``: names it assigns (``=``, ``+=``, annotated) or mutates in place
+    (``self.items.append(...)``, ``self.d[k] = v``, ``del self.d[k]``), with the
+    line of the first change. ``read_first``: changed names whose OLD value the
+    function reads, before (or as part of) its first assignment: ``+=``,
+    ``self.x = f(self.x)``, an in-place mutation. ``reads``: every name it reads.
+    An assignment's value is visited before its target, as Python evaluates it.
+    """
+
+    def __init__(self, receiver: str) -> None:
+        self.receiver = receiver
+        self.changed: dict[str, int] = {}
+        self.assigned: set[str] = set()
+        self.read_first: set[str] = set()
+        self.reads: set[str] = set()
+
+    def _name(self, node: Any) -> Optional[str]:
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == self.receiver
+        ):
+            return node.attr
+        return None
+
+    def _read(self, name: str) -> None:
+        self.reads.add(name)
+        if name not in self.assigned:
+            self.read_first.add(name)
+
+    def _change(self, name: str, line: int, *, assigned: bool) -> None:
+        self.changed.setdefault(name, line)
+        if assigned:
+            self.assigned.add(name)
+
+    def _store(self, target: Any, line: int) -> None:
+        for leaf in ast.walk(target):
+            name = self._name(leaf)
+            if name is not None and isinstance(getattr(leaf, "ctx", None), ast.Store):
+                self._change(name, line, assigned=True)
+            elif isinstance(leaf, ast.Subscript):
+                base = self._name(leaf.value)
+                if base is not None:  # self.d[k] = v: a read and an in-place change
+                    self._read(base)
+                    self._change(base, line, assigned=False)
+                    self.visit(leaf.slice)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self.visit(node.value)
+        for target in node.targets:
+            self._store(target, node.lineno)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if node.value is not None:
+            self.visit(node.value)
+            self._store(node.target, node.lineno)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self.visit(node.value)
+        name = self._name(node.target)
+        if name is not None:
+            self._read(name)
+            self._change(name, node.lineno, assigned=True)
+        else:
+            self._store(node.target, node.lineno)
+
+    def visit_Delete(self, node: ast.Delete) -> None:
+        for target in node.targets:
+            if isinstance(target, ast.Subscript) and self._name(target.value) is not None:
+                name = self._name(target.value)
+                assert name is not None
+                self._read(name)
+                self._change(name, node.lineno, assigned=False)
+            else:
+                self.visit(target)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr in _V029_MUTATORS:
+            name = self._name(func.value)
+            if name is not None:
+                for arg in node.args:
+                    self.visit(arg)
+                for keyword in node.keywords:
+                    self.visit(keyword.value)
+                self._read(name)
+                self._change(name, node.lineno, assigned=False)
+                return
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        name = self._name(node)
+        if name is not None and isinstance(node.ctx, ast.Load):
+            self._read(name)
+        self.generic_visit(node)
+
+
+def _self_access(function: Any) -> Optional[_SelfAccess]:
+    """``_SelfAccess`` of ``function``'s body, or None if its source is unreadable."""
+    try:
+        lines, start = inspect.getsourcelines(function)
+        tree = ast.parse(textwrap.dedent("".join(lines)))
+    except (OSError, TypeError, SyntaxError):
+        return None
+    if not tree.body or not isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return None
+    definition = tree.body[0]
+    positional = definition.args.posonlyargs + definition.args.args
+    if not positional:
+        return None
+    access = _SelfAccess(positional[0].arg)
+    for statement in definition.body:
+        access.visit(statement)
+    access.changed = {name: start + line - 1 for name, line in access.changed.items()}
+    return access
+
+
+_V029_ABSENT = object()
+
+
+def _resolved_class_attribute(cls: type, name: str) -> Any:
+    for klass in cls.__mro__:
+        if name in vars(klass):
+            return vars(klass)[name]
+    return _V029_ABSENT
+
+
+def _is_descriptor(value: Any) -> bool:
+    kind = type(value)
+    return any(hasattr(kind, hook) for hook in ("__get__", "__set__", "__delete__")) and not (
+        inspect.isfunction(value) or inspect.ismethod(value)
+    )
+
+
+def _temporary_assign_keys(cls: type) -> frozenset[str]:
+    value = _resolved_class_attribute(cls, "temporary_assigns")
+    if isinstance(value, dict):
+        return frozenset(k for k in value if isinstance(k, str))
+    return frozenset()
+
+
+@register("djust")
+def check_undeclared_handler_state(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V029 (Warning): an explicit view's event handler changes a value a later
+    event reads, and the value does not survive the HTTP fallback (#4053).
+
+    Under explicit exposure the HTTP page-POST fallback builds a new view for
+    each event and runs ``mount()`` again; only ``state(..., persist="server")``
+    fields are restored. A handler that changes a value a LATER event reads
+    (``self.count += 1`` with ``count`` set in ``mount()``) answers every
+    fallback event from the ``mount()`` value, with no error. Over a WebSocket
+    the same view works, because the instance lives as long as the socket.
+
+    A later event reads the value when the handler reads its old value before
+    changing it (``+=``, ``self.x = f(self.x)``, ``self.items.append(...)``,
+    ``self.d[k] = v``), or when another handler or ``get_context_data()``
+    reads it. A handler that recomputes a value from its own arguments and is
+    the only reader of it (``self.results = query(value)``) is correct on the
+    fallback and is not reported.
+
+    Two messages: a plain attribute (not declared state), and a ``state()``
+    field declared without ``persist`` that a handler reads-then-changes (it is
+    not restored on the fallback either).
+
+    Conservative: reads only methods decorated ``@event_handler`` / ``@action``
+    in application classes, and only their own bodies (not helpers they call,
+    not ``setattr``). Not reported: ``_private`` names, keys of
+    ``temporary_assigns`` (reset every render by design), djust's own
+    attributes (``reserved_state_names()``, any name a djust class in the MRO
+    defines, what ``LiveView()`` sets), descriptors other than ``state()``
+    (a property, ``@computed``), a ``state()`` field with ``persist``, and
+    legacy views. Builds one bare ``LiveView()`` to list djust's instance
+    attributes; no application view is constructed.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V029"):
+        return messages
+    try:
+        from djust._exposure import reserved_state_names, uses_legacy_exposure
+        from djust._state import StateProperty
+        from djust.decorators import is_action, is_event_handler
+        from djust.live_view import LiveView
+
+        framework = set(reserved_state_names()) | set(vars(LiveView()))
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    seen: set[tuple[type, str]] = set()
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if _is_framework_internal_class(cls):
+            continue
+        try:
+            if uses_legacy_exposure(cls):
+                continue
+        except Exception:  # noqa: BLE001 — a class this cannot read is skipped
+            logger.debug("V029: could not read the exposure policy of a view class")
+            continue
+        own = set(framework) | _temporary_assign_keys(cls)
+        user_classes = []
+        for klass in cls.__mro__:
+            module = getattr(klass, "__module__", "") or ""
+            if klass is object or module == "builtins" or _is_framework_internal_class(klass):
+                own.update(vars(klass).copy())
+            else:
+                user_classes.append(klass)
+        # Every handler and get_context_data() the view resolves to, with its owner.
+        handlers: dict[str, tuple[type, Any, _SelfAccess]] = {}
+        readers: dict[str, _SelfAccess] = {}
+        for klass in user_classes:
+            for name, member in vars(klass).copy().items():
+                if name in handlers or name in readers:
+                    continue
+                function = getattr(member, "__func__", member)
+                if not inspect.isfunction(function):
+                    continue
+                if is_event_handler(function) or is_action(function):
+                    access = _self_access(function)
+                    if access is not None:
+                        handlers[name] = (klass, function, access)
+                elif name == "get_context_data":
+                    access = _self_access(function)
+                    if access is not None:
+                        readers[name] = access
+        label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        for name, (klass, function, access) in handlers.items():
+            if klass is not cls and klass in candidates:
+                continue  # a LiveView base that is itself checked reports its own code
+            for attr, line in access.changed.items():
+                if attr.startswith("_") or attr in own or (klass, attr) in seen:
+                    continue
+                declaration = _resolved_class_attribute(cls, attr)
+                is_field = issubclass(type(declaration), StateProperty)
+                if is_field:
+                    if declaration.exposure.persist is not None or attr not in access.read_first:
+                        continue
+                elif _is_descriptor(declaration):
+                    continue
+                elif attr not in access.read_first and not any(
+                    attr in other.reads
+                    for other in [a for n, (_, _, a) in handlers.items() if n != name]
+                    + list(readers.values())
+                ):
+                    continue  # recomputed per event, read by nothing later
+                seen.add((klass, attr))
+                where = "" if klass is cls else " (in %s)" % klass.__qualname__
+                if is_field:
+                    msg = (
+                        "%s %s()%s changes state() field %s, which a later event reads, "
+                        'but it is declared without persist="server": on the HTTP '
+                        "fallback each event builds a new view and runs mount() again, so "
+                        "the change is lost there (over a WebSocket it is kept)."
+                        % (label, name, where, attr)
+                    )
+                    fix = 'Declare it `%s = state(..., persist="server")` on `%s`.'
+                else:
+                    msg = (
+                        "%s %s()%s changes self.%s, which a later event reads, but it is "
+                        "not declared state: on the HTTP fallback each event builds a new "
+                        "view and runs mount() again, so the change is lost there (over a "
+                        "WebSocket it is kept)." % (label, name, where, attr)
+                    )
+                    fix = 'Declare `%s = state(..., persist="server")` on `%s`.'
+                messages.append(
+                    DjustWarning(
+                        msg,
+                        hint=(
+                            "Declare it on the class: %s = state(<default>, "
+                            'persist="server") keeps it between events on every '
+                            "transport. Name it with a leading underscore if it is "
+                            "per-event scratch. Suppress with DJUST_CONFIG = "
+                            "{'suppress_checks': ['V029']}." % attr
+                        ),
+                        id="djust.V029",
+                        fix_hint=fix % (attr, klass.__qualname__),
+                        file_path=inspect.getsourcefile(function) or "",
+                        line_number=line,
+                    )
+                )
     return messages

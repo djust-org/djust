@@ -1106,9 +1106,20 @@ def _warn_refused(label: str, name: str, compile_func: Optional[Callable[..., An
     )
 
 
+def library_owns(name: str) -> bool:
+    """``True`` when a ``{% load %}``ed library's tag holds ``name`` in the Rust engine."""
+    return name in _engine_state("_owned_tags", _owned_tags) or name in _owned_tags
+
+
 def _may_override(name: str) -> bool:
     """Collision policy: never displace a handler this module does not own."""
     if name in _engine_state("_owned_tags", _owned_tags) or name in _owned_tags:
+        return True
+    from djust._removed_settings import REMOVED_TEMPLATE_TAGS
+
+    if name in REMOVED_TEMPLATE_TAGS:
+        # A component tag 2.0 removed is registered only to refuse itself (#4002): an app's own
+        # tag of that name takes the name over, as it would if djust had never had one.
         return True
     from djust._rust import (
         has_assign_tag_handler,

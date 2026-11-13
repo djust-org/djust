@@ -333,7 +333,7 @@ def test_rate_bucket_lru_cap_bounds_memory():
     WS/SSE/API). The cap + dict are read there, not on ``api.dispatch``.
     """
     from djust.api import dispatch as dispatch_mod
-    from djust import rate_limit as rate_limit_mod
+    import djust.rate_limit as rate_limit_mod
 
     dispatch_mod.reset_rate_buckets()
     original_cap = rate_limit_mod._HANDLER_BUCKET_CAP

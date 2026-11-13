@@ -463,7 +463,8 @@ def bind_params(view: Any, form_class: type, params: Any) -> BoundParams:
 
 def _refuse_removed_configuration(view: Any) -> None:
     """Refuse a view that still turns on an attribute 2.0 removed (``use_actors``),
-    or an explicit view with a plain component in its class body (#4045).
+    an explicit view with a plain component in its class body (#4045), or a
+    ``state()`` field under a reserved name (#4070).
 
     The class-creation check cannot see a value ``__init__`` or ``mount()`` set
     on the instance, one assigned to the class afterwards, or a class whose
@@ -474,10 +475,13 @@ def _refuse_removed_configuration(view: Any) -> None:
     same function right after ``mount()``.
     """
     from ._exposure_providers import class_level_plain_component_error
-    from .live_view import LiveView
+    from .live_view import LiveView, _refuse_reserved_state_names
 
     if isinstance(view, LiveView):
         reject_removed_view_attributes(view)
+        # #4070: a state() field under a reserved name, refused at class
+        # creation too.
+        _refuse_reserved_state_names(type(view))
         # #4045: the same holds for a plain component in an explicit view's
         # class body (shared by every session), refused at class creation too.
         shared = class_level_plain_component_error(view)

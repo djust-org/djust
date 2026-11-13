@@ -37,7 +37,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C024 | Config | Error | `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is not a number of seconds greater than 0 and at most 10 |
 | C025 | Config | Error | `DJUST_WS_PATH` is not a path starting with a single `/` (#3186) |
 | C026 | Config | Error | `LIVEVIEW_MIDDLEWARE` has an entry that is not an importable `async def mw(turn, next)` (ADR-044) |
-| C027 | Config | Error | `LIVEVIEW_CONFIG['view_state_in_session']` is not `True` or `False` |
+| C027 | Config | Retired | Retired in 2.0 with `view_state_in_session`: the setting was not `True` or `False`. Never emitted; the ID is not reused |
 | C028 | Config | Error | `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is not `None` or a number of seconds greater than 0 |
 | C029 | Config | Error | `LIVEVIEW_CONFIG['query_budget']` is not `None`, `"off"`, `"warn"` or `"error"` |
 | C301 | Config | Error | Invalid VDOM cache TTL |
@@ -75,6 +75,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V026 | LiveView | Warning | A legacy view declares a plain component in its class body: one object shared by every session, rendered for every user |
 | V027 | LiveView | Warning | An explicit view declares a `state()` field named `user` or `perms` (without `render=False`): it replaces `request.user` / the permission proxy in every template the view renders |
 | V028 | LiveView | Warning | An application class states `exposure_policy = "legacy"`, which is deprecated and removed before 2.0.0 |
+| V029 | LiveView | Warning | An explicit view's event handler changes a value a later event reads, and the value is not kept on the HTTP fallback (not declared state, or a `state()` field without `persist`) |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -276,12 +277,11 @@ console.log("debug info"); // noqa: Q003
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C026"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C026"]` (turns still fail at runtime)
 - **False positives**: None
 
-### C027 — Invalid `view_state_in_session`
-- **Severity**: Error
-- **Method**: Settings inspection
-- **What it detects**: `LIVEVIEW_CONFIG['view_state_in_session']` (or the same key in `DJUST_CONFIG`) is set to something other than a bool, such as `"false"`, `0` or `None`. Only `False` keeps view state out of the Django session; any other value keeps the default and saves each view's state there. See [Keeping view state out of the session](website/guides/http-only-mode.md#keeping-view-state-out-of-the-session).
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C027"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C027"]` (the runtime still keeps the default)
-- **False positives**: None
+### C027 — Retired
+- **Retired in**: 2.0 (`view_state_in_session` was removed)
+- **What it did**: reported a `LIVEVIEW_CONFIG['view_state_in_session']` (or `DJUST_CONFIG`) value that was not a bool
+- **Why it was retired**: no view state is kept in the session any more, so the setting has nothing to switch. A project that still sets it is refused with `ImproperlyConfigured` at startup. See [Nothing of the view is kept in the session](website/guides/http-only-mode.md#nothing-of-the-view-is-kept-in-the-session)
+- **Migration**: remove `"C027"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
 ### C028 — Invalid `http_fallback_background_timeout`
 - **Severity**: Error
@@ -541,6 +541,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: an application class whose own body states `exposure_policy = "legacy"`, reported once for that class, wherever the views that use it inherit it from (a view, an abstract base or a mixin); the message names up to three of those views. Explicit exposure is the default since djust 2.0 and `"legacy"` is removed before 2.0.0. Stating it also raises a `DeprecationWarning` when the class is created, which most test runners and servers hide. djust's own classes (the legacy-pinned shipped views and djust's test modules) are not reported, and a subclass that states `"explicit"` is not either (#4047).
 - **Fix**: move the view to explicit exposure (declare persisted fields with `state()`, return template names from `get_context_data()`) and delete the line. `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](website/guides/migrating-to-2.0.md).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V028"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V028"]`
+
+### V029 — a handler changes a value a later event reads, and the fallback does not keep it
+- **Severity**: Warning
+- **Method**: Runtime (class inspection and the handlers' source). It builds one bare `LiveView()` to list djust's own instance attributes; no application view is constructed.
+- **What it detects**: an `@event_handler` or `@action` of an explicit view that changes `self.<name>` (assigns it, or mutates it in place: `.append()`, `self.d[k] = v`, ...) when a later event reads that value: the handler reads the old value before changing it (`self.count += 1`, `self.x = f(self.x)`, `self.items.append(...)`), or another handler or `get_context_data()` reads it. Under explicit exposure the HTTP page-POST fallback builds a new view for each event and runs `mount()` again, and only `state(..., persist="server")` fields are restored, so such a value answers every fallback event from its `mount()` value, with no error. Over a WebSocket the same view works. Two messages: a plain attribute ("not declared state"), and a `state()` field declared without `persist` that a handler reads and then changes ("declared without persist"; `count = state(0)` + `self.count += 1` is stuck the same way). Not reported: a value a handler recomputes from its own arguments and only it reads (`self.results = query(value)`), `_private` names, keys of `temporary_assigns`, djust's own attributes (`page_title`, `template_name` and every other name in `djust._exposure.reserved_state_names()`, and any name a djust class in the view's MRO defines), descriptors other than `state()` (a property, `@computed`), a `state()` field with `persist`, and legacy views. Only the handlers' own bodies are read: a change in a helper the handler calls, or through `setattr()`, is not reported. Reported once per class and attribute, on the class whose handler changes it.
+- **Fix**: declare the value on the class with `persist`, `count = state(0, persist="server")` (or add `persist="server"` to the existing `state()`); or name it with a leading underscore if it is per-event scratch.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V029"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V029"]`
 
 <!-- END GENERATED check-sections:V -->
 

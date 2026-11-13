@@ -628,8 +628,8 @@ interface Djust {
    * `document.querySelector` (first match).
    *
    * @example
-   * const hook = window.djust.getHook(document.querySelector('[dj-hook="MarkdownEditor"]'));
-   * hook?.getEditor()?.chain().focus().addRowAfter().run();
+   * const hook = window.djust.getHook(document.querySelector('[dj-hook="ResizablePanel"]'));
+   * hook?.el.focus();
    */
   getHook(el: Element | string | null): (DjustHook & DjustHookContext) | null;
 

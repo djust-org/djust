@@ -309,55 +309,6 @@ def _post(initial, event, params):
     return response, view
 
 
-@pytest.mark.django_db
-def test_http_session_round_trip_keeps_members_state_and_never_resurrects():
-    from djust.tests.test_exposure_runtime import make_request
-
-    initial = make_request()
-    RowsPage().get(initial)
-    saved = initial.session["liveview_%s_components" % initial.path]
-    assert [m["key"] for m in saved["rows"]["members"]] == ["p-42", "p-87"]
-    assert "rows" not in initial.session["liveview_" + initial.path]
-    ids = {m["key"]: m["binding_id"] for m in saved["rows"]["members"]}
-
-    response, view = _post(initial, "toggle", {"component_id": ids["p-87"]})
-    assert response.status_code == 200, response.content
-    assert view.rows.get("p-87").open and view.rows.get("p-87").component_id == ids["p-87"]
-
-    response, view = _post(initial, "select", {"component_id": ids["p-42"], "value": "remove"})
-    assert response.status_code == 200, response.content
-    assert view.rows.get("p-42") is None
-
-    # The next request restores the latest membership: p-42 stays gone, and
-    # its old identity is refused.
-    response, view = _post(initial, "select", {"component_id": ids["p-42"], "value": "details"})
-    assert response.status_code == 400
-    assert view.rows.get("p-42") is None
-    assert view.rows.get("p-87").open
-
-
-@pytest.mark.django_db
-def test_invalid_session_record_changes_nothing():
-    view = mounted()
-    before = [(m.key, m.component_id) for m in view.rows]
-    record = view.rows._dump_session_collection()
-    for damage in (
-        {**record, "version": 2},
-        {"version": 1, "members": [{**record["members"][0], "key": ""}]},
-        {"version": 1, "members": [record["members"][0], record["members"][0]]},
-        {"version": 1, "members": [{**record["members"][0], "items": [{"label": "x"}]}]},
-        {"version": 1, "members": [{**record["members"][0], "binding_id": "forged"}]},
-        {"version": 1, "members": [{**record["members"][0], "extra": 1}]},
-        {
-            "version": 1,
-            "members": [{**record["members"][0], "binding_id": view.fixed.component_id}],
-        },
-    ):
-        with pytest.raises(ValueError):
-            view.rows._restore_session_collection(damage)
-        assert [(m.key, m.component_id) for m in view.rows] == before
-
-
 # --------------------------------------------------------------------------
 # Rendering in both engines and both policies; change detection.
 # --------------------------------------------------------------------------

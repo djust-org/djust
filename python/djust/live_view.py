@@ -20,7 +20,7 @@ from django.views import View
 from ._class_snapshot import namespace as _class_namespace
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
 from ._deprecation import class_statement_stacklevel, warn_deprecated
-from .change_detection import deep_fingerprint, fingerprints_by_content
+from .change_detection import CHANGE_DETECTION_IGNORED, deep_fingerprint, fingerprints_by_content
 from .serialization import (  # noqa: F401
     DjangoJSONEncoder,
     StateRoundtripJSONEncoder,
@@ -87,177 +87,15 @@ __all__ = [
 ]
 
 
-# Framework-internal attributes that MUST NOT be surfaced as reactive user state
-# in get_state(), _snapshot_assigns(), or observability debug payloads (#762).
-#
-# Three buckets of leakage:
-#   1. Django ``View``-inherited (set by ``as_view()``):
-#      http_method_names, args, kwargs, response_class, content_type
-#   2. djust ``LiveView``/mixin-set config attrs that happen to live on
-#      ``self.__dict__`` rather than on the class — without this filter they
-#      get mistaken for reactive state.
-#   3. Static config surfaced by mixins (PageMetadataMixin, LayoutMixin, etc.).
-#
-# This is the non-breaking fix: attribute names are unchanged. Renaming these
-# to ``_*`` would break every downstream template / integration that reads
-# e.g. ``template_name`` from the context.
-_FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
-    {
-        # Django View-inherited (set by as_view())
-        "http_method_names",
-        "args",
-        "kwargs",
-        "response_class",
-        "content_type",
-        # Request handle — reassigned per HTTP/WS event (#1545)
-        "request",
-        # djust LiveView base config
-        "sync_safe",
-        "exposure_policy",
-        "_explicit_child_mount_inputs",
-        "_explicit_child_mount_binding",
-        "_explicit_child_schema",
-        "_explicit_child_reuse_identity",
-        "_explicit_child_render_regions",
-        "_explicit_child_vdom_bindings",
-        "_explicit_child_vdom_tracking",
-        "_explicit_child_render_scope",
-        "_explicit_child_rendered_full",
-        "_explicit_child_state_tracked",
-        # ADR-038 E2-1: the keys registered providers rendered this pass.
-        "_explicit_context_provider_keys",
-        "_djust_child_disposed",
-        "_djust_waiters_closed",
-        "_async_task_handles",
-        "_tracked_tasks",
-        "_async_tasks",
-        "_async_task_counter",
-        "_async_cancelled",
-        "_async_work_generation",
-        "view_is_async",
-        "tick_interval",
-        "room_clock",
-        "_room_clock_scope",
-        "login_required",
-        "login_url",
-        "permission_required",
-        "allowed_model_fields",
-        "on_mount",
-        "on_mount_count",
-        "static_assigns",
-        "static_assigns_count",
-        "static_render",
-        "query_budget",
-        # View options of the page-status / declared-URL-params work (#3688,
-        # #3689). Class attributes like ``query_budget``; an instance that
-        # assigns one (``self.state_attribute = ...``) must not publish it as
-        # reactive state (#3706).
-        "http_status_of_state",
-        "state_attribute",
-        "params_form",
-        "params_form_fallback",
-        "template",
-        "template_name",
-        "base_template",
-        "page_meta",
-        "page_slug",
-        "page_title",
-        "temporary_assigns",
-        "sticky",
-        "sticky_id",
-        # Per-event render-control flags (#1981 / PR #1982 review). Written by
-        # ``set_changed_keys()`` / handlers and read by the event spine; they are
-        # framework signals, not user state. ``_snapshot_assigns`` has no
-        # underscore filter, so without this exclusion assigning them in a
-        # handler perturbs the pre/post fingerprint and triggers a render BY
-        # SNAPSHOT LEAK rather than by the sanctioned ``_force_full_html``
-        # mechanism (and made the "setting _changed_keys directly is
-        # ineffective" doc claim false).
-        "_changed_keys",
-        # The handler's no-render request (#3246): consumed to False by
-        # ``_resolve_skip_render``, so a first ``_skip_render`` left a key the
-        # pre-handler snapshot lacked and read as a state change.
-        "_skip_render",
-        # Lazily-assigned framework bookkeeping (#2664). These are written
-        # AFTER ``__init__`` (first render / first event / first dirty
-        # baseline), so they are NOT in the ``_framework_attrs`` snapshot
-        # taken at init and ``_snapshot_assigns`` would otherwise fingerprint
-        # them as user state — including ``_prev_context_fingerprints``,
-        # which is the structural fingerprint of the PREVIOUS render and
-        # therefore the single largest value on the instance (measured:
-        # 12.8k nodes vs 153 for the 50-row ``rows`` list on the
-        # model-backed benchmark). The test for membership is "is it ever
-        # read by a template?", NOT "is it set after __init__": ``_action_state``
-        # (splatted into the context by ``mixins/context.py`` — an ``@action``
-        # that only records an error must re-render) is deliberately NOT here.
-        # ``_dirty_baseline`` IS here even though the template-readable
-        # ``is_dirty`` / ``changed_fields`` derive from it: it is the
-        # fingerprint of EVERY public attr, so walking it re-walks the whole
-        # state per event (measured 12.2k nodes vs 3.0k for the data, 7.6x
-        # slower, and it trips the budget with a warning naming it). The one
-        # thing that changes it without touching public state —
-        # ``mark_clean()`` — is made visible by ``_dirty_baseline_version``, a
-        # small counter ``_capture_dirty_baseline`` bumps that IS snapshotted.
-        "_prev_context_refs",
-        "_prev_context_immutables",
-        "_prev_context_fingerprints",
-        "_djust_computed_cache",
-        "_djust_computed_deps",
-        "_djust_computed_lock",
-        # The context names that are a form or hold one (#3767): the sidecar answers
-        # for them, and a name not sent this sync keeps this answer.
-        "_form_held_keys",
-        "_dirty_baseline",
-        "_rust_render_timing",
-        # Adaptive loop-cache bypass bookkeeping (#3071), written after a render.
-        "_loop_cache_miss_streak",
-        "_loop_cache_bypassed",
-        "_djust_mount_kwargs",
-        "_jit_serialized_keys",
-        # The JIT's template source for a value reached through a container,
-        # read once per render by ``get_context_data`` (#3788).
-        "_nested_template_source",
-        # The raw rows a QuerySet-method read is answered from (#3801).
-        "_all_method_rows",
-        "_context_processor_keys",
-        # What the last legacy render built from attributes / as render-only
-        # (``mixins/context.py`` ``legacy_unsaved_keys``).
-        "_djust_state_context_keys",
-        "_djust_render_only_keys",
-        "_cached_csrf_token",
-        "_djust_id_counter",  # Render-cycle ID allocation is not reactive state.
-        "_sync_done_this_cycle",
-        "_force_full_html",
-        # Names of start_async tasks currently running (#2969). Written by the
-        # dispatcher and a task's completion callback, possibly while an
-        # unrelated handler's turn is in flight; never read by a template.
-        "_async_running",
-        # {% live_render sticky=True %} bookkeeping (#2919): the kwargs a
-        # sticky child was mounted with, and the last set a warning named.
-        "_djust_sticky_mount_kwargs",
-        "_djust_sticky_kwargs_warned",
-        # Per-connection identity the transports write before ``mount()``
-        # (``runtime.py`` ``dispatch_mount`` / ``on_view_mounted``). Not in the
-        # init-time ``_framework_attrs``, so the legacy private-state save
-        # carried them, and a reconnect's session restore then overwrote the
-        # new connection's values with the previous connection's (#3248).
-        "_websocket_session_id",
-        "_websocket_path",
-        "_websocket_query_string",
-        "_websocket_host",
-        "_websocket_secure",
-        "_django_session_key",
-        "_djust_mount_view_path",
-        # The ``target_id`` of the slot a view mounted beside the page view
-        # (``on_view_instantiated``, #3252); keys its cached Rust view.
-        "_djust_slot_target",
-        # The HTTP fallback's per-render child id counter (``_assign_view_id``).
-        "_render_child_ids",
-        # The SSE transport's stream id (``on_view_mounted``), the twin of
-        # ``_websocket_session_id`` (#3248 review).
-        "_sse_session_id",
-    }
-)
+# ``_FRAMEWORK_INTERNAL_ATTRS``: the framework names on a view's instance dict
+# that are not user state. Exposure-flip plan row 10 (section 5, G1) split it:
+# the change-detection skip list is ``change_detection.CHANGE_DETECTION_IGNORED``
+# (this set, same membership) and the reserved ``state()`` names are
+# ``_exposure.reserved_state_names()``. This name stays only for the legacy
+# exporters that still filter the attribute walk with it (``get_state``,
+# ``_capture_snapshot_state``, the private-state helpers, time travel, the
+# legacy debug panel and the exposure inventory); it goes with them (rows 7, 9).
+_FRAMEWORK_INTERNAL_ATTRS: frozenset = CHANGE_DETECTION_IGNORED
 
 
 # Component-level analog (#1041): framework-internal LiveComponent
@@ -555,6 +393,54 @@ def _is_framework_class(cls: type) -> bool:
     )
 
 
+def reserved_state_field_error(view_class: type, owner: type, name: str) -> Exception:
+    """The error for a ``state()`` field declared under a reserved name (#4070)."""
+    from ._exposure import ExposureConfigurationError
+
+    where = (
+        ""
+        if owner is view_class
+        else " (declared on %s.%s)"
+        % (
+            owner.__module__,
+            owner.__qualname__,
+        )
+    )
+    return ExposureConfigurationError(
+        "%s.%s declares a state() field named %r%s, a name djust reserves for a "
+        "framework setting, a view method or per-request identity. Rename the field, "
+        "for example to %r."
+        % (view_class.__module__, view_class.__qualname__, name, where, "%s_value" % name)
+    )
+
+
+def _refuse_reserved_state_names(cls: type) -> None:
+    """Refuse a ``state()`` field ``cls`` declares under a reserved name (#4070).
+
+    Reads the fields the way the exposure contract compiles them: most-derived
+    first across the MRO, so a field a plain mixin declares is refused on the
+    view that uses it, and a mixin field a subclass replaces with a plain value
+    is not a field. Runs when the class is created (``__init_subclass__``) and
+    again on the mount path (``_params_form._refuse_removed_configuration``),
+    which catches what class creation cannot: a mixin whose
+    ``__init_subclass__`` skips ``super()``, or a ``state()`` assigned to the
+    class afterwards. ``StateProperty.__set_name__`` refuses a field in a view's
+    own class body even when ``__init_subclass__`` does not run.
+    """
+    from ._exposure import reserved_state_names
+    from ._state import StateProperty
+
+    reserved = reserved_state_names()
+    seen: set[str] = set()
+    for owner in cls.__mro__:
+        for name, value in _class_namespace(owner).items():
+            if name in seen:
+                continue
+            seen.add(name)
+            if name in reserved and issubclass(type(value), StateProperty):
+                raise reserved_state_field_error(cls, owner, name)
+
+
 def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None:
     """Warn, once per class, that the class states ``exposure_policy = "legacy"``.
 
@@ -592,8 +478,10 @@ def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None
             removed_in="2.0.0",
             instead=(
                 'exposure_policy = "explicit" (the default: declare state() fields and '
-                "supply template context in get_context_data(); see %s)"
-                % EXPLICIT_EXPOSURE_GUIDE_URL
+                "supply template context in get_context_data(); see %s). A legacy view "
+                "keeps no state between requests in 2.0: the page-POST fallback mounts "
+                'it again on every POST; declare state(persist="server") for what must '
+                "survive" % EXPLICIT_EXPOSURE_GUIDE_URL
             ),
             # Both walk out of djust's own frames: to the ``class`` statement,
             # or to the code that constructed the view.
@@ -1062,6 +950,8 @@ class LiveView(
 
         cls._component_subscriptions = compile_subscriptions(cls)
         _warn_legacy_exposure_policy(cls, at_class_statement=True)
+        # #4070: a state() field may not take a reserved name.
+        _refuse_reserved_state_names(cls)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -1069,7 +959,6 @@ class LiveView(
         self._rust_view: Optional[RustLiveView] = None
         self._rust_view_explicit: bool = False
         self._session_id: Optional[str] = None
-        self._cache_key: Optional[str] = None
         self._handler_metadata: Optional[Dict[str, Dict[str, Any]]] = (
             None  # Cache for decorator metadata
         )
@@ -1412,6 +1301,11 @@ class LiveView(
 
         Non-serializable values (locks, file handles, etc.) are silently skipped.
         This is a legacy-only API; explicit persistence uses a bound adapter.
+
+        2.0: the page-POST fallback and the socket no longer save private
+        attributes; the one remaining caller is the legacy ``lazy=True`` child
+        on the page-POST fallback (``_lazy_containers.py``), which goes with
+        that path (exposure-flip plan row 9).
         """
         from ._exposure import require_legacy_state_api
 
@@ -1460,35 +1354,14 @@ class LiveView(
                 continue
         return result
 
-    def _unsaved_private_keys(self, saved: Dict[str, Any]) -> List[str]:
-        """Tracked private attributes that ``saved`` (``_get_private_state()``) lacks.
-
-        Those the session could not hold: a non-JSON value or a stored callable.
-        The slots ``_get_private_state`` leaves to the public state on purpose
-        are not lost, so they are not listed.
-        """
-        user_keys: Set[str] = getattr(self, "_user_private_keys", set())
-        not_private = self._framework_storage_slots()
-        return sorted(
-            key
-            for key in user_keys
-            if key in self.__dict__
-            and key not in saved
-            and key not in _FRAMEWORK_INTERNAL_ATTRS
-            and not (
-                key in not_private
-                and not (key != "_reactive_state" and _holds_model(self.__dict__[key]))
-            )
-        )
-
     def _restore_private_state(self, private_state: Dict[str, Any]) -> None:
         """Restore legacy private attributes; explicit views require a bound adapter.
 
         A ``"lifecycle"`` step of the ``sync_turn_wrapper`` (#3646): a private model
         reference is re-fetched here (``decode_private_model_refs``, ``Model.objects.get``)
-        and a private attribute can be a property whose setter is application code. Every
-        caller (the WebSocket state restore, the HTTP POST restore, a lazy container and
-        a sticky child's restore) reaches this method, so the step is entered here.
+        and a private attribute can be a property whose setter is application code. Its
+        one remaining caller (2.0) is the legacy lazy container on the page-POST
+        fallback; the step is entered here.
 
         A guarded step: a wrapper whose ``__exit__`` swallows
         an exception would otherwise turn a failing restore into a silent PARTIAL one

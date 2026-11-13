@@ -47,7 +47,13 @@ _SCOREBOARD = pathlib.Path(
 # the package under test — not whichever checkout the venv's editable install
 # points at (identical in CI; different in a worktree). ``python/`` first, the
 # repo root second for the script's own imports.
-_PYTHONPATH = os.pathsep.join([str(_REPO / "python"), str(_REPO)])
+_PYTHONPATH = os.pathsep.join(
+    [str(_REPO / "python"), str(_REPO)]
+    # Keep what the parent inherited after ours, so the subprocess imports the same Django
+    # as the process under test: a run whose Django comes from PYTHONPATH (a version
+    # overlay) otherwise compared one Django's tag registry with another's engine.
+    + [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p]
+)
 
 
 def _load_module():

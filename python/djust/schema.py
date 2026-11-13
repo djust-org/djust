@@ -1746,8 +1746,10 @@ def _extract_view_schema(cls: type, base_classes: list) -> Dict[str, Any]:
     class_name = cls.__qualname__
     full_path = "%s.%s" % (module, class_name)
 
-    # Template. Only a string is a template: a view may shadow the name with
-    # something else (a state() descriptor), which is not one (#4050).
+    # Template. Only a string is a template (#4050). A class statement can no
+    # longer declare a state() field under either name (#4070), but a property,
+    # a state() assigned to the class afterwards or a super()-skipping mixin's
+    # field still reaches here (test_reserved_state_names_4070.py).
     raw_template = getattr(cls, "template_name", None)
     template: Any = raw_template if isinstance(raw_template, str) else None
     if template is None and isinstance(getattr(cls, "template", None), str):

@@ -4686,8 +4686,12 @@ if (typeof window !== 'undefined') {
 
 /**
  * A password field (or one the page marks as holding a password) is never
- * read into a draft, an auto-recover envelope or `_collectFormData`, and never
- * written back from one.
+ * read into a draft, an auto-recover envelope, `_collectFormData` or the
+ * reconnect form-recovery snapshot, and never written back or replayed from
+ * one (#4067, #4078). This is the ONE predicate for every path that keeps or
+ * re-sends form values: `_readControls`, `_writeControl` and
+ * `_formRecoveryFields` call it. A live `dj-input` / `dj-change` event and a
+ * `dj-submit` still send the value the user typed, as a native post would.
  */
 function _isSecretControl(field) {
     if (field.type === 'password') return true;
@@ -8043,7 +8047,9 @@ function _processAutoRecover() {
  * server-rendered default, restoring server state transparently.
  *
  * Skips fields with dj-no-recover or fields inside dj-auto-recover
- * containers (custom handlers take precedence).
+ * containers (custom handlers take precedence), and password fields
+ * (`_isSecretControl`, #4078): their values are neither captured before the
+ * reconnect mount, restored into the new markup, nor replayed to the server.
  *
  * Fires events sequentially (batched) via handleEvent() to avoid
  * race conditions on the server.
@@ -8052,7 +8058,7 @@ function _formRecoveryFields(root) {
     return Array.from(root.querySelectorAll('input, textarea, select')).filter(field =>
         (field.hasAttribute('dj-change') || field.hasAttribute('dj-input') || field.closest('[dj-auto-recover]'))
         && !field.hasAttribute('dj-no-recover') && !field.hasAttribute('dj-force-value')
-        && !field.disabled && field.type !== 'file');
+        && !field.disabled && field.type !== 'file' && !_isSecretControl(field));
 }
 
 function _formRecoveryKey(field, root) {
@@ -8985,6 +8991,14 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             applyHttpSideChannels(data);
             return filled;
         } else {
+            // Each fallback request renders on a fresh server renderer, so a
+            // whole-page answer starts its own version count (v1) and is not
+            // the successor of the previous answer. Like a socket mount or an
+            // html_recovery frame, it re-bases the cursor instead of being
+            // checked against it; the strict check stays for patch answers.
+            if (typeof data.html === 'string' && data.patches === undefined && data.version !== undefined) {
+                clientVdomVersion = null;
+            }
             await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
         }
 

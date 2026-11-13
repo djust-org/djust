@@ -1,10 +1,11 @@
 """Typed state descriptors; exposure permissions are a separate contract."""
 
+import sys
 from collections.abc import Callable
 from copy import deepcopy
 from typing import Any, Generic, TypeVar, cast, overload
 
-from ._exposure import FieldExposure, Persistence
+from ._exposure import FieldExposure, Persistence, reserved_state_names
 
 T = TypeVar("T")
 
@@ -58,6 +59,14 @@ class StateProperty(Generic[T]):
     def __set_name__(self, owner: type, name: str) -> None:
         if self.public_name is not None and self.public_name != name:
             raise TypeError("A state descriptor cannot be shared by different field names")
+        # #4070: a field in a view's class body under a reserved name is refused
+        # here as well as in ``LiveView.__init_subclass__``, which does not run
+        # when a mixin earlier in the MRO skips ``super().__init_subclass__()``.
+        live_view = sys.modules.get("djust.live_view")
+        view_base = getattr(live_view, "LiveView", None)
+        if isinstance(view_base, type) and issubclass(owner, view_base):
+            if name in reserved_state_names():
+                raise live_view.reserved_state_field_error(owner, owner, name)  # type: ignore[union-attr]
         self.attr_name = f"_state_{name}"
         self.public_name = name
 

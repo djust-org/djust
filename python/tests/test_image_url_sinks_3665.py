@@ -27,10 +27,7 @@ from django.template import engines
 from django.utils.safestring import mark_safe
 
 from djust.components.components.image_cropper import ImageCropper
-from djust.components.components.image_upload_preview import ImageUploadPreview
-from djust.components.components.live_indicator import LiveIndicator
 from djust.components.components.mentions_input import MentionsInput
-from djust.components.components.org_chart import OrgChart
 from djust.components.components.responsive_image import ResponsiveImage
 import random
 
@@ -55,10 +52,7 @@ NO_WHITESPACE = [
 # (id, constructor taking the url, element the image is in)
 COMPONENTS = [
     ("image_cropper", lambda u: ImageCropper(src=u)),
-    ("image_upload_preview", lambda u: ImageUploadPreview(previews=[u])),
-    ("live_indicator", lambda u: LiveIndicator(user={"name": "A", "avatar": u}, field="f")),
     ("mentions_input", lambda u: MentionsInput(users=[{"id": 1, "name": "A", "avatar": u}])),
-    ("org_chart", lambda u: OrgChart(nodes=[{"id": "1", "name": "A", "avatar": u}])),
     ("responsive_image", lambda u: ResponsiveImage(src=u)),
 ]
 

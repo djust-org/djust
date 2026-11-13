@@ -129,14 +129,21 @@ def reserved_view():
             "__module__": __name__,
             "exposure_policy": "explicit",
             "template": "<div dj-root>[{{ user }}]</div>",
-            "request": state("REQUEST_FIELD"),
-            "view": state("VIEW_FIELD"),
-            "kwargs": state("KWARGS_FIELD"),
-            "template_name": state("TEMPLATE_NAME_FIELD"),
             "streams": state("STREAMS_FIELD"),
             "user": state("DECLARED_USER"),
         },
     )
+    # A class statement refuses these names (#4070). Bind them afterwards, as a
+    # bound field, to pin that the render path never renders one either.
+    for name, value in (
+        ("request", "REQUEST_FIELD"),
+        ("view", "VIEW_FIELD"),
+        ("kwargs", "KWARGS_FIELD"),
+        ("template_name", "TEMPLATE_NAME_FIELD"),
+    ):
+        field = state(value)
+        field.attr_name, field.public_name = f"_state_{name}", name
+        setattr(cls, name, field)
     yield cls
     del cls
     gc.collect()

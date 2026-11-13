@@ -392,7 +392,13 @@ class CounterView(LiveView):
 
 @pytest.mark.django_db
 def test_torture_rapid_counter():
-    """Rapidly incrementing a counter 20 times."""
+    """Rapidly incrementing a counter 20 times on one view's renderer.
+
+    Driven on the view instance (handler, then ``render_with_diff``), as a
+    socket turn runs it: 2.0 keeps no legacy view state between page-POST
+    fallback requests, so a counter driven over that fallback restarts from
+    ``mount()`` on every POST and cannot exercise 20 consecutive diffs.
+    """
     view = CounterView()
     factory = RequestFactory()
 
@@ -401,23 +407,12 @@ def test_torture_rapid_counter():
     view.get(get_request)
 
     for i in range(20):
-        post_request = factory.post(
-            "/test/",
-            data='{"event":"increment","params":{}}',
-            content_type="application/json",
-        )
-        post_request.session = get_request.session
-        response = view.post(post_request)
-        data = json.loads(response.content.decode("utf-8"))
-
-        if "patches" in data:
-            patches_json = data["patches"]
-            patches = json.loads(patches_json) if isinstance(patches_json, str) else patches_json
-            types = count_patch_types(patches)
-            assert "SetText" in types, f"Step {i}: counter should produce SetText, got {types}"
-        elif "html" in data:
-            # Full HTML update is also valid (first render after mount)
-            pass
+        view.increment()
+        _html, patches_json, _version = view.render_with_diff(get_request)
+        patches = json.loads(patches_json) if isinstance(patches_json, str) else patches_json
+        assert patches, f"Step {i}: a changed counter must diff"
+        types = count_patch_types(patches)
+        assert "SetText" in types, f"Step {i}: counter should produce SetText, got {types}"
 
 
 # ============================================================================

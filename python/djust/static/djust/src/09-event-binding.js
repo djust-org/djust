@@ -2541,7 +2541,9 @@ function _processAutoRecover() {
  * server-rendered default, restoring server state transparently.
  *
  * Skips fields with dj-no-recover or fields inside dj-auto-recover
- * containers (custom handlers take precedence).
+ * containers (custom handlers take precedence), and password fields
+ * (`_isSecretControl`, #4078): their values are neither captured before the
+ * reconnect mount, restored into the new markup, nor replayed to the server.
  *
  * Fires events sequentially (batched) via handleEvent() to avoid
  * race conditions on the server.
@@ -2550,7 +2552,7 @@ function _formRecoveryFields(root) {
     return Array.from(root.querySelectorAll('input, textarea, select')).filter(field =>
         (field.hasAttribute('dj-change') || field.hasAttribute('dj-input') || field.closest('[dj-auto-recover]'))
         && !field.hasAttribute('dj-no-recover') && !field.hasAttribute('dj-force-value')
-        && !field.disabled && field.type !== 'file');
+        && !field.disabled && field.type !== 'file' && !_isSecretControl(field));
 }
 
 function _formRecoveryKey(field, root) {

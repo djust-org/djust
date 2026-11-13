@@ -1,6 +1,6 @@
-"""ResizablePanel ``resize_event`` and FileTree ``toggle_event`` (#2985).
+"""ResizablePanel ``resize_event`` (#2985).
 
-Two optional, additive kwargs. The markup change is one data attribute, added
+An optional, additive kwarg. The markup change is one data attribute, added
 only when the kwarg is set, identically on the component class, the Django
 template tag and the Rust-engine handler: without it the markup is what it was.
 """
@@ -9,13 +9,7 @@ from __future__ import annotations
 
 from django.template import Context, Template
 
-from djust.components.components.file_tree import FileTree
 from djust.components.components.resizable_panel import ResizablePanel
-
-NODES = [
-    {"name": "src", "type": "folder", "children": [{"name": "main.py", "type": "file"}]},
-    {"name": "README.md", "type": "file"},
-]
 
 
 def _tag(source: str, **context) -> str:
@@ -32,15 +26,6 @@ def _panel_paths(event: str | None = None) -> dict[str, str]:
             + kw_tag
             + " %}hello{% endresizable_panel %}"
         ),
-    }
-
-
-def _tree_paths(event: str | None = None) -> dict[str, str]:
-    kw_class = {"toggle_event": event} if event is not None else {}
-    kw_tag = f" toggle_event={event!r}" if event is not None else ""
-    return {
-        "class": FileTree(nodes=NODES, **kw_class).render(),
-        "tag": _tag("{% file_tree nodes=nodes" + kw_tag + " %}", nodes=NODES),
     }
 
 
@@ -70,34 +55,4 @@ class TestResizePanelResizeEvent:
 
     def test_the_event_name_is_escaped(self):
         for path, html in _panel_paths('"><script>alert(1)</script>').items():
-            assert "<script>" not in html, path
-
-
-class TestFileTreeToggleEvent:
-    def test_the_event_is_one_additive_data_attribute_on_every_path(self):
-        for path, html in _tree_paths("folder_toggled").items():
-            assert 'data-toggle-event="folder_toggled"' in html, path
-            assert html.count("data-toggle-event") == 1, path  # on the root only
-
-    def test_without_it_there_is_no_attribute(self):
-        for path, html in _tree_paths().items():
-            assert "data-toggle-event" not in html, path
-        for path, html in _tree_paths("").items():
-            assert "data-toggle-event" not in html, path
-
-    def test_removing_the_attribute_leaves_the_old_markup(self):
-        with_event = _tree_paths("folder_toggled")
-        without = _tree_paths()
-        for path in with_event:
-            assert (
-                with_event[path].replace(' data-toggle-event="folder_toggled"', "") == without[path]
-            ), path
-
-    def test_the_three_render_paths_agree_on_the_root(self):
-        for event in (None, "folder_toggled"):
-            roots = {path: html[: html.index(">")] for path, html in _tree_paths(event).items()}
-            assert roots["class"] == roots["tag"], event
-
-    def test_the_event_name_is_escaped(self):
-        for path, html in _tree_paths('"><script>alert(1)</script>').items():
             assert "<script>" not in html, path

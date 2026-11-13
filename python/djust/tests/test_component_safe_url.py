@@ -87,7 +87,7 @@ def test_no_inline_navigation_sink_uses_bare_conditional_escape():
     import djust.components.templatetags.djust_components as dc
 
     base = Path(dc.__file__).parent
-    files = ["djust_components.py", "_advanced.py", "_forms.py"]
+    files = ["djust_components.py", "_forms.py"]
     # An inline f-string href=/action=/formaction= whose value is
     # conditional_escape(...) is exactly the vulnerable shape.
     bad = re.compile(r'(?:href|action|formaction)="\{conditional_escape\(')
@@ -102,7 +102,7 @@ def test_no_inline_navigation_sink_uses_bare_conditional_escape():
 
 
 def test_safe_url_sink_count_pinned():
-    """All 11 navigation URL sinks route through safe_url. Pinning the count
+    """All 8 navigation URL sinks route through safe_url. Pinning the count
     catches a revert of a *precomputed-var* sink (e_url = conditional_escape(...))
     that the inline-regex test above can't see (#1646 whole-class guard).
 
@@ -117,10 +117,10 @@ def test_safe_url_sink_count_pinned():
 
     base = Path(dc.__file__).parent
     counts = {
-        f: (base / f).read_text().count("safe_url(")
-        for f in ["djust_components.py", "_advanced.py", "_forms.py"]
+        f: (base / f).read_text().count("safe_url(") for f in ["djust_components.py", "_forms.py"]
     }
     total = sum(counts.values())
     # 7 (djust_components: breadcrumb, citation, cookie-consent, 4×dj_nav)
-    # + 3 (_advanced: error-page, 2×breadcrumb) + 1 (_forms: form action) = 11
-    assert total >= 11, f"safe_url sink count dropped to {total} (expected >= 11): {counts}"
+    # + 1 (_forms: form action) = 8. The 3 in _advanced.py (error-page, 2×breadcrumb-dropdown)
+    # went with those tags (#4002).
+    assert total >= 8, f"safe_url sink count dropped to {total} (expected >= 8): {counts}"

@@ -32,11 +32,6 @@ TEXT_CASES = [
         lambda v: {"panels": [{"id": "p1", "title": "T", "content": v}]},
     ),
     (
-        "masonry_grid_item_content",
-        "{% masonry_grid items=items %}",
-        lambda v: {"items": [{"content": v}]},
-    ),
-    (
         "meter_legend_value",
         "{% meter segments=segs %}",
         lambda v: {"segs": [{"label": "a", "value": v}]},
@@ -149,27 +144,6 @@ IMAGE_CASES = [
         "lightbox",
         "{% lightbox images=imgs open=is_open %}",
         lambda u: {"imgs": [{"src": u, "alt": "a"}], "is_open": True},
-    ),
-    (
-        "org_chart",
-        "{% org_chart nodes=nodes %}",
-        lambda u: {"nodes": [{"id": "1", "name": "A", "avatar": u}]},
-    ),
-    (
-        "live_indicator",
-        "{% live_indicator user=user %}",
-        lambda u: {"user": {"name": "A", "avatar": u}},
-    ),
-    (
-        "activity_feed",
-        "{% activity_feed events=events %}",
-        lambda u: {"events": [{"user": "A", "action": "did", "avatar": u}]},
-    ),
-    ("image_upload_preview", "{% image_upload_preview previews=p %}", lambda u: {"p": [u]}),
-    (
-        "data_card_grid",
-        "{% data_card_grid items=items %}",
-        lambda u: {"items": [{"title": "A", "image": u}]},
     ),
 ]
 

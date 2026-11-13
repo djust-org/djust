@@ -116,7 +116,7 @@ A stuck loop stops accepting connections while the others still answer probes. I
 
 | Setting | Default | Recommendation |
 |---|---|---|
-| `DJUST_CONFIG["SESSION_TTL"]` | 3600 s | The reconnect window you need. The multiplayer game uses 120 s. The in-memory state backend holds about *new sessions per second × `SESSION_TTL`* entries, at about 270 KB each in that game. |
+| `DJUST_CONFIG["SESSION_TTL"]` | 3600 s | The reconnect window you need. The multiplayer game uses 120 s. The in-memory state backend held about *new sessions per second × `SESSION_TTL`* entries, at about 270 KB each in that game, under 1.x; 2.0 removed the cached views those entries were. |
 | `djust.worker_pool.PooledHTTP` | off | On for 3.14t. In one run on a shared dev machine (3.14t, `worker_threads=5`) it cut peak RSS at 256 clients from 2,030 MB to 936 MB. |
 | Idle-time `gc.collect()` and `malloc_trim(0)` | not run | On 3.14t, a housekeeping thread that collects only when the process is idle (or every 5 minutes at most), then calls glibc's `malloc_trim(0)` through `ctypes`. Log the pause: a forced collection took 40–190 ms even when it found nothing. |
 | `MALLOC_ARENA_MAX`, mimalloc purge options | unset | Made no measurable difference in the game's tests. |

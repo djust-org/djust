@@ -160,8 +160,11 @@ user).
 
 - Two roots with the same `data-draft-key` write the same draft and overwrite
   each other's fields of the same name. Give each root its own key.
-- A draft is stored as plain text in `localStorage`. This includes a field you
-  mark `data-draft="true"` that is a password: do not mark one.
+- A draft is stored as plain text in `localStorage`. A password field
+  (`type="password"`, or `autocomplete="new-password"` / `"current-password"`) is
+  never saved or restored, even when marked `data-draft="true"`; the same rule
+  applies to `dj-auto-recover` and reconnect form recovery. Hidden and disabled
+  fields are saved and restored like any other field.
 - A `type="file"` field is neither saved nor restored.
 
 ## Debugging Decorators

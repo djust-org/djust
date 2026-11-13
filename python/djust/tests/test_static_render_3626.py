@@ -11,7 +11,6 @@ behaves: it is a full render, never a patch, and never wrong.
 from __future__ import annotations
 
 import json
-import warnings
 
 import pytest
 from asgiref.sync import sync_to_async
@@ -22,7 +21,7 @@ from djust import LiveView
 from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import event_handler
 from djust.state_backends import get_backend, set_backend
-from djust.state_backends.base import DjustPerformanceWarning, describe_snapshot
+from djust.state_backends.base import describe_snapshot
 from djust.state_backends.memory import InMemoryStateBackend
 
 pytestmark = [pytest.mark.django_db]
@@ -218,52 +217,11 @@ class TestReleaseBaseline:
 
 
 class TestTheStoredSnapshot:
-    def test_a_static_view_stores_the_template_and_the_version_only(self, backend):
-        _get(StaticDiagram)
-        static = _stored(backend)
-        backend.delete_all()
-        _get(Diagram)
-        normal = _stored(backend)
-        # Measured: normal 474,054 bytes (state 204,004, tree 269,862; the same
-        # on main, where nothing here changes a normal view), static 196 bytes.
-        print("\nstored after GET: normal=%(total)d (state %(state)d, tree %(tree)d)" % normal)
-        print("stored after GET: static=%(total)d (state %(state)d, tree %(tree)d)" % static)
-        assert normal["total"] > 350_000
-        assert normal["tree"] > 150_000 and normal["state"] > 150_000
-        assert static["tree"] <= 1 and static["state"] <= 1
-        assert static["total"] <= static["template"] + 64
-        assert static["total"] < 1_000
-
-    def test_the_size_warning_measures_what_is_stored(self, backend):
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            _get(StaticDiagram)
-        static = _stored(backend)
-        assert static["recorded"] == static["total"]
-        assert not [w for w in caught if issubclass(w.category, DjustPerformanceWarning)]
-
-        backend.delete_all()
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            _get(Diagram)
-        normal = _stored(backend)
-        assert normal["recorded"] == normal["total"]
-        fired = [w for w in caught if issubclass(w.category, DjustPerformanceWarning)]
-        assert fired
-        # The advice names the remedy measured above.
-        assert "static_render = True: it stores neither part" in str(fired[0].message)
-
     def test_the_page_is_the_same(self, backend):
         _request, static_html = _get(StaticDiagram)
         _request, normal_html = _get(Diagram)
         for html in (static_html, normal_html):
             assert DIAGRAM[:200] in html and "table_1999" in html and ">closed<" in html
-
-    def test_a_normal_view_is_unchanged(self, backend):
-        assert Diagram.static_render is False
-        _get(SmallPage)
-        stored = _stored(backend)
-        assert stored["tree"] > 1 and stored["state"] > 1
 
 
 # --------------------------------------------------------------------------
@@ -272,27 +230,30 @@ class TestTheStoredSnapshot:
 
 
 class TestTheHttpFallback:
-    @pytest.mark.parametrize("in_session", [True, False])
-    def test_an_event_answers_the_whole_page_with_consecutive_versions(self, backend, in_session):
-        with override_settings(LIVEVIEW_CONFIG={"view_state_in_session": in_session}):
-            initial, _html = _get(StaticDiagram)
-            first = _post(StaticDiagram, initial, "toggle")
-            second = _post(StaticDiagram, initial, "nothing")
-            third = _post(StaticDiagram, initial, "toggle")
+    def test_an_event_answers_the_whole_page(self, backend):
+        initial, _html = _get(StaticDiagram)
+        first = _post(StaticDiagram, initial, "toggle")
+        second = _post(StaticDiagram, initial, "nothing")
+        third = _post(StaticDiagram, initial, "toggle")
         for frame in (first, second, third):
             assert "patches" not in frame, frame.keys()
             assert "table_1999" in frame["html"]
-        assert first["version"] + 1 == second["version"]
-        assert second["version"] + 1 == third["version"]
-        if in_session:
-            # The state the session holds carries the toggles across requests.
-            assert ">open<" in first["html"] and ">open<" not in third["html"]
-        assert _stored(backend)["total"] < 1_000
+        # 2.0 keeps no legacy renderer in the backend between requests, so each
+        # POST's fresh instance numbers its whole-page answer v1 (as an explicit
+        # view does); the client re-bases its cursor on a whole-page fallback
+        # answer instead of checking it against the previous one
+        # (tests/js/http-fallback-whole-page-version.test.js).
+        assert [frame["version"] for frame in (first, second, third)] == [1, 1, 1]
+        assert ">open<" in first["html"] and ">closed<" in second["html"]
+        assert backend._cache == {}
 
-    def test_a_normal_view_still_patches(self, backend):
+    def test_a_normal_view_answers_the_whole_page_too(self, backend):
+        """2.0: a fresh fallback instance has no renderer from the previous
+        request to diff against (the state-backend cache was removed), so a
+        normal legacy view answers with the whole page, as an explicit one does."""
         initial, _html = _get(Diagram)
         frame = _post(Diagram, initial, "toggle")
-        assert frame["patches"] and "html" not in frame
+        assert "patches" not in frame and ">open<" in frame["html"]
 
 
 # --------------------------------------------------------------------------
@@ -429,15 +390,13 @@ class TestTheWebSocket:
 
     async def test_a_mount_after_the_get_starts_from_the_small_entry(self, backend):
         request, _html = await sync_to_async(_get)(StaticDiagram)
-        assert _stored(backend)["total"] < 1_000
         with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
             async with _Socket(request.session.session_key) as socket:
                 mounted = await socket.mount(StaticDiagram)
                 frame = await socket.event("toggle", 1)
         assert "table_1999" in mounted["html"]
         assert frame["type"] == "html_update" and ">open<" in frame["html"]
-        for entry in backend._cache.values():
-            assert len(entry[0]) < 1_000
+        assert backend._cache == {}
 
     @pytest.mark.django_db(transaction=True)
     async def test_work_started_at_mount_answers_the_whole_page(self, backend):

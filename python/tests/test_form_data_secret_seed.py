@@ -745,46 +745,6 @@ class TestRestoredEarlierStateIsCleaned:
         restore_public_state(view, {"form_data": {"password": STORED, "city": "Oslo"}})
         assert view.form_data == {"password": "", "city": "Oslo"}
 
-    def test_the_http_event_fallback_restores_a_pre_fix_session_without_the_stored_value(self):
-        from django.contrib.sessions.backends.db import SessionStore
-
-        user = make_user()
-        view_class = view_for(EditForm)
-        session = SessionStore()
-        session.create()
-        factory = RequestFactory()
-        request = factory.get("/x/")
-        request.user = user
-        request.session = session
-        view_class.as_view()(request, pk=user.pk)
-        keys = [
-            k for k in session.keys() if k.startswith("liveview_") and isinstance(session[k], dict)
-        ]
-        blobs = [k for k in keys if "form_data" in session[k]]
-        assert blobs, list(session.keys())  # the saved shape is really there
-        for key in blobs:
-            blob = session[key]
-            blob["form_data"]["password"] = STORED
-            session[key] = blob
-        session.save()
-        post = factory.post(
-            "/x/",
-            data=json.dumps(
-                {"event": "validate_field", "params": {"field": "username", "value": "z"}}
-            ),
-            content_type="application/json",
-            HTTP_X_DJUST_EVENT="validate_field",
-        )
-        post.user = user
-        post.session = session
-        response = view_class.as_view()(post, pk=user.pk)
-        assert response.status_code == 200
-        assert response.content.decode().count(STORED) == 0
-        saved = json.dumps(
-            {k: session[k] for k in session.keys() if k.startswith("liveview_")}, default=str
-        )
-        assert saved.count(STORED) == 0
-
     def test_the_restore_callers_are_the_ones_this_was_checked_against(self):
         """Every restore of saved public state passes ``restore_public_state``: a new caller is a new
         thing to check."""
@@ -799,9 +759,9 @@ class TestRestoredEarlierStateIsCleaned:
             and re.search(r"restore_public_state\(", path.read_text())
             and path.name != "_state_restore.py"
         )
+        # 2.0 removed the page-POST fallback's restore (``mixins/request.py``).
         assert found == [
             "_lazy_containers.py",
-            "mixins/request.py",
         ]
 
 

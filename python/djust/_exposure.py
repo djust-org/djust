@@ -71,6 +71,73 @@ class FieldExposure:
 _PROVIDER_NAME = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*\Z", re.ASCII)
 _RESERVED_CONTEXT_KEYS = frozenset({"view"})
 
+#: The public names a ``state()`` field may not take, besides the ``LiveView``
+#: class namespace (exposure-flip plan section 5, G1): per-request identity
+#: (``request``, ``args``, ``kwargs``) and the framework settings the runtime,
+#: the system checks and the management commands read off a view (#4070).
+#: Until 2.0 the explicit path read these out of
+#: ``live_view._FRAMEWORK_INTERNAL_ATTRS``; this is that set's public subset.
+#: Its ``_``-prefixed names are not repeated: a state field name must match
+#: ``_NAME``, which no underscore name does. A test pins that every public name
+#: of the old set is here.
+RESERVED_STATE_NAMES: frozenset[str] = frozenset(
+    {
+        # Django ``View`` (``as_view()`` / ``setup()``)
+        "args",
+        "content_type",
+        "http_method_names",
+        "kwargs",
+        "request",
+        "response_class",
+        "view_is_async",
+        # djust view settings
+        "allowed_model_fields",
+        "base_template",
+        "exposure_policy",
+        "http_status_of_state",
+        "login_required",
+        "login_url",
+        "on_mount",
+        "on_mount_count",
+        "page_meta",
+        "page_slug",
+        "page_title",
+        "params_form",
+        "params_form_fallback",
+        "permission_required",
+        "query_budget",
+        "room_clock",
+        "state_attribute",
+        "static_assigns",
+        "static_assigns_count",
+        "static_render",
+        "sticky",
+        "sticky_id",
+        "sync_safe",
+        "template",
+        "template_name",
+        "temporary_assigns",
+        "tick_interval",
+    }
+)
+
+
+def reserved_state_names() -> frozenset[str]:
+    """Every name a declared ``state()`` field may not take.
+
+    One list (#4070) for the exposure contract (refused when the contract is
+    compiled), the rendered-state names (never rendered from a declaration) and
+    the class-creation refusal (``live_view._refuse_reserved_state_names``).
+    :data:`RESERVED_STATE_NAMES`, the context keys djust reserves, the
+    client-unsafe keys and every name in the ``LiveView`` class namespace.
+    """
+    from .live_view import LiveView
+
+    names = set(RESERVED_STATE_NAMES) | _RESERVED_CONTEXT_KEYS | _UNSAFE_KEYS
+    for base in LiveView.__mro__:
+        names.update(namespace(base))  # #3151
+    return frozenset(names)
+
 
 def _provider_keys(value: Any, label: str) -> frozenset[str]:
     if isinstance(value, str) or not isinstance(value, (frozenset, set, tuple, list)):
@@ -448,11 +515,7 @@ class ExposureContract:
         )
 
     def __post_init__(self) -> None:
-        from .live_view import _FRAMEWORK_INTERNAL_ATTRS, LiveView
-
-        framework_names = set(_FRAMEWORK_INTERNAL_ATTRS)
-        for base in LiveView.__mro__:
-            framework_names.update(namespace(base))  # #3151
+        reserved = reserved_state_names()
 
         if type(self.owner) is not str or not self.owner or len(self.owner) > 512:
             raise ExposureError("Invalid state contract owner")
@@ -468,9 +531,7 @@ class ExposureContract:
                 type(name) is not str
                 or len(name) > 128
                 or not _NAME.fullmatch(name)
-                or name in framework_names
-                or name in _UNSAFE_KEYS
-                or name in _RESERVED_CONTEXT_KEYS
+                or name in reserved
             ):
                 raise ExposureError("Invalid or reserved state field name")
             if type(policy) is not FieldExposure:
