@@ -287,3 +287,26 @@ def test_serialized_cards_render_like_the_objects():
     html = render_template(view.template, data)
     assert "one ONE" in html and "call to search" in html and "ab" in html
     assert "hunter2" not in html
+
+
+class WholeAndFieldView(LiveView):
+    exposure_policy = "legacy"
+    template = (
+        '<div dj-root dj-view="tests.WholeAndFieldView">'
+        "{% for card in cards %}{{ card }}|{{ card.title }};{% endfor %}"
+        "{{ featured }}|{{ featured.title }}"
+        "</div>"
+    )
+
+
+def test_a_plain_object_read_whole_and_by_field_carries_its_text():
+    """#3911 for ``serialize_for_template``: an object the template prints whole AND reads a
+    field of carries its text beside the field, so ``{{ card }}`` prints it and not a dict.
+    ``template_paths()`` keeps that internal: a whole read is still no path there."""
+    view = WholeAndFieldView()
+    assert view.template_paths() == {"cards": ["title"], "card": ["title"], "featured": ["title"]}
+    rows = view.serialize_for_template(_cards(), "cards")
+    assert [row["__str__"] for row in rows] == [str(card) for card in _cards()]
+    assert [row["title"] for row in rows] == ["one", "two"]
+    one = view.serialize_for_template(_cards()[0], "featured")
+    assert one == {"__str__": str(_cards()[0]), "title": "one"}

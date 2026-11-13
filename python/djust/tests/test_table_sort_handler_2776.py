@@ -149,48 +149,43 @@ def _render_under(component, framework: str) -> str:
 
 
 class TableHostView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    # Explicit views render components declared in the class body; each view
+    # gets its own binding, whose component_id is the attribute name, so the
+    # attribute is named after the id the test's control markup carries.
+    t1 = TableComponent(component_id="t1", columns=list(_COLUMNS), rows=[dict(r) for r in _ROWS])
     template = f'<div dj-root dj-view="{_MODULE}.TableHostView" dj-id="0"><p>order={{{{ order }}}}</p></div>'
-
-    def mount(self, request, **kwargs):
-        self.table = TableComponent(
-            component_id="t1", columns=list(_COLUMNS), rows=[dict(r) for r in _ROWS]
-        )
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["order"] = ",".join(r["name"] for r in self.table.rows)
+        ctx["order"] = ",".join(r["name"] for r in self.t1.rows)
         return ctx
 
 
 class PaginationHostView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    p1 = PaginationComponent(component_id="p1", current_page=2, total_pages=5)
     template = f'<div dj-root dj-view="{_MODULE}.PaginationHostView" dj-id="0"><p>page={{{{ p }}}}</p></div>'
-
-    def mount(self, request, **kwargs):
-        self.pager = PaginationComponent(component_id="p1", current_page=2, total_pages=5)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["p"] = self.pager.current_page
+        ctx["p"] = self.p1.current_page
         return ctx
 
 
 class TabsHostView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    tb1 = TabsComponent(
+        component_id="tb1",
+        tabs=[{"id": "one", "label": "One"}, {"id": "two", "label": "Two"}],
+    )
     template = (
         f'<div dj-root dj-view="{_MODULE}.TabsHostView" dj-id="0"><p>active={{{{ a }}}}</p></div>'
     )
 
-    def mount(self, request, **kwargs):
-        self.tabs = TabsComponent(
-            component_id="tb1",
-            tabs=[{"id": "one", "label": "One"}, {"id": "two", "label": "Two"}],
-        )
-
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["a"] = self.tabs.active
+        ctx["a"] = self.tb1.active
         return ctx
 
 

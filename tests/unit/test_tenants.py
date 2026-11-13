@@ -12,6 +12,7 @@ Tests cover:
 import time
 import pytest
 from unittest.mock import Mock, patch
+from djust._exposure_providers import new_render_context
 
 
 # === TenantInfo Tests ===
@@ -653,7 +654,7 @@ class TestTenantMixin:
         from djust.tenants.resolvers import TenantInfo
 
         class TestClass(TenantMixin):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
         obj = TestClass()
         request = Mock()
@@ -689,7 +690,7 @@ class TestTenantMixin:
         from djust.tenants.mixin import TenantMixin
 
         class TestClass(TenantMixin):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             tenant_required = False
 
         obj = TestClass()
@@ -705,10 +706,13 @@ class TestTenantMixin:
         from djust.tenants.resolvers import TenantInfo
 
         class ParentClass:
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def get_context_data(self, **kwargs):
-                return {"existing": "value"}
+                # The framework's explicit render context, as LiveView supplies it.
+                context = new_render_context(self)
+                context["existing"] = "value"
+                return context
 
         class TestClass(TenantMixin, ParentClass):
             pass
@@ -729,8 +733,13 @@ class TestTenantMixin:
         from djust.tenants.mixin import TenantMixin
         from djust.tenants.resolvers import TenantInfo
 
-        class TestClass(TenantMixin):
-            exposure_policy = "legacy"
+        class ParentClass:
+            def get_context_data(self, **kwargs):
+                # The framework's explicit render context, as LiveView supplies it.
+                return new_render_context(self)
+
+        class TestClass(TenantMixin, ParentClass):
+            exposure_policy = "explicit"
             tenant_context_name = "organization"
 
         obj = TestClass()

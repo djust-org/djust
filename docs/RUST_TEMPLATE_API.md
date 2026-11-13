@@ -275,14 +275,49 @@ fields the body reads, so a JIT row carries it.
 # Template: {% for u in users|dictsort:'username' %}{{ u.pk }}{% endfor %}
 # Result: {"users": ["pk", "username"], "u": ["pk"]}
 ```
-Three limits, each deliberate. The field is filed only when the list's items
-are also read by field: with nothing else singled out the row is serialized
-whole, which already carries the field (`{% for u in users|dictsort:'name' %}{{ u }}`
-gives `{"users": []}`). A bare argument (`dictsort:key`) is a context variable
-whose value is the field, which a static pass cannot know, so it is filed as
-the variable read it is and names no field (#3910). A key that is not a plain
-dotted path (an empty segment, a segment starting with `_`) is ignored, as Django
-refuses it.
+The field is filed when the list's items are also read by field, or when the
+list is NESTED (`g.user_set.all|dictsort:'username'`): a top-level list whose
+rows nothing else singles out is serialized whole, which already carries the
+field (`{% for u in users|dictsort:'name' %}{{ u }}` gives `{"users": []}`), but
+the rows of a nested list cross as their text, which carries no field (#3918).
+`{% regroup %}`'s groups read their rows through `.list`; a field read there is
+filed on the regroup's source (#3920).
+
+A bare argument (`dictsort:key`) is a context variable whose value is the field,
+which a static pass cannot know. The list is filed with `*key`, the variable's
+name, and the Python JIT resolves it from the context it renders with and adds
+the ONE column it names to the row (#3910); a key that changes between renders
+serializes its own column. The value is a key only when it names one of the
+model's own non-relation columns: a property, a `get_*()` method, a relation
+path, a private or numeric name resolves to no column and the loop renders
+empty. The serialization floor still decides whether the column ships, so a
+floored or `djust_exclude_fields` column, or one a `djust_serializable_fields`
+allowlist leaves out, also renders an empty loop where Django sorts. A list of
+plain (non-model) objects passed through `serialize_for_template` and sorted by
+a variable key renders an empty loop too: only model rows resolve the key. Only a top-level list gets `*key`; it is filed even when the rows
+are read whole, so that a method the variable names is kept out of the whole row
+(Django's `dictsort` cannot order bound methods and renders an empty loop).
+
+A key that is not a plain dotted path (an empty segment, a segment starting with
+`_`) is ignored, as Django refuses it. A dotted key is a path, resolved one part
+at a time as Django resolves it (#3912). A key naming a method or a related
+manager is not orderable in Django, which renders an empty loop; djust leaves
+such a key out of the row when nothing else in the template reads it, and the
+sort fails the same way (#3919). With exactly ONE row Django never compares and
+renders it; djust still renders nothing there.
+
+**A row read whole AND by field** (#3911): `{{ u }}{{ u.pk }}` files `__str__`
+beside the fields, and the row carries the identity map a serialized model
+carries (`id`, `pk`, `__str__`, `__model__`), so `{{ u }}` prints the model's text
+and the row is a model, not a dict, to the template. A row read only whole stays whole; a test
+(`{% if u %}`), a binding (`{% with v=u %}`) or iterating a list is not a whole
+read. A top-level name read whole files `__djust_text__` instead, because only
+the JIT knows whether the name holds one model (its text, `__str__`) or a list
+(`{{ rows|pprint }}` prints the list, not each row, so it is dropped).
+```python
+# Template: {% for u in users %}{{ u }}{{ u.pk }}{% endfor %}
+# Result: {"users": ["__str__", "pk"], "u": ["__djust_text__", "pk"]}
+```
 
 ---
 

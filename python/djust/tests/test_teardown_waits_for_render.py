@@ -23,6 +23,8 @@ from django.test import override_settings
 from djust import LiveView
 from djust.config import config as djust_config
 from djust.push import apush_to_view
+from djust import state
+from djust.tests._live_session import with_live_session
 
 pytest.importorskip("channels")
 
@@ -43,7 +45,9 @@ class _Blocker:
 
 
 class _SlowRenderPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
+    blocker = state()
     template = "<div dj-root><b>{{ count }}</b><i>{{ blocker.value }}</i></div>"
 
     def mount(self, request, **kwargs):
@@ -96,7 +100,7 @@ async def test_closing_during_a_pushed_render_does_not_race_the_teardown(workers
     caplog.set_level(logging.WARNING)
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
         comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-        assert (await comm.connect())[0]
+        assert (await with_live_session(comm).connect())[0]
         await comm.receive_json_from(timeout=10)
         await comm.send_json_to({"type": "mount", "view": VIEW, "url": "/slow/"})
         while (await comm.receive_json_from(timeout=10)).get("type") != "mount":
@@ -142,7 +146,7 @@ async def test_a_render_that_starts_after_the_last_thread_hop_is_waited_for(
     caplog.set_level(logging.WARNING)
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
         comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-        assert (await comm.connect())[0]
+        assert (await with_live_session(comm).connect())[0]
         await comm.receive_json_from(timeout=10)
         await comm.send_json_to({"type": "mount", "view": VIEW, "url": "/slow/"})
         while (await comm.receive_json_from(timeout=10)).get("type") != "mount":

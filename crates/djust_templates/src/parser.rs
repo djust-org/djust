@@ -3117,35 +3117,88 @@ pub fn extract_template_variables(
         extract_from_nodes(&nodes, &mut variables);
     }
 
-    // Normalize, deduplicate and sort paths for each variable.
-    //
-    // A numeric segment is an INDEX into a sequence, never a model field — an
-    // identifier cannot start with a digit — so `{{ rows.0.username }}` names
-    // the element field `username` of `rows`, and `{{ rows.0 }}` names a whole
-    // element (an empty path, the same as `{{ rows }}`). Left in, `0.username`
-    // reached the JIT serializer as an attribute path and serialized `[{}]`
-    // for every list and QuerySet, saved or not (#2736). This is the one
-    // chokepoint every producer above flows through, so the for-loop
-    // transfer and the tag-operand walk cannot drift from it (#1646).
     for paths in variables.values_mut() {
-        for path in paths.iter_mut() {
-            if path.split('.').any(is_index_segment) {
-                *path = path
-                    .split('.')
-                    .filter(|segment| !is_index_segment(segment))
-                    .collect::<Vec<_>>()
-                    .join(".");
-            }
-        }
-        paths.retain(|path| !path.is_empty());
-        // After the index segments are gone, so that `rows.0.items` and
-        // `rows.items` are the same iterable when a key is matched to it.
-        resolve_item_key_paths(paths);
-        paths.sort();
-        paths.dedup();
+        settle_paths(paths);
     }
 
     Ok(variables)
+}
+
+/// Normalize, deduplicate and sort one root's raw paths (marks included) into
+/// the public path list [`extract_template_variables`] returns.
+///
+/// A numeric segment is an INDEX into a sequence, never a model field — an
+/// identifier cannot start with a digit — so `{{ rows.0.username }}` names
+/// the element field `username` of `rows`, and `{{ rows.0 }}` names a whole
+/// element (an empty path, the same as `{{ rows }}`). Left in, `0.username`
+/// reached the JIT serializer as an attribute path and serialized `[{}]`
+/// for every list and QuerySet, saved or not (#2736). This is the one
+/// chokepoint every producer flows through, so the for-loop transfer and the
+/// tag-operand walk cannot drift from it (#1646).
+fn settle_paths(paths: &mut Vec<String>) {
+    drop_index_segments(paths);
+    // After the index segments are gone, so that `rows.0.items` and
+    // `rows.items` are the same iterable when a key is matched to it.
+    resolve_item_key_paths(paths);
+    resolve_whole_reads(paths);
+    paths.sort();
+    paths.dedup();
+}
+
+fn drop_index_segments(paths: &mut Vec<String>) {
+    for path in paths.iter_mut() {
+        if path.split('.').any(is_index_segment) {
+            *path = path
+                .split('.')
+                .filter(|segment| !is_index_segment(segment))
+                .collect::<Vec<_>>()
+                .join(".");
+        }
+    }
+    paths.retain(|path| !path.is_empty());
+}
+
+/// The item-key reads (`dictsort:'k'`, `{% regroup x by k %}`) that
+/// [`extract_template_variables`] files and that nothing ELSE in the template
+/// reads, per root (#3919).
+///
+/// Django's `dictsort` resolves its key with `_property_resolver`, which never
+/// CALLS what it finds, so a method or a related manager named as a key orders
+/// bound methods and raises (`""`). A template read `{{ u.get_full_name }}`
+/// calls it. The JIT serializer cannot tell the two reads apart from the one
+/// path list, so this names the key-only ones and the JIT leaves a callable
+/// among them out of the row, as Django leaves it unorderable.
+pub fn extract_item_key_only_reads(
+    template: &str,
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    use std::collections::HashMap;
+
+    let tokens = crate::lexer::tokenize(template)?;
+    let nodes = parse(&tokens)?;
+    let mut variables: HashMap<String, Vec<String>> = HashMap::new();
+    {
+        let _walk = RawBodyWalk::enter();
+        extract_from_nodes(&nodes, &mut variables);
+    }
+    let mut out = HashMap::new();
+    for (root, mut paths) in variables {
+        drop_index_segments(&mut paths);
+        let read: std::collections::HashSet<String> =
+            paths.iter().filter(|p| !is_marked(p)).cloned().collect();
+        let mut keys: Vec<String> = paths
+            .iter()
+            .filter_map(|path| path.split_once(ITEM_KEY_MARK))
+            .map(|(list_path, key)| format!("{list_path}{key}"))
+            .filter(|key| !read.contains(key))
+            .collect();
+        if keys.is_empty() {
+            continue;
+        }
+        keys.sort();
+        keys.dedup();
+        out.insert(root, keys);
+    }
+    Ok(out)
 }
 
 thread_local! {
@@ -3452,6 +3505,10 @@ fn extract_from_nodes(
     nodes: &[Node],
     variables: &mut std::collections::HashMap<String, Vec<String>>,
 ) {
+    // `{% regroup src by k as g %}` targets: what later siblings read through
+    // `g.list` is read off the items of `src` (#3920), settled once the whole
+    // sibling list has been walked.
+    let mut regroups: Vec<(String, String)> = Vec::new();
     for node in nodes {
         match node {
             Node::Located { nodes, .. } => extract_from_nodes(nodes, variables),
@@ -3479,7 +3536,7 @@ fn extract_from_nodes(
                 ..
             } => {
                 // Extract from condition: {% if variable.path %}
-                extract_from_expression(condition, variables);
+                extract_from_condition(condition, variables);
                 // Recurse into if branches
                 extract_from_nodes(true_nodes, variables);
                 extract_from_nodes(false_nodes, variables);
@@ -3491,8 +3548,10 @@ fn extract_from_nodes(
                 reversed: _,
                 empty_nodes,
             } => {
-                // Extract from iterable: {% for item in variable.path %}
-                extract_from_operand(iterable, variables);
+                // Extract from iterable: {% for item in variable.path %}.
+                // Iterating is not a whole read of the value (#3911): its
+                // whole-read mark is dropped and an ITERATED mark recorded.
+                extract_without_whole_reads(iterable, variables);
                 // Recurse into for body
                 extract_from_nodes(nodes, variables);
                 // Recurse into empty block
@@ -3525,6 +3584,8 @@ fn extract_from_nodes(
                     .copied()
                     .unwrap_or(iterable)
                     .trim();
+                record_iterated(iterable, variables);
+                let single_var = var_names.len() == 1;
                 for var_name in var_names {
                     if let Some(loop_var_paths) = variables.get(var_name) {
                         // Transfer paths from loop variable to iterable (but keep loop var)
@@ -3541,6 +3602,17 @@ fn extract_from_nodes(
                         };
                         let prefixed_paths: Vec<String> = loop_var_paths
                             .iter()
+                            .filter_map(|path| {
+                                // The loop variable read whole is EACH ITEM of
+                                // the iterable read whole (#3911). With
+                                // unpacking (`for k, v in ...`) a name is a
+                                // part of an item, so its whole read says
+                                // nothing about the item.
+                                if path == WHOLE_READ_MARK_STR {
+                                    return single_var.then(|| ITEM_WHOLE_MARK.to_string());
+                                }
+                                Some(path.clone())
+                            })
                             .map(|path| {
                                 if iterable_suffix.is_empty() {
                                     path.clone()
@@ -3567,12 +3639,14 @@ fn extract_from_nodes(
                 let mut body = HashMap::new();
                 extract_from_nodes(nodes, &mut body);
                 for (name, expr) in assignments {
-                    extract_from_operand(expr, variables);
+                    // Binding is not a read of the value whole: what the body
+                    // does with the alias decides that, below (#3911).
+                    extract_without_whole_reads(expr, variables);
                     if let Some(paths) = body.remove(name) {
                         let parts = crate::filter_lexer::split_pipes(expr);
                         let source = parts.first().copied().unwrap_or(expr).trim();
                         let mut source_vars = HashMap::new();
-                        extract_from_operand(source, &mut source_vars);
+                        extract_without_whole_reads(source, &mut source_vars);
                         for (root, prefixes) in source_vars {
                             let prefixes = if prefixes.is_empty() {
                                 vec![String::new()]
@@ -3674,8 +3748,13 @@ fn extract_from_nodes(
                 // inline tag handler (the `as` form is still `CustomTag`),
                 // and `handler_exists` is asked before `assign_handler_exists`
                 // at parse, so it arrives here and never as `AssignTag`.
-                if name == "regroup" {
+                let is_regroup = name == "regroup";
+                if is_regroup {
                     record_regroup_item_key(args, variables);
+                    if let Some(pending) = regroup_target(args) {
+                        record_iterated(&pending.1, variables);
+                        regroups.push(pending);
+                    }
                 }
                 // Extract variables from custom/block tag arguments
                 for arg in args {
@@ -3694,7 +3773,12 @@ fn extract_from_nodes(
                         && !value.starts_with('\'')
                         && !value.chars().all(|c| c.is_numeric() || c == '.')
                     {
-                        extract_from_operand(value, variables);
+                        if is_regroup {
+                            // Grouping iterates the source; it prints nothing whole.
+                            extract_without_whole_reads(value, variables);
+                        } else {
+                            extract_from_operand(value, variables);
+                        }
                     }
                 }
                 // For block tags, also recurse into children
@@ -3823,7 +3907,7 @@ fn extract_from_nodes(
                 // emitted stale bytes. `extract_from_expression` is what the
                 // `Node::If` arm above uses; it tokenizes on the operator set
                 // and hands each token to the operand helper.
-                extract_from_expression(condition, variables);
+                extract_from_condition(condition, variables);
                 // The two ARMS are operands — a dotted path or a literal —
                 // and stay on the operand helper.
                 for expr in [true_expr, false_expr] {
@@ -3864,6 +3948,9 @@ fn extract_from_nodes(
             _ => {}
         }
     }
+    for (target, source) in regroups {
+        transfer_regroup_reads(&target, &source, variables);
+    }
 }
 
 /// Extract variable path from a single variable reference
@@ -3886,9 +3973,12 @@ fn extract_from_variable(
     let root = parts[0].to_string();
 
     if parts.len() == 1 {
-        // Simple variable (no path)
-        // Still track it, but with empty path
-        variables.entry(root).or_default();
+        // Simple variable (no path): the value is read WHOLE. Recorded as a
+        // mark, not a path, and settled by [`resolve_whole_reads`] (#3911).
+        variables
+            .entry(root)
+            .or_default()
+            .push(WHOLE_READ_MARK.to_string());
     } else {
         // Has a path (e.g., "lease.property.name")
         let path = parts[1..].join(".");
@@ -4074,6 +4164,16 @@ fn record_item_key_filter(
     let key = strip_filter_arg_quotes(arg);
     if key.len() != arg.len() {
         record_item_key_read(head, key, variables);
+    } else if arg
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_')
+    {
+        // `dictsort:key` names its field at render time (#3910). No static
+        // pass can say which, so the VARIABLE is filed on the list and the
+        // JIT, which renders with the context in hand, resolves it to the one
+        // field the sort reads.
+        record_marked_read(head, &format!("{WHOLE_ROW_MARK}{arg}"), variables);
     }
 }
 
@@ -4100,6 +4200,224 @@ fn record_regroup_item_key(
     record_item_key_read(&head(source), &head(attr), variables);
 }
 
+/// The value at a path is read WHOLE (`{{ u }}`, `{{ u|upper }}`): a bare
+/// variable read. Settled by [`resolve_whole_reads`] (#3911).
+const WHOLE_READ_MARK: char = '\u{2}';
+const WHOLE_READ_MARK_STR: &str = "\u{2}";
+
+/// Each ITEM of the iterable at a path is read whole: a loop variable's
+/// [`WHOLE_READ_MARK`], moved onto its iterable by the loop transfer (#3911).
+const ITEM_WHOLE_MARK: char = '\u{3}';
+
+/// The value at a path is ITERATED (`{% for %}`, `{% regroup %}`). A whole
+/// read of the same path is then the list, not a row (#3911).
+const ITERATED_MARK: char = '\u{4}';
+const ITERATED_MARK_STR: &str = "\u{4}";
+
+/// Each item of the iterable at a path is sorted by a key only known at render
+/// time (`dictsort:key`, #3910). Followed by the context VARIABLE that names it.
+const WHOLE_ROW_MARK: char = '\u{5}';
+
+/// Every mark this extractor files in the path channel; none is a path.
+const PATH_MARKS: [char; 5] = [
+    ITEM_KEY_MARK,
+    WHOLE_READ_MARK,
+    ITEM_WHOLE_MARK,
+    ITERATED_MARK,
+    WHOLE_ROW_MARK,
+];
+
+/// The path a row's TEXT is read through: a row read whole AND by field is
+/// serialized with `__str__` beside its fields, the key a serialized model
+/// carries and the renderer prints a dict by (#3911). The serializers
+/// (`serialize_queryset`, the Python codegen) answer it with `str(row)`.
+pub const ROW_TEXT_PATH: &str = "__str__";
+
+/// The path a ROOT read whole AND by field files (`{{ user }}{{ user.pk }}`):
+/// [`ROW_TEXT_PATH`] for a single model, nothing for a list, whose root paths
+/// describe its items (#3911). The Python JIT decides, by the value's type.
+pub const VALUE_TEXT_PATH: &str = "__djust_text__";
+
+/// The prefix of a path naming a sort key held in a context VARIABLE
+/// (`*key` for `dictsort:key`, #3910). Only filed at a root, beside field
+/// reads. The Python JIT resolves the variable from the context it renders
+/// with and serializes the one field it names, as `dictsort:'<value>'` would.
+pub const VARIABLE_KEY_PREFIX: &str = "*";
+
+fn is_marked(path: &str) -> bool {
+    path.contains(PATH_MARKS)
+}
+
+/// Extract `operand` without recording a whole read of the names in it: a
+/// binding, an iterable or a condition uses a value without printing it.
+fn extract_without_whole_reads(
+    operand: &str,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    let mut local = std::collections::HashMap::new();
+    extract_from_operand(operand, &mut local);
+    merge_without_whole_reads(local, variables);
+}
+
+fn merge_without_whole_reads(
+    local: std::collections::HashMap<String, Vec<String>>,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    for (root, paths) in local {
+        variables
+            .entry(root)
+            .or_default()
+            .extend(paths.into_iter().filter(|path| path != WHOLE_READ_MARK_STR));
+    }
+}
+
+/// File `mark` at the path `head` names (`users`, `page.users`), the way
+/// [`record_item_key_read`] files a key there. A literal head files nothing.
+fn record_marked_read(
+    head: &str,
+    mark: &str,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    let head = crate::filter_lexer::split_pipes(head)
+        .first()
+        .map(|part| part.trim())
+        .unwrap_or("");
+    let named = head
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_');
+    if !named {
+        return;
+    }
+    let (root, list_path) = match head.split_once('.') {
+        Some((root, path)) => (root, format!("{path}.")),
+        None => (head, String::new()),
+    };
+    variables
+        .entry(root.to_string())
+        .or_default()
+        .push(format!("{list_path}{mark}"));
+}
+
+fn record_iterated(head: &str, variables: &mut std::collections::HashMap<String, Vec<String>>) {
+    record_marked_read(head, ITERATED_MARK_STR, variables);
+}
+
+/// `(target, source)` of `{% regroup source by attr as target %}`.
+fn regroup_target(args: &[String]) -> Option<(String, String)> {
+    let [source, _by, _attr, as_kw, target, ..] = args else {
+        return None;
+    };
+    if as_kw != "as" {
+        return None;
+    }
+    let source = crate::filter_lexer::split_pipes(source)
+        .first()
+        .map(|part| part.trim().to_string())?;
+    Some((target.trim().to_string(), source))
+}
+
+/// What the template reads through a regroup's `g.list` is read off each item
+/// of its source (#3920): `{% for u in grp.list %}{{ u.email }}` files
+/// `list.email` on `g`, which is `email` of every row of the source.
+fn transfer_regroup_reads(
+    target: &str,
+    source: &str,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    let Some(paths) = variables.get(target).cloned() else {
+        return;
+    };
+    let named = source
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_');
+    if !named {
+        return;
+    }
+    let (root, list_path) = match source.split_once('.') {
+        Some((root, path)) => (root, format!("{path}.")),
+        None => (source, String::new()),
+    };
+    let moved: Vec<String> = paths
+        .iter()
+        .filter_map(|path| path.strip_prefix("list."))
+        .map(|rest| format!("{list_path}{rest}"))
+        .collect();
+    if !moved.is_empty() {
+        variables.entry(root.to_string()).or_default().extend(moved);
+    }
+}
+
+/// Settle the whole-read marks in one root's paths into public paths (#3911,
+/// #3910). Runs after [`resolve_item_key_paths`], over the plain paths it left.
+///
+/// * An item read whole ([`ITEM_WHOLE_MARK`] at `P`) beside a field read of the
+///   same items (`P.<field>`) becomes `P.__str__`: the row is built from the
+///   named fields, so it must carry the text a bare `{{ u }}` prints. With no
+///   field read the row is serialized whole already and the mark is dropped.
+/// * A value read whole ([`WHOLE_READ_MARK`] at `P`, a single model's
+///   `{{ user }}` beside `{{ user.pk }}`) becomes `P.__str__` on the same
+///   condition, unless `P` is also iterated: then the whole read is of the
+///   list (`{{ users|length }}`), not of a row.
+/// * [`WHOLE_ROW_MARK`]`<variable>` at the root beside field reads becomes
+///   `*<variable>` ([`VARIABLE_KEY_PREFIX`]).
+/// * [`ITERATED_MARK`] only informs the rule above and is dropped.
+fn resolve_whole_reads(paths: &mut Vec<String>) {
+    if !paths.iter().any(|path| is_marked(path)) {
+        return;
+    }
+    let (marked, mut plain): (Vec<String>, Vec<String>) = std::mem::take(paths)
+        .into_iter()
+        .partition(|p| is_marked(p));
+    let read_by_field = |prefix: &str| {
+        plain
+            .iter()
+            .any(|path| path.starts_with(prefix) && path.len() > prefix.len())
+    };
+    let iterated: std::collections::HashSet<&str> = marked
+        .iter()
+        .filter_map(|path| path.strip_suffix(ITERATED_MARK))
+        .collect();
+    let mut settled: Vec<String> = Vec::new();
+    for path in &marked {
+        if let Some((prefix, variable)) = path.split_once(WHOLE_ROW_MARK) {
+            // Only at the root. Filed even when the rows are read whole: the
+            // JIT still has to keep a METHOD the variable names out of a whole
+            // row (#3919), which would otherwise sort by the called value.
+            if prefix.is_empty() && !variable.is_empty() {
+                settled.push(format!("{VARIABLE_KEY_PREFIX}{variable}"));
+            }
+            continue;
+        }
+        let Some(mark) = path.chars().last() else {
+            continue;
+        };
+        let prefix = &path[..path.len() - mark.len_utf8()];
+        if is_marked(prefix) {
+            continue;
+        }
+        let keep = match mark {
+            ITEM_WHOLE_MARK => read_by_field(prefix),
+            WHOLE_READ_MARK => !iterated.contains(prefix) && read_by_field(prefix),
+            _ => false,
+        };
+        if keep {
+            let public = if mark == WHOLE_READ_MARK && prefix.is_empty() {
+                // The ROOT read whole: the value itself when it is one model,
+                // the list when it is a list (`{{ rows|pprint }}`). Only the
+                // JIT knows which, so it gets its own name (#3911).
+                VALUE_TEXT_PATH
+            } else {
+                ROW_TEXT_PATH
+            };
+            settled.push(format!("{prefix}{public}"));
+        }
+    }
+    plain.extend(settled);
+    *paths = plain;
+}
+
 /// Settle the item-key reads in one root's paths (see [`ITEM_KEY_MARK`]).
 ///
 /// A key is kept only when the same iterable's items are read by field
@@ -4117,14 +4435,34 @@ fn resolve_item_key_paths(paths: &mut Vec<String>) {
     let (marked, mut plain): (Vec<String>, Vec<String>) = std::mem::take(paths)
         .into_iter()
         .partition(|path| path.contains(ITEM_KEY_MARK));
+    // A related manager's rows (`g.user_set.all`) with no field read are not
+    // serialized as whole rows: they cross as their text, which carries no key
+    // at all, so there the key is always filed (#3918).
     let kept: Vec<String> = marked
         .iter()
         .filter_map(|path| path.split_once(ITEM_KEY_MARK))
-        .filter(|(list_path, _)| plain.iter().any(|other| other.starts_with(list_path)))
+        .filter(|(list_path, _)| {
+            (*list_path == "all." || list_path.ends_with(".all."))
+                || plain
+                    .iter()
+                    .any(|other| !is_marked(other) && other.starts_with(list_path))
+        })
         .map(|(list_path, key)| format!("{list_path}{key}"))
         .collect();
     plain.extend(kept);
     *paths = plain;
+}
+
+/// [`extract_from_expression`] for a CONDITION: a condition tests a value; it
+/// does not print it, so a bare name in it is not a whole read (#3911).
+/// `{% if user %}{{ user.name }}` must not ask for `str(user)`.
+fn extract_from_condition(
+    expr: &str,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    let mut local = std::collections::HashMap::new();
+    extract_from_expression(expr, &mut local);
+    merge_without_whole_reads(local, variables);
 }
 
 /// Extract variable paths from an expression (like in if tags)

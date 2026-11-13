@@ -41,6 +41,8 @@ from django.template import Context, Engine
 from django.test import override_settings
 
 from djust.live_view import LiveView
+from djust import state
+from djust.tests._live_session import with_live_session
 
 pytestmark = [pytest.mark.django_db, pytest.mark.pr_tier]
 
@@ -591,7 +593,8 @@ def _leak_template() -> str:
 
 
 class _EntryView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    page = state()
     template = "<div dj-root></div>"
     username = "floor-user"
 
@@ -645,7 +648,7 @@ class TestTheRealEntries:
 
             communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
             communicator.scope["session"] = _Session()
-            connected, _ = await communicator.connect()
+            connected, _ = await with_live_session(communicator).connect()
             assert connected
             await communicator.receive_json_from()
             await communicator.send_json_to(

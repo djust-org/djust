@@ -206,19 +206,20 @@ class FilterableTableHostView(LiveView):
     """Renders the table plus ``vis=`` (visible row ids, in render order) and
     ``sel=`` (``selected_rows``) summaries for the assertions."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    # Explicit views render components declared in the class body; each view
+    # gets its own binding, whose component_id is the attribute name, so the
+    # attribute is named after the id the test's events carry.
+    t1 = _table()
     template = (
         f'<div dj-root dj-view="{_MODULE}.FilterableTableHostView" dj-id="0">'
-        "<p>vis={{ vis }}</p><p>sel={{ sel }}</p>{{ table.render }}</div>"
+        "<p>vis={{ vis }}</p><p>sel={{ sel }}</p>{{ t1.render }}</div>"
     )
-
-    def mount(self, request, **kwargs):
-        self.table = _table()
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["vis"] = ",".join(self.table._row_ids()) or "-"  # pylint: disable=protected-access
-        ctx["sel"] = ",".join(self.table.selected_rows) or "-"
+        ctx["vis"] = ",".join(self.t1._row_ids()) or "-"  # pylint: disable=protected-access
+        ctx["sel"] = ",".join(self.t1.selected_rows) or "-"
         return ctx
 
 

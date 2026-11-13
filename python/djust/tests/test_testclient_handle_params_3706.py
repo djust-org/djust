@@ -19,6 +19,7 @@ from django.test import RequestFactory
 
 from djust import LiveView
 from djust.testing import LiveViewTestClient
+from djust import state
 
 pytestmark = pytest.mark.django_db
 
@@ -42,7 +43,10 @@ class ListParams(forms.Form):
 class FormView(LiveView):
     """The #3689 example: a form-declared URL."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    params_errors = state(default_factory=dict)  # rendered: explicit views declare it
+    category = state("unset")
+    page = state(0)
     login_required = False
     params_form = ListParams
     template = "<div dj-root>{{ category }}/{{ page }}</div>"
@@ -60,7 +64,9 @@ class FormView(LiveView):
 class RawView(LiveView):
     """No ``params_form``: ``handle_params`` gets the raw dict."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    params_errors = state(default_factory=dict)  # rendered: explicit views declare it
+    tab = state("none")
     login_required = False
     template = "<div dj-root>{{ tab }}</div>"
 
@@ -75,7 +81,9 @@ class RawView(LiveView):
 class NoParamsHookView(LiveView):
     """Never defines ``handle_params``: the default hook must be harmless."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    params_errors = state(default_factory=dict)  # rendered: explicit views declare it
+    n = state(7)
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
 
@@ -139,6 +147,8 @@ class TestMountRunsHandleParams:
 
     def test_mount_kwargs_and_query_params_are_independent(self):
         class Both(RawView):
+            kwargs_seen = state()
+
             def mount(self, request, **kwargs):
                 self.kwargs_seen = dict(kwargs)
                 self.tab = "none"

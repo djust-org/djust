@@ -28,6 +28,8 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust import state
+from djust.tests._live_session import with_live_session
 
 pytest.importorskip("channels")
 
@@ -40,7 +42,9 @@ def _note(key):
 
 
 class _AsyncMountView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    greeting = state("hello-async")
+    tab = state("none")
     template = "<div dj-root><b>{{ greeting }}</b><i>{{ tab }}</i></div>"
 
     async def mount(self, request, **kwargs):
@@ -56,7 +60,8 @@ class _AsyncMountView(LiveView):
 
 
 class _SyncMountView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    greeting = state("hello-sync")
     template = "<div dj-root><b>{{ greeting }}</b></div>"
 
     def mount(self, request, **kwargs):
@@ -87,7 +92,7 @@ async def _ws_mount(view, url="/m/", params=None):
     from djust.websocket import LiveViewConsumer
 
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    connected, _ = await comm.connect()
+    connected, _ = await with_live_session(comm).connect()
     assert connected
     await comm.receive_json_from()
     frame = {"type": "mount", "view": f"{_MODULE}.{view}", "url": url}
@@ -139,7 +144,8 @@ _MEET: dict = {}
 class _AwaitingMountView(LiveView):
     """A page whose first read is an await (an async ORM query, say)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    rows = state("rows-loaded")
     template = "<div dj-root><b>{{ rows }}</b></div>"
 
     async def mount(self, request, **kwargs):
@@ -160,7 +166,8 @@ class _AwaitingMountView(LiveView):
 class _BlockingSyncMountView(LiveView):
     """The same page with a sync mount and a blocking read."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    rows = state("rows-loaded")
     template = "<div dj-root><b>{{ rows }}</b></div>"
 
     def mount(self, request, **kwargs):
@@ -219,7 +226,8 @@ def test_http_get_runs_async_mount_and_handle_params(rf):
 
 
 class _AsyncChild(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    child_value = state("child-mounted")
     template = '<p class="child">{{ child_value }}</p>'
 
     async def mount(self, request, **kwargs):
@@ -269,7 +277,9 @@ def test_live_render_runs_an_async_child_mount(rf):
 
 
 class _AsyncMountPostView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    greeting = state("posted-async")
+    clicks = state(0)
     template = "<div dj-root><b>{{ greeting }}-{{ clicks }}</b></div>"
 
     async def mount(self, request, **kwargs):

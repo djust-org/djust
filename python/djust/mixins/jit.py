@@ -7,10 +7,10 @@ import logging
 import os
 import re
 import sys
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Tuple, cast
 
 from .._render_caches import render_caches_enabled
-from .._rust import extract_template_variables
+from .._rust import extract_item_key_only_reads, extract_template_variables
 from ..optimization.codegen import (
     all_methods_need_rows,
     all_row_cap,
@@ -31,8 +31,10 @@ logger = logging.getLogger(__name__)
 _template_hash_cache: Dict[str, str] = {}
 _TEMPLATE_HASH_CACHE_MAX = 256
 
-# Cache (template_hash, variable_name) → expected top-level key count
-_expected_keys_cache: Dict[Tuple[str, str], int] = {}
+# Cache (template_hash, variable_name, resolved sort keys) → expected top-level key count.
+# The resolved sort keys are part of the key because the path set depends on them
+# (``dictsort:<variable>``, #3910): a count cached for one key is wrong for the next.
+_expected_keys_cache: Dict[Tuple[str, str, Tuple[str, ...]], int] = {}
 
 # Pre-compiled regex for {% include %} — handles normal and doubled quotes from Rust resolver
 _INCLUDE_RE = re.compile(
@@ -107,6 +109,283 @@ def _paths_for_variable(variable_paths_map: Optional[dict], variable_name: str) 
     ]
 
 
+#: The prefix of a path naming a sort key held in a context VARIABLE: ``*key`` for
+#: ``{% for u in users|dictsort:key %}`` (#3910). The extractor files it
+#: (``djust_templates::parser::VARIABLE_KEY_PREFIX``) at a root, beside field
+#: reads. It is never an attribute: :func:`split_variable_keys` takes it out and
+#: :func:`resolve_variable_keys` turns it into the ONE column the sort reads.
+VARIABLE_KEY_PREFIX = "*"
+
+
+#: The path a ROOT read whole AND by field files (``{{ user }}{{ user.pk }}``,
+#: ``djust_templates::parser::VALUE_TEXT_PATH``). For one model it is the model's
+#: text, ``__str__``; for a list (``{{ rows|pprint }}``) the root paths describe
+#: the items, and it is dropped (#3911). :func:`value_paths` decides.
+VALUE_TEXT_PATH = "__djust_text__"
+
+#: A row's text read beside its fields (``djust_templates::parser::ROW_TEXT_PATH``).
+ROW_TEXT_PATH = "__str__"
+
+
+def is_internal_path(path: str) -> bool:
+    """A path the extractor files for the JIT, not a name the template reads (#3911/#3910)."""
+    return (
+        path.startswith(VARIABLE_KEY_PREFIX)
+        or path == VALUE_TEXT_PATH
+        or path == ROW_TEXT_PATH
+        or path.endswith("." + ROW_TEXT_PATH)
+    )
+
+
+def public_template_paths(found: Optional[dict]) -> Dict[str, List[str]]:
+    """The extraction map with the JIT's internal paths taken out, for every reader
+    that wants the names and paths a template reads (``template_paths``,
+    ``djust_audit``). Every name stays, the ``"*"`` wildcard included."""
+    return {
+        name: [path for path in paths if not is_internal_path(path)]
+        for name, paths in (found or {}).items()
+    }
+
+
+def split_variable_keys(paths: List[str]) -> "tuple[List[str], List[str]]":
+    """``(paths without the JIT's root markers, the sort-key VARIABLES named)``.
+
+    The ROOT text path (:data:`VALUE_TEXT_PATH`) is dropped: these are the paths
+    of a list's ITEMS, and a list read whole is not each item read whole.
+    """
+    if not any(p == VALUE_TEXT_PATH or p.startswith(VARIABLE_KEY_PREFIX) for p in paths):
+        return paths, []
+    variables = [p[len(VARIABLE_KEY_PREFIX) :] for p in paths if p.startswith(VARIABLE_KEY_PREFIX)]
+    kept = [p for p in paths if p != VALUE_TEXT_PATH and not p.startswith(VARIABLE_KEY_PREFIX)]
+    return kept, variables
+
+
+def value_paths(paths: List[str]) -> List[str]:
+    """The paths of ONE model value: :data:`VALUE_TEXT_PATH` is its ``__str__``."""
+    if VALUE_TEXT_PATH not in paths:
+        return paths
+    return sorted({ROW_TEXT_PATH if p == VALUE_TEXT_PATH else p for p in paths})
+
+
+_MISSING = object()
+
+
+def _lookup(context: Any, variable: str) -> Any:
+    """``variable`` (``key``, ``sort.field``) read off *context* as a template reads a
+    name: a mapping key, else an attribute. Nothing is called; a name starting with
+    ``_`` is not read (Django refuses it)."""
+    current = context
+    for part in variable.split("."):
+        if not part or part.startswith("_"):
+            return _MISSING
+        if isinstance(current, dict):
+            current = current.get(part, _MISSING)
+        else:
+            current = getattr(current, part, _MISSING)
+        if current is _MISSING:
+            return _MISSING
+    return current
+
+
+def _column_names(model_class: Any) -> FrozenSet[str]:
+    """A model's own non-relation columns, by name and attname, plus ``pk``."""
+    meta = getattr(model_class, "_meta", None)
+    if meta is None:
+        return frozenset()
+    names = {"pk"}
+    for field in meta.concrete_fields:
+        if not field.is_relation:
+            names.add(field.name)
+            names.add(field.attname)
+    return frozenset(names)
+
+
+def resolve_variable_keys(
+    variables: List[str], context: Any, model_class: Any, view: Any = None
+) -> List[str]:
+    """The ONE column each ``dictsort:<variable>`` sorts by, read from the render's
+    context (#3910).
+
+    The row then carries that column beside the fields the template reads, and
+    nothing else: the variable's value is a key only when it names one of the
+    model's own non-relation columns (``_column_names``). A property, a
+    ``get_*()`` method, a relation path, a private or numeric name, or a value
+    that is not text resolves to no column, and the sort renders the empty loop
+    a missing key gives (the fail-closed side). The serialization floor still
+    decides whether the column ships: a floored or ``djust_exclude_fields``
+    column is left out of the row and the loop is empty where Django sorts.
+
+    *context* is the render's context dict; a LiveView with no context in hand
+    (``serialize_for_template``) reads the name off the view instead.
+    """
+    if not variables:
+        return []
+    columns = _column_names(model_class)
+    resolved = []
+    for variable in variables:
+        value = _MISSING
+        if context is not None:
+            value = _lookup(context, variable)
+        if value is _MISSING and view is not None:
+            value = _lookup(view, variable)
+        if isinstance(value, str) and value in columns:
+            resolved.append(value)
+    return sorted(set(resolved))
+
+
+_item_key_only_cache: Dict[str, dict] = {}
+
+
+def _item_key_only_reads(template_content: str) -> dict:
+    """``extract_item_key_only_reads`` by content hash, ``{}`` when it refuses."""
+    content_hash = _template_hash(template_content)
+    try:
+        return _item_key_only_cache[content_hash]
+    except KeyError:
+        pass
+    try:
+        result = dict(extract_item_key_only_reads(template_content))
+    except Exception:  # noqa: BLE001 — the paths extraction refuses the same template
+        result = {}
+    if len(_item_key_only_cache) >= _VARIABLE_EXTRACTION_CACHE_MAX:
+        _item_key_only_cache.clear()
+    _item_key_only_cache[content_hash] = result
+    return result
+
+
+def _many_relation_model(model_class: Any, name: str) -> Any:
+    """The model of the rows ``model_class().<name>.all`` yields, or ``None``."""
+    for field in model_class._meta.get_fields():
+        if not (field.many_to_many or field.one_to_many):
+            continue
+        accessor = (
+            field.get_accessor_name()
+            if field.auto_created and not field.concrete
+            else getattr(field, "name", None)
+        )
+        if accessor == name:
+            return field.related_model
+    return None
+
+
+def _names_a_callable(model_class: Any, path: str) -> bool:
+    """Does ``path``'s LAST part name a method or a related manager of its row?
+
+    Read off the CLASS (``inspect.getattr_static``), so nothing is called and no
+    query runs: a plain function is a method, and a many-valued relation's
+    descriptor hands out a manager. A field, a property or a forward relation is
+    a value. The path is followed to the row its last part is read off: a
+    forward relation to its model, a many-valued relation's ``.all`` to the
+    model of its rows (``user_set.all.username`` asks about ``username`` of a
+    ``User``).
+    """
+    import inspect
+
+    from django.core.exceptions import FieldDoesNotExist
+    from django.db.models.fields.related_descriptors import (
+        ManyToManyDescriptor,
+        ReverseManyToOneDescriptor,
+    )
+
+    parts = path.split(".")
+    current = model_class
+    at = 0
+    while at < len(parts):
+        name = parts[at]
+        meta = getattr(current, "_meta", None)
+        if meta is None:
+            return False
+        try:
+            attr = inspect.getattr_static(current, name)
+        except AttributeError:
+            return False
+        many = isinstance(attr, (ManyToManyDescriptor, ReverseManyToOneDescriptor))
+        last = at == len(parts) - 1
+        if last:
+            return many or inspect.isfunction(attr) or isinstance(attr, (staticmethod, classmethod))
+        if many:
+            if parts[at + 1] != "all":
+                return False
+            current = _many_relation_model(current, name)
+            at += 2
+            continue
+        try:
+            field = meta.get_field(name)
+        except FieldDoesNotExist:
+            return False
+        if not (field.is_relation and (field.many_to_one or field.one_to_one)):
+            return False
+        current = field.related_model
+        at += 1
+    return False
+
+
+def callable_sort_keys(
+    model_class: Any, template_content: Optional[str], variable_name: str
+) -> FrozenSet[str]:
+    """The sort keys of *variable_name*'s rows that name a method or a related manager
+    and that nothing else in the template reads (#3919).
+
+    ``{% for u in users|dictsort:'get_full_name' %}``: Django's ``dictsort``
+    resolves the key without calling it, so it orders bound methods, raises, and
+    renders an empty loop. A JIT row CALLS what it is given (a path row) or carries
+    every ``get_*()`` result (a whole row), so the rows sorted by the method's
+    text. Such a key is left out of the row instead and the sort fails as
+    Django's does. A method the template also prints (``{{ u.get_full_name }}``)
+    stays: the row needs it.
+    """
+    if not template_content or model_class is None:
+        return frozenset()
+    keys = _paths_for_variable(_item_key_only_reads(template_content), variable_name)
+    return frozenset(key for key in keys if _names_a_callable(model_class, key))
+
+
+def drop_callable_sort_keys(
+    model_class: Any, template_content: Optional[str], variable_name: str, paths: List[str]
+) -> List[str]:
+    """``paths`` without a :func:`callable_sort_keys` key (#3919)."""
+    if not paths:
+        return paths
+    drop = callable_sort_keys(model_class, template_content, variable_name)
+    if not drop:
+        return paths
+    return [path for path in paths if path not in drop]
+
+
+def whole_rows_without_callable_sort_keys(
+    items: Any,
+    template_content: Optional[str],
+    variable_name: str,
+    key_variables: List[str] = (),  # type: ignore[assignment]
+    context: Any = None,
+    view: Any = None,
+) -> List[Any]:
+    """``normalize_django_value`` per item, without a key that names a method or manager.
+
+    The whole-row twin of :func:`drop_callable_sort_keys`: a row the template reads
+    only whole carries every ``get_*()`` result, so ``dictsort:'get_username'`` (or
+    ``dictsort:key`` with ``key = "get_full_name"``) over ``{{ u }}`` rows found the
+    called value and sorted, where Django's empty loop is the answer (#3919).
+    """
+    rows = [normalize_django_value(item) for item in items]
+    if not rows:
+        return rows
+    model_class = getattr(items, "model", None) or type(next(iter(items)))
+    drop = set(callable_sort_keys(model_class, template_content, variable_name))
+    for variable in key_variables:
+        value = _lookup(context, variable) if context is not None else _MISSING
+        if value is _MISSING and view is not None:
+            value = _lookup(view, variable)
+        if isinstance(value, str) and _names_a_callable(model_class, value):
+            drop.add(value)
+    if drop:
+        for row in rows:
+            if isinstance(row, dict):
+                for key in drop:
+                    row.pop(key, None)
+    return rows
+
+
 def _serializer_function_name(variable_name: str, template_hash: str) -> str:
     """``serialize_<name>_<hash>`` as a Python identifier (#3788).
 
@@ -146,6 +425,7 @@ def clear_template_source_caches() -> None:
     _template_source_cache.clear()
     _template_hash_cache.clear()
     _variable_extraction_cache.clear()
+    _item_key_only_cache.clear()
 
 
 def _template_source_key(view: Any) -> Optional[Tuple[str, str, Tuple[str, ...]]]:
@@ -654,8 +934,8 @@ class JITMixin:
         content = self._get_template_content()
         if not content:
             return {}
-        found = _cached_extract_template_variables(content) or {}
-        return {name: list(paths) for name, paths in found.items() if name != "*"}
+        found = public_template_paths(_cached_extract_template_variables(content))
+        return {name: paths for name, paths in found.items() if name != "*"}
 
     def serialize_for_template(self, value: Any, name: str) -> Any:
         """``value`` as the plain data the template reads under ``name``.
@@ -692,9 +972,16 @@ class JITMixin:
             return self._jit_serialize_model(value, content, name)
         if is_model_list(value):
             return self._jit_serialize_model_list(value, content, name)
-        paths = self.template_paths().get(name, [])
+        # The raw extraction, not ``template_paths()``: an object read whole AND
+        # by field carries its text, as a model does (#3911). A list's items take
+        # ``__str__``; one object takes its root text path as ``__str__``.
+        raw = _paths_for_variable(
+            _cached_extract_template_variables(content) if content else None, name
+        )
         if isinstance(value, (list, tuple)):
+            paths, _ = split_variable_keys(raw)
             return [_serialize_object_by_paths(item, paths) for item in value]
+        paths, _ = split_variable_keys(value_paths(raw))
         return _serialize_object_by_paths(value, paths)
 
     @staticmethod
@@ -799,7 +1086,11 @@ class JITMixin:
             return resolve(template_content)
 
     def _jit_serialize_queryset(
-        self, queryset: Any, template_content: str, variable_name: str
+        self,
+        queryset: Any,
+        template_content: str,
+        variable_name: str,
+        context: Optional[Dict[str, Any]] = None,
     ) -> List[Any]:
         """
         Apply JIT auto-serialization to a Django QuerySet.
@@ -817,7 +1108,19 @@ class JITMixin:
                 if recursive_relation:
                     raise ValueError("Cannot extract recursive partial model fields")
                 return [normalize_django_value(obj) for obj in queryset]
-            paths_for_var = _paths_for_variable(variable_paths_map, variable_name)
+            paths_for_var, key_variables = split_variable_keys(
+                _paths_for_variable(variable_paths_map, variable_name)
+            )
+            # Only beside field reads: rows read whole carry every column already.
+            sort_keys = (
+                resolve_variable_keys(key_variables, context, queryset.model, self)
+                if paths_for_var
+                else []
+            )
+            paths_for_var = sorted(set(paths_for_var) | set(sort_keys))
+            paths_for_var = drop_callable_sort_keys(
+                queryset.model, template_content, variable_name, paths_for_var
+            )
 
             if not paths_for_var and recursive_relation:
                 raise ValueError("Cannot extract recursive partial model fields")
@@ -826,12 +1129,16 @@ class JITMixin:
                     "[JIT] No paths found for '%s', using DjangoJSONEncoder fallback",
                     variable_name,
                 )
-                return [normalize_django_value(obj) for obj in queryset]
+                return whole_rows_without_callable_sort_keys(
+                    queryset, template_content, variable_name, key_variables, context, self
+                )
 
             model_class = queryset.model
             template_hash = _template_hash(template_content)
             model_hash = _get_model_hash(model_class)
-            cache_key = (template_hash, variable_name, model_hash)
+            # The resolved sort key is part of the key: a key that changes between
+            # renders builds (and caches) its own path set (#3910).
+            cache_key = (template_hash, variable_name, model_hash, tuple(sort_keys))
 
             if cache_key in _jit_serializer_cache:
                 paths_for_var, optimization = _jit_serializer_cache[cache_key]
@@ -881,7 +1188,7 @@ class JITMixin:
 
             # Check if Rust serializer captured all expected paths
             # (Rust can't access @property attributes, only model fields)
-            ek_cache_key = (template_hash, variable_name)
+            ek_cache_key = (template_hash, variable_name, tuple(sort_keys))
             if ek_cache_key not in _expected_keys_cache:
                 _expected_keys_cache[ek_cache_key] = len(
                     set(p.split(".")[0] for p in paths_for_var)
@@ -911,7 +1218,9 @@ class JITMixin:
                     items,
                     result,
                     recursive_relation,
-                    lambda obj: self._jit_serialize_model(obj, template_content, variable_name),
+                    lambda obj: self._jit_serialize_model(
+                        obj, template_content, variable_name, _item=True
+                    ),
                     initial_caches,
                 )
 
@@ -936,7 +1245,11 @@ class JITMixin:
             raise RuntimeError(f"djust JIT serialization failed for {variable_name!r}") from e
 
     def _jit_serialize_model_list(
-        self, items: Any, template_content: str, variable_name: str
+        self,
+        items: Any,
+        template_content: str,
+        variable_name: str,
+        context: Optional[Dict[str, Any]] = None,
     ) -> List[Any]:
         """Serialize a ``list[Model]`` under the QuerySet contract (#2736).
 
@@ -959,29 +1272,49 @@ class JITMixin:
         """
         recursive_relation = _recursive_queryset_relation(template_content, variable_name)
         variable_paths_map = _cached_extract_template_variables(template_content)
-        paths_for_var = _paths_for_variable(variable_paths_map, variable_name)
+        paths_for_var, key_variables = split_variable_keys(
+            _paths_for_variable(variable_paths_map, variable_name)
+        )
+        model_class = type(items[0]) if items else None
+        sort_keys = tuple(resolve_variable_keys(key_variables, context, model_class, self))
         if not paths_for_var:
             if recursive_relation:
                 raise ValueError("Cannot extract recursive partial model fields")
-            return [normalize_django_value(item) for item in items]
+            return whole_rows_without_callable_sort_keys(
+                items, template_content, variable_name, key_variables, context, self
+            )
         initial_caches = {}
         if recursive_relation:
             initial_caches = {
                 id(item): item._meta.get_field(recursive_relation).is_cached(item) for item in items
             }
-        rows = [self._jit_serialize_model(item, template_content, variable_name) for item in items]
+        rows = [
+            self._jit_serialize_model(
+                item, template_content, variable_name, _item=True, _sort_keys=sort_keys
+            )
+            for item in items
+        ]
         if recursive_relation:
-            return _serialize_recursive_models(
+            rows = _serialize_recursive_models(
                 items,
                 rows,
                 recursive_relation,
-                lambda obj: self._jit_serialize_model(obj, template_content, variable_name),
+                lambda obj: self._jit_serialize_model(
+                    obj, template_content, variable_name, _item=True, _sort_keys=sort_keys
+                ),
                 initial_caches,
             )
         return rows
 
     def _jit_serialize_model(
-        self, obj: Any, template_content: str, variable_name: str, *, _recursive_child: bool = False
+        self,
+        obj: Any,
+        template_content: str,
+        variable_name: str,
+        *,
+        _recursive_child: bool = False,
+        _item: bool = False,
+        _sort_keys: Tuple[str, ...] = (),
     ) -> Dict[str, Any]:
         """
         Apply JIT auto-serialization to a single Django Model instance.
@@ -997,7 +1330,17 @@ class JITMixin:
                 if relation:
                     raise ValueError("Cannot extract recursive partial model fields")
                 return cast(Dict[str, Any], normalize_django_value(obj))
-            paths_for_var = _paths_for_variable(variable_paths_map, variable_name)
+            # A row of a list is serialized here one at a time: a variable sort
+            # key is resolved by the list's caller, which passes the column it
+            # names (``_sort_keys``). A model VALUE (not a list item) read whole
+            # carries its text.
+            raw_paths = _paths_for_variable(variable_paths_map, variable_name)
+            paths_for_var, _ = split_variable_keys(raw_paths if _item else value_paths(raw_paths))
+            if _sort_keys:
+                paths_for_var = sorted(set(paths_for_var) | set(_sort_keys))
+            paths_for_var = drop_callable_sort_keys(
+                obj.__class__, template_content, variable_name, paths_for_var
+            )
 
             if not paths_for_var and relation:
                 raise ValueError("Cannot extract recursive partial model fields")
@@ -1022,7 +1365,13 @@ class JITMixin:
             # Its own slot: ``_jit_serialize_queryset`` keeps (paths,
             # optimization) under the three-part key, and a name served as a
             # QuerySet once and a model later read that tuple as a serializer.
-            cache_key = (template_hash, variable_name, model_hash, "model")
+            cache_key = (
+                template_hash,
+                variable_name,
+                model_hash,
+                "item" if _item else "model",
+                _sort_keys,
+            )
 
             if cache_key in _jit_serializer_cache:
                 serializer, _ = _jit_serializer_cache[cache_key]

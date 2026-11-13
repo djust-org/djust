@@ -36,6 +36,7 @@ from asgiref.sync import sync_to_async
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.tests._source_scan import without_prose
+from djust import state
 
 
 class _WSVersionView(LiveView):
@@ -47,7 +48,8 @@ class _WSVersionView(LiveView):
     non-sequential Rust version — the exact #1788 drift trigger.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = (
         '<div dj-view="djust.tests.test_ws_send_version_1788._WSVersionView" '
         'dj-id="0">Count: {{ count }}</div>'
@@ -80,7 +82,8 @@ _HVR_TEMPLATE_BODY = ["Count: {{ count }}"]
 class _WSHvrView(LiveView):
     """View used to exercise the channel-layer ``hotreload`` handler (HIDDEN #1)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
 
     @property
     def template(self):

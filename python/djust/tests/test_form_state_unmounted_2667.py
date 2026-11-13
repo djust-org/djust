@@ -31,6 +31,8 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust.forms import FormMixin
+from djust import state
+from djust.tests._live_session import with_live_session
 
 pytestmark = [pytest.mark.django_db]
 
@@ -55,7 +57,7 @@ def _tpl(name: str) -> str:
 class PlainContact2667(FormMixin, LiveView):
     """Control: the correct shape — no user ``mount()`` at all."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = Contact2667Form
     template = _tpl("PlainContact2667")
 
@@ -66,7 +68,8 @@ class PlainContact2667(FormMixin, LiveView):
 class OwnMountNoSuper2667(FormMixin, LiveView):
     """A ``mount()`` override that forgets ``super().mount()``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    title = state("Contact")
     form_class = Contact2667Form
     template = _tpl("OwnMountNoSuper2667")
 
@@ -81,7 +84,7 @@ class OwnMountNoSuper2667(FormMixin, LiveView):
 class ReversedMro2667(LiveView, FormMixin):
     """Bases in the wrong order — ``LiveView.mount`` wins the MRO."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = Contact2667Form
     template = _tpl("ReversedMro2667")
 
@@ -101,7 +104,7 @@ async def _drive(cls_name: str) -> Dict[str, Any]:
     from djust.websocket import LiveViewConsumer
 
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    connected, _ = await comm.connect()
+    connected, _ = await with_live_session(comm).connect()
     assert connected
     await comm.receive_json_from()
     out: Dict[str, Any] = {}

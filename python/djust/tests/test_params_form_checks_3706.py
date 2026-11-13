@@ -65,54 +65,54 @@ class NotAForm:
 
 
 class GoodView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     params_form = Plain
 
 
 class UndeclaredView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
 
 class NotAClassView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     params_form = "myapp.forms.ListParams"  # the string a FormView-style API might take
 
 
 class InstanceView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     params_form = Plain()  # an instance, not the class
 
 
 class WrongClassView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     params_form = NotAForm
 
 
 class NeedsUserView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     params_form = NeedsUser
 
 
 class NeedsKeywordOnlyView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     params_form = NeedsKeywordOnly
 
 
 class OptionalExtraView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     params_form = OptionalExtra
 
 
 class NoDataView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     params_form = NoDataParameter
 
@@ -198,7 +198,7 @@ class TestTheCheckAgreesWithTheRuntime:
         assert (problem is None) is buildable, problem
 
         class Probe(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
             params_form = form_class
 
@@ -219,7 +219,7 @@ class TestTheCheckAgreesWithTheRuntime:
         assert form_class_problem(declared) is not None
 
         class Probe(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
             params_form = declared
 
@@ -271,6 +271,8 @@ class TestReservedNames:
     def test_an_instance_assignment_is_not_reactive_state(self, name):
         """``self.state_attribute = ...`` in ``mount()`` must not become template state."""
 
+        # Legacy on purpose: the subject is the legacy state APIs (get_state,
+        # _capture_snapshot_state), which read the attribute walk.
         class Assigns(LiveView):
             exposure_policy = "legacy"
             template = "<div dj-root></div>"

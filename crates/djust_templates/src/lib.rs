@@ -41,7 +41,7 @@ use inheritance::{build_inheritance_chain, build_inheritance_chain_from, Templat
 use parser::Node;
 
 // Re-export for JIT auto-serialization
-pub use parser::extract_template_variables;
+pub use parser::{extract_item_key_only_reads, extract_template_variables};
 
 // Re-export for the dj-model mass-assignment allowlist (CWE-915, finding #3):
 // derives the bindable-field set from developer-authored template TEXT, which

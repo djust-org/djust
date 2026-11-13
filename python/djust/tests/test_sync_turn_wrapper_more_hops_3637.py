@@ -37,6 +37,8 @@ from djust.decorators import event_handler
 from djust.hooks import on_mount
 from djust.presence import PresenceMixin
 from djust.tests._ws_frames import drain_extra, has_type, receive_until
+from djust import state
+from djust.tests._live_session import with_live_session
 
 pytest.importorskip("channels")
 
@@ -118,7 +120,9 @@ def _record_on_mount(view, request, **kwargs):
 class AuthProbeView(LiveView):
     """Every hook this change wraps, on one view."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
+    denied = state(False)
     template = f'<div dj-root dj-view="{MOD}.AuthProbeView"><b>{{{{ count }}}}</b></div>'
     on_mount = [_record_on_mount]
 
@@ -164,7 +168,8 @@ class AuthProbeView(LiveView):
 
 
 class PresenceProbeView(PresenceMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0)
     template = f'<div dj-root dj-view="{MOD}.PresenceProbeView"><b>{{{{ count }}}}</b></div>'
     presence_key = "probe"
 
@@ -204,7 +209,7 @@ async def _open(view_name):
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     communicator.scope["session"] = _ScopeSession()
     communicator.scope["user"] = AnonymousUser()
-    connected, _ = await communicator.connect()
+    connected, _ = await with_live_session(communicator).connect()
     assert connected
     await communicator.receive_json_from()
     await communicator.send_json_to(
@@ -361,7 +366,7 @@ async def test_a_time_travel_replay_runs_the_handler_inside_the_wrapper(
 @pytest.mark.asyncio
 async def test_a_streamed_fragment_render_runs_get_context_data_inside_the_wrapper(probe):
     class Streamer(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-stream='feed'>{{ n }}</div>"
 
         def get_context_data(self, **kwargs):
@@ -381,7 +386,7 @@ def _gate(user):
 class PostGatedView(LiveView):
     """Access control only Django's ``post()`` runs: replayed for an event."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>x</div>"
 
     @method_decorator(user_passes_test(_gate))
@@ -393,7 +398,7 @@ class AsyncAuthView(UserPassesTestMixin, LiveView):
     """``async def check_permissions`` makes ``acheck_view_auth`` run the sync steps
     around it in their own hops."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>x</div>"
     permission_required = "app.view"
 
@@ -519,7 +524,7 @@ def test_the_scoped_presence_probe_runs_inside_the_wrapper(probe):
     from djust.push import _presence_probe
 
     class V(PresenceMixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         presence_key = "probe"
 
         def get_presence_key(self):
@@ -699,7 +704,7 @@ def test_the_http_fallbacks_result_hook_is_an_async_step_not_a_generic_hook(prob
     from djust._view_hooks import call_hook_sync
 
     class V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def handle_async_result(self, name, result=None, error=None):
             note("http_result")
@@ -723,7 +728,7 @@ def test_an_async_def_hook_is_never_hidden_behind_a_step_wrapper(probe, helper):
     from djust import sync_turn
 
     class V(PresenceMixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         async def handle_cursor_move(self, x, y):
             note("never")
@@ -772,7 +777,7 @@ async def test_a_presence_broadcast_from_async_code_runs_inside_the_wrapper(prob
     itself to a worker; that hop reads ``get_presence_key()`` and is a ``hook`` step."""
 
     class V(PresenceMixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         presence_key = "probe"
 
         def get_presence_key(self):

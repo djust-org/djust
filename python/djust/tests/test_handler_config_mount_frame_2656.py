@@ -24,6 +24,8 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust.decorators import cache, debounce, event_handler, rate_limit, throttle
+from djust import state
+from djust.tests._live_session import with_live_session
 
 pytestmark = [pytest.mark.django_db]
 
@@ -33,7 +35,8 @@ MOD = __name__
 class RateLimited2656(LiveView):
     """One handler per decorator shape the client gate can consume."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    q = state("")
     template = f'<div dj-view="{MOD}.RateLimited2656" dj-id="0"><p>{{{{ q }}}}</p></div>'
 
     def mount(self, request: Any, **kwargs: Any) -> None:
@@ -70,7 +73,7 @@ async def _mount_frame() -> Dict[str, Any]:
     from djust.websocket import LiveViewConsumer
 
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    connected, _ = await comm.connect()
+    connected, _ = await with_live_session(comm).connect()
     assert connected
     await comm.receive_json_from()
     try:
@@ -144,7 +147,7 @@ class TestExtractHandlerConfig:
         from djust.runtime import ViewRuntime
 
         class Bare2656(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div></div>"
 
             @event_handler()

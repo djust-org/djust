@@ -1663,6 +1663,25 @@ pub fn resolve_template_inheritance(
         ))
     })?;
 
+    resolve_inheritance_with_loader(source, &loader)
+}
+
+/// [`resolve_template_inheritance`] for a template whose SOURCE is in hand (a
+/// `from_string` template, or a file the caller already read): its parents are
+/// loaded from `template_dirs`. What `DjustTemplateBackend` extracts the JIT's
+/// variable paths from, so a read in a parent template is a read (#3920).
+pub fn resolve_template_inheritance_from_source(
+    source: &str,
+    template_dirs: &[std::path::PathBuf],
+) -> Result<String> {
+    let loader = FilesystemTemplateLoader::new(template_dirs.to_vec());
+    resolve_inheritance_with_loader(source.to_owned(), &loader)
+}
+
+fn resolve_inheritance_with_loader(
+    source: String,
+    loader: &FilesystemTemplateLoader,
+) -> Result<String> {
     // Parse initial template (use `parse_with_source` so the
     // boundary-marker ID prefix is derived from this template's
     // own source — matches the production loader, see #1358 Iter 1
@@ -1680,7 +1699,7 @@ pub fn resolve_template_inheritance(
     }
 
     // Build inheritance chain
-    let chain = build_inheritance_chain(nodes, &loader, 10)?;
+    let chain = build_inheritance_chain(nodes, loader, 10)?;
 
     // Get merged template nodes
     let root_nodes = chain.get_root_nodes();

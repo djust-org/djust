@@ -147,7 +147,7 @@ def liveview_render(source: str, context: dict) -> str:
     """The REAL LiveView entry — the path the arm sits on. Needs `django_db`."""
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request, **kwargs):
             pass
@@ -392,6 +392,7 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
     Neither the session snapshot nor the client payload may carry one.
     """
 
+    # Stays legacy (split from the explicit migration): this test's subject is a legacy mechanism (see the legacy-subject worklist).
     def test_the_session_snapshot_holds_no_function_address(self) -> None:
         """The REAL GET path: `mixins/request.py` writes
         `request.session[view_key]` through
@@ -421,6 +422,7 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
         blob = json.dumps(saved)
         assert "0x" not in blob and "<function" not in blob, blob
 
+    # Stays legacy (split from the explicit migration): this test's subject is a legacy mechanism (see the legacy-subject worklist).
     def test_the_client_state_payload_holds_no_function_address(self) -> None:
         """The other outbound channel, measured rather than assumed.
 
@@ -458,6 +460,7 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
         )
         assert state == {"plain": "visible"}, state
 
+    # Stays legacy (split from the explicit migration): this test's subject is a legacy mechanism (see the legacy-subject worklist).
     def test_a_public_callable_ATTRIBUTE_is_still_dropped_before_the_arm(self) -> None:
         """The boundary #2621 does NOT move, stated so nobody reads the gate
         as wider than it is.

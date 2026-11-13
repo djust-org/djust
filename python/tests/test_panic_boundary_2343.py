@@ -177,6 +177,7 @@ class TestGuardCoversTheRenderSurface:
             "serialize_queryset_py",
             "serialize_context_py",
             "extract_template_variables_py",
+            "extract_item_key_only_reads_py",
             "dj_model_fields_from_template",
             "compute_template_hash",
             # Both #2477/#2489 predicates. They CONVERT A USER VALUE — the

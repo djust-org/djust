@@ -8,6 +8,7 @@ the wizard author skip `field_html` generation for the unused fields. Default
 
 import django
 from django.conf import settings
+from djust._exposure_providers import new_render_context
 
 if not settings.configured:
     settings.configure(
@@ -38,10 +39,13 @@ class _BigForm(forms.Form):
 class _StubLiveView:
     """Minimal stub providing get_context_data for WizardMixin to super() into."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def get_context_data(self, **kwargs):
-        return dict(kwargs)
+        # The framework's explicit render context, as LiveView supplies it.
+        context = new_render_context(self)
+        context.update(kwargs)
+        return context
 
 
 _SENTINEL = object()
