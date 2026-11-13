@@ -561,16 +561,22 @@ jobs:
           BASES: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }} ${{ github.event.merge_group.base_ref }}
         run: |
           out="$RUNNER_TEMP/changed-paths.txt"
+          # With the status letter, for the early tier's path rules (tests/early_tier.py): a test
+          # module ADDED or DELETED runs the tree-scanning pins. --no-renames: a rename is D + A.
+          status="$RUNNER_TEMP/changed-status.txt"
           : > "$out"
+          : > "$status"
           for base in $BASES; do
             [ "$base" = "0000000000000000000000000000000000000000" ] && continue
-            if git fetch --no-tags --depth=1 origin "$base" && git diff --name-only FETCH_HEAD HEAD >> "$out"; then
+            if git fetch --no-tags --depth=1 origin "$base" && git diff --name-only FETCH_HEAD HEAD >> "$out" \
+              && git diff --name-status --no-renames FETCH_HEAD HEAD >> "$status"; then
               echo "diffed against $base"
             else
               echo "::warning::could not diff against $base; the sweep sample draws without its changed paths"
             fi
           done
           sort -u -o "$out" "$out"
+          sort -u -o "$status" "$status"
           echo "$(wc -l < "$out") changed path(s)"
 
       - name: Run Python tests (parallel with pytest-xdist, shard ${{ matrix.group }}/4)
@@ -598,6 +604,8 @@ jobs:
           DJUST_SWEEP_SAMPLE: ${{ (inputs.full_sweeps || contains(github.event.pull_request.labels.*.name, 'full-tests')) && '0' || '1' }}
           DJUST_SWEEP_SEED: ${{ github.sha }}-py${{ matrix.python-version }}-dj${{ matrix.django-version }}
           DJUST_SWEEP_CHANGED_FILE: ${{ runner.temp }}/changed-paths.txt
+          # tests/early_tier.py: the path rules that keep pins early for this change's shape.
+          DJUST_CHANGED_STATUS_FILE: ${{ runner.temp }}/changed-status.txt
           # tests/skip_ledger.py: every skipped node id, for python-tests-django6-only.
           DJUST_RECORD_SKIPS: ${{ runner.temp }}/skipped.txt
         run: |

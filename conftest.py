@@ -24,6 +24,7 @@ pytest_plugins = [
     "tests.lost_items_guard",  # #2746: a run that loses collected items goes red
     "tests.corpus_shards",  # share the full differential sweep within one CI shard
     "tests.local_load_guard",  # outside CI: <=2 xdist workers, no whole-suite run (laptop load)
+    "tests.early_tier",  # the promotion ledger and path rules keep some slow tests early
     "tests.slow_tier",  # mark tests > 1s in .test_durations `slow` (fast tier: -m "not slow")
     "tests.sweep_sample",  # #4074: exhaustive sweeps run sampled before merge, full nightly
     "tests.skip_ledger",  # #4074: run on Django 6.1 what the Django 5.2 PR shards skipped

@@ -345,6 +345,15 @@ test-selected: ## Run affected Python tests (FROM/TO optional; unknown/shared ch
 test-fast: ## Python fast tier: everything except `slow` (>1s in .test_durations, tests/slow_tier.py) and `nightly`
 	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto --dist loadfile -q -m "not slow and not nightly" --benchmark-disable
 
+# The early tier (tests/early_tier.py): every promotion-ledger entry (tests/promotion-ledger.json,
+# tests that failed late), every `pr_tier` test, and the pins the path rules select for this
+# branch's change (diff against origin/main plus the working tree). The local quick check before
+# handing work over; PR CI runs the same set inside its fast tier.
+.PHONY: test-early
+test-early: ## The early tier: promotion-ledger entries + pr_tier tests + the path-rule pins this change selects
+	@files=$$($(PYTHON) scripts/promotion_ledger.py early-files) || exit $$?; \
+	DJUST_EARLY_ONLY=1 DJUST_SWEEP_SAMPLE=1 PYTHONPATH=. $(PYTHON) -m pytest $$files -n 2 --dist loadfile -q -m "not nightly" --benchmark-disable
+
 .PHONY: test-integration
 test-integration: test ## Run the unchanged full integration gate before declaring a milestone ready
 
@@ -415,6 +424,7 @@ MERGE_GATES := \
 	tests/test_corpus_shards.py \
 	tests/test_git_env_guard_3179.py \
 	tests/test_merge_gates_3757.py \
+	tests/test_promotion_ledger.py \
 	tests/test_reset_fixture_hygiene_2234.py \
 	python/djust/tests/test_communicator_timeouts_ratchet_3709.py \
 	python/djust/tests/test_marked_safe_attribute_sweep_3898.py \
