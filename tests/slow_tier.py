@@ -28,6 +28,9 @@ otherwise push the only test that asserts the ratchet into the deselected tier
 the first time the durations are refreshed.
 ``@pytest.mark.sweep`` is the other opt-out (#4074): an exhaustive sweep is slow only in full;
 whenever this tier is deselected it runs a seeded sample (``tests/sweep_sample.py``), so it stays.
+The early tier (``tests/early_tier.py``) is the third: a test in the promotion ledger
+(``tests/promotion-ledger.json``, a test that failed late), or selected by a path rule for the
+change being tested, stays in the fast tier too.
 
 ``DJUST_SLOW_TIER=0`` turns the derived markers off.
 """
@@ -39,6 +42,8 @@ import os
 from pathlib import Path
 
 import pytest
+
+from tests import early_tier
 
 SLOW_SECONDS = 1.0
 DURATIONS_FILE = ".test_durations"
@@ -67,10 +72,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     if not slow:
         return
     marker = pytest.mark.slow(reason="> %.1fs in %s" % (SLOW_SECONDS, DURATIONS_FILE))
+    early = early_tier.early_tier(config)
     for item in items:
         if (
             item.nodeid in slow
             and item.get_closest_marker("pr_tier") is None
             and item.get_closest_marker("sweep") is None
+            and early.reason(item) is None
         ):
             item.add_marker(marker)

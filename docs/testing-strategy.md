@@ -289,6 +289,65 @@ concurrency groups, differ); a second dispatch on the same branch cancels the fi
 when both are green. A manual run of `main-health` on a branch tests that branch and fails the run
 instead of filing an issue.
 
+### The early tier: tests that failed late run early
+
+A test that runs only late (the push to `main`, the nightly) fails after the change that broke it
+has merged. The early tier keeps such tests before merge. It is honoured where `pr_tier` is
+(`tests/slow_tier.py` does not mark an early test `slow`), so PR and merge-queue CI run it inside
+their fast tier, and `make test-early` runs exactly it locally. All numbers live in
+`tests/early_tier.py`.
+
+- **Promotion.** The nightly `main-health` suite writes a junit report in which every test carries
+  its node id and its pre-merge tier. When it is red, `scripts/promotion_ledger.py promote` adds
+  each failing test that is NOT already in the pre-merge tier to `tests/promotion-ledger.json`.
+  Not promoted: a test that is already early (a fast test failing on `main` is a merge
+  interaction, not a tier problem), a `nightly`-marked test (nightly-only by declaration), and a
+  test a path rule already selects (the report says so: if the breaking change did not match the
+  rule, extend the rule). A failure from a push to `main` can be promoted by hand:
+  `python scripts/promotion_ledger.py promote --failed-ids ids.txt` (one node id per line; without
+  a junit report the tier comes from `.test_durations`).
+- **The workflow never pushes.** `main-health` has `contents: read` and `issues: write` and gains no
+  permission: the ledger change is a patch, posted on the `main is RED` issue when a test is
+  promoted, and on a `promotion ledger: changes to apply` issue when a green night demotes one.
+  Apply it with `git apply` in a pull request (the one fixing the red, typically).
+- **Demotion.** On a green night `promotion_ledger.py demote` credits every entry whose test passed
+  with one green night; an entry that fails again restarts at zero. After `DEMOTE_AFTER_GREEN` (30)
+  consecutive green nights an unpinned entry leaves. The streaks between nights are kept in the
+  actions cache (no token permission); a lost cache restarts them, so an entry stays early longer,
+  never shorter.
+- **Pinned.** `"pinned": true` (set by hand) keeps an entry for good: never demoted, never evicted.
+- **Budget.** The ledger may cost at most `BUDGET_SECONDS` (180 s) of recorded duration. Over it,
+  unpinned entries leave in order of oldest last failure; pinned entries alone over it make the
+  script exit 2.
+- **Granularity.** An entry is a test function (`path::Class::test_name`, parameters stripped):
+  parametrized ids are derived from values and churn, and a whole file is too coarse for the
+  budget. `tests/test_promotion_ledger.py` fails, naming the entry, when an entry's test is renamed
+  or deleted.
+
+**Path rules** (`PATH_RULES` in `tests/early_tier.py`) are early by change shape rather than by
+failure. In a run that deselects `slow`, a rule whose change shape matches the run's changed paths
+(CI writes `$RUNNER_TEMP/changed-status.txt` with `git diff --name-status --no-renames`; locally it
+is the diff against `origin/main` plus the working tree and untracked files) keeps its pins in the
+fast tier:
+
+| rule | fires on | runs |
+|---|---|---|
+| `test-module-added-or-removed` | a test module added, deleted or renamed | every module in `MERGE_GATES` (Makefile) |
+| `system-check-changed` | `python/djust/checks/`, `docs/system-checks.md` | the check-ID uniqueness and C0xx docs-table pins |
+| `client-js-source-changed` | `python/djust/static/djust/src/` | `tests/test_client_size_manifest_2138.py` |
+
+Each rule names the incident that justifies it; add one the same way, with an `example` path the
+tests check fires it.
+
+**Running the early tier locally** before handing work over:
+
+    make test-early
+
+It collects the ledger entries' files, every file using `pr_tier` and the files the fired rules
+name, and keeps only the early tests (`pytest --early-only`) on two workers. A rule selects
+whole files, but the exhaustive sweep units in them are left to their own sampling (their
+`pr_tier` census tests stay).
+
 ### The merge queue is on (ruleset `merge-queue`)
 
 The `merge-queue` ruleset on the default branch requires the `test-summary` check and
