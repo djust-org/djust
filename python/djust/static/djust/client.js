@@ -8533,13 +8533,17 @@ let _httpEventChain = null;
 // token in two halves, "<digest>.<shape>". The digest is a keyed digest of
 // that render: the page GET carries one (a <meta>, outside dj-root), every
 // fallback answer carries the next, and each fallback POST echoes the latest.
-// The shape is a checksum of that render's element tree (domShape,
-// 12-vdom-patch.js). A patch answer is addressed by path, so it may only be
-// applied to a DOM with the tree the server diffed against: the client sends
-// the shape of its own DOM with the digest (the server answers with patches
-// only if it is its render's shape), sends no token at all while its DOM has
-// another shape (a script inserted or removed a node, a dj-remove exit is
-// still playing), and checks the shape again before it applies the patches.
+// The shape is a checksum of that render's tree (domShape, 12-vdom-patch.js):
+// every element with its attributes, every text. A patch answer is addressed
+// by path, so it may only be applied to a DOM that is the tree the server
+// diffed against: the client sends the shape of its own DOM with the digest
+// (the server answers with patches only if it is its render's shape), sends
+// no token at all while its DOM has another shape (a script or a hook added,
+// removed or moved a node or changed a text, a dj-remove exit is still
+// playing), and checks the shape again at the moment it applies the patches.
+// The shape the client computes is compared with the server's own, never with
+// an earlier reading of the same DOM, so it does not matter when the DOM was
+// changed: before this client started, or in a callback after a patch.
 // The digest is null when unknown (a socket or SSE mount rendered this page,
 // or something changed the DOM without naming a token); the server then
 // answers with the whole page, as it does when a token does not match. There
@@ -8568,19 +8572,6 @@ function _readPageRenderDigest() {
     const meta = document.querySelector(_RENDER_DIGEST_META);
     _setRenderToken(meta && meta.getAttribute('content'));
     _httpDigestMisses = _httpDigestHold = 0;
-    _markDomAsRendered();
-}
-
-// The DOM is the server's render now (the page as loaded, or an answer just
-// applied): number its elements, so a later move, swap or replacement shows.
-function _markDomAsRendered() {
-    if (_httpRenderDigest) domShape(getLiveViewRoot(), 'mark');
-}
-
-// Whether the DOM still is the render `shape` stands for: the same tree, made
-// of the same elements in the same order.
-function _domIsRender(shape) {
-    return domShape(getLiveViewRoot(), 'verify') === shape;
 }
 
 // The token this fallback request sends, if any: the digest, and the shape of
@@ -8591,10 +8582,10 @@ function _renderTokenToSend() {
         _httpDigestHold -= 1;
         return null;
     }
-    // The DOM is not the render the digest stands for (another layout, or
-    // elements moved or replaced): patches computed from that render would
-    // land on other nodes.
-    if (!_domIsRender(_httpRenderShape)) return null;
+    // The DOM is not the render the digest stands for (a node added, removed
+    // or moved, an attribute or a text changed): patches computed from that
+    // render would land on other nodes.
+    if (domShape(getLiveViewRoot()) !== _httpRenderShape) return null;
     return _httpRenderDigest + '.' + _httpRenderShape;
 }
 
@@ -8603,10 +8594,10 @@ function _noteRenderDigest(data, sent) {
     const whole = typeof data.html === 'string';
     const changed = whole || (Array.isArray(data.patches) && data.patches.length > 0)
         || data.type === 'embedded_update';
+    // (An answer that changes the DOM and names no token needs no forgetting:
+    // the DOM then has another shape than the token held, so none is sent.)
     if (typeof data.render_digest === 'string' && data.render_digest) {
         _setRenderToken(data.render_digest);
-    } else if (changed) {
-        _setRenderToken(null);
     }
     if (!sent || !changed) return;
     if (!whole) {
@@ -8653,7 +8644,6 @@ async function _httpFallbackResync() {
         _noteRenderDigest(data, null);
         clientVdomVersion = null;
         await handleServerResponse(data, null, null, _localEventTransport);
-        _markDomAsRendered();
     } catch (_e) {
         window.location.reload();
     }
@@ -9142,7 +9132,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         if (sentDigest !== null && data.version === undefined &&
                 Array.isArray(data.patches) && data.patches.length > 0) {
             const shape = sentDigest.split('.')[1];
-            data._applyIf = () => _domIsRender(shape) || !(data._applyIfRefused = true);
+            data._applyIf = () => domShape(getLiveViewRoot()) === shape || !(data._applyIfRefused = true);
         }
         _noteRenderDigest(data, sentDigest);
         if (data.type === 'embedded_update') {
@@ -9165,7 +9155,6 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 clientVdomVersion = null;
             }
             await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
-            _markDomAsRendered();
         }
 
     } catch (error) {
@@ -10916,14 +10905,18 @@ function getSignificantChildren(node) {
 }
 
 // --- DOM shape (#4108) -------------------------------------------------------
-// A checksum of the element tree under a view's root: tags, `id` and key
-// attributes, and which children are text or dj-if markers, counted with
-// getSignificantChildren, the rule patch paths are resolved with. Two trees
-// with one shape resolve every path to corresponding nodes. The server
+// A checksum of the tree under a view's root: what sits where. For each node
+// in document order: an element's tag and attributes (sorted by name) and its
+// children, a text child's text (whitespace runs collapsed), a dj-if marker.
+// Which nodes count is getSignificantChildren's rule, the one patch paths are
+// resolved with, so two trees with one shape resolve every path to
+// corresponding nodes; and since the shape holds each element's attributes and
+// text, rows that were reordered give another shape unless they are equal in
+// all of that, in which case their order makes no difference. The server
 // computes the same value from its render (`dom_shape`,
 // python/djust/_render_digest.py); the page-POST fallback applies a patch
-// answer, which is addressed by path, only while the DOM still has the shape
-// of the render the patches were computed from.
+// answer, which is addressed by path, only while the DOM has the shape of the
+// render the patches were computed from.
 const _SHAPE_CRC = (() => {
     const table = new Uint32Array(256);
     for (let n = 0; n < 256; n++) {
@@ -10934,69 +10927,60 @@ const _SHAPE_CRC = (() => {
     return table;
 })();
 
-function _shapeName(value) {
-    return encodeURIComponent(value).replace(/[!*'()]/g,
-        c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
-}
+// Attributes client code writes on a page that is still the server's render
+// (presentation and widget state) are not part of the shape. Kept equal to
+// `_SKIPPED_ATTRS` / `_SKIPPED_ATTR_PREFIXES` in _render_digest.py.
+const _SHAPE_SKIPPED = new Set(('class style dj-id open hidden disabled checked selected tabindex role '
+    + 'data-live-hydrated data-open data-visible data-position data-current '
+    + 'data-theme data-theme-mode').split(' '));
+const _SHAPE_SKIPPED_PREFIX = /^(aria-|data-djust-|data-dj-|data-upload-|data-stream-)/;
+const _shapeText = (text) => text.replace(/[ \t\n\r\f]+/g, ' ').replace(/^ | $/g, '');
 
-// The shape says the tree is laid out as the server's render. It does not say
-// the same nodes sit in the same places: a script can swap two rows that have
-// one layout. So the elements are also numbered, in document order, each time
-// the DOM is the server's render (the page load, and after every answer of the
-// page-POST fallback is applied). While every element still carries a number
-// and the numbers still rise in document order, no element was moved, swapped,
-// replaced by a copy or put under another parent since then; removals keep
-// the order and change the shape instead. A position is trusted for a patch
-// only when both hold.
-const _syncedOrder = new WeakMap();
-
-/**
- * The shape of `root`'s tree as 16 hex digits, or null if it cannot be computed.
- *
- * `mode` 'mark' also numbers the elements as the server's render. `mode`
- * 'verify' also checks those numbers and returns null when an element is new
- * or out of order.
- */
-function domShape(root, mode = null) {
+/** The shape of `root`'s tree as 16 hex digits, or null if it cannot be computed. */
+function domShape(root) {
     if (!root) return null;
-    let order = 0, last = -1, inOrder = true;
     let crc = 0xFFFFFFFF, a = 1, b = 0;
+    const byte = (code) => {
+        crc = _SHAPE_CRC[(crc ^ code) & 0xFF] ^ (crc >>> 8);
+        a = (a + code) % 65521;
+        b = (b + a) % 65521;
+    };
+    // The UTF-8 bytes of `text`.
     const put = (text) => {
-        for (let i = 0; i < text.length; i++) {
-            let code = text.charCodeAt(i);
-            if (code > 127) code = 63;
-            crc = _SHAPE_CRC[(crc ^ code) & 0xFF] ^ (crc >>> 8);
-            a = (a + code) % 65521;
-            b = (b + a) % 65521;
+        for (const char of text) {
+            const c = char.codePointAt(0);
+            if (c < 0x80) byte(c);
+            else if (c < 0x800) { byte(0xC0 | (c >> 6)); byte(0x80 | (c & 63)); }
+            else if (c < 0x10000) { byte(0xE0 | (c >> 12)); byte(0x80 | ((c >> 6) & 63)); byte(0x80 | (c & 63)); }
+            else { byte(0xF0 | (c >> 18)); byte(0x80 | ((c >> 12) & 63)); byte(0x80 | ((c >> 6) & 63)); byte(0x80 | (c & 63)); }
         }
     };
     const walk = (node) => {
         for (const child of getSignificantChildren(node)) {
-            if (child.nodeType === Node.ELEMENT_NODE) {
-                if (mode === 'mark') {
-                    _syncedOrder.set(child, order++);
-                } else if (mode === 'verify') {
-                    const number = _syncedOrder.get(child);
-                    if (number === undefined || number <= last) inOrder = false;
-                    last = number;
-                }
-                const id = child.getAttribute('id');
-                const key = child.getAttribute('dj-key') || child.getAttribute('data-key');
-                put('<' + child.tagName.toLowerCase()
-                    + (id ? '#' + _shapeName(id) : '') + (key ? '@' + _shapeName(key) : ''));
-                walk(child);
-                put('>');
+            if (child.nodeType === Node.COMMENT_NODE) {
+                put('!');
+            } else if (child.nodeType === Node.TEXT_NODE) {
+                put('"' + _shapeText(child.textContent) + '\0');
             } else {
-                put(child.nodeType === Node.TEXT_NODE ? 't' : 'c');
+                const csrf = child.getAttribute('name') === 'csrfmiddlewaretoken';
+                const attrs = [];
+                for (const name of child.getAttributeNames()) {
+                    const lower = name.toLowerCase();
+                    if (_SHAPE_SKIPPED.has(lower) || _SHAPE_SKIPPED_PREFIX.test(lower)) continue;
+                    // Django masks the CSRF token again on every render.
+                    if (csrf && lower === 'value') continue;
+                    attrs.push(' ' + lower + '=' + child.getAttribute(name) + '\0');
+                }
+                put('<' + child.tagName.toLowerCase() + attrs.sort().join(''));
+                // dj-disable-with shows other text while its request is out.
+                const shown = child.getAttribute('data-djust-original-text');
+                if (shown === null) walk(child);
+                else if (shown === ' ' || /[^ \t\n\r\f]/.test(shown)) put('"' + _shapeText(shown) + '\0');
+                put('>');
             }
         }
     };
-    try {
-        walk(root);
-    } catch (_e) {
-        return null; // e.g. an id that is not valid UTF-16
-    }
-    if (!inOrder) return null;
+    walk(root);
     const hex = (n) => (n >>> 0).toString(16).padStart(8, '0');
     return hex(crc ^ 0xFFFFFFFF) + hex((b << 16) | a);
 }

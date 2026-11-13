@@ -54,7 +54,6 @@ import string
 import zlib
 from html import unescape
 from typing import Any
-from urllib.parse import quote
 
 from django.utils.crypto import salted_hmac
 
@@ -92,10 +91,19 @@ _TOKEN = re.compile(
     r"|<(?P<close>/?)(?P<tag>[A-Za-z][^\s/>]*)(?P<attrs>(?:[^>\"']|\"[^\"]*\"|'[^']*')*)>",
     re.DOTALL,
 )
-_ATTR = {
-    name: re.compile(r"""(?:^|\s)%s=(?:"([^"]*)"|'([^']*)')""" % re.escape(name))
-    for name in ("id", "dj-key", "data-key")
-}
+# One attribute of a start tag: name, then a double-quoted, single-quoted or
+# bare value, or none.
+_ATTRS = re.compile(r"""([^\s"'=<>/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?""")
+#: Attributes client code writes on a page that is still the server's render.
+#: Kept equal to ``_SHAPE_SKIPPED`` / ``_SHAPE_SKIPPED_PREFIX`` in
+#: ``12-vdom-patch.js`` by the shared vectors.
+_SKIPPED_ATTRS = frozenset(
+    "class style dj-id open hidden disabled checked selected tabindex role "
+    "data-live-hydrated data-open data-visible data-position data-current "
+    "data-theme data-theme-mode".split()
+)
+_SKIPPED_ATTR_PREFIXES = ("aria-", "data-djust-", "data-dj-", "data-upload-", "data-stream-")
+_ASCII_SPACE_RUN = re.compile(r"[ \t\n\r\f]+")
 _VOID = frozenset("area base br col embed hr img input link meta param source track wbr".split())
 #: Elements whose every text child counts (``isWhitespacePreserving`` in the client).
 _KEEPS_WHITESPACE = frozenset(("pre", "code", "textarea", "script", "style"))
@@ -200,9 +208,6 @@ def _is_dj_if_comment(text: str) -> bool:
 
 def _counts_as_text(text: str, keeps_whitespace: bool) -> bool:
     """``isSignificantChild`` in the client, for a text node."""
-    if "&" in text:
-        # The client sees the character, not the reference to it.
-        text = unescape(text)
     if not text:
         return False
     if keeps_whitespace or text == " ":
@@ -210,30 +215,60 @@ def _counts_as_text(text: str, keeps_whitespace: bool) -> bool:
     return bool(text.strip(" \t\n\r\f"))
 
 
-def _shape_name(value: str) -> str:
-    """As the client writes it: ``encodeURIComponent``, plus ``! * ' ( )``."""
-    return quote(unescape(value), safe="~")
+def _shape_attr_counts(name: str) -> bool:
+    """Whether attribute ``name`` is part of the shape (``_shapeAttrCounts`` in the client).
+
+    Left out are the attributes client code writes on a page that is still the
+    server's render: presentation and widget state. Everything else an element
+    carries is part of what it is.
+    """
+    return name not in _SKIPPED_ATTRS and not name.startswith(_SKIPPED_ATTR_PREFIXES)
 
 
-def _attr(attrs: str, name: str) -> str:
-    """The value of attribute ``name`` in a start tag's attribute text, or ``""``."""
-    found = _ATTR[name].search(attrs)
-    if not found:
-        return ""
-    return found.group(1) if found.group(1) is not None else found.group(2)
+def _shape_text(text: str) -> str:
+    """Text as the shape holds it: runs of ASCII whitespace as one space, trimmed."""
+    return _ASCII_SPACE_RUN.sub(" ", text).strip(" ")
+
+
+def _element_piece(tag: str, attrs: str) -> str:
+    """``<tag`` and its counted attributes, sorted by name, each ended by NUL."""
+    pairs: dict[str, str] = {}
+    for found in _ATTRS.finditer(attrs):
+        name = found.group(1).lower()
+        if name in pairs or not _shape_attr_counts(name):
+            continue
+        value = found.group(2)
+        if value is None:
+            value = found.group(3)
+        if value is None:
+            value = found.group(4) or ""
+        pairs[name] = unescape(value) if "&" in value else value
+    if pairs.get("name") == "csrfmiddlewaretoken":
+        # Django masks the token again on every render.
+        pairs.pop("value", None)
+    return "<" + tag + "".join(" %s=%s\0" % (name, pairs[name]) for name in sorted(pairs))
 
 
 def dom_shape(html: Any) -> str | None:
-    """A checksum of the element tree of the rendered root ``html``.
+    """A checksum of the tree of the rendered root ``html``: what sits where.
 
-    The text hashed is, for each node under the root in document order: an
-    element as ``<tag#id@key`` + its children + ``>`` (``#id`` and ``@key``
-    only when the attribute is present and not empty; the key is ``dj-key``,
-    else ``data-key``), a text node that counts as a child as ``t``, a ``dj-if``
-    boundary comment as ``c``. Which nodes count is the rule the client's path
-    walker uses (``isSignificantChild``), so two trees with one shape resolve
-    every path to corresponding nodes. ``12-vdom-patch.js`` (``domShape``)
-    computes the same text from the live DOM; ``tests/js`` holds them together.
+    The text hashed is, for each node under the root in document order:
+
+    * an element: ``<tag``, then each counted attribute as `` name=value``
+      + NUL, sorted by name (:func:`_shape_attr_counts`), then its children,
+      then ``>``;
+    * a text node that counts as a child: ``"`` + its text with whitespace
+      runs collapsed + NUL;
+    * a ``dj-if`` boundary comment: ``!``.
+
+    Which nodes count is the rule the client's path walker uses
+    (``isSignificantChild``), so two trees with one shape resolve every path
+    to corresponding nodes; and because the shape holds each element's
+    attributes and text, a tree whose rows were reordered has another shape
+    unless the rows are equal in all of that, in which case the order makes no
+    difference. ``12-vdom-patch.js`` (``domShape``) computes the same text
+    from the live DOM; ``tests/js/fixtures/dom_shape_vectors_4108.json`` holds
+    the two together.
 
     ``None`` for anything this reader cannot follow (unbalanced tags): the
     caller then answers with the whole page.
@@ -244,6 +279,14 @@ def dom_shape(html: Any) -> str | None:
     stack: list[str] = []
     position = 0
     after_start_of = ""  # the tag whose start tag was the previous token
+
+    def text_child(text: str, parent: str, references: bool = True) -> None:
+        if references and "&" in text:
+            # The client sees the character, not the reference to it.
+            text = unescape(text)
+        if _counts_as_text(text, parent in _KEEPS_WHITESPACE):
+            out.append('"' + _shape_text(text) + "\0")
+
     while True:
         match = _TOKEN.search(html, position)
         if match is None:
@@ -254,12 +297,12 @@ def dom_shape(html: Any) -> str | None:
             # The HTML parser drops a newline right after <pre>.
             text = text[1:]
         after_start_of = ""
-        if stack and _counts_as_text(text, stack[-1] in _KEEPS_WHITESPACE):
-            out.append("t")
+        if stack:
+            text_child(text, stack[-1])
         comment = match.group("comment")
         if comment is not None:
             if stack and _is_dj_if_comment(comment):
-                out.append("c")
+                out.append("!")
             continue
         tag = match.group("tag").lower()
         if match.group("close"):
@@ -277,16 +320,7 @@ def dom_shape(html: Any) -> str | None:
             if attrs.rstrip().endswith("/") or tag in _VOID:
                 return None
             continue
-        piece = "<" + tag
-        # (The substring tests only spare most tags three regex searches.)
-        name = _attr(attrs, "id") if " id=" in attrs else ""
-        if name:
-            piece += "#" + _shape_name(name)
-        # The first of the two that is not empty, as the client reads them.
-        name = (_attr(attrs, "dj-key") or _attr(attrs, "data-key")) if "key=" in attrs else ""
-        if name:
-            piece += "@" + _shape_name(name)
-        out.append(piece)
+        out.append(_element_piece(tag, attrs))
         if attrs.rstrip().endswith("/") or tag in _VOID:
             out.append(">")
             continue
@@ -299,17 +333,16 @@ def dom_shape(html: Any) -> str | None:
             raw = html[position : end.start()]
             if tag in _DROPS_FIRST_NEWLINE and raw.startswith("\n"):
                 raw = raw[1:]
-            if tag == "textarea" and "&" in raw:
-                raw = unescape(raw)
-            if raw and (tag in _KEEPS_WHITESPACE or raw == " " or raw.strip(" \t\n\r\f")):
-                out.append("t")
+            # <script> and <style> hold their text as written; <textarea> and
+            # <title> hold character references.
+            text_child(raw, tag, references=tag in ("textarea", "title"))
             position = end.end()
             after_start_of = ""
             stack.pop()
             out.append(">")
     if stack:
         return None
-    data = "".join(out).encode("ascii", "replace")
+    data = "".join(out).encode("utf-8", "surrogatepass")
     return "%08x%08x" % (zlib.crc32(data) & 0xFFFFFFFF, zlib.adler32(data) & 0xFFFFFFFF)
 
 
@@ -317,7 +350,7 @@ def render_token(view: Any, request: Any, html: Any) -> str | None:
     """``<digest>.<shape>`` for the rendered root ``html``: what the page GET
     and every fallback answer carry, or ``None`` when either half is missing."""
     digest = render_digest(view, request, html)
-    shape = dom_shape(html)
+    shape = dom_shape(canonical_html(html, request)) if isinstance(html, str) else None
     if not digest or not shape:
         return None
     return digest + "." + shape
@@ -341,19 +374,21 @@ def supplied_token(request: Any) -> tuple[str, str] | None:
     return digest, shape
 
 
-def tokens_match(html: Any, expected_digest: str | None, supplied: tuple[str, str] | None) -> bool:
+def tokens_match(
+    html: Any, request: Any, expected_digest: str | None, supplied: tuple[str, str] | None
+) -> bool:
     """Whether the client's ``(digest, shape)`` are those of the render ``html``.
 
     The digest is compared in constant time. The shape is not a secret: it is
-    recomputed here from the server's own render and compared with what the
-    client reports about its DOM.
+    recomputed here from the server's own render (in its canonical form, as the
+    token names it) and compared with what the client reports about its DOM.
     """
-    if not expected_digest or supplied is None:
+    if not expected_digest or supplied is None or not isinstance(html, str):
         return False
     digest, shape = supplied
     if not hmac.compare_digest(expected_digest.encode("ascii"), digest.encode("ascii")):
         return False
-    return dom_shape(html) == shape
+    return dom_shape(canonical_html(html, request)) == shape
 
 
 def path_addressed(patches: list[Any]) -> list[Any]:

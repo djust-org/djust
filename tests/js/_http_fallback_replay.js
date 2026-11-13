@@ -14,7 +14,7 @@ export const DIGEST_HEADER = 'X-Djust-Render-Digest';
 const FALLBACK_NOTICE = /falling back to full-page HTTP re-renders/;
 
 /** Resolves once the client initialised (it does so on DOMContentLoaded). */
-export async function loadPage(documentHtml, path = '/', {hooks = {}} = {}) {
+export async function loadPage(documentHtml, path = '/', {hooks = {}, before = null} = {}) {
     const navigations = [];
     const logs = [];
     const virtualConsole = new VirtualConsole();
@@ -31,6 +31,9 @@ export async function loadPage(documentHtml, path = '/', {hooks = {}} = {}) {
         url: 'http://localhost' + path, runScripts: 'dangerously', virtualConsole,
     });
     const win = dom.window;
+    // A page script that runs before the client's: `before` may register
+    // listeners that fire ahead of djust's own.
+    if (before) before(win);
     win.eval(client);
     // Registered before the client initialises, as a page's own script does.
     win.djust.hooks = Object.assign(win.djust.hooks || {}, hooks);

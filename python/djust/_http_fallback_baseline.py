@@ -145,7 +145,7 @@ def prepare_baseline(view: Any, request: Any) -> bool:
             isinstance(html, str)
             and not _holds_other_views(baseline)
             and not any(marker in html for marker in _CLIENT_OWNED_MARKERS)
-            and tokens_match(html, render_digest(view, request, html), supplied)
+            and tokens_match(html, request, render_digest(view, request, html), supplied)
         ):
             renderer = getattr(baseline, "_rust_view", None)
             if renderer is not None:

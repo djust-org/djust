@@ -20,13 +20,17 @@ let _httpEventChain = null;
 // token in two halves, "<digest>.<shape>". The digest is a keyed digest of
 // that render: the page GET carries one (a <meta>, outside dj-root), every
 // fallback answer carries the next, and each fallback POST echoes the latest.
-// The shape is a checksum of that render's element tree (domShape,
-// 12-vdom-patch.js). A patch answer is addressed by path, so it may only be
-// applied to a DOM with the tree the server diffed against: the client sends
-// the shape of its own DOM with the digest (the server answers with patches
-// only if it is its render's shape), sends no token at all while its DOM has
-// another shape (a script inserted or removed a node, a dj-remove exit is
-// still playing), and checks the shape again before it applies the patches.
+// The shape is a checksum of that render's tree (domShape, 12-vdom-patch.js):
+// every element with its attributes, every text. A patch answer is addressed
+// by path, so it may only be applied to a DOM that is the tree the server
+// diffed against: the client sends the shape of its own DOM with the digest
+// (the server answers with patches only if it is its render's shape), sends
+// no token at all while its DOM has another shape (a script or a hook added,
+// removed or moved a node or changed a text, a dj-remove exit is still
+// playing), and checks the shape again at the moment it applies the patches.
+// The shape the client computes is compared with the server's own, never with
+// an earlier reading of the same DOM, so it does not matter when the DOM was
+// changed: before this client started, or in a callback after a patch.
 // The digest is null when unknown (a socket or SSE mount rendered this page,
 // or something changed the DOM without naming a token); the server then
 // answers with the whole page, as it does when a token does not match. There
@@ -55,19 +59,6 @@ function _readPageRenderDigest() {
     const meta = document.querySelector(_RENDER_DIGEST_META);
     _setRenderToken(meta && meta.getAttribute('content'));
     _httpDigestMisses = _httpDigestHold = 0;
-    _markDomAsRendered();
-}
-
-// The DOM is the server's render now (the page as loaded, or an answer just
-// applied): number its elements, so a later move, swap or replacement shows.
-function _markDomAsRendered() {
-    if (_httpRenderDigest) domShape(getLiveViewRoot(), 'mark');
-}
-
-// Whether the DOM still is the render `shape` stands for: the same tree, made
-// of the same elements in the same order.
-function _domIsRender(shape) {
-    return domShape(getLiveViewRoot(), 'verify') === shape;
 }
 
 // The token this fallback request sends, if any: the digest, and the shape of
@@ -78,10 +69,10 @@ function _renderTokenToSend() {
         _httpDigestHold -= 1;
         return null;
     }
-    // The DOM is not the render the digest stands for (another layout, or
-    // elements moved or replaced): patches computed from that render would
-    // land on other nodes.
-    if (!_domIsRender(_httpRenderShape)) return null;
+    // The DOM is not the render the digest stands for (a node added, removed
+    // or moved, an attribute or a text changed): patches computed from that
+    // render would land on other nodes.
+    if (domShape(getLiveViewRoot()) !== _httpRenderShape) return null;
     return _httpRenderDigest + '.' + _httpRenderShape;
 }
 
@@ -90,10 +81,10 @@ function _noteRenderDigest(data, sent) {
     const whole = typeof data.html === 'string';
     const changed = whole || (Array.isArray(data.patches) && data.patches.length > 0)
         || data.type === 'embedded_update';
+    // (An answer that changes the DOM and names no token needs no forgetting:
+    // the DOM then has another shape than the token held, so none is sent.)
     if (typeof data.render_digest === 'string' && data.render_digest) {
         _setRenderToken(data.render_digest);
-    } else if (changed) {
-        _setRenderToken(null);
     }
     if (!sent || !changed) return;
     if (!whole) {
@@ -140,7 +131,6 @@ async function _httpFallbackResync() {
         _noteRenderDigest(data, null);
         clientVdomVersion = null;
         await handleServerResponse(data, null, null, _localEventTransport);
-        _markDomAsRendered();
     } catch (_e) {
         window.location.reload();
     }
@@ -629,7 +619,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         if (sentDigest !== null && data.version === undefined &&
                 Array.isArray(data.patches) && data.patches.length > 0) {
             const shape = sentDigest.split('.')[1];
-            data._applyIf = () => _domIsRender(shape) || !(data._applyIfRefused = true);
+            data._applyIf = () => domShape(getLiveViewRoot()) === shape || !(data._applyIfRefused = true);
         }
         _noteRenderDigest(data, sentDigest);
         if (data.type === 'embedded_update') {
@@ -652,7 +642,6 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 clientVdomVersion = null;
             }
             await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
-            _markDomAsRendered();
         }
 
     } catch (error) {

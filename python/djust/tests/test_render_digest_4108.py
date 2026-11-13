@@ -273,7 +273,9 @@ def test_a_well_formed_token_is_read_and_both_halves_are_compared():
     assert _render_digest.supplied_token(request) == (digest, shape)
     assert _render_digest.supplied_token(RequestFactory().post("/")) is None
 
-    match = _render_digest.tokens_match
+    def match(html, expected, supplied):
+        return _render_digest.tokens_match(html, request_for_html, expected, supplied)
+
     assert match(HTML, digest, (digest, shape))
     other_digest = digest[:-1] + ("A" if digest[-1] != "A" else "B")
     assert not match(HTML, digest, (other_digest, shape))
@@ -296,7 +298,7 @@ def test_the_digest_comparison_is_constant_time(monkeypatch):
 
     monkeypatch.setattr(_render_digest.hmac, "compare_digest", recording)
     shape = _render_digest.dom_shape(HTML)
-    assert _render_digest.tokens_match(HTML, "a" * 22, ("a" * 22, shape))
+    assert _render_digest.tokens_match(HTML, _request(), "a" * 22, ("a" * 22, shape))
     assert calls == [(b"a" * 22, b"a" * 22)]
 
 
@@ -314,16 +316,19 @@ def _shape(inner: str) -> str:
     return shape
 
 
-def test_the_shape_ignores_what_does_not_move_a_path():
+def test_the_shape_ignores_what_client_code_writes_on_the_servers_render():
     base = _render_digest.dom_shape(BASE)
     same = [
-        # text, attribute values, classes, generated ids, the root's own attributes
-        ROOT % '<h1 dj-id="9">Other</h1><ul dj-id="8" class="x"><li>c</li><li>d</li></ul>',
+        # presentation, widget state, generated ids, the root's own attributes
+        ROOT
+        % (
+            '<h1 dj-id="9" class="x" style="color:red" aria-live="polite">Rows</h1>'
+            '<ul dj-id="8" hidden data-djust-locked="1" data-dj-src="t.html:3">'
+            '<li tabindex="0" role="note">a</li><li data-open="1" disabled>b</li></ul>'
+        ),
         '<div dj-root="" dj-view="app.View" class="page"><h1>Rows</h1><ul><li>a</li><li>b</li></ul></div>',
-        # a comment that is not a dj-if boundary, and indentation
-        ROOT % "<h1>Rows</h1><!-- note -->\n  <ul><li>a</li>\n<li>b</li></ul>",
-        # a ">" inside a quoted attribute value
-        ROOT % '<h1 title="a > b">Rows</h1><ul><li>a</li><li>b</li></ul>',
+        # a comment that is not a dj-if boundary, indentation, whitespace runs in text
+        ROOT % "<h1>Rows</h1><!-- note -->\n  <ul><li>a</li>\n<li>  b\n</li></ul>",
     ]
     assert [_render_digest.dom_shape(html) for html in same] == [base] * len(same)
 
@@ -340,31 +345,67 @@ def test_the_shape_ignores_what_does_not_move_a_path():
         "<h1></h1><ul><li>a</li><li>b</li></ul>",  # a text child gone
         "<h1>Rows</h1><ul><li>a</li><li><b>b</b></li></ul>",  # deeper
         "<h1>Rows</h1><ul><li>a</li></ul><li>b</li>",  # same tags, other nesting
-        '<h1 id="t">Rows</h1><ul><li>a</li><li>b</li></ul>',  # an id
-        '<h1>Rows</h1><ul><li data-key="1">a</li><li>b</li></ul>',  # a key
-        '<h1>Rows</h1><ul><li dj-key="1">a</li><li>b</li></ul>',
+        '<h1 id="t">Rows</h1><ul><li>a</li><li>b</li></ul>',  # an attribute
+        '<h1>Rows</h1><ul><li data-key="1">a</li><li>b</li></ul>',
+        '<h1>Rows</h1><ul><li dj-value-id="1">a</li><li>b</li></ul>',
+        '<h1 title="a > b">Rows</h1><ul><li>a</li><li>b</li></ul>',
         '<h1>Rows</h1><!--dj-if id="if-1"--><!--/dj-if--><ul><li>a</li><li>b</li></ul>',
         "<h1>Rows</h1> <ul><li>a</li><li>b</li></ul>",  # a kept single space
+        "<h1>Other</h1><ul><li>a</li><li>b</li></ul>",  # a text
+        "<h1>Rows</h1><ul><li>b</li><li>a</li></ul>",  # the rows' order
     ],
 )
-def test_the_shape_changes_with_anything_that_moves_a_path(inner):
+def test_the_shape_changes_with_anything_else(inner):
     assert _shape(inner) != _render_digest.dom_shape(BASE)
 
 
-def test_two_keyed_rows_swapped_change_the_shape():
-    one = _shape('<ul><li data-key="1">a</li><li data-key="2">b</li></ul>')
-    two = _shape('<ul><li data-key="2">b</li><li data-key="1">a</li></ul>')
-    assert one != two
+def test_rows_in_another_order_have_another_shape_unless_they_are_equal():
+    """What makes a position trustworthy: reordered rows show, whatever tells them apart."""
+    for one, two in [
+        ('<li data-key="1">a</li>', '<li data-key="2">a</li>'),  # a key
+        (
+            '<li dj-value-id="1"><button>Delete</button></li>',
+            '<li dj-value-id="2"><button>Delete</button></li>',
+        ),
+        ("<li>a</li>", "<li>b</li>"),  # text only
+        ('<li><a href="/1">open</a></li>', '<li><a href="/2">open</a></li>'),  # a nested attribute
+        ('<li><input name="q" value="1"></li>', '<li><input name="q" value="2"></li>'),
+    ]:
+        assert _shape("<ul>%s%s</ul>" % (one, two)) != _shape("<ul>%s%s</ul>" % (two, one)), one
+    # Rows equal in every counted attribute and text: either order is the same page.
+    assert _shape('<ul><li class="x">a</li><li>a</li></ul>') == _shape(
+        '<ul><li>a</li><li class="x">a</li></ul>'
+    )
+
+
+def test_attribute_order_and_quoting_do_not_matter_and_values_are_read_as_the_browser_reads_them():
+    assert _shape('<input type="text" name="q" value="v">') == _shape(
+        "<input value='v' name=q type=\"text\" />"
+    )
+    assert _shape('<a href="/x?a=1&amp;b=2">l</a>') != _shape('<a href="/x?a=1">l</a>')
+    # A name or a value cannot pass for structure.
+    assert _shape('<p data-a="1 data-b=2">x</p>') != _shape('<p data-a="1" data-b="2">x</p>')
+    assert _shape("<p>a</p><p>b</p>") != _shape("<p>a&lt;/p&gt;&lt;p&gt;b</p>")
+
+
+def test_the_csrf_inputs_value_is_not_part_of_the_shape():
+    one = _shape('<form><input type="hidden" name="csrfmiddlewaretoken" value="A"></form>')
+    two = _shape('<form><input type="hidden" name="csrfmiddlewaretoken" value="B"></form>')
+    assert one == two
+    assert _shape('<input name="other" value="A">') != _shape('<input name="other" value="B">')
 
 
 def test_void_and_raw_text_elements_and_whitespace_keeping_ones():
     # A void element has no children, with or without the closing slash.
-    assert _shape('<input name="a" /><br><p>x</p>') == _shape('<input name="b"><br /><p>y</p>')
+    assert _shape('<input name="a" /><br><p>x</p>') == _shape('<input name="a"><br /><p>x</p>')
     # Text that looks like markup inside <script> / <textarea> is text.
-    assert _shape("<script>if (a < b) { x = '<p>'; }</script><p>x</p>") == _shape(
+    assert _shape("<script>if (a < b) { x = '<p>'; }</script><p>x</p>") != _shape(
         "<script>y</script><p>x</p>"
     )
-    assert _shape("<textarea><b>not a tag</b></textarea>") == _shape("<textarea>t</textarea>")
+    assert _shape("<script>if (a < b) { x = '<p>'; }</script><p>x</p>") is not None
+    assert _shape("<textarea>&lt;b&gt;not a tag&lt;/b&gt;</textarea>") == _shape(
+        "<textarea><b>not a tag</b></textarea>"
+    )
     # Whitespace is a child inside <pre>, and not inside <p>.
     assert _shape("<pre> </pre>") != _shape("<pre></pre>")
     # ... except the one newline the HTML parser drops after <pre>.
@@ -372,15 +413,8 @@ def test_void_and_raw_text_elements_and_whitespace_keeping_ones():
     assert _shape("<pre>\n\n</pre>") != _shape("<pre></pre>")
     # A character reference is the character it names.
     assert _shape("<p>&#10;<b>x</b></p>") == _shape("<p>\n<b>x</b></p>")
+    assert _shape("<p>caf&eacute;</p>") == _shape("<p>caf\u00e9</p>")
     assert _shape("<p>\n</p>") == _shape("<p></p>")
-
-
-def test_names_are_written_as_the_client_writes_them():
-    # html-escaped in the markup, percent-encoded in the shape text, so an id
-    # cannot be mistaken for structure.
-    assert _shape('<p id="a&amp;b">x</p>') != _shape('<p id="a">x</p>')
-    assert _shape('<p id="a&gt;&lt;p">x</p>') != _shape('<p id="a">x</p><p>x</p>')
-    assert _render_digest._shape_name("a&amp;b c/é~!*'()") == "a%26b%20c%2F%C3%A9~%21%2A%27%28%29"
 
 
 VECTORS = json.loads(

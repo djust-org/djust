@@ -13,33 +13,39 @@ import {loadPage, recordedServer, finishExits, domDifference} from './_http_fall
 const fixture = JSON.parse(
     readFileSync('./tests/js/fixtures/http_fallback_replay_4108.json', 'utf8'));
 
-const BODY = '<body>\n<div dj-root dj-view="app.View">\n'
-    + '<p id="n">0</p>\n<input id="note" name="note" value="">\n'
+const BODY = (n) => '<body>\n<div dj-root dj-view="app.View">\n'
+    + `<p id="n">${n}</p>\n<input id="note" name="note" value="">\n`
     + '<details id="more"><summary>More</summary><p>Body</p></details>\n'
     + '<button id="go" dj-click="bump">Go</button>\n</div>\n</body></html>';
-// The shape of that page, as the client computes it (the server's `dom_shape`
-// of the same tree is the same value: http_fallback_replay_4108.test.js).
-let SHAPE;
+// The shape of that page for each text the tests put in it, as the client
+// computes it (the server's `dom_shape` of the same tree is the same value:
+// dom_shape_vectors_4108.test.js). The shape holds the text, so a token names
+// the page WITH a given number in it.
+const SHAPES = {};
 beforeAll(async () => {
-    const page = await loadPage('<!doctype html><html><head></head>' + BODY);
-    SHAPE = page.shape();
-    page.close();
-    expect(SHAPE).toMatch(/^[0-9a-f]{16}$/);
+    for (const n of [...Array(13).keys(), 'cached']) {
+        const page = await loadPage('<!doctype html><html><head></head>' + BODY(n));
+        SHAPES[n] = page.shape();
+        page.close();
+        expect(SHAPES[n]).toMatch(/^[0-9a-f]{16}$/);
+    }
+    expect(new Set(Object.values(SHAPES)).size).toBe(14);
 });
-const token = (digest) => `${digest}.${SHAPE}`;
+// The token of the page showing `n` (by default the number in the digest's name).
+const token = (digest, n = Number(digest.slice(1))) => `${digest}.${SHAPES[n]}`;
 const PAGE = (digest) => '<!doctype html><html><head>'
-    + (digest ? `<meta name="djust-render-digest" content="${token(digest)}">` : '')
-    + '</head>' + BODY;
+    + (digest ? `<meta name="djust-render-digest" content="${token(digest, 0)}">` : '')
+    + '</head>' + BODY(0);
 
 // The root as the server renders it (significant children: p, input, details, button).
 const rootHtml = (n) => `<div dj-root=""><p id="n">${n}</p><input id="note" name="note" value="" />`
     + '<details id="more"><summary>More</summary><p>Body</p></details>'
     + '<button dj-click="bump" id="go">Go</button></div>';
-const whole = (n, digest) => ({html: rootHtml(n), version: 1, ...(digest ? {render_digest: token(digest)} : {})});
+const whole = (n, digest) => ({html: rootHtml(n), version: 1, ...(digest ? {render_digest: token(digest, n)} : {})});
 // No `d` hint and no `version`: what the server sends on this transport.
 const patch = (n, digest) => ({
     patches: [{type: 'SetText', path: [0, 0], text: String(n)}],
-    ...(digest ? {render_digest: token(digest)} : {}),
+    ...(digest ? {render_digest: token(digest, n)} : {}),
 });
 
 async function bump(page, answer) {
@@ -70,14 +76,14 @@ describe('render token', () => {
     it('ignores a token that is not two halves', async () => {
         for (const content of ['d0', 'd0.', '.abc', 'a.b.c']) {
             const page = await loadPage('<!doctype html><html><head>'
-                + `<meta name="djust-render-digest" content="${content}"></head>` + BODY);
+                + `<meta name="djust-render-digest" content="${content}"></head>` + BODY(0));
             try {
                 expect((await bump(page, whole(1, null))).token, content).toBe(null);
             } finally { page.close(); }
         }
     });
 
-    it('forgets the token when an answer changes the DOM without naming one', async () => {
+    it('sends no token after an answer that changed the DOM and named none: the DOM is no longer that render', async () => {
         const page = await loadPage(PAGE('d0'));
         try {
             await bump(page, whole(1, null));
@@ -133,23 +139,39 @@ describe('the shape of the DOM', () => {
         try { return page.shape(); } finally { page.close(); }
     };
 
-    it('ignores text, classes, values and indentation, and sees every structural change', async () => {
-        const base = await shapeOf('<h1>Rows</h1><ul><li>a</li><li>b</li></ul>');
-        expect(await shapeOf('\n  <h1 class="x">Other</h1>\n<!-- note -->  <ul>\n<li>c</li>\n<li>d</li></ul>\n')).toBe(base);
+    it('ignores what client code writes on the server\'s render, and sees everything else', async () => {
+        const base = await shapeOf('<h1>Rows</h1><ul><li>a</li><li data-x="2">b</li></ul>');
+        // Presentation, widget state, generated ids, indentation, plain comments.
+        expect(await shapeOf('\n  <h1 class="x" style="color:red" aria-live="polite" dj-id="9">Rows</h1>\n'
+            + '<!-- note -->  <ul hidden data-djust-locked="1">\n<li>a</li>\n<li data-x="2" tabindex="0">b</li></ul>\n')).toBe(base);
         const different = [
-            '<ul><li>a</li><li>b</li></ul>',
-            '<h1>Rows</h1><p>new</p><ul><li>a</li><li>b</li></ul>',
+            '<ul><li>a</li><li data-x="2">b</li></ul>',
+            '<h1>Rows</h1><p>new</p><ul><li>a</li><li data-x="2">b</li></ul>',
             '<h1>Rows</h1><ul><li>a</li></ul>',
-            '<h2>Rows</h2><ul><li>a</li><li>b</li></ul>',
-            '<h1></h1><ul><li>a</li><li>b</li></ul>',
-            '<h1>Rows</h1><ul><li>a</li></ul><li>b</li>',
-            '<h1 id="t">Rows</h1><ul><li>a</li><li>b</li></ul>',
-            '<h1>Rows</h1><ul><li data-key="1">a</li><li>b</li></ul>',
-            '<h1>Rows</h1><!--dj-if id="if-1"--><!--/dj-if--><ul><li>a</li><li>b</li></ul>',
+            '<h2>Rows</h2><ul><li>a</li><li data-x="2">b</li></ul>',
+            '<h1></h1><ul><li>a</li><li data-x="2">b</li></ul>',
+            '<h1>Rows</h1><ul><li>a</li></ul><li data-x="2">b</li>',
+            '<h1 id="t">Rows</h1><ul><li>a</li><li data-x="2">b</li></ul>',
+            '<h1>Rows</h1><ul><li data-key="1">a</li><li data-x="2">b</li></ul>',
+            '<h1>Rows</h1><!--dj-if id="if-1"--><!--/dj-if--><ul><li>a</li><li data-x="2">b</li></ul>',
+            // The same tree with a text, an attribute value, or the rows' order changed.
+            '<h1>Other</h1><ul><li>a</li><li data-x="2">b</li></ul>',
+            '<h1>Rows</h1><ul><li>a</li><li data-x="3">b</li></ul>',
+            '<h1>Rows</h1><ul><li data-x="2">b</li><li>a</li></ul>',
         ];
         const shapes = [];
         for (const inner of different) shapes.push(await shapeOf(inner));
         expect(new Set([base, ...shapes]).size).toBe(different.length + 1);
+    });
+
+    it('reads a dj-disable-with button by the text it will show again', async () => {
+        const plain = await shapeOf('<button dj-click="save">Save</button>');
+        // While its request is out the button shows other text; djust keeps
+        // the original in data-djust-original-text and puts it back.
+        expect(await shapeOf('<button dj-click="save" data-djust-original-text="Save" disabled>Saving\u2026</button>'))
+            .toBe(plain);
+        expect(await shapeOf('<button dj-click="save" data-djust-original-text="Other" disabled>Saving\u2026</button>'))
+            .not.toBe(plain);
     });
 
     it('is the value the server computes for the same tree', async () => {
@@ -337,7 +359,7 @@ describe('a DOM that is not the tree the server rendered', () => {
 
 describe('a patch answer that cannot be applied', () => {
     // A path that resolves to nothing although the shape matched.
-    const unfit = () => ({patches: [{type: 'SetText', path: [9, 9, 9], text: 'x'}], render_digest: token('bad')});
+    const unfit = () => ({patches: [{type: 'SetText', path: [9, 9, 9], text: 'x'}], render_digest: token('bad', 0)});
 
     it('asks for the page with a POST that carries no event, and morphs it in: the event\'s state is kept', async () => {
         const page = await loadPage(PAGE('d0'));
@@ -358,7 +380,7 @@ describe('a patch answer that cannot be applied', () => {
             expect(doc.getElementById('go')).toBe(button);
             expect(page.reloads()).toBe(0);
             // The resync answer's token is the one sent next.
-            expect((await bump(page, patch(8, 'd8'))).token).toBe(token('fresh'));
+            expect((await bump(page, patch(8, 'd8'))).token).toBe(token('fresh', 7));
             expect(shown(page)).toBe('8');
         } finally { page.close(); }
     });
@@ -450,20 +472,25 @@ describe('elements moved or replaced without changing the layout', () => {
         } finally { page.close(); }
     });
 
-    it('two identical siblings swapped', async () => {
+    it('two siblings equal in every attribute and text, swapped: the same page, so the token is sent', async () => {
         const page = await open();
         try {
             const [first, second] = page.win.document.querySelectorAll('p.same');
             first.parentNode.insertBefore(second, first);
-            expect((await send(page, serverWith([], rootOf([['A', 'A'], ['B', 'B']], M)))).token).toBe(null);
+            const request = await send(page, serverWith(
+                [{type: 'SetText', path: [0, 0, 0], text: 'A-updated'}], rootOf([['A', 'A-updated'], ['B', 'B']], M)));
+            expect(request.token).not.toBe(null);
+            expect(rows(page, 'l')).toEqual([['A', 'A-updated'], ['B', 'B']]);
         } finally { page.close(); }
     });
 
-    it('a sibling replaced by a copy of itself', async () => {
+    it('a sibling replaced by a copy with other content', async () => {
         const page = await open();
         try {
             const row = page.win.document.querySelector('#l li');
-            row.replaceWith(row.cloneNode(true));
+            const copy = row.cloneNode(true);
+            copy.setAttribute('data-x', 'Z');
+            row.replaceWith(copy);
             expect((await send(page, serverWith([], rootOf([['A', 'A'], ['B', 'B']], M)))).token).toBe(null);
         } finally { page.close(); }
     });
@@ -484,23 +511,96 @@ describe('elements moved or replaced without changing the layout', () => {
         } finally { page.close(); }
     });
 
-    it('rows the server\'s own answers insert and move are part of the render: the next token is sent', async () => {
-        const page = await open();
+    it('two text nodes exchanged around an inline element', async () => {
+        const page = await loadPage('<!doctype html><html><head></head><body><div dj-root dj-view="app.View">'
+            + '<p id="t">before<b>mid</b>after</p><button id="go" dj-click="bump">Go</button></div></body></html>');
         try {
-            // A whole page with a new row, then a patch answer adding another.
-            const first = await send(page, () => ({
-                html: rootOf([['A', 'A'], ['B', 'B'], ['E', 'E']], M), version: 1,
-                render_digest: `d1.${'x'.repeat(16)}`,
-            }));
-            expect(first.token).not.toBe(null);
-            // (Name the token of the page as it now is.)
-            const shape = page.shape();
-            await send(page, () => ({html: rootOf([['A', 'A'], ['B', 'B'], ['E', 'E']], M), version: 1,
-                render_digest: `d2.${shape}`}));
-            const third = await send(page, () => ({patches: [], render_digest: `d2.${shape}`}));
-            expect(third.token).toBe(`d2.${shape}`);
+            const doc = page.win.document;
+            const meta = doc.createElement('meta');
+            meta.setAttribute('name', 'djust-render-digest');
+            meta.setAttribute('content', `d0.${page.shape()}`);
+            doc.head.appendChild(meta);
+            page.win.djust._installPageParameterContracts();
+            const p = doc.getElementById('t');
+            p.appendChild(p.firstChild); // "before" goes last
+            p.insertBefore(p.lastChild.previousSibling, p.firstChild); // "after" goes first
+            expect(p.textContent).toBe('aftermidbefore');
+            const request = await send(page, () => ({html: '<div dj-root=""><p id="t">before<b>mid</b>after</p>'
+                + '<button dj-click="bump" id="go">Go</button></div>', version: 1}));
+            expect(request.token).toBe(null);
         } finally { page.close(); }
     });
+
+    // The shape the client computes is compared with the SERVER's, not with an
+    // earlier reading of the same DOM. So it does not matter when the rows
+    // were moved: these two are the cases an order remembered by the client
+    // cannot see.
+    it('rows reordered before the client initialises (a page script\'s DOMContentLoaded listener that runs first)', async () => {
+        // The token is the server's, for the page as rendered: A above B.
+        const rendered = await loadPage(LISTS);
+        const shape = rendered.shape();
+        rendered.close();
+        const page = await loadPage(
+            LISTS.replace('<head></head>', `<head><meta name="djust-render-digest" content="d0.${shape}"></head>`),
+            '/',
+            {before: (win) => win.document.addEventListener('DOMContentLoaded', () => {
+                const list = win.document.getElementById('l');
+                list.insertBefore(list.children[1], list.children[0]); // a saved sort order
+            })},
+        );
+        try {
+            expect(rows(page, 'l')).toEqual([['B', 'B'], ['A', 'A']]);
+            // The server deleted A and believes B is what is left.
+            const request = await send(page, serverWith(
+                [{type: 'RemoveChild', path: [0], index: 0}], rootOf([['B', 'B']], M)));
+            expect(request.token).toBe(null);
+            expect(rows(page, 'l')).toEqual([['B', 'B']]);
+        } finally { page.close(); }
+    });
+
+    for (const [how, arrange] of [
+        ['a djust:patched listener', (page, reorder) => page.win.addEventListener('djust:patched', reorder)],
+        ['a hook\'s updated()', null],
+    ]) {
+        it(`rows reordered in a callback after a patch is applied (${how})`, async () => {
+            const hooked = arrange === null;
+            const html = hooked ? LISTS.replace('<ul id="l">', '<ul id="l" dj-hook="Sorter">') : LISTS;
+            const reorder = (doc) => {
+                const list = doc.getElementById('l');
+                if (list.children[0].getAttribute('data-x') === 'A') {
+                    list.insertBefore(list.children[1], list.children[0]);
+                }
+            };
+            const rendered = await loadPage(html, '/', {hooks: {Sorter: {}}});
+            const shape = rendered.shape();
+            rendered.close();
+            const page = await loadPage(
+                html.replace('<head></head>', `<head><meta name="djust-render-digest" content="d0.${shape}"></head>`),
+                '/',
+                {hooks: {Sorter: {updated() { reorder(this.el.ownerDocument); }}}},
+            );
+            try {
+                if (!hooked) arrange(page, () => reorder(page.win.document));
+                const attr = hooked ? ' dj-hook="Sorter"' : '';
+                const truth = (l) => rootOf(l, M).replace('<ul id="l">', `<ul id="l"${attr}>`);
+                // Event 1: a patch answer (text only), naming the token of the
+                // page it leaves: the same tree, one text changed.
+                const first = await send(page, (request) => {
+                    expect(request.token).not.toBe(null);
+                    return {patches: [{type: 'SetText', path: [1, 0, 0], text: 'C2'}], render_digest: 'PENDING'};
+                });
+                expect(first.token).toBe(`d0.${shape}`);
+                // The callback ran inside the answer's handling and moved B above A.
+                expect(rows(page, 'l')).toEqual([['B', 'B'], ['A', 'A']]);
+                // Event 2: the server deleted A. With a token it would answer
+                // RemoveChild index 0, which here is B.
+                const second = await send(page, serverWith(
+                    [{type: 'RemoveChild', path: [0], index: 0}], truth([['B', 'B']])));
+                expect(second.token).toBe(null);
+                expect(rows(page, 'l')).toEqual([['B', 'B']]);
+            } finally { page.close(); }
+        });
+    }
 
     it('the DOM is reordered while a View Transition holds the patches back: none is applied', async () => {
         const page = await open();
@@ -542,7 +642,7 @@ describe('a client cache hit', () => {
             const cached = (request) => ({
                 patches: [{type: 'SetText', path: [0, 0], text: 'cached'}],
                 cache_request_id: JSON.parse(request.body)._cacheRequestId,
-                render_digest: token('d1'),
+                render_digest: token('d1', 'cached'),
             });
             const first = await bump(page, cached);
             expect(first.token).toBe(token('d0'));
