@@ -341,7 +341,8 @@ saved state and does **not** run `mount()` again; then `handle_params()` and
 `handle_restore()` run, and what a handler set goes back over what
 `handle_params()` assigned. `mount()` runs again only when nothing is saved, or
 when something of the view could not be saved (a queryset, the request's user,
-an arbitrary object, work `mount()` queued): such a value is skipped, never
+an arbitrary object, a callable such as a class or a `functools.partial`, work
+`mount()` queued): such a value is skipped, never
 turned into a string, a WARNING on the `djust.automatic_state` logger names it
 once, and the next request runs `mount()` to re-create it before the saved
 state is put back over it. Over a socket, a mount or reconnect runs `mount()`
@@ -350,7 +351,9 @@ and then puts back only what a handler changed since `mount()`, so everything
 new saved state.
 
 **One state per tab.** Each page load carries a tab id; two tabs on one route
-do not share state (1.3 shared it). A reload is a new tab.
+do not share state (1.3 shared it). A reload is a new tab. A session keeps at
+most 8 tab states per view and route, together no larger than that view's size
+limit, and at most 1 MB of saved view state in all; the oldest go first.
 
 **What is not saved.** A field declared `state(..., persist=False)`; names on
 the sensitive-field list (`password`, `is_staff`, `is_superuser`,
@@ -936,4 +939,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 2e12e10867a4 -->
+<!-- generated-doc prose-sha256: 300c24f60867 -->

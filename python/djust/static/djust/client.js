@@ -219,7 +219,10 @@ const UNSAFE_KEYS = ['__proto__', 'constructor', 'prototype'];
 // fallback POST, and the server keeps one saved state per tab under it. An
 // empty string when the page carries none: the server then saves nothing.
 function djustTabId() {
-    const meta = document.querySelector('meta[name="djust-tab"]');
+    // The LAST one: a navigation that merges a new page's <head> into the
+    // document may leave the previous page's tag in front of the new one.
+    const metas = document.querySelectorAll('meta[name="djust-tab"]');
+    const meta = metas[metas.length - 1];
     return (meta && meta.getAttribute('content')) || '';
 }
 

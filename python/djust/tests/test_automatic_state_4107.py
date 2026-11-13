@@ -2011,3 +2011,301 @@ def test_a_tab_id_cannot_reach_another_users_or_sessions_state():
     view = Counter()
     view.post(request)
     assert view.count == 0
+
+
+# ---------------------------------------------------------------------------
+# Re-review fixes: rollback, held callables, the size of tab states, deletions
+# ---------------------------------------------------------------------------
+
+
+class GatedCart(_Base):
+    """A permission flag ``mount()`` computes, and a change that can be refused."""
+
+    automatic_state_max_kb = 16
+
+    def mount(self, request, **kwargs):
+        self.can_edit = STAFF["is"]
+        self.count = 0
+        self.cart = []
+
+    def get_context_data(self, **kwargs):
+        return {"probe": json.dumps([self.can_edit, self.count, len(self.cart)])}
+
+    @event_handler()
+    def add(self, n: int = 1, **kwargs):
+        self.count += 1
+        self.cart = self.cart + [{"sku": "item-%04d" % i} for i in range(n)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_refused_change_rolls_back_to_this_mounts_state_not_the_page_gets():
+    """GET while the right is held; it is revoked; the socket mounts (false);
+    the first event is refused as too large. The rollback must go back to what
+    THIS mount settled on, not to the page GET's saved ``can_edit=True``."""
+    STAFF["is"] = True
+    try:
+        with harness.ws_settings(MODULE):
+            first = await sync_to_async(_request)("GET", None)
+            assert (await sync_to_async(lambda: GatedCart().get(first).status_code)()) == 200
+            key = first.session.session_key
+            assert (await sync_to_async(_saved_envelope)(key))["values"]["can_edit"] is True
+            STAFF["is"] = False
+            comm, mount = await harness.mount_view(GatedCart, key)
+            try:
+                assert _gated(mount["html"]) == [False, 0, 0]
+                refused = await _event_or_error(comm, "add", {"n": 2000})
+                assert refused["code"] == "state_too_large", refused
+                frames = await harness.event_frames(comm, "add", {"n": 1})
+            finally:
+                await comm.disconnect()
+        assert "[true," not in json.dumps(frames) and "[True," not in json.dumps(frames)
+        stored = (await sync_to_async(_saved_envelope)(key))["values"]
+        assert (stored["can_edit"], stored["count"], len(stored["cart"])) == (False, 1, 1)
+    finally:
+        STAFF["is"] = True
+
+
+class Thing:
+    def __call__(self):
+        return "called"
+
+
+class HoldsCallables(_Base):
+    shown = ("count",)
+
+    def mount(self, request, **kwargs):
+        import functools
+
+        CALLS.append("mount")
+        self.count = 0
+        self.kind = Decimal  # a class
+        self.model = User  # a model class
+        self.maker = functools.partial(int, "7")
+        self.thing = Thing()
+
+    @event_handler()
+    def inc(self, **kwargs):
+        self.count += 1
+        assert self.kind("1.5") == Decimal("1.5") and self.model is User
+        assert self.maker() == 7 and self.thing() == "called"
+
+
+@pytest.mark.django_db
+def test_a_held_callable_is_reported_and_recreated_by_mount_never_dropped(caplog):
+    """Was a 500: the attribute was skipped silently, mount() did not run on
+    the next POST, and the handler found no ``self.kind``."""
+    CALLS.clear()
+    _automatic_state._NOTICED.clear()
+    entry = HoldsCallables.as_view()
+    first = _request("GET", None)
+    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
+        assert entry(first).status_code == 200
+        key = first.session.session_key
+        for _ in range(2):
+            assert entry(_request("POST", key, "inc")).status_code == 200
+    assert CALLS == ["mount", "mount", "mount"]
+    envelope = _saved_envelope(key)
+    assert envelope["values"] == {"count": 2} and envelope["remount"] is True
+    text = "\n".join(record.getMessage() for record in caplog.records)
+    for name in ("kind", "model", "maker", "thing"):
+        assert text.count("HoldsCallables.%s " % name) == 1, (name, text)
+    assert "HoldsCallables.head " not in text  # the view's own bound method: not state
+
+
+class Heavy(_Base):
+    shown = ("count",)
+    automatic_state_max_kb = 64
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+        self.blob = ""
+
+    @event_handler()
+    def fill(self, kb: int = 1, **kwargs):
+        self.count += 1
+        self.blob = "x" * (kb * 1024)
+
+
+def _auto_bytes(key: str) -> int:
+    return sum(len(json.dumps(value)) for value in _stored(key).values())
+
+
+@pytest.mark.django_db
+def test_tab_states_of_one_page_stay_within_the_views_limit_together(monkeypatch):
+    """Thirteen reloads of a view holding 30 KB: the session holds what fits in
+    the view's 64 KB limit (two of them), not thirteen copies."""
+    clock = {"now": int(_automatic_state.time.time()) - 1000}
+    monkeypatch.setattr(_automatic_state.time, "time", lambda: clock["now"])
+    key = _request("GET", None).session.session_key
+    tabs = ["tab-%08d" % n for n in range(13)]
+    for tab in tabs:
+        clock["now"] += 1
+        assert Heavy().post(_request("POST", key, "fill", {"kb": 30}, tab=tab)).status_code == 200
+    stored = _stored(key)
+    assert len(stored) == 2 and _auto_bytes(key) < 64 * 1024 + 2048
+    newest = Heavy()
+    newest.post(_request("POST", key, "nothing_here", tab=tabs[-1]))
+    assert newest.count == 1  # the one just written is always kept
+
+
+@pytest.mark.django_db
+def test_all_saved_states_of_a_session_stay_within_the_session_budget(monkeypatch):
+    clock = {"now": int(_automatic_state.time.time()) - 1000}
+    monkeypatch.setattr(_automatic_state.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(_automatic_state, "SESSION_BUDGET_KB", 128)
+    key = _request("GET", None).session.session_key
+    for n in range(40):  # forty routes, one tab each, 30 KB each
+        clock["now"] += 1
+        request = _request("POST", key, "fill", {"kb": 30}, path="/route-%d/" % n)
+        assert Heavy().post(request).status_code == 200
+    assert _auto_bytes(key) < 128 * 1024 + 4096
+    assert len(_stored(key)) == 4
+    latest = Heavy()
+    latest.post(_request("POST", key, "nothing_here", path="/route-39/"))
+    assert latest.count == 1
+
+
+@pytest.mark.django_db
+def test_expired_states_are_dropped_at_the_next_write(monkeypatch):
+    key = _request("GET", None).session.session_key
+    for tab in (TAB_A, TAB_B):
+        Counter().post(_request("POST", key, "inc", tab=tab))
+    assert len(_stored(key)) == 2
+    real = _automatic_state.time.time
+    monkeypatch.setattr(_automatic_state.time, "time", lambda: real() + 3700)  # past the lifetime
+    Counter().post(_request("POST", key, "inc", tab="tab-cccccccc"))
+    assert len(_stored(key)) == 1
+
+
+@pytest.mark.django_db
+def test_an_evicted_tab_is_said_once_per_request_without_values(caplog):
+    key = _request("GET", None).session.session_key
+    Counter().post(_request("POST", key, "inc", tab=TAB_A))
+    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
+        view = Counter()
+        assert view.post(_request("POST", key, "nothing", tab="tab-evicted1")).status_code == 200
+    assert view.count == 0
+    lines = [
+        r.getMessage() for r in caplog.records if "no saved state for this tab" in r.getMessage()
+    ]
+    assert len(lines) == 1 and "Counter" in lines[0] and harness.PATH in lines[0]
+    assert SECRET not in lines[0]
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
+        Counter().post(_request("POST", _request("GET", None).session.session_key, "nothing"))
+    assert not [r for r in caplog.records if "no saved state for this tab" in r.getMessage()]
+
+
+class Draft(_Base):
+    shown = ("count",)
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+        self.draft = "from mount"
+        self._scratch = "from mount"
+
+    def get_context_data(self, **kwargs):
+        return {
+            "probe": json.dumps(
+                [self.count, getattr(self, "draft", None), getattr(self, "_scratch", None)]
+            )
+        }
+
+    @event_handler()
+    def discard(self, **kwargs):
+        self.count += 1
+        del self.draft
+        del self._scratch
+
+    @event_handler()
+    def rewrite(self, **kwargs):
+        self.draft = "again"
+
+    @event_handler()
+    def noop(self, **kwargs):
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_an_attribute_a_handler_deleted_stays_deleted_after_a_reconnect():
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE):
+        comm, _mount = await harness.mount_view(Draft, key)
+        await harness.event(comm, "discard")
+        await comm.disconnect()
+        stored = await sync_to_async(_saved_envelope)(key)
+        assert stored["deleted"] == ["_scratch", "draft"]
+        again, mount = await harness.mount_view(Draft, key)
+        await harness.event(again, "rewrite")
+        await again.disconnect()
+        third, mount3 = await harness.mount_view(Draft, key)
+        await third.disconnect()
+    assert _gated(mount["html"]) == [1, None, None]  # mount() set them again; still gone
+    assert _gated(mount3["html"]) == [1, "again", None]  # set again by a handler: back
+    assert (await sync_to_async(_saved_envelope)(key))["deleted"] == ["_scratch"]
+
+
+@pytest.mark.django_db
+def test_an_attribute_a_handler_deleted_stays_deleted_over_the_fallback():
+    view, key, _ = _fallback(Draft, [("discard",), ("noop",)])
+    assert not hasattr(view, "draft") and view.count == 1
+
+
+@pytest.mark.django_db
+def test_a_stored_deleted_record_cannot_remove_what_the_view_would_not_restore():
+    _view, key, _ = _fallback(Names, [("inc",)])
+    session = SessionStore(key)
+    (name,) = [n for n in session.keys() if n.startswith("_djust_auto_")]
+    envelope = session[name]
+    envelope["deleted"] = ["limit", "_framework_attrs", "__dict__", "template_name", "inc", 7]
+    session[name] = envelope
+    session.save()
+    request = _request("POST", key, "inc")
+    view = Names()
+    view.mount(request)
+    view._djust_tab = harness.TAB
+    view._snapshot_user_private_attrs()
+    _automatic_state.load(view, request)
+    assert "limit" not in vars(view)  # an application attribute: removed, as recorded
+    assert isinstance(view._framework_attrs, frozenset) and callable(view.inc)
+    assert view.template_name == Names().template_name
+
+
+class BumpEvents(_DescriptorComponent):
+    template = '<button dj-click="bump">{{ n }}</button>'
+
+    class State(_TypedState):
+        n: int = 0
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.state.n += 1
+
+
+class HasEventComponent(_Base):
+    shown = ("count",)
+    bumper = BumpEvents()
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    def get_context_data(self, **kwargs):
+        return {
+            "bumper": self.bumper,
+            "probe": json.dumps({"count": self.count, "n": self.bumper.state.n}),
+        }
+
+
+@pytest.mark.django_db
+def test_an_event_addressed_to_a_component_reaches_it_over_the_fallback():
+    first = _request("GET", None)
+    assert HasEventComponent().get(first).status_code == 200
+    key = first.session.session_key
+    for expected in (1, 2, 3):
+        view = HasEventComponent()
+        response = view.post(_request("POST", key, "bump", {"component_id": "bumper"}))
+        assert response.status_code == 200, response.content
+        assert view.bumper.state.n == expected
+    assert _saved_envelope(key)["components"] == {"bumper": {"n": 3}}

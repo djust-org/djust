@@ -42,8 +42,14 @@ session:
   page; its socket and its fallback requests send it back. Two tabs on one
   route do not share state, a reload starts a new tab from `mount()`, and a
   duplicated browser tab shares its original's state until its next page load.
-  At most 8 tab states per route are kept in a session; the oldest goes first.
   A request with no tab id, or a malformed one, saves and restores nothing.
+- **How tab states are bounded.** At every save the session drops expired
+  states, keeps at most 8 tab states per view and route and no more of them
+  than fit together in that view's size limit (512 KB by default, so reloading
+  a large page does not multiply it), and keeps all saved view states of the
+  session together under 1 MB; the oldest go first and the state just written
+  is always kept. A tab whose state was evicted starts from `mount()` again,
+  with a WARNING on the `djust.automatic_state` logger.
 - **Over the HTTP fallback** a later request rebuilds the view from its saved
   state and does not run `mount()` again; `handle_params()` and
   `handle_restore()` then run, and what a handler set goes back over
@@ -53,7 +59,7 @@ session:
   in 1.3: read it again in `handle_restore()`.
 - **Over a socket**, a mount or reconnect runs `mount()` and then puts back
   only what a handler (or a later step such as a background result or a tick)
-  changed since `mount()`. Everything `mount()` computes is fresh on every
+  changed since `mount()`, and removes again what a handler deleted. Everything `mount()` computes is fresh on every
   socket mount: a permission flag follows the user, and a model instance stays
   an instance.
 - The two paths differ only for values `mount()` computes and no handler
@@ -61,7 +67,8 @@ session:
   in the framework's gates, which run on every request on both, and read data
   that must be current in `handle_restore()` or `get_context_data()`.
 - A value that cannot be saved (a queryset, the request's user, an arbitrary
-  object) is skipped, never turned into a string; a WARNING names it once, and
+  object, or a callable such as a class, a `functools.partial` or an object
+  with `__call__`) is skipped, never turned into a string; a WARNING names it once, and
   the next fallback request runs `mount()` again to re-create it before the
   saved state is put back.
 - `state(..., persist="server")` is the strict form (an unsaveable value is an
@@ -94,6 +101,7 @@ a channel layer every process shares. See
 | URL kwargs and the query string (`handle_params`) | kept<br><sub>`test_url_kwargs_and_handle_params`</sub> | read from the request; persisted fields restored<br><sub>`test_url_kwargs_and_handle_params`</sub> | read from the new URL (it wins); persisted fields restored<br><sub>`test_url_kwargs_and_handle_params`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: the URL is read again; it wins over a persisted field of the same name. |
 | A model instance `mount()` loads and keeps (`self.obj = Model.objects.get(...)`) | the instance<br><sub>`test_held_model_and_handle_params`</sub> | a dict of its fields: the view is rebuilt from saved state, `mount()` does not run<br><sub>`test_held_model_and_handle_params`</sub> | the instance `mount()` loaded on the new process<br><sub>`test_held_model_and_handle_params`</sub> | n/a (same mount path as the reconnect to another process) | Over the HTTP fallback read it again in `handle_restore()`: it comes back as a dict of its fields, as in 1.3. |
 | A value a handler set that `handle_params()` would default | kept<br><sub>`test_held_model_and_handle_params`</sub> | kept<br><sub>`test_held_model_and_handle_params`</sub> | kept<br><sub>`test_held_model_and_handle_params`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: the saved value goes back after `handle_params()`. |
+| The URL carries a value (`?tab=z`) for an undeclared attribute a handler also set | n/a (no mount, so `handle_params()` does not run again) | the handler's saved value wins<br><sub>`test_held_model_and_handle_params`</sub> | the handler's saved value wins<br><sub>`test_held_model_and_handle_params`</sub> | n/a (same mount path as the reconnect to another process) | Declare it `state(..., persist="server")` if the URL must win: for a declared field `handle_params()` has the last word. |
 | `FormMixin` input and errors, mid-validation | kept<br><sub>`test_form_mid_validation`</sub> | input and errors restored<br><sub>`test_form_mid_validation`</sub> | input and errors restored<br><sub>`test_form_mid_validation`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: input and errors are saved, except password and other sensitive fields. |
 | `WizardMixin` step and answers | kept<br><sub>`test_wizard_step`</sub> | kept: the step and the answers<br><sub>`test_wizard_step`</sub> | restored: the step and the answers<br><sub>`test_wizard_step`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: the step and the answers are saved. |
 | `exposure_policy = "legacy"` view attribute | kept<br><sub>`test_legacy_view`</sub> | lost: every request runs `mount()`<br><sub>`test_legacy_view`</sub> | lost: `mount()` value<br><sub>`test_legacy_view`</sub> | n/a (same mount path as the reconnect to another process) | Migrate the view to explicit exposure: a legacy view's state is not saved. |

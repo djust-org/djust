@@ -130,6 +130,12 @@ STATE_ROWS = (
         "Nothing: the saved value goes back after `handle_params()`.",
     ),
     Row(
+        "url_vs_saved",
+        "The URL carries a value (`?tab=z`) for an undeclared attribute a handler also set",
+        'Declare it `state(..., persist="server")` if the URL must win: for a declared '
+        "field `handle_params()` has the last word.",
+    ),
+    Row(
         "form",
         "`FormMixin` input and errors, mid-validation",
         "Nothing: input and errors are saved, except password and other sensitive fields.",
@@ -263,6 +269,14 @@ STATE_CELLS: Dict[Tuple[str, str], Entry] = {
     ("params_default", HTTP): Cell("kept", _T + "held_model_and_handle_params"),
     ("params_default", WS): Cell("kept", _T + "held_model_and_handle_params"),
     ("params_default", RESTART): NA("same mount path as the reconnect to another process"),
+    ("url_vs_saved", SAME): NA("no mount, so `handle_params()` does not run again"),
+    ("url_vs_saved", HTTP): Cell(
+        "the handler's saved value wins", _T + "held_model_and_handle_params"
+    ),
+    ("url_vs_saved", WS): Cell(
+        "the handler's saved value wins", _T + "held_model_and_handle_params"
+    ),
+    ("url_vs_saved", RESTART): NA("same mount path as the reconnect to another process"),
     ("form", SAME): Cell("kept", _T + "form_mid_validation"),
     ("form", HTTP): Cell("input and errors restored", _T + "form_mid_validation"),
     ("form", WS): Cell("input and errors restored", _T + "form_mid_validation"),

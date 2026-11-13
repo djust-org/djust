@@ -38,6 +38,7 @@ A view on the deprecated ``exposure_policy = "legacy"`` takes no part.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import re
@@ -60,7 +61,7 @@ from ._exposure import (
 logger = logging.getLogger("djust.automatic_state")
 
 #: Envelope format. A reader discards any other.
-_VERSION = 6
+_VERSION = 7
 _KEY_PREFIX = "_djust_auto_"
 _MISSING: Any = object()
 #: Public names a transport sets per connection, and this module's own settings.
@@ -295,9 +296,12 @@ def _candidates(view: Any) -> Dict[str, Any]:
     def take(name: str, value: Any) -> None:
         if not names.application(name):
             return
-        if callable(value):
+        if inspect.ismethod(value) and value.__self__ is view:
             # Not state: Django's ``View.setup()`` sets ``self.head = self.get``
-            # on every dispatched view, and 1.3 never saved a callable either.
+            # on every dispatched view. Any OTHER callable (a class, a partial,
+            # an object with ``__call__``) is a value the view holds: it goes
+            # on to the encoder, which refuses it, so it is reported and the
+            # next request mounts again.
             return
         if names.sensitive(name):
             _report(
@@ -655,7 +659,9 @@ _ENVELOPE = frozenset(
         "remount",
         "components",
         "changed",
+        "deleted",
         "page",
+        "bytes",
     }
 )
 
@@ -764,7 +770,17 @@ class Saved:
     changed since ``mount()``, and whether ``mount()`` must run before they are
     put back."""
 
-    __slots__ = ("public", "private", "remount", "components", "changed", "raw", "text", "created")
+    __slots__ = (
+        "public",
+        "private",
+        "remount",
+        "components",
+        "changed",
+        "deleted",
+        "raw",
+        "text",
+        "created",
+    )
 
     def __init__(
         self,
@@ -773,6 +789,7 @@ class Saved:
         remount: bool,
         components: Dict[str, Any],
         changed: frozenset,
+        deleted: frozenset,
         raw: Tuple[Dict[str, Any], Dict[str, Any]],
         text: str,
         created: int,
@@ -782,6 +799,7 @@ class Saved:
         self.remount = remount
         self.components = components
         self.changed = changed
+        self.deleted = deleted  # names a handler removed from the view
         self.raw = raw  # the encoded public and private values, as stored
         self.text = text
         self.created = created
@@ -803,6 +821,7 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
     created, expires = envelope["created"], envelope["expires"]
     public, private = envelope["values"], envelope["private"]
     components, changed = envelope["components"], envelope["changed"]
+    deleted = envelope["deleted"]
     now = int(time.time())
     if (
         type(envelope["version"]) is not int
@@ -819,6 +838,8 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
         or type(private) is not dict
         or type(components) is not dict
         or type(changed) is not list
+        or type(deleted) is not list
+        or type(envelope["bytes"]) is not int
         or type(envelope["remount"]) is not bool
     ):
         return None
@@ -843,6 +864,7 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
                 if type(item) is dict
             },
             frozenset(name for name in changed if type(name) is str),
+            frozenset(name for name in deleted if names.eligible(name) or names.private(name)),
             (kept_public, kept_private),
             _encode([public, private, envelope["remount"], components]),
             created,
@@ -864,7 +886,7 @@ class _Basis:
     empty again.
     """
 
-    __slots__ = ("text", "created", "public", "private", "changed")
+    __slots__ = ("text", "created", "public", "private", "changed", "deleted", "components")
 
     def __init__(
         self,
@@ -873,12 +895,16 @@ class _Basis:
         public: Dict[str, Any],
         private: Dict[str, Any],
         changed: frozenset,
+        deleted: frozenset = frozenset(),
+        components: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.text = text
         self.created = created
         self.public = public
         self.private = private
         self.changed = changed
+        self.deleted = deleted
+        self.components = components or {}
 
 
 def _basis(view: Any) -> Optional[_Basis]:
@@ -898,7 +924,22 @@ def saved(view: Any, request: Any) -> Optional[Saved]:
     found = _read(view, store) if store is not None else None
     if found is not None:
         view.__dict__["_djust_auto_basis"] = _Basis(
-            found.text, found.created, found.raw[0], found.raw[1], found.changed
+            found.text, found.created, found.raw[0], found.raw[1], found.changed, found.deleted
+        )
+    elif store is not None and any(
+        type(other) is dict and other.get("page") == store.page
+        for key, other in list(store.session.items())
+        if type(key) is str and key.startswith(_KEY_PREFIX)
+    ):
+        # A well-formed tab id with no state of its own, while other tabs of
+        # this page have one: this tab's state expired or was evicted.
+        owner = type(view)
+        logger.warning(
+            "djust: no saved state for this tab of %s.%s at %s (expired, or evicted "
+            "past the limit of tab states kept per page); the view starts from mount().",
+            owner.__module__,
+            owner.__qualname__,
+            str(getattr(request, "path", ""))[:200].replace("\n", " ").replace("\r", " "),
         )
     return found
 
@@ -920,7 +961,21 @@ def load(view: Any, request: Any) -> Optional[Dict[str, Any]]:
     ``mount()`` computed and no handler touched stays as this ``mount()`` built
     it (a permission flag read from the user is fresh).
     """
-    first = _basis(view) is None
+    settled = _basis(view)
+    first = settled is None
+    if settled is not None:
+        # The over-limit rollback (#4095): back to what this view held when
+        # its mount sequence finished, or at its last save, whichever is later
+        # (kept in memory). Not to the store: after a socket mount the store
+        # may still hold the page GET's mount()-computed values, which this
+        # connection's mount() has since replaced (a revoked permission flag).
+        return put_back(
+            view,
+            _decoded(view, settled.public),
+            _decoded(view, settled.private),
+            _decoded(view, settled.components),
+            over_mount=True,
+        )
     found = saved(view, request)
     if found is None:
         if first:
@@ -938,10 +993,6 @@ def load(view: Any, request: Any) -> Optional[Dict[str, Any]]:
             except StateLimitExceeded:
                 return None  # reported; refused again at the first save
         return None
-    if not first:
-        # The over-limit rollback (#4095): the whole saved state goes back,
-        # not only what handlers changed; the view is already running.
-        return put_back(view, found.public, found.private, found.components, over_mount=True)
     # Whether putting it back changes the view mount() just built. When it
     # does not, nothing is applied, and the page the browser holds already
     # shows the view's state, so the first event may answer with patches
@@ -965,12 +1016,23 @@ def load(view: Any, request: Any) -> Optional[Dict[str, Any]]:
         found.components,
         over_mount=True,
         changed=found.changed,
+        deleted=found.deleted,
     )
     # The socket mount calls handle_params() after this restore (the URL wins
     # over a declared field, #3624); what was put back here goes on again after
     # it (``reapply``), so the hook's defaults do not reset what a handler set.
     view.__dict__["_djust_auto_reapply"] = (public, found.private, found.changed)
     return public
+
+
+def _decoded(view: Any, values: Dict[str, Any]) -> Dict[str, Any]:
+    from .serialization import decode_state_roundtrip
+
+    enums = enum_classes(type(view))
+    return {
+        name: decode_state_roundtrip(item, enums=enums, strict=True)
+        for name, item in values.items()
+    }
 
 
 def _encoded_components(found: Saved, mine: Projection) -> Dict[str, Any]:
@@ -1015,6 +1077,7 @@ def put_back(
     *,
     over_mount: bool,
     changed: Optional[frozenset] = None,
+    deleted: frozenset = frozenset(),
 ) -> Dict[str, Any]:
     """The ONE place that decides which saved values go back on a view.
 
@@ -1050,6 +1113,11 @@ def put_back(
         }
     apply_private(view, private)
     apply_components(view, components)
+    if over_mount:
+        # What a handler removed (``del self.draft``) stays removed after the
+        # mount() that just set it again. The names were validated on read.
+        for name in deleted:
+            vars(view).pop(name, None)
     return public
 
 
@@ -1085,6 +1153,8 @@ def settle(view: Any) -> None:
         state.public,
         state.private,
         frozenset() if basis is None else basis.changed,
+        frozenset() if basis is None else basis.deleted,
+        state.components,
     )
     view.__dict__["_djust_auto_settled"] = state.text
 
@@ -1152,6 +1222,23 @@ def stage(view: Any, request: Any, *, create: bool = True) -> Optional[Callable[
             for name, value in now_values.items()
             if then_values.get(name, _MISSING) != value
         )
+    # What a handler removed from the view: a name the basis held that the
+    # view no longer has at all (not one that merely stopped being saveable).
+    deleted: frozenset = frozenset()
+    if basis is not None:
+        live = vars(view)
+        gone = {
+            name
+            for then_values in (basis.public, basis.private)
+            for name in then_values
+            if name not in live and "_state_" + name not in live
+        }
+        deleted = frozenset(
+            name
+            for name in basis.deleted | gone
+            if name not in live and "_state_" + name not in live
+        )
+        changed = changed | gone
     envelope = {
         "version": _VERSION,
         "binding": store.binding,
@@ -1162,16 +1249,18 @@ def stage(view: Any, request: Any, *, create: bool = True) -> Optional[Callable[
         "remount": state.remount,
         "components": state.components,
         "changed": sorted(changed),
+        "deleted": sorted(deleted),
         "page": store.page,
+        "bytes": len(state.text.encode("utf-8")),
     }
     session = store.session
     previous = session.get(store.key, _MISSING)
     session[store.key] = envelope
-    _evict_old_tabs(session, store)
+    _evict_old_tabs(session, store, limits_for(view)[0], now)
     previous_basis = view.__dict__.get("_djust_auto_basis")
     previous_settled = settled
     view.__dict__["_djust_auto_basis"] = _Basis(
-        state.text, now, state.public, state.private, changed
+        state.text, now, state.public, state.private, changed, deleted, state.components
     )
     view.__dict__["_djust_auto_settled"] = None
     view.__dict__["_djust_auto_bytes"] = len(_encode(envelope))
@@ -1187,20 +1276,55 @@ def stage(view: Any, request: Any, *, create: bool = True) -> Optional[Callable[
     return undo
 
 
-def _evict_old_tabs(session: Any, store: _Store) -> None:
-    """Keep at most :data:`MAX_TABS` states of this view and route in the
-    session: the oldest are removed, the one just written never."""
-    tabs = []
+#: What every saved view state of one session may add up to: twice the default
+#: per-view limit. Past it the oldest states go, whatever page they belong to.
+SESSION_BUDGET_KB = 2 * DEFAULT_MAX_KB
+
+
+def _evict_old_tabs(session: Any, store: _Store, maximum: int, now: int) -> None:
+    """Bound what the session holds, at every write. The state just written
+    is never removed.
+
+    * Expired states, of any page, are dropped.
+    * The tab states of this view and route: at most :data:`MAX_TABS`, and
+      together at most this view's size limit (``automatic_state_max_kb``),
+      so a page's reloads and tabs cannot multiply its limit. Oldest first.
+    * All saved view states of the session together: at most
+      :data:`SESSION_BUDGET_KB`. Oldest first, whatever page they belong to.
+    """
+    mine = session.get(store.key) or {}
+    written = mine.get("bytes", 0) if type(mine) is dict else 0
+    others = []
     for key in list(session.keys()):
         if type(key) is not str or not key.startswith(_KEY_PREFIX) or key == store.key:
             continue
         envelope = session.get(key)
-        if type(envelope) is dict and envelope.get("page") == store.page:
-            created = envelope.get("created")
-            tabs.append((created if type(created) is int else 0, key))
-    tabs.sort()
-    for _created, key in tabs[: max(0, len(tabs) - (MAX_TABS - 1))]:
-        del session[key]
+        if type(envelope) is not dict:
+            continue
+        created, expires = envelope.get("created"), envelope.get("expires")
+        if type(expires) is not int or expires <= now:
+            del session[key]
+            continue
+        size = envelope.get("bytes")
+        others.append(
+            (
+                created if type(created) is int else 0,
+                key,
+                size if type(size) is int and size >= 0 else 0,
+                envelope.get("page") == store.page,
+            )
+        )
+    others.sort(reverse=True)  # newest first: keep while the budgets allow
+    page_count, page_bytes, total = 1, written, written
+    for _created, key, size, same_page in others:
+        over_page = same_page and (page_count + 1 > MAX_TABS or page_bytes + size > maximum)
+        if over_page or total + size > SESSION_BUDGET_KB * 1024:
+            del session[key]
+            continue
+        total += size
+        if same_page:
+            page_count += 1
+            page_bytes += size
 
 
 # ---------------------------------------------------------------------------

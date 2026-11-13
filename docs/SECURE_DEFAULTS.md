@@ -745,7 +745,9 @@ A view's state is saved in the server-side session between requests, as in
   frame) picks one of the states inside the caller's own session. The
   envelope stays bound to the session, user, tenant and route, so an id copied
   elsewhere reaches nothing; a missing or malformed id saves and restores
-  nothing; at most 8 tab states per route are kept.
+  nothing. What a client can make a session hold is bounded at every write:
+  8 tab states per view and route, together within that view's size limit, and
+  1 MB for all saved view state of the session.
 - **Not a projection.** Template context, client state, signed snapshot tokens
   and debug payloads still read declarations only (ADR-038 D1). A saved value
   that is not declared or supplied by `get_context_data()` appears in no frame.

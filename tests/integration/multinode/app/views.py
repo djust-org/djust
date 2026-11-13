@@ -158,6 +158,10 @@ class HeldView(_Probed, LiveView):
         self.tab = value
         self.count += 1
 
+    @event_handler()
+    def noop(self, **kwargs):
+        self.set_changed_keys(["probe"])
+
 
 class SignupForm(forms.Form):
     name = forms.CharField(min_length=3)

@@ -324,6 +324,25 @@ def test_held_model_and_handle_params(db_cluster, survival):
     assert probe_from(socket_b.event("pick", {"value": "c"}))["member"] == "User"
     socket_b.close()
 
+    # The URL names another tab than the one a handler set: for an undeclared
+    # attribute the handler's saved value wins, on both transports.
+    socket_c = browser.socket("A")
+    with_url = probe_from(socket_c.mount(held, "/held/?tab=z", reconnect_from=socket_b))
+    socket_c.close()
+    survival.observe(
+        "state",
+        "url_vs_saved",
+        "ws",
+        "the handler's saved value wins" if with_url["tab"] == "c" else "? %r" % (with_url,),
+    )
+    _, posted = _post(browser, "B", "/held/?tab=z", "noop")
+    survival.observe(
+        "state",
+        "url_vs_saved",
+        "http",
+        "the handler's saved value wins" if posted["tab"] == "c" else "? %r" % (posted,),
+    )
+
     _, first = _post(browser, "A", "/held/", "pick", {"value": "d"})
     _, second = _post(browser, "B", "/held/", "pick", {"value": "e"})
     survival.observe(

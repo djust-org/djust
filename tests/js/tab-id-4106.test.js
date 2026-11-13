@@ -37,6 +37,16 @@ it('the fallback POST carries the tab id the page was given', async () => {
     } finally { dom.window.close(); }
 });
 
+it('after a navigation that merged a new head in, the newest tab id is the one sent', async () => {
+    const dom = page(
+        '<meta name="djust-tab" content="tab-old-page">'
+        + '<meta name="djust-tab" content="tab-new-page">',
+    );
+    try {
+        expect((await postedHeaders(dom))['X-Djust-Tab']).toBe('tab-new-page');
+    } finally { dom.window.close(); }
+});
+
 it('a page without a tab id sends an empty one, which selects nothing', async () => {
     const dom = page('');
     try {
