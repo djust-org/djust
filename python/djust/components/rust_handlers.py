@@ -2579,9 +2579,15 @@ def register_with_rust_engine() -> None:
     native = {name for name, _handler in NATIVE_INLINE_HANDLERS} | {
         name for name, _end, _handler in NATIVE_BLOCK_HANDLERS
     }
+    from djust._removed_settings import REMOVED_TEMPLATE_TAGS
+    from djust.template_libraries import library_owns
+
     handlers = _bridged_handlers(library)
     for name, (kind, handler) in handlers.items():
         if name in native:
+            continue
+        if name in REMOVED_TEMPLATE_TAGS and library_owns(name):
+            # An app's own tag of a removed name took it over (#4002): the refusal yields.
             continue
         # A name moves between registries only if its kind changes; clear the other two so a
         # stale registration can never shadow this one.

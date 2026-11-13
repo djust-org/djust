@@ -75,7 +75,6 @@ FULL_WIDTH_FIELDS = (
     ".rich-select-search-input",
     ".dj-dependent-select__control select",
     ".dj-mentions__input",
-    ".dj-prompt-editor__textarea",
 )
 
 

@@ -18,5 +18,7 @@ vendored bundles that existed only for them:
 A template that still uses one fails to compile, under Django's engine and the
 Rust engine alike, with a `TemplateSyntaxError` that names the tag and what to
 use instead. Importing one of the classes (`from djust.components import Tour`)
-raises `ImportError` naming it. The Visual/Markdown editor bundle
+raises `ImportError` naming it. An application library that defines its own tag under one of these
+names (`{% calendar %}`, `{% tour %}`, ...) and `{% load %}`s it gets its own tag under both
+engines: the refusal only answers when nothing else claims the name. The Visual/Markdown editor bundle
 (`markdown-visual.js`, Tiptap) and the vendored Leaflet are no longer shipped.

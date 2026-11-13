@@ -386,6 +386,7 @@ module = [
     "djust.formsets",
     "djust.simple_live_view",
     "djust.testing",
+    "djust.react",
     "djust.frameworks",
     "djust.js",
     "djust.wizard",
@@ -424,6 +425,7 @@ module = [
     "djust.components.utils",
     "djust.components.mixins.base",
     "djust.components.templatetags._registry",
+    "djust.components.templatetags._dev_tools",
 ]
 ignore_errors = false
 disallow_untyped_defs = true
@@ -618,6 +620,7 @@ module = [
     "djust.components.components.dependent_select",
     "djust.components.components.form_validation",
     "djust.components.components.heatmap",
+    "djust.components.components.json_viewer",
     "djust.components.components.markdown",
     "djust.components.components.model_selector",
     "djust.components.components.rich_select",

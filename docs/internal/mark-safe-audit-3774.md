@@ -80,7 +80,8 @@ line coverage over the sweep and fails when an audited sink's lines never execut
 entry carries an `unreached` reason (and fails if such an entry IS reached). Sinks not reached
 today: 0.
 
-Thirteen gate-offs, each removing one escape or validation inside an AUDITED sink, all fail the sweep:
+Thirteen gate-offs, each removing one escape or validation inside an AUDITED sink, all failed the sweep
+when it was written (the `PivotTable` one went with that component in #4002):
 `slider` name, `number_stepper` name and label, `PivotTable` column header, `breadcrumb` `safe_url` ->
 `conditional_escape` (the URL mode), `live_render` id, `render_modal` title, `FormMixin.as_live`
 help text, `model_table` cell, `ColocatedHook` nonce, `_client_config_html` path, `live_input`
@@ -94,9 +95,10 @@ The payload carries `</textarea></title>` ahead of its `<svg onload=ZQ>` (#3827)
 `<textarea>` and `<title>` are RCDATA: the parser never turns text inside them into elements, so a
 payload that is interpolated raw INTO one stayed inert text and the sweep reported it clean, while a
 browser ends the element at the first `</textarea>` / `</title>` it finds in that text. Four gate-offs
-passed the sweep without the closers and fail it with them: `build_tag` printing a `<textarea>`
+passed the sweep without the closers and failed it with them: `build_tag` printing a `<textarea>`
 body raw, `PromptEditor`'s `{tmpl}</textarea>`, `dj_textarea`'s `{value}</textarea>` and the Gantt
-bar's SVG `<title>{name}`. The unmutated tree stays at zero findings.
+bar's SVG `<title>{name}` (`PromptEditor` and the Gantt chart were removed in #4002; the other two
+still hold). The unmutated tree stays at zero findings.
 
 Since #3820 the sweep also drives the **Rust-native handlers** (`rust_handlers.py`): every handler the
 module registers is called as the engine calls it, `handler.render(args, [content,] context)`, with the

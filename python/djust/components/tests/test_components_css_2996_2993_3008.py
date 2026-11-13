@@ -102,18 +102,6 @@ class TestButtonLabelFollowsTheTheme2996:
         assert color == f"var({override}, hsl(var({token}, 0 0% 100%)))"
 
     @pytest.mark.parametrize(
-        "variant,token",
-        [
-            ("primary", "--primary-foreground"),
-            ("success", "--success-foreground"),
-            ("danger", "--destructive-foreground"),
-        ],
-    )
-    def test_ribbon_label_follows_its_fill(self, variant, token):
-        block = _rule(COMPONENTS_CSS, f".dj-ribbon--{variant} .dj-ribbon__text")
-        assert f"color: var(--dj-ribbon-fg, hsl(var({token}, 0 0% 100%)))" in block
-
-    @pytest.mark.parametrize(
         "selector,token",
         [
             (".btn-success", "--success-foreground"),

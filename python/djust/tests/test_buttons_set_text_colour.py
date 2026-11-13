@@ -67,8 +67,6 @@ PAIRED = (
     (".dj-dropdown-menu__trigger", "--background", "--foreground"),
     (".rich-select-trigger", "--input-background", "--foreground"),
     (".data-table-copy-btn", "--muted", "--foreground"),
-    (".dj-data-card-grid__filter", "--card", "--card-foreground"),
-    (".dj-reactions__btn", "--accent", "--accent-foreground"),
 )
 
 
@@ -80,19 +78,11 @@ def test_painted_button_uses_the_paired_foreground(selector: str, background: st
 
 
 def test_transparent_buttons_inherit_the_surrounding_text():
-    for selector in (".notif-trigger", ".collapsible-trigger", ".dj-tour__prev"):
+    for selector in (".notif-trigger", ".collapsible-trigger"):
         assert _COLOUR.search(_rule(COMPONENTS_CSS, selector)).group(1).strip() == "inherit"
 
 
 def test_upload_area_sets_foreground():
     assert (
         _COLOUR.search(_rule(THEME_CSS, ".upload-area")).group(1).startswith("hsl(var(--foreground")
-    )
-
-
-def test_the_active_filter_colour_still_wins():
-    """The base rule's new colour must precede the modifier that recolours it."""
-    css = COMPONENTS_CSS.read_text(encoding="utf-8")
-    assert css.index(".dj-data-card-grid__filter {") < css.index(
-        ".dj-data-card-grid__filter--active {"
     )

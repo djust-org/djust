@@ -671,34 +671,12 @@
 .dj-notif-popover__item--read { opacity: 0.6; }
 
 /* --- Conversation Thread (classes) --- */
-.dj-chat-thread { display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem; overflow-y: auto; }
-.dj-chat-msg { display: flex; gap: 0.5rem; align-items: flex-start; max-width: 80%; }
-.dj-chat-msg--user { align-self: flex-end; flex-direction: row-reverse; }
-.dj-chat-msg--ai { align-self: flex-start; }
-.dj-chat-avatar { display: flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; min-width: 2rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
-.dj-chat-avatar--hidden { visibility: hidden; }
-.dj-chat-bubble { border-radius: 0.75rem; padding: 0.5rem 0.75rem; }
-.dj-chat-typing { display: flex; gap: 0.25rem; padding: 0.25rem 0; }
-.dj-chat-typing__dot { width: 0.4rem; height: 0.4rem; border-radius: 9999px; background: currentColor; opacity: 0.4; }
 
 /* --- Thinking Indicator (classes) --- */
-.dj-thinking { display: inline-flex; align-items: center; gap: 0.5rem; }
-.dj-thinking__dots { display: inline-flex; gap: 0.2rem; }
-.dj-thinking__dot { width: 0.5rem; height: 0.5rem; border-radius: 9999px; background: currentColor; }
-.dj-thinking__pulse { width: 1rem; height: 1rem; border-radius: 9999px; background: currentColor; }
-.dj-thinking__cursor { width: 2px; height: 1.1em; background: currentColor; }
-.dj-thinking__spinner { width: 1rem; height: 1rem; border: 2px solid currentColor; border-top-color: transparent; border-radius: 9999px; }
 
 /* --- Multimodal Input (classes) --- */
-.dj-mminput { display: flex; align-items: flex-end; gap: 0.375rem; padding: 0.5rem; border: 1px solid; border-radius: 0.75rem; }
-.dj-mminput--disabled { opacity: 0.5; pointer-events: none; }
-.dj-mminput__text { flex: 1; border: none; outline: none; background: transparent; resize: none; font: inherit; min-height: 1.5em; max-height: 8rem; }
-.dj-mminput__btn { display: flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border: none; border-radius: 0.375rem; background: transparent; color: inherit; cursor: pointer; font-family: inherit; flex-shrink: 0; }
 
 /* --- Feedback Widget (classes) --- */
-.dj-feedback { display: inline-flex; align-items: center; gap: 0.25rem; }
-.dj-feedback__btn { display: flex; align-items: center; justify-content: center; border: none; background: transparent; color: inherit; cursor: pointer; font-family: inherit; padding: 0.25rem; border-radius: 0.25rem; font-size: 1.125rem; }
-.dj-feedback__btn--active, .dj-feedback__star--active { font-weight: bold; }
 
 /* --- Approval Gate (classes) --- */
 .dj-approval { border: 1px solid; border-radius: var(--dj-approval-radius, 0.5rem); padding: 1rem; }

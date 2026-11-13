@@ -302,8 +302,20 @@ def test_a_state_rule_never_puts_another_surface_under_a_flipped_label():
 
 
 def test_the_state_scan_finds_the_active_chip_when_the_exclusion_is_removed():
-    """Mutation: the scan must flag the chip's hover rule without its ``:not(--active)``."""
-    css = (ROOT / "components/static/djust_components/components.css").read_text()
+    """Mutation: the scan must flag the chip's hover rule without its ``:not(--active)``.
+
+    The chip (``data_card_grid``'s filter) went with #4002; its three rules are planted here as
+    they shipped, so the scan is still shown able to fire on the shape it was written for."""
+    planted = (
+        ".dj-data-card-grid__filter { background: hsl(var(--card, 0 0% 100%)); "
+        "color: hsl(var(--card-foreground, var(--foreground, 222 47% 11%))); }\n"
+        ".dj-data-card-grid__filter:hover:not(.dj-data-card-grid__filter--active) "
+        "{ background: hsl(var(--accent, 210 40% 96%)); }\n"
+        ".dj-data-card-grid__filter--active { background: hsl(var(--primary, 222 47% 51%)); "
+        "color: hsl(var(--primary-foreground, 210 40% 98%)); "
+        "border-color: hsl(var(--primary, 222 47% 51%)); }\n"
+    )
+    css = (ROOT / "components/static/djust_components/components.css").read_text() + planted
     mutated = css.replace(
         ".dj-data-card-grid__filter:hover:not(.dj-data-card-grid__filter--active)",
         ".dj-data-card-grid__filter:hover",
@@ -317,18 +329,6 @@ def test_the_state_scan_finds_the_active_chip_when_the_exclusion_is_removed():
     finally:
         globals()["_static_sources"] = original
     assert flagged and flagged[0][2] == "primary"
-
-
-def test_the_active_filter_chip_keeps_its_fill_on_hover():
-    """23 dark presets: hovering the active chip put ``--accent`` under the flipped
-    ``--primary-foreground`` (8-18:1 to ~1:1). The hover affordance stays on the other chips."""
-    hover = [
-        sel
-        for _src, sels, _body in _all_rules()
-        for sel in sels
-        if sel.startswith(".dj-data-card-grid__filter") and ":hover" in sel
-    ]
-    assert hover and all(":not(.dj-data-card-grid__filter--active)" in sel for sel in hover), hover
 
 
 def _hover_alphas() -> set[float]:

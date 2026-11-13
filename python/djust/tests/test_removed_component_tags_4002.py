@@ -91,3 +91,60 @@ def test_a_missing_name_is_still_an_attribute_error():
 
     for mod in (djust.components, djust.components.components):
         assert not hasattr(mod, "NoSuchComponent")
+
+
+_APP_LIBRARY = "djust.tests.removed_tag_collision_lib_4002"
+
+
+@pytest.fixture
+def app_calendar():
+    """The app library's ``calendar`` holds the name in the Rust engine for one test, then the
+    refusal comes back (the engine's tag registry is process-wide)."""
+    from djust import _rust
+    from djust import template_libraries as tl
+
+    yield
+    for state in (
+        tl._owned_tags,
+        *[getattr(b, "_djust_library_state", {}).get("_owned_tags", {}) for b in _backends],
+    ):
+        state.pop("calendar", None)
+    _rust.unregister_tag_handler("calendar")
+    rh.register_with_rust_engine()
+
+
+_backends: list = []
+
+
+def test_an_app_tag_with_a_removed_name_wins_under_both_engines(app_calendar):
+    """A removal stub never blocks an app's own tag of that name: it yields as if djust had
+    never had one (an ordinary djust tag still wins, the bridge's existing policy)."""
+    from djust.template.backend import DjustTemplateBackend
+
+    src = "{% load app4002 %}{% calendar %}"
+    django = Engine(libraries={"app4002": _APP_LIBRARY}).from_string(src).render(Context({}))
+    assert django == "APP-CALENDAR"
+
+    rh.register_with_rust_engine()
+    backend = DjustTemplateBackend(
+        {
+            "NAME": "app4002",
+            "DIRS": [],
+            "APP_DIRS": False,
+            "OPTIONS": {"libraries": {"app4002": _APP_LIBRARY}},
+        }
+    )
+    _backends.append(backend)
+    assert str(backend.from_string(src).render({})) == "APP-CALENDAR"
+    # A re-registration of djust's tags (another app's ready(), a test) does not take it back.
+    rh.register_with_rust_engine()
+    assert str(backend.from_string(src).render({})) == "APP-CALENDAR"
+
+
+def test_without_the_app_library_the_name_is_still_refused():
+    from djust._rust import render_template
+
+    rh.register_with_rust_engine()
+    with pytest.raises(Exception) as exc:
+        render_template("{% calendar %}", {})
+    _assert_refusal(str(exc.value), "calendar")

@@ -1856,8 +1856,8 @@ class TestEveryClassIsReached:
         assert echoed | silent | unreached == derived
         assert not (echoed & silent or echoed & unreached or silent & unreached)
         assert len(echoed) + len(silent) + len(unreached) == len(derived)
-        # 700 before #4002 removed 33 component classes (696 echoed after).
-        assert ONLY or len(echoed) > 650, len(echoed)
+        # 700 before #4002 removed 33 component classes; 696 measured after.
+        assert ONLY or len(echoed) >= 696, len(echoed)
 
     def test_the_keys_a_cell_could_not_carry_are_exactly_the_listed_ones(self, outcome) -> None:
         """A crash is searched per KEY, and what the search leaves out or turns into a number
