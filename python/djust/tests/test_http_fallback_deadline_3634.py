@@ -39,7 +39,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory, override_settings
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from djust.mixins import request as request_mixin
 
@@ -63,6 +63,9 @@ CTX: ContextVar = ContextVar("deadline_ctx", default="unset")
 class Watching(LiveView):
     exposure_policy = "legacy"
     template = "<div dj-root dj-id='0'><p>{{ status }}</p></div>"
+    # Not saved between requests (#4107): these tests POST concurrently on one
+    # session, and what they measure is the worker cap, not session writes.
+    status = state("idle", persist=False)
 
     def mount(self, request, **kwargs):
         self.status = "idle"

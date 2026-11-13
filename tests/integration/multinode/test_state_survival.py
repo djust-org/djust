@@ -66,6 +66,9 @@ def test_ws_events_on_one_process(db_cluster, survival):
             "plain_attr": "plain_attr",
         }[field]
         survival.observe("state", row, "same", _kept(probe[field], 2))
+    survival.observe(
+        "state", "not_saved", "same", _kept((probe["not_saved"], probe["private_attr"]), (2, 2))
+    )
     survival.observe("state", "render", "same", "patches" if kinds(second) == ["patch"] else "?")
     socket.close()
 
@@ -86,13 +89,30 @@ def test_http_fallback_alternating_processes(db_cluster, survival):
         "kept (1, 2, 3 across A, B, A)" if [p["count"] for p in probes] == [1, 2, 3] else "?",
     )
     reset = "lost: every request starts from the default"
-    for field, row in (("client_count", "persist_client"), ("plain_state", "plain_state")):
-        survival.observe("state", row, "http", reset if {p[field] for p in probes} == {1} else "?")
     survival.observe(
         "state",
-        "plain_attr",
+        "persist_client",
         "http",
-        "lost: every request runs `mount()`" if {p["plain_attr"] for p in probes} == {1} else "?",
+        reset if {p["client_count"] for p in probes} == {1} else "?",
+    )
+    # #4107: what the view sets on self is saved, declared or not.
+    for field in ("plain_state", "plain_attr"):
+        survival.observe(
+            "state",
+            field,
+            "http",
+            "kept (1, 2, 3 across A, B, A)"
+            if [p[field] for p in probes] == [1, 2, 3]
+            else "? %r" % ([p[field] for p in probes],),
+        )
+    survival.observe(
+        "state",
+        "not_saved",
+        "http",
+        "lost: every request runs `mount()`"
+        if {(p["not_saved"], p["private_attr"]) for p in probes} == {(1, 1)}
+        and [p["unsaveable_pid"] for p in probes] == pids
+        else "?",
     )
     survival.observe(
         "state",
@@ -133,17 +153,17 @@ def _restored_counter(survival, column: str, probe, *, count: int, client: int) 
         column,
         "restored from the browser's signed token" if probe["client_count"] == client else "lost",
     )
+    saved = {"ws": "restored", "restart": "restored (last completed save)"}[column]
+    for field in ("plain_state", "plain_attr"):
+        survival.observe("state", field, column, saved if probe[field] == count else "lost")
     survival.observe(
         "state",
-        "plain_state",
+        "not_saved",
         column,
-        "lost: `mount()` default" if probe["plain_state"] == 0 else "kept",
-    )
-    survival.observe(
-        "state",
-        "plain_attr",
-        column,
-        "lost: `mount()` value" if probe["plain_attr"] == 0 else "kept",
+        "lost: `mount()` value"
+        if (probe["not_saved"], probe["private_attr"]) == (0, 0)
+        and probe["unsaveable_pid"] == probe["pid"]
+        else "kept",
     )
     survival.observe(
         "state",
@@ -271,29 +291,31 @@ def test_form_mid_validation(db_cluster, survival):
     )
     socket_a.close()
 
-    reset = "opted-in input restored; other input and errors reset"
+    restored = "input and errors restored"
     socket_b = browser.socket("B")
     probe = probe_from(socket_b.mount(V + "FormView", "/form/", reconnect_from=socket_a))
     survival.observe(
         "state",
         "form",
         "ws",
-        reset
-        if (probe["form_data"], probe["field_errors"]) == ({"name": "ab", "email": ""}, [])
-        else "?",
+        restored
+        if (probe["form_data"], probe["field_errors"])
+        == ({"name": "ab", "email": "x"}, ["email", "name"])
+        else "? %r" % (probe,),
     )
     socket_b.close()
 
-    # One more field validated over the fallback on A: the persisted name is
-    # there, its error is not.
+    # One more field validated over the fallback on A: the other field's
+    # input and its error are there too (#4107).
     _, probe = _post(browser, "A", "/form/", "validate_field", {"field": "email", "value": "y"})
     survival.observe(
         "state",
         "form",
         "http",
-        reset
-        if probe["form_data"] == {"name": "ab", "email": "y"} and probe["field_errors"] == ["email"]
-        else "?",
+        restored
+        if probe["form_data"] == {"name": "ab", "email": "y"}
+        and probe["field_errors"] == ["email", "name"]
+        else "? %r" % (probe,),
     )
 
 
@@ -308,18 +330,26 @@ def test_wizard_step(db_cluster, survival):
 
     socket_b = browser.socket("B")
     probe = probe_from(socket_b.mount(V + "WizardView", "/wizard/", reconnect_from=socket_a))
-    survival.observe("state", "wizard", "ws", "lost: back to step 1" if probe["step"] == 0 else "?")
+    survival.observe(
+        "state",
+        "wizard",
+        "ws",
+        "restored: the step and the answers"
+        if (probe["step"], probe["data"]) == (1, {"one": {"first": "x"}, "two": {"second": "y"}})
+        else "? %r" % (probe,),
+    )
     socket_b.close()
 
-    # Over the fallback: a POST may move one step, the next POST starts over.
-    _, first = _post(browser, "B", "/wizard/", "next_step", {"first": "x"})
+    # Over the fallback, on alternating processes: the step and the answers carry.
+    _, first = _post(browser, "B", "/wizard/", "validate_field", {"field": "second", "value": "z"})
     _, second = _post(browser, "A", "/wizard/", "validate_field", {"field": "second", "value": "y"})
     survival.observe(
         "state",
         "wizard",
         "http",
-        "lost: every request starts at step 1"
-        if second["step"] == 0
+        "kept: the step and the answers"
+        if (first["step"], second["step"]) == (1, 1)
+        and second["data"] == {"one": {"first": "x"}, "two": {"second": "y"}}
         else "? %r %r" % (first, second),
     )
 
@@ -339,7 +369,10 @@ def test_legacy_view(db_cluster, survival):
     socket_b.close()
     counts = [_post(browser, node, "/legacy/", "increment")[1]["count"] for node in ("A", "B")]
     survival.observe(
-        "state", "legacy", "http", "lost: every request runs `mount()`" if counts == [1, 1] else "?"
+        "state",
+        "legacy",
+        "http",
+        "kept (1, 2 across A, B)" if counts == [1, 2] else "? %r" % (counts,),
     )
 
 
@@ -437,11 +470,11 @@ def test_tick(db_cluster, survival):
         "state",
         "tick",
         "ws",
-        "restarts on the new process; plain counter reset, persisted counter continues"
-        if moved["ticks"] == 0
-        and moved["ticks_saved"] >= 2
+        "restarts on the new process; the counters continue"
+        if moved["ticks"] >= 2
+        and moved["ticks_saved"] == moved["ticks"]
         and ticked["pid"] == db_cluster["B"].pid
-        and ticked["ticks"] == 1
+        and ticked["ticks"] == moved["ticks"] + 1
         and ticked["ticks_saved"] == moved["ticks_saved"] + 1
         else "? %r %r" % (moved, ticked),
     )

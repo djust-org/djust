@@ -31,20 +31,33 @@ up as a failing test and a table update.
 What a view keeps across processes is exactly what went into the shared
 session:
 
-- `state(..., persist="server")` fields are saved in the Django session after
-  each event, bound to the session, the user, the tenant and the route, and are
-  put back after `mount()` on whichever process mounts the view next.
+- **What the view sets on `self`** is saved in the Django session after each
+  event that changed it: public attributes and `state()` fields whose values
+  are plain data (`None`, booleans, numbers, strings, lists, dicts). It is
+  bound to the session, the user, the tenant and the route, and is put back
+  after `mount()` on whichever process mounts the view next. Saving exposes
+  nothing: rendering and client data stay with `state()` declarations and
+  `get_context_data()`.
+- `state(..., persist="server")` is the strict form: a value that is not plain
+  data, or does not fit, is an error instead of being left out.
 - `state(..., persist="client", client=True)` fields travel in a signed token
   the browser holds and sends back when its socket reconnects. The HTTP
   fallback does not send it.
-- Everything else (plain attributes, `state()` without `persist`, components,
-  the render baseline, background work, timers) lives in the process that holds
-  the socket. A move to another process runs `mount()` again.
+- Not saved: names with a leading underscore, `state(..., persist=False)`,
+  values that are not plain data (model instances, querysets, `Decimal`,
+  dates, the request, the user), components, the render baseline, background
+  work and timers. These live in the process that holds the socket; a move to
+  another process runs `mount()` again. A value that is skipped is named once
+  on the `djust.automatic_state` logger.
+- A full page load is a fresh `mount()` and discards the route's saved state.
+  State written by different code of the view class (after a deploy that
+  changed it) is discarded too.
+- An `exposure_policy = "legacy"` view saves the same way over the HTTP
+  fallback; over a socket it keeps its state in the process only.
 
-So a multi-process deployment needs a session engine every process shares, a
-channel layer every process shares, and `persist="server"` on what must
-survive. See [Scaling djust](scaling.md#option-b-redis-between-processes) for
-the settings.
+So a multi-process deployment needs a session engine every process shares and
+a channel layer every process shares. See
+[Scaling djust](scaling.md#option-b-redis-between-processes) for the settings.
 
 ## Kinds of state
 
@@ -53,26 +66,27 @@ the settings.
 |---|---|---|---|---|---|
 | `state(..., persist="server")` field | kept<br><sub>`test_ws_events_on_one_process`</sub> | kept (1, 2, 3 across A, B, A)<br><sub>`test_http_fallback_alternating_processes`</sub> | restored<br><sub>`test_ws_reconnect_to_another_process`</sub> | restored (last completed save)<br><sub>`test_kill_after_save`</sub> | Declare it `persist="server"`; use a session engine every process shares. |
 | `state(..., persist="client", client=True)` field | kept<br><sub>`test_ws_events_on_one_process`</sub> | lost: every request starts from the default<br><sub>`test_http_fallback_alternating_processes`</sub> | restored from the browser's signed token<br><sub>`test_ws_reconnect_to_another_process`</sub> | restored from the browser's signed token<br><sub>`test_kill_after_save`</sub> | Nothing more over a WebSocket. Over the HTTP fallback it is not kept: use `persist="server"` for a value that must be. |
-| `state()` without `persist` | kept<br><sub>`test_ws_events_on_one_process`</sub> | lost: every request starts from the default<br><sub>`test_http_fallback_alternating_processes`</sub> | lost: `mount()` default<br><sub>`test_ws_reconnect_to_another_process`</sub> | lost: `mount()` default<br><sub>`test_kill_after_save`</sub> | Rebuild it in `mount()`, or declare it `persist=`. |
-| Ordinary attribute set in `mount()` | kept<br><sub>`test_ws_events_on_one_process`</sub> | lost: every request runs `mount()`<br><sub>`test_http_fallback_alternating_processes`</sub> | lost: `mount()` value<br><sub>`test_ws_reconnect_to_another_process`</sub> | lost: `mount()` value<br><sub>`test_kill_after_save`</sub> | Rebuild it in `mount()`; read rows again in `handle_restore()`. |
+| `state()` without `persist` | kept<br><sub>`test_ws_events_on_one_process`</sub> | kept (1, 2, 3 across A, B, A)<br><sub>`test_http_fallback_alternating_processes`</sub> | restored<br><sub>`test_ws_reconnect_to_another_process`</sub> | restored (last completed save)<br><sub>`test_kill_after_save`</sub> | Nothing: it is saved automatically. Use a session engine every process shares. |
+| Ordinary public attribute holding plain data | kept<br><sub>`test_ws_events_on_one_process`</sub> | kept (1, 2, 3 across A, B, A)<br><sub>`test_http_fallback_alternating_processes`</sub> | restored<br><sub>`test_ws_reconnect_to_another_process`</sub> | restored (last completed save)<br><sub>`test_kill_after_save`</sub> | Nothing: it is saved automatically, and is not rendered unless declared. |
+| `_private` attribute, `state(persist=False)`, or a value that is not plain data | kept<br><sub>`test_ws_events_on_one_process`</sub> | lost: every request runs `mount()`<br><sub>`test_http_fallback_alternating_processes`</sub> | lost: `mount()` value<br><sub>`test_ws_reconnect_to_another_process`</sub> | lost: `mount()` value<br><sub>`test_kill_after_save`</sub> | Rebuild it in `mount()` or `handle_restore()`; drop the underscore if it must survive. |
 | `handle_restore()` hook | n/a (no remount, so nothing to restore) | called on every request<br><sub>`test_http_fallback_alternating_processes`</sub> | called after the restore<br><sub>`test_ws_reconnect_to_another_process`</sub> | called after the restore<br><sub>`test_kill_after_save`</sub> | Use it to reload what the persisted fields point at. |
 | Render baseline (what the next update sends) | patches<br><sub>`test_ws_events_on_one_process`</sub> | full HTML on every request<br><sub>`test_http_fallback_alternating_processes`</sub> | full HTML in the mount, full HTML for the first event, then patches<br><sub>`test_ws_reconnect_to_another_process`</sub> | full HTML in the mount, full HTML for the first event, then patches<br><sub>`test_kill_after_save`</sub> | Nothing: the framework re-sends the page. |
 | URL kwargs and the query string (`handle_params`) | kept<br><sub>`test_url_kwargs_and_handle_params`</sub> | read from the request; persisted fields restored<br><sub>`test_url_kwargs_and_handle_params`</sub> | read from the new URL (it wins); persisted fields restored<br><sub>`test_url_kwargs_and_handle_params`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: the URL is read again; it wins over a persisted field of the same name. |
-| `FormMixin` input and errors, mid-validation | kept<br><sub>`test_form_mid_validation`</sub> | opted-in input restored; other input and errors reset<br><sub>`test_form_mid_validation`</sub> | opted-in input restored; other input and errors reset<br><sub>`test_form_mid_validation`</sub> | n/a (same mount path as the reconnect to another process) | Opt fields in with `persisted_form_input(...)`; errors come back on the next edit. |
-| `WizardMixin` step and answers | kept<br><sub>`test_wizard_step`</sub> | lost: every request starts at step 1<br><sub>`test_wizard_step`</sub> | lost: back to step 1<br><sub>`test_wizard_step`</sub> | n/a (same mount path as the reconnect to another process) | Resume from your own storage (`get_wizard_initial()` / `get_wizard_step()`). |
-| `exposure_policy = "legacy"` view attribute | kept<br><sub>`test_legacy_view`</sub> | lost: every request runs `mount()`<br><sub>`test_legacy_view`</sub> | lost: `mount()` value<br><sub>`test_legacy_view`</sub> | n/a (same mount path as the reconnect to another process) | Migrate the view to explicit exposure and declare what must survive. |
+| `FormMixin` input and errors, mid-validation | kept<br><sub>`test_form_mid_validation`</sub> | input and errors restored<br><sub>`test_form_mid_validation`</sub> | input and errors restored<br><sub>`test_form_mid_validation`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: input and errors are saved, except password and other sensitive fields. |
+| `WizardMixin` step and answers | kept<br><sub>`test_wizard_step`</sub> | kept: the step and the answers<br><sub>`test_wizard_step`</sub> | restored: the step and the answers<br><sub>`test_wizard_step`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: the step and the answers are saved. |
+| `exposure_policy = "legacy"` view attribute | kept<br><sub>`test_legacy_view`</sub> | kept (1, 2 across A, B)<br><sub>`test_legacy_view`</sub> | lost: `mount()` value<br><sub>`test_legacy_view`</sub> | n/a (same mount path as the reconnect to another process) | Nothing over the HTTP fallback. Over a socket it lives in the process: migrate the view to explicit exposure. |
 | `LiveComponent` state | kept<br><sub>`test_components`</sub> | event refused (Component not found)<br><sub>`test_components`</sub> | lost: mounts fresh<br><sub>`test_components`</sub> | n/a (same mount path as the reconnect to another process) | Persist the values on the view and build the component from them. |
 | Interactive component (ADR-034 `DropdownMenu`) open state | kept<br><sub>`test_components`</sub> | event refused (Component not found)<br><sub>`test_components`</sub> | lost: closed, with a new component id<br><sub>`test_components`</sub> | n/a (same mount path as the reconnect to another process) | Nothing; a reconnect closes it. No HTTP-fallback support yet (#4046). |
 | `start_async()` work in flight | result delivered<br><sub>`test_async_work_in_flight`</sub> | n/a (the HTTP fallback waits for the work inside the request) | result lost; a persisted in-progress flag stays set<br><sub>`test_async_work_in_flight`</sub> | n/a (the work dies with its process; same as the reconnect) | Clear a persisted in-progress flag in `handle_restore()`; restart the work. |
-| `tick_interval` / `handle_tick()` | keeps ticking<br><sub>`test_tick`</sub> | n/a (ticks run only on a connection) | restarts on the new process; plain counter reset, persisted counter continues<br><sub>`test_tick`</sub> | n/a (same mount path as the reconnect to another process) | Count with a `persist="server"` field if the count matters. |
+| `tick_interval` / `handle_tick()` | keeps ticking<br><sub>`test_tick`</sub> | n/a (ticks run only on a connection) | restarts on the new process; the counters continue<br><sub>`test_tick`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: a counter the tick changes is saved like any other state. |
 | Rows added with `stream_insert()` after mount | kept<br><sub>`test_stream_rows`</sub> | n/a (not measured) | lost: the mount renders only `mount()`'s rows<br><sub>`test_stream_rows`</sub> | n/a (same mount path as the reconnect to another process) | Load the rows in `mount()` from storage. |
 | An event whose save was still being written | n/a (the event's own answer waits for its save) | n/a (not measured) | n/a (see the restart column) | event lost; the previous saved state restored<br><sub>`test_kill_while_save_held`</sub> | Nothing; the user's last shown state comes back, the event is lost. |
 <!-- END GENERATED survival-state -->
 
 The HTTP fallback builds a new view for every request: `mount()`, then the
-persisted fields, then `handle_params()` and `handle_restore()`, then the
-event. That is why only `persist="server"` fields carry from one request to the
-next, on the same process or another.
+saved state, then `handle_params()` and `handle_restore()`, then the event.
+What is saved carries from one request to the next, on the same process or
+another.
 
 ## Sessions, sockets and messages
 

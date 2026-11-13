@@ -25,6 +25,10 @@ setting, and there is no supported way to do it.
 ``plain_sub_ids``           ``_collect_sub_ids`` is not run over a changed
                             attribute that is plain data and is itself a
                             context value.
+``unchanged_save_skip``     The automatic state (#4107) is not written to the
+                            session when its encoding equals what the store
+                            already holds (or, with nothing stored, what
+                            ``mount()`` produced).
 ==========================  ==================================================
 """
 
@@ -39,6 +43,7 @@ ALL: FrozenSet[str] = frozenset(
         "request_scoped_changes",
         "serializable_by_type",
         "plain_sub_ids",
+        "unchanged_save_skip",
     }
 )
 

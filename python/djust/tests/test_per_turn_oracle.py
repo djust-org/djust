@@ -1295,7 +1295,42 @@ def _break_plain_sub_ids(patch: Any) -> None:
     patch.setattr(rust_bridge, "_collect_sub_ids", lambda *args, **kwargs: None)
 
 
+async def _reconnect_run() -> Any:
+    """Two events, then a new consumer on the same session (#4107): the second
+    mount frame shows what the first connection saved."""
+    RAN.clear()
+    key = await harness.new_session_key_async()
+    frames: List[Any] = []
+    with harness.ws_settings(MODULE):
+        comm, mount_frame = await harness.mount_view(Counter, key)
+        frames.append(mount_frame)
+        try:
+            frames += await harness.event_frames(comm, "inc")
+            frames += await harness.event_frames(comm, "nothing")
+            frames += await harness.event_frames(comm, "inc")
+        finally:
+            await comm.disconnect()
+        again, mount_frame = await harness.mount_view(Counter, key)
+        frames.append(mount_frame)
+        await again.disconnect()
+    return [_normalise(frame) for frame in frames]
+
+
+async def test_a_reconnect_sees_the_same_saved_state(monkeypatch):
+    before, after = await both(_reconnect_run, monkeypatch)
+    assert as_bytes(before) == as_bytes(after)
+    assert "Count: 2" in json.dumps(after)
+
+
+def _break_unchanged_save_skip(patch: Any) -> None:
+    from djust import _automatic_state
+
+    # As if every state encoded to what the store already holds.
+    patch.setattr(_automatic_state, "_encode", lambda values: "the same")
+
+
 SABOTAGE = {
+    "unchanged_save_skip": (_break_unchanged_save_skip, _reconnect_run),
     "contract_cache": (_break_contract_cache, _redeclared_run),
     "snapshot_single_hop": (
         _break_snapshot_single_hop,

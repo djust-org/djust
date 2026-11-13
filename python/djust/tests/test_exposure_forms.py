@@ -378,7 +378,9 @@ def test_persisted_form_input_is_a_server_state_field_in_the_contract():
 
 
 @pytest.mark.asyncio
-async def test_reconnect_restores_opted_in_fields_and_resets_the_rest(staged):
+async def test_reconnect_restores_form_input_and_errors_but_no_sensitive_field(staged):
+    """#4107: form input and errors are saved with the view's state; a sensitive
+    field never is, opted in or not."""
     request = await sync_to_async(make_request)()
     runtime, _ = await mount(request, PersistedFormView)
     await event(runtime, "validate_field", field="name", value="Al")
@@ -389,16 +391,17 @@ async def test_reconnect_restores_opted_in_fields_and_resets_the_rest(staged):
     fresh = await sync_to_async(make_request)(request.session.session_key)
     second, transport = await mount(fresh, PersistedFormView)
     view = second.view_instance
-    assert view.form_data == {"name": "Al", "email": "", "password": ""}
-    assert view.field_errors == {} and view.form_errors == {} and view.is_valid is False
+    assert view.form_data == {"name": "Al", "email": "bad", "password": ""}
+    assert view.field_errors["email"] and view.is_valid is False
     html = mount_html(transport)
     assert 'value="Al"' in html
-    assert EMAIL_ERROR not in html
     assert PASSWORD not in json.dumps(transport.sent)
+    raw = await sync_to_async(SessionStore(request.session.session_key).load)()
+    assert PASSWORD not in json.dumps(raw, default=str)
 
 
 @pytest.mark.asyncio
-async def test_reconnect_without_opt_in_persists_nothing(staged):
+async def test_reconnect_without_opt_in_restores_the_input_from_the_automatic_state(staged):
     request = await sync_to_async(make_request)()
     runtime, _ = await mount(request, ExplicitFormView)
     await event(runtime, "validate_field", field="name", value="Al")
@@ -408,7 +411,7 @@ async def test_reconnect_without_opt_in_persists_nothing(staged):
 
     fresh = await sync_to_async(make_request)(request.session.session_key)
     second, _ = await mount(fresh, ExplicitFormView)
-    assert second.view_instance.form_data["name"] == ""
+    assert second.view_instance.form_data["name"] == "Al"  # #4107
 
 
 def test_http_post_restores_opted_in_fields_across_requests(staged):

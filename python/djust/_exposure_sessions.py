@@ -312,52 +312,99 @@ def _project_for_save(adapter: "ServerStateSession", view: Any) -> dict[str, Any
         raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
 
 
-def save_server_state(view: Any, request: Any) -> None:
-    """Persist only declared server fields after the transport's authorization.
+def _declared_adapter(
+    view: Any, request: Any, *, create: bool = False
+) -> "ServerStateSession | None":
+    """The strict adapter for declared ``persist="server"`` fields.
 
-    Raises :class:`StateLimitExceeded`, before writing anything, when the
-    declared server state is over its limits.
+    A legacy view has no declared server state (the constructor refuses the
+    grant), so it has no adapter; its state is the automatic kind only (#4107).
     """
-    adapter = server_state_adapter(view, request, create=True)
-    if adapter is not None:
-        values = _project_for_save(adapter, view)
+    from ._exposure import uses_legacy_exposure
+
+    if uses_legacy_exposure(view):
+        return None
+    return server_state_adapter(view, request, create=create)
+
+
+def _flush(session: Any, expected_key: Any) -> None:
+    from ._session_merge import save_merged
+
+    save_merged(session, expected_key)
+
+
+def save_server_state(view: Any, request: Any, *, fresh: bool = False) -> None:
+    """Save the view's server-side state after the transport's authorization.
+
+    Two parts, one session write (#4107):
+
+    * declared ``persist="server"`` fields, strictly: raises
+      :class:`StateLimitExceeded`, before writing anything, when they are over
+      their limits;
+    * the view's automatic state (``_automatic_state``): best effort, never an
+      error for a value, and not written when it equals what is stored.
+
+    ``fresh=True`` is the full page load: ``mount()`` just ran and nothing was
+    restored, so the stored automatic state of this route is dropped instead
+    of written (a view that changes nothing creates no session).
+    """
+    from . import _automatic_state
+
+    adapter = _declared_adapter(view, request, create=True)
+    # Projected first: a refusal must leave the session dict untouched.
+    values = _project_for_save(adapter, view) if adapter is not None else None
+    undo = None
+    if fresh:
+        changed = _automatic_state.discard(view, request)
+    else:
+        undo = _automatic_state.stage(view, request)
+        changed = undo is not None
+    if adapter is not None and values is not None:
         try:
-            adapter.save(values)
+            adapter.save(values)  # flushes the automatic envelope with it
         except StateLimitError as error:
             # The envelope's own overhead tipped it over: the fields are the cause.
+            if undo is not None:
+                undo()
             field = _limit_culprit(adapter.contract, view)
             raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
+    elif changed:
+        session = request.session
+        _flush(session, session.session_key)
 
 
 def load_server_state(view: Any, request: Any) -> dict[str, Any] | None:
-    """Validate current server state or request a fresh mount for rejected data.
+    """Validated stored state to put back after ``mount()``, or None.
+
+    Declared ``persist="server"`` fields and the automatic state (#4107), in
+    one dictionary: every restore site applies it the same way. The two name
+    sets are disjoint (a field that states ``persist`` is never automatic).
 
     Invalid configuration and storage failures still propagate. Only a rejected
     envelope (schema/identity/expiry) becomes a cache miss. Never hydrate a legacy
     session dictionary or log rejected values. Caller performs fresh object auth
-    before dispatch/render after applying these declared values.
+    before dispatch/render after applying these values.
     """
-    adapter = server_state_adapter(view, request)
-    if adapter is None:
-        return None
-    try:
-        return adapter.load()
-    except ExposureError:
-        return None
+    from . import _automatic_state
+
+    restored: dict[str, Any] | None = None
+    adapter = _declared_adapter(view, request)
+    if adapter is not None:
+        try:
+            restored = adapter.load()
+        except ExposureError:
+            restored = None
+    automatic = _automatic_state.load(view, request)
+    if automatic is not None:
+        restored = {**automatic, **(restored or {})}
+    return restored
 
 
 async def asave_server_state(view: Any, request: Any) -> None:
-    """Async transport save with identity/default evaluation in the Django thread."""
+    """Async transport save; the work runs in the Django thread."""
     from asgiref.sync import sync_to_async
 
-    adapter = await sync_to_async(server_state_adapter)(view, request, create=True)
-    if adapter is not None:
-        values = await sync_to_async(_project_for_save)(adapter, view)
-        try:
-            await adapter.asave(values)
-        except StateLimitError as error:
-            field = await sync_to_async(_limit_culprit)(adapter.contract, view)
-            raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
+    await sync_to_async(save_server_state)(view, request)
 
 
 @dataclass(frozen=True)

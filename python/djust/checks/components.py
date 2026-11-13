@@ -2519,15 +2519,16 @@ def check_undeclared_handler_state(app_configs: Any, **kwargs: Any) -> list[Chec
             if klass is not cls and klass in candidates:
                 continue  # a LiveView base that is itself checked reports its own code
             for attr, line in access.changed.items():
-                if attr.startswith("_") or attr in own or (klass, attr) in seen:
+                if attr.startswith("__") or attr in own or (klass, attr) in seen:
                     continue
                 declaration = _resolved_class_attribute(cls, attr)
                 is_field = issubclass(type(declaration), StateProperty)
                 if is_field:
-                    if declaration.exposure.persist is not None or attr not in access.read_first:
+                    # Only a field the author opted out of saving is lost.
+                    if declaration.exposure.persist is not False or attr not in access.read_first:
                         continue
-                elif _is_descriptor(declaration):
-                    continue
+                elif not attr.startswith("_") or _is_descriptor(declaration):
+                    continue  # a public attribute is saved automatically (#4107)
                 elif attr not in access.read_first and not any(
                     attr in other.reads
                     for other in [a for n, (_, _, a) in handlers.items() if n != name]
@@ -2539,30 +2540,34 @@ def check_undeclared_handler_state(app_configs: Any, **kwargs: Any) -> list[Chec
                 if is_field:
                     msg = (
                         "%s %s()%s changes state() field %s, which a later event reads, "
-                        'but it is declared without persist="server": on the HTTP '
-                        "fallback each event builds a new view and runs mount() again, so "
-                        "the change is lost there (over a WebSocket it is kept)."
-                        % (label, name, where, attr)
+                        "but it is declared persist=False: it is not saved, so on the HTTP "
+                        "fallback and after a reconnect the change is lost (within one "
+                        "WebSocket connection it is kept)." % (label, name, where, attr)
                     )
-                    fix = 'Declare it `%s = state(..., persist="server")` on `%s`.'
+                    fix = "Remove `persist=False` from `%s` on `%s`."
+                    hint = (
+                        "Drop persist=False so %s is saved with the rest of the view's "
+                        "state, or stop reading its old value in a later event. Suppress "
+                        "with DJUST_CONFIG = {'suppress_checks': ['V029']}." % attr
+                    )
                 else:
                     msg = (
-                        "%s %s()%s changes self.%s, which a later event reads, but it is "
-                        "not declared state: on the HTTP fallback each event builds a new "
-                        "view and runs mount() again, so the change is lost there (over a "
-                        "WebSocket it is kept)." % (label, name, where, attr)
+                        "%s %s()%s changes self.%s, which a later event reads, but a name "
+                        "with a leading underscore is not saved: on the HTTP fallback and "
+                        "after a reconnect the change is lost (within one WebSocket "
+                        "connection it is kept)." % (label, name, where, attr)
                     )
-                    fix = 'Declare `%s = state(..., persist="server")` on `%s`.'
+                    fix = "Rename `%s` on `%s` without the leading underscore."
+                    hint = (
+                        "Public attributes are saved between requests; private ones are "
+                        "not. Rename %s without the underscore (saving it does not render "
+                        "it), or rebuild it in mount() / handle_restore(). Suppress with "
+                        "DJUST_CONFIG = {'suppress_checks': ['V029']}." % attr
+                    )
                 messages.append(
                     DjustWarning(
                         msg,
-                        hint=(
-                            "Declare it on the class: %s = state(<default>, "
-                            'persist="server") keeps it between events on every '
-                            "transport. Name it with a leading underscore if it is "
-                            "per-event scratch. Suppress with DJUST_CONFIG = "
-                            "{'suppress_checks': ['V029']}." % attr
-                        ),
+                        hint=hint,
                         id="djust.V029",
                         fix_hint=fix % (attr, klass.__qualname__),
                         file_path=inspect.getsourcefile(function) or "",

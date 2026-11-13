@@ -715,6 +715,44 @@ coverage lives in `python/tests/test_context_item_safety_2287.py`.
 
 ---
 
+## 7. Automatic server-side state is storage, never exposure
+
+A view's public, plain-data attributes are saved in the server-side session
+between requests (`python/djust/_automatic_state.py`, #4107). The pattern that
+keeps this safe as a default:
+
+- **One name rule for both directions.** `_Names.eligible` decides what is
+  saved AND what a stored envelope may put back: a public ASCII identifier that
+  is not reserved (`reserved_state_names()`), not framework-owned
+  (`_framework_attrs`, `CHANGE_DETECTION_IGNORED`), not on the serialization
+  floor (`_resolve_sensitive_fields()`), and not a method, property or other
+  descriptor of the class. A stored name that fails is dropped on restore, so
+  the store cannot reach `__class__`, a handler, `template_name` or
+  `login_required`.
+- **Exact-type values.** Only what `clone_json_state` accepts is stored, so the
+  request, the user, lazy objects, querysets and model instances cannot enter
+  it; nothing is stringified.
+- **Written only from the server.** The envelope is built from the view's
+  attributes after the transport's authorization. No client message names an
+  attribute to store.
+- **Bound and versioned.** The envelope carries the `StateBinding` digest
+  (session, user, tenant, route), a lifetime, and a digest of the view class's
+  code (`class_digest`): state written by other code, or for another principal,
+  reads as nothing stored.
+- **Not a projection.** Template context, client state, signed snapshot tokens
+  and debug payloads still read declarations only (ADR-038 D1). A saved value
+  that is not declared or supplied by `get_context_data()` appears in no frame.
+- **A server-side store only.** A cookie session, which the browser can read,
+  holds no automatic state.
+
+```python
+# Saving and restoring go through the two shared functions; nothing else
+# writes or reads the store.
+from djust._exposure_sessions import load_server_state, save_server_state
+```
+
+---
+
 ## How to make a NEW feature secure-by-default
 
 When you add a feature that emits data, accepts client-echoed state, exposes an

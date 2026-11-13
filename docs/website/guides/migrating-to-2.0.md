@@ -323,10 +323,27 @@ class AppView(LiveView):
 
 ### Keeping state across a reconnect
 
-A reconnect, a deploy or a second worker gives the user a new view object.
-Under explicit exposure, `mount()` runs, then every `persist="server"` field
-is put back from the session, and nothing else is. Decide per field whether
-the user would notice it resetting:
+A reconnect, a second worker and every event over the HTTP fallback give the
+user a new view object. `mount()` runs, then the view's saved state is put back
+from the server-side session, then `handle_restore()` runs.
+
+**What you set on `self` is saved.** Public attributes and `state()` fields
+are saved after each event when their value is plain data: `None`, booleans,
+numbers, strings, and lists and dicts of those. This needs no declaration and
+exposes nothing: a saved value reaches the template only through a `state()`
+field or `get_context_data()`, and reaches the browser as data only with
+`client=True`.
+
+Not saved: a name with a leading underscore, a field declared
+`state(..., persist=False)`, djust's own attributes, and any value that is not
+plain data (a model instance, a queryset, a `Decimal`, a `date`, the request,
+the user). Such a value is skipped, the event still succeeds, and the
+attribute comes from `mount()` on the next request; the `djust.automatic_state`
+logger names it once. Rebuild it in `mount()` or `handle_restore()`.
+
+`persist="server"` is the strict form of the same thing: the field must be
+plain data and must fit the size limit, and a change that does not is refused
+with an error instead of being skipped.
 
 ```python
 from djust import LiveView
@@ -347,7 +364,8 @@ class ReportView(LiveView):
         self.rows = []
 
     def handle_restore(self, request):
-        # report_id and status are back; rows were never saved.
+        # report_id, status and rows are back; read the rows again, they
+        # may have changed since they were saved.
         self.rows = self.fetch_rows(self.report_id)
         if self.status == "loading":
             self.status = "idle"
@@ -378,9 +396,17 @@ class ReportView(LiveView):
   without the fix for [#3989](https://github.com/djust-org/djust/issues/3989)
   call `handle_restore()` only on legacy views; on those, an explicit view
   gets its fields back and no hook.
-- **Underscore names are never persisted.** `state()` cannot declare a name
-  that starts with `_`. If `self._draft` has to survive a reconnect, rename it
-  and declare it.
+- **Underscore names are never saved.** If `self._draft` has to survive a
+  reconnect, rename it `self.draft`. Saving it does not render it.
+- **A page load starts fresh.** A full page load runs `mount()` and discards
+  the route's saved state; a reconnect and a fallback event restore it.
+- **A deploy that changes the view's code resets its state.** Saved state
+  written by different code of the view class (its methods, its class
+  attributes, its `state()` fields) is dropped and the view mounts fresh.
+- **Large values are left out.** Saved state is limited to 64 KB, 10,000
+  values and 16 levels per view. When it does not fit, the largest attributes
+  are left out, with a warning naming them. Name a large value `_rows`, or
+  declare it `rows = state(persist=False)`, and load it in `mount()`.
 - **Grants are not inherited.** A `state(..., persist=...)` or `client=True`
   field on a base class has to be declared again on each concrete view. A base
   class may declare `state()` fields without grants.
@@ -392,12 +418,11 @@ class ReportView(LiveView):
   version is dropped and the view mounts fresh, unless you define
   `migrate_state(self, old_version, values)` to translate it.
 
-A view that is ever served without a WebSocket (the HTTP fallback) gets a new
-view object for every event. In 1.3 such a view had all its public attributes
-restored from the session between events; under explicit exposure only
-`persist="server"` fields are. The inventory command cannot see this. If the
-view must work without a socket, give every field its handlers change
-`persist="server"`.
+A view that is served without a WebSocket (the HTTP fallback) gets a new view
+object for every event, and its saved state is put back each time, as in 1.3.
+What does not come back is what is not saved: underscore names and values
+that are not plain data. `manage.py check` reports a handler that changes an
+underscore attribute a later event reads (`djust.V029`).
 
 ### Other things explicit exposure refuses
 
@@ -895,4 +920,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: d9acd17b7baf -->
+<!-- generated-doc prose-sha256: 81b70c2ffcd1 -->

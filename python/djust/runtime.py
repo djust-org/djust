@@ -4334,10 +4334,35 @@ class ViewRuntime(RuntimeTurnPort):
         from ._exposure import uses_legacy_exposure
 
         target_view = self.view_instance
+        # #4107: the post-event snapshot, taken before the commit so the save
+        # can tell from it whether any saved attribute changed (and walk
+        # nothing when none did). It is the snapshot the render decision below
+        # needs anyway: the commit and the client snapshot between here and
+        # there do not change the view's state. Off with the shortcut, the
+        # snapshot is taken where it always was.
+        early_post_assigns: Optional[Dict[str, Any]] = None
         if not uses_legacy_exposure(target_view):
+            if (
+                _per_turn.on("unchanged_save_skip")
+                and target_view is view
+                and pre_assigns is not None
+                and not getattr(view, "_force_full_html", False)
+            ):
+                early_post_assigns = _snapshot_assigns(view)
+                view.__dict__["_djust_auto_changed"] = _compute_changed_keys(
+                    pre_assigns, early_post_assigns
+                )
             # A failed explicit save withholds the success frame (E3); the
             # child tree is saved on the render/noop branches below.
-            if not await self.commit_explicit_turn(target_view, source="event", children=False):
+            try:
+                committed = await self.commit_explicit_turn(
+                    target_view, source="event", children=False
+                )
+            finally:
+                # This turn's answer only: a commit that never reached the
+                # save must not leave it for a later turn's save to trust.
+                view.__dict__["_djust_auto_changed"] = None
+            if not committed:
                 return
 
         snapshot_fields = await self._explicit_event_snapshot(view)
@@ -4360,7 +4385,9 @@ class ViewRuntime(RuntimeTurnPort):
             getattr(view, "_child_views", None)
         )
         if not skip_render and not force_html:
-            post_assigns = _snapshot_assigns(view)
+            post_assigns = (
+                early_post_assigns if early_post_assigns is not None else _snapshot_assigns(view)
+            )
             if pre_assigns == post_assigns and not has_explicit_children:
                 skip_render = True
             else:

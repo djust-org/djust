@@ -2171,7 +2171,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         # ADR-038 D-m: a non-sticky explicit child is transient. It has no
         # stable slot to persist under, so it may not declare persisted state.
         if any(
-            field.persist is not None
+            field.persist not in (None, False)
             for field in ExposureContract.from_view_class(child_cls).fields.values()
         ):
             raise TemplateSyntaxError(

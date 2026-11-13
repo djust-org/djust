@@ -841,14 +841,13 @@ class RequestMixin:
         state_serializable = state
         t_json = (time.perf_counter() - t0) * 1000
 
-        # An explicit view saves its declared persist="server" fields. A legacy
-        # view keeps nothing between requests (2.0): the page-POST fallback and
-        # the socket mount run mount() again.
         t0_sc = time.perf_counter()
-        if not uses_legacy_exposure(self):
-            from .._exposure_sessions import save_server_state
+        # A page load is a fresh mount(): declared persist="server" fields are
+        # written as mount() left them, and the route's automatic state (#4107)
+        # is dropped, for explicit and legacy views alike.
+        from .._exposure_sessions import save_server_state
 
-            save_server_state(self, request)
+        save_server_state(self, request, fresh=True)
         t_save_components = (time.perf_counter() - t0_sc) * 1000
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
@@ -1672,33 +1671,26 @@ class RequestMixin:
             # One budget for every wait on background work in this request
             # (#3634); ``None`` unless ``http_fallback_background_timeout`` is set.
             bg_budget = _http_background_budget()
-            if not legacy_exposure:
-                from .._exposure_sessions import load_server_state
+            from .._exposure_sessions import load_server_state
 
-                # Reconstruct transient server services for this HTTP request.
-                # The persisted projection is validated separately and overlays
-                # only declared server fields, never render/context attributes.
-                call_hook_sync(self.mount, request, **kwargs)
-                restored = load_server_state(self, request)
-                if restored is not None:
-                    for key, value in restored.items():
-                        safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
-                    explicit_restored = True
-                # The socket mount restores, then reads the URL (``dispatch_mount``:
-                # mount, ``load_server_state``, ``handle_params``). Same order
-                # here, so the URL this request carries wins over a persisted
-                # server field the previous request saved (#3624).
-                _run_http_handle_params(self, request)
-                mount_work_pending = True
-            else:
-                # A legacy view keeps nothing between requests (2.0): every POST
-                # mounts it again. The page's URL state is rebuilt the way the
-                # GET builds it: the event must meet the page the browser shows,
-                # and the render it answers with must not diff against mount()'s
-                # defaults (#3624).
-                call_hook_sync(self.mount, request, **kwargs)
-                _run_http_handle_params(self, request)
-                mount_work_pending = True
+            # Every view, explicit or legacy (#4107): mount() rebuilds the
+            # transient parts for this request, then the saved state is put
+            # back over it: declared persist="server" fields and the view's
+            # automatic state. Both are validated by ``load_server_state``;
+            # nothing rendered or sent by the client is read here.
+            call_hook_sync(self.mount, request, **kwargs)
+            restored = load_server_state(self, request)
+            if restored is not None:
+                for key, value in restored.items():
+                    safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
+                explicit_restored = True
+            # The socket mount restores, then reads the URL (``dispatch_mount``:
+            # mount, ``load_server_state``, ``handle_params``). Same order
+            # here, so the URL this request carries wins over a saved value the
+            # previous request stored (#3624), and the event meets the page the
+            # browser shows.
+            _run_http_handle_params(self, request)
+            mount_work_pending = True
 
             self._assign_component_ids()
 
@@ -1722,11 +1714,9 @@ class RequestMixin:
                     status=403,
                 )
 
-            # An explicit view whose declared persist="server" state was put
-            # back on top of mount() reads again what that state does not hold
-            # (#3989). After the object check, so it never reads for a denied
-            # object. A legacy view keeps nothing between requests (2.0), so
-            # nothing was restored and the hook does not run for it.
+            # A view whose saved state was put back on top of mount() reads
+            # again what that state does not hold (#3989). After the object
+            # check, so it never reads for a denied object.
             if explicit_restored:
                 handle_restore = getattr(self, "handle_restore", None)
                 if callable(handle_restore):
@@ -1960,23 +1950,21 @@ class RequestMixin:
                 _inject_side_channels(redirect_response)
                 return JsonResponse(redirect_response)
 
-            if not legacy_exposure:
-                from .._exposure_sessions import StateLimitExceeded, save_server_state
+            # Explicit and legacy views alike (#4107).
+            from .._exposure_sessions import StateLimitExceeded, save_server_state
 
-                try:
-                    save_server_state(self, request)
-                except StateLimitExceeded as refused:
-                    # Refused before writing (#4095): the stored state is the
-                    # last one that fit, and the next request restores it. This
-                    # request's view is discarded, so nothing else to put back.
-                    logger.warning(
-                        "HTTP event state save refused: field %s over its %s limit",
-                        sanitize_for_log(refused.field),
-                        refused.limit,
-                    )
-                    return JsonResponse(
-                        {"error": str(refused), "code": "state_too_large"}, status=413
-                    )
+            try:
+                save_server_state(self, request)
+            except StateLimitExceeded as refused:
+                # Refused before writing (#4095): the stored state is the
+                # last one that fit, and the next request restores it. This
+                # request's view is discarded, so nothing else to put back.
+                logger.warning(
+                    "HTTP event state save refused: field %s over its %s limit",
+                    sanitize_for_log(refused.field),
+                    refused.limit,
+                )
+                return JsonResponse({"error": str(refused), "code": "state_too_large"}, status=413)
 
             # Fields every response of this turn carries besides its payload.
             response_fields: Dict[str, Any] = {}

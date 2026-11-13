@@ -309,6 +309,41 @@ async def test_the_walk_grows_with_the_list_and_no_faster(monkeypatch):
     assert 3.8 < total(big) / total(small) < 4.1
 
 
+# --- #4107: a turn that changes nothing saved --------------------------------------
+
+
+async def test_an_unchanged_turn_neither_serializes_nor_writes_the_saved_state(monkeypatch):
+    """Two ``nothing`` turns after the mount. With the shortcut, the save reads
+    the turn's change detection and does no work; without it, each turn
+    serializes the view's saved state and writes the session."""
+    from djust import _automatic_state, _session_merge
+
+    seen: Dict[str, int] = {"project": 0, "write": 0}
+    real_project, real_save = _automatic_state.project, _session_merge.save_merged
+
+    def project(view):
+        seen["project"] += 1
+        return real_project(view)
+
+    def save_merged(*args, **kwargs):
+        seen["write"] += 1
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(_automatic_state, "project", project)
+    monkeypatch.setattr(_session_merge, "save_merged", save_merged)
+    now = await turn(monkeypatch, BareCounter, "nothing")
+    with_shortcut = dict(seen)
+    seen.update(project=0, write=0)
+    off = await turn(monkeypatch, BareCounter, "nothing", "unchanged_save_skip")
+    assert now["reply"] == off["reply"] == "noop"
+    # One projection at the mount (the basis), none for the two turns, no write.
+    assert with_shortcut == {"project": 1, "write": 0}
+    # Gate-off: the mount's, then one projection and one write per turn.
+    assert seen == {"project": 3, "write": 2}
+    # The snapshots change detection takes are the same two per turn either way.
+    assert now["snapshot_assigns.calls"] == off["snapshot_assigns.calls"] == 2
+
+
 def test_every_shortcut_has_a_gate_off_in_this_file():
     """Derived from the source: each name in ``_per_turn.ALL`` is turned off, by
     name, in a ``turn(...)`` call above, so a shortcut added without a gate-off

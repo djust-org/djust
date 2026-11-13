@@ -48,7 +48,9 @@ class _Probed:
 
 class CounterView(_Probed, LiveView):
     """One field of each kind: server-persisted, client-persisted, plain
-    ``state()``, and an ordinary attribute."""
+    ``state()``, an ordinary attribute, one opted out of saving, and a private
+    one. ``_mounted_pid`` and ``_restored`` are private so that they describe
+    THIS view object, not a saved one (#4107)."""
 
     exposure_policy = "explicit"
     template = "<div dj-root>" + PROBE + "</div>"
@@ -56,14 +58,17 @@ class CounterView(_Probed, LiveView):
     count = state(0, persist="server")
     client_count = state(0, persist="client", client=True)
     plain_state = state(0)
+    not_saved = state(0, persist=False)
 
     def mount(self, request, **kwargs):
         self.plain_attr = 0
-        self.mounted_pid = os.getpid()
-        self.restored = False
+        self._private_attr = 0
+        self.unsaveable = {os.getpid()}  # a set: not plain data, never saved
+        self._mounted_pid = os.getpid()
+        self._restored = False
 
     def handle_restore(self, request):
-        self.restored = True
+        self._restored = True
 
     def snapshot(self):
         return {
@@ -71,8 +76,11 @@ class CounterView(_Probed, LiveView):
             "client_count": self.client_count,
             "plain_state": self.plain_state,
             "plain_attr": self.plain_attr,
-            "restored": self.restored,
-            "mounted_pid": self.mounted_pid,
+            "not_saved": self.not_saved,
+            "private_attr": self._private_attr,
+            "unsaveable_pid": sorted(self.unsaveable)[0],
+            "restored": self._restored,
+            "mounted_pid": self._mounted_pid,
         }
 
     @event_handler()
@@ -81,6 +89,8 @@ class CounterView(_Probed, LiveView):
         self.client_count += 1
         self.plain_state += 1
         self.plain_attr += 1
+        self.not_saved += 1
+        self._private_attr += 1
 
     @event_handler()
     def probe(self, **kwargs):

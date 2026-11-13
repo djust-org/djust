@@ -333,6 +333,54 @@ class FormMixin:
             name for name, field in form.fields.items() if is_sensitive_form_field(name, field)
         )
 
+    #: Rebuilt from the form class by ``mount()``; never saved (#4107).
+    _djust_unsaved_attrs = frozenset({"form_choices"})
+
+    def _djust_automatic_state_filter(self, values: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep sensitive form input out of the automatically saved state (#4107).
+
+        Called with the detached copy about to be stored. A sensitive field
+        (:func:`is_sensitive_form_field`: a password widget, or a name on the
+        serialization floor) is blanked in ``form_data``, as the render blanks
+        it (the key stays, so the restored form has every field), and an error message
+        that contains its value is replaced by the generic one, as the render
+        does. If the form cannot be inspected, no form input or error is stored.
+        """
+        form_keys = ("form_data", "field_errors", "form_errors")
+        try:
+            sensitive = self._sensitive_form_field_names()
+        except Exception:  # noqa: BLE001 — unknown fields: store no form input at all
+            for key in form_keys:
+                values.pop(key, None)
+            return values
+        if not sensitive:
+            return values
+        live = getattr(self, "form_data", None)
+        secrets: List[str] = []
+        for name in sensitive:
+            value = live.get(name) if isinstance(live, dict) else None
+            items = value if isinstance(value, (list, tuple)) else [value]
+            secrets.extend(str(item) for item in items if item not in (None, ""))
+        data = values.get("form_data")
+        if type(data) is dict:
+            for name in sensitive:
+                if name in data:
+                    data[name] = ""
+
+        def scrub(item: Any) -> Any:
+            if type(item) is str:
+                return _REDACTED_FORM_ERROR if any(secret in item for secret in secrets) else item
+            if type(item) is list:
+                return [scrub(child) for child in item]
+            if type(item) is dict:
+                return {key: scrub(child) for key, child in item.items() if key not in sensitive}
+            return item
+
+        for key in ("field_errors", "form_errors"):
+            if key in values:
+                values[key] = scrub(values[key])
+        return values
+
     def _explicit_form_context(self) -> Dict[str, Any]:
         """Render values with sensitive fields' input blanked (ADR-038 D-e).
 
