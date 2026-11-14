@@ -662,7 +662,10 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             // ``handleStickyUpdate`` with a scoped ``rootEl``. No ambiguity
             // here — calling applyPatches(data.patches) with the default
             // null rootEl is correct for the root view.
-            const success = await applyPatches(data.patches);
+            // `_applyIf` is set by the page-POST fallback for a patch answer
+            // (11-event-handler.js): a function, so never from the wire.
+            const success = await applyPatches(data.patches, null,
+                typeof data._applyIf === 'function' ? data._applyIf : null);
             _isBroadcastUpdate = false;
 
             // For broadcast patches, sync textarea .value from .textContent.
@@ -681,7 +684,9 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 // Patches failed — likely due to {% if %} blocks shifting DOM structure.
                 // Request full HTML from server for DOM morphing (on-demand, not sent
                 // with every response to avoid bandwidth regression).
-                console.warn(
+                // (Not when the fallback withheld the patches because the DOM
+                // had changed: nothing failed, and the resync below is the plan.)
+                if (!data._applyIfRefused) console.warn(
                     '[LiveView] VDOM patches failed. This usually happens when {% if %} blocks ' +
                     'add/remove DOM elements, shifting sibling positions.\n' +
                     'Fix: Use style="display:none" toggling instead of {% if %} for elements:\n' +
@@ -690,10 +695,13 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 );
 
                 // Revert VDOM version — recovery response will set the correct version
-                clientVdomVersion = data.version - 1;
+                if (data.version !== undefined) clientVdomVersion = data.version - 1;
 
                 if (isWSConnected()) {
                     liveViewWS.sendMessage({ type: 'request_html', ...slotFrameFields(_activeSlot && _activeSlot.id) });
+                } else if (transport && transport === _localEventTransport) {
+                    // Page-POST fallback (#4108): fetch the page and morph it in.
+                    await _httpFallbackResync();
                 } else {
                     // No WebSocket available — last resort page reload
                     window.location.reload();
@@ -723,6 +731,11 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
                 globalLoadingManager.stopLoading(eventName, triggerElement);
                 window.location.reload();
                 return false;
+            }
+            // Page-POST fallback (#4108): elements still playing a dj-remove
+            // exit are not part of the page being morphed in.
+            if (transport && transport === _localEventTransport) {
+                globalThis.djust.djRemove?.finishPendingRemovals(liveviewRoot);
             }
             // Parsed in the root's namespace (an SVG / MathML root keeps its
             // children SVG / MathML), inert.
@@ -8515,6 +8528,127 @@ const _pendingHttpControllers = new Set();
 // input typed since. Null when nothing is in flight, so an event sent alone
 // still goes out synchronously.
 let _httpEventChain = null;
+// #4108: the page-POST fallback answers with patches when the server can show
+// that this page displays the render it would diff against. The proof is a
+// token in two halves, "<digest>.<shape>". The digest is a keyed digest of
+// that render: the page GET carries one (a <meta>, outside dj-root), every
+// fallback answer carries the next, and each fallback POST echoes the latest.
+// The shape is a checksum of that render's tree (domShape, 12-vdom-patch.js):
+// every element with its attributes, every text. A patch answer is addressed
+// by path, so it may only be applied to a DOM that is the tree the server
+// diffed against: the client sends the shape of its own DOM with the digest
+// (the server answers with patches only if it is its render's shape), sends
+// no token at all while its DOM has another shape (a script or a hook added,
+// removed or moved a node or changed a text, a dj-remove exit is still
+// playing), and checks the shape again at the moment it applies the patches.
+// The shape the client computes is compared with the server's own, never with
+// an earlier reading of the same DOM, so it does not matter when the DOM was
+// changed: before this client started, or in a callback after a patch.
+// The digest is null when unknown (a socket or SSE mount rendered this page,
+// or something changed the DOM without naming a token); the server then
+// answers with the whole page, as it does when a token does not match. There
+// is no version counter on this path: a patch answer has no `version`, and a
+// whole-page answer re-bases the cursor (see handleEvent).
+let _httpRenderDigest = null;
+let _httpRenderShape = null;
+// Whole-page answers in a row to requests that sent a token. A page whose
+// render differs on every request (a clock, a random id) never matches, and
+// each token costs the server a second render: after two misses it is
+// withheld for `_HTTP_DIGEST_HOLD` events, then offered again.
+let _httpDigestMisses = 0;
+let _httpDigestHold = 0;
+const _HTTP_DIGEST_HOLD = 8;
+const _RENDER_DIGEST_META = 'meta[name="djust-render-digest"]';
+
+function _setRenderToken(token) {
+    // A token that is not "<digest>.<shape>" leaves a shape no DOM has, so
+    // nothing is sent for it.
+    const parts = typeof token === 'string' ? token.split('.') : [];
+    _httpRenderDigest = parts[0] || null;
+    _httpRenderShape = parts[1] || null;
+}
+
+function _readPageRenderDigest() {
+    const meta = document.querySelector(_RENDER_DIGEST_META);
+    _setRenderToken(meta && meta.getAttribute('content'));
+    _httpDigestMisses = _httpDigestHold = 0;
+}
+
+// The token this fallback request sends, if any: the digest, and the shape of
+// the DOM as it is now.
+function _renderTokenToSend() {
+    if (!_httpRenderDigest) return null;
+    if (_httpDigestHold > 0) {
+        _httpDigestHold -= 1;
+        return null;
+    }
+    // The DOM is not the render the digest stands for (a node added, removed
+    // or moved, an attribute or a text changed): patches computed from that
+    // render would land on other nodes.
+    if (domShape(getLiveViewRoot()) !== _httpRenderShape) return null;
+    return _httpRenderDigest + '.' + _httpRenderShape;
+}
+
+// Record what a fallback answer says about the render now on the page.
+function _noteRenderDigest(data, sent) {
+    const whole = typeof data.html === 'string';
+    const changed = whole || (Array.isArray(data.patches) && data.patches.length > 0)
+        || data.type === 'embedded_update';
+    // (An answer that changes the DOM and names no token needs no forgetting:
+    // the DOM then has another shape than the token held, so none is sent.)
+    if (typeof data.render_digest === 'string' && data.render_digest) {
+        _setRenderToken(data.render_digest);
+    }
+    if (!sent || !changed) return;
+    if (!whole) {
+        _httpDigestMisses = 0;
+    } else if (++_httpDigestMisses >= 2) {
+        _httpDigestHold = _HTTP_DIGEST_HOLD;
+    }
+}
+
+// Every answer of this transport enters here, an event's and a resync's: the
+// same client-owned-flag strip as the WebSocket and SSE transports (#2829; the
+// HTTP fallback dispatches straight into handleServerResponse, so it needs its
+// own call), then the contract bookkeeping.
+function _receiveHttpAnswer(data) {
+    stripClientOwnedFrameFlags(data);
+    _recordParameterContractFrame(_localEventTransport, data);
+}
+
+// The page no longer matches what the server last sent: a patch answer did not
+// fit this DOM, or the DOM changed shape while the request was out. Ask for
+// the page as the saved state renders it now (a POST with no event, which runs
+// no handler and keeps the state) and morph it in. The page GET is no
+// substitute: it is a new page load, which mounts the view again and saves
+// that. Reload only when the request cannot be made or answered.
+async function _httpFallbackResync() {
+    const url = window.location.href;
+    _setRenderToken(null);
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': window.djust.csrfToken(),
+                'X-Djust-Resync': '1',
+                ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null
+                    ? {'X-Djust-Parameter-Contracts': '1'} : {})
+            },
+            body: '{}'
+        });
+        if (!response.ok) throw new Error(`status ${response.status}`);
+        const data = await response.json();
+        if (typeof data.html !== 'string' || url !== window.location.href) throw new Error('no page');
+        _receiveHttpAnswer(data);
+        _noteRenderDigest(data, null);
+        clientVdomVersion = null;
+        await handleServerResponse(data, null, null, _localEventTransport);
+    } catch (_e) {
+        window.location.reload();
+    }
+}
+
 for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide']) {
     window.addEventListener(event, () => {
         _httpPageGeneration += 1;
@@ -8529,6 +8663,7 @@ for (const event of ['djust:before-navigate', 'turbo:before-visit', 'pagehide'])
 // data block names another view (a socket live_redirect replaced the root)
 // leaves the scope unknown rather than applying a stale mount's rules.
 function _installPageParameterContracts() {
+    _readPageRenderDigest();
     const root = findPageViewContainer();
     const path = root ? root.getAttribute('dj-view') : null;
     _localEventTransport.primaryViewPath = path || null;
@@ -8567,6 +8702,8 @@ function _eventContractTransport() {
 // A socket mount of the page's root also refreshes the page scope, so an HTTP
 // fallback after a socket live_redirect uses the current mount's contracts.
 function _mirrorPageParameterContracts(manifest, viewPath) {
+    // The socket's mount render is on the page now, not the GET's (#4108).
+    _setRenderToken(null);
     if (typeof viewPath !== 'string' || !viewPath) return;
     _localEventTransport.primaryViewPath = viewPath;
     try {
@@ -8800,6 +8937,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         try {
             // Apply cached patches
             if (cached.patches && cached.patches.length > 0) {
+                // The DOM changes without an answer from the server (#4108).
+                _setRenderToken(null);
                 await applyPatches(cached.patches);
                 reinitAfterDOMUpdate();
             }
@@ -8933,6 +9072,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         }
         // Input, configured-name cookie, then server meta tag (00-namespace.js).
         const csrfToken = window.djust.csrfToken();
+        // Read here, after the wait above: the previous answer set it.
+        const sentDigest = teardown ? null : _renderTokenToSend();
         const response = await fetch(teardown ? teardown.url : window.location.href, {
             keepalive: !!teardown,
             ...(httpController ? {signal: httpController.signal} : {}),
@@ -8944,7 +9085,8 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 // A strict (or invalid) page scope asks for an explicit
                 // contract clear when the rendered tree no longer has one.
                 ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null
-                    ? {'X-Djust-Parameter-Contracts': '1'} : {})
+                    ? {'X-Djust-Parameter-Contracts': '1'} : {}),
+                ...(sentDigest ? {'X-Djust-Render-Digest': sentDigest} : {})
             },
             body: JSON.stringify(paramsToSend)
         });
@@ -8982,8 +9124,17 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // Same client-owned-flag strip as the WebSocket and SSE transports
         // (#2829) — the HTTP fallback dispatches straight into
         // handleServerResponse, so it needs its own call.
-        stripClientOwnedFrameFlags(data);
-        _recordParameterContractFrame(_localEventTransport, data);
+        _receiveHttpAnswer(data);
+        // A patch answer is addressed by path: it is applied only if, at the
+        // moment of the first mutation, the DOM still is the render this
+        // request named. Otherwise none of it is applied and the page is
+        // resynced (handleServerResponse's failed-patch branch).
+        if (sentDigest !== null && data.version === undefined &&
+                Array.isArray(data.patches) && data.patches.length > 0) {
+            const shape = sentDigest.split('.')[1];
+            data._applyIf = () => domShape(getLiveViewRoot()) === shape || !(data._applyIfRefused = true);
+        }
+        _noteRenderDigest(data, sentDigest);
         if (data.type === 'embedded_update') {
             // An embedded child's event: the server answers with the child's own
             // HTML, as the socket transports do (#3104).
@@ -8995,7 +9146,11 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             // whole-page answer starts its own version count (v1) and is not
             // the successor of the previous answer. Like a socket mount or an
             // html_recovery frame, it re-bases the cursor instead of being
-            // checked against it; the strict check stays for patch answers.
+            // checked against it. A patch answer of this transport carries no
+            // version at all (#4108): the server sends one only after matching
+            // the render digest this request echoed, which checks the content
+            // the patches apply to, not the order of answers. A patch answer
+            // that does carry a version is still checked against the cursor.
             if (typeof data.html === 'string' && data.patches === undefined && data.version !== undefined) {
                 clientVdomVersion = null;
             }
@@ -10749,6 +10904,88 @@ function getSignificantChildren(node) {
     );
 }
 
+// --- DOM shape (#4108) -------------------------------------------------------
+// A checksum of the tree under a view's root: what sits where. For each node
+// in document order: an element's tag and attributes (sorted by name) and its
+// children, a text child's text (whitespace runs collapsed), a dj-if marker.
+// Which nodes count is getSignificantChildren's rule, the one patch paths are
+// resolved with, so two trees with one shape resolve every path to
+// corresponding nodes; and since the shape holds each element's attributes and
+// text, rows that were reordered give another shape unless they are equal in
+// all of that, in which case their order makes no difference. The server
+// computes the same value from its render (`dom_shape`,
+// python/djust/_render_digest.py); the page-POST fallback applies a patch
+// answer, which is addressed by path, only while the DOM has the shape of the
+// render the patches were computed from.
+const _SHAPE_CRC = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+        table[n] = c >>> 0; // eslint-disable-line security/detect-object-injection
+    }
+    return table;
+})();
+
+// Attributes client code writes on a page that is still the server's render
+// (presentation and widget state) are not part of the shape. Kept equal to
+// `_SKIPPED_ATTRS` / `_SKIPPED_ATTR_PREFIXES` in _render_digest.py.
+const _SHAPE_SKIPPED = new Set(('class style dj-id open hidden disabled checked selected tabindex role '
+    + 'data-live-hydrated data-open data-visible data-position data-current '
+    + 'data-theme data-theme-mode').split(' '));
+const _SHAPE_SKIPPED_PREFIX = /^(aria-|data-djust-|data-dj-|data-upload-|data-stream-)/;
+const _shapeText = (text) => text.replace(/[ \t\n\r\f]+/g, ' ').replace(/^ | $/g, '');
+
+/** The shape of `root`'s tree as 16 hex digits, or null if it cannot be computed. */
+function domShape(root) {
+    if (!root) return null;
+    let crc = 0xFFFFFFFF, a = 1, b = 0;
+    const byte = (code) => {
+        crc = _SHAPE_CRC[(crc ^ code) & 0xFF] ^ (crc >>> 8);
+        a = (a + code) % 65521;
+        b = (b + a) % 65521;
+    };
+    // The UTF-8 bytes of `text`.
+    const put = (text) => {
+        for (const char of text) {
+            const c = char.codePointAt(0);
+            if (c < 0x80) byte(c);
+            else if (c < 0x800) { byte(0xC0 | (c >> 6)); byte(0x80 | (c & 63)); }
+            else if (c < 0x10000) { byte(0xE0 | (c >> 12)); byte(0x80 | ((c >> 6) & 63)); byte(0x80 | (c & 63)); }
+            else { byte(0xF0 | (c >> 18)); byte(0x80 | ((c >> 12) & 63)); byte(0x80 | ((c >> 6) & 63)); byte(0x80 | (c & 63)); }
+        }
+    };
+    const walk = (node) => {
+        for (const child of getSignificantChildren(node)) {
+            if (child.nodeType === Node.COMMENT_NODE) {
+                put('!');
+            } else if (child.nodeType === Node.TEXT_NODE) {
+                put('"' + _shapeText(child.textContent) + '\0');
+            } else {
+                const csrf = child.getAttribute('name') === 'csrfmiddlewaretoken';
+                const attrs = [];
+                for (const name of child.getAttributeNames()) {
+                    const lower = name.toLowerCase();
+                    if (_SHAPE_SKIPPED.has(lower) || _SHAPE_SKIPPED_PREFIX.test(lower)) continue;
+                    // Django masks the CSRF token again on every render.
+                    if (csrf && lower === 'value') continue;
+                    attrs.push(' ' + lower + '=' + child.getAttribute(name) + '\0');
+                }
+                put('<' + child.tagName.toLowerCase() + attrs.sort().join(''));
+                // dj-disable-with shows other text while its request is out.
+                const shown = child.getAttribute('data-djust-original-text');
+                if (shown === null) walk(child);
+                else if (shown === ' ' || /[^ \t\n\r\f]/.test(shown)) put('"' + _shapeText(shown) + '\0');
+                put('>');
+            }
+        }
+    };
+    walk(root);
+    const hex = (n) => (n >>> 0).toString(16).padStart(8, '0');
+    return hex(crc ^ 0xFFFFFFFF) + hex((b << 16) | a);
+}
+window.djust.domShape = domShape;
+
 const WHITESPACE_PRESERVING_TAGS = ['PRE', 'CODE', 'TEXTAREA', 'SCRIPT', 'STYLE'];
 
 /**
@@ -12324,17 +12561,21 @@ function _shouldUseViewTransition() {
  * to abandon the animation and return false so the caller can trigger
  * a full re-render fallback. ADR-013.
  */
-async function applyPatches(patches, rootEl = null) {
+async function applyPatches(patches, rootEl = null, applyIf = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
     // A frame for a view mounted beside the page view patches its container (#3252).
     if (!rootEl && _activeSlot) rootEl = _activeSlot.root;
+    // `applyIf` (#4108) is asked at the last moment, in the same synchronous
+    // step as the first mutation: under a View Transition that is the update
+    // callback, which runs later than this call. False applies nothing.
+    const apply = () => (applyIf && !applyIf() ? false : _applyPatchesInner(patches, rootEl));
 
     if (_shouldUseViewTransition()) {
         let innerResult = true;
         const transition = document.startViewTransition(() => {
-            innerResult = _applyPatchesInner(patches, rootEl);
+            innerResult = apply();
         });
         try {
             await transition.updateCallbackDone;
@@ -12346,7 +12587,7 @@ async function applyPatches(patches, rootEl = null) {
         return innerResult;
     }
 
-    return _applyPatchesInner(patches, rootEl);
+    return apply();
 }
 
 /**
@@ -21152,6 +21393,17 @@ function _finalizeRemoval(el) {
     }
 }
 
+// #4108: end every exit still playing under `root` now. A whole-page answer
+// of the page-POST fallback is morphed in position by position; an element
+// that is on its way out is no part of the page the server sent, and left in
+// place it would be given a live row's content and then removed with it.
+function finishPendingRemovals(root) {
+    if (!root || !root.querySelectorAll) return;
+    for (const el of root.querySelectorAll('[dj-remove]')) {
+        if (_pendingRemovals.has(el)) _finalizeRemoval(el);
+    }
+}
+
 function _cancelRemoval(el) {
     // Called when the dj-remove attribute is stripped from a pending
     // element. Revert applied classes, clear the timer, leave the
@@ -21259,6 +21511,7 @@ globalThis.djust.djRemove = {
     _durationFor,
     _runRemove,
     _finalizeRemoval,
+    finishPendingRemovals,
     _cancelRemoval,
     _teardownState,
     _pendingRemovals,

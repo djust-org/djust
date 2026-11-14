@@ -1143,17 +1143,27 @@ HTTP_CASES = [
 ]
 
 
-def run_http(view_class: type, script: Script) -> List[Any]:
-    def request(session: Any, event_name: Any = None, params: Any = None) -> Any:
+def run_http(view_class: type, script: Script, echo: bool = False) -> List[Any]:
+    """The page GET, then each event of *script* as a fallback POST.
+
+    With *echo*, each POST sends the render token the page (then the previous
+    answer) carried, as the client does, so the answers are patches wherever
+    the page is reproducible (#4108).
+    """
+    from djust.tests.http_fallback_matrix import DigestEcho, meta_digest
+
+    def request(session: Any, event_name: Any = None, params: Any = None, token: Any = None) -> Any:
         factory = RequestFactory()
         if event_name is None:
             made = factory.get(harness.PATH)
         else:
+            headers = {"HTTP_X_DJUST_RENDER_DIGEST": token} if token else {}
             made = factory.post(
                 harness.PATH,
                 data=json.dumps(params or {}),
                 content_type="application/json",
                 HTTP_X_DJUST_EVENT=event_name,
+                **headers,
             )
         made.user, made.tenant, made.session = AnonymousUser(), None, session
         return made
@@ -1163,33 +1173,75 @@ def run_http(view_class: type, script: Script) -> List[Any]:
     out: List[Any] = []
     with harness.ws_settings(MODULE):
         response = view_class.as_view()(request(session))
-        # The page carries a freshly masked CSRF token; nothing else varies.
-        page = re.sub(
-            r'(<meta name="djust-csrf-token" content=")[^"]*',
-            r"\1<token>",
-            response.content.decode(),
-        )
-        out.append([response.status_code, page])
+
+        # The page carries a freshly masked CSRF token, and it and every answer
+        # carry a render digest bound to this run's session (#4108); nothing
+        # else varies.
+        def stable(text: str) -> str:
+            # The digest half is bound to the session; the shape half is the
+            # render's own and must not differ between the two runs.
+            text = re.sub(r'(<meta name="djust-csrf-token" content=")[^"]*', r"\1<token>", text)
+            text = re.sub(
+                r'(<meta name="djust-render-digest" content=")[^".]*', r"\1<digest>", text
+            )
+            return re.sub(r'("render_digest": ")[^".]*', r"\1<digest>", text)
+
+        page_text = response.content.decode()
+        tokens = DigestEcho(meta_digest(page_text))
+        out.append([response.status_code, stable(page_text)])
         for step in script:
             if step[0] != "event":
                 continue
+            sent = tokens.to_send() if echo else None
             posted = request(
-                SessionStore(session.session_key), step[1], step[2] if len(step) > 2 else None
+                SessionStore(session.session_key),
+                step[1],
+                step[2] if len(step) > 2 else None,
+                sent,
             )
             response = view_class.as_view()(posted)
-            out.append([response.status_code, response.content.decode()])
+            body = response.content.decode()
+            if response.status_code == 200:
+                tokens.note(json.loads(body), sent)
+            out.append([response.status_code, stable(body)])
     return out
 
 
+#: The cases whose every rendered fallback answer is patches once the client
+#: echoes the render token: their state is persisted and every event renders,
+#: so each request reproduces the page. The others answer with patches while
+#: the page is what the client shows, and with the whole page after an event
+#: left state that is not persisted or changed state without rendering it.
+HTTP_ALWAYS_PATCHED = {"table", "derived"}
+
+
+@pytest.mark.parametrize("echo", [False, True], ids=["whole-page", "patches"])
 @pytest.mark.parametrize(
     "label,view_class,script", HTTP_CASES, ids=[case[0] for case in HTTP_CASES]
 )
-async def test_get_and_fallback_post_are_identical(monkeypatch, label, view_class, script):
-    before, after = await both(sync_to_async(lambda: run_http(view_class, script)), monkeypatch)
+async def test_get_and_fallback_post_are_identical(monkeypatch, label, view_class, script, echo):
+    before, after = await both(
+        sync_to_async(lambda: run_http(view_class, script, echo)), monkeypatch
+    )
     assert [status for status, _ in after[:-1]] == [200] * (len(after) - 1), after
     for index, (old, new) in enumerate(zip(before, after)):
         assert new == old, f"response {index} of {label} differs"
     assert len({body for _, body in after[:-1]}) > 2, "the fallback answers never changed"
+    # What each answer brought: the whole page, patches, or no DOM change (a
+    # skipped render, a render that changed nothing).
+    answers = [json.loads(body) for _, body in after[1:-1]]
+    kinds = [
+        "html" if "html" in answer else "patches" if answer.get("patches") else "none"
+        for answer in answers
+    ]
+    rendered = [kind for kind in kinds if kind != "none"]
+    if not echo:
+        assert set(rendered) == {"html"}, kinds
+    else:
+        # Not vacuous: the patch path was taken, in both runs.
+        assert rendered[0] == "patches", (label, kinds)
+        if label in HTTP_ALWAYS_PATCHED:
+            assert set(rendered) == {"patches"}, (label, kinds)
     FRAMES_COMPARED.append(len(after) - 1)
 
 

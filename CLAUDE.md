@@ -104,10 +104,10 @@ djust/
   `python/djust/static/djust/client-sizes.json` by `scripts/build-client.sh`
   and enforced by `scripts/check-doc-snippets.py` against the artifact each
   line names — run `make sizes` to print the current values (#2138).
-  - **Shipped**: `client.min.js.gz` is **~83 KB** gz — what a user downloads,
+  - **Shipped**: `client.min.js.gz` is **~85 KB** gz — what a user downloads,
     and the only figure that constrains anything.
-  - **Build input**: unminified `client.js` is ~273 KB gz <!-- size-claim: unminified -->
-    across 59 modules in `static/djust/src/`. Not a deliverable; do not quote
+  - **Build input**: unminified `client.js` is ~277 KB gz <!-- size-claim: unminified -->
+    across 60 modules in `static/djust/src/`. Not a deliverable; do not quote
     it as "the client size".
   - Until #2138 these read ~87 KB gz / 388 KB raw / 35 modules <!-- size-claim: historical -->
     and had drifted more than 2x, because only the README pair was checked.

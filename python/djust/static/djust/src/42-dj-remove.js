@@ -106,6 +106,17 @@ function _finalizeRemoval(el) {
     }
 }
 
+// #4108: end every exit still playing under `root` now. A whole-page answer
+// of the page-POST fallback is morphed in position by position; an element
+// that is on its way out is no part of the page the server sent, and left in
+// place it would be given a live row's content and then removed with it.
+function finishPendingRemovals(root) {
+    if (!root || !root.querySelectorAll) return;
+    for (const el of root.querySelectorAll('[dj-remove]')) {
+        if (_pendingRemovals.has(el)) _finalizeRemoval(el);
+    }
+}
+
 function _cancelRemoval(el) {
     // Called when the dj-remove attribute is stripped from a pending
     // element. Revert applied classes, clear the timer, leave the
@@ -213,6 +224,7 @@ globalThis.djust.djRemove = {
     _durationFor,
     _runRemove,
     _finalizeRemoval,
+    finishPendingRemovals,
     _cancelRemoval,
     _teardownState,
     _pendingRemovals,

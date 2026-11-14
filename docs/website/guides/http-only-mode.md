@@ -9,12 +9,22 @@ description: "Run djust without WebSockets: HTTP polling for environments where 
 
 # HTTP-Only Mode (Without WebSocket)
 
-djust can run without WebSockets. With `use_websocket: False`, the client uses the SSE transport: the server pushes updates over an `EventSource` stream, and the client sends events as HTTP POST requests. Only in a browser without `EventSource` does it fall back to POSTing events to the page URL. This is useful for:
+djust can run without WebSockets, in two ways that suit different deployments.
 
-- Testing without WebSocket infrastructure
-- Environments where WebSocket connections are blocked
-- Simpler deployment scenarios
-- Debugging and development
+| | Stateless page POST | SSE transport |
+|---|---|---|
+| What it is | each event is one `POST` to the page's own URL; the answer updates the page | an `EventSource` stream from the server, plus one `POST` per event |
+| Server state | none between requests: each POST builds the view again and restores the fields declared `persist="server"` | the view object lives in the process that holds the stream |
+| Several processes or nodes | any process can answer any request; no sticky routing | the stream and its event POSTs must reach **the same process**: an event POST that lands on another one is answered 404 and the event is dropped. Needs sticky routing, or one worker |
+| Server push (`tick_interval`, `self.server_push()`), loading states from `start_async` | no: there is no channel from the server. Use [`dj-poll`](#polling-instead-of-server-push) | yes |
+| Infrastructure | plain HTTP | a streaming response the proxy does not buffer, and an open connection per client |
+| Answers | patches when the page is reproducible, the whole page otherwise ([below](#patches-over-the-page-post)) | patches |
+
+**The stateless page POST is the HTTP-only mode that scales across processes.** It is also what every page falls back to whenever an event cannot go over a socket or a stream: before the WebSocket has mounted the view, while it reconnects, when its mount was rejected, in a browser without `EventSource`. So every djust page uses it at some point, with no configuration.
+
+**SSE is the option for a deployment with sticky routing** (or a single process) that wants server push without WebSockets.
+
+With `use_websocket: False`, the client opens the SSE stream when the browser has `EventSource`, and uses the page POST when it does not.
 
 ## Configuration
 
@@ -77,13 +87,77 @@ Browser                                   Server
    |<==stream: patches ==========================|
 ```
 
-### Fallback: browsers without `EventSource`
+### The stateless page POST
 
 ```
-Browser                    Server
-   |---POST <page URL> ---->| (event + params)
-   |<--JSON patches---------|
+Browser                               Server
+   |---GET <page URL> ------------------>|  the page, with a digest of its render
+   |---POST <page URL> ----------------->|  event + params + the digest
+   |<--JSON: patches + the next digest---|  (or the whole page: see below)
 ```
+
+### Patches over the page POST
+
+A page POST has no earlier render to diff against, because the view is built again for each request. djust renders the restored view once **before** the handler, runs the handler, renders again and answers with the difference: about a hundred bytes instead of the page, and the browser's own state (text typed into other inputs, an opened `<details>`, classes a script set) is left alone, as it is over a socket.
+
+That is only correct if the render before the handler is the page the browser is showing, node for node. The server checks both halves of that without storing anything. The page and every answer carry a token in two parts:
+
+- a **digest** of the render they deliver, keyed from `SECRET_KEY` and bound to the session, the signed-in user, the path and the view. The client sends the latest one back; it matches only if a fresh render of the saved state reproduces what the client was last sent.
+- the **shape** of that render: a checksum of its tree, every element with its attributes and every text, in document order. The client computes the shape of its own DOM and sends that. Patches are addressed by position, so a DOM that a script, a hook or a still-playing `dj-remove` exit has changed would take them on the wrong node. While its DOM has another shape the client sends no token at all, and it checks the shape again at the moment it applies an answer. The client's shape is compared with the server's own, so it does not matter when the DOM was changed: rows a script reordered before djust started, or in a callback after a patch, give another shape. (Attributes client code normally writes on a server-rendered page are left out: `class`, `style`, `aria-*`, `hidden`, `open`, `disabled`, `checked`, `selected`, `tabindex`, `role` and djust's own markers.)
+
+- **Both match:** the answer is the patches.
+- **Anything else:** the answer is the whole page, exactly as before this existed. That covers a first request with no token, a second tab that changed the state the tabs share, a template changed by a deploy between two requests, a page that renders differently each time, and a page whose DOM something else has rearranged.
+
+Nothing in the token is secret or trusted. The patches are always computed from the server's own two renders, so a forged or replayed token can only select the whole page.
+
+The render before the handler runs on a **copy** of the view, which is then thrown away; only its compiled template and rendered tree are kept. So nothing it evaluates (a queryset's rows, a `cached_property`, a paginator's count) is there when the handler's render runs: a row the handler changed in the database is in the answer, as it is in a whole-page answer.
+
+If a patch answer cannot be applied after all (the DOM changed while the request was out), the client asks for the page again with a POST that carries no event (`X-Djust-Resync: 1`). The server restores the saved state, runs every check an event passes and no handler, and answers with the whole page. Nothing is lost: unlike a reload, which is a new page load and mounts the view again.
+
+**What makes a page reproducible.** The pre-handler render must equal what the browser shows, so everything the last answer showed has to come back on the next request:
+
+- State an event changes must be declared `state(..., persist="server")`. A plain attribute a handler set is back at its `mount()` value on the next request, so the next answer is the whole page (which is also the correct page).
+- `FormMixin` errors and input are not persisted by default: after a validation error the next answer is the whole page.
+- Output that differs on every render (a clock, a random id) never matches. After two whole-page answers in a row the client stops sending the token for a while, so such a page costs one render per event, as before.
+- DOM that client code adds, removes, reorders or rewrites inside the root (a widget library, a hook's `mounted()`, a script that changes a text or a `data-*` attribute) changes the page's shape, so that page is answered with whole pages. Put such DOM under `dj-update="ignore"`, or outside the root.
+- A page whose markup the browser parses into another tree than it spells out (a `<table>` with no `<tbody>`, a `<div>` inside a `<p>`) never has the server's shape and is answered with whole pages.
+
+**What is never patched** (the answer is the whole page, with no extra render): a view with `temporary_assigns` or streams, a page whose template embeds another view (`{% live_render %}`, `dj-lazy`), an event addressed to a component or an embedded child, and an `@cache` request. A page whose render contains a `dj-update` container or a virtual list is answered with the whole page too.
+
+**The cost** is the second render. An event answered with patches takes up to about twice the server time of the same event answered with the whole page: we measured between 1.2 and 2.2 times on tables of 1,000 rows (70 → 86 ms on one page, 63 → 140 ms on another). `get_context_data()` and the context processors run twice (once on the copy, once on the view), and so does everything they do: their queries, and any side effect such as an audit log entry, a counter or a write. Copying the view and computing the shape are a small part of it (well under a millisecond on a small page, a few milliseconds on a page of a thousand rows). A view that cannot be copied (it holds a lock, an open file, a connection) is answered with the whole page.
+
+**When to turn it off.** Keep the whole-page answer and the single render for a view when:
+
+- `get_context_data()` or a context processor has a side effect that must happen once per event;
+- the render is expensive enough that doubling it matters more than the smaller answer;
+- client scripts or widgets restructure the DOM inside the root. Nothing breaks (the client then sends no token and gets whole pages), but nothing is gained either; put such DOM under `dj-update="ignore"` or outside the root if you want patches.
+
+```python
+from djust import LiveView
+from djust.decorators import state
+
+
+class ReportView(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ total }}</div>"
+    http_fallback_patches = False  # whole-page answers, one render per event
+    total = state(0)
+```
+
+or for every view:
+
+<!-- doc-snippet-check: skip -->
+```python
+LIVEVIEW_CONFIG = {
+    "http_fallback_patches": False,  # default True
+}
+```
+
+**Compression.** A whole-page answer is the root's HTML as JSON, and many deployments do not compress `application/json` (nginx's default `gzip_types` is `text/html` only). djust therefore gzips a page-POST answer of 200 bytes or more itself, for a client that accepts gzip, using Django's `GZipMiddleware` rules (including its padding against BREACH). A 100-row table goes from about 29 KB to about 4 KB. A response that is already encoded is left alone, and a `GZipMiddleware` of your own does not compress it twice. `LIVEVIEW_CONFIG["http_fallback_compress"] = False` leaves compression to your proxy.
+
+### Polling instead of server push
+
+The page POST has no channel from the server to the browser: `tick_interval`, `self.server_push()`, `push_to_view`, presence and the loading state of `start_async` need a WebSocket (or, for ticks and `server_push`, the SSE stream). What works on every transport is `dj-poll`: a timer in the browser that sends an ordinary event (every 5 seconds by default, paused while the tab is hidden).
 
 ### What the page-POST fallback keeps between events
 
@@ -93,7 +167,7 @@ Every POST to the page URL builds a fresh view instance. What it gets back depen
 
 **A view that states `exposure_policy = "legacy"`** (deprecated) keeps nothing between requests in 2.0: every POST runs `mount()` and `handle_params()` again, applies the event and renders, so anything a handler set on `self` is back at its `mount()` value on the next POST. Until 2.0 such a view's public and private attributes and its components' state were saved in the session and put back instead of running `mount()`; that save, and `handle_restore()` for a legacy view, are gone (see [Migrating to 2.0](migrating-to-2.0.md#5-what-does-not-survive)). An interactive component (`DropdownMenu`) gets a new identity on each mount, so an event addressed to the one the previous answer rendered is refused with 400 `{"error": "Component not found"}`, as on an explicit view.
 
-Whenever the fallback runs `mount()` it then runs `handle_params(params, uri)`, as the GET and the socket mount do, with the POST's own query string (the browser posts to `window.location.href`, so `?scope=mine` is on the request). A page that reads its URL there meets the event with the state the browser shows, and the answer is a diff against that page, not against `mount()`'s defaults.
+Whenever the fallback runs `mount()` it then runs `handle_params(params, uri)`, as the GET and the socket mount do, with the POST's own query string (the browser posts to `window.location.href`, so `?scope=mine` is on the request). A page that reads its URL there meets the event with the state the browser shows, and the answer is computed against that page, not against `mount()`'s defaults.
 
 `start_async()` and `@background` work runs inside the request, before the answer is rendered, because the fallback has one response and no later frame to deliver a result. The handler's loading state is therefore never rendered on this transport: the one answer holds the result.
 
@@ -149,13 +223,14 @@ What carries over and what does not:
 
 ## Behavior Differences
 
-| Feature | WebSocket Mode | SSE / HTTP Mode |
-|---------|---------------|-----------|
-| Connection | Persistent | SSE stream + one POST per event |
-| Latency | Lower (~10ms) | Higher (~50-100ms) |
-| Server Load | Lower | Higher (new request per event) |
-| Fallback | To SSE, if mounted | To page POST, if no `EventSource` |
-| Deployment | Requires WebSocket support | Standard HTTP only |
+| Feature | WebSocket | SSE | Stateless page POST |
+|---------|-----------|-----|---------------------|
+| Connection | persistent | a stream + one POST per event | one POST per event |
+| The view between events | one live object | one live object, in one process | built again for each event from `persist="server"` state |
+| Answer to an event | patches | patches | patches when the page is reproducible, else the whole page |
+| Server push, ticks | yes | yes | no (`dj-poll`) |
+| Across processes | the socket stays on its process | needs sticky routing | any process |
+| When it is used | default | `use_websocket: False`, or after the WebSocket gives up, if mounted | whenever neither of the others can carry the event |
 
 ## Example: HTTP-Only LiveView
 
@@ -231,12 +306,13 @@ class CounterView(LiveView):
 - ✅ Better for frequent updates
 - ✅ Lower server load
 
-### HTTP Mode (Good for Development/Testing)
-- ✅ Simpler infrastructure
-- ✅ No WebSocket configuration needed
-- ✅ Easier debugging (see requests in Network tab)
-- ⚠️  Higher latency
-- ⚠️  More server load
+### HTTP modes
+- ✅ Simpler infrastructure, no WebSocket configuration
+- ✅ Easier debugging (every event is a request in the Network tab)
+- ✅ The stateless page POST needs no sticky routing and no shared process state
+- ⚠️  Higher latency: a request per event
+- ⚠️  More server work per event: the page POST mounts the view again, and renders it twice when it answers with patches
+- ⚠️  No server push over the page POST
 
 ## Automatic Fallback
 
@@ -248,7 +324,7 @@ If the WebSocket exhausts its reconnect attempts and the SSE endpoint is mounted
 
 Check:
 1. `sse_urlpatterns` is mounted (see [Mount the SSE endpoint](#mount-the-sse-endpoint)); the stream at `/djust/sse/<session>/` must not 404
-2. Event handlers are decorated with `@event_handler` (the default `event_security = "strict"` rejects undecorated methods)
+2. Event handlers are decorated with `@event_handler`. The page POST refuses an undecorated method whatever `event_security` says
 3. Browser console for errors
 4. Django middleware allows POST requests
 

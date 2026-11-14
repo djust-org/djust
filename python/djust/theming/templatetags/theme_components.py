@@ -14,7 +14,6 @@ Falling back to:
 import inspect
 import logging
 import re
-import uuid
 from collections.abc import Callable, Iterable, Mapping
 from decimal import Decimal
 from typing import Any, Optional, Tuple
@@ -1334,7 +1333,14 @@ def theme_tooltip(context: Context, text: str, position: str = "top", **attrs: A
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
     tmpl = resolve_component_template(request, "tooltip")
-    tooltip_id = remaining_attrs.pop("id", f"tooltip-{uuid.uuid4().hex}")
+    if "id" in remaining_attrs:
+        tooltip_id = remaining_attrs.pop("id")
+    else:
+        # Derived from the call, so it repeats on every render (#4108); the
+        # second identical tooltip of a render gets "-2".
+        from djust.components.templatetags.djust_components import _render_id
+
+        tooltip_id = _render_id("tooltip", text, position, context=context)
     ctx = {
         "text": text,
         "position": position,

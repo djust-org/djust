@@ -1732,6 +1732,88 @@ function getSignificantChildren(node) {
     );
 }
 
+// --- DOM shape (#4108) -------------------------------------------------------
+// A checksum of the tree under a view's root: what sits where. For each node
+// in document order: an element's tag and attributes (sorted by name) and its
+// children, a text child's text (whitespace runs collapsed), a dj-if marker.
+// Which nodes count is getSignificantChildren's rule, the one patch paths are
+// resolved with, so two trees with one shape resolve every path to
+// corresponding nodes; and since the shape holds each element's attributes and
+// text, rows that were reordered give another shape unless they are equal in
+// all of that, in which case their order makes no difference. The server
+// computes the same value from its render (`dom_shape`,
+// python/djust/_render_digest.py); the page-POST fallback applies a patch
+// answer, which is addressed by path, only while the DOM has the shape of the
+// render the patches were computed from.
+const _SHAPE_CRC = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+        table[n] = c >>> 0; // eslint-disable-line security/detect-object-injection
+    }
+    return table;
+})();
+
+// Attributes client code writes on a page that is still the server's render
+// (presentation and widget state) are not part of the shape. Kept equal to
+// `_SKIPPED_ATTRS` / `_SKIPPED_ATTR_PREFIXES` in _render_digest.py.
+const _SHAPE_SKIPPED = new Set(('class style dj-id open hidden disabled checked selected tabindex role '
+    + 'data-live-hydrated data-open data-visible data-position data-current '
+    + 'data-theme data-theme-mode').split(' '));
+const _SHAPE_SKIPPED_PREFIX = /^(aria-|data-djust-|data-dj-|data-upload-|data-stream-)/;
+const _shapeText = (text) => text.replace(/[ \t\n\r\f]+/g, ' ').replace(/^ | $/g, '');
+
+/** The shape of `root`'s tree as 16 hex digits, or null if it cannot be computed. */
+function domShape(root) {
+    if (!root) return null;
+    let crc = 0xFFFFFFFF, a = 1, b = 0;
+    const byte = (code) => {
+        crc = _SHAPE_CRC[(crc ^ code) & 0xFF] ^ (crc >>> 8);
+        a = (a + code) % 65521;
+        b = (b + a) % 65521;
+    };
+    // The UTF-8 bytes of `text`.
+    const put = (text) => {
+        for (const char of text) {
+            const c = char.codePointAt(0);
+            if (c < 0x80) byte(c);
+            else if (c < 0x800) { byte(0xC0 | (c >> 6)); byte(0x80 | (c & 63)); }
+            else if (c < 0x10000) { byte(0xE0 | (c >> 12)); byte(0x80 | ((c >> 6) & 63)); byte(0x80 | (c & 63)); }
+            else { byte(0xF0 | (c >> 18)); byte(0x80 | ((c >> 12) & 63)); byte(0x80 | ((c >> 6) & 63)); byte(0x80 | (c & 63)); }
+        }
+    };
+    const walk = (node) => {
+        for (const child of getSignificantChildren(node)) {
+            if (child.nodeType === Node.COMMENT_NODE) {
+                put('!');
+            } else if (child.nodeType === Node.TEXT_NODE) {
+                put('"' + _shapeText(child.textContent) + '\0');
+            } else {
+                const csrf = child.getAttribute('name') === 'csrfmiddlewaretoken';
+                const attrs = [];
+                for (const name of child.getAttributeNames()) {
+                    const lower = name.toLowerCase();
+                    if (_SHAPE_SKIPPED.has(lower) || _SHAPE_SKIPPED_PREFIX.test(lower)) continue;
+                    // Django masks the CSRF token again on every render.
+                    if (csrf && lower === 'value') continue;
+                    attrs.push(' ' + lower + '=' + child.getAttribute(name) + '\0');
+                }
+                put('<' + child.tagName.toLowerCase() + attrs.sort().join(''));
+                // dj-disable-with shows other text while its request is out.
+                const shown = child.getAttribute('data-djust-original-text');
+                if (shown === null) walk(child);
+                else if (shown === ' ' || /[^ \t\n\r\f]/.test(shown)) put('"' + _shapeText(shown) + '\0');
+                put('>');
+            }
+        }
+    };
+    walk(root);
+    const hex = (n) => (n >>> 0).toString(16).padStart(8, '0');
+    return hex(crc ^ 0xFFFFFFFF) + hex((b << 16) | a);
+}
+window.djust.domShape = domShape;
+
 const WHITESPACE_PRESERVING_TAGS = ['PRE', 'CODE', 'TEXTAREA', 'SCRIPT', 'STYLE'];
 
 /**
@@ -3307,17 +3389,21 @@ function _shouldUseViewTransition() {
  * to abandon the animation and return false so the caller can trigger
  * a full re-render fallback. ADR-013.
  */
-async function applyPatches(patches, rootEl = null) {
+async function applyPatches(patches, rootEl = null, applyIf = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
     // A frame for a view mounted beside the page view patches its container (#3252).
     if (!rootEl && _activeSlot) rootEl = _activeSlot.root;
+    // `applyIf` (#4108) is asked at the last moment, in the same synchronous
+    // step as the first mutation: under a View Transition that is the update
+    // callback, which runs later than this call. False applies nothing.
+    const apply = () => (applyIf && !applyIf() ? false : _applyPatchesInner(patches, rootEl));
 
     if (_shouldUseViewTransition()) {
         let innerResult = true;
         const transition = document.startViewTransition(() => {
-            innerResult = _applyPatchesInner(patches, rootEl);
+            innerResult = apply();
         });
         try {
             await transition.updateCallbackDone;
@@ -3329,7 +3415,7 @@ async function applyPatches(patches, rootEl = null) {
         return innerResult;
     }
 
-    return _applyPatchesInner(patches, rootEl);
+    return apply();
 }
 
 /**
