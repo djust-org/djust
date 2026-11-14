@@ -158,8 +158,6 @@ if os.environ.get("DJUST_DEMO_REAUTH_ON_EVENT") == "1":
 # Only views from these modules can be mounted via WebSocket
 LIVEVIEW_ALLOWED_MODULES = [
     "demo_app.views",
-    # The homepage demos are still defined here (djust_homepage imports them).
-    "demo_app.views_old",
     "djust_demos.views",
     "djust_docs.views",
     "djust_forms.views",

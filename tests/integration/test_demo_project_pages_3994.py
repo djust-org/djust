@@ -301,6 +301,16 @@ def test_every_routed_demo_view_can_mount_over_the_websocket():
     assert_all_routed_liveviews_allowlisted()
 
 
+def test_the_unrouted_legacy_views_cannot_mount():
+    """``demo_app.views_old`` holds unrouted legacy views; the one routed view it held,
+    ``NavbarBadgeDemo``, moved to ``demo_app.views.homepage`` so the module stays off the
+    allowlist."""
+    from djust.security.mount import is_view_path_allowed
+
+    assert not is_view_path_allowed("demo_app.views_old.CounterView")
+    assert is_view_path_allowed("demo_app.views.homepage.NavbarBadgeDemo")
+
+
 def test_portal_create_page_says_there_is_no_tenant(admin_client):
     """With no tenant row the create page says so instead of offering a form.
 
