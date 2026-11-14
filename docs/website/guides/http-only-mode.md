@@ -116,8 +116,7 @@ If a patch answer cannot be applied after all (the DOM changed while the request
 
 **What makes a page reproducible.** The pre-handler render must equal what the browser shows, so everything the last answer showed has to come back on the next request:
 
-- State an event changes must be declared `state(..., persist="server")`. A plain attribute a handler set is back at its `mount()` value on the next request, so the next answer is the whole page (which is also the correct page).
-- `FormMixin` errors and input are not persisted by default: after a validation error the next answer is the whole page.
+- State an event changes must come back on the next request. The view's public attributes, `FormMixin` input and errors included, are saved server-side for the page's tab ([what survives](state-survival.md)); a value that cannot be saved is back at its `mount()` value on the next request, so the next answer is the whole page (which is also the correct page). Secret form input (a password, a one-time code) is never stored.
 - Output that differs on every render (a clock, a random id) never matches. After two whole-page answers in a row the client stops sending the token for a while, so such a page costs one render per event, as before.
 - DOM that client code adds, removes, reorders or rewrites inside the root (a widget library, a hook's `mounted()`, a script that changes a text or a `data-*` attribute) changes the page's shape, so that page is answered with whole pages. Put such DOM under `dj-update="ignore"`, or outside the root.
 - A page whose markup the browser parses into another tree than it spells out (a `<table>` with no `<tbody>`, a `<div>` inside a `<p>`) never has the server's shape and is answered with whole pages.
