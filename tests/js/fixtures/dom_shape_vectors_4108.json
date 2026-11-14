@@ -377,6 +377,18 @@
    "html": "<div dj-root=\"\"><svg viewBox=\"0 0 1 1\"><path d=\"M0\"/></svg></div>",
    "shape": "b22321c9baa909b3",
    "client": "same"
+  },
+  {
+   "name": "every_skipped_attribute",
+   "html": "<div dj-root=\"\"><p checked=\"v\" class=\"v\" data-current=\"v\" data-live-hydrated=\"v\" data-open=\"v\" data-position=\"v\" data-theme=\"v\" data-theme-mode=\"v\" data-visible=\"v\" disabled=\"v\" hidden=\"v\" open=\"v\" role=\"v\" selected=\"v\" style=\"v\" tabindex=\"v\" aria-x=\"v\" data-djust-x=\"v\" data-dj-x=\"v\" data-upload-x=\"v\" data-stream-x=\"v\">x</p></div>",
+   "shape": "aa10c54c05cc0185",
+   "client": "same"
+  },
+  {
+   "name": "every_skipped_attribute_left_out",
+   "html": "<div dj-root=\"\"><p>x</p></div>",
+   "shape": "aa10c54c05cc0185",
+   "client": "same"
   }
  ]
 }

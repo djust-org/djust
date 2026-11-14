@@ -67,7 +67,12 @@ class LiveViewSSE {
         // runtime's early-return when view_instance is already set), which
         // is the only path that includes ``url`` for URL-kwarg resolution
         // (fixes #1237 bug 1).
-        const urlParams = new URLSearchParams(params);
+        // Every value of a repeated key goes on the stream URL (#4125):
+        // `new URLSearchParams(params)` would join a list into "a,b".
+        const urlParams = new URLSearchParams();
+        for (const [key, value] of Object.entries(params || {})) {
+            for (const item of (Array.isArray(value) ? value : [value])) urlParams.append(key, item);
+        }
         urlParams.set('view', viewPath);
         urlParams.set('_djust_url', window.location.pathname);
         urlParams.set('_djust_tab', djustTabId());
@@ -144,7 +149,7 @@ class LiveViewSSE {
             // the current route instead of remounting the wrong view.
             if (this.eventSource && pageUrl !== window.location.pathname + window.location.search) {
                 this.disconnect();
-                this.connect(this.primaryViewPath, Object.fromEntries(new URLSearchParams(window.location.search)));
+                this.connect(this.primaryViewPath, djustQueryParams(window.location.search));
                 return;
             }
             // #3164: the server refuses (409) a session id that is live under
@@ -491,7 +496,7 @@ class LiveViewSSE {
      */
     remountSlots() {
         if (!this.enabled || !this.viewMounted) return;
-        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+        const urlParams = djustQueryParams(window.location.search);
         for (const [targetId, slot] of Array.from(_mountedSlots.entries())) {
             if (!slotContainer(targetId)) {
                 forgetSlot(targetId);

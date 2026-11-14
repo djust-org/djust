@@ -18,38 +18,98 @@ ROOT = Path(__file__).resolve().parents[1]
 # the expected workflow; failing to add it will cause the linter to
 # surface a possible #1275-class (stale/typo'd emit default) mismatch.
 _APP_LEVEL_EVENTS = {
-    # {% carousel %}: no framework handler since CarouselMixin was removed
-    # (#4025). The Carousel descriptor handles carousel_go through Meta.event,
-    # which this scan of method names does not see; prev/next are the app's.
-    "carousel_go",
-    "carousel_next",
-    "carousel_prev",
+    # Block tags read their defaults with ``kw.get("x_event", "default")``; the scan covers
+    # those since #4037. These defaults are answered by the application's own handler: what
+    # they do depends on the app's data (approve, export, reorder, a page of results ...).
+    "add_row",
+    "approve",
     "clear_notifications",
     "copy_code",
+    "counter_update",
+    "dashboard_move",
+    "dashboard_resize",
     "date_next_month",
     "date_prev_month",
     "date_select",
+    "default",
+    "dismiss_alert",
     "dismiss_toast",
+    "export",
+    "filter_change",
+    "filter_clear",
     "grid_cell_edit",
+    "import_data",
+    "inline_edit",
     "kanban_add_card",
     "kanban_add_column",
     "kanban_move",
     "load_more",
     "mark_notification_read",
+    "mark_read",
+    "new_message",
     "page_next",
     "page_prev",
+    "rate_response",
+    "reject",
+    "remove_row",
+    "reorder",
+    "save_crop",
+    "save_signature",
+    "select_model",
+    "send",
+    "toggle_menu",
     "toggle_notifications",
+    "toggle_sidebar",
     "toggle_split_menu",
     "tree_expand",
     "tree_select",
+    "upload_file",
+    "x_event",
+    # UI-state events of a component tag: no framework handler yet, tracked in #4126.
+    "accept_cookies",
+    "close_export",
+    "close_lightbox",
+    "close_palette",
+    "data_loaded",
+    "dismiss_announcement",
+    "lightbox_navigate",
+    "palette_search",
+    "section_changed",
+    "set_step",
+    "stream_chunk",
+    "toggle_expand",
+    "toggle_list",
+    "toggle_nav",
+    "toggle_preview",
 }
 
 
 def extract_event_defaults(path: Path) -> dict:
-    """Return {default_value: [site]} for every kwarg ending in _event."""
+    """Return {default_value: [site]} for every kwarg ending in _event (or
+    named ``event``): a function default, or a ``kw.get("x_event", "default")``
+    read of a resolved tag-argument dict (#4037: the block tags, such as
+    ``{% modal %}`` and ``{% sheet %}``, read their defaults that way)."""
     tree = ast.parse(path.read_text())
     out = {}
     for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in ("kw", "kwargs")
+            and len(node.args) == 2
+            and all(isinstance(a, ast.Constant) for a in node.args)
+        ):
+            key, default = node.args[0].value, node.args[1].value
+            if (
+                isinstance(key, str)
+                and (key == "event" or key.endswith("_event"))
+                and isinstance(default, str)
+                and default
+            ):
+                out.setdefault(default, []).append(f"{path.name}:{node.lineno} (kw.get)")
+            continue
         if not isinstance(node, ast.FunctionDef):
             continue
         args_with_defaults = node.args.args[-len(node.args.defaults):]
@@ -75,14 +135,38 @@ def extract_event_defaults(path: Path) -> dict:
     return out
 
 
+def _str_constants(node) -> list:
+    """The string constants of a str / tuple / list / set literal."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        return [
+            e.value
+            for e in node.elts
+            if isinstance(e, ast.Constant) and isinstance(e.value, str)
+        ]
+    return []
+
+
 def extract_handler_names(path: Path) -> set:
-    """Return every method def name in this file."""
+    """Return every method def name in this file, plus the events a
+    component's ``class Meta`` answers (``event = ...`` and
+    ``events = (...)``, #4037): the descriptors register those on the view."""
     tree = ast.parse(path.read_text())
-    return {
+    names = {
         n.name
         for n in ast.walk(tree)
         if isinstance(n, ast.FunctionDef)
     }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "Meta":
+            for stmt in node.body:
+                if not isinstance(stmt, ast.Assign):
+                    continue
+                for target in stmt.targets:
+                    if isinstance(target, ast.Name) and target.id in ("event", "events"):
+                        names.update(_str_constants(stmt.value))
+    return names
 
 
 def run(tag_files, handler_files, app_level_events=None):
@@ -171,6 +255,10 @@ def main(argv=None):
             ROOT / "python/djust/components/base.py",
             ROOT / "python/djust/components/rust_handlers.py",
         ])
+        # The descriptors answer their tags' default events (#4037).
+        handler_files.extend(
+            sorted((ROOT / "python/djust/components/descriptors").glob("*.py"))
+        )
 
     exit_code, msg = run(tag_files, handler_files)
     print(msg)

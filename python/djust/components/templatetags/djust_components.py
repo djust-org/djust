@@ -854,6 +854,21 @@ def table_href(row: Any, key: Any) -> Any:
     return mark_safe(url_attr(table_cell(row, key), honor_safe=False))
 
 
+@register.filter
+def table_has_href(row: Any, key: Any) -> bool:
+    """Whether ``row[key]`` is a URL at all (#3895): not for a row that is not a mapping, a key
+    it lacks, ``None`` or blank text. ``table_cell`` writes those as ``""`` / ``"None"``, which as
+    an ``href`` is the current page or ``<page>/None``; a link column then draws plain text and a
+    ``row_url`` row is not clickable. The native table decides the same (``_has_row_href``)."""
+    if not isinstance(row, Mapping):
+        return False
+    try:
+        value = row.get(key)
+    except TypeError:  # an unhashable key
+        return False
+    return value is not None and str(value).strip() != ""
+
+
 @register.inclusion_tag("djust_components/table.html")
 def data_table(
     rows: Any,
@@ -6596,89 +6611,86 @@ def do_sidebar_section(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 
+#: The context key a ``{% nav_menu %}`` / ``{% nav_item %}`` sets for the items rendered in
+#: its body (#3873, #3878): the menu's ``active`` and the depth of the items below, plus a
+#: count the item bumps so its parent knows it holds sub-items. A context entry, not the
+#: render context, so an item reached through ``{% include %}`` still finds its menu.
+_NAV_FRAME = "_djust_nav_frame"
+
+
 class NavItemNode(template.Node):
-    """A single nav menu item, optionally containing dropdown children."""
+    """A single nav menu item, optionally containing dropdown children.
+
+    The item renders its own body first, as the native block handler is handed it rendered
+    (#3873, #3878): a sub-item at any depth is drawn, and so is one a template puts inside
+    ``{% if %}`` / ``{% for %}``. An item with sub-items is a dropdown whose list is that body;
+    an item without is a link or a button and its body is ignored. Outside a ``{% nav_menu %}``
+    it draws nothing.
+    """
 
     def __init__(self, kwargs: Any, nodelist: Any) -> None:
         self.kwargs = kwargs
         self.nodelist = nodelist
 
     def render(self, context: Any) -> SafeString:
-        return ""  # rendered by parent NavMenuNode
-
-
-class NavMenuNode(template.Node):
-    def __init__(self, nodelist: Any, kwargs: Any) -> None:
-        self.nodelist = nodelist
-        self.kwargs = kwargs
-
-    def _render_nav_item(self, item: Any, context: Any, active_path: Any) -> Any:
-        kw = {k: _resolve(v, context) for k, v in item.kwargs.items()}
+        frame = context.get(_NAV_FRAME)
+        if not isinstance(frame, dict):
+            return SafeString("")
+        frame["items"] += 1
+        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         label = kw.get("label", "")
         href = kw.get("href", "#")
         item_id = kw.get("id", "")
         event = kw.get("event", "")
         mega = kw.get("mega", False)
+        desc = kw.get("description", "")
+        depth = frame["depth"]
+        # The item's own ``active=`` (what the native item reads), else the menu's.
+        active_path = kw.get("active", frame["active"])
 
-        is_active = item_id == active_path or href == active_path
-        active_cls = " dj-nav__item--active" if is_active else ""
+        own: dict[str, Any] = {"active": frame["active"], "depth": depth + 1, "items": 0}
+        with context.push(**{_NAV_FRAME: own}):
+            content = self.nodelist.render(context)
 
-        # Check for sub-items (dropdown children)
-        sub_items = [n for n in item.nodelist if isinstance(n, NavItemNode)]
+        # Truthiness first, as the native item: no ``id`` and no menu ``active`` is not a match.
+        is_active = bool(item_id and item_id == active_path) or bool(href and href == active_path)
+        top = depth == 0
+        li_cls = "dj-nav__item" if top else "dj-nav__dropdown-item"
+        link_cls = "dj-nav__link" if top else "dj-nav__dropdown-link"
+        active_cls = f" {li_cls}--active" if is_active else ""
 
-        if sub_items:
-            children = "".join(
-                self._render_dropdown_item(si, context, active_path) for si in sub_items
-            )
+        if own["items"]:
             mega_cls = " dj-nav__dropdown--mega" if mega else ""
-            return (
-                f'<li class="dj-nav__item dj-nav__item--has-dropdown{active_cls}">'
-                f'<button class="dj-nav__link">{conditional_escape(label)}'
+            return mark_safe(
+                f'<li class="{li_cls} dj-nav__item--has-dropdown{active_cls}">'
+                f'<button class="{link_cls}">{conditional_escape(label)}'
                 f'<span class="dj-nav__caret">&#9662;</span></button>'
                 f'<div class="dj-nav__dropdown{mega_cls}">'
-                f'<ul class="dj-nav__dropdown-list">{children}</ul></div></li>'
+                f'<ul class="dj-nav__dropdown-list">{content}</ul></div></li>'
             )
-
-        if event:
-            return (
-                f'<li class="dj-nav__item{active_cls}">'
-                f'<button class="dj-nav__link" dj-click="{conditional_escape(event)}">'
-                f"{conditional_escape(label)}</button></li>"
-            )
-
-        return (
-            f'<li class="dj-nav__item{active_cls}">'
-            f'<a class="dj-nav__link" href="{safe_url(href)}">'
-            f"{conditional_escape(label)}</a></li>"
-        )
-
-    def _render_dropdown_item(self, item: Any, context: Any, active_path: Any) -> Any:
-        kw = {k: _resolve(v, context) for k, v in item.kwargs.items()}
-        label = kw.get("label", "")
-        href = kw.get("href", "#")
-        desc = kw.get("description", "")
-        event = kw.get("event", "")
-        item_id = kw.get("id", "")
-
-        is_active = item_id == active_path or href == active_path
-        active_cls = " dj-nav__dropdown-item--active" if is_active else ""
 
         desc_html = ""
         if desc:
             desc_html = f'<span class="dj-nav__dropdown-desc">{conditional_escape(desc)}</span>'
 
         if event:
-            return (
-                f'<li class="dj-nav__dropdown-item{active_cls}">'
-                f'<button class="dj-nav__dropdown-link" dj-click="{conditional_escape(event)}">'
+            return mark_safe(
+                f'<li class="{li_cls}{active_cls}">'
+                f'<button class="{link_cls}" dj-click="{conditional_escape(event)}">'
                 f"{conditional_escape(label)}{desc_html}</button></li>"
             )
 
-        return (
-            f'<li class="dj-nav__dropdown-item{active_cls}">'
-            f'<a class="dj-nav__dropdown-link" href="{safe_url(href)}">'
+        return mark_safe(
+            f'<li class="{li_cls}{active_cls}">'
+            f'<a class="{link_cls}" href="{safe_url(href)}">'
             f"{conditional_escape(label)}{desc_html}</a></li>"
         )
+
+
+class NavMenuNode(template.Node):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
+        self.nodelist = nodelist
+        self.kwargs = kwargs
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
@@ -6708,8 +6720,10 @@ class NavMenuNode(template.Node):
             f'aria-label="Toggle navigation">&#9776;</button>'
         )
 
-        items = [n for n in self.nodelist if isinstance(n, NavItemNode)]
-        items_html = "".join(self._render_nav_item(item, context, active) for item in items)
+        # The body as rendered, as the native handler is handed it (#3878): every item at
+        # every depth, wherever the template put it.
+        with context.push(**{_NAV_FRAME: {"active": active, "depth": 0, "items": 0}}):
+            items_html = self.nodelist.render(context)
 
         return mark_safe(
             f'<nav class="{cls}" id="{conditional_escape(nav_id)}" role="navigation">'
@@ -6992,28 +7006,41 @@ def do_inline_edit(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 
-class FilterSelectNode(template.Node):
+#: The context key a ``{% filter_bar %}`` sets for the controls rendered in its body (#3878).
+_FILTER_FRAME = "_djust_filter_frame"
+#: What a control leaves in its bar's rendered body; the bar removes it.
+_FILTER_SLOT = "<!--djust-filter-slot-->"
+
+
+class _FilterControlNode(template.Node):
+    """A ``{% filter_* %}`` control: it hands its resolved arguments to the nearest enclosing
+    ``{% filter_bar %}``, which draws it (#3878). Like the native child, it is found wherever
+    the bar's body renders it, inside ``{% if %}`` / ``{% for %}`` too. Outside a bar it
+    draws nothing."""
+
+    KIND = ""
+
     def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
     def render(self, context: Any) -> SafeString:
-        return ""  # rendered by FilterBarNode
+        controls = context.get(_FILTER_FRAME)
+        if not isinstance(controls, list):
+            return SafeString("")
+        controls.append((self.KIND, {k: _resolve(v, context) for k, v in self.kwargs.items()}))
+        return SafeString(_FILTER_SLOT)
 
 
-class FilterDateRangeNode(template.Node):
-    def __init__(self, kwargs: Any) -> None:
-        self.kwargs = kwargs
-
-    def render(self, context: Any) -> SafeString:
-        return ""  # rendered by FilterBarNode
+class FilterSelectNode(_FilterControlNode):
+    KIND = "select"
 
 
-class FilterSearchNode(template.Node):
-    def __init__(self, kwargs: Any) -> None:
-        self.kwargs = kwargs
+class FilterDateRangeNode(_FilterControlNode):
+    KIND = "date_range"
 
-    def render(self, context: Any) -> SafeString:
-        return ""  # rendered by FilterBarNode
+
+class FilterSearchNode(_FilterControlNode):
+    KIND = "search"
 
 
 def render_filter_bar(
@@ -7120,26 +7147,22 @@ def render_filter_bar(
     )
 
 
-_FILTER_KINDS = {
-    FilterSelectNode: "select",
-    FilterDateRangeNode: "date_range",
-    FilterSearchNode: "search",
-}
-
-
 class FilterBarNode(template.Node):
+    """Renders its body, as the native handler is handed it (#3878): the controls the body
+    rendered, at any depth, are the bar's; a bar inside the bar and any other content are kept
+    after them, as the native bar keeps them."""
+
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        controls = [
-            (_FILTER_KINDS[type(n)], {k: _resolve(v, context) for k, v in n.kwargs.items()})
-            for n in self.nodelist
-            if type(n) in _FILTER_KINDS
-        ]
-        return render_filter_bar(kw, controls)
+        controls: list[tuple[str, dict[str, Any]]] = []
+        with context.push(**{_FILTER_FRAME: controls}):
+            body = str(self.nodelist.render(context))
+        rest = body.replace(_FILTER_SLOT, "")
+        return render_filter_bar(kw, controls, extra_html=mark_safe(rest) if rest.strip() else "")
 
 
 @register.tag("filter_bar")

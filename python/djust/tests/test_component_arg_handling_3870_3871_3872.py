@@ -416,11 +416,13 @@ def test_a_row_url_and_a_link_column_write_the_rows_url_and_refuse_a_dangerous_s
     assert not [n for _t, n, _v in attrs_of(html) if n.startswith("onmouseover")], html
 
 
-def test_a_row_or_a_key_that_is_not_there_gives_an_empty_attribute() -> None:
+def test_a_row_or_a_key_that_is_not_there_is_not_a_clickable_row() -> None:
+    """#3895: no URL under the key is no ``data-href`` (it was ``""``, the current page)."""
     ctx = {"rows": [{"id": 1, "name": "N"}, "not a dict", None], "cols": COLS}
     src = '{% data_table rows=rows columns=cols row_url="u" %}'
     html = _django(src, ctx)
-    assert attr_values(html, "tr", "data-href") == ["", "", ""], html
+    assert attr_values(html, "tr", "data-href") == [], html
+    assert "data-table-row-clickable" not in html, html
 
 
 def test_a_number_is_written_unlocalised(settings) -> None:

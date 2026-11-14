@@ -1603,7 +1603,7 @@ class LiveViewWebSocket {
      * (reconnect): the server holds no view for a connection that closed.
      */
     remountSlots() {
-        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+        const urlParams = djustQueryParams(window.location.search);
         for (const [targetId, slot] of Array.from(_mountedSlots.entries())) {
             const container = slotContainer(targetId);
             if (!container) {
@@ -1649,7 +1649,7 @@ class LiveViewWebSocket {
 
                 // Always send mount message to initialize server-side session
                 // Pass URL query params so server mount can read filters (e.g., ?sender=80)
-                const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+                const urlParams = djustQueryParams(window.location.search);
                 this.mount(viewPath, urlParams, { primary: true });
             } else {
                 console.warn('[LiveView] Container found but no view path specified');

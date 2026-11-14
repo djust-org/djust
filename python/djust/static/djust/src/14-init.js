@@ -30,7 +30,7 @@ function _switchToSSETransport() {
     liveViewWS = sseInstance;
     window.djust.liveViewInstance = sseInstance;
 
-    const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+    const urlParams = djustQueryParams(window.location.search);
     sseInstance.connect(viewPath, urlParams);
 }
 
