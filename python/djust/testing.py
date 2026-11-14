@@ -1631,14 +1631,26 @@ class LiveComponentTestClient:
                 renamed handler should fail loudly rather than silently
                 no-op, which is how a test can pass while the feature is
                 broken.
+            EventRejectedError: if the transports would refuse the event
+                (a method without ``@event_handler``, a private name, a
+                server-push or server-only method; #4101).
         """
         component = self._require_mounted()
 
-        handler = getattr(component, event_name, None)
         from .decorators import is_push_only
+        from .security.event_guard import is_safe_event_name
+        from .websocket_utils import _check_event_security
 
+        if not is_safe_event_name(event_name):
+            raise EventRejectedError("Blocked unsafe event name: %s" % event_name)
+        handler = getattr(component, event_name, None)
         if handler is None or not callable(handler) or is_push_only(component, event_name, handler):
             raise NoHandlerFoundError(f"{type(component).__name__} has no handler {event_name!r}")
+        # The check every transport runs on a component event, so a test
+        # cannot pass for a method the browser cannot reach.
+        security_error = _check_event_security(handler, component, event_name)
+        if security_error:
+            raise EventRejectedError(security_error)
 
         state_before = self.get_state()
         started = time.perf_counter()

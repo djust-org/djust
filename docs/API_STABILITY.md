@@ -686,10 +686,16 @@ which always refused an undecorated method, so the same event behaved
 differently by transport. djust `2.0.0` removed both modes (#4101): every
 transport runs one check (`websocket_utils._check_event_security`) and refuses
 a method without `@event_handler`, naming the method and the decorator in the
-`DEBUG` error. A project that still sets `LIVEVIEW_CONFIG['event_security']`
-(or `DJUST_CONFIG['event_security']`) to anything but `"strict"` fails startup
-with `ImproperlyConfigured` and the replacement. `"strict"` is accepted and
-does nothing; delete it when convenient.
+`DEBUG` error. Outside `DEBUG` every transport answers `"Event rejected"` both
+for a refused method and for a name that does not exist (the page POST used to
+answer `"Event handler not found"`), so the answer does not reveal which
+methods a view has. `LiveComponentTestClient.send_event` refuses the same
+methods, raising `EventRejectedError`. A project that still sets
+`LIVEVIEW_CONFIG['event_security']` (or `DJUST_CONFIG['event_security']`) to
+`"open"` or `"warn"`, in any case, fails startup with `ImproperlyConfigured`
+and the replacement; any other value except `"strict"` fails startup as an
+unknown value. `"strict"` (any case) is accepted and does nothing; delete it
+when convenient.
 
 ```python
 # Before (removed in 2.0, #4101)

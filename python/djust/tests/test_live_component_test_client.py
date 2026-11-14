@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from djust import LiveComponent
+from djust.decorators import event_handler
 from djust.testing import LiveComponentTestClient, NoHandlerFoundError
 
 
@@ -24,9 +25,11 @@ class StarRating(LiveComponent):
         self.max = max
         self.hover = 0
 
+    @event_handler
     def hover_star(self, n: int = 0) -> None:
         self.hover = n
 
+    @event_handler
     def commit_rating(self, n: int = 0) -> None:
         self.value = n
 

@@ -937,7 +937,7 @@ def test_http_api_refuses_an_unmarked_override_like_an_unknown_handler():
 
 def test_component_test_client_refuses_marked_and_overridden_handlers():
     from djust.components.base import LiveComponent
-    from djust.testing import LiveComponentTestClient, NoHandlerFoundError
+    from djust.testing import EventRejectedError, LiveComponentTestClient, NoHandlerFoundError
 
     class Marked(LiveComponent):
         def mount(self, **kwargs) -> None: ...
@@ -946,8 +946,12 @@ def test_component_test_client_refuses_marked_and_overridden_handlers():
         def refresh(self, **kwargs):
             RAN.append(("component_refresh",))
 
+        @event_handler
         def plain(self, **kwargs):
             RAN.append(("component_plain",))
+
+        def undecorated(self, **kwargs):
+            RAN.append(("component_undecorated",))
 
     class Overridden(Marked):
         def refresh(self, **kwargs):
@@ -957,6 +961,9 @@ def test_component_test_client_refuses_marked_and_overridden_handlers():
         with pytest.raises(NoHandlerFoundError):
             LiveComponentTestClient(cls).mount().send_event("refresh")
     assert RAN == []
+    # The transports refuse an undecorated component method (#4101).
+    with pytest.raises(EventRejectedError):
+        LiveComponentTestClient(Marked).mount().send_event("undecorated")
     LiveComponentTestClient(Marked).mount().send_event("plain")
     assert RAN == [("component_plain",)]
 

@@ -11,11 +11,14 @@ so one event behaved differently by transport. Now every path runs one check,
   ``LiveViewTestClient``) and runs a decorated one;
 * in DEBUG every transport shows the same text, which names the method and
   ``@event_handler``;
-* a structural pin lists who calls the shared check, so a new client-event
-  path that does not call it, or a path that goes back to its own
-  ``is_event_handler`` gate, fails here;
-* ``LIVEVIEW_CONFIG`` / ``DJUST_CONFIG`` ``event_security`` set to anything but
-  ``"strict"`` fails startup with the migration hint (``djust._removed_settings``).
+* outside DEBUG a missing name and a refused one get the same answer, on the
+  page POST and the WebSocket, so the answer does not tell which methods exist;
+* ``LiveComponentTestClient`` refuses what the transports refuse;
+* two structural pins (see their docstrings for what they cannot see);
+* ``LIVEVIEW_CONFIG`` / ``DJUST_CONFIG`` ``event_security``: ``"strict"`` (any
+  case) is silent, ``"open"`` / ``"warn"`` fail startup with the migration
+  hint, anything else fails startup as an unknown value
+  (``djust._removed_settings``).
 """
 
 from __future__ import annotations
@@ -274,11 +277,84 @@ def test_test_client_refuses_with_the_transport_message():
     assert RAN == ["ping"]
 
 
+@pytest.mark.django_db
+def test_component_test_client_refuses_with_the_transport_message():
+    from djust.components.base import LiveComponent as InstanceComponent
+    from djust.testing import EventRejectedError, LiveComponentTestClient
+
+    class Dial(InstanceComponent):
+        template = "<i></i>"
+
+        def mount(self, **props: Any) -> None:
+            pass
+
+        @event_handler
+        def turn(self, **kwargs: Any) -> None:
+            RAN.append("dial.turn")
+
+        def wipe(self, **kwargs: Any) -> None:
+            RAN.append("dial.wipe")
+
+    client = LiveComponentTestClient(Dial).mount()
+    with pytest.raises(EventRejectedError) as exc:
+        client.send_event("wipe")
+    assert str(exc.value) == _expected(client.component, "wipe")
+    with pytest.raises(EventRejectedError):
+        client.send_event("_private")
+    assert client.send_event("turn")["success"] is True
+    assert RAN == ["dial.turn"]
+
+
+# --- a missing name and a refused one read alike in production ----------------------
+
+#: An inherited public framework method (undecorated) and a server-push method:
+#: both exist, neither is an event. A client must not tell them from a name that
+#: does not exist.
+EXISTING_BUT_REFUSED = ("wipe", "get_template", "server_push", "resume_wizard")
+
+
+@pytest.mark.django_db
+def test_http_fallback_missing_and_refused_answers_are_equal_in_production():
+    with _settings(DEBUG=False):
+        missing = _post("no_such_method")
+        answers = {name: _post(name) for name in EXISTING_BUT_REFUSED}
+    for name, response in answers.items():
+        assert (response.status_code, response.content) == (
+            missing.status_code,
+            missing.content,
+        ), name
+    assert json.loads(missing.content) == {"error": "Event rejected"}
+    assert RAN == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_websocket_missing_and_refused_answers_are_equal_in_production():
+    with _settings(DEBUG=False):
+        socket = await _socket()
+        try:
+            missing = await _ws_event(socket, "no_such_method")
+            for name in EXISTING_BUT_REFUSED:
+                assert await _ws_event(socket, name) == missing, name
+        finally:
+            await socket.disconnect()
+    assert missing == ["Event rejected"]
+    assert RAN == []
+
+
+@pytest.mark.django_db
+def test_http_fallback_debug_answer_for_a_missing_name_stays_helpful():
+    with _settings(DEBUG=True):
+        body = json.loads(_post("pign").content)
+    assert body["error"].startswith("No handler found for event: pign")
+    assert "ping" in body["error"]  # the typo hint
+
+
 # --- the removed setting -------------------------------------------------------------
 
 
 @pytest.mark.parametrize("setting", ["LIVEVIEW_CONFIG", "DJUST_CONFIG"])
-@pytest.mark.parametrize("mode", ["warn", "open"])
+@pytest.mark.parametrize("mode", ["warn", "open", "WARN", " Open "])
 def test_a_removed_mode_is_reported_with_the_migration_hint(setting, mode):
     [problem] = removed_settings_in_use(SimpleNamespace(**{setting: {"event_security": mode}}))
     assert f"{setting}['event_security'] = {mode!r} was removed in djust 2.0" in problem
@@ -287,9 +363,19 @@ def test_a_removed_mode_is_reported_with_the_migration_hint(setting, mode):
 
 
 @pytest.mark.parametrize("setting", ["LIVEVIEW_CONFIG", "DJUST_CONFIG"])
-def test_strict_or_unset_is_silent(setting):
-    assert removed_settings_in_use(SimpleNamespace(**{setting: {"event_security": "strict"}})) == []
+@pytest.mark.parametrize("value", ["strict", "Strict", " STRICT "])
+def test_strict_in_any_case_or_unset_is_silent(setting, value):
+    assert removed_settings_in_use(SimpleNamespace(**{setting: {"event_security": value}})) == []
     assert removed_settings_in_use(SimpleNamespace(**{setting: {}})) == []
+
+
+@pytest.mark.parametrize("setting", ["LIVEVIEW_CONFIG", "DJUST_CONFIG"])
+@pytest.mark.parametrize("value", ["stirct", "", None, True])
+def test_an_unknown_value_says_unknown_and_to_delete_the_key(setting, value):
+    [problem] = removed_settings_in_use(SimpleNamespace(**{setting: {"event_security": value}}))
+    assert f"{setting}['event_security'] = {value!r} is an unknown value" in problem
+    assert "Delete the key" in problem
+    assert "was removed" not in problem
 
 
 def test_startup_refuses_a_removed_mode():
@@ -318,6 +404,7 @@ CALLERS = {
     ("runtime.py", "ViewRuntime._dispatch_component_event"): "component events",
     ("mixins/request.py", "RequestMixin._post_turn_body"): "page-POST fallback",
     ("testing.py", "LiveViewTestClient.send_event"): "test client",
+    ("testing.py", "LiveComponentTestClient.send_event"): "component test client",
     ("observability/views.py", "eval_handler"): "DEBUG eval_handler",
     ("time_travel.py", "replay_event"): "time-travel replay",
 }
@@ -356,6 +443,15 @@ def _calls_by_scope(names: set) -> dict:
 
 
 def test_every_client_event_path_calls_the_shared_check():
+    """Pins the KNOWN callers of the shared check to :data:`CALLERS`.
+
+    What it catches: a caller removed (a path that stopped calling the check)
+    or added without review. What it cannot see on its own: a new path that
+    resolves a client event and never calls the check at all, e.g. a fresh
+    ``getattr(view, name)()``; that is
+    :func:`test_dynamic_dispatch_on_an_event_name_is_reviewed`'s job, and it is
+    a name heuristic, not proof.
+    """
     sites = _calls_by_scope(SHARED)
     assert set(sites) == set(CALLERS), (
         "callers of the shared event check changed; derived %d site(s): %s"
@@ -390,3 +486,69 @@ def test_nothing_reads_the_removed_setting():
 def test_this_module_is_importable_by_name():
     # The WebSocket and SSE paths resolve PAGE by dotted path.
     assert sys.modules[__name__].Page is Page
+
+
+#: Functions that call a method named by a variable holding an event or handler
+#: name WITHOUT the shared check, each reviewed: why it is not a client event.
+REVIEWED_DISPATCH = {
+    ("api/dispatch.py", "_dispatch_api_authenticated"): (
+        "HTTP API: refuses all but @event_handler(expose_api=True)"
+    ),
+    ("websocket.py", "LiveViewConsumer._prepare_server_push"): (
+        "server push from the channel layer, not a client"
+    ),
+    ("websocket.py", "LiveViewConsumer._route_to_view"): (
+        "a consumer method the router names (uploads, request_html, time travel)"
+    ),
+    ("websocket.py", "LiveViewConsumer._run_lane_item"): "a queued _route_to_view item",
+    ("theming/gallery/live_views.py", "_make_forwarder.handler"): (
+        "a fixed component action, chosen at import"
+    ),
+}
+
+
+def _dynamic_dispatch_by_scope() -> dict:
+    """``getattr(obj, X)`` where ``X`` is a variable or attribute whose name
+    mentions ``event`` or ``handler`` (``event_name``, ``handler_name``,
+    ``snapshot.event_name`` ...), by enclosing function."""
+    found: dict = {}
+
+    def walk(rel: str, node: ast.AST, scope: list) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                walk(rel, child, scope + [child.name])
+                continue
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "getattr"
+                and len(child.args) >= 2
+            ):
+                arg = child.args[1]
+                name = (
+                    arg.id
+                    if isinstance(arg, ast.Name)
+                    else arg.attr
+                    if isinstance(arg, ast.Attribute)
+                    else ""
+                )
+                if "event" in name or "handler" in name:
+                    found.setdefault((rel, ".".join(scope)), []).append(child.lineno)
+            walk(rel, child, scope)
+
+    for rel, tree in _production_modules("getattr"):
+        walk(rel, tree, [])
+    return found
+
+
+def test_dynamic_dispatch_on_an_event_name_is_reviewed():
+    """Every function that looks up a method by an event/handler-name variable
+    either calls the shared check (:data:`CALLERS`) or is listed, with a reason,
+    in :data:`REVIEWED_DISPATCH`. A heuristic: a lookup through a variable named
+    otherwise (``name``, ``action``) is not seen, so review still matters."""
+    sites = _dynamic_dispatch_by_scope()
+    unchecked = set(sites) - set(CALLERS)
+    assert unchecked == set(REVIEWED_DISPATCH), (
+        "dynamic dispatch on an event name outside the shared check; derived %d "
+        "site(s): %s" % (len(unchecked), sorted(unchecked))
+    )

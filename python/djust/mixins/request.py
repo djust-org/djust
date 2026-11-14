@@ -1936,7 +1936,19 @@ class RequestMixin:
                     event_name,
                     component_id if owner is not self else type(self).__name__,
                 )
-                return JsonResponse({"error": "Event handler not found"}, status=400)
+                # The WebSocket's answer (#4101): outside DEBUG a missing name
+                # and a refused one read alike, so the answer does not tell a
+                # client which methods exist.
+                from ..websocket_utils import _format_handler_not_found_error, _safe_error
+
+                return JsonResponse(
+                    {
+                        "error": _safe_error(
+                            _format_handler_not_found_error(owner, event_name), "Event rejected"
+                        )
+                    },
+                    status=400,
+                )
             if handler and callable(handler):
                 # The handler check every transport runs (#4101): an
                 # undecorated method is refused with the same message as on
