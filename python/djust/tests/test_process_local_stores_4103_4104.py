@@ -116,13 +116,28 @@ class _RoomView(PresenceMixin, LiveView):
     template = "<div dj-root></div>"
 
 
+class _PlainView(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root></div>"
+
+
 @pytest.mark.parametrize("config", [{}, {"PRESENCE_BACKEND": "memory"}])
 def test_c033_reports_memory_presence_used_by_a_view(config):
-    with override_settings(DJUST_CONFIG=config):
+    # The check names the first three presence views by dotted path, out of
+    # every LiveView loaded in the process. Which others are loaded depends on
+    # the test modules a worker imported (test_presence_per_connection_3254
+    # sorts first), so the test hands the check its own two views.
+    with (
+        override_settings(DJUST_CONFIG=config),
+        mock.patch.object(
+            configuration, "_walk_subclasses", lambda base: iter([_PlainView, _RoomView])
+        ),
+    ):
         ids, errors = _ids(configuration._check_memory_presence_backend)
     assert ids == ["djust.C033"]
     assert errors[0].level == 30
     assert "_RoomView" in errors[0].msg
+    assert "_PlainView" not in errors[0].msg
 
 
 def test_c033_is_quiet_for_redis_presence_in_development_and_without_presence_views():
