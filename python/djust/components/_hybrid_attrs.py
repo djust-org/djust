@@ -200,6 +200,8 @@ _MAX_PATHS = 64
 _DROP_WS = {ord("\t"): None, ord("\n"): None, ord("\r"): None}
 #: A tag that assigns its output to a variable instead of printing it (``{% url "x" as u %}``).
 _AS_VAR = re.compile(r"\sas\s+\w+\s*-?%\}$")
+#: What the first slot of a refused path becomes (the rest become nothing).
+_NEUTRAL = "#"
 
 _TOKEN = re.compile(r"\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}", re.S)
 _TAG_OPEN = re.compile(r"<([A-Za-z][^\s/>]*)")
@@ -1096,6 +1098,29 @@ def _refused(group: Group, path: tuple[tuple[str, str], ...], texts: dict[str, s
     return not _allowed(group.attr, group.kind, assembled)
 
 
+def _neutralise(group: Group, texts: dict[str, str]) -> None:
+    """Replace the slots of every refused path of ``group`` until every path is allowed.
+
+    The first slot of a refused path becomes ``#`` and the rest nothing, repeated (a slot emptied
+    for one path may be the first of another). A path still refused after that is a defect here
+    and fails closed (#3925): the value is never printed unjudged.
+    """
+    for _ in range(len(group.slots) + 1):
+        bad = [p for p in group.paths if _refused(group, p, texts)]
+        if not bad:
+            return
+        for path in bad:
+            first = True
+            for kind, v in path:
+                if kind == "slot":
+                    texts[v] = _NEUTRAL if first else ""
+                    first = False
+    if any(_refused(group, p, texts) for p in group.paths):
+        raise RuntimeError(
+            f"djust: the {group.attr!r} value of a hybrid template could not be made safe"
+        )
+
+
 #: Warnings already given, by (class, attributes): bounded, and never carrying template text.
 _WARNED: set[tuple[Any, ...]] = set()
 _MAX_WARNED = 512
@@ -1236,18 +1261,6 @@ def harden_context(
             (key,) = texts
             texts[key] = srcset_attr(texts[key], honor_safe=False)
         else:
-            # A path whose assembled value is refused loses its slots: the first becomes "#" and
-            # the rest nothing, so no value is left that completes a refused scheme. Repeat until
-            # every path is allowed (each round neutralises a slot, so it ends).
-            for _ in range(len(group.slots) + 1):
-                bad = [p for p in group.paths if _refused(group, p, texts)]
-                if not bad:
-                    break
-                for path in bad:
-                    first = True
-                    for kind, v in path:
-                        if kind == "slot":
-                            texts[v] = "#" if first else ""
-                            first = False
+            _neutralise(group, texts)
         hardened.update(texts)
     return rewrite.template, hardened
