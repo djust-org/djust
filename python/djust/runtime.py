@@ -3441,7 +3441,15 @@ class ViewRuntime(RuntimeTurnPort):
         # valid (it routes the close through the consumer regardless).
         from .hooks import run_on_mount_hooks
 
-        hook_redirect = await sync_to_async(run_on_mount_hooks)(view_instance, request, **params)
+        # mount() and the on_mount hooks take each repeated query key's LAST
+        # value, as in 1.3; handle_params() alone gets the list (#4125).
+        last_values = {
+            key: (value[-1] if value else "") if isinstance(value, list) else value
+            for key, value in params.items()
+        }
+        hook_redirect = await sync_to_async(run_on_mount_hooks)(
+            view_instance, request, **last_values
+        )
         if hook_redirect:
             if not await self._refused_view("redirect", hook_redirect):
                 await self.transport.send({"type": "navigate", "to": hook_redirect})
@@ -3479,7 +3487,7 @@ class ViewRuntime(RuntimeTurnPort):
                 await result
 
         # ---- Mount kwargs ----
-        mount_kwargs = dict(params)
+        mount_kwargs = dict(last_values)
         url_kwargs = self._resolve_url_kwargs(page_url)
         if url_kwargs:
             mount_kwargs.update(url_kwargs)

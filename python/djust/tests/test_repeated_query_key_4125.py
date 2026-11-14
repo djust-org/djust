@@ -52,9 +52,26 @@ class Tagged(LiveView):
         self.count += 1
 
 
+class IntTagged(LiveView):
+    """``mount()`` reads a query key as one value, as 1.3 handed it over."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root><p>{{ n }}</p></div>"
+    n = state(0)
+
+    def mount(self, request, tag=None, **kwargs):
+        self.n = int(tag) if tag else 0
+        SEEN.append(("mount", tag, ""))
+
+    def handle_params(self, params, uri, **kwargs):
+        SEEN.append(("params", dict(params), uri))
+
+
 URL = "/q/tagged/"
 VIEW = "%s.Tagged" % __name__
-urlpatterns = [path("q/tagged/", Tagged.as_view())]
+INT_URL = "/q/int-tagged/"
+INT_VIEW = "%s.IntTagged" % __name__
+urlpatterns = [path("q/tagged/", Tagged.as_view()), path("q/int-tagged/", IntTagged.as_view())]
 
 SETTINGS = {
     "ROOT_URLCONF": __name__,
@@ -171,3 +188,80 @@ def test_a_change_to_an_earlier_value_of_a_repeated_key_is_a_url_change():
 
     assert probe(QUERY) is False  # the URL the state was saved under
     assert probe("a=3&a=2&b=x") is True  # only the first value differs
+
+
+TAG_PARAMS = {"tag": ["1", "2"]}
+
+
+async def _socket_mount(url: str, view: str, params: dict) -> dict:
+    from channels.testing import WebsocketCommunicator
+
+    from djust.websocket import LiveViewConsumer
+
+    def page() -> Any:
+        client = Client()
+        assert client.get(url + "?tag=1&tag=2").status_code == 200
+        return client.session
+
+    session = await sync_to_async(page)()
+    SEEN.clear()
+    comm = WebsocketCommunicator(
+        LiveViewConsumer.as_asgi(),
+        "/ws/",
+        headers=[(b"host", b"testserver"), (b"origin", b"http://testserver")],
+    )
+    comm.scope["session"] = session
+    comm.scope["user"] = AnonymousUser()
+    connected, _ = await comm.connect()
+    assert connected
+    await comm.send_json_to({"type": "mount", "view": view, "url": url, "params": params})
+    for _ in range(20):
+        frame = json.loads(await comm.receive_from(timeout=30))
+        if frame.get("type") in ("mount", "error"):
+            break
+    await comm.disconnect()
+    return frame
+
+
+@pytest.mark.asyncio
+async def test_a_socket_mount_hands_mount_the_last_value_and_handle_params_the_list():
+    frame = await _socket_mount(INT_URL, INT_VIEW, TAG_PARAMS)
+    assert frame["type"] == "mount", frame
+    assert ("mount", "2", "") in SEEN
+    assert _params_seen() == [TAG_PARAMS]
+    assert re.search(r"<p[^>]*>2</p>", frame["html"]), frame["html"]
+
+
+@pytest.mark.asyncio
+async def test_an_sse_mount_hands_mount_the_last_value_and_handle_params_the_list():
+    from djust.sse import DjustSSEStreamView, _sse_sessions
+
+    def page() -> Any:
+        client = Client()
+        assert client.get(INT_URL + "?tag=1&tag=2").status_code == 200
+        return client.session
+
+    session_store = await sync_to_async(page)()
+    SEEN.clear()
+    sid = "41254125-4125-4125-4125-4125412541ff"
+    _sse_sessions.pop(sid, None)
+    request = RequestFactory().get(
+        "/djust/sse/%s/" % sid,
+        {"view": INT_VIEW, "_djust_url": INT_URL, **TAG_PARAMS},
+        HTTP_ORIGIN="http://testserver",
+        HTTP_HOST="testserver",
+    )
+    request.session = session_store
+    request.user = AnonymousUser()
+    await DjustSSEStreamView().get(request, session_id=sid)
+    session = _sse_sessions.pop(sid, None)
+    assert session is not None and session.runtime.view_instance is not None, "SSE mount failed"
+    assert session.runtime.view_instance.n == 2
+    session.shutdown()
+    assert ("mount", "2", "") in SEEN
+    assert _params_seen() == [TAG_PARAMS]
+
+
+def test_the_page_get_hands_handle_params_the_list():
+    assert Client().get(INT_URL + "?tag=1&tag=2").status_code == 200
+    assert _params_seen() == [TAG_PARAMS]

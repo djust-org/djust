@@ -1623,6 +1623,8 @@ class LiveView(
         ``handle_params()`` and the saved state's re-apply, after the object
         permission check, before the first render or the event handler. It
         does not run after a plain ``mount()``. May be ``async def``.
+        ``handle_params()`` and ``get_object()`` run before it, so they must not
+        read rows that only ``handle_restore()`` loads.
 
         Keep it idempotent: what it changes is not saved until the next event,
         so it runs again on every reconnect until one lands. It also cannot
