@@ -132,8 +132,8 @@ STATE_ROWS = (
     Row(
         "url_vs_saved",
         "The URL carries a value (`?tab=z`) for an undeclared attribute a handler also set",
-        'Declare it `state(..., persist="server")` if the URL must win: for a declared '
-        "field `handle_params()` has the last word.",
+        "Nothing: `handle_params()` has the last word when the URL changed since the "
+        "state was saved; while it is the same URL, the handler's value is kept.",
     ),
     Row(
         "form",
@@ -271,10 +271,12 @@ STATE_CELLS: Dict[Tuple[str, str], Entry] = {
     ("params_default", RESTART): NA("same mount path as the reconnect to another process"),
     ("url_vs_saved", SAME): NA("no mount, so `handle_params()` does not run again"),
     ("url_vs_saved", HTTP): Cell(
-        "the handler's saved value wins", _T + "held_model_and_handle_params"
+        "the URL wins when it changed; the same URL keeps the handler's value",
+        _T + "held_model_and_handle_params",
     ),
     ("url_vs_saved", WS): Cell(
-        "the handler's saved value wins", _T + "held_model_and_handle_params"
+        "the URL wins when it changed; the same URL keeps the handler's value",
+        _T + "held_model_and_handle_params",
     ),
     ("url_vs_saved", RESTART): NA("same mount path as the reconnect to another process"),
     ("form", SAME): Cell("kept", _T + "form_mid_validation"),

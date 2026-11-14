@@ -63,10 +63,19 @@ are never persisted" and D-e (form input).
   differ for values `mount()` computes and no handler changes.
 - **A saved model dict never goes over a live instance** that `mount()` just
   loaded (`put_back(over_mount=True)`).
-- **`handle_params()`** still runs on every fallback request, because 2.0 pins
-  that the URL a request carries wins over a declared `persist="server"` field
-  (#3624); the undeclared saved state goes back after it, so the hook does not
-  reset what a handler set. The same on a socket mount.
+- **The URL and the saved state.** `handle_params()` runs on every fallback
+  request and socket mount (2.0 pins that the URL a request carries wins over a
+  declared `persist="server"` field, #3624). The envelope records the query the
+  view last read, canonical (parsed, sorted). On restore the saved state goes
+  on first; `handle_params()` runs; and only while the query is the one the
+  state was saved under is the undeclared saved state put back again over what
+  the hook assigned. When the query changed, the hook has the last word for
+  what it assigned. Chosen because it needs no knowledge of which names the
+  hook assigns: skipping the second put-back is exactly "handle_params() wins
+  for what it assigned, everything else keeps its restored value". Its cost: a
+  name the hook defaults on every call is defaulted when any parameter changed.
+  `live_patch(params=...)` moves the recorded URL, so the request the browser
+  then makes there is not a change.
 - **Component state** is saved with the view's state and put back onto the
   components the view holds (1.3's `<key>_components`). ADR-034 interactive
   components are left out: their identity is rebuilt per mount (#4046).

@@ -61,7 +61,7 @@ from ._exposure import (
 logger = logging.getLogger("djust.automatic_state")
 
 #: Envelope format. A reader discards any other.
-_VERSION = 7
+_VERSION = 8
 _KEY_PREFIX = "_djust_auto_"
 _MISSING: Any = object()
 #: Public names a transport sets per connection, and this module's own settings.
@@ -667,6 +667,7 @@ _ENVELOPE = frozenset(
         "deleted",
         "page",
         "bytes",
+        "url",
     }
 )
 
@@ -785,6 +786,7 @@ class Saved:
         "raw",
         "text",
         "created",
+        "url",
     )
 
     def __init__(
@@ -798,7 +800,9 @@ class Saved:
         raw: Tuple[Dict[str, Any], Dict[str, Any]],
         text: str,
         created: int,
+        url: Optional[str] = None,
     ) -> None:
+        self.url = url  # the query the state was saved under, canonical
         self.public = public
         self.private = private
         self.remount = remount
@@ -873,6 +877,7 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
             (kept_public, kept_private),
             _encode([public, private, envelope["remount"], components]),
             created,
+            envelope["url"] if type(envelope["url"]) is str else None,
         )
     except StateValueError:
         logger.warning("djust: stored view state could not be restored and was discarded")
@@ -949,6 +954,8 @@ def saved(view: Any, request: Any) -> Optional[Saved]:
         return None
     store = _store(view, request, create=False)
     found = _read(view, store) if store is not None else None
+    # The query the state was saved under, for ``note_url`` to compare with.
+    view.__dict__["_djust_auto_saved_url"] = found.url if found is not None else None
     if found is not None:
         view.__dict__["_djust_auto_basis"] = _Basis(
             found.text, found.created, found.raw[0], found.raw[1], found.changed, found.deleted
@@ -1100,12 +1107,69 @@ def reapply(view: Any) -> Dict[str, Any]:
 
 def finish_mount(view: Any) -> None:
     """The end of a socket mount: what the restore put back goes on again over
-    ``handle_params()``'s defaults, and the view is settled (:func:`settle`)."""
+    ``handle_params()``'s defaults, unless the URL changed since the state was
+    saved (:func:`url_changed`), and the view is settled (:func:`settle`)."""
     from .security import safe_setattr
 
-    for key, value in reapply(view).items():
-        safe_setattr(view, key, value, allow_private=False, raise_on_blocked=True)
+    if url_changed(view):
+        view.__dict__["_djust_auto_reapply"] = None  # handle_params() has the last word
+    else:
+        for key, value in reapply(view).items():
+            safe_setattr(view, key, value, allow_private=False, raise_on_blocked=True)
     settle(view)
+
+
+# ---------------------------------------------------------------------------
+# The URL: saved state wins while it is the same, handle_params() when it changed
+# ---------------------------------------------------------------------------
+
+
+def canonical_params(params: Any) -> str:
+    """A query's parameters in one canonical form, so that two spellings of
+    the same query compare equal: parsed values, sorted, repeated keys kept.
+    No query and an empty query are the same (``"[]"``)."""
+    pairs = []
+    try:
+        lists = params.lists() if hasattr(params, "lists") else None
+        items = lists if lists is not None else dict(params or {}).items()
+        for key, value in items:
+            values = value if isinstance(value, (list, tuple)) else [value]
+            pairs.extend((str(key), "" if item is None else str(item)) for item in values)
+    except Exception:  # noqa: BLE001 — not a mapping: no parameters
+        pairs = []
+    return json.dumps(sorted(pairs), separators=(",", ":"))
+
+
+def note_url(view: Any, params: Any) -> None:
+    """``handle_params()`` is about to read ``params``: remember them as the
+    view's URL (saved with its state), and whether they differ from the URL the
+    restored state was saved under.
+
+    The rule (#4107): while the URL is the one the state was saved under, the
+    saved state wins over what ``handle_params()`` assigns (a handler-set tab
+    survives the hook's default). When the URL changed, ``handle_params()``
+    wins for what it assigns (``?page=3`` shows page 3); everything it does not
+    assign keeps its restored value.
+    """
+    if uses_legacy_exposure(view):
+        return
+    now = canonical_params(params)
+    saved_under = view.__dict__.get("_djust_auto_saved_url")
+    view.__dict__["_djust_auto_url_changed"] = saved_under is not None and saved_under != now
+    view.__dict__["_djust_auto_url"] = now
+
+
+def note_patched_url(view: Any, params: Any) -> None:
+    """A handler called ``live_patch(params=...)``: the page's URL is now that
+    one, so the state this turn saves is saved under it."""
+    if not uses_legacy_exposure(view):
+        view.__dict__["_djust_auto_url"] = canonical_params(params)
+
+
+def url_changed(view: Any) -> bool:
+    """Whether the URL ``handle_params()`` just read differs from the one the
+    restored state was saved under."""
+    return bool(view.__dict__.get("_djust_auto_url_changed"))
 
 
 def put_back(
@@ -1292,6 +1356,9 @@ def stage(view: Any, request: Any, *, create: bool = True) -> Optional[Callable[
         "deleted": sorted(deleted),
         "page": store.page,
         "bytes": len(state.text.encode("utf-8")),
+        # The query string the view last read (``note_url``), canonical; None
+        # when handle_params() never ran on it.
+        "url": view.__dict__.get("_djust_auto_url"),
     }
     session = store.session
     previous = session.get(store.key, _MISSING)

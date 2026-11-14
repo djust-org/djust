@@ -489,9 +489,17 @@ def _refuse_removed_configuration(view: Any) -> None:
             raise shared
 
 
+def _note_url(view: Any, params: Any) -> None:
+    """The URL this hook call reads, for the saved view state (#4107)."""
+    from ._automatic_state import note_url
+
+    note_url(view, params)
+
+
 async def run_handle_params(view: Any, params: Any, uri: str) -> None:
     """Call the view's params hook from async code (the socket, SSE, ``url_change``)."""
     _refuse_removed_configuration(view)
+    _note_url(view, params)
     form_class = _declared_form_class(view)
     if form_class is None:
         if hasattr(view, "handle_params"):
@@ -511,6 +519,7 @@ async def run_handle_params(view: Any, params: Any, uri: str) -> None:
 def run_handle_params_sync(view: Any, params: Any, uri: str) -> None:
     """Call the view's params hook from sync code (the HTTP GET and fallback POST)."""
     _refuse_removed_configuration(view)
+    _note_url(view, params)
     form_class = _declared_form_class(view)
     if form_class is None:
         if hasattr(view, "handle_params"):

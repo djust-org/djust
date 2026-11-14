@@ -1096,6 +1096,11 @@ class LiveView(
         # The tab this view belongs to: minted by the page GET, sent back by
         # that page's client on its socket mount and fallback POSTs (#4106).
         self._djust_tab = ""
+        # The query handle_params() last read, the one the restored state was
+        # saved under, and whether they differ (``_automatic_state.note_url``).
+        self._djust_auto_url: Any = None
+        self._djust_auto_saved_url: Any = None
+        self._djust_auto_url_changed = False
         self._djust_restore_changed_view = True
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())
 
