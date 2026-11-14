@@ -474,8 +474,9 @@ class ProgressHandler:
 
         kw = _parse_args(args, context)
         # The Python tag's own clamp, so a ``value`` it refuses (``None``: TypeError, ``"abc"``:
-        # ValueError) is refused here and not drawn as 0% (#3667).
-        value = _progress(value=kw.get("value", 0))["value"]
+        # ValueError) is refused here and not drawn as 0% (#3667). ``int()`` says which key of the
+        # tag's context this is: the clamped number, not one of the raw ones beside it (#3847).
+        value = int(_progress(value=kw.get("value", 0))["value"])
         label = conditional_escape(kw.get("label", ""))
         size = conditional_escape(kw.get("size", "md"))
         color = conditional_escape(kw.get("color", "primary"))

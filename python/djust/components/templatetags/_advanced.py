@@ -734,10 +734,12 @@ class OrgChartNode(template.Node):
     def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
-    def _render_node(self, nid: Any, node_map: Any, children: Any, e_event: Any) -> Any:
+    def _render_node(self, nid: Any, node_map: Any, children: Any, event: Any) -> Any:
         node = node_map.get(nid)
         if not node:
             return ""
+        # escaped HERE, where it is written, so the method is safe for any caller (#3845)
+        e_event = conditional_escape(str(event)) if event else ""
         name = conditional_escape(str(node.get("name", "")))
         title = conditional_escape(str(node.get("title", "")))
         avatar = node.get("avatar", "")
@@ -769,7 +771,7 @@ class OrgChartNode(template.Node):
             return f'<li class="dj-org__node">{node_html}</li>'
 
         child_items = "".join(
-            self._render_node(cid, node_map, children, e_event) for cid in child_ids
+            self._render_node(cid, node_map, children, event) for cid in child_ids
         )
         return (
             f'<li class="dj-org__node">{node_html}'
@@ -820,8 +822,7 @@ class OrgChartNode(template.Node):
         if not node_map or not root_id:
             return mark_safe(f'<div class="{class_str}" role="tree"></div>')
 
-        e_event = conditional_escape(str(event)) if event else ""
-        tree_html = self._render_node(root_id, node_map, children, e_event)
+        tree_html = self._render_node(root_id, node_map, children, event)
 
         return mark_safe(
             f'<div class="{class_str}" role="tree"><ul class="dj-org__root">{tree_html}</ul></div>'
