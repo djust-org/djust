@@ -18,7 +18,8 @@ anything could set. Outside CI:
   asked for with ``-n`` (``-n auto`` included), unless an approval is valid.
 
 Targeted runs (a file, a class, ``-k``) and ``make test-early`` (``--early-only``, a
-bounded tier) are untouched. CI (``CI`` set) is unaffected.
+bounded tier) are untouched. CI (``GITHUB_ACTIONS=true``) is unaffected. The guard
+prevents accidents, not deliberate bypasses.
 """
 
 from __future__ import annotations
@@ -40,14 +41,15 @@ LOCK_NAME = "full-run.lock"
 _LOCK_HANDLE = None
 
 
-def _truthy(value: str | None) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def active(environ=None) -> bool:
-    """True when the guard applies: everywhere but CI."""
+    """True when the guard applies: everywhere but GitHub Actions.
+
+    CI is recognised only by ``GITHUB_ACTIONS == "true"`` (set on hosted and
+    self-hosted runners alike), not by a bare ``CI``: agents export ``CI=1``
+    routinely. The guard prevents accidents, not deliberate bypasses.
+    """
     env = os.environ if environ is None else environ
-    return not _truthy(env.get("CI"))
+    return env.get("GITHUB_ACTIONS") != "true"
 
 
 def _state_dir(home: Path | None = None) -> Path:

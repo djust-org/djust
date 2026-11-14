@@ -311,7 +311,7 @@ console.log("debug info"); // noqa: Q003
 ### C031 — Session store local to one process
 - **Severity**: Warning
 - **Method**: Settings inspection (`SESSION_ENGINE`, `SESSION_CACHE_ALIAS`, `CACHES`)
-- **What it detects**: `SESSION_ENGINE` is `django.contrib.sessions.backends.cache` or `cached_db` and the cache it uses is `LocMemCache` (or `DummyCache`). djust keeps view state in the session, so with more than one process a request or socket served by another process does not find the session (`cache`) or reads a stale copy (`cached_db`), and the view mounts fresh. Reported only with `DEBUG = False`: a development server is one process, where the local cache works (#4103).
+- **What it detects**: `SESSION_ENGINE` is `django.contrib.sessions.backends.cache` or `cached_db` and the cache it uses is `LocMemCache` (or `DummyCache`). djust keeps view state in the session, so with more than one process a request or socket served by another process does not find the session (`cache`) or reads a stale copy (`cached_db`), and the view mounts fresh. Reported only with `DEBUG = False` for `LocMemCache`: a development server is one process, where the local cache works. A `DummyCache` stores nothing, so the `cache` engine loses every session even with one process; it is reported in development too (#4103).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C031"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C031"]` (for a site that runs as one process)
 - **False positives**: A deployment that runs exactly one process. The `file` engine is not reported: whether its directory is shared cannot be seen from settings.
 

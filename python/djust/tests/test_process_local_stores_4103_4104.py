@@ -147,3 +147,12 @@ def test_the_checks_run_from_the_registered_configuration_check():
         "_check_memory_presence_backend(errors)",
     ):
         assert source.count(name) == 1, name
+
+
+def test_c031_says_a_dummy_cache_loses_sessions_even_with_one_process():
+    dummy = {"default": {"BACKEND": "django.core.cache.backends.dummy.DummyCache"}}
+    with override_settings(SESSION_ENGINE=CACHE, CACHES=dummy, SESSION_CACHE_ALIAS="default"):
+        ids, errors = _ids(configuration._check_process_local_session_cache, production=False)
+    assert ids == ["djust.C031"]
+    assert "stores nothing" in errors[0].msg and "even with one process" in errors[0].msg
+    assert "more than one process" not in errors[0].msg

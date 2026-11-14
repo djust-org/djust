@@ -30,8 +30,11 @@ def _approve(home, seconds_ahead: float) -> None:
 
 
 def test_ci_is_unaffected_and_the_variable_no_longer_bypasses():
-    assert not guard.active({"CI": "true"})
+    assert not guard.active({"GITHUB_ACTIONS": "true"})
+    assert not guard.active({"GITHUB_ACTIONS": "true", "CI": "true"})
     assert guard.active({})
+    assert guard.active({"CI": "1"}), "a bare CI=1 must not bypass"
+    assert guard.active({"CI": "true"})
     assert guard.active({"DJUST_FULL_LOCAL": "1"}), "DJUST_FULL_LOCAL alone must not bypass"
 
 
@@ -90,7 +93,7 @@ def test_the_early_tier_is_exempt():
 
 def test_the_worker_cap_lifts_only_for_an_approved_run(home, monkeypatch):
     monkeypatch.setattr(guard.Path, "home", classmethod(lambda cls: home))
-    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     config = SimpleNamespace(option=SimpleNamespace(maxprocesses=8))
     guard.pytest_cmdline_main(config)
     assert config.option.maxprocesses == guard.DEFAULT_MAX_WORKERS

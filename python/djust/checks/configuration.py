@@ -830,7 +830,7 @@ def _check_process_local_session_cache(errors: list[CheckMessage]) -> None:
     """
     from django.conf import settings
 
-    if _is_check_suppressed("djust.C031") or not _is_production():
+    if _is_check_suppressed("djust.C031"):
         return
     engine = getattr(settings, "SESSION_ENGINE", "django.contrib.sessions.backends.db")
     if engine not in (
@@ -847,16 +847,36 @@ def _check_process_local_session_cache(errors: list[CheckMessage]) -> None:
     label = _PROCESS_LOCAL_CACHES.get(backend)
     if label is None:
         return
-    effect = (
-        "each process keeps its own sessions, so a request or socket served by another "
-        "process mounts fresh and loses the view's state"
-        if engine.endswith(".cache")
-        else "another process can read its own stale copy of the session"
-    )
+    # A dummy cache loses sessions with one process too, so it is reported in
+    # development as well; a local cache only matters with several processes.
+    if not backend.endswith(".DummyCache") and not _is_production():
+        return
+    if backend.endswith(".DummyCache"):
+        message = (
+            "SESSION_ENGINE is %r over the %r cache, which is DummyCache: it stores nothing, "
+            "so %s even with one process."
+            % (
+                engine,
+                alias,
+                "every request starts a new session and the view's state is lost"
+                if engine.endswith(".cache")
+                else "every session read goes to the database and the cache does nothing",
+            )
+        )
+    else:
+        effect = (
+            "each process keeps its own sessions, so a request or socket served by another "
+            "process mounts fresh and loses the view's state"
+            if engine.endswith(".cache")
+            else "another process can read its own stale copy of the session"
+        )
+        message = (
+            "SESSION_ENGINE is %r over the %r cache, which is %s: with more than one "
+            "process, %s." % (engine, alias, label, effect)
+        )
     errors.append(
         DjustWarning(
-            "SESSION_ENGINE is %r over the %r cache, which is %s: with more than one "
-            "process, %s." % (engine, alias, label, effect),
+            message,
             hint=(
                 "djust keeps view state in the session. Use a session store every process "
                 "shares: the db or cached_db engine over a shared cache, the cache engine "
