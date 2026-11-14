@@ -143,10 +143,17 @@ class TestTheShortcutsChangeNothing:
         )
 
     def test_the_exhaustive_run_really_takes_no_shortcut(self, both):
-        """Else the comparison below compares a run with itself and cannot fail (#1859)."""
+        """Else the comparison below compares a run with itself and cannot fail (#1859).
+
+        The exhaustive run measures ``carries`` for every cell; the fast one for exactly the cells
+        :func:`url_sweep.needs_carries` says are read, which must leave some out. Derived from the
+        cells, not a fixed share: how many cells are native depends on the tags in ``SAMPLE`` and
+        their parameters (``nav_item`` grew two in #3873 and pushed the fast share past a half)."""
         fast, full = both
         assert full["carries_measured"] == full["cells"]
-        assert fast["carries_measured"] < fast["cells"] // 2
+        assert fast["carries_measured"] == fast["carries_needed"]
+        assert fast["carries_needed"] < fast["cells"]
+        assert fast["carries_measured"] < full["carries_measured"]
         assert fast["context_names"] < full["context_names"] // 2
 
     def test_every_cell_is_measured_the_same(self, both):

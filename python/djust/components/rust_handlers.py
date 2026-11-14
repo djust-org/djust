@@ -2034,7 +2034,17 @@ class NavMenuHandler:
             f'aria-label="Toggle navigation">&#9776;</button>'
         )
 
-        content = _apply_menu_active(content, kw.get("active", ""))
+        # The menu's ``active`` reaches the items that left a marker (#3873 follow-up). Each
+        # marker sits right after its item's ``<li ...`` opening (``">`` then the comment); it is
+        # replaced with that ``">``, the active class first for a match. Only literals and the
+        # escaped hex key are written, so ``content`` stays the engine-rendered body.
+        for key in _nav_active_keys(content):
+            e_key = conditional_escape(key)
+            hit = _nav_key_matches(key, kw.get("active", ""))
+            content = content.replace(
+                f'"><!--djust-nav-key:{e_key}-->',
+                ' dj-nav__item--active">' if hit else '">',
+            )
 
         return _safe(
             f'<nav class="{cls}" id="{nav_id}" role="navigation">'
@@ -2055,30 +2065,28 @@ _NAV_ITEM_MARKUP = '<li class="dj-nav__item'
 #: removes every one, adding the active class to the matches. Outside a menu the comment is
 #: invisible. The Django node is handed the menu's ``active`` directly.
 _NAV_ACTIVE_MARK = _re_filters.compile(
-    r'(<li class="dj-nav__item[^"]*)(">)<!--djust-nav-key:([0-9a-f]*)-->'
+    r'<li class="dj-nav__item[^"]*"><!--djust-nav-key:([0-9a-f]*)-->'
 )
 
 
-def _nav_active_mark(item_id: object, href: object) -> str:
+def _nav_active_key(item_id: object, href: object) -> str:
+    """The marker's payload: the hex of the ``[id, href]`` JSON pair."""
     payload = _json.dumps([item_id, href], default=str, separators=(",", ":"))
-    return "<!--djust-nav-key:" + payload.encode("utf-8").hex() + "-->"
+    return payload.encode("utf-8").hex()
 
 
-def _apply_menu_active(content: str, active: object) -> str:
-    """Add ``dj-nav__item--active`` to the items that match the menu's ``active`` (the Django
-    rule: a non-empty ``id`` or ``href`` equal to it) and remove every marker."""
+def _nav_active_keys(content: str) -> list[str]:
+    """The distinct marker keys of the items in ``content``, in order."""
+    return list(dict.fromkeys(_NAV_ACTIVE_MARK.findall(content)))
 
-    def resolve(match: "_re_filters.Match[str]") -> str:
-        try:
-            item_id, href = _json.loads(bytes.fromhex(match.group(3)).decode("utf-8"))
-        except (ValueError, TypeError):
-            return match.group(1) + match.group(2)
-        hit = bool(active) and (
-            bool(item_id and item_id == active) or bool(href and href == active)
-        )
-        return match.group(1) + (" dj-nav__item--active" if hit else "") + match.group(2)
 
-    return _NAV_ACTIVE_MARK.sub(resolve, content)
+def _nav_key_matches(key: str, active: object) -> bool:
+    """The Django rule: a non-empty ``id`` or ``href`` equal to the menu's ``active``."""
+    try:
+        item_id, href = _json.loads(bytes.fromhex(key).decode("utf-8"))
+    except (ValueError, TypeError):
+        return False
+    return bool(active) and (bool(item_id and item_id == active) or bool(href and href == active))
 
 
 class NavItemHandler:
@@ -2100,7 +2108,13 @@ class NavItemHandler:
         is_active = (item_id and item_id == active) or (href and href == active)
         active_cls = " dj-nav__item--active" if is_active else ""
         # No ``active=`` of its own: the enclosing menu's ``active`` decides (#3873 follow-up).
-        mark = "" if "active" in kw else _nav_active_mark(kw.get("id", ""), kw.get("href", "#"))
+        # Written as a literal around the escaped hex key, which only holds ``0-9a-f``.
+        mark = ""
+        if "active" not in kw:
+            mark = (
+                "<!--djust-nav-key:"
+                f"{conditional_escape(_nav_active_key(kw.get('id', ''), kw.get('href', '#')))}-->"
+            )
 
         # A dropdown parent only when the body holds nav ITEMS (this handler's own ``<li>``).
         # The Python tag counts child ``{% nav_item %}`` nodes and ignores any other body, so
