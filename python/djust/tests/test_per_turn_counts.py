@@ -311,6 +311,44 @@ async def test_the_walk_grows_with_the_list_and_no_faster(monkeypatch):
     assert 3.8 < total(big) / total(small) < 4.1
 
 
+# --- #4107: a turn that changes nothing saved --------------------------------------
+
+
+async def test_an_unchanged_turn_neither_serializes_nor_writes_the_saved_state(monkeypatch):
+    """Two ``nothing`` turns after the mount. With the shortcut, the save reads
+    the turn's change detection and does no work; without it, each turn
+    serializes the view's saved state and writes the session."""
+    from djust import _automatic_state, _session_merge
+
+    seen: Dict[str, int] = {"project": 0, "write": 0}
+    real_project, real_save = _automatic_state.project, _session_merge.save_merged
+
+    def project(view):
+        seen["project"] += 1
+        return real_project(view)
+
+    def save_merged(*args, **kwargs):
+        seen["write"] += 1
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(_automatic_state, "project", project)
+    monkeypatch.setattr(_session_merge, "save_merged", save_merged)
+    now = await turn(monkeypatch, BareCounter, "nothing")
+    with_shortcut = dict(seen)
+    seen.update(project=0, write=0)
+    off = await turn(monkeypatch, BareCounter, "nothing", "unchanged_save_skip")
+    assert now["reply"] == off["reply"] == "noop"
+    # The mount saves what mount() built (no page GET came first here); the
+    # two turns that change nothing neither serialize nor write.
+    # (Two projections at the mount: the save, and the baseline taken once
+    # handle_params() has run, against which a handler's changes are found.)
+    assert with_shortcut == {"project": 2, "write": 1}
+    # Gate-off: the mount's two, then one projection and one write per turn.
+    assert seen == {"project": 4, "write": 3}
+    # The snapshots change detection takes are the same two per turn either way.
+    assert now["snapshot_assigns.calls"] == off["snapshot_assigns.calls"] == 2
+
+
 # --- what the socket holds after the turn (#3998) -------------------------------------
 
 

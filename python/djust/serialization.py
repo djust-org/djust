@@ -9,6 +9,7 @@ import functools
 import importlib.util
 import inspect
 import json
+import math
 import logging
 import re
 import threading
@@ -1249,7 +1250,7 @@ def _rehydrate_component(tagged: Dict[str, Any]) -> Any:
         return decoded
 
 
-def decode_state_roundtrip(obj: Any) -> Any:
+def decode_state_roundtrip(obj: Any, *, enums: Optional[Any] = None, strict: bool = False) -> Any:
     """Inverse of :func:`decimal_for_state_roundtrip` (#2252) and of
     :func:`component_for_state_roundtrip` (ADR-033 D6).
 
@@ -1261,6 +1262,13 @@ def decode_state_roundtrip(obj: Any) -> Any:
 
     Untagged values pass through unchanged, which is what makes state written
     by an older release keep working.
+
+    Also restores every ``{"__djust_value__": [kind, payload]}`` map written by
+    :func:`encode_state_value` (#4107): tuples, sets, dates, times, UUIDs,
+    bytes and the rest, through a fixed table of constructors. An enum member
+    is restored only from the classes in ``enums``. With ``strict=True`` a tag
+    that cannot be restored raises :class:`StateValueError` instead of being
+    left as a dict (the automatic state drops such an envelope whole).
 
     Fails soft on a payload ``Decimal`` refuses — ``{"__djust_decimal__": "hi"}``
     stays a dict — because a user dict that collides with the tag must not
@@ -1280,14 +1288,237 @@ def decode_state_roundtrip(obj: Any) -> Any:
                     # raises ``ValueError``, not ``InvalidOperation``, for it).
                     # Leave it alone rather than raise — see the docstring.
                     return dict(obj)
+            tagged = obj.get(STATE_VALUE_TAG)
+            if tagged is not None:
+                try:
+                    return _decode_tagged_value(tagged, enums, 0)
+                except StateValueError:
+                    if strict:
+                        raise
+                    # A colliding user dict, or an enum no resolver was given
+                    # for: left as it is, as an invalid Decimal tag is.
+                    return dict(obj)
         if STATE_COMPONENT_TAG in obj and "state" in obj and len(obj) <= 3:
             return _rehydrate_component(obj)
-        return {k: decode_state_roundtrip(v) for k, v in obj.items()}
+        return {k: decode_state_roundtrip(v, enums=enums, strict=strict) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [decode_state_roundtrip(v) for v in obj]
+        return [decode_state_roundtrip(v, enums=enums, strict=strict) for v in obj]
     if isinstance(obj, tuple):
-        return tuple(decode_state_roundtrip(v) for v in obj)
+        return tuple(decode_state_roundtrip(v, enums=enums, strict=strict) for v in obj)
     return obj
+
+
+# ---------------------------------------------------------------------------
+# The other plain Python values on the state round trip (#4107)
+# ---------------------------------------------------------------------------
+
+#: One tag for every other value JSON has no type for:
+#: ``{"__djust_value__": [kind, payload]}``. ``kind`` selects a constructor
+#: from the FIXED table in :func:`_decode_tagged_value`; nothing is imported or
+#: called by name, and nothing is unpickled. A ``Decimal`` keeps its own tag
+#: above (the Rust side reads that one).
+STATE_VALUE_TAG = "__djust_value__"
+
+#: Longest ``bytes`` value the round trip carries (the whole state has its own
+#: size limit as well).
+STATE_VALUE_MAX_BYTES = 256 * 1024
+
+
+class StateValueError(ValueError):
+    """A value the state round trip cannot carry, or a tag it cannot restore.
+
+    ``reason`` is a short phrase for the developer; it never holds the value.
+    """
+
+    def __init__(self, reason: str, kind: str = "value") -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.kind = kind
+
+
+def _tag(kind: str, payload: Any) -> Dict[str, Any]:
+    return {STATE_VALUE_TAG: [kind, payload]}
+
+
+def encode_state_value(
+    value: Any,
+    *,
+    max_nodes: int = 200000,
+    max_depth: int = 32,
+    enums: Optional[Any] = None,
+    convert: Optional[Callable[[Any], Any]] = None,
+) -> Any:
+    """*value* as JSON that :func:`decode_state_roundtrip` restores exactly.
+
+    Type and value both come back: ``tuple``, ``set``, ``frozenset``,
+    ``Decimal``, ``date``, ``datetime`` (naive, fixed-offset, UTC and
+    ``zoneinfo``), ``time``, ``timedelta``, ``UUID``, ``bytes``, enum members,
+    integers of any size, non-finite floats, and dictionaries whose keys are
+    not strings. Only exact builtin types are taken: a subclass (a
+    ``SafeString``, a lazy string, a ``namedtuple``, an ``OrderedDict``) is
+    refused, never converted, as is every other object (a model instance, a
+    queryset, a file, a callable).
+
+    ``enums`` maps an enum CLASS to nothing in particular; only its membership
+    is read: a member is encoded only if its class is in it, so that whatever
+    is written can be resolved again without importing anything.
+
+    Raises :class:`StateValueError` (its ``reason`` names the type, never the
+    value; ``kind`` is ``"structure"`` for a value over ``max_nodes`` /
+    ``max_depth``).
+    """
+    import base64
+    import datetime as _dt
+    import enum
+    import uuid
+    import zoneinfo
+
+    nodes = [max_nodes]
+
+    def zone(tz: Any) -> Any:
+        if tz is None:
+            return None
+        if tz is _dt.timezone.utc:
+            return "UTC+0"
+        if type(tz) is _dt.timezone:
+            return ["offset", int(tz.utcoffset(None).total_seconds() * 1000000)]
+        if isinstance(tz, zoneinfo.ZoneInfo) and tz.key:
+            return ["zone", tz.key]
+        raise StateValueError(
+            "a datetime with a %s time zone cannot be saved; use zoneinfo or a fixed offset"
+            % type(tz).__name__
+        )
+
+    def walk(item: Any, depth: int) -> Any:
+        nodes[0] -= 1
+        if nodes[0] < 0 or depth > max_depth:
+            raise StateValueError("it is too large or too deeply nested", "structure")
+        kind = type(item)
+        if item is None or kind is bool or kind is str:
+            return item
+        if kind is int:
+            return item if -(2**53) < item < 2**53 else _tag("int", str(item))
+        if kind is float:
+            return item if math.isfinite(item) else _tag("float", repr(item))
+        if kind is list:
+            return [walk(child, depth + 1) for child in item]
+        if kind is dict:
+            plain = all(type(key) is str for key in item) and not (
+                len(item) == 1 and next(iter(item)).startswith("__djust_")
+            )
+            if plain:
+                return {key: walk(child, depth + 1) for key, child in item.items()}
+            return _tag(
+                "dict",
+                [[walk(key, depth + 1), walk(child, depth + 1)] for key, child in item.items()],
+            )
+        if kind is tuple:
+            return _tag("tuple", [walk(child, depth + 1) for child in item])
+        if kind is set or kind is frozenset:
+            members = [walk(child, depth + 1) for child in item]
+            # Sorted by encoding: a set has no order, and two processes must
+            # write the same bytes for the same set.
+            members.sort(key=lambda member: json.dumps(member, sort_keys=True))
+            return _tag("set" if kind is set else "frozenset", members)
+        if kind is Decimal:
+            return decimal_for_state_roundtrip(item)
+        if kind is _dt.datetime:
+            naive = item.replace(tzinfo=None)
+            return _tag("datetime", [naive.isoformat(), zone(item.tzinfo), item.fold])
+        if kind is _dt.date:
+            return _tag("date", item.isoformat())
+        if kind is _dt.time:
+            naive_time = item.replace(tzinfo=None)
+            return _tag("time", [naive_time.isoformat(), zone(item.tzinfo), item.fold])
+        if kind is _dt.timedelta:
+            return _tag("timedelta", [item.days, item.seconds, item.microseconds])
+        if kind is uuid.UUID:
+            return _tag("uuid", str(item))
+        if kind is bytes:
+            if len(item) > STATE_VALUE_MAX_BYTES:
+                raise StateValueError("a bytes value over %d bytes" % STATE_VALUE_MAX_BYTES)
+            return _tag("bytes", base64.b64encode(item).decode("ascii"))
+        if isinstance(item, enum.Enum):
+            if enums is None or kind not in enums:
+                raise StateValueError(
+                    "an enum member is saved only when its class is defined in, or imported "
+                    "into, the module of the view (or is an attribute of the view class)"
+                )
+            return _tag("enum", [kind.__module__, kind.__qualname__, item.name])
+        if convert is not None:
+            # The caller's own plain form of an object (a model as its field
+            # dict, as 1.3 saved it); it raises StateValueError to refuse.
+            return walk(convert(item), depth + 1)
+        raise StateValueError("a %s cannot be saved" % kind.__name__, "type:" + kind.__name__)
+
+    return walk(value, 0)
+
+
+def _decode_tagged_value(tagged: Any, enums: Optional[Any], depth: int) -> Any:
+    """The fixed table of constructors. Raises :class:`StateValueError`."""
+    import base64
+    import datetime as _dt
+    import uuid
+    import zoneinfo
+
+    if depth > 64 or type(tagged) is not list or len(tagged) != 2 or type(tagged[0]) is not str:
+        raise StateValueError("not a tagged value")
+    kind, payload = tagged
+
+    def inner(item: Any) -> Any:
+        return decode_state_roundtrip(item, enums=enums, strict=True)
+
+    def zone(spec: Any) -> Any:
+        if spec is None:
+            return None
+        if spec == "UTC+0":
+            return _dt.timezone.utc
+        if type(spec) is list and len(spec) == 2 and spec[0] == "offset" and type(spec[1]) is int:
+            return _dt.timezone(_dt.timedelta(microseconds=spec[1]))
+        if type(spec) is list and len(spec) == 2 and spec[0] == "zone" and type(spec[1]) is str:
+            return zoneinfo.ZoneInfo(spec[1])
+        raise StateValueError("not a time zone")
+
+    try:
+        if kind == "tuple" and type(payload) is list:
+            return tuple(inner(item) for item in payload)
+        if kind in ("set", "frozenset") and type(payload) is list:
+            members = [inner(item) for item in payload]
+            return set(members) if kind == "set" else frozenset(members)
+        if kind == "dict" and type(payload) is list:
+            return {inner(pair[0]): inner(pair[1]) for pair in payload if len(pair) == 2}
+        if kind == "int" and type(payload) is str:
+            return int(payload)
+        if kind == "float" and payload in ("nan", "inf", "-inf"):
+            return float(payload)
+        if kind == "date" and type(payload) is str:
+            return _dt.date.fromisoformat(payload)
+        if kind == "datetime" and type(payload) is list and len(payload) == 3:
+            moment = _dt.datetime.fromisoformat(payload[0])
+            return moment.replace(tzinfo=zone(payload[1]), fold=1 if payload[2] else 0)
+        if kind == "time" and type(payload) is list and len(payload) == 3:
+            clock = _dt.time.fromisoformat(payload[0])
+            return clock.replace(tzinfo=zone(payload[1]), fold=1 if payload[2] else 0)
+        if kind == "timedelta" and type(payload) is list and len(payload) == 3:
+            days, seconds, micro = payload
+            if not all(type(part) is int for part in payload):
+                raise StateValueError("not a timedelta")
+            return _dt.timedelta(days=days, seconds=seconds, microseconds=micro)
+        if kind == "uuid" and type(payload) is str:
+            return uuid.UUID(payload)
+        if kind == "bytes" and type(payload) is str:
+            return base64.b64decode(payload.encode("ascii"), validate=True)
+        if kind == "enum" and type(payload) is list and len(payload) == 3:
+            # Looked up among classes the caller already holds; never imported.
+            for candidate in enums or ():
+                if [candidate.__module__, candidate.__qualname__] == payload[:2]:
+                    return candidate[payload[2]]
+            raise StateValueError("an enum class this view does not reference")
+    except StateValueError:
+        raise
+    except Exception:  # noqa: BLE001 — a malformed payload; its text may hold a stored value
+        raise StateValueError("a malformed %s" % kind) from None
+    raise StateValueError("an unknown kind of value")
 
 
 def decimal_tags_to_strings(obj: Any) -> Any:

@@ -1445,7 +1445,7 @@ class DjustSSEStreamView(View):
             mount_params = {
                 k: v
                 for k, v in request.GET.items()
-                if k not in {"view", "_djust_url", "_djust_track_static"}
+                if k not in {"view", "_djust_url", "_djust_track_static", "_djust_tab"}
             }
             # #2966: dj-track-static over SSE. The stream GET is the mount (a later
             # POSTed mount frame is a no-op), and an EventSource auto-reconnect
@@ -1490,6 +1490,9 @@ class DjustSSEStreamView(View):
                             "url": session._request.path_info,
                             "params": mount_params,
                             "track_static": track_static,
+                            # The page's tab id (#4106), on the stream URL as
+                            # the page URL is: the stream GET is the mount.
+                            "tab": request.GET.get("_djust_tab"),
                         }
                     )
                 except Exception as exc:

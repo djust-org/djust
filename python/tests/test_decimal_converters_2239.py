@@ -544,6 +544,8 @@ EXPECTED_ROUNDTRIP_SITES = {
     # #3252: legacy lazy-child public/private state is written to the Django
     # session and restored onto the child by mount_http_lazy.
     ("_lazy_containers.py", "save_http_lazy"),
+    # #4107: a model instance in a view's saved state, as its field dict.
+    ("_automatic_state.py", "_model_as_dict"),
     # 2.0 removed the page GET / POST session saves and the component session
     # save (``mixins/request.py``, ``mixins/components.py``).
     # ADR-033 D6: the tagged form of a plain component's state, reached only

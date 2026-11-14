@@ -851,13 +851,13 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Fix**: Move the view to explicit exposure and delete the line; `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](migrating-to-2.0.md#1-move-each-view-to-explicit-exposure). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V028"]}`.
 
-### V029: a handler changes a value a later event reads, and the fallback does not keep it
+### V029: a handler changes a `persist=False` field a later event reads
 
 **Severity**: Warning
 
-**What causes it**: An event handler of an explicit view changes `self.count` (`self.count += 1`, `self.items.append(...)`, or a value another handler or `get_context_data()` reads), and `count` is either not declared state or a `state()` field without `persist`. On the HTTP fallback each event mounts a new view, so the change is lost there; over a WebSocket it is kept. Message: "<view> increment() changes self.count, which a later event reads, but it is not declared state: on the HTTP fallback each event builds a new view and runs mount() again, so the change is lost there (over a WebSocket it is kept)."
+**What causes it**: An event handler of an explicit view reads and then changes a `state()` field declared `persist=False` (`self.count += 1`). That field is not saved between requests, so on the HTTP fallback, where each event rebuilds the view from its saved state, and after a reconnect, the change is lost; within one WebSocket connection it is kept. Message: "<view> increment() changes state() field count, which a later event reads, but it is declared persist=False: it is not saved, so on the HTTP fallback and after a reconnect the change is lost (within one WebSocket connection it is kept)."
 
-**Fix**: Declare it on the class: `count = state(0, persist="server")`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V029"]}`.
+**Fix**: Remove `persist=False`: the field is then saved with the rest of the view's state. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V029"]}`.
 
 <!-- END GENERATED check-sections:V -->
 

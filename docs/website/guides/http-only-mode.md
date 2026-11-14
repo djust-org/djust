@@ -163,7 +163,7 @@ The page POST has no channel from the server to the browser: `tick_interval`, `s
 
 Every POST to the page URL builds a fresh view instance. What it gets back depends on the view's exposure policy.
 
-**The default, [explicit exposure](../state/explicit-exposure.md).** `mount()` runs on each POST and only the fields declared with `state(..., persist="server")` are restored. An attribute that is only set in `mount()` starts again from its `mount()` value on every POST, so declare what an event changes and the next event needs. The URL is read after those fields are restored, as on the socket, so a declared field `handle_params()` derives from the URL takes the URL's value on every POST: a handler's change to it that is not carried by a `live_patch()` does not survive to the next POST.
+**How a POST builds the view.** As in 1.x, the view is rebuilt from the state the previous request saved (its public attributes, the `_private` attributes `mount()` created, its `state()` fields), and `mount()` does not run again; then `handle_params()` reads the URL and `handle_restore()` runs. `mount()` runs only when nothing is saved yet, or when something of the view could not be saved (a queryset, the request's user, a component, work `mount()` queued): then `mount()` re-creates it and the saved state is put back over it. Read what must be current on every request in `handle_restore()` or `get_context_data()`. The URL is read after the state is restored, as on the socket, so a value `handle_params()` derives from the URL takes the URL's value on every POST. Saving is server-side only; what reaches the template is still decided by [explicit exposure](../state/explicit-exposure.md).
 
 **A view that states `exposure_policy = "legacy"`** (deprecated) keeps nothing between requests in 2.0: every POST runs `mount()` and `handle_params()` again, applies the event and renders, so anything a handler set on `self` is back at its `mount()` value on the next POST. Until 2.0 such a view's public and private attributes and its components' state were saved in the session and put back instead of running `mount()`; that save, and `handle_restore()` for a legacy view, are gone (see [Migrating to 2.0](migrating-to-2.0.md#5-what-does-not-survive)). An interactive component (`DropdownMenu`) gets a new identity on each mount, so an event addressed to the one the previous answer rendered is refused with 400 `{"error": "Component not found"}`, as on an explicit view.
 
@@ -198,11 +198,11 @@ Whenever the fallback runs `mount()` it then runs `handle_params(params, uri)`, 
 
 A `live_redirect()` or `live_patch()` that a handler queues is returned in the answer's `_navigation` list, in the shape of the WebSocket `navigation` frame, and the client applies it. After a `live_redirect()` nothing is rendered or saved for that request, so a handler can call `logout()` and then redirect. The flip side: a handler that changes state and then calls `live_redirect()` back to the same view's URL does not keep that change over the HTTP fallback, because the state is not saved. A `live_patch()` renders as usual and carries its frame beside the patches.
 
-### Nothing of the view is kept in the session
+### What of the view is kept in the session
 
-djust 2.0 keeps no view state in the Django session except what an [explicit](../state/explicit-exposure.md) view declares with `state(..., persist="server")` (including the fields of an explicit embedded child). A legacy view writes and reads no `liveview_<path>` key, nor its old `__private`, `__private_unsaved`, `_components` and `__mount_work` siblings, on any transport; keys a 1.x server left in a session are never read. The 1.x setting that switched this off, `LIVEVIEW_CONFIG["view_state_in_session"] = False`, is refused at startup: delete it. (The legacy `lazy=True` child on this fallback still keeps its own state under its slot's key until it is ported.)
+The view's state is kept in the Django session under djust's own keys (`_djust_auto_...` for the view's state, `_djust_explicit_...` for fields declared `persist="server"`, including the fields of an explicit embedded child). It is bound to the session, the user, the tenant and the route, expires after `DJUST_SERVER_STATE_MAX_AGE` (one hour), and needs a server-side session engine; with signed-cookie sessions nothing is saved. The 1.x `liveview_<path>` keys are never read. The 1.x setting that switched this off, `LIVEVIEW_CONFIG["view_state_in_session"] = False`, is refused at startup: delete it. A view that still states the deprecated `exposure_policy = "legacy"` saves nothing.
 
-The trade-off: state that lives only on the view resets on each fallback POST, because `mount()` runs again. A "load more" offset, a form draft or a selected tab that a handler set on `self` is back at its `mount()` value on the next POST. Declare it with `state(..., persist="server")` on an explicit view, keep it somewhere `mount()` can read it again (the URL, the database), or use the WebSocket or SSE transport, where the one view instance stays alive between events.
+What is not saved: a `state(..., persist=False)` field, names on the sensitive-field list, and values that cannot be saved (which make the next request run `mount()` again). Saved state past 512 KB per view is refused whole, never saved in part.
 
 So a form must post what identifies its target. Nothing of the page's open UI state survives between POSTs: a dialog that was open is closed again on the next request, and its submit meets no dialog. Put the target in the form (hidden fields, or `dj-value-*` attributes on the button) and let the handler read it from its parameters, or reopen the dialog from them before it acts. The URL is read again by `handle_params()` on every POST, so state that lives in the query string (a filter, a scope, `?tab=`) needs nothing extra.
 
@@ -242,8 +242,8 @@ from djust.decorators import event_handler, state
 class CounterView(LiveView):
     template_name = 'counter.html'
 
-    # Each POST builds a new view: a persisted field is what carries the count over.
-    count = state(0, persist="server")
+    # Each POST rebuilds the view from its saved state.
+    count = state(0)
 
     @event_handler
     def increment(self, **kwargs):

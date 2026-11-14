@@ -36,7 +36,7 @@ from djust.decorators import event_handler
 
 class CounterView(LiveView):
     template_name = "myapp/counter.html"
-    count = state(0, persist="server")
+    count = state(0)
 
     @event_handler()
     def increment(self, **kwargs):
@@ -53,7 +53,7 @@ class CounterView(LiveView):
 - Every event handler needs `@event_handler()` — djust blocks undecorated methods for security
 - Declare the parameters each binding sends; `manage.py check` reports a handler that would reject one (`djust.T020`)
 - State lives on `self` — any change to `self.count` triggers a re-render automatically
-- Keep what a handler changes in a declared `state()` field. `persist="server"` keeps it between events on every transport: over the HTTP fallback each event mounts a new view, so a plain attribute set in `mount()` starts from its `mount()` value every time (`manage.py check` reports such a handler, `djust.V029`)
+- A view's state is saved server-side between requests, as in 1.x: its public attributes, the `_private` attributes `mount()` creates, and its `state()` fields. Saving is not exposure: only a `state()` field or `get_context_data()` puts a value in the template. Over the HTTP fallback a later request rebuilds the view from its saved state and does not run `mount()` again, so read what must be fresh on every request in `handle_restore()` or `get_context_data()`
 
 ## 2. Create the Template
 

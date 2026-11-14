@@ -58,6 +58,16 @@ from djust.tests._ws_frames import drain_extra, has_type, receive_until
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
+
+@pytest.fixture(autouse=True)
+def _one_tab(monkeypatch):
+    """Every page load here is the same tab (#4106): the GET's id is the one
+    the harness's client sends back, and the page bytes are repeatable."""
+    from djust import _automatic_state
+
+    monkeypatch.setattr(_automatic_state, "new_tab_id", lambda: harness.TAB)
+
+
 MODULE = __name__
 RAN: List[str] = []
 
@@ -1058,6 +1068,10 @@ async def observe(run: Callable[[], Any]) -> List[Any]:
     stored state shows as a "non-serializable value" warning (#1786) before it
     shows in any frame.
     """
+    from djust import _automatic_state
+
+    # Its once-per-process reports would be in the first run's log only.
+    _automatic_state._NOTICED.clear()
     handler = _Warnings()
     logger = logging.getLogger("djust")
     logger.addHandler(handler)
@@ -1163,6 +1177,7 @@ def run_http(view_class: type, script: Script, echo: bool = False) -> List[Any]:
                 data=json.dumps(params or {}),
                 content_type="application/json",
                 HTTP_X_DJUST_EVENT=event_name,
+                HTTP_X_DJUST_TAB=harness.TAB,
                 **headers,
             )
         made.user, made.tenant, made.session = AnonymousUser(), None, session
@@ -1523,6 +1538,47 @@ def _break_plain_sub_ids(patch: Any) -> None:
     patch.setattr(rust_bridge, "_collect_sub_ids", lambda *args, **kwargs: None)
 
 
+async def _reconnect_run() -> Any:
+    """Two events, then a new consumer on the same session (#4107): the second
+    mount frame shows what the first connection saved."""
+    RAN.clear()
+    key = await harness.new_session_key_async()
+    frames: List[Any] = []
+    with harness.ws_settings(MODULE):
+        comm, mount_frame = await harness.mount_view(Counter, key)
+        frames.append(mount_frame)
+        try:
+            frames += await harness.event_frames(comm, "inc")
+            frames += await harness.event_frames(comm, "nothing")
+            frames += await harness.event_frames(comm, "inc")
+        finally:
+            await comm.disconnect()
+        again, mount_frame = await harness.mount_view(Counter, key)
+        frames.append(mount_frame)
+        await again.disconnect()
+    return [_normalise(frame) for frame in frames]
+
+
+async def test_a_reconnect_sees_the_same_saved_state(monkeypatch):
+    before, after = await both(_reconnect_run, monkeypatch)
+    assert as_bytes(before) == as_bytes(after)
+    assert "Count: 2" in json.dumps(after)
+
+
+def _break_unchanged_save_skip(patch: Any) -> None:
+    from djust import _automatic_state
+
+    # As if every state encoded to what the store already holds.
+    real = _automatic_state.project
+
+    def stale(view: Any) -> Any:
+        state = real(view)
+        state.text = "[{},{},false]"
+        return state
+
+    patch.setattr(_automatic_state, "project", stale)
+
+
 def _break_compact_fingerprints(patch: Any) -> None:
     from djust import change_detection, state_pass
 
@@ -1546,6 +1602,7 @@ def _break_shared_fingerprints(patch: Any) -> None:
 
 
 SABOTAGE = {
+    "unchanged_save_skip": (_break_unchanged_save_skip, _reconnect_run),
     "contract_cache": (_break_contract_cache, _redeclared_run),
     "snapshot_single_hop": (
         _break_snapshot_single_hop,

@@ -216,6 +216,9 @@ class TestExplicitExposureOrder:
         second = _post(initial, ExplicitPersisted(), "archive", url=PATH + "?scope=b")
         assert second.status_code == 200, second.content
         assert ("handler", "b") in SEEN, SEEN
+        # This client sends no tab id (#4106), so nothing undeclared is
+        # restored and mount() runs on each POST: the work it queues reads the
+        # URL's scope too.
         assert ("mount-work", "b") in SEEN, SEEN
 
 

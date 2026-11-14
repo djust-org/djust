@@ -819,6 +819,9 @@ class RequestMixin:
         # IMPORTANT: mount() must be called first to initialize clean state
         t0 = time.perf_counter()
         call_hook_sync(self.mount, request, **kwargs)
+        # Which ``_private`` attributes mount() created: saved with the view's
+        # state so a later request can be rebuilt without mount() (1.3).
+        cast(Any, self)._snapshot_user_private_attrs()
         t_mount = (time.perf_counter() - t0) * 1000
 
         # Call handle_params after mount (Phoenix parity).
@@ -877,14 +880,16 @@ class RequestMixin:
         state_serializable = state
         t_json = (time.perf_counter() - t0) * 1000
 
-        # An explicit view saves its declared persist="server" fields. A legacy
-        # view keeps nothing between requests (2.0): the page-POST fallback and
-        # the socket mount run mount() again.
         t0_sc = time.perf_counter()
-        if not uses_legacy_exposure(self):
-            from .._exposure_sessions import save_server_state
+        # A page load is a fresh mount() and a new tab (#4106): its state is
+        # saved as mount() left it, under an id the page carries and its client
+        # sends back. Another tab on this route keeps its own state.
+        from .. import _automatic_state as _saved_state
 
-            save_server_state(self, request)
+        self.__dict__["_djust_tab"] = _saved_state.new_tab_id()
+        from .._exposure_sessions import save_server_state
+
+        save_server_state(self, request)
         t_save_components = (time.perf_counter() - t0_sc) * 1000
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
@@ -1030,6 +1035,7 @@ class RequestMixin:
 
         # Inject LiveView client script
         html = self._inject_client_script(html)
+        html = _saved_state.page_with_tab(html, self.__dict__.get("_djust_tab", ""))
 
         # #3252: the page-POST fallback hosts its lazy slots too. The
         # streaming path flushes their thunks through the chunk emitter; here
@@ -1731,33 +1737,71 @@ class RequestMixin:
             # One budget for every wait on background work in this request
             # (#3634); ``None`` unless ``http_fallback_background_timeout`` is set.
             bg_budget = _http_background_budget()
-            if not legacy_exposure:
-                from .._exposure_sessions import load_server_state
+            from .. import _automatic_state
+            from .._exposure_sessions import load_saved_view
 
-                # Reconstruct transient server services for this HTTP request.
-                # The persisted projection is validated separately and overlays
-                # only declared server fields, never render/context attributes.
+            # The 1.3 rule (#4107): a view whose state is saved is REBUILT from
+            # it, and mount() does not run again; mount() runs only when
+            # nothing is saved, or when something of the view could not be
+            # saved (an unsaveable attribute, a component, work mount() queued),
+            # and then the saved state goes back over what mount() built. What
+            # is put back was validated by the store; nothing the client sent
+            # is read here.
+            # The tab the page says it is (#4106). It selects one of this
+            # session's own states; none or a malformed one selects nothing.
+            self.__dict__["_djust_tab"] = _automatic_state.tab_id(
+                request.headers.get(_automatic_state.TAB_HEADER)
+            )
+            saved_view = load_saved_view(self, request)
+
+            def _assign(values: Dict[str, Any]) -> None:
+                for key, value in values.items():
+                    safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
+
+            if saved_view.must_mount:
                 call_hook_sync(self.mount, request, **kwargs)
-                restored = load_server_state(self, request)
-                if restored is not None:
-                    for key, value in restored.items():
-                        safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
-                    explicit_restored = True
-                # The socket mount restores, then reads the URL (``dispatch_mount``:
-                # mount, ``load_server_state``, ``handle_params``). Same order
-                # here, so the URL this request carries wins over a persisted
-                # server field the previous request saved (#3624).
-                _run_http_handle_params(self, request)
+                cast(Any, self)._snapshot_user_private_attrs()
                 mount_work_pending = True
+                # Declared persist="server" fields, then the URL: the URL this
+                # request carries wins over a declared field (#3624), as on the
+                # socket mount.
+                _assign(saved_view.declared)
+                _run_http_handle_params(self, request)
             else:
-                # A legacy view keeps nothing between requests (2.0): every POST
-                # mounts it again. The page's URL state is rebuilt the way the
-                # GET builds it: the event must meet the page the browser shows,
-                # and the render it answers with must not diff against mount()'s
-                # defaults (#3624).
-                call_hook_sync(self.mount, request, **kwargs)
+                # Rebuilt from the saved state, no mount(). handle_params()
+                # still runs, because 2.0 pins that the URL THIS request
+                # carries wins over a declared persist="server" field (#3624,
+                # ``test_http_fallback_handle_params_3624``): the saved state
+                # goes on first so the hook can read it, and the undeclared
+                # part goes back again below.
+                _assign(saved_view.declared)
+                _assign(saved_view.public)
+                _automatic_state.apply_private(self, saved_view.private)
                 _run_http_handle_params(self, request)
-                mount_work_pending = True
+            # The rest of the saved state goes over what mount() and
+            # handle_params() built, as 1.3 put it back: what a handler set (a
+            # tab the URL does not carry) is not reset by handle_params().
+            # ``put_back`` decides what goes back (never a saved model dict over
+            # the live instance mount() just loaded) and restores the private
+            # attributes and the components' state.
+            _assign(
+                _automatic_state.put_back(
+                    self,
+                    saved_view.public,
+                    saved_view.private,
+                    saved_view.components,
+                    over_mount=saved_view.must_mount,
+                )
+            )
+            # The view is as the next handler finds it: a save records as
+            # changed every name that differs from this.
+            _automatic_state.settle(self)
+            explicit_restored = saved_view.found and bool(
+                saved_view.declared
+                or saved_view.public
+                or saved_view.private
+                or saved_view.components
+            )
 
             self._assign_component_ids()
 
@@ -1781,11 +1825,9 @@ class RequestMixin:
                     status=403,
                 )
 
-            # An explicit view whose declared persist="server" state was put
-            # back on top of mount() reads again what that state does not hold
-            # (#3989). After the object check, so it never reads for a denied
-            # object. A legacy view keeps nothing between requests (2.0), so
-            # nothing was restored and the hook does not run for it.
+            # A view whose saved state was put back on top of mount() reads
+            # again what that state does not hold (#3989). After the object
+            # check, so it never reads for a denied object.
             if explicit_restored:
                 handle_restore = getattr(self, "handle_restore", None)
                 if callable(handle_restore):
@@ -2048,23 +2090,23 @@ class RequestMixin:
                 _inject_side_channels(redirect_response)
                 return JsonResponse(redirect_response)
 
-            if not legacy_exposure:
-                from .._exposure_sessions import StateLimitExceeded, save_server_state
+            # Explicit and legacy views alike (#4107).
+            from .._exposure_sessions import StateLimitExceeded, save_server_state
 
-                try:
-                    save_server_state(self, request)
-                except StateLimitExceeded as refused:
-                    # Refused before writing (#4095): the stored state is the
-                    # last one that fit, and the next request restores it. This
-                    # request's view is discarded, so nothing else to put back.
-                    logger.warning(
-                        "HTTP event state save refused: field %s over its %s limit",
-                        sanitize_for_log(refused.field),
-                        refused.limit,
-                    )
-                    return JsonResponse(
-                        {"error": refused.user_message, "code": "state_too_large"}, status=413
-                    )
+            try:
+                save_server_state(self, request)
+            except StateLimitExceeded as refused:
+                # Refused before writing (#4095): the stored state is the
+                # last one that fit, and the next request restores it. This
+                # request's view is discarded, so nothing else to put back.
+                logger.warning(
+                    "HTTP event state save refused: field %s over its %s limit",
+                    sanitize_for_log(refused.field),
+                    refused.limit,
+                )
+                return JsonResponse(
+                    {"error": refused.user_message, "code": "state_too_large"}, status=413
+                )
 
             # Fields every response of this turn carries besides its payload.
             response_fields: Dict[str, Any] = {}

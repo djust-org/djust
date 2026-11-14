@@ -925,7 +925,7 @@ class LiveView(
                     continue
                 seen_state_names.add(name)
                 if issubclass(type(declaration), StateProperty) and (
-                    declaration.exposure.persist is not None or declaration.exposure.client
+                    declaration.exposure.persist not in (None, False) or declaration.exposure.client
                 ):
                     raise ExposureConfigurationError(
                         "state() exposure grants require exposure_policy='explicit'. "
@@ -1084,6 +1084,19 @@ class LiveView(
         self._explicit_child_vdom_tracking = False
         self._http_lazy_containers = {}
         self._http_lazy_validated_html = None
+        # #4107: what the session store holds of this view's automatic state
+        # (``_automatic_state``): bookkeeping, so before the snapshot below.
+        self._djust_auto_basis: Any = None
+        self._djust_auto_bytes = 0
+        # The keys the turn's change detection found changed, for the save.
+        self._djust_auto_changed: Any = None
+        self._djust_auto_restore_same = False
+        self._djust_auto_reapply: Any = None
+        self._djust_auto_settled: Any = None
+        # The tab this view belongs to: minted by the page GET, sent back by
+        # that page's client on its socket mount and fallback POSTs (#4106).
+        self._djust_tab = ""
+        self._djust_restore_changed_view = True
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())
 
         # v0.8.0 — @action server-action state. Initialized AFTER

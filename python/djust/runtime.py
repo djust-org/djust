@@ -3331,6 +3331,11 @@ class ViewRuntime(RuntimeTurnPort):
 
         # Stash transport identity on the view (used by VDOM caching).
         view_instance._websocket_session_id = self.session_id
+        # The tab the page says it is (#4106): selects one of this session's
+        # own saved states. None, or a malformed one, selects nothing.
+        from ._automatic_state import tab_id as _tab_id
+
+        view_instance._djust_tab = _tab_id(data.get("tab"))
         view_instance._websocket_path = page_url
         view_instance._websocket_query_string = ""
 
@@ -3483,6 +3488,9 @@ class ViewRuntime(RuntimeTurnPort):
 
         try:
             await call_hook(view_instance.mount, request, **mount_kwargs)
+            # Which ``_private`` attributes mount() created (saved with the
+            # view's state, #4107).
+            view_instance._snapshot_user_private_attrs()
             if not legacy_exposure:
                 from ._exposure_sessions import load_server_state
 
@@ -3540,8 +3548,12 @@ class ViewRuntime(RuntimeTurnPort):
                     # match it. The first event after the restore must send
                     # full HTML, not a patch against that stale baseline. The
                     # mount render reads the flag and never resets it; the
-                    # first event's render consumes it.
-                    view_instance._force_full_html = True
+                    # first event's render consumes it. Not when the restore
+                    # put back exactly what mount() built (#4107): the page
+                    # GET saved that state and rendered the page from it, so
+                    # the browser's DOM and the baseline already agree.
+                    if view_instance.__dict__.get("_djust_restore_changed_view", True):
+                        view_instance._force_full_html = True
         except Exception as exc:
             response = handle_exception(
                 exc,
@@ -3589,6 +3601,13 @@ class ViewRuntime(RuntimeTurnPort):
             query_string = urlencode(params) if params else ""
             uri = f"{page_url}?{query_string}" if query_string else page_url
             await run_handle_params(view_instance, params, uri)
+            if not legacy_exposure:
+                # #4107: what a handler set (restored above) goes back over the
+                # defaults handle_params() just assigned; a declared
+                # persist="server" field keeps the URL's value (#3624).
+                from ._exposure_sessions import reapply_saved_state
+
+                reapply_saved_state(view_instance)
         except Exception as exc:
             response = handle_exception(
                 exc,
@@ -4334,10 +4353,35 @@ class ViewRuntime(RuntimeTurnPort):
         from ._exposure import uses_legacy_exposure
 
         target_view = self.view_instance
+        # #4107: the post-event snapshot, taken before the commit so the save
+        # can tell from it whether any saved attribute changed (and walk
+        # nothing when none did). It is the snapshot the render decision below
+        # needs anyway: the commit and the client snapshot between here and
+        # there do not change the view's state. Off with the shortcut, the
+        # snapshot is taken where it always was.
+        early_post_assigns: Optional[Dict[str, Any]] = None
         if not uses_legacy_exposure(target_view):
+            if (
+                _per_turn.on("unchanged_save_skip")
+                and target_view is view
+                and pre_assigns is not None
+                and not getattr(view, "_force_full_html", False)
+            ):
+                early_post_assigns = _snapshot_assigns(view)
+                view.__dict__["_djust_auto_changed"] = _compute_changed_keys(
+                    pre_assigns, early_post_assigns
+                )
             # A failed explicit save withholds the success frame (E3); the
             # child tree is saved on the render/noop branches below.
-            if not await self.commit_explicit_turn(target_view, source="event", children=False):
+            try:
+                committed = await self.commit_explicit_turn(
+                    target_view, source="event", children=False
+                )
+            finally:
+                # This turn's answer only: a commit that never reached the
+                # save must not leave it for a later turn's save to trust.
+                view.__dict__["_djust_auto_changed"] = None
+            if not committed:
                 return
 
         snapshot_fields = await self._explicit_event_snapshot(view)
@@ -4360,7 +4404,9 @@ class ViewRuntime(RuntimeTurnPort):
             getattr(view, "_child_views", None)
         )
         if not skip_render and not force_html:
-            post_assigns = _snapshot_assigns(view)
+            post_assigns = (
+                early_post_assigns if early_post_assigns is not None else _snapshot_assigns(view)
+            )
             if pre_assigns == post_assigns and not has_explicit_children:
                 skip_render = True
             else:

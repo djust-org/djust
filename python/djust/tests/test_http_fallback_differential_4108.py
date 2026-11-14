@@ -107,8 +107,13 @@ def _masked(html: str | None) -> str | None:
 _CSRF_META = re.compile(r'(<meta name="djust-csrf-token" content=")[^"]*(">)')
 
 
+_TAB_META = re.compile(r'(<meta name="djust-tab" content=")[^"]*(">)')
+
+
 def _stable_document(document: str) -> str:
-    """The GET document with the per-response CSRF token replaced."""
+    """The GET document with the per-response CSRF token and the per-page-load
+    tab id (#4106) replaced."""
+    document = _TAB_META.sub(r"\1tab-fixture-0001\2", document)
     return _CSRF_META.sub(r"\1CSRF\2", document)
 
 
@@ -203,6 +208,12 @@ async def test_a_dropped_state_field_turns_the_differential_red(monkeypatch):
     from djust import _exposure_sessions
 
     monkeypatch.setattr(_exposure_sessions, "load_server_state", lambda view, request: None)
+    # The fallback reads its saved state through ``load_saved_view`` (#4107).
+    monkeypatch.setattr(
+        _exposure_sessions,
+        "load_saved_view",
+        lambda view, request: _exposure_sessions.SavedView({}, {}, {}, True),
+    )
     with override_settings(**SETTINGS):
         record = await _scenario("counter", monkeypatch)
     assert record["fallback_final"] != record["socket_final"]

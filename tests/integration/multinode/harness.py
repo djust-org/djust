@@ -294,6 +294,9 @@ class Browser:
         self.cluster = cluster
         self.cookies: Dict[str, str] = {}
         self.headers = dict(headers or {})
+        # The tab id each page load carried (#4106), by path: what client.js
+        # reads from the page and sends back on its mount and its POSTs.
+        self.tabs: Dict[str, str] = {}
 
     def _cookie_header(self) -> str:
         return "; ".join("%s=%s" % kv for kv in self.cookies.items())
@@ -324,13 +327,25 @@ class Browser:
             conn.close()
 
     def get(self, node: str, path: str, headers=None):
-        return self.request(node, "GET", path, headers=headers)
+        answer = self.request(node, "GET", path, headers=headers)
+        found = re.search(r'<meta name="djust-tab" content="([^"]+)">', answer[1])
+        if found:
+            self.tabs[path.split("?")[0]] = found.group(1)
+        return answer
+
+    def tab(self, path: str) -> str:
+        """The tab id of this browser's latest load of ``path``."""
+        return self.tabs.get(path.split("?")[0], "")
 
     def post_event(self, node: str, path: str, event: str, params=None):
         """The HTTP fallback's event POST, as client.js sends it."""
         body = json.dumps({"event": event, "params": params or {}})
         status, data, _ = self.request(
-            node, "POST", path, body=body, headers={"Content-Type": "application/json"}
+            node,
+            "POST",
+            path,
+            body=body,
+            headers={"Content-Type": "application/json", "X-Djust-Tab": self.tab(path)},
         )
         try:
             payload = json.loads(data)
@@ -411,6 +426,7 @@ class Socket:
             "params": dict(parse_qsl(parts.query)),
             "url": parts.path,
             "has_prerendered": True,
+            "tab": self.browser.tab(parts.path),
         }
         if reconnect_from is not None:
             frame["reconnect"] = True
