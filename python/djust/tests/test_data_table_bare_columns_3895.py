@@ -4,7 +4,8 @@
 but ``table.html`` reads ``col.key``, and a filter argument that does not resolve raises
 ``VariableDoesNotExist``: the page's first render, the one under Django's engine, failed. The
 Python tag now reads any column that is not a dict as the column whose key and label are its text
-(an ``int`` keeps its value as the key), and that text is plain even when it is marked safe.
+(an ``int`` keeps its value as the key), and that text is plain even when it is marked safe. Only
+scalars: an object column (a class, a namedtuple) keeps its attribute reading (#3894).
 
 The comparison is the body rows and the header labels. The header's other attributes and the
 native ``data-row-key`` differ for every column shape, dicts included (#3663, #3869), so they are
@@ -14,6 +15,7 @@ bare name is exactly its dict on the Python side.
 
 from __future__ import annotations
 
+import collections
 import re
 
 import pytest
@@ -114,3 +116,43 @@ def test_a_bare_column_row_with_no_url_is_a_plain_row() -> None:
         '{% data_table rows=rows columns=cols row_url="u" %}', {"rows": ROWS, "cols": ["name"]}
     )
     assert [r["attrs"].get("data-href") for r in view(py).rows] == ["/a", None, None]
+
+
+# --- an object column is not a bare name: the #3894 contract stands -------------------------------
+
+
+class _Col:
+    def __init__(self, key: str, label: str, width: str) -> None:
+        self.key, self.label, self.width = key, label, width
+
+
+_ColTuple = collections.namedtuple("_ColTuple", "key label width")
+
+OBJECT_COLUMNS = {"object": _Col("name", "N", "10px"), "namedtuple": _ColTuple("name", "N", "10px")}
+
+
+@pytest.mark.parametrize("name", sorted(OBJECT_COLUMNS))
+def test_an_object_column_is_read_through_its_attributes_in_python(name: str) -> None:
+    """Only scalars become a bare name; ``key`` / ``label`` / ``width`` of an object are read."""
+    html = _django(
+        "{% data_table rows=rows columns=cols %}",
+        {"rows": [{"id": 1, "name": "v"}], "cols": [OBJECT_COLUMNS[name]]},
+    )
+    assert _labels(html) == ["N"], html
+    assert 'data-value="name"' in html and 'style="width:10px"' in html, html
+    assert ">v<" in _body(html), html
+
+
+@pytest.mark.parametrize("name", sorted(OBJECT_COLUMNS))
+def test_an_object_column_natively_is_its_serialised_text(name: str) -> None:
+    """Pinned for a decision (#3895): the native handler is handed the column after the context's
+    JSON round trip, an object as its ``repr`` and a namedtuple as a list, so it draws that text
+    as the header and reads no cell. It is not the bare-name rule: the Python tag reads the
+    attributes (above)."""
+    col = OBJECT_COLUMNS[name]
+    html = _rust(
+        "{% data_table rows=rows columns=cols %}", {"rows": [{"id": 1, "name": "v"}], "cols": [col]}
+    )
+    (label,) = _labels(html)
+    assert label != "N" and ("_Col object at 0x" in label or "&#x27;name&#x27;" in label), html
+    assert _body(html) == "<tr><td></td></tr>", html
