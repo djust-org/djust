@@ -990,7 +990,13 @@ class TestTheNarrowingsTheExtractorsInherit:
         try:
             out = djust_render(EXTRACTORS[name], value)
         except Exception as exc:  # noqa: BLE001 — a refusal is the strongest form
-            assert "KeyError" in str(exc) or "not subscriptable" in str(exc), exc
+            # `last` runs Django's own `value[-1]` since #4005, so its `KeyError`
+            # crosses whole rather than as djust's message naming it.
+            assert (
+                isinstance(exc, KeyError)
+                or "KeyError" in str(exc)
+                or "not subscriptable" in str(exc)
+            ), exc
             return
         assert payload_capabilities(out) == set(), out
 

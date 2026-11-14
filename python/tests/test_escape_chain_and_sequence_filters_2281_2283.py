@@ -457,8 +457,9 @@ class TestNonIterableFallThrough:
         with pytest.raises(Exception) as caught:
             _rust.render_template("{{ p|%s }}" % name, normalize_django_value({"p": value}))
         message = str(caught.value)
-        if name == "unordered_list":
-            # Django's own function since 2.0: its TypeError crosses whole.
+        if name in ("unordered_list", "random"):
+            # Django's own function since 2.0 (`random` since #4005): its
+            # TypeError crosses whole.
             assert isinstance(caught.value, TypeError), message
         else:
             assert f"filter '{name}'" in message, message
@@ -561,9 +562,10 @@ def test_the_iteration_sink_has_exactly_the_callers_it_claims() -> None:
     # exception Python raises where it answers `None` (#2451). `unordered_list`
     # was the third; it runs Django's own function since 2.0.
     assert wrapped == {"safeseq", "escapeseq"}, wrapped
-    # `random` moved OFF the iteration sink entirely: `random.choice(seq)` is
-    # `seq[i]`, so it belongs with `first`/`last` on the subscript chokepoint.
-    assert subscripted == {"first", "last", "random"}, subscripted
+    # `last` and `random` run Django's own `value[-1]` / `random.choice(value)`
+    # since #4005, so `first` is the one native caller of the subscript
+    # chokepoint left.
+    assert subscripted == {"first"}, subscripted
 
 
 #: The corpus reachability manifest (#2345), read once per module.
@@ -1014,12 +1016,15 @@ class TestDictsortHasDjangosFailureBranch:
         source = "{{ p|%s:%s }}" % (name, arg)
         try:
             django_out = DjangoTemplate(source).render(DjangoContext({"p": self.HOSTILE}))
-        except Exception:  # noqa: BLE001 — Django's own IndexError on `''`
-            django_out = None
+        except Exception as exc:  # noqa: BLE001 — Django's own IndexError on `''`
+            # Django's own function since #4005: its `IndexError` crosses, so
+            # the sequence is not kept alive here either.
+            with pytest.raises(type(exc)):
+                _rust.render_template(source, normalize_django_value({"p": self.HOSTILE}))
+            return
         djust_out = _rust.render_template(source, normalize_django_value({"p": self.HOSTILE}))
         assert djust_out == "", f"{source} kept the sequence: {djust_out!r}"
-        if django_out is not None:
-            assert djust_out == django_out, f"django={django_out!r} djust={djust_out!r}"
+        assert djust_out == django_out, f"django={django_out!r} djust={djust_out!r}"
 
     @pytest.mark.parametrize(
         "source",

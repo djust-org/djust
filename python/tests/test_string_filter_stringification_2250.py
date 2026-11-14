@@ -459,15 +459,13 @@ def test_escape_is_the_named_exclusion() -> None:
             expected, got = _render_both("{{ p|safe }}", value)
             assert expected == "1E-9", f"Django changed: {expected!r}"
             assert got == "1E-9", f"#2303 regressed? {got!r}"
-            # `escape` stopped being a no-op in #2281 — it is `conditional_escape`
-            # now, eager, so it necessarily produces a STRING and the value no
-            # longer localizes. It stringifies through `Display` (the RENDER
-            # form) and NOT through `str(Decimal)` (`1E-9`), which is what the
-            # `@stringfilter` coercion would have selected — so the exclusion
-            # this test names still stands, and Django is still one step away.
+            # `escape` stopped being a no-op in #2281, and since #4005 it is
+            # Django's own `escape_filter`, which is `conditional_escape(value)`
+            # on the `Decimal` itself: `str(Decimal)`, `1E-9`. The exclusion's
+            # divergence is closed for `escape` as it was for `safe`.
             expected, got = _render_both("{{ p|escape }}", value)
             assert expected == "1E-9", f"Django changed: {expected!r}"
-            assert got == "0.000000001", f"#2257 closed? {got!r}"
+            assert got == expected, f"#4005 regressed? {got!r}"
             # The blocker, on a plain string so it is visibly independent of
             # anything #2250 changed. It read `("10", "1E+1")` — a divergence —
             # until #2253 ported Django's `floatformat`, whose first step is

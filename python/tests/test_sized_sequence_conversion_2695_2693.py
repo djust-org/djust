@@ -460,6 +460,16 @@ LAZY_PARITY: frozenset[str] = frozenset(
     | _cells("zip", *(s for s in SINKS if s not in ("first", "last")))
     | _cells("dict_gen", *(s for s in SINKS if s not in ("first", "last")))
     | _cells("dict_iter", *(s for s in SINKS if s not in ("first", "last")))
+    # #4005: `last` is Django's own `value[-1]`, so its refusal over these
+    # shapes is Django's own `TypeError`, class and all.
+    | _cells("set", "last")
+    | _cells("frozenset", "last")
+    | _cells("dict_keys", "last")
+    | _cells("generator", "last")
+    | _cells("map", "last")
+    | _cells("zip", "last")
+    | _cells("dict_gen", "last")
+    | _cells("dict_iter", "last")
 )
 
 #: The divergences that remain, each with the reason it is out of #2695's and
@@ -467,8 +477,9 @@ LAZY_PARITY: frozenset[str] = frozenset(
 #: second data structure, but grouped here so a reader does not have to
 #: subtract two frozensets by hand:
 #:
-#: * ``{first,last}`` over a ``set`` / ``frozenset`` / ``dict_keys`` /
-#:   generator / ``map`` / ``zip`` / one-shot iterator — BOTH engines raise,
+#: * ``first`` over a ``set`` / ``frozenset`` / ``dict_keys`` /
+#:   generator / ``map`` / ``zip`` / one-shot iterator (``last`` too, until
+#:   #4005 made it Django's own function) — BOTH engines raise,
 #:   and djust's message quotes Django's sentence verbatim
 #:   (``TypeError: 'set' object is not subscriptable``); only the exception
 #:   CLASS wrapping it differs. Pre-existing.

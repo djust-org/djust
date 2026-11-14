@@ -1433,10 +1433,13 @@ fn apply_builtin_filter(
         // through), `force_escape` is `escape` (a `SafeString` is escaped
         // AGAIN). `{{ p|safe|escape }}` and `{{ p|safe|force_escape }}` are
         // the cells that tell them apart.
-        "escape" => Ok(Value::String(conditional_escape(
+        "escape" => filter_registry::apply_django_builtin_filter(
+            filter_name,
             value,
-            input_safety.container,
-        ))),
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         // Django's `mark_safe(obj)` is `SafeString(str(obj))` — it does not
         // merely MARK the value, it changes its TYPE before the rest of the
         // chain sees it. So `|safe` is a stringify, for every variant, and the
@@ -1485,10 +1488,17 @@ fn apply_builtin_filter(
             Ok(found) => Ok(found.unwrap_or_else(index_error_answer)),
             Err(err) => Err(value_op_error(filter_name, value, &err)),
         },
-        "last" => match python_getitem(value, -1) {
-            Ok(found) => Ok(found.unwrap_or_else(index_error_answer)),
-            Err(err) => Err(value_op_error(filter_name, value, &err)),
-        },
+        // `value[-1]`, Django's own, with its `except IndexError: return ""`
+        // (#4005). The element comes back as djust's own `Value` (identity),
+        // so a carried row keeps what it carries.
+        "last" => filter_registry::apply_django_builtin_filter_keeping(
+            filter_name,
+            value,
+            None,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         // Django, verbatim:
         //
         //     try:
@@ -1729,11 +1739,13 @@ fn apply_builtin_filter(
             autoescape,
             input_safety,
         ),
-        "cut" => {
-            // cut filter: removes all occurrences of arg from string
-            let remove_str = arg.unwrap_or("");
-            Ok(Value::String(value.to_string().replace(remove_str, "")))
-        }
+        "cut" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         "divisibleby" => {
             // Django is `int(value) % int(arg) == 0`, so it reads the VALUE and
             // not the type: `{{ "42"|divisibleby:"2" }}` is `True`. This arm
@@ -1818,49 +1830,19 @@ fn apply_builtin_filter(
         // the whole string was not "a random pick of one element", it was the
         // sequence itself.
         "random" => {
-            // `random.choice(seq)` is `seq[_randbelow(len(seq))]`, so it needs
-            // BOTH a length and a subscript — and its subscript goes through
-            // the same chokepoint `first` and `last` use (#2451). A view was
-            // carved out by hand here (#2340) and no longer needs to be: it
-            // has a `len()` and [`python_getitem`] answers `NotSubscriptable`
-            // for it, which is Python's own reason.
-            //
-            // Over a MAPPING this is genuinely nondeterministic in Python too:
-            // `random.choice(d)` draws an index and then does `d[i]`, so a dict
-            // carrying every key `0..len-1` never raises, one carrying none of
-            // them always does, and one carrying some raises on some draws.
-            // Reproduced rather than smoothed over — smoothing it would be a
-            // second, quieter divergence. `TestRandomOverAMapping` pins the two
-            // deterministic ends.
-            match python_len(value) {
-                // `random.choice([])` — an `IndexError`, which Django catches.
-                Some(0) => Ok(index_error_answer()),
-                Some(len) => {
-                    use std::collections::hash_map::DefaultHasher;
-                    use std::hash::{Hash, Hasher};
-                    use std::time::{SystemTime, UNIX_EPOCH};
-
-                    let mut hasher = DefaultHasher::new();
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_nanos()
-                        .hash(&mut hasher);
-                    let drawn = i64::try_from((hasher.finish() as usize) % len).unwrap_or(0);
-                    match python_getitem(value, drawn) {
-                        Ok(found) => Ok(found.unwrap_or_else(index_error_answer)),
-                        Err(err) => Err(value_op_error(filter_name, value, &err)),
-                    }
-                }
-                // No `len()` at all — a scalar, `None`, a serialized model.
-                // `random.choice` asks for one first, so this is a `TypeError`
-                // Django does not catch.
-                None => Err(value_op_error(
-                    filter_name,
-                    value,
-                    &ValueOpError::NotSubscriptable,
-                )),
-            }
+            // `random.choice(value)`, Django's own (#4005): over a MAPPING it is
+            // nondeterministic exactly as Python is (`d[i]` for a drawn index),
+            // and the draw comes from Python's `random`, so `random.seed()`
+            // governs it as it does Django's. The pick comes back as the
+            // element's own `Value` (identity).
+            filter_registry::apply_django_builtin_filter_keeping(
+                filter_name,
+                value,
+                None,
+                django_filter_arg(arg, resolved_arg),
+                autoescape,
+                input_safety,
+            )
         }
         "timeuntil" => {
             // The same computation as `timesince` with the operands swapped,
@@ -2009,88 +1991,43 @@ fn apply_builtin_filter(
         // step over. The failure branch closes BOTH orders, and every future
         // one, because the value Django discarded is discarded here too.
         "dictsort" | "dictsortreversed" => {
-            let sort_key = arg.unwrap_or("name");
-            // An UNQUOTED integer literal is an `int` to Python, so
-            // `itemgetter(n)` indexes. A quoted one is a `str` and looks up a
-            // key. `arg_was_quoted` is the only thing that separates them, and
-            // `{{ p|dictsort:0 }}` vs `{{ p|dictsort:"1" }}` on the same list
-            // of strings is the cell that proves it.
+            // Django's own `sorted(value, key=_property_resolver(arg))` (#4005),
+            // with the two things djust adds kept:
             //
-            // A VARIABLE argument is typed by what it resolved to, not by its
-            // spelling: `_property_resolver` tries `float(arg)` on the object,
-            // so a context string `"3"` builds `itemgetter("3")`, a KEY
-            // lookup, and an `int` indexes. Reading the resolved text as an
-            // unquoted literal sorted a list of strings by its fourth
-            // character where Django's `str["3"]` raises and renders `""`.
-            let index = match resolved_arg {
-                Some(Value::Integer(n)) => usize::try_from(*n).ok(),
-                Some(Value::Bool(b)) => Some(usize::from(*b)),
-                Some(Value::String(_) | Value::SafeString(_)) => None,
-                // `itemgetter(2.5)` / `itemgetter(Decimal("0"))`: no sequence
-                // item accepts a non-integer index, so Django's
-                // `except TypeError` returns `""`.
-                Some(Value::Float(_) | Value::Decimal(_)) => {
-                    return Some(Ok(Value::String(String::new())));
+            //   * the BOUND. A carried collection (a generator, a `map`, a
+            //     one-shot iterator) is walked by `iter_values` and its cap
+            //     first, so Django sorts a bounded list and never pulls an
+            //     unbounded iterable (#2693, #2695). Not iterable is Django's
+            //     `TypeError`, answered `""` without the call.
+            //   * the FLOOR. Elements cross as djust's handler objects, so a
+            //     carried model is read through its floor proxy, as a bridged
+            //     tag reads it, and never orders rows by a field a template
+            //     path cannot read.
+            //
+            // The sorted rows come back as djust's own `Value`s (identity).
+            let carried;
+            let items: Option<&[Value]> = match value {
+                Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
+                    Some(items)
                 }
-                _ if arg_was_quoted => None,
-                _ => sort_key.parse::<usize>().ok(),
-            };
-            // `sorted(..., reverse=True)` keeps EQUAL keys in their input
-            // order. Reversing an ascending sort reversed them as well, so a
-            // tie came out backwards.
-            let reverse = filter_name == "dictsortreversed";
-            let sorted = match value {
-                // A dict VIEW sorts (#2340). Django's `dictsort` is
-                // `sorted(value, key=…)` and `sorted()` takes ANY iterable, so
-                // `{{ d.values|dictsort:"k" }}` is a real, working idiom — and
-                // it returns a LIST, which the `Ok(Value::List(items))` below
-                // already produces.
-                //
-                // The or-pattern audit first classified this arm's `_ => None`
-                // as CORRECT, on the measurement `{{ p.items|dictsort:'0' }}`
-                // -> `''`. That is a case where DJANGO ALSO FAILS — a quoted
-                // `'0'` is a key lookup and a tuple has no key `'0'` — so one
-                // arg value said "agree" about a filter that diverges for
-                // every arg that resolves. The exhaustive filter sweep missed
-                // it for the same reason: `FILTER_ARGS` carries ONE arg per
-                // filter, which is a curated sample wearing a sweep's clothes.
-                Value::List(items)
-                | Value::Tuple(items)
-                | Value::NamedTuple { items, .. }
-                | Value::DictView { items, .. } => match index {
-                    Some(n) => dictsort_by_index(items, n, reverse),
-                    None => dictsort_by_key(items, sort_key, reverse),
-                },
-                // A CARRIED collection, through the same `iter_values` sink
-                // `{% for %}` / `|join` / `in` use (#2693, link N+1 of
-                // #2674). `sorted()` takes ANY iterable, so Django sorts a
-                // generator, a `map`, a `zip` and a one-shot `iter([...])`
-                // — and this arm answered `''` for every one of them,
-                // because it fell to the `_ => None` below. Routing it here
-                // consumes a one-shot handle exactly once, at whichever sink
-                // reaches it first, with the same cap semantics.
                 Value::Encoded(_) => match iter_values(value) {
-                    Ok(Some(items)) => match index {
-                        Some(n) => dictsort_by_index(&items, n, reverse),
-                        None => dictsort_by_key(&items, sort_key, reverse),
-                    },
-                    // Not iterable — `sorted()` raises `TypeError`, which
-                    // Django's own `except TypeError: return ""` catches.
-                    Ok(None) => None,
-                    // A raising `__next__`, or an unbounded walk past the
-                    // cap: propagated, as `|join` propagates it. `Some(..)`
-                    // because this function's return type is
-                    // `Option<Result<Value>>` and a bare `Err` would target
-                    // the Option.
+                    Ok(Some(items)) => {
+                        carried = items;
+                        Some(&carried)
+                    }
+                    Ok(None) => return Some(Ok(Value::String(String::new()))),
                     Err(err) => return Some(Err(err)),
                 },
-                // Not a sequence at all: `sorted()` raises `TypeError`.
                 _ => None,
             };
-            match sorted {
-                Some(items) => Ok(Value::List(items)),
-                None => Ok(Value::String(String::new())),
-            }
+            filter_registry::apply_django_builtin_filter_keeping(
+                filter_name,
+                value,
+                items,
+                django_filter_arg(arg, resolved_arg),
+                autoescape,
+                input_safety,
+            )
         }
         "urlencode" => {
             // `quote(value, safe=arg)`, and `quote`'s own default safe set is
@@ -2108,24 +2045,18 @@ fn apply_builtin_filter(
             let spec = arg.unwrap_or("s");
             Ok(Value::String(crate::stringformat::apply(value, spec)))
         }
-        "default_if_none" => {
-            // Fallback only when the value is None or absent — never for an
-            // empty string. BOTH variants (#2203 review): matching only
-            // `Missing` inverted the filter, firing on an absent variable while
-            // rendering the literal text "None" for the one input it is named
-            // for.
-            match value {
-                // `None` ONLY — not `Missing`. Django substitutes
-                // `string_if_invalid` ("") for an absent variable BEFORE the
-                // filter runs, so the filter never sees None there and returns
-                // the empty string rather than the fallback. Matching `Missing`
-                // too made `{{ absent|default_if_none:'NA' }}` render "NA"
-                // where Django renders "" — a pre-existing divergence this PR
-                // is in the right place to close (#2203 review).
-                Value::None => Ok(Value::String(arg.unwrap_or("").to_string())),
-                _ => Ok(value.clone()),
-            }
-        }
+        // `arg if value is None else value`, Django's own (#4005). The input
+        // comes back as itself (identity). A resolved argument never gets
+        // here when the fallback fires: `apply_resolved_filter` answers it
+        // with the argument's own `Value`.
+        "default_if_none" => filter_registry::apply_django_builtin_filter_keeping(
+            filter_name,
+            value,
+            None,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         "wordcount" => filter_registry::apply_django_builtin_filter(
             filter_name,
             value,
@@ -2155,9 +2086,12 @@ fn apply_builtin_filter(
             input_safety,
         ),
         "ljust" => {
-            // `value.ljust(int(arg))` — `int()` raises, so the argument takes
-            // the chokepoint's `Raise` arm (#2328).
-            let width = pad_width!(
+            // Django's own `value.ljust(int(arg))` (#4005), behind djust's width check:
+            // the argument goes through the #2328 chokepoint first, so a bad
+            // width raises as before, and `pad_width` keeps the
+            // `MAX_PAD_WIDTH` cap and its message, so a huge width is refused
+            // before Python is asked to allocate it.
+            pad_width!(
                 filter_name,
                 int_arg!(
                     filter_name,
@@ -2168,35 +2102,21 @@ fn apply_builtin_filter(
                     BadArg::Raise
                 )
             );
-            let s = value.to_string();
-            // NOT `format!("{s:<width$}")`, which was here: Rust's format spec
-            // holds its width in a `u16`, so a width of **65536 or more** — one
-            // past `u16::MAX` — panics with "Formatting argument out of range".
-            // `{{ p|ljust:"65536" }}` therefore aborted the render with a
-            // `PanicException`, whose MRO is `BaseException` directly: it does
-            // not inherit from `Exception` at all, so it walks past the
-            // consumer's `except Exception` and kills the SESSION rather than
-            // producing an error frame. Confirmed in release as well as debug.
-            //
-            // The width must PARSE to reach the panic, which is what makes this
-            // easy to miss: `ljust:"999999999999999999999"` is 21 digits, past
-            // `usize::MAX`, so the old `parse::<usize>()` failed and fell back
-            // to width 0. `ljust:"18446744073709551615"` — one digit shorter,
-            // exactly `usize::MAX` — parses, and panicked.
-            //
-            // Padding explicitly is what `center` below already does, which is
-            // why `center` never had the bug.
-            let len = s.chars().count();
-            Ok(Value::String(if width <= len {
-                s
-            } else {
-                format!("{s}{}", " ".repeat(width - len))
-            }))
+            filter_registry::apply_django_builtin_filter(
+                filter_name,
+                value,
+                django_filter_arg(arg, resolved_arg),
+                autoescape,
+                input_safety,
+            )
         }
         "rjust" => {
-            // `value.rjust(int(arg))` — see `ljust` for both halves: the
-            // chokepoint argument and why the padding is explicit (#2328).
-            let width = pad_width!(
+            // Django's own `value.rjust(int(arg))` (#4005), behind djust's width check:
+            // the argument goes through the #2328 chokepoint first, so a bad
+            // width raises as before, and `pad_width` keeps the
+            // `MAX_PAD_WIDTH` cap and its message, so a huge width is refused
+            // before Python is asked to allocate it.
+            pad_width!(
                 filter_name,
                 int_arg!(
                     filter_name,
@@ -2207,32 +2127,21 @@ fn apply_builtin_filter(
                     BadArg::Raise
                 )
             );
-            let s = value.to_string();
-            let len = s.chars().count();
-            Ok(Value::String(if width <= len {
-                s
-            } else {
-                format!("{}{s}", " ".repeat(width - len))
-            }))
+            filter_registry::apply_django_builtin_filter(
+                filter_name,
+                value,
+                django_filter_arg(arg, resolved_arg),
+                autoescape,
+                input_safety,
+            )
         }
         "center" => {
-            // Django <6 uses `value.center(int(arg))`; Django 6+ uses
-            // format-style center alignment, which puts the smaller half of
-            // an odd margin on the left.
-            //
-            // CPython's `str.center` uses:
-            //
-            //     marg = width - len(self)
-            //     left = marg / 2 + (marg & width & 1)
-            //
-            // — so an odd margin biases left only when the WIDTH is also odd
-            // (#2294). `'ab'.center(5)` is `'  ab '`, not `' ab  '`.
-            //
-            // The two agree whenever the margin is even, which is why a curated
-            // table sampling `'a'.center(4)` and `'abc'.center(6)` finds
-            // nothing. Both halves of the formula are load-bearing and are
-            // gate-off tested separately.
-            let width = pad_width!(
+            // Django's own `value.center(int(arg))` (#4005), behind djust's width check:
+            // the argument goes through the #2328 chokepoint first, so a bad
+            // width raises as before, and `pad_width` keeps the
+            // `MAX_PAD_WIDTH` cap and its message, so a huge width is refused
+            // before Python is asked to allocate it.
+            pad_width!(
                 filter_name,
                 int_arg!(
                     filter_name,
@@ -2243,21 +2152,13 @@ fn apply_builtin_filter(
                     BadArg::Raise
                 )
             );
-            let s = value.to_string();
-            // Code points, like `len()` — and like `{:^}`, which also counted
-            // chars, so this is not the byte-vs-char defect (#2279).
-            let len = s.chars().count();
-            Ok(Value::String(if width <= len {
-                s
-            } else {
-                let marg = width - len;
-                let left = if crate::renderer::django_6_or_later() {
-                    marg / 2
-                } else {
-                    marg / 2 + (marg & width & 1)
-                };
-                format!("{}{s}{}", " ".repeat(left), " ".repeat(marg - left))
-            }))
+            filter_registry::apply_django_builtin_filter(
+                filter_name,
+                value,
+                django_filter_arg(arg, resolved_arg),
+                autoescape,
+                input_safety,
+            )
         }
         "make_list" => filter_registry::apply_django_builtin_filter(
             filter_name,
@@ -2349,10 +2250,13 @@ fn apply_builtin_filter(
             // force_escape filter: always HTML-escape (unlike escape which is a no-op)
             Ok(Value::String(html_escape(&value.to_string())))
         }
-        "escapejs" => {
-            // escapejs filter: escape string for use in JavaScript
-            Ok(Value::String(escape_js(&value.to_string())))
-        }
+        "escapejs" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         "linenumbers" => filter_registry::apply_django_builtin_filter(
             filter_name,
             value,
@@ -4397,369 +4301,6 @@ fn format_time(datetime_str: &str, format_str: &str, original: &Value) -> Result
     format_date(datetime_str, format_str, original)
 }
 
-fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
-    // The key is read ONCE per item, not once per comparison (#3888): for a dict it is a map
-    // lookup either way, but a carried object's key is an attribute read on its live handle
-    // (a Python call), and `sort_by` compares each item O(log n) times.
-    let mut keyed: Vec<(Value, &Value)> = items
-        .iter()
-        .map(|item| (sort_key_value(item, sort_key), item))
-        .collect();
-    // `sort_by` is stable, as Python's `sorted` is.
-    merge_sort_by(&mut keyed, |a, b| compare_sort_values(&a.0, &b.0));
-    keyed.into_iter().map(|(_, item)| item.clone()).collect()
-}
-
-/// A stable merge sort that tolerates a comparator that is not a total order.
-///
-/// `dictsort` asks Python's own `<` for keys the engine has no comparison of its own
-/// for (#3919 review), and Python lets a type define one that is not a total order:
-/// two sets neither of which contains the other are neither less nor greater, yet not
-/// equal. `slice::sort_by` may panic on such a comparator ("does not correctly
-/// implement a total order"), which would fail the whole render; Python's `sorted()`
-/// does not raise there, it returns SOME order. This never panics and, like
-/// `sort_by`, keeps equal elements in input order. Which order it returns for an
-/// inconsistent comparator need not match CPython's timsort, which is itself an
-/// accident of that algorithm.
-fn merge_sort_by<T: Clone>(items: &mut Vec<T>, cmp: impl Fn(&T, &T) -> std::cmp::Ordering) {
-    fn sort<T: Clone>(items: &[T], cmp: &dyn Fn(&T, &T) -> std::cmp::Ordering) -> Vec<T> {
-        if items.len() <= 1 {
-            return items.to_vec();
-        }
-        let (left, right) = items.split_at(items.len() / 2);
-        let (left, right) = (sort(left, cmp), sort(right, cmp));
-        let mut out = Vec::with_capacity(items.len());
-        let (mut i, mut j) = (0, 0);
-        while i < left.len() && j < right.len() {
-            // Take from the right only when it is strictly less: stable.
-            if cmp(&right[j], &left[i]) == std::cmp::Ordering::Less {
-                out.push(right[j].clone());
-                j += 1;
-            } else {
-                out.push(left[i].clone());
-                i += 1;
-            }
-        }
-        out.extend_from_slice(&left[i..]);
-        out.extend_from_slice(&right[j..]);
-        out
-    }
-    let sorted = sort(items, &cmp);
-    *items = sorted;
-}
-
-/// The one ordering used by every `dictsort` path (#1646).
-fn compare_sort_values(a_val: &Value, b_val: &Value) -> std::cmp::Ordering {
-    {
-        match (&a_val, &b_val) {
-            (
-                Value::String(a_str) | Value::SafeString(a_str),
-                Value::String(b_str) | Value::SafeString(b_str),
-            ) => a_str.cmp(b_str),
-            (Value::Integer(a_int), Value::Integer(b_int)) => a_int.cmp(b_int),
-            (Value::Float(a_float), Value::Float(b_float)) => a_float
-                .partial_cmp(b_float)
-                .unwrap_or(std::cmp::Ordering::Equal),
-            (Value::Bool(a_bool), Value::Bool(b_bool)) => a_bool.cmp(b_bool),
-            // Two members of the datetime family, through the same
-            // `python_partial_cmp` `{% if a < b %}` reads (#2471). A
-            // `dictsort` over a DateTimeField column is an ordinary idiom and
-            // sorted as all-Equal — i.e. not at all — because no arm here
-            // admitted an `Encoded` and the `as_f64` wildcard below answers
-            // `None` for one.
-            //
-            // A pair Python REFUSES stays Equal, which is the wildcard's
-            // pre-existing answer for every mixed column: Django's `dictsort`
-            // catches the `TypeError` and returns `""` where this returns the
-            // list unsorted, a divergence that predates this variant and is
-            // not this fix's (#1079).
-            // A pair the engine has no comparison for asks Python's own `<`
-            // (a `UUID`, a lazy string), as `sorted()` does (#3919 review). A
-            // pair Python refuses never reaches here: `keys_are_orderable`
-            // turned the whole sort into Django's `""` first.
-            (Value::Encoded(a_enc), Value::Encoded(b_enc)) => {
-                crate::renderer::encoded_partial_cmp(a_enc, b_enc)
-                    .or_else(|| a_enc.python_order(b_enc).and_then(|order| order.ok()))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            }
-            // A tuple or list key orders element by element, then by length,
-            // as Python's sequence comparison does.
-            (
-                Value::List(a_items) | Value::Tuple(a_items),
-                Value::List(b_items) | Value::Tuple(b_items),
-            ) => a_items
-                .iter()
-                .zip(b_items.iter())
-                .map(|(a, b)| compare_sort_values(a, b))
-                .find(|ordering| *ordering != std::cmp::Ordering::Equal)
-                .unwrap_or_else(|| a_items.len().cmp(&b_items.len())),
-            // Any pair that is numeric on BOTH sides. Two deltas, not one:
-            // a Decimal column used to sort as all-Equal, i.e. not at all
-            // (#2214) — and so did a MIXED int/float column, since the arms
-            // above cover only like-for-like and `sort_dicts_by_key` has no
-            // `(Integer, Float)` arm.
-            //
-            // The mixed case is a strict improvement, not a regression: against
-            // Django, an all-permutations sweep of a mixed pool agreed 938/2184
-            // before and 2184/2184 after. Deliberately left unguarded for that
-            // reason, unlike `values_equal`'s wildcard, which was restricted to
-            // Decimal pairs because widening it there CHANGED answers for the
-            // worse (#2240 round 6).
-            // A `bool` is an `int` to Python (`True < 1.5`), which `as_f64`
-            // does not answer; a column mixing them sorted as all-Equal.
-            _ => match (sort_number(a_val), sort_number(b_val)) {
-                (Some(a), Some(b)) => a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal),
-                _ => std::cmp::Ordering::Equal,
-            },
-        }
-    }
-}
-
-/// Does Python's `a < b` raise for two sequences? It walks to the first pair of
-/// elements that are not equal and compares those; `None` equals `None`.
-fn sequence_comparison_raises(a: &[Value], b: &[Value]) -> bool {
-    for (x, y) in a.iter().zip(b.iter()) {
-        if matches!((x, y), (Value::None, Value::None)) {
-            continue;
-        }
-        let pair = [x.clone(), y.clone()];
-        if !keys_are_orderable(&pair) {
-            return true;
-        }
-        if compare_sort_values(x, y) != std::cmp::Ordering::Equal {
-            return false;
-        }
-    }
-    false
-}
-
-fn sort_number(value: &Value) -> Option<f64> {
-    match value {
-        Value::Bool(b) => Some(f64::from(u8::from(*b))),
-        other => other.as_f64(),
-    }
-}
-
-/// Django's `_property_resolver(arg)` applied to every item, reporting only
-/// whether it would RAISE — which is the half `dictsort` needs and the half
-/// djust never had.
-///
-/// ```python
-/// def _property_resolver(arg):
-///     try:
-///         float(arg)
-///     except ValueError:
-///         if VARIABLE_ATTRIBUTE_SEPARATOR + "_" in arg or arg[0] == "_":
-///             raise AttributeError("Access to private variables is forbidden.")
-///         ...  # dotted attribute path
-///     else:
-///         return itemgetter(arg)
-/// ```
-///
-/// A NUMERIC key is `operator.itemgetter(n)` — it INDEXES, so `dictsort:0` over
-/// a list of strings sorts them by first character and does NOT raise. That
-/// case is why this cannot simply refuse every non-`Object` item: doing so
-/// would turn a cell that agrees with Django into `""`.
-///
-/// A key that resolves for no item is Django's raise, and the caller returns
-/// `""` there. A dotted key is a PATH, walked one segment at a time by
-/// [`sort_key_value`] as `_property_resolver` walks it (#3912).
-fn dictsort_by_key(items: &[Value], key: &str, reverse: bool) -> Option<Vec<Value>> {
-    // Django's `_property_resolver` refuses private access before touching any
-    // item, so it raises even for an empty sequence.
-    if key.starts_with('_') || key.contains("._") {
-        return None;
-    }
-    // `itemgetter(key)` / `getattr` raises for any item that cannot resolve it,
-    // and one raise discards the WHOLE sequence.
-    let mut keys = Vec::with_capacity(items.len());
-    for item in items {
-        let key_value = sort_key_value(item, key);
-        if matches!(key_value, Value::Missing) {
-            return None;
-        }
-        keys.push(key_value);
-    }
-    if !keys_are_orderable(&keys) {
-        return None;
-    }
-    Some(stable_reverse(items, reverse, |items| {
-        sort_dicts_by_key(items, key)
-    }))
-}
-
-/// Can Python's `sorted()` order these keys without raising `TypeError`?
-///
-/// Django's `dictsort` is `sorted(value, key=...)` inside `except (TypeError,
-/// AttributeError): return ""`, so keys Python cannot order render an EMPTY
-/// loop. Refused here are only the kinds Python really refuses: `None` beside
-/// any value (a nullable column, `None < None` raises), a dict, text beside a
-/// number, and a pair of carried objects for which Python's own `<` RAISES
-/// (two models, two managers, a `date` beside a `datetime`) (#3919, and the
-/// nullable column the #3911 sweep found). A method or manager key never gets
-/// here as a value: `live_attr` and the JIT refuse it earlier. A comparison
-/// sort compares at least one pair across two classes that cannot be compared,
-/// so with two or more keys the class rule is the answer whatever the item
-/// order; one key is never compared, as in Python.
-///
-/// Limit: a pair of carried objects is asked only as the FIRST carried key against
-/// each other one, not every pair, so a column whose first value orders with all
-/// the others but where two later values refuse each other is not refused here.
-/// Python would raise on such a column only if `sorted()` happened to compare that
-/// pair; the sort then still completes (`merge_sort_by` never panics) and renders
-/// the rows, where Django may render `""`. Sequence keys are checked pairwise.
-///
-/// Anything the engine merely has no comparison for is NOT refused: a pair
-/// with no live object to ask keeps its previous answer (shown, in input
-/// order), so a key Django sorts is never turned from "rows shown" into
-/// "nothing shown".
-fn keys_are_orderable(keys: &[Value]) -> bool {
-    if keys.len() < 2 {
-        return true;
-    }
-    let mut text = false;
-    let mut number = false;
-    for key in keys {
-        match key {
-            Value::Missing | Value::None | Value::Object(_) | Value::DictView { .. } => {
-                return false
-            }
-            Value::String(_) | Value::SafeString(_) => text = true,
-            Value::Bool(_)
-            | Value::Integer(_)
-            | Value::Float(_)
-            | Value::Decimal(_)
-            | Value::BigInt(_) => number = true,
-            _ => {}
-        }
-    }
-    if text && number {
-        return false;
-    }
-    // Two sequences compare element by element and raise at the first pair of
-    // elements that differ and cannot be ordered (`(1, 'a') < (1, 2)`). Asked of
-    // every pair (of the first key against every other past 64 keys).
-    let sequences: Vec<&Vec<Value>> = keys
-        .iter()
-        .filter_map(|key| match key {
-            Value::List(items) | Value::Tuple(items) => Some(items),
-            _ => None,
-        })
-        .collect();
-    for (i, a) in sequences.iter().enumerate() {
-        let others = if sequences.len() <= 64 {
-            &sequences[i + 1..]
-        } else if i == 0 {
-            &sequences[1..]
-        } else {
-            break;
-        };
-        if others.iter().any(|b| sequence_comparison_raises(a, b)) {
-            return false;
-        }
-    }
-    let mut carried = keys.iter().filter_map(|key| match key {
-        Value::Encoded(e) => Some(e),
-        _ => None,
-    });
-    if let Some(first) = carried.next() {
-        for other in carried {
-            if let Some(Err(())) = first.python_order(other) {
-                return false;
-            }
-        }
-    }
-    true
-}
-
-/// Python's `reverse=True`: equal elements keep their input order. Sorting
-/// the reversed input ascending and reversing the result gives exactly that.
-fn stable_reverse(
-    items: &[Value],
-    reverse: bool,
-    sort: impl FnOnce(&[Value]) -> Vec<Value>,
-) -> Vec<Value> {
-    if !reverse {
-        return sort(items);
-    }
-    let backwards: Vec<Value> = items.iter().rev().cloned().collect();
-    let mut out = sort(&backwards);
-    out.reverse();
-    out
-}
-
-/// `operator.itemgetter(n)` — an UNQUOTED integer argument INDEXES.
-///
-/// djust previously returned the sequence unsorted here, because
-/// `sort_dicts_by_key` resolves through `get_dict_value`, which answers
-/// `Missing` for every non-`Object` and so compared every pair Equal.
-/// `{{ ['ba','ab']|dictsort:0 }}` is `['ab', 'ba']` in Django and was
-/// `['ba', 'ab']` here.
-fn dictsort_by_index(items: &[Value], n: usize, reverse: bool) -> Option<Vec<Value>> {
-    let mut keyed: Vec<(Value, Value)> = Vec::with_capacity(items.len());
-    let ordered: Vec<&Value> = if reverse {
-        items.iter().rev().collect()
-    } else {
-        items.iter().collect()
-    };
-    for item in ordered {
-        let k = match item {
-            Value::String(s) | Value::SafeString(s) => {
-                s.chars().nth(n).map(|c| Value::String(c.to_string()))
-            }
-            Value::List(v) | Value::Tuple(v) | Value::NamedTuple { items: v, .. } => {
-                v.get(n).cloned()
-            }
-            // `itemgetter(0)` on a str-keyed dict is a `KeyError`, and on a
-            // scalar a `TypeError`. Both are Django's raise.
-            _ => None,
-        }?;
-        keyed.push((k, item.clone()));
-    }
-    merge_sort_by(&mut keyed, |a, b| compare_sort_values(&a.0, &b.0));
-    let mut out: Vec<Value> = keyed.into_iter().map(|(_, item)| item).collect();
-    if reverse {
-        out.reverse();
-    }
-    Some(out)
-}
-
-/// The value `dictsort` orders an item by: Django's `_property_resolver`
-/// splits the key on `.` and resolves each part in turn (`item['ct']['m']`, or
-/// `item.ct.m`), so `dictsort:'ct.m'` sorts dict rows by a nested key (#3912).
-/// It looked the whole string up as ONE key, found none, and rendered `""`.
-///
-/// A carried object resolves the whole path through its live handle, which
-/// already walks it the same way (`Encoded::live_attr`).
-/// A list part is never an index here, as in Django: `list['0']` raises and
-/// `getattr(list, '0')` does too.
-fn sort_key_value(item: &Value, key: &str) -> Value {
-    if !key.contains('.') || matches!(item, Value::Encoded(_)) {
-        return get_dict_value(item, key);
-    }
-    let mut current = item.clone();
-    for part in key.split('.') {
-        current = get_dict_value(&current, part);
-        if matches!(current, Value::Missing) {
-            return Value::Missing;
-        }
-    }
-    current
-}
-
-fn get_dict_value(value: &Value, key: &str) -> Value {
-    match value {
-        Value::Object(map) => map.get(key).cloned().unwrap_or(Value::Missing),
-        // A CARRIED object (a raw model is one since #3888): Django's `_property_resolver` reads
-        // `value[part]` then `getattr(value, part)`, which is the object's own attribute and not
-        // a key of a dict. Read through the live handle, which for a model is its floor proxy:
-        // a floor field or a `_` name is unreadable here, as in a template path, and the sort
-        // fails closed (`""`) instead of ordering rows by a value that must not be seen.
-        Value::Encoded(encoded) => encoded.live_attr(key).unwrap_or(Value::Missing),
-        _ => Value::Missing,
-    }
-}
-
 /// Django's `_json_script_escapes`, applied to the assembled JSON document —
 /// the second of the two steps `json_script` composes.
 ///
@@ -5420,9 +4961,10 @@ mod value_to_json_structure {
             TokenTree::Ident(id) => assert_eq!(id.to_string(), "match", "body starts at `match`"),
             other => panic!("unexpected first token: {other:?}"),
         }
-        // `escape_js` is the next item in the file; the body must NOT reach it.
+        // `body_tokens` is defined in the next item in the file (this test
+        // module); the body must NOT reach it.
         assert_eq!(
-            count_ident(&body, "escape_js"),
+            count_ident(&body, "body_tokens"),
             0,
             "the slice ran past the end of value_to_json"
         );
@@ -6074,31 +5616,6 @@ mod float_sink_set {
         );
         assert_eq!(count_ident(&arms[0].1, "format"), 1);
     }
-}
-
-fn escape_js(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '\\' => result.push_str("\\u005C"),
-            '\'' => result.push_str("\\u0027"),
-            '"' => result.push_str("\\u0022"),
-            '>' => result.push_str("\\u003E"),
-            '<' => result.push_str("\\u003C"),
-            '&' => result.push_str("\\u0026"),
-            '=' => result.push_str("\\u003D"),
-            '-' => result.push_str("\\u002D"),
-            ';' => result.push_str("\\u003B"),
-            '\n' => result.push_str("\\u000A"),
-            '\r' => result.push_str("\\u000D"),
-            '\t' => result.push_str("\\u0009"),
-            '\0' => result.push_str("\\u0000"),
-            '\u{2028}' => result.push_str("\\u2028"),
-            '\u{2029}' => result.push_str("\\u2029"),
-            _ => result.push(c),
-        }
-    }
-    result
 }
 
 /// `str(int(value))`, or `None` where Python's `int()` would raise.
