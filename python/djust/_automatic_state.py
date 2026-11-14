@@ -128,18 +128,31 @@ def _report(view: Any, name: str, kind: str, reason: str, fix: str) -> None:
     )
 
 
-def report_unsaved_page(view: Any) -> None:
+def report_unsaved_page(view: Any, session_written: bool = False) -> None:
     """A page load whose session could not be updated: say so once per view
-    class. The page is served; nothing of the view was saved for it."""
-    if not _first_time(view, "", "session-update"):
+    class and outcome. Nothing of the view was saved for it.
+
+    djust serves the page. ``session_written``: the application itself also
+    wrote to the session in this request, so Django's session middleware will
+    try to save it, fail the same way and answer 400 (``SessionInterrupted``).
+    """
+    if not _first_time(view, "", "session-update-400" if session_written else "session-update"):
         return
     owner = type(view)
+    outcome = (
+        "This request also wrote to the session itself, so Django's session middleware "
+        "will fail to save it too and answer 400 (the session was deleted while the "
+        "request was in progress)."
+        if session_written
+        else "The page is served; mount() runs again on its next request."
+    )
     logger.warning(
         "djust: the state of %s.%s was not saved for this page load: the session could "
         "not be updated (it was deleted meanwhile, or the session store refused the "
-        "write). The page is served; mount() runs again on its next request.",
+        "write). %s",
         owner.__module__,
         owner.__qualname__,
+        outcome,
     )
 
 
@@ -725,7 +738,7 @@ TAB_META = "djust-tab"
 
 
 _HEAD_END = re.compile(r"</head\s*>", re.IGNORECASE)
-_HTML_START = re.compile(r"<html(?:\s[^>]*)?>", re.IGNORECASE)
+_HTML_START = re.compile(r"""<html(?:\s(?:[^>"']|"[^"]*"|'[^']*')*)?>""", re.IGNORECASE)
 _DOCTYPE = re.compile(r"\s*<!doctype[^>]*>", re.IGNORECASE)
 
 
@@ -1184,10 +1197,17 @@ def finish_mount(view: Any) -> None:
     saved (:func:`url_changed`), and the view is settled (:func:`settle`)."""
     from .security import safe_setattr
 
+    declared = view.__dict__.get("_djust_auto_reapply_declared")
+    view.__dict__["_djust_auto_reapply_declared"] = None
     if url_changed(view):
         view.__dict__["_djust_auto_reapply"] = None  # handle_params() has the last word
     else:
-        for key, value in reapply(view).items():
+        again = reapply(view)
+        if declared and url_unchanged(view):
+            # Declared persist="server" fields follow the same rule: at the
+            # URL they were saved under, the saved value wins over the hook's.
+            again = {**again, **declared}
+        for key, value in again.items():
             safe_setattr(view, key, value, allow_private=False, raise_on_blocked=True)
     settle(view)
 
@@ -1199,15 +1219,25 @@ def finish_mount(view: Any) -> None:
 
 def canonical_params(params: Any) -> str:
     """A query's parameters in one canonical form, so that two spellings of
-    the same query compare equal: parsed values, sorted, repeated keys kept.
-    No query and an empty query are the same (``"[]"``)."""
+    the same query compare equal: parsed values, sorted by key.
+    No query and an empty query are the same (``"[]"``).
+
+    A repeated key (``?a=1&a=2``) counts by its LAST value. That is the one
+    reading every transport shares: the page GET and the fallback POST hand
+    ``handle_params()`` the list, while the client builds a socket mount's
+    params with ``Object.fromEntries(new URLSearchParams(...))``, which keeps
+    the last value only. Comparing lists would call the same URL "changed" on
+    one transport and not the other."""
     pairs = []
     try:
         lists = params.lists() if hasattr(params, "lists") else None
         items = lists if lists is not None else dict(params or {}).items()
         for key, value in items:
-            values = value if isinstance(value, (list, tuple)) else [value]
-            pairs.extend((str(key), "" if item is None else str(item)) for item in values)
+            if isinstance(value, (list, tuple)):
+                if not value:
+                    continue
+                value = value[-1]
+            pairs.append((str(key), "" if value is None else str(value)))
     except Exception:  # noqa: BLE001 — not a mapping: no parameters
         pairs = []
     return json.dumps(sorted(pairs), separators=(",", ":"))
@@ -1237,6 +1267,13 @@ def note_patched_url(view: Any, params: Any) -> None:
     one, so the state this turn saves is saved under it."""
     if not uses_legacy_exposure(view):
         view.__dict__["_djust_auto_url"] = canonical_params(params)
+
+
+def url_unchanged(view: Any) -> bool:
+    """Whether ``handle_params()`` just read the very URL the restored state
+    was saved under. False when that URL is not known (nothing was restored)."""
+    saved_under = view.__dict__.get("_djust_auto_saved_url")
+    return saved_under is not None and saved_under == view.__dict__.get("_djust_auto_url")
 
 
 def url_changed(view: Any) -> bool:

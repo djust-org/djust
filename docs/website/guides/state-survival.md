@@ -55,13 +55,14 @@ session:
   `handle_restore()` then run.
 - **The URL and the saved state.** The state is saved with the query string
   the view last read. While a request or reconnect comes with that same query
-  (compared as parsed parameters, so order and encoding do not matter), the
-  saved state wins over what `handle_params()` assigns: a tab a handler set
-  survives the hook's default. When the query changed, `handle_params()` has
+  (compared as parsed parameters, so order and encoding do not matter; a
+  repeated key such as `?a=1&a=2` counts by its last value, the one reading the
+  socket and HTTP share), the saved state wins over what `handle_params()`
+  assigns: a tab a handler set survives the hook's default. When the query changed, `handle_params()` has
   the last word for everything it assigns (`?page=3` shows page 3, and a value
   it defaults is defaulted), and the rest of the saved state is kept. A
   handler's `live_patch(params=...)` moves the saved URL with it. A declared
-  `persist="server"` field always takes what `handle_params()` assigns. So what `mount()` computed at the page load (a
+  `persist="server"` field follows the same rule as the rest of the state. So what `mount()` computed at the page load (a
   permission flag, a list of rows) continues as saved until the next page
   load, and a model instance `mount()` loaded is a dict of its fields there, as
   in 1.3: read it again in `handle_restore()`.
@@ -158,6 +159,19 @@ With `DEBUG = False`, system checks [`djust.C032`](error-codes.md#c032-in-memory
 (an in-memory channel layer) and [`djust.C033`](error-codes.md#c033-presence-counted-per-process)
 (memory presence used by a view) warn about the two rows above that cover only
 one process.
+
+## Every page load creates a session
+
+A LiveView page GET saves the view's state, so it creates a session when the
+visitor has none and the response sets the session cookie, as in 1.x. Two things follow:
+
+- **Caching.** A response that sets a session cookie carries `Vary: Cookie`
+  and must not be stored by a shared cache or CDN. Cache the static assets;
+  serve a page that has to be cached for everyone as a plain Django view.
+- **Cookie consent.** Every visitor to a LiveView page gets the session cookie
+  on the first load, before any interaction. It holds only the session id and
+  exists to make the page work; whether that needs consent or a notice where
+  you operate is for you to decide.
 
 ## Session engines
 

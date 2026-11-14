@@ -14,6 +14,7 @@ import logging
 import re
 
 import pytest
+from django.conf import settings
 from django.contrib.sessions.models import Session
 from django.test import AsyncClient, Client, override_settings
 from django.urls import path
@@ -43,6 +44,11 @@ REST = "<div dj-root><p>0</p></div>"
             f'<!DOCTYPE html>\n<html lang="en"><body>{REST}</body></html>',
             f'<!DOCTYPE html>\n<html lang="en">{META}<body>{REST}</body></html>',
         ),
+        # A ">" inside a quoted attribute value does not end the tag.
+        (
+            f"<html lang=\"a>b\" data-x='c>d'><body>{REST}</body></html>",
+            f"<html lang=\"a>b\" data-x='c>d'>{META}<body>{REST}</body></html>",
+        ),
         # A doctype and no <html>: after the doctype, never before it.
         (f"<!DOCTYPE html>{REST}", f"<!DOCTYPE html>{META}{REST}"),
         (f"\n<!doctype html>\n{REST}", f"\n<!doctype html>{META}\n{REST}"),
@@ -60,6 +66,23 @@ def test_no_valid_tab_id_adds_no_meta(tab):
     assert page_with_tab(f"<html><head></head>{REST}</html>", tab) == (
         f"<html><head></head>{REST}</html>"
     )
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        # Known, not handled: the first "</head>" in the text is taken as the
+        # head's end, wherever it is. The meta then lands inside the comment or
+        # the script string, the client finds no id, and the page works as a
+        # page with no saved state (mount() on each fallback request). Telling
+        # them apart needs an HTML tokenizer, which a page GET does not run.
+        f"<html><head><!-- </head> --><title>t</title></head><body>{REST}</body></html>",
+        f"<html><head><script>var s = '</head>';</script></head><body>{REST}</body></html>",
+    ],
+)
+def test_known_miss_an_earlier_head_end_in_a_comment_or_script_takes_the_meta(page):
+    placed = page_with_tab(page, "tab-placed01")
+    assert placed.index(META) < placed.index("<title>t</title>" if "<title>" in page else "';")
 
 
 def test_a_doctype_is_never_preceded_by_the_meta():
@@ -92,6 +115,14 @@ class Plain(LiveView):
         return super().get_context_data(count=self.count, **kwargs)
 
 
+class Legacy(LiveView):
+    exposure_policy = "legacy"
+    template = SHELL % "<div dj-root><p>Count: {{ count }}</p></div>"
+
+    def mount(self, request, **kwargs):
+        self.count = 3
+
+
 class Streamed(Plain):
     streaming_render = True
 
@@ -105,6 +136,14 @@ class SessionGoes(Plain):
         Session.objects.all().delete()
 
 
+class SessionGoesAfterAWrite(SessionGoes):
+    """The view itself also writes to the session in the request."""
+
+    def mount(self, request, **kwargs):
+        request.session["seen"] = True
+        super().mount(request, **kwargs)
+
+
 class SessionGoesStreamed(SessionGoes):
     streaming_render = True
 
@@ -112,8 +151,10 @@ class SessionGoesStreamed(SessionGoes):
 urlpatterns = [
     path("p/plain/", Plain.as_view()),
     path("p/streamed/", Streamed.as_view()),
+    path("p/legacy/", Legacy.as_view()),
     path("p/goes/", SessionGoes.as_view()),
     path("p/goes-streamed/", SessionGoesStreamed.as_view()),
+    path("p/goes-written/", SessionGoesAfterAWrite.as_view()),
 ]
 
 
@@ -163,6 +204,17 @@ def test_a_fresh_client_with_no_session_row_gets_the_page_and_its_state_is_saved
     response = Client().get(url)
     assert response.status_code == 200
     _check_saved_page(_body(response))
+    # Every page load creates a session and sets its cookie (the state-survival
+    # guide says what that means for caches and consent).
+    assert settings.SESSION_COOKIE_NAME in response.cookies
+    assert "Cookie" in response.headers.get("Vary", "")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_legacy_view_saves_nothing_of_its_state():
+    response = Client().get("/p/legacy/")
+    assert response.status_code == 200 and "Count: 3" in _body(response)
+    assert _saved() == []
 
 
 @pytest.mark.asyncio
@@ -204,6 +256,24 @@ def test_a_session_deleted_during_the_page_load_still_serves_the_page(url, caplo
     with caplog.at_level(logging.WARNING, logger="djust"):
         assert client.get(url).status_code == 200
     assert sum("was not saved for this page load" in r.getMessage() for r in caplog.records) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_when_the_view_also_wrote_the_session_django_answers_400_and_the_warning_says_so(caplog):
+    """Django's session middleware refuses a response whose session was deleted
+    while the request wrote to it. That is Django's answer, not djust's, and the
+    warning must not claim the page was served."""
+    client = Client()
+    _with_session(client)
+    with caplog.at_level(logging.WARNING, logger="djust"):
+        response = client.get("/p/goes-written/")
+    assert response.status_code == 400
+    (warned,) = [
+        r.getMessage()
+        for r in caplog.records
+        if "was not saved for this page load" in r.getMessage()
+    ]
+    assert "answer 400" in warned and "The page is served" not in warned
 
 
 @pytest.mark.asyncio
