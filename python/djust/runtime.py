@@ -5655,12 +5655,11 @@ class ViewRuntime(RuntimeTurnPort):
 
         # Wire session if available from WS scope
         try:
-            from .utils import build_session_for_request  # noqa: PLC0415
+            from .utils import build_session_for_request, presented_session_key  # noqa: PLC0415
 
-            session_key = None
-            if self.scope:
-                scope_session = self.scope.get("session")
-                session_key = getattr(scope_session, "session_key", None) if scope_session else None
+            # The key the browser presented, even when the connect-time read of
+            # a vanished session cleared the scope's copy (#4102).
+            session_key = presented_session_key(self.scope)
             # Honours settings.SESSION_ENGINE (#2210). Hardcoding the DB store
             # here handed a cache-backed project an empty session — or, if it
             # never ran the sessions migration, an OperationalError on first
