@@ -36,7 +36,7 @@ server memory, available to your handlers and never exported.
 | Destination | Comes only from |
 | --- | --- |
 | Template context | Declared `state()` fields, `get_context_data()` additions and registered framework providers |
-| Server persistence (reconnect, cross-worker restore) | `state(..., persist="server")` fields |
+| Server-side saved state (reconnect, cross-worker restore, HTTP fallback) | The view's own state: public attributes, the `_private` ones `mount()` creates, `state()` fields. Never sent to the browser |
 | Raw browser data (`get_state()`, HTTP API `assigns`) | `state(..., client=True)` fields |
 | Back-navigation snapshot | `state(..., persist="client", client=True)` fields |
 | Debug panel, time travel, bug capture | A redacted projection: names and types, not values |
@@ -44,7 +44,13 @@ server memory, available to your handlers and never exported.
 A value you render is visible in the HTML, as with any Django template. Being
 rendered does not also put it in the state mirror, the snapshot or the debug
 panel: a declared field renders, but it reaches `get_state()` only with
-`client=True`, and survives a reconnect only with `persist=`.
+`client=True`.
+
+**Exposure is about the client; saving is automatic.** Keeping a value on the
+server exposes nothing, so it needs no declaration: the view's state is saved
+in the server-side session after each event, as in 1.x, and a later request
+rebuilds the view from it. Saving a value does not render it, send it, or let
+the client set it. See [what survives](../guides/state-survival.md).
 
 ### What the template sees
 
@@ -81,8 +87,9 @@ result and an ordinary attribute still have to be returned from
 ```python
 from djust.decorators import state
 
-count = state(0)                                 # reactive, rendered, not persisted
-cart = state(default_factory=list, persist="server")
+count = state(0)                                 # reactive, rendered, saved server-side
+scratch = state(0, persist=False)                # never saved: starts from its default
+cart = state(default_factory=list, persist="server")  # saved strictly: an error if it cannot be
 page = state(1, persist="client", client=True)   # restorable on back-navigation
 token = state("", persist="server", render=False)  # handlers only, never template context
 ```
@@ -93,8 +100,11 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   change detection on every turn. A legacy view refuses
   `render=False`, because its attribute walk renders every public field.
 
-- `persist="server"` saves the field in a server-side session envelope, bound
-  to the session, the user, the tenant and the route.
+- A field with no `persist=` is saved server-side with the rest of the view's
+  state, bound to the session, the user, the tenant and the route.
+  `persist=False` keeps a field out.
+- `persist="server"` is the strict form: a value that cannot be saved, or a
+  change over the declared-field limit, is refused with an error.
 - `client=True` lets the raw value reach the browser.
 - `persist="client"` requires `client=True`. A contradictory declaration fails
   at class definition.
@@ -162,7 +172,12 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   WebSocket the replacement never reaches the browser, so it expires after
   `DJUST_SERVER_STATE_MAX_AGE`, and repeated mounts on one socket reuse it. Over
   SSE the stream response issues it as a cookie with Django's normal lifetime,
-  as a page load does. A socket with no session cookie at all is still refused.
+  as a page load does. An HTTP fallback POST whose session is gone mounts
+  fresh the same way. The browser's cookie decides this even when the
+  socket's connect-time sign-in check already read the lost session. A socket
+  with no session cookie at all is still refused. Between two events on an
+  open socket or stream a lost session is treated as a revocation (as a
+  logout is, above); the next page load or reconnect mounts fresh.
   With `cache` sessions, Django treats a failed cache read as a missing
   session, so a transient cache error on mount also takes this path: that
   socket mounts anonymous while the real session survives.
@@ -233,9 +248,12 @@ token = state("", persist="server", render=False)  # handlers only, never templa
 ## Framework features
 
 - **Forms.** `FormMixin` provides `form_data`, `form_errors`, `field_errors`,
-  `is_valid` and its messages to the template. None of that is persisted by
-  default. To keep a non-sensitive field's input across a reconnect, declare it
-  with `form_input = persisted_form_input("name", "email")` from `djust.forms`.
+  `is_valid` and its messages to the template. Input and errors are saved
+  server-side with the view's state, except password, one-time-code and
+  payment-card inputs and names on the sensitive-field list: such input is
+  never stored, and an error message that contains it is replaced.
+  `form_input = persisted_form_input("name", "email")` from `djust.forms` is
+  the strict, declared form of the same.
   Opting in a password field, or a name on the sensitive-field list, is
   refused at class definition (at mount, for a form class chosen by
   `get_form_class()`). Such fields render empty and never reach storage,

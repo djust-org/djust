@@ -48,7 +48,7 @@ from ..validation import (
 )
 from ..security import safe_setattr, sanitize_for_log
 from ..security.event_guard import is_safe_event_name
-from ..decorators import is_event_handler, is_push_only
+from ..decorators import is_push_only
 from ..hooks import run_on_mount_hooks
 from .._exposure import uses_legacy_exposure
 from .._view_hooks import call_async_result_sync, call_hook_sync
@@ -819,6 +819,9 @@ class RequestMixin:
         # IMPORTANT: mount() must be called first to initialize clean state
         t0 = time.perf_counter()
         call_hook_sync(self.mount, request, **kwargs)
+        # Which ``_private`` attributes mount() created: saved with the view's
+        # state so a later request can be rebuilt without mount() (1.3).
+        cast(Any, self)._snapshot_user_private_attrs()
         t_mount = (time.perf_counter() - t0) * 1000
 
         # Call handle_params after mount (Phoenix parity).
@@ -877,14 +880,29 @@ class RequestMixin:
         state_serializable = state
         t_json = (time.perf_counter() - t0) * 1000
 
-        # An explicit view saves its declared persist="server" fields. A legacy
-        # view keeps nothing between requests (2.0): the page-POST fallback and
-        # the socket mount run mount() again.
         t0_sc = time.perf_counter()
-        if not uses_legacy_exposure(self):
-            from .._exposure_sessions import save_server_state
+        # A page load is a fresh mount() and a new tab (#4106): its state is
+        # saved as mount() left it, under an id the page carries and its client
+        # sends back. Another tab on this route keeps its own state.
+        from .. import _automatic_state as _saved_state
 
+        self.__dict__["_djust_tab"] = _saved_state.new_tab_id()
+        from django.contrib.sessions.backends.base import UpdateError
+
+        from .._exposure_sessions import save_server_state
+
+        try:
             save_server_state(self, request)
+        except UpdateError:
+            # The session row cannot be updated (it was deleted meanwhile, as a
+            # logout in another tab does, or the store refused the write). The
+            # page still renders: nothing is saved, so its first fallback
+            # request runs mount() again. If the application itself wrote to
+            # the session in this request, Django's session middleware meets
+            # the same failure at the response and answers 400.
+            _saved_state.report_unsaved_page(
+                self, bool(getattr(getattr(request, "session", None), "modified", False))
+            )
         t_save_components = (time.perf_counter() - t0_sc) * 1000
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
@@ -1030,6 +1048,7 @@ class RequestMixin:
 
         # Inject LiveView client script
         html = self._inject_client_script(html)
+        html = _saved_state.page_with_tab(html, self.__dict__.get("_djust_tab", ""))
 
         # #3252: the page-POST fallback hosts its lazy slots too. The
         # streaming path flushes their thunks through the chunk emitter; here
@@ -1731,33 +1750,72 @@ class RequestMixin:
             # One budget for every wait on background work in this request
             # (#3634); ``None`` unless ``http_fallback_background_timeout`` is set.
             bg_budget = _http_background_budget()
-            if not legacy_exposure:
-                from .._exposure_sessions import load_server_state
+            from .. import _automatic_state
+            from .._exposure_sessions import load_saved_view
 
-                # Reconstruct transient server services for this HTTP request.
-                # The persisted projection is validated separately and overlays
-                # only declared server fields, never render/context attributes.
+            # The 1.3 rule (#4107): a view whose state is saved is REBUILT from
+            # it, and mount() does not run again; mount() runs only when
+            # nothing is saved, or when something of the view could not be
+            # saved (an unsaveable attribute, a component, work mount() queued),
+            # and then the saved state goes back over what mount() built. What
+            # is put back was validated by the store; nothing the client sent
+            # is read here.
+            # The tab the page says it is (#4106). It selects one of this
+            # session's own states; none or a malformed one selects nothing.
+            self.__dict__["_djust_tab"] = _automatic_state.tab_id(
+                request.headers.get(_automatic_state.TAB_HEADER)
+            )
+            saved_view = load_saved_view(self, request)
+
+            def _assign(values: Dict[str, Any]) -> None:
+                for key, value in values.items():
+                    safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
+
+            if saved_view.must_mount:
                 call_hook_sync(self.mount, request, **kwargs)
-                restored = load_server_state(self, request)
-                if restored is not None:
-                    for key, value in restored.items():
-                        safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
-                    explicit_restored = True
-                # The socket mount restores, then reads the URL (``dispatch_mount``:
-                # mount, ``load_server_state``, ``handle_params``). Same order
-                # here, so the URL this request carries wins over a persisted
-                # server field the previous request saved (#3624).
-                _run_http_handle_params(self, request)
+                cast(Any, self)._snapshot_user_private_attrs()
                 mount_work_pending = True
-            else:
-                # A legacy view keeps nothing between requests (2.0): every POST
-                # mounts it again. The page's URL state is rebuilt the way the
-                # GET builds it: the event must meet the page the browser shows,
-                # and the render it answers with must not diff against mount()'s
-                # defaults (#3624).
-                call_hook_sync(self.mount, request, **kwargs)
-                _run_http_handle_params(self, request)
-                mount_work_pending = True
+
+            def _put_saved_state_back() -> None:
+                # ``put_back`` decides what goes back (never a saved model dict
+                # over the live instance mount() just loaded) and restores the
+                # private attributes and the components' state.
+                _assign(
+                    _automatic_state.put_back(
+                        self,
+                        saved_view.public,
+                        saved_view.private,
+                        saved_view.components,
+                        over_mount=saved_view.must_mount,
+                    )
+                )
+
+            # The saved state goes on first, so handle_params() can read it.
+            _assign(saved_view.declared)
+            _put_saved_state_back()
+            # handle_params() runs on every request: the URL THIS request
+            # carries wins over a declared persist="server" field (#3624).
+            _run_http_handle_params(self, request)
+            # One rule for declared and undeclared state (#4107): while the URL
+            # is the one the state was saved under, the saved state goes back
+            # over what handle_params() assigned, so the hook's defaults do not
+            # reset what a handler set. When the URL changed, handle_params()
+            # has the last word for what it assigned (``?page=3`` shows page 3).
+            if _automatic_state.url_unchanged(self):
+                # Only when the saved URL is known: without it (no tab id, so
+                # no saved view state) the URL this request carries wins (#3624).
+                _assign(saved_view.declared)
+            if not _automatic_state.url_changed(self):
+                _put_saved_state_back()
+            # The view is as the next handler finds it: a save records as
+            # changed every name that differs from this.
+            _automatic_state.settle(self)
+            explicit_restored = saved_view.found and bool(
+                saved_view.declared
+                or saved_view.public
+                or saved_view.private
+                or saved_view.components
+            )
 
             self._assign_component_ids()
 
@@ -1781,11 +1839,9 @@ class RequestMixin:
                     status=403,
                 )
 
-            # An explicit view whose declared persist="server" state was put
-            # back on top of mount() reads again what that state does not hold
-            # (#3989). After the object check, so it never reads for a denied
-            # object. A legacy view keeps nothing between requests (2.0), so
-            # nothing was restored and the hook does not run for it.
+            # A view whose saved state was put back on top of mount() reads
+            # again what that state does not hold (#3989). After the object
+            # check, so it never reads for a denied object.
             if explicit_restored:
                 handle_restore = getattr(self, "handle_restore", None)
                 if callable(handle_restore):
@@ -1894,18 +1950,33 @@ class RequestMixin:
                     event_name,
                     component_id if owner is not self else type(self).__name__,
                 )
-                return JsonResponse({"error": "Event handler not found"}, status=400)
+                # The WebSocket's answer (#4101): outside DEBUG a missing name
+                # and a refused one read alike, so the answer does not tell a
+                # client which methods exist.
+                from ..websocket_utils import _format_handler_not_found_error, _safe_error
+
+                return JsonResponse(
+                    {
+                        "error": _safe_error(
+                            _format_handler_not_found_error(owner, event_name), "Event rejected"
+                        )
+                    },
+                    status=400,
+                )
             if handler and callable(handler):
-                if not is_event_handler(handler):
+                # The handler check every transport runs (#4101): an
+                # undecorated method is refused with the same message as on
+                # the WebSocket, whatever else differs about this path.
+                from ..websocket_utils import _check_event_security, _safe_error
+
+                security_error = _check_event_security(handler, owner, event_name)
+                if security_error:
                     logger.warning(
-                        "HTTP POST blocked undecorated handler '%s' on %s",
-                        event_name,
-                        type(self).__name__,
+                        "HTTP POST security check failed for event %s on %s",
+                        sanitize_for_log(event_name),
+                        type(owner).__name__,
                     )
-                    return JsonResponse(
-                        {"error": "Event handler not found"},
-                        status=400,
-                    )
+                    return JsonResponse({"error": _safe_error(security_error)}, status=400)
                 # --- Authorization layer 2 of 3: handler-level -----------
                 # ``@permission_required`` on the handler — the same check the
                 # WS path runs (websocket_utils._validate_event_security →
@@ -2048,23 +2119,23 @@ class RequestMixin:
                 _inject_side_channels(redirect_response)
                 return JsonResponse(redirect_response)
 
-            if not legacy_exposure:
-                from .._exposure_sessions import StateLimitExceeded, save_server_state
+            # Explicit and legacy views alike (#4107).
+            from .._exposure_sessions import StateLimitExceeded, save_server_state
 
-                try:
-                    save_server_state(self, request)
-                except StateLimitExceeded as refused:
-                    # Refused before writing (#4095): the stored state is the
-                    # last one that fit, and the next request restores it. This
-                    # request's view is discarded, so nothing else to put back.
-                    logger.warning(
-                        "HTTP event state save refused: field %s over its %s limit",
-                        sanitize_for_log(refused.field),
-                        refused.limit,
-                    )
-                    return JsonResponse(
-                        {"error": refused.user_message, "code": "state_too_large"}, status=413
-                    )
+            try:
+                save_server_state(self, request)
+            except StateLimitExceeded as refused:
+                # Refused before writing (#4095): the stored state is the
+                # last one that fit, and the next request restores it. This
+                # request's view is discarded, so nothing else to put back.
+                logger.warning(
+                    "HTTP event state save refused: field %s over its %s limit",
+                    sanitize_for_log(refused.field),
+                    refused.limit,
+                )
+                return JsonResponse(
+                    {"error": refused.user_message, "code": "state_too_large"}, status=413
+                )
 
             # Fields every response of this turn carries besides its payload.
             response_fields: Dict[str, Any] = {}

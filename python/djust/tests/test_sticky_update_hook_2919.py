@@ -348,43 +348,6 @@ class TestNotReachableFromTheClient:
         assert sent == ["Event rejected"]
         assert HookChild.updates == []
 
-    @pytest.mark.asyncio
-    async def test_other_public_hook_names_would_have_been_reachable_in_open_mode(self):
-        """Why the hook is private: in ``event_security = "open"`` any public
-        method is a valid event, which is the reachability a public name would
-        have given the hook. The private name closes it in every mode."""
-        from djust.config import config
-
-        class FakeWS:
-            _client_ip = None
-
-            async def send_error(self, error, **kwargs):
-                pass
-
-            async def close(self, code=1000):
-                pass
-
-        class PublicHook(HookChild):
-            def sticky_update(self, changed):
-                type(self).updates.append(changed)
-
-        child = PublicHook()
-        from djust.rate_limit import ConnectionRateLimiter
-
-        previous = config.get("event_security", "strict")
-        config.set("event_security", "open")
-        try:
-            allowed = await _validate_event_security(
-                FakeWS(), "sticky_update", child, ConnectionRateLimiter()
-            )
-            blocked = await _validate_event_security(
-                FakeWS(), "_on_sticky_update", child, ConnectionRateLimiter()
-            )
-        finally:
-            config.set("event_security", previous)
-        assert allowed is not None
-        assert blocked is None
-
 
 # ---------------------------------------------------------------------------
 # The real socket path: a parent event re-renders the parent, which runs the

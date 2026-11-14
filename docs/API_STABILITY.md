@@ -678,6 +678,52 @@ class CartView(LiveView):
 section). `djust.C304` now warns about a `client=True` field with a
 credential-like name.
 
+### `event_security` `"open"` and `"warn"` → `@event_handler` on every handler
+
+`"open"` let a client event call any public method of a view; `"warn"` let it
+and logged a deprecation warning. Neither applied to the page-POST fallback,
+which always refused an undecorated method, so the same event behaved
+differently by transport. djust `2.0.0` removed both modes (#4101): every
+transport runs one check (`websocket_utils._check_event_security`) and refuses
+a method without `@event_handler`, naming the method and the decorator in the
+`DEBUG` error. Outside `DEBUG` every transport answers `"Event rejected"` both
+for a refused method and for a name that does not exist (the page POST used to
+answer `"Event handler not found"`), so the answer does not reveal which
+methods a view has. `LiveComponentTestClient.send_event` refuses the same
+methods, raising `EventRejectedError`. A project that still sets
+`LIVEVIEW_CONFIG['event_security']` (or `DJUST_CONFIG['event_security']`) to
+`"open"` or `"warn"`, in any case, fails startup with `ImproperlyConfigured`
+and the replacement; any other value except `"strict"` fails startup as an
+unknown value. `"strict"` (any case) is accepted and does nothing; delete it
+when convenient.
+
+```python
+# Before (removed in 2.0, #4101)
+LIVEVIEW_CONFIG = {"event_security": "warn"}
+
+class Counter(LiveView):
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    def increment(self, **kwargs):  # ran under "open" / "warn"
+        self.count += 1
+
+# After
+from djust.decorators import event_handler
+
+class Counter(LiveView):
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    @event_handler
+    def increment(self, **kwargs):
+        self.count += 1
+```
+
+`strict` has been the default since 0.2.1, so a project that never set the
+key is unaffected. System check `djust.T019` now reports every template
+binding to an undecorated method, which it used to skip under the two modes.
+
 ### Legacy view state between requests → `state(..., persist="server")`
 
 Until 2.0 a legacy-exposure view kept three things between requests that it no

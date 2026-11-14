@@ -403,10 +403,32 @@ class TestTheSinkSetIsPinned:
             out.append(line)
         return "\n".join(out)
 
+    @staticmethod
+    def _split_state_codec(source: str) -> tuple[str, str]:
+        """``serialization.py`` without, and then only, ``encode_state_value``.
+
+        That function (#4107) is not a client spelling: it writes saved state that
+        ``decode_state_roundtrip`` must restore exactly, so it keeps every
+        microsecond with ``isoformat()`` and never goes through Django's JSON
+        spelling. It is pinned on its own, below.
+        """
+        start = source.index("\ndef encode_state_value(")
+        end = source.index("\ndef ", start + 1)
+        return source[:start] + source[end:], source[start:end]
+
     def _sources(self) -> str:
-        return self._production(SER_PY.read_text(encoding="utf-8")) + self._production(
-            TSER_PY.read_text(encoding="utf-8")
-        )
+        client, _codec = self._split_state_codec(SER_PY.read_text(encoding="utf-8"))
+        return self._production(client) + self._production(TSER_PY.read_text(encoding="utf-8"))
+
+    def test_the_saved_state_codec_keeps_its_exact_spellings(self) -> None:
+        """The codec's own set: one ``isoformat()`` each for datetime, date and
+        time, and none of the client helper."""
+        _client, codec = self._split_state_codec(SER_PY.read_text(encoding="utf-8"))
+        codec = self._production(codec)
+        assert self._count(codec, ".isoformat()") == 3, [
+            line for line in codec.splitlines() if ".isoformat()" in line
+        ]
+        assert "django_json_datetime(" not in codec
 
     def test_the_helper_has_exactly_the_callers_it_claims(self) -> None:
         src = self._sources()

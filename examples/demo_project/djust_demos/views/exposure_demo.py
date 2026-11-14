@@ -6,8 +6,11 @@ reach no destination (HTML, frames, stored session state, server log) under
 the explicit policy, while the legacy twin shows the harness can see them.
 
 - ``E5_UNDECLARED_SENTINEL``: an ordinary attribute. Never context, never
-  persisted, never sent.
+  sent, never client-settable. Saved server-side in the caller's own session
+  (#4107), which is not a client destination.
 - ``E5_PRIVATE_SENTINEL``: an underscore attribute. Same.
+- ``E5_FLOOR_SENTINEL``: held as ``self.password``, a name on the
+  sensitive-field list. Never sent and never saved, the session included.
 - ``E5_ERROR_SENTINEL``: raised by a handler. Errors follow Django (ADR-038
   D-a): under DEBUG every view's error frame carries it; in production the
   explicit view's frame and log do not.
@@ -29,6 +32,8 @@ class ExposureMatrixView(LiveView):
     def mount(self, request, **kwargs):
         self.secret_note = "E5_UNDECLARED_SENTINEL"
         self._private_note = "E5_PRIVATE_SENTINEL"
+        # A name on the sensitive-field list: never saved, never sent.
+        self.password = "E5_FLOOR_SENTINEL"
 
     def handle_params(self, params, uri):
         raw = params.get("page")
@@ -74,6 +79,7 @@ class LegacyExposureMatrixView(LiveView):
         self.policy = "legacy"
         self.secret_note = "E5_UNDECLARED_SENTINEL"
         self._private_note = "E5_PRIVATE_SENTINEL"
+        self.password = "E5_FLOOR_SENTINEL"
 
     def handle_params(self, params, uri):
         raw = params.get("page")

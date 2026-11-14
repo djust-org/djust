@@ -375,7 +375,12 @@ async def _connect(request, view_class):
     assert (await socket.connect())[0]
     await socket.receive_json_from()
     await socket.send_json_to(
-        {"type": "mount", "view": __name__ + "." + view_class.__name__, "url": request.path}
+        {
+            "type": "mount",
+            "view": __name__ + "." + view_class.__name__,
+            "url": request.path,
+            "tab": "tab-4050-0001",
+        }
     )
     frame = await socket.receive_json_from()
     assert frame["type"] == "mount", frame
@@ -631,7 +636,7 @@ class Unprinted(LiveView):
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-async def test_an_unprinted_declared_field_reaches_no_frame_session_or_state():
+async def test_an_unprinted_declared_field_reaches_no_frame_or_client_state():
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SOCKET_SETTINGS):
         request = await sync_to_async(make_request)()
         socket, mount = await _connect(request, Unprinted)
@@ -646,8 +651,10 @@ async def test_an_unprinted_declared_field_reaches_no_frame_session_or_state():
     for frame in frames:
         # Every field of every frame, the markup included.
         assert UNPRINTED not in json.dumps(frame), frame
+    # #4107: the server-side session keeps the view's state; nothing in it is
+    # sent. The signed client token is a frame field, checked above.
     stored = await sync_to_async(lambda: SessionStore(request.session.session_key).load())()
-    assert UNPRINTED not in json.dumps(stored, default=str)
+    assert UNPRINTED in json.dumps(stored, default=str)
 
 
 @pytest.mark.django_db

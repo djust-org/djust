@@ -30,8 +30,8 @@ class CounterView(LiveView):
     """
 
     # Declared state renders in the template; other attributes do not.
-    # persist="server" keeps it between events on the WebSocket and the HTTP fallback.
-    count = state(0, persist="server")
+    # The view's state is saved server-side between requests.
+    count = state(0)
 
     @event_handler
     def increment(self):
@@ -110,7 +110,7 @@ from djust import LiveView, event_handler, state
 class CounterView(LiveView):
     template_name = "counter.html"
 
-    count = state(0, persist="server")
+    count = state(0)
 
     @event_handler
     def increment(self):

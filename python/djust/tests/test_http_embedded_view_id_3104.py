@@ -320,7 +320,8 @@ def test_an_undecorated_method_of_the_child_is_not_an_event(session):
     ids = _page(session)
     response = _post(session, {"view_id": ids[0]}, event="not_a_handler")
     assert response.status_code == 400
-    assert json.loads(response.content) == {"error": "Event handler not found"}
+    # The WebSocket's refusal (#4101): "Event rejected" outside DEBUG.
+    assert json.loads(response.content) == {"error": "Event rejected"}
 
 
 @pytest.mark.django_db

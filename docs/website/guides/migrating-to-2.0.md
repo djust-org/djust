@@ -323,10 +323,47 @@ class AppView(LiveView):
 
 ### Keeping state across a reconnect
 
-A reconnect, a deploy or a second worker gives the user a new view object.
-Under explicit exposure, `mount()` runs, then every `persist="server"` field
-is put back from the session, and nothing else is. Decide per field whether
-the user would notice it resetting:
+A reconnect, a second worker and every event over the HTTP fallback give the
+user a new view object, built from the view's saved state as in 1.3.
+
+**What is saved.** After the page load and after each event that changed it,
+the view's state is saved in the server-side session: its public attributes,
+the `_private` attributes `mount()` created, and its `state()` fields. Every
+plain Python value comes back with its type (numbers, strings, lists, dicts,
+tuples, sets, `Decimal`, dates and times, `UUID`, bytes, enum members). A
+model instance is saved as a dict of its fields, as in 1.3. Saving needs no
+declaration and exposes nothing: a saved value reaches the template only
+through a `state()` field or `get_context_data()`, and reaches the browser as
+data only with `client=True`.
+
+**How it comes back.** Over the HTTP fallback a later request restores the
+saved state and does **not** run `mount()` again; then `handle_params()` and
+`handle_restore()` run. While the query string is the one the state was saved
+under, what a handler set goes back over what `handle_params()` assigned; when
+the query changed (`?page=1` then `?page=3`), `handle_params()` has the last
+word for what it assigns and the rest of the saved state is kept. `mount()` runs again only when nothing is saved, or
+when something of the view could not be saved (a queryset, the request's user,
+an arbitrary object, a callable such as a class or a `functools.partial`, work
+`mount()` queued): such a value is skipped, never
+turned into a string, a WARNING on the `djust.automatic_state` logger names it
+once, and the next request runs `mount()` to re-create it before the saved
+state is put back over it. Over a socket, a mount or reconnect runs `mount()`
+and then puts back only what a handler changed since `mount()`, so everything
+`mount()` computes is fresh there. A full page load runs `mount()` and starts a
+new saved state.
+
+**One state per tab.** Each page load carries a tab id; two tabs on one route
+do not share state (1.3 shared it). A reload is a new tab. A session keeps at
+most 8 tab states per view and route, together no larger than that view's size
+limit, and at most 1 MB of saved view state in all; the oldest go first.
+
+**What is not saved.** A field declared `state(..., persist=False)`; names on
+the sensitive-field list (`password`, `is_staff`, `is_superuser`,
+`DJUST_SENSITIVE_FIELDS`); and, in a `FormMixin` form, password, one-time-code
+and payment-card inputs.
+
+`persist="server"` is the strict form: a value that cannot be saved is an
+error instead of being skipped.
 
 ```python
 from djust import LiveView
@@ -347,7 +384,8 @@ class ReportView(LiveView):
         self.rows = []
 
     def handle_restore(self, request):
-        # report_id and status are back; rows were never saved.
+        # report_id, status and rows are back; read the rows again, they
+        # may have changed since they were saved.
         self.rows = self.fetch_rows(self.report_id)
         if self.status == "loading":
             self.status = "idle"
@@ -378,9 +416,21 @@ class ReportView(LiveView):
   without the fix for [#3989](https://github.com/djust-org/djust/issues/3989)
   call `handle_restore()` only on legacy views; on those, an explicit view
   gets its fields back and no hook.
-- **Underscore names are never persisted.** `state()` cannot declare a name
-  that starts with `_`. If `self._draft` has to survive a reconnect, rename it
-  and declare it.
+- **`mount()` is not the place for what must be fresh.** A value `mount()`
+  computes (a permission flag, a list of rows) is saved and comes back as it
+  was until the page is loaded again, exactly as it lives on in a socket's
+  view. Authorization belongs in the framework's gates (`login_required`,
+  `permission_required`, `check_permissions`, object permissions), which run on
+  every request; data that must be current belongs in `handle_restore()` or
+  `get_context_data()`.
+- **Size.** A WARNING names the largest attributes once a view's saved state
+  passes 100 KB (`DJUST_AUTOMATIC_STATE_WARN_KB`). Past 512 KB
+  (`DJUST_AUTOMATIC_STATE_MAX_KB`, or `automatic_state_max_kb` on the view)
+  the event's change is refused whole, with an error naming the view, the
+  attribute and the limit; the page stays on its last saved state. State is
+  never saved in part.
+- **Deploys.** As in 1.3, saved state is applied to the code that is running;
+  a saved name that is now a method or a property is skipped.
 - **Grants are not inherited.** A `state(..., persist=...)` or `client=True`
   field on a base class has to be declared again on each concrete view. A base
   class may declare `state()` fields without grants.
@@ -392,12 +442,8 @@ class ReportView(LiveView):
   version is dropped and the view mounts fresh, unless you define
   `migrate_state(self, old_version, values)` to translate it.
 
-A view that is ever served without a WebSocket (the HTTP fallback) gets a new
-view object for every event. In 1.3 such a view had all its public attributes
-restored from the session between events; under explicit exposure only
-`persist="server"` fields are. The inventory command cannot see this. If the
-view must work without a socket, give every field its handlers change
-`persist="server"`.
+A view that is served without a WebSocket (the HTTP fallback) gets a new view
+object for every event, rebuilt from its saved state as in 1.3.
 
 ### Other things explicit exposure refuses
 
@@ -720,6 +766,7 @@ To open or close from your own handler, set the state:
 | `TEMPLATES[...]['BACKEND'] = "djust.template_backend.DjustTemplateBackend"` | `"djust.template.backend.DjustTemplateBackend"` |
 | `template_auto_call`, `virtual_keyed_ops`, `django_value_repr` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the key. What each one could switch off is always on. |
 | `view_state_in_session` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the key. No view state is kept in the session any more ([below](#state-a-legacy-view-no-longer-keeps)), so there is nothing to switch off. System check `djust.C027`, which validated it, is retired. |
+| `event_security` set to `"open"` or `"warn"` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Put `@event_handler` on every method a template binds (`dj-click`, `dj-submit`, ...), then delete the key. Only decorated methods are client events, on every transport (WebSocket, SSE, the page-POST fallback, components and the test client); startup refuses the two modes (any case) with this hint and any other value except `"strict"` as unknown (#4101). `"strict"` is accepted and does nothing. |
 
 <!-- END GENERATED removed-table:settings -->
 
@@ -854,7 +901,6 @@ the only behaviour, before 2.0.0 is released, so finish with them on 1.3.x:
 | --- | --- |
 | `exposure_policy = "legacy"`. It is no longer the default: a view has to state it, stating it warns, and system check `djust.V028` lists each class that does | Migrate every view that states it, or that you have not checked yet ([section 1](#1-move-each-view-to-explicit-exposure)) |
 | `event_parameter_policy = "legacy"`, the default, and `parameter_policy="legacy"` | Make every handler strict ([section 2](#2-make-event-handlers-strict)) |
-| `event_security` set to `"open"` or `"warn"` | Remove the setting (the default is `"strict"`) and put `@event_handler` on every method a template calls |
 | Time travel that restores a past state | Nothing to change in code; see below |
 
 ## 5. What does not survive
@@ -893,4 +939,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: d9acd17b7baf -->
+<!-- generated-doc prose-sha256: 0681d1491cc9 -->

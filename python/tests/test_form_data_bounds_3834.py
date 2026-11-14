@@ -60,6 +60,9 @@ class Contact(forms.Form):
 
 
 class WsContact(FormMixin, LiveView):
+    # These tests measure the form-data bounds, with floods far past the
+    # default limit on a view's saved state (#4107), which would refuse first.
+    automatic_state_max_kb = 16 * 1024
     exposure_policy = "explicit"
     form_class = Contact
     last = None

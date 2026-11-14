@@ -332,15 +332,10 @@ def test_server_toggle_observation_is_actual_post_change_value():
 
 
 @pytest.mark.parametrize("name", ["render", "unmount", "send_parent", "update"])
-@pytest.mark.parametrize("mode", ["open", "warn", "strict"])
-def test_undeclared_component_methods_are_not_transport_actions(name, mode, monkeypatch):
+def test_undeclared_component_methods_are_not_transport_actions(name):
     from djust.websocket_utils import _check_event_security
-    from djust.config import config
 
     view = mounted()
-    monkeypatch.setattr(
-        config, "get", lambda key, default=None: mode if key == "event_security" else default
-    )
     assert _check_event_security(getattr(view.menu, name), view.menu, name) is not None
 
 

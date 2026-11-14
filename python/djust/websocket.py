@@ -4952,10 +4952,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         page_url = _validate_mount_url(data.get("url", "/"))
         request = factory.get(page_url)
         # Session — same source as handle_mount.
-        from .utils import build_session_for_request
+        from .utils import build_session_for_request, presented_session_key
 
-        scope_session = self.scope.get("session") if hasattr(self, "scope") else None
-        session_key = getattr(scope_session, "session_key", None) if scope_session else None
+        # The presented key, as the runtime's twin reads it (#4102).
+        session_key = presented_session_key(getattr(self, "scope", None))
         # Honours settings.SESSION_ENGINE (#2210) — see the note at the twin
         # site in runtime.py. Both go through one helper so they cannot drift.
         session = build_session_for_request(session_key)

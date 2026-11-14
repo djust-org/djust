@@ -36,8 +36,8 @@ transport layer.
   name. Returns a dict with `state_before`, `state_after`, `duration_ms`,
   `success`, `error`. An unknown handler raises `NoHandlerFoundError` unless
   you pass `raise_on_missing=False`. The transports' event-security check runs
-  first, as it does over WebSocket: a method without `@event_handler` (under
-  the default strict `event_security`), a server-push method or a private name
+  first, as it does over WebSocket: a method without `@event_handler`, a
+  server-push method or a private name
   raises `EventRejectedError` (a `NoHandlerFoundError`), or comes back as
   `success=False` with `code="event_rejected"` when you pass
   `raise_on_missing=False`. An exception raised *inside* the handler

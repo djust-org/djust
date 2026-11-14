@@ -28,9 +28,9 @@ A pushed `handler` must start with `handle_`, be decorated with `@event_handler`
 
 ### Handlers only the server may call: `@push_handler`
 
-A browser can send an event naming any method of your view. Under the default `event_security = "strict"` it is refused for a method without `@event_handler`, which is why an undecorated `handle_*` method works as a push target. Under `"warn"` and `"open"` the browser is not refused, so that method is also a browser event target.
+A browser can send an event naming any method of your view. It is refused for a method without `@event_handler`, on every transport, which is why an undecorated `handle_*` method works as a push target.
 
-`@push_handler` marks a method that only server push may call, in every `event_security` mode:
+`@push_handler` marks a method that only server push may call, even when an override carries `@event_handler`:
 
 ```python
 from djust.decorators import push_handler
@@ -153,7 +153,7 @@ class JobView(LiveView):
 
 - **It is the same turn as `push_to_view()` on the socket**: the turn-middleware chain runs (so `LIVEVIEW_CONFIG["sync_turn_wrapper"]` and `reauth_on_event` apply), the handler runs under the connection's render lock, the page renders once and the frame is sent with `source="broadcast"`.
 - **Busy deferral.** A push that finds a turn in progress (an event, a background result, a tick, or the lock held) is queued and replayed in arrival order once the lock frees; identical queued pushes coalesce, the queue is bounded (64, the oldest dropped), and a backlog costs one render. A push issued from inside an event handler is queued behind that event, so it never waits on its own turn.
-- **A browser cannot call it.** `server_push` is refused as a client event in every `event_security` mode (`strict`, `warn`, `open`), by name (so a subclass that overrides it is covered too) and by function; only your server code reaches it.
+- **A browser cannot call it.** `server_push` is refused as a client event, by name (so a subclass that overrides it is covered too) and by function; only your server code reaches it.
 - **The handler is checked as `push_to_view()` checks it**: `handle_*`, `@event_handler` or `@push_handler`; any other name is refused with a `server_push: blocked handler` warning and never called. The handler name and the payload come from your server code; nothing a browser sends reaches `server_push()`.
 - **A failing handler or render is logged and swallowed**, as `push_to_view()` does on the socket: `server_push()` never raises it into your task, and a deferred batch is not lost with it.
 - **It returns `False` for a handler it refuses** (a `server_push: blocked handler` warning) or cannot find, so a caller can tell a refusal from a run.

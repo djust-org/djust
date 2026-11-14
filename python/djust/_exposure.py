@@ -21,7 +21,7 @@ from . import _per_turn
 from ._class_snapshot import ClassSnapshot, namespace
 
 Destination = Literal["server", "client", "snapshot", "debug"]
-Persistence = Literal["server", "client"] | None
+Persistence = Literal["server", "client", False] | None
 _DESTINATIONS = ("server", "client", "snapshot", "debug")
 _RESTORABLE = ("server", "snapshot")
 _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*\Z", re.ASCII)
@@ -62,8 +62,12 @@ class FieldExposure:
     client: bool = False
 
     def __post_init__(self) -> None:
-        if self.persist is not None and (
-            type(self.persist) is not str or self.persist not in ("server", "client")
+        # ``None`` is "not stated" (kept automatically, #4107); ``False`` is the
+        # explicit "never keep this".
+        if (
+            self.persist is not None
+            and self.persist is not False
+            and (type(self.persist) is not str or self.persist not in ("server", "client"))
         ):
             raise ExposureError("Invalid state persistence destination")
         if type(self.client) is not bool:
@@ -311,7 +315,7 @@ class _ClassFacts:
     provider.
     """
 
-    __slots__ = ("snapshot", "providers", "contracts", "exposures")
+    __slots__ = ("snapshot", "providers", "contracts", "exposures", "code_digest", "enums")
 
     def __init__(self, view_class: type) -> None:
         # Before anything is compiled: see ``ClassSnapshot``.
@@ -319,6 +323,9 @@ class _ClassFacts:
         self.providers: tuple[ProviderContract, ...] | None = None
         self.contracts: dict[int | None, "ExposureContract"] = {}
         self.exposures: tuple[tuple[Any, Any], ...] = ()
+        # ``_automatic_state.class_digest`` (#4107), compiled on first use.
+        self.code_digest: str | None = None
+        self.enums: Any = None
 
     def fresh(self) -> bool:
         for descriptor, exposure in self.exposures:
@@ -629,7 +636,11 @@ class ExposureContract:
                 if not issubclass(type(descriptor), StateProperty):  # lazy-safe
                     continue
                 policy = descriptor.exposure
-                if owner is not view_class and policy != FieldExposure():
+                # ``persist=False`` grants nothing, so it is inherited like a
+                # field with no grant.
+                if owner is not view_class and (
+                    policy.client or policy.persist not in (None, False)
+                ):
                     raise ExposureError(
                         "Inherited exposure grants require explicit field redeclaration"
                     )

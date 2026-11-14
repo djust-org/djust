@@ -810,6 +810,176 @@ def _check_server_state_session_engine(errors: list[CheckMessage]) -> None:
     )
 
 
+#: Django cache backends whose entries one process cannot see from another.
+_PROCESS_LOCAL_CACHES = {
+    "django.core.cache.backends.locmem.LocMemCache": "LocMemCache (one copy per process)",
+    "django.core.cache.backends.dummy.DummyCache": "DummyCache (stores nothing)",
+}
+
+
+def _check_process_local_session_cache(errors: list[CheckMessage]) -> None:
+    """C031 — the session store is a cache only this process can see (#4103).
+
+    A view's state is kept in the session (every view's since #4107, declared
+    ``persist="server"`` fields included). With ``SESSION_ENGINE`` ``cache``
+    over ``LocMemCache`` each process holds its own sessions, so a request or a
+    socket that lands on another process does not find the session; with
+    ``cached_db`` another process may read its own stale copy. Reported with
+    ``DEBUG`` off only (``_is_production``): a development server is one
+    process, where the local cache works.
+    """
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C031"):
+        return
+    engine = getattr(settings, "SESSION_ENGINE", "django.contrib.sessions.backends.db")
+    if engine not in (
+        "django.contrib.sessions.backends.cache",
+        "django.contrib.sessions.backends.cached_db",
+    ):
+        return
+    alias = getattr(settings, "SESSION_CACHE_ALIAS", "default")
+    caches = getattr(settings, "CACHES", None) or {}
+    config = caches.get(alias)
+    if not isinstance(config, dict):
+        return
+    backend = config.get("BACKEND", "")
+    label = _PROCESS_LOCAL_CACHES.get(backend)
+    if label is None:
+        return
+    # A dummy cache loses sessions with one process too, so it is reported in
+    # development as well; a local cache only matters with several processes.
+    if not backend.endswith(".DummyCache") and not _is_production():
+        return
+    if backend.endswith(".DummyCache"):
+        message = (
+            "SESSION_ENGINE is %r over the %r cache, which is DummyCache: it stores nothing, "
+            "so %s even with one process."
+            % (
+                engine,
+                alias,
+                "every request starts a new session and the view's state is lost"
+                if engine.endswith(".cache")
+                else "every session read goes to the database and the cache does nothing",
+            )
+        )
+    else:
+        effect = (
+            "each process keeps its own sessions, so a request or socket served by another "
+            "process mounts fresh and loses the view's state"
+            if engine.endswith(".cache")
+            else "another process can read its own stale copy of the session"
+        )
+        message = (
+            "SESSION_ENGINE is %r over the %r cache, which is %s: with more than one "
+            "process, %s." % (engine, alias, label, effect)
+        )
+    errors.append(
+        DjustWarning(
+            message,
+            hint=(
+                "djust keeps view state in the session. Use a session store every process "
+                "shares: the db or cached_db engine over a shared cache, the cache engine "
+                "over Redis or Memcached, or the file engine on shared storage. Ignore this "
+                "if the site runs as a single process (suppress djust.C031)."
+            ),
+            id="djust.C031",
+            fix_hint=(
+                "Set `SESSION_ENGINE = 'django.contrib.sessions.backends.db'`, or point "
+                "`CACHES[%r]` at a shared cache such as `django.core.cache.backends.redis."
+                "RedisCache`." % alias
+            ),
+        )
+    )
+
+
+#: Channel layers that deliver only within the process that sent the message.
+_IN_MEMORY_LAYERS = (
+    "channels.layers.InMemoryChannelLayer",
+    "djust.layers.InMemoryChannelLayer",
+    "djust.layers.MultiLoopInMemoryChannelLayer",
+)
+
+
+def _check_in_memory_channel_layer(errors: list[CheckMessage]) -> None:
+    """C032 — the channel layer reaches only this process's sockets (#4104).
+
+    ``push_to_view``, broadcasts, presence updates and ``db_notify`` travel
+    over the channel layer. An in-memory layer delivers within one process, so
+    with several processes a message never reaches a socket another process
+    holds, and nothing fails. Reported with ``DEBUG`` off only.
+    """
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C032") or not _is_production():
+        return
+    layers = getattr(settings, "CHANNEL_LAYERS", None)
+    config = layers.get("default") if isinstance(layers, dict) else None
+    if not isinstance(config, dict) or config.get("BACKEND") not in _IN_MEMORY_LAYERS:
+        return
+    errors.append(
+        DjustWarning(
+            "CHANNEL_LAYERS['default'] is %s, which delivers only within one process: with "
+            "more than one process, push_to_view(), broadcasts, presence updates and "
+            "db_notify never reach a socket another process holds." % config["BACKEND"],
+            hint=(
+                "Use channels_redis.core.RedisChannelLayer (or another shared layer) when "
+                "the site runs more than one process. Ignore this for a single process "
+                "(suppress djust.C032)."
+            ),
+            id="djust.C032",
+            fix_hint=(
+                "Set `CHANNEL_LAYERS = {'default': {'BACKEND': "
+                "'channels_redis.core.RedisChannelLayer', 'CONFIG': {'hosts': [REDIS_URL]}}}`."
+            ),
+        )
+    )
+
+
+def _check_memory_presence_backend(errors: list[CheckMessage]) -> None:
+    """C033 — presence is counted per process (#4104).
+
+    The ``memory`` presence backends keep who is online in the process, so
+    with several processes each counts only the sockets it holds. Reported
+    with ``DEBUG`` off when a LiveView uses ``PresenceMixin``.
+    """
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C033") or not _is_production():
+        return
+    config = getattr(settings, "DJUST_CONFIG", None) or {}
+    backend = config.get("PRESENCE_BACKEND", "memory") if isinstance(config, dict) else "memory"
+    if backend not in ("memory", "tenant_memory"):
+        return
+    try:
+        from djust.live_view import LiveView
+        from djust.presence import PresenceMixin
+    except ImportError:
+        return
+    views = sorted(
+        "%s.%s" % (cls.__module__, cls.__qualname__)
+        for cls in _walk_subclasses(LiveView)
+        if issubclass(cls, PresenceMixin) and not _is_framework_internal_class(cls)
+    )
+    if not views:
+        return
+    shown = ", ".join(views[:3]) + (" and %d more" % (len(views) - 3) if len(views) > 3 else "")
+    errors.append(
+        DjustWarning(
+            "The presence backend is %r, which counts only this process's sockets: with "
+            "more than one process each process sees its own users online (used by %s)."
+            % (backend, shown),
+            hint=(
+                "Set DJUST_CONFIG['PRESENCE_BACKEND'] to 'redis' (or 'tenant_redis') with a "
+                "shared channel layer when the site runs more than one process. Ignore this "
+                "for a single process (suppress djust.C033)."
+            ),
+            id="djust.C033",
+            fix_hint="Set `DJUST_CONFIG['PRESENCE_BACKEND'] = 'redis'`.",
+        )
+    )
+
+
 def _check_liveview_middleware(errors: list[CheckMessage]) -> None:
     """C026 — every ``LIVEVIEW_MIDDLEWARE`` entry is an importable ``async def`` (ADR-044).
 
@@ -1453,6 +1623,13 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C030 -- persist="server" state with a session engine that cannot hold it (#4092)
     _check_server_state_session_engine(errors)
+
+    # C031 -- the session store is a cache local to one process (#4103)
+    _check_process_local_session_cache(errors)
+
+    # C032 / C033 -- in-memory channel layer, memory presence backend (#4104)
+    _check_in_memory_channel_layer(errors)
+    _check_memory_presence_backend(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)

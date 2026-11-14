@@ -79,8 +79,15 @@ const frameDispatchSource = readFileSync(
 const requestSource = readFileSync(
     resolve(__dirname, '../../python/djust/static/djust/src/04-cache.js'), 'utf8'
 );
+// The page's tab id (#4106): connect() and the mount frame send it, so the
+// real helper is loaded rather than a stub.
+const namespaceSource = readFileSync(
+    resolve(__dirname, '../../python/djust/static/djust/src/00-namespace.js'), 'utf8'
+);
+const tabIdStart = namespaceSource.indexOf('function djustTabId()');
+const tabIdSource = namespaceSource.slice(tabIdStart, namespaceSource.indexOf('\n}\n', tabIdStart) + 3);
 // Use the real shared registry rather than mocking acknowledgement semantics.
-eval(requestSource.slice(requestSource.indexOf('// Event sequencing'),
+eval(tabIdSource + '\n' + requestSource.slice(requestSource.indexOf('// Event sequencing'),
     requestSource.indexOf('// State management')) + '\n' + frameDispatchSource + '\n' + src); // eslint-disable-line no-eval
 
 const { LiveViewSSE } = global.window.djust;

@@ -50,13 +50,12 @@ class MyView(LiveView):
         pass
 ```
 
-The `event_security` setting controls enforcement:
-
-| Mode       | Behavior                                             |
-| ---------- | ---------------------------------------------------- |
-| `"strict"` | (default) Only `@event_handler` decorated methods    |
-| `"warn"`   | Allows undecorated methods with deprecation warnings |
-| `"open"`   | No decorator check (legacy, not recommended)         |
+Every transport (WebSocket, SSE, the page-POST fallback, component events and
+`LiveViewTestClient`) runs the same check and refuses an undecorated method with
+the same answer: `"Event rejected"` in production, and in `DEBUG` a message that
+names the method and the decorator to add. There is no setting to relax it: djust
+2.0 removed the `event_security` `"warn"` and `"open"` modes, and a project that
+still sets them fails startup with the migration hint (#4101).
 
 ### Layer 3: Rate Limiting
 

@@ -1504,6 +1504,7 @@ class LiveViewWebSocket {
             type: 'mount',
             view: viewPath,
             params: params,
+            tab: djustTabId(),
             url: window.location.pathname,
             has_prerendered: options.hasPrerendered ?? (this.skipMountHtml || false),  // Tell server we have pre-rendered content
             client_timezone: clientTimezone  // IANA timezone string (e.g. "America/New_York")

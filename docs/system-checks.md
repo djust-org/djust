@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 116 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 119 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -41,6 +41,9 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C028 | Config | Error | `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is not `None` or a number of seconds greater than 0 |
 | C029 | Config | Error | `LIVEVIEW_CONFIG['query_budget']` is not `None`, `"off"`, `"warn"` or `"error"` |
 | C030 | Config | Error | A view declares `persist="server"` state and `SESSION_ENGINE` cannot hold it |
+| C031 | Config | Warning | The session store is a cache only one process can see (`LocMemCache`, `DummyCache`) |
+| C032 | Config | Warning | The channel layer is in-memory, so messages never reach another process's sockets |
+| C033 | Config | Warning | A view uses presence and the presence backend counts only one process's sockets |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -76,7 +79,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V026 | LiveView | Warning | A legacy view declares a plain component in its class body: one object shared by every session, rendered for every user |
 | V027 | LiveView | Warning | An explicit view declares a `state()` field named `user` or `perms` (without `render=False`): it replaces `request.user` / the permission proxy in every template the view renders |
 | V028 | LiveView | Warning | An application class states `exposure_policy = "legacy"`, which is deprecated and removed before 2.0.0 |
-| V029 | LiveView | Warning | An explicit view's event handler changes a value a later event reads, and the value is not kept on the HTTP fallback (not declared state, or a `state()` field without `persist`) |
+| V029 | LiveView | Warning | An explicit view's event handler reads and then changes a `state()` field declared `persist=False`, so the change is not saved between requests |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -305,6 +308,27 @@ console.log("debug info"); // noqa: Q003
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C030"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C030"]`
 - **False positives**: None. The engine is judged by the `SessionStore` class it resolves to, as the runtime judges the request's session, so a module that re-exports a supported store is accepted. A subclass of a supported store is reported because the runtime refuses it too (only the exact audited stores are accepted).
 
+### C031 — Session store local to one process
+- **Severity**: Warning
+- **Method**: Settings inspection (`SESSION_ENGINE`, `SESSION_CACHE_ALIAS`, `CACHES`)
+- **What it detects**: `SESSION_ENGINE` is `django.contrib.sessions.backends.cache` or `cached_db` and the cache it uses is `LocMemCache` (or `DummyCache`). djust keeps view state in the session, so with more than one process a request or socket served by another process does not find the session (`cache`) or reads a stale copy (`cached_db`), and the view mounts fresh. Reported only with `DEBUG = False` for `LocMemCache`: a development server is one process, where the local cache works. A `DummyCache` stores nothing, so the `cache` engine loses every session even with one process; it is reported in development too (#4103).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C031"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C031"]` (for a site that runs as one process)
+- **False positives**: A deployment that runs exactly one process. The `file` engine is not reported: whether its directory is shared cannot be seen from settings.
+
+### C032 — In-memory channel layer
+- **Severity**: Warning
+- **Method**: Settings inspection (`CHANNEL_LAYERS['default']['BACKEND']`)
+- **What it detects**: The default channel layer is `channels.layers.InMemoryChannelLayer`, `djust.layers.InMemoryChannelLayer` or `djust.layers.MultiLoopInMemoryChannelLayer`. `push_to_view()`, broadcasts, presence updates and `db_notify` travel over the layer, which then delivers only within one process: with several processes they never reach a socket another process holds, and nothing fails. Reported only with `DEBUG = False` (#4104).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C032"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C032"]` (for a site that runs as one process)
+- **False positives**: A deployment that runs exactly one process.
+
+### C033 — Presence counted per process
+- **Severity**: Warning
+- **Method**: Settings inspection (`DJUST_CONFIG['PRESENCE_BACKEND']`) and LiveView classes using `PresenceMixin`
+- **What it detects**: A LiveView uses `PresenceMixin` while the presence backend is `memory` (the default) or `tenant_memory`. Each process then counts only the sockets it holds, so with several processes every process shows its own users online. Reported only with `DEBUG = False` (#4104).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C033"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C033"]` (for a site that runs as one process)
+- **False positives**: A deployment that runs exactly one process.
+
 <!-- END GENERATED check-sections:C -->
 
 ---
@@ -501,7 +525,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 ### V021 — Override of a `@push_handler` method
 - **Severity**: Info; Warning when the override carries `@event_handler`
 - **Method**: Runtime (class inspection; nothing is constructed or mounted)
-- **What it detects**: a LiveView class whose effective definition of a method name is not marked, while another class in its MRO (a base or mixin) defines the same name with `@push_handler`. That covers an override and the multiple-inheritance case where one base's unmarked or `@event_handler` method comes first in the MRO and another base's marked method comes later. The marker is inherited by method name, so the override is still refused to browsers in every `event_security` mode; the check makes that visible. With `@event_handler` on the override it is a Warning: the decorator cannot make the name browser-callable, so the event handler is dead code.
+- **What it detects**: a LiveView class whose effective definition of a method name is not marked, while another class in its MRO (a base or mixin) defines the same name with `@push_handler`. That covers an override and the multiple-inheritance case where one base's unmarked or `@event_handler` method comes first in the MRO and another base's marked method comes later. The marker is inherited by method name, so the override is still refused to browsers; the check makes that visible. With `@event_handler` on the override it is a Warning: the decorator cannot make the name browser-callable, so the event handler is dead code.
 - **Fix**: add `@push_handler` to the override. For the Warning, remove `@event_handler`, or rename the method if a browser should call it.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V021"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V021"]`
 
@@ -550,11 +574,11 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Fix**: move the view to explicit exposure (declare persisted fields with `state()`, return template names from `get_context_data()`) and delete the line. `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](website/guides/migrating-to-2.0.md).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V028"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V028"]`
 
-### V029 — a handler changes a value a later event reads, and the fallback does not keep it
+### V029 — a handler changes a `persist=False` field a later event reads
 - **Severity**: Warning
 - **Method**: Runtime (class inspection and the handlers' source). It builds one bare `LiveView()` to list djust's own instance attributes; no application view is constructed.
-- **What it detects**: an `@event_handler` or `@action` of an explicit view that changes `self.<name>` (assigns it, or mutates it in place: `.append()`, `self.d[k] = v`, ...) when a later event reads that value: the handler reads the old value before changing it (`self.count += 1`, `self.x = f(self.x)`, `self.items.append(...)`), or another handler or `get_context_data()` reads it. Under explicit exposure the HTTP page-POST fallback builds a new view for each event and runs `mount()` again, and only `state(..., persist="server")` fields are restored, so such a value answers every fallback event from its `mount()` value, with no error. Over a WebSocket the same view works. Two messages: a plain attribute ("not declared state"), and a `state()` field declared without `persist` that a handler reads and then changes ("declared without persist"; `count = state(0)` + `self.count += 1` is stuck the same way). Not reported: a value a handler recomputes from its own arguments and only it reads (`self.results = query(value)`), `_private` names, keys of `temporary_assigns`, djust's own attributes (`page_title`, `template_name` and every other name in `djust._exposure.reserved_state_names()`, and any name a djust class in the view's MRO defines), descriptors other than `state()` (a property, `@computed`), a `state()` field with `persist`, and legacy views. Only the handlers' own bodies are read: a change in a helper the handler calls, or through `setattr()`, is not reported. Reported once per class and attribute, on the class whose handler changes it.
-- **Fix**: declare the value on the class with `persist`, `count = state(0, persist="server")` (or add `persist="server"` to the existing `state()`); or name it with a leading underscore if it is per-event scratch.
+- **What it detects**: an `@event_handler` or `@action` of an explicit view that reads the old value of a `state()` field declared `persist=False` and then changes it (`self.count += 1`, `self.x = f(self.x)`, `self.items.append(...)`). A view's state is saved server-side between requests: its public attributes, the `_private` attributes `mount()` creates, and its `state()` fields. A field declared `persist=False` is the one thing the author kept out, so on the HTTP fallback and after a reconnect it starts from its default again and the change is lost, with no error; within one WebSocket connection it is kept. Not reported: every attribute and field that is saved, a `persist=False` field a handler only replaces, keys of `temporary_assigns`, djust's own attributes, and legacy views. A value that is not saved because it cannot be (a queryset, the request's user, an arbitrary object) is not found by this check: the `djust.automatic_state` logger names it at run time, and `mount()` runs again on the next request to re-create it. Only the handlers' own bodies are read. Reported once per class and field, on the class whose handler changes it.
+- **Fix**: remove `persist=False` from the field, or stop reading its old value in a later event.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V029"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V029"]`
 
 <!-- END GENERATED check-sections:V -->
@@ -965,8 +989,8 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   runs and no queryset is evaluated.
 - **What each detects**:
   - `T019`: the name resolves to no browser-callable handler on the owner. This
-    covers a missing method, one without `@event_handler` (under the default
-    strict `event_security`), an output-subscription callback, and a `@push_handler` method (in every `event_security` mode). It also
+    covers a missing method, one without `@event_handler` (refused on every
+    transport since 2.0, #4101), an output-subscription callback, and a `@push_handler` method. It also
     covers an action or output of a declared interactive component, which a
     view-owned binding never reaches. The last cases are an invalid event name,
     and arguments on a directive that sends its value verbatim (`dj-submit`,

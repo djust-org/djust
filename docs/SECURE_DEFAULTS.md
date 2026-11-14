@@ -715,6 +715,55 @@ coverage lives in `python/tests/test_context_item_safety_2287.py`.
 
 ---
 
+## 7. Saved view state is storage, never exposure
+
+A view's state is saved in the server-side session between requests, as in
+1.x (`python/djust/_automatic_state.py`, #4107). What keeps that safe:
+
+- **One name rule for both directions.** `_Names.eligible` (public) and
+  `_Names.private` decide what is saved AND what a stored envelope may put
+  back: an ASCII identifier that is not reserved (`reserved_state_names()`),
+  not framework-owned (`_framework_attrs`, `CHANGE_DETECTION_IGNORED`,
+  `_djust_*`, `_state_*`), not on the serialization floor
+  (`_resolve_sensitive_fields()`), and not a method, property or other
+  descriptor of the class. A stored name that fails is dropped on restore, so
+  the store cannot reach `__class__`, a handler, `template_name` or
+  `login_required`.
+- **A fixed codec.** `encode_state_value` / `decode_state_roundtrip` carry the
+  plain Python types through a fixed table of constructors. Nothing is
+  imported by name, nothing is unpickled, and an enum member is restored only
+  from classes the view's own module already references. Any other object is
+  skipped, never stringified.
+- **Written only from the server.** The envelope is built from the view's
+  attributes after the transport's authorization. No client message names an
+  attribute to store.
+- **Bound.** The envelope carries the `StateBinding` digest (session, user,
+  tenant, route) and a lifetime; state for another principal reads as nothing
+  stored.
+- **A tab id selects, it does not authorize.** The page's tab id
+  (`<meta name="djust-tab">`, sent back as `X-Djust-Tab` and in the mount
+  frame) picks one of the states inside the caller's own session. The
+  envelope stays bound to the session, user, tenant and route, so an id copied
+  elsewhere reaches nothing; a missing or malformed id saves and restores
+  nothing. What a client can make a session hold is bounded at every write:
+  8 tab states per view and route, together within that view's size limit, and
+  1 MB for all saved view state of the session.
+- **Not a projection.** Template context, client state, signed snapshot tokens
+  and debug payloads still read declarations only (ADR-038 D1). A saved value
+  that is not declared or supplied by `get_context_data()` appears in no frame.
+- **A server-side store only.** A cookie session, which the browser can read,
+  holds no view state.
+- **Not an authorization cache to rely on.** A value `mount()` computed (a
+  permission flag) is saved and restored as it was. Authorization belongs in
+  the framework's gates, which run on every request.
+
+```python
+# Saving and restoring go through these functions; nothing else touches the store.
+from djust._exposure_sessions import load_saved_view, load_server_state, save_server_state
+```
+
+---
+
 ## How to make a NEW feature secure-by-default
 
 When you add a feature that emits data, accepts client-echoed state, exposes an

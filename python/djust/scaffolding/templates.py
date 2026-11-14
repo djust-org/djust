@@ -488,9 +488,8 @@ class %(view_class)s(%(view_bases)s):
     # set ``login_required = True`` (or add ``permission_required``) instead.
     login_required = False
 
-    # Declared state a later event reads (djust.V029): kept between events on
-    # every transport, the HTTP fallback included, where each event builds a
-    # new view and runs mount() again.
+    # Declared state renders in the template. persist="server" is the strict
+    # form of saving: a value that cannot be saved is an error, not skipped.
     items = state(default_factory=list, persist="server")
     search_query = state("", persist="server")
 

@@ -81,7 +81,8 @@ def test_rotation_invalidates_existing_adapter(store):
         store.save({"count": 8})
 
 
-@pytest.mark.parametrize("elapsed", [-1, 60, 61])
+# Written more than the clock-skew tolerance (30 s) "in the future" (#4105).
+@pytest.mark.parametrize("elapsed", [-31, 60, 61])
 def test_expired_and_future_envelopes_fail_closed(store, monkeypatch, elapsed):
     monkeypatch.setattr("djust._exposure_sessions.time.time", lambda: 1000)
     store.save({"count": 7})

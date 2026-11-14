@@ -1,10 +1,12 @@
-"""``tests/local_load_guard.py``: outside CI a run is held to a few workers and to a
-targeted size, unless the full gate is asked for on purpose.
+"""``tests/local_load_guard.py``: outside GitHub Actions a run is held to a few workers
+and to a targeted size, unless a time-limited approval is on disk (#4111).
 
 The behaviour tests run a real inner pytest in a subprocess with a fully controlled
-environment (``CI`` and the ``DJUST_*`` knobs removed first), because the guard is
-about how a pytest process starts and what it collects, which cannot be observed from
-inside one.
+environment (``GITHUB_ACTIONS``, ``CI`` and the ``DJUST_*`` knobs removed first, and
+``HOME`` pointed at the test's own directory so no real approval or lock is seen),
+because the guard is about how a pytest process starts and what it collects, which
+cannot be observed from inside one. Without that, a run on a GitHub runner inherits
+``GITHUB_ACTIONS=true`` and every inner run is unguarded.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -27,12 +30,13 @@ class TestTheKnobs:
         "env, expected",
         [
             ({}, True),
-            ({"CI": "true"}, False),
-            ({"CI": "1"}, False),
-            ({"CI": "false"}, True),
-            ({"DJUST_FULL_LOCAL": "1"}, False),
-            ({"DJUST_FULL_LOCAL": "0"}, True),
-            ({"DJUST_FULL_LOCAL": "yes", "CI": ""}, False),
+            ({"GITHUB_ACTIONS": "true"}, False),
+            ({"GITHUB_ACTIONS": "false"}, True),
+            # Since #4111 neither a bare CI nor the old full-run variable switches it off.
+            ({"CI": "true"}, True),
+            ({"CI": "1"}, True),
+            ({"DJUST_FULL_LOCAL": "1"}, True),
+            ({"DJUST_FULL_LOCAL": "yes", "CI": "true"}, True),
         ],
     )
     def test_active(self, env, expected):
@@ -80,15 +84,43 @@ def _inner(tmp_path: Path, *args: str, env: dict | None = None, tests: int = 12)
     clean = {
         k: v
         for k, v in os.environ.items()
-        if k not in {"CI", "DJANGO_SETTINGS_MODULE", "PYTEST_ADDOPTS"} and not k.startswith("DJUST_")
+        if k not in {"GITHUB_ACTIONS", "CI", "DJANGO_SETTINGS_MODULE", "PYTEST_ADDOPTS"}
+        and not k.startswith("DJUST_")
     }
     clean["PYTHONPATH"] = str(REPO)
+    # The approval file and the machine-wide lock live under HOME: use the test's own.
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    clean["HOME"] = str(home)
     clean.update(env or {})
     return subprocess.run(
-        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-p", "no:django",
-         "-q", "-s", "-o", "addopts=", *args],
-        cwd=tmp_path, env=clean, capture_output=True, text=True, timeout=180,
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "no:django",
+            "-q",
+            "-s",
+            "-o",
+            "addopts=",
+            *args,
+        ],
+        cwd=tmp_path,
+        env=clean,
+        capture_output=True,
+        text=True,
+        timeout=180,
     )
+
+
+def _approve(tmp_path: Path, seconds_ahead: float = 3600) -> None:
+    """A valid approval in the inner run's own HOME, never the developer's."""
+    directory = tmp_path / "home" / ".djust"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / guard.APPROVAL_NAME).write_text(str(time.time() + seconds_ahead))
 
 
 def _workers(tmp_path: Path) -> set[str]:
@@ -115,13 +147,24 @@ class TestTheSizeLimit:
         r = _inner(tmp_path, "-k", "n and (0 or 1)", env={"DJUST_LOCAL_MAX_ITEMS": "5"})
         assert r.returncode == 0, r.stdout + r.stderr
 
-    def test_the_explicit_full_gate_is_allowed(self, tmp_path):
+    def test_the_old_full_run_variable_alone_no_longer_lets_it_through(self, tmp_path):
         r = _inner(tmp_path, env={"DJUST_LOCAL_MAX_ITEMS": "5", "DJUST_FULL_LOCAL": "1"})
+        assert r.returncode != 0
+        assert not _workers(tmp_path), "a test ran although the run was refused"
+
+    def test_an_approval_lets_it_through(self, tmp_path):
+        _approve(tmp_path)
+        r = _inner(tmp_path, env={"DJUST_LOCAL_MAX_ITEMS": "5"})
         assert r.returncode == 0, r.stdout + r.stderr
 
-    def test_ci_is_never_limited(self, tmp_path):
-        r = _inner(tmp_path, env={"DJUST_LOCAL_MAX_ITEMS": "5", "CI": "true"})
+    def test_github_actions_is_never_limited(self, tmp_path):
+        r = _inner(tmp_path, env={"DJUST_LOCAL_MAX_ITEMS": "5", "GITHUB_ACTIONS": "true"})
         assert r.returncode == 0, r.stdout + r.stderr
+
+    def test_a_bare_ci_is_still_limited(self, tmp_path):
+        r = _inner(tmp_path, env={"DJUST_LOCAL_MAX_ITEMS": "5", "CI": "true"})
+        assert r.returncode != 0
+        assert not _workers(tmp_path), "a test ran although the run was refused"
 
 
 class TestTheWorkerCap:
@@ -137,12 +180,26 @@ class TestTheWorkerCap:
 
     def test_the_cap_can_be_raised_on_purpose(self, tmp_path):
         r = _inner(tmp_path, "-n", "4", env={"DJUST_LOCAL_MAX_WORKERS": "3"})
+        assert r.returncode == 0, r.stdout + r.stderr
         assert _workers(tmp_path) == {"3"}
 
-    def test_the_full_gate_keeps_the_workers_it_asked_for(self, tmp_path):
+    def test_the_old_full_run_variable_alone_is_held_to_the_cap(self, tmp_path):
         r = _inner(tmp_path, "-n", "4", env={"DJUST_FULL_LOCAL": "1"})
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert _workers(tmp_path) == {"2"}
+
+    def test_an_approved_run_keeps_the_workers_it_asked_for(self, tmp_path):
+        _approve(tmp_path)
+        r = _inner(tmp_path, "-n", "4")
+        assert r.returncode == 0, r.stdout + r.stderr
         assert _workers(tmp_path) == {"4"}
 
-    def test_ci_keeps_the_workers_it_asked_for(self, tmp_path):
-        r = _inner(tmp_path, "-n", "4", env={"CI": "true"})
+    def test_github_actions_keeps_the_workers_it_asked_for(self, tmp_path):
+        r = _inner(tmp_path, "-n", "4", env={"GITHUB_ACTIONS": "true"})
+        assert r.returncode == 0, r.stdout + r.stderr
         assert _workers(tmp_path) == {"4"}
+
+    def test_a_bare_ci_is_held_to_the_cap(self, tmp_path):
+        r = _inner(tmp_path, "-n", "4", env={"CI": "true"})
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert _workers(tmp_path) == {"2"}

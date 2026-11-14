@@ -799,9 +799,6 @@ In `settings.py`:
 
 ```python
 LIVEVIEW_CONFIG = {
-    # "strict" (default), "warn", or "open"
-    "event_security": "strict",
-
     # Global rate limit (token bucket) and per-IP connection limits
     "rate_limit": {
         "rate": 100,

@@ -11,7 +11,7 @@ run system checks.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 #: Top-level Django settings that were aliases of a nested key (#3500).
 REMOVED_FLAT_SETTINGS: dict[str, str] = {
@@ -52,6 +52,44 @@ REMOVED_CONFIG_KEYS: dict[str, str] = {
         'view keeps exactly its state(..., persist="server") fields'
     ),
 }
+
+#: ``LIVEVIEW_CONFIG`` / ``DJUST_CONFIG`` keys whose values 2.0 removed: key ->
+#: (the value still accepted, the removed values, the replacement). Values are
+#: compared as ``str(v).strip().lower()``. The accepted value does nothing and is
+#: silent; a removed value names the replacement; anything else is an unknown
+#: value and the message says to delete the key.
+REMOVED_CONFIG_VALUES: dict[str, tuple[str, frozenset[str], str]] = {
+    "event_security": (
+        "strict",
+        # #4101: the "warn" and "open" modes let an undecorated public method
+        # run as a client event; 2.0 refuses it on every transport.
+        frozenset({"warn", "open"}),
+        "only methods decorated with @event_handler are client events, on every "
+        "transport. Decorate each method a template binds (dj-click, dj-submit, ...) "
+        "with @event_handler, then delete the key",
+    ),
+}
+
+
+def _removed_value_problem(setting: str, key: str, value: Any) -> Optional[str]:
+    """The problem with ``setting[key] = value``, or None when it is accepted."""
+    accepted, removed, replacement = REMOVED_CONFIG_VALUES[key]
+    normalized = str(value).strip().lower()
+    if normalized == accepted:
+        return None
+    if normalized in removed:
+        return "%s[%r] = %r was removed in djust 2.0: %s. See %s" % (
+            setting,
+            key,
+            value,
+            replacement,
+            MIGRATION_GUIDE_URL,
+        )
+    return (
+        "%s[%r] = %r is an unknown value, and the key does nothing in djust 2.0. "
+        "Delete the key." % (setting, key, value)
+    )
+
 
 #: View attributes 2.0 removed. A truthy value is refused when the class is
 #: created, so the module fails to import instead of the view quietly running
@@ -241,6 +279,11 @@ def removed_settings_in_use(settings: Any) -> list[str]:
             for key, behaviour in REMOVED_CONFIG_KEYS.items()
             if key in cfg
         )
+        for key in REMOVED_CONFIG_VALUES:
+            if key in cfg:
+                problem = _removed_value_problem(setting, key, cfg[key])
+                if problem is not None:
+                    problems.append(problem)
     return problems
 
 

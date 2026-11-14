@@ -180,6 +180,7 @@ class ProbeComponent(LiveComponent):
     def get_context_data(self, **kwargs):
         return {"n": self.n}
 
+    @event_handler
     def poke(self, **kwargs):
         note("component")
         self.n += 1

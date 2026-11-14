@@ -101,6 +101,30 @@ def unsupported_session_message(session: Any) -> str:
 _VERSION = 2
 _DEFAULT_MAX_AGE = 3600
 
+#: How far ahead of this process's clock saved state may say it was written
+#: (#4105). Processes' clocks differ a little, and ``created`` is in whole
+#: seconds, so a reader one second behind the writer saw fresh state as
+#: "written in the future" and discarded it. Beyond this the state is still
+#: refused, and the refusal is logged.
+CLOCK_SKEW_TOLERANCE = 30
+
+
+def written_in_the_future(created: int, now: int, what: str) -> bool:
+    """True (and logged) when ``created`` is ahead of ``now`` by more than the
+    clock-skew tolerance. Within the tolerance it is accepted."""
+    ahead = created - now
+    if ahead <= CLOCK_SKEW_TOLERANCE:
+        return False
+    logger.warning(
+        "djust: discarded %s written %d s ahead of this process's clock (more than the "
+        "%d s tolerated); keep the servers' clocks in sync. The view mounts fresh.",
+        what,
+        ahead,
+        CLOCK_SKEW_TOLERANCE,
+    )
+    return True
+
+
 logger = logging.getLogger(__name__)
 
 StateMigration = Callable[[int, dict[str, Any]], Any]
@@ -317,52 +341,173 @@ def _project_for_save(adapter: "ServerStateSession", view: Any) -> dict[str, Any
         raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
 
 
-def save_server_state(view: Any, request: Any) -> None:
-    """Persist only declared server fields after the transport's authorization.
+def _declared_adapter(
+    view: Any, request: Any, *, create: bool = False
+) -> "ServerStateSession | None":
+    """The strict adapter for declared ``persist="server"`` fields.
 
-    Raises :class:`StateLimitExceeded`, before writing anything, when the
-    declared server state is over its limits.
+    A legacy view has no declared server state (the constructor refuses the
+    grant), so it has no adapter; its state is the automatic kind only (#4107).
     """
-    adapter = server_state_adapter(view, request, create=True)
-    if adapter is not None:
-        values = _project_for_save(adapter, view)
+    from ._exposure import uses_legacy_exposure
+
+    if uses_legacy_exposure(view):
+        return None
+    return server_state_adapter(view, request, create=create)
+
+
+def _flush(session: Any, expected_key: Any) -> None:
+    from ._session_merge import save_merged
+
+    save_merged(session, expected_key)
+
+
+def save_server_state(view: Any, request: Any) -> None:
+    """Save the view's server-side state after the transport's authorization.
+
+    Two parts, one session write (#4107):
+
+    * declared ``persist="server"`` fields, strictly: a value the declared
+      codec refuses is an error;
+    * the rest of the view's state (``_automatic_state``): its public
+      attributes and the private ones ``mount()`` created, as 1.3 saved them.
+      Not written when it equals what is stored.
+
+    Either part over its size limit raises :class:`StateLimitExceeded` before
+    anything is written: state is never saved in part. Called after the page
+    GET's ``mount()`` too, where it overwrites what an earlier page load saved.
+    """
+    from . import _automatic_state
+
+    adapter = _declared_adapter(view, request, create=True)
+    # Projected first: a refusal must leave the session dict untouched.
+    values = _project_for_save(adapter, view) if adapter is not None else None
+    modified_before = getattr(getattr(request, "session", None), "modified", None)
+    undo = _automatic_state.stage(view, request)
+    if adapter is not None and values is not None:
         try:
-            adapter.save(values)
+            adapter.save(values)  # flushes the automatic envelope with it
         except StateLimitError as error:
             # The envelope's own overhead tipped it over: the fields are the cause.
+            if undo is not None:
+                undo()
             field = _limit_culprit(adapter.contract, view)
             raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
+    elif undo is not None:
+        session = request.session
+        try:
+            _flush(session, session.session_key)
+        except BaseException:
+            # Never leave a staged envelope behind a write that failed: the
+            # session middleware would try the same write again at the response.
+            undo()
+            if modified_before is not None:
+                session.modified = modified_before
+            raise
+
+
+def reapply_saved_state(view: Any) -> None:
+    """Put the view's restored state back over what ``handle_params()`` just
+    set, on a socket mount (#4107), when the URL is the one it was saved under:
+    declared ``persist="server"`` fields and the rest alike. At another URL
+    ``handle_params()`` has the last word for what it assigns (#3624).
+    """
+    from . import _automatic_state
+
+    _automatic_state.finish_mount(view)
+
+
+class SavedView:
+    """What the store holds for a view, read BEFORE ``mount()`` (the HTTP
+    fallback): the values to put back, and whether ``mount()`` must run first.
+
+    ``declared`` holds the strict ``persist="server"`` fields, ``public`` /
+    ``private`` / ``components`` the rest of the view's state. ``must_mount``
+    is 1.3's rule: nothing saved, or something of the view could not be saved
+    (an unsaveable attribute, a component, work ``mount()`` queued that has not
+    run), so only ``mount()`` can supply it.
+    """
+
+    __slots__ = ("declared", "public", "private", "components", "must_mount", "found")
+
+    def __init__(
+        self,
+        declared: dict[str, Any],
+        public: dict[str, Any],
+        private: dict[str, Any],
+        must_mount: bool,
+        components: dict[str, Any] | None = None,
+    ) -> None:
+        self.declared = declared
+        self.public = public
+        self.private = private
+        self.components = components or {}
+        self.must_mount = must_mount
+        self.found = bool(declared or public or private or self.components) or not must_mount
+
+
+def load_saved_view(view: Any, request: Any) -> SavedView:
+    """Read a view's saved state before deciding whether to run ``mount()``."""
+    from . import _automatic_state
+
+    stored = _automatic_state.saved(view, request)
+    declared: dict[str, Any] | None = None
+    adapter = _declared_adapter(view, request)
+    if adapter is not None:
+        try:
+            declared = adapter.load()
+        except ExposureError:
+            declared = None
+    if stored is None:
+        # Nothing of the view's own state is stored: mount() builds it. Declared
+        # fields, if any, still go back over it.
+        return SavedView(declared or {}, {}, {}, True)
+    return SavedView(
+        declared or {}, stored.public, stored.private, stored.remount, stored.components
+    )
 
 
 def load_server_state(view: Any, request: Any) -> dict[str, Any] | None:
-    """Validate current server state or request a fresh mount for rejected data.
+    """Validated stored state to put back after ``mount()``, or None.
+
+    Declared ``persist="server"`` fields and the automatic state (#4107), in
+    one dictionary: every restore site applies it the same way. The two name
+    sets are disjoint (a field that states ``persist`` is never automatic).
 
     Invalid configuration and storage failures still propagate. Only a rejected
     envelope (schema/identity/expiry) becomes a cache miss. Never hydrate a legacy
     session dictionary or log rejected values. Caller performs fresh object auth
-    before dispatch/render after applying these declared values.
+    before dispatch/render after applying these values.
     """
-    adapter = server_state_adapter(view, request)
-    if adapter is None:
-        return None
-    try:
-        return adapter.load()
-    except ExposureError:
-        return None
+    from . import _automatic_state
+
+    restored: dict[str, Any] | None = None
+    adapter = _declared_adapter(view, request)
+    if adapter is not None:
+        try:
+            restored = adapter.load()
+        except ExposureError:
+            restored = None
+    declared_restored = restored is not None
+    # Assigned again after handle_params() when the URL is the one they were
+    # saved under (``finish_mount``): one rule for declared and undeclared state.
+    view.__dict__["_djust_auto_reapply_declared"] = dict(restored) if restored else None
+    # Also puts the saved private attributes back on the view.
+    automatic = _automatic_state.load(view, request)
+    if automatic is not None:
+        restored = {**automatic, **(restored or {})}
+    # For the socket mount (#1977): did the restore change what mount() built?
+    view.__dict__["_djust_restore_changed_view"] = declared_restored or not view.__dict__.get(
+        "_djust_auto_restore_same", False
+    )
+    return restored
 
 
 async def asave_server_state(view: Any, request: Any) -> None:
-    """Async transport save with identity/default evaluation in the Django thread."""
+    """Async transport save; the work runs in the Django thread."""
     from asgiref.sync import sync_to_async
 
-    adapter = await sync_to_async(server_state_adapter)(view, request, create=True)
-    if adapter is not None:
-        values = await sync_to_async(_project_for_save)(adapter, view)
-        try:
-            await adapter.asave(values)
-        except StateLimitError as error:
-            field = await sync_to_async(_limit_culprit)(adapter.contract, view)
-            raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
+    await sync_to_async(save_server_state)(view, request)
 
 
 @dataclass(frozen=True)
@@ -481,8 +626,8 @@ class ServerStateSession:
             type(created) is not int
             or type(expires) is not int
             or created < 0
-            or created > now
             or not 0 < expires - created <= 86400
+            or written_in_the_future(created, now, "declared server state")
         ):
             raise ExposureError("Invalid server state timestamp")
         if now >= min(expires, created + self.max_age):

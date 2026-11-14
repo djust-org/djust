@@ -85,12 +85,23 @@ STATE_ROWS = (
     Row(
         "plain_state",
         "`state()` without `persist`",
-        "Rebuild it in `mount()`, or declare it `persist=`.",
+        "Nothing: it is saved automatically. Use a session engine every process shares.",
     ),
     Row(
         "plain_attr",
-        "Ordinary attribute set in `mount()`",
-        "Rebuild it in `mount()`; read rows again in `handle_restore()`.",
+        "Ordinary attribute set in `mount()` or a handler, public or `_private`",
+        "Nothing: it is saved automatically, and is not rendered unless declared.",
+    ),
+    Row(
+        "not_saved",
+        "`state(..., persist=False)` field",
+        "Nothing: you asked for it not to be kept.",
+    ),
+    Row(
+        "mount",
+        "`mount()`",
+        "Put what must be read again on every request in `handle_restore()` or "
+        "`get_context_data()`, not only in `mount()`.",
     ),
     Row(
         "handle_restore",
@@ -108,24 +119,41 @@ STATE_ROWS = (
         "Nothing: the URL is read again; it wins over a persisted field of the same name.",
     ),
     Row(
+        "held_model",
+        "A model instance `mount()` loads and keeps (`self.obj = Model.objects.get(...)`)",
+        "Over the HTTP fallback read it again in `handle_restore()`: it comes back as "
+        "a dict of its fields, as in 1.3.",
+    ),
+    Row(
+        "params_default",
+        "A value a handler set that `handle_params()` would default",
+        "Nothing: the saved value goes back after `handle_params()`.",
+    ),
+    Row(
+        "url_vs_saved",
+        "The URL carries a value (`?tab=z`) for an undeclared attribute a handler also set",
+        "Nothing: `handle_params()` has the last word when the URL changed since the "
+        "state was saved; while it is the same URL, the handler's value is kept.",
+    ),
+    Row(
         "form",
         "`FormMixin` input and errors, mid-validation",
-        "Opt fields in with `persisted_form_input(...)`; errors come back on the next edit.",
+        "Nothing: input and errors are saved, except password and other sensitive fields.",
     ),
     Row(
         "wizard",
         "`WizardMixin` step and answers",
-        "Resume from your own storage (`get_wizard_initial()` / `get_wizard_step()`).",
+        "Nothing: the step and the answers are saved.",
     ),
     Row(
         "legacy",
         '`exposure_policy = "legacy"` view attribute',
-        "Migrate the view to explicit exposure and declare what must survive.",
+        "Migrate the view to explicit exposure: a legacy view's state is not saved.",
     ),
     Row(
         "component",
         "`LiveComponent` state",
-        "Persist the values on the view and build the component from them.",
+        "Nothing: its state is saved with the view's.",
     ),
     Row(
         "dropdown",
@@ -140,7 +168,7 @@ STATE_ROWS = (
     Row(
         "tick",
         "`tick_interval` / `handle_tick()`",
-        'Count with a `persist="server"` field if the count matters.',
+        "Nothing: a counter the tick changes is saved like any other state.",
     ),
     Row(
         "stream",
@@ -173,16 +201,32 @@ STATE_CELLS: Dict[Tuple[str, str], Entry] = {
     ),
     ("plain_state", SAME): Cell("kept", _T + "ws_events_on_one_process"),
     ("plain_state", HTTP): Cell(
-        "lost: every request starts from the default", _T + "http_fallback_alternating_processes"
+        "kept (1, 2, 3 across A, B, A)", _T + "http_fallback_alternating_processes"
     ),
-    ("plain_state", WS): Cell("lost: `mount()` default", _T + "ws_reconnect_to_another_process"),
-    ("plain_state", RESTART): Cell("lost: `mount()` default", _T + "kill_after_save"),
+    ("plain_state", WS): Cell("restored", _T + "ws_reconnect_to_another_process"),
+    ("plain_state", RESTART): Cell("restored (last completed save)", _T + "kill_after_save"),
     ("plain_attr", SAME): Cell("kept", _T + "ws_events_on_one_process"),
     ("plain_attr", HTTP): Cell(
-        "lost: every request runs `mount()`", _T + "http_fallback_alternating_processes"
+        "kept (1, 2, 3 across A, B, A)", _T + "http_fallback_alternating_processes"
     ),
-    ("plain_attr", WS): Cell("lost: `mount()` value", _T + "ws_reconnect_to_another_process"),
-    ("plain_attr", RESTART): Cell("lost: `mount()` value", _T + "kill_after_save"),
+    ("plain_attr", WS): Cell("restored", _T + "ws_reconnect_to_another_process"),
+    ("plain_attr", RESTART): Cell("restored (last completed save)", _T + "kill_after_save"),
+    ("not_saved", SAME): Cell("kept", _T + "ws_events_on_one_process"),
+    ("not_saved", HTTP): Cell(
+        "lost: every request starts from the default", _T + "http_fallback_alternating_processes"
+    ),
+    ("not_saved", WS): Cell("lost: the default", _T + "ws_reconnect_to_another_process"),
+    ("not_saved", RESTART): Cell("lost: the default", _T + "kill_after_save"),
+    ("mount", SAME): NA("runs once, when the page's view is built"),
+    ("mount", HTTP): Cell(
+        "not run again: the view is rebuilt from its saved state",
+        _T + "http_fallback_alternating_processes",
+    ),
+    ("mount", WS): Cell(
+        "runs on the new process, then the saved state is put back over it",
+        _T + "ws_reconnect_to_another_process",
+    ),
+    ("mount", RESTART): NA("same mount path as the reconnect to another process"),
     ("handle_restore", SAME): NA("no remount, so nothing to restore"),
     ("handle_restore", HTTP): Cell(
         "called on every request", _T + "http_fallback_alternating_processes"
@@ -212,25 +256,46 @@ STATE_CELLS: Dict[Tuple[str, str], Entry] = {
         _T + "url_kwargs_and_handle_params",
     ),
     ("url", RESTART): NA("same mount path as the reconnect to another process"),
+    ("held_model", SAME): Cell("the instance", _T + "held_model_and_handle_params"),
+    ("held_model", HTTP): Cell(
+        "a dict of its fields: the view is rebuilt from saved state, `mount()` does not run",
+        _T + "held_model_and_handle_params",
+    ),
+    ("held_model", WS): Cell(
+        "the instance `mount()` loaded on the new process", _T + "held_model_and_handle_params"
+    ),
+    ("held_model", RESTART): NA("same mount path as the reconnect to another process"),
+    ("params_default", SAME): Cell("kept", _T + "held_model_and_handle_params"),
+    ("params_default", HTTP): Cell("kept", _T + "held_model_and_handle_params"),
+    ("params_default", WS): Cell("kept", _T + "held_model_and_handle_params"),
+    ("params_default", RESTART): NA("same mount path as the reconnect to another process"),
+    ("url_vs_saved", SAME): NA("no mount, so `handle_params()` does not run again"),
+    ("url_vs_saved", HTTP): Cell(
+        "the URL wins when it changed; the same URL keeps the handler's value",
+        _T + "held_model_and_handle_params",
+    ),
+    ("url_vs_saved", WS): Cell(
+        "the URL wins when it changed; the same URL keeps the handler's value",
+        _T + "held_model_and_handle_params",
+    ),
+    ("url_vs_saved", RESTART): NA("same mount path as the reconnect to another process"),
     ("form", SAME): Cell("kept", _T + "form_mid_validation"),
-    ("form", HTTP): Cell(
-        "opted-in input restored; other input and errors reset", _T + "form_mid_validation"
-    ),
-    ("form", WS): Cell(
-        "opted-in input restored; other input and errors reset", _T + "form_mid_validation"
-    ),
+    ("form", HTTP): Cell("input and errors restored", _T + "form_mid_validation"),
+    ("form", WS): Cell("input and errors restored", _T + "form_mid_validation"),
     ("form", RESTART): NA("same mount path as the reconnect to another process"),
     ("wizard", SAME): Cell("kept", _T + "wizard_step"),
-    ("wizard", HTTP): Cell("lost: every request starts at step 1", _T + "wizard_step"),
-    ("wizard", WS): Cell("lost: back to step 1", _T + "wizard_step"),
+    ("wizard", HTTP): Cell("kept: the step and the answers", _T + "wizard_step"),
+    ("wizard", WS): Cell("restored: the step and the answers", _T + "wizard_step"),
     ("wizard", RESTART): NA("same mount path as the reconnect to another process"),
     ("legacy", SAME): Cell("kept", _T + "legacy_view"),
     ("legacy", HTTP): Cell("lost: every request runs `mount()`", _T + "legacy_view"),
     ("legacy", WS): Cell("lost: `mount()` value", _T + "legacy_view"),
     ("legacy", RESTART): NA("same mount path as the reconnect to another process"),
     ("component", SAME): Cell("kept", _T + "components"),
-    ("component", HTTP): Cell("event refused (Component not found)", _T + "components"),
-    ("component", WS): Cell("lost: mounts fresh", _T + "components"),
+    ("component", HTTP): Cell(
+        "kept: the event reaches the component and its state carries", _T + "components"
+    ),
+    ("component", WS): Cell("restored", _T + "components"),
     ("component", RESTART): NA("same mount path as the reconnect to another process"),
     ("dropdown", SAME): Cell("kept", _T + "components"),
     ("dropdown", HTTP): Cell("event refused (Component not found)", _T + "components"),
@@ -245,7 +310,7 @@ STATE_CELLS: Dict[Tuple[str, str], Entry] = {
     ("tick", SAME): Cell("keeps ticking", _T + "tick"),
     ("tick", HTTP): NA("ticks run only on a connection"),
     ("tick", WS): Cell(
-        "restarts on the new process; plain counter reset, persisted counter continues",
+        "restarts on the new process; the counters continue",
         _T + "tick",
     ),
     ("tick", RESTART): NA("same mount path as the reconnect to another process"),
@@ -288,8 +353,9 @@ SESSION_ROWS = (
     ),
     Row(
         "two_sockets_same_route",
-        "Two sockets of one session on the same route",
-        "Expect last write wins; keep shared data in your own storage.",
+        "Two tabs of one session on the same route",
+        "Nothing for the view's own state: each page load is its own tab. A "
+        '`persist="server"` field is per route: keep shared data in your own storage.',
     ),
     Row(
         "two_sockets_other_route",
@@ -335,10 +401,12 @@ SESSION_CELLS: Dict[Tuple[str, str], Entry] = {
         "other tenant mounts fresh; own tenant restored", _T + "tenant_scoping_across_processes"
     ),
     ("two_sockets_same_route", SAME): Cell(
-        "last write wins (a stale socket overwrites)", _T + "two_sockets_same_route"
+        'independent; a `persist="server"` field is still shared (last write wins)',
+        _T + "two_sockets_same_route",
     ),
     ("two_sockets_same_route", WS): Cell(
-        "last write wins (a stale socket overwrites)", _T + "two_sockets_same_route"
+        'independent; a `persist="server"` field is still shared (last write wins)',
+        _T + "two_sockets_same_route",
     ),
     ("two_sockets_other_route", SAME): NA("same binding rule; measured across processes"),
     ("two_sockets_other_route", WS): Cell("independent", _T + "two_sockets_other_route"),
@@ -391,12 +459,14 @@ for _engine in ("db", "file", "cache_file", "cache_redis", "cached_db"):
     ENGINE_CELLS[(_engine, HTTP)] = Cell("kept", _T + "session_engine_across_processes")
     ENGINE_CELLS[(_engine, WS)] = Cell("restored", _T + "session_engine_across_processes")
 ENGINE_CELLS[("cache_locmem", HTTP)] = Cell(
-    "500 error, the session cookie is deleted; the next request starts a new session",
+    "not kept: each process holds its own sessions, so each request starts over",
     _T + "session_engine_across_processes",
     gap=True,
 )
 ENGINE_CELLS[("cache_locmem", WS)] = Cell(
-    "mount fails with an error", _T + "session_engine_across_processes", gap=True
+    "the view mounts fresh: this process does not hold the session (#4102)",
+    _T + "session_engine_across_processes",
+    gap=True,
 )
 
 # ---------------------------------------------------------------------------

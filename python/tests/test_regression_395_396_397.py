@@ -148,13 +148,21 @@ def test_websocket_py_uses_getattr_not_hasattr():
     getattr() with a sentinel is atomic and idiomatic.
     """
     src = (_WORKTREE_ROOT / "python/djust/websocket.py").read_text()
+    # Since #4102 the socket reads the presented session key through
+    # utils.presented_session_key, which falls back to the cookie; the
+    # getattr-with-sentinel read moved there with it.
+    utils_src = (_WORKTREE_ROOT / "python/djust/utils.py").read_text()
 
-    assert 'getattr(scope_session, "session_key", None)' in src, (
-        "websocket.py must use getattr() with sentinel for LazyObject safety"
+    assert 'presented_session_key(getattr(self, "scope", None))' in src, (
+        "websocket.py must read the session key through presented_session_key"
     )
-    assert 'hasattr(scope_session, "session_key")' not in src, (
-        "websocket.py must not use hasattr() on scope_session"
+    assert 'getattr(session, "session_key", None)' in utils_src, (
+        "presented_session_key must use getattr() with sentinel for LazyObject safety"
     )
+    for name, text in (("websocket.py", src), ("utils.py", utils_src)):
+        assert not re.search(r'hasattr\(\w*session\w*, "session_key"\)', text), (
+            "%s must not use hasattr() on a session" % name
+        )
 
 
 # ===========================================================================

@@ -48,7 +48,8 @@ class _Probed:
 
 class CounterView(_Probed, LiveView):
     """One field of each kind: server-persisted, client-persisted, plain
-    ``state()``, and an ordinary attribute."""
+    ``state()``, an ordinary attribute, a private one, and one opted out of
+    saving (#4107)."""
 
     exposure_policy = "explicit"
     template = "<div dj-root>" + PROBE + "</div>"
@@ -56,14 +57,16 @@ class CounterView(_Probed, LiveView):
     count = state(0, persist="server")
     client_count = state(0, persist="client", client=True)
     plain_state = state(0)
+    not_saved = state(0, persist=False)
 
     def mount(self, request, **kwargs):
         self.plain_attr = 0
-        self.mounted_pid = os.getpid()
-        self.restored = False
+        self._private_attr = 0
+        self._mounted_pid = os.getpid()
+        self._restored = False
 
     def handle_restore(self, request):
-        self.restored = True
+        self._restored = True
 
     def snapshot(self):
         return {
@@ -71,8 +74,10 @@ class CounterView(_Probed, LiveView):
             "client_count": self.client_count,
             "plain_state": self.plain_state,
             "plain_attr": self.plain_attr,
-            "restored": self.restored,
-            "mounted_pid": self.mounted_pid,
+            "not_saved": self.not_saved,
+            "private_attr": self._private_attr,
+            "restored": self._restored,
+            "mounted_pid": self._mounted_pid,
         }
 
     @event_handler()
@@ -81,6 +86,8 @@ class CounterView(_Probed, LiveView):
         self.client_count += 1
         self.plain_state += 1
         self.plain_attr += 1
+        self.not_saved += 1
+        self._private_attr += 1
 
     @event_handler()
     def probe(self, **kwargs):
@@ -126,6 +133,34 @@ class ItemView(_Probed, LiveView):
     @event_handler()
     def hit(self, **kwargs):
         self.hits += 1
+
+
+class HeldView(_Probed, LiveView):
+    """A model ``mount()`` loads, and a value a handler sets that
+    ``handle_params()`` would default (#4107)."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root>" + PROBE + "</div>"
+
+    def mount(self, request, **kwargs):
+        self.member = get_user_model().objects.order_by("pk").first()
+        self.tab = "a"
+        self.count = 0
+
+    def handle_params(self, params, uri):
+        self.tab = params.get("tab", "a")
+
+    def snapshot(self):
+        return {"member": type(self.member).__name__, "tab": self.tab, "count": self.count}
+
+    @event_handler()
+    def pick(self, value: str = "b", **kwargs):
+        self.tab = value
+        self.count += 1
+
+    @event_handler()
+    def noop(self, **kwargs):
+        self.set_changed_keys(["probe"])
 
 
 class SignupForm(forms.Form):

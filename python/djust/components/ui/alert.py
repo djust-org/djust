@@ -59,8 +59,8 @@ class AlertComponent(LiveComponent):
     @event_handler()
     def dismiss(self, **kwargs: Any) -> None:
         """Dismiss the alert (the handler every framework branch's close button
-        targets via ``dj-click="dismiss"``; decorated because ``event_security``
-        defaults to strict — #2756)."""
+        targets via ``dj-click="dismiss"``; decorated because only
+        @event_handler methods are client events — #2756)."""
         self.visible = False
         self.trigger_update()
 

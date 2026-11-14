@@ -119,6 +119,8 @@ async function _httpFallbackResync() {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': window.djust.csrfToken(),
                 'X-Djust-Resync': '1',
+                // The tab whose saved state the page is to be rendered from (#4106).
+                'X-Djust-Tab': djustTabId(),
                 ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null
                     ? {'X-Djust-Parameter-Contracts': '1'} : {})
             },
@@ -569,6 +571,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': csrfToken,
                 'X-Djust-Event': eventName,
+                'X-Djust-Tab': djustTabId(),
                 // A strict (or invalid) page scope asks for an explicit
                 // contract clear when the rendered tree no longer has one.
                 ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null

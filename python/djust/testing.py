@@ -299,8 +299,7 @@ class NoHandlerFoundError(Exception):
 class EventRejectedError(NoHandlerFoundError):
     """Raised by :meth:`LiveViewTestClient.send_event` when the transports
     refuse the event before any handler runs (#4096): an unsafe event name,
-    a method without ``@event_handler`` under the default strict
-    ``event_security``, a server-push or server-only method.
+    a method without ``@event_handler``, a server-push or server-only method.
 
     The check is the transports' own (``websocket_utils._check_event_security``),
     so a test cannot pass for an event the browser cannot send. A subclass of
@@ -578,7 +577,7 @@ class LiveViewTestClient:
             NoHandlerFoundError: If no handler is found for ``event_name``
                 and ``raise_on_missing`` is True (the default).
             EventRejectedError: If the transports refuse the event (an
-                undecorated method under strict ``event_security``, a
+                undecorated method, a
                 server-push method, an unsafe name) and ``raise_on_missing``
                 is True.
 
@@ -1632,14 +1631,26 @@ class LiveComponentTestClient:
                 renamed handler should fail loudly rather than silently
                 no-op, which is how a test can pass while the feature is
                 broken.
+            EventRejectedError: if the transports would refuse the event
+                (a method without ``@event_handler``, a private name, a
+                server-push or server-only method; #4101).
         """
         component = self._require_mounted()
 
-        handler = getattr(component, event_name, None)
         from .decorators import is_push_only
+        from .security.event_guard import is_safe_event_name
+        from .websocket_utils import _check_event_security
 
+        if not is_safe_event_name(event_name):
+            raise EventRejectedError("Blocked unsafe event name: %s" % event_name)
+        handler = getattr(component, event_name, None)
         if handler is None or not callable(handler) or is_push_only(component, event_name, handler):
             raise NoHandlerFoundError(f"{type(component).__name__} has no handler {event_name!r}")
+        # The check every transport runs on a component event, so a test
+        # cannot pass for a method the browser cannot reach.
+        security_error = _check_event_security(handler, component, event_name)
+        if security_error:
+            raise EventRejectedError(security_error)
 
         state_before = self.get_state()
         started = time.perf_counter()
@@ -2081,82 +2092,6 @@ def _get_handlers(cls: Type[Any]) -> Dict[str, Any]:
 _VARIADIC_KINDS = ("var_keyword", "var_positional")
 
 
-# #3126: view classes already warned about in this process, so each is named once.
-_UNFUZZED_WARNED: set = set()
-
-
-def _unfuzzed_reachable_methods(cls: Type[Any]) -> List[str]:
-    """Undecorated public methods a client can still call, which the smoke test skips.
-
-    Under ``event_security = "warn"`` or ``"open"``, ``_check_event_security``
-    lets a client call an undecorated public method, but ``_get_handlers``
-    lists only the decorated handlers dispatch resolves in every mode, so those
-    methods are reachable and unfuzzed (#3126). This names the ones the app
-    wrote: plain functions on the view's own classes, not the framework's
-    lifecycle and helper methods. Empty under ``"strict"`` (the default),
-    where dispatch refuses them.
-    """
-    from djust.config import config
-    from djust.decorators import is_event_handler, is_push_only
-    from djust.live_view import LiveView
-
-    if config.get("event_security", "strict") == "strict" or not isinstance(cls, type):
-        return []
-    framework_names = set(dir(LiveView))
-    declared = set(_get_handlers(cls))
-    names: List[str] = []
-    for klass in cls.__mro__:
-        module = getattr(klass, "__module__", "") or ""
-        if klass is object or klass in LiveView.__mro__:
-            continue
-        if (module == "djust" or module.startswith("djust.")) and ".tests" not in module:
-            continue  # a framework mixin, not app code
-        for name, member in vars(klass).items():
-            if name.startswith("_") or name in framework_names or name in declared:
-                continue
-            # A static or class method is dispatched like any other callable;
-            # any decorator other than @event_handler leaves it undeclared.
-            function = (
-                member.__func__ if isinstance(member, (staticmethod, classmethod)) else member
-            )
-            if not inspect.isfunction(function) or is_event_handler(function):
-                continue
-            if is_push_only(cls, name, function):
-                continue  # refused to a client in every mode (#3002)
-            if name not in names:
-                names.append(name)
-    return sorted(names)
-
-
-def _warn_unfuzzed_methods(cls: Type[Any]) -> None:
-    """Warn once per view class about reachable methods the fuzzer skips (#3126)."""
-    import warnings
-
-    if cls in _UNFUZZED_WARNED:
-        return
-    names = _unfuzzed_reachable_methods(cls)
-    if not names:
-        return
-    _UNFUZZED_WARNED.add(cls)
-    warnings.warn(
-        "%s.%s: %s %s not decorated with @event_handler, so LiveViewSmokeTest does "
-        'not fuzz %s, but event_security is not "strict" and a client can still '
-        "call %s. Decorate %s or test %s directly."
-        % (
-            cls.__module__,
-            cls.__qualname__,
-            ", ".join(names),
-            "is" if len(names) == 1 else "are",
-            "it" if len(names) == 1 else "them",
-            "it" if len(names) == 1 else "them",
-            "it" if len(names) == 1 else "them",
-            "it" if len(names) == 1 else "them",
-        ),
-        UserWarning,
-        stacklevel=3,
-    )
-
-
 def _make_fuzz_params(handler_meta: Dict[str, Any]) -> Iterator[Tuple[str, Dict[str, Any]]]:
     """Generate fuzz parameter dicts for a handler based on its signature.
 
@@ -2288,10 +2223,8 @@ class LiveViewSmokeTest:
         - test_fuzz_no_unhandled_crash: Fuzz payloads don't escape send_event()
         - test_fuzz_handlers_succeed: Handlers handle all fuzz input gracefully (no exceptions)
 
-    Fuzzing covers the ``@event_handler`` handlers dispatch resolves in every
-    ``event_security`` mode. Under ``"warn"`` or ``"open"`` an undecorated public
-    method stays callable by a client but is not fuzzed; the fuzz tests emit one
-    ``UserWarning`` per view that has any (#3126).
+    Fuzzing covers the ``@event_handler`` handlers, which are everything a
+    client event can call (#4101).
     """
 
     # Override in subclass
@@ -2583,7 +2516,6 @@ class LiveViewSmokeTest:
 
         for view_class in views:
             view_name = f"{view_class.__module__}.{view_class.__name__}"
-            _warn_unfuzzed_methods(view_class)
             handlers = _get_handlers(view_class)
             if not handlers:
                 continue
@@ -2628,7 +2560,6 @@ class LiveViewSmokeTest:
 
         for view_class in views:
             view_name = f"{view_class.__module__}.{view_class.__name__}"
-            _warn_unfuzzed_methods(view_class)
             handlers = _get_handlers(view_class)
             if not handlers:
                 continue
@@ -2668,7 +2599,6 @@ class LiveViewSmokeTest:
 
         for view_class in views:
             view_name = f"{view_class.__module__}.{view_class.__name__}"
-            _warn_unfuzzed_methods(view_class)
             handlers = _get_handlers(view_class)
             if not handlers:
                 continue

@@ -29,7 +29,11 @@ def establish_mount_session(
 
     - Only a key that was PRESENT and is now missing is replaced. A request
       with no session key at all is left exactly as before (the binding
-      refuses it), so a cookieless socket cannot mint sessions.
+      refuses it), so a cookieless socket cannot mint sessions. A socket
+      presenting a key the store does not have (any value Django accepts as
+      a key, 8+ characters) gets one replacement session row, as an HTTP GET
+      with that cookie gets a new session; the key may come from the cookie
+      even when the connect-time read already cleared it (#4102).
     - A session the store still has keeps its identity, whoever it belongs
       to. The replacement key is server-generated, so a client cannot fix it.
     - ``replacement`` is the key this connection already created for the same

@@ -384,6 +384,36 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 ---
 
+### C031: Session store local to one process
+
+**Severity**: Warning
+
+**What causes it**: Sessions are stored in a `LocMemCache` (or `DummyCache`) through the `cache` or `cached_db` engine, with `DEBUG = False`. Each process has its own copy, so a page served by another process loses the view's saved state.
+
+**Fix**: Use a session store every process shares: the `db` engine, `cached_db` or `cache` over Redis or Memcached, or `file` on shared storage. If the site really runs one process, suppress the check.
+
+---
+
+### C032: In-memory channel layer
+
+**Severity**: Warning
+
+**What causes it**: `CHANNEL_LAYERS` uses an in-memory layer with `DEBUG = False`. Server pushes, broadcasts and presence updates reach only the sockets of the process that sent them.
+
+**Fix**: Use `channels_redis.core.RedisChannelLayer` (or another shared layer) when the site runs more than one process. See [Scaling](scaling.md).
+
+---
+
+### C033: Presence counted per process
+
+**Severity**: Warning
+
+**What causes it**: A view uses `PresenceMixin` with the in-memory presence backend and `DEBUG = False`. With more than one process, each counts only its own users.
+
+**Fix**: Set `DJUST_CONFIG['PRESENCE_BACKEND'] = 'redis'` (or `'tenant_redis'`) together with a shared channel layer.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error
@@ -534,7 +564,7 @@ def mount(self, request, **kwargs):
 
 **Severity**: Info
 
-**What causes it**: A public method name matches event handler naming patterns (e.g., `on_*`, `toggle_*`, `select_*`, `update_*`, `delete_*`, `create_*`, `add_*`, `remove_*`, `save_*`, `cancel_*`, `submit_*`, `close_*`, `open_*`) but is not decorated with `@event_handler`. `handle_*` methods and methods marked `@push_handler` are not flagged: an undecorated `handle_*` method is a push target that browsers cannot call under the default `strict` mode, and `@push_handler` marks a method that only server push may call in every `event_security` mode.
+**What causes it**: A public method name matches event handler naming patterns (e.g., `on_*`, `toggle_*`, `select_*`, `update_*`, `delete_*`, `create_*`, `add_*`, `remove_*`, `save_*`, `cancel_*`, `submit_*`, `close_*`, `open_*`) but is not decorated with `@event_handler`. `handle_*` methods and methods marked `@push_handler` are not flagged: an undecorated `handle_*` method is a push target that browsers cannot call, and `@push_handler` marks a method that only server push may call.
 
 Without the decorator, the method cannot be called from templates via `dj-click` or other directives.
 
@@ -783,7 +813,7 @@ never reused. Existing suppressions of V020 have no effect and can be removed.
 
 **Severity**: Info; Warning when the override carries `@event_handler`
 
-**What causes it**: A subclass (or a class that shadows a mixin's method) defines a method whose name a base defines with `@push_handler`, without re-applying the marker. The marker is inherited by method name, so the override is still refused to browsers in every `event_security` mode and server push still reaches it. Message: "<view>.<name>() overrides a @push_handler method without the marker; it is still push-only (the marker is inherited by name)." If the override has `@event_handler` the message says browsers are still refused: the decorator cannot make the name browser-callable.
+**What causes it**: A subclass (or a class that shadows a mixin's method) defines a method whose name a base defines with `@push_handler`, without re-applying the marker. The marker is inherited by method name, so the override is still refused to browsers and server push still reaches it. Message: "<view>.<name>() overrides a @push_handler method without the marker; it is still push-only (the marker is inherited by name)." If the override has `@event_handler` the message says browsers are still refused: the decorator cannot make the name browser-callable.
 
 **Fix**: Add `@push_handler` to the override. For the `@event_handler` case, remove the decorator, or rename the method if a browser should be able to call it.
 
@@ -851,13 +881,13 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Fix**: Move the view to explicit exposure and delete the line; `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](migrating-to-2.0.md#1-move-each-view-to-explicit-exposure). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V028"]}`.
 
-### V029: a handler changes a value a later event reads, and the fallback does not keep it
+### V029: a handler changes a `persist=False` field a later event reads
 
 **Severity**: Warning
 
-**What causes it**: An event handler of an explicit view changes `self.count` (`self.count += 1`, `self.items.append(...)`, or a value another handler or `get_context_data()` reads), and `count` is either not declared state or a `state()` field without `persist`. On the HTTP fallback each event mounts a new view, so the change is lost there; over a WebSocket it is kept. Message: "<view> increment() changes self.count, which a later event reads, but it is not declared state: on the HTTP fallback each event builds a new view and runs mount() again, so the change is lost there (over a WebSocket it is kept)."
+**What causes it**: An event handler of an explicit view reads and then changes a `state()` field declared `persist=False` (`self.count += 1`). That field is not saved between requests, so on the HTTP fallback, where each event rebuilds the view from its saved state, and after a reconnect, the change is lost; within one WebSocket connection it is kept. Message: "<view> increment() changes state() field count, which a later event reads, but it is declared persist=False: it is not saved, so on the HTTP fallback and after a reconnect the change is lost (within one WebSocket connection it is kept)."
 
-**Fix**: Declare it on the class: `count = state(0, persist="server")`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V029"]}`.
+**Fix**: Remove `persist=False`: the field is then saved with the rest of the view's state. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V029"]}`.
 
 <!-- END GENERATED check-sections:V -->
 

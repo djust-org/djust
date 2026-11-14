@@ -70,6 +70,7 @@ class LiveViewSSE {
         const urlParams = new URLSearchParams(params);
         urlParams.set('view', viewPath);
         urlParams.set('_djust_url', window.location.pathname);
+        urlParams.set('_djust_tab', djustTabId());
         // #2966: dj-track-static. The stream GET is the mount, and an
         // EventSource auto-reconnect re-requests this same URL, so the page's
         // tracked asset URLs ride it (a POSTed mount frame would be a no-op).
@@ -474,6 +475,7 @@ class LiveViewSSE {
             type: 'mount',
             view: viewPath,
             params,
+            tab: djustTabId(),
             url: window.location.pathname,
             has_prerendered: options.hasPrerendered ?? false,
             client_timezone: clientTimezone,
@@ -588,6 +590,7 @@ class LiveViewSSE {
             type: 'mount',
             view: viewPath,
             params,
+            tab: djustTabId(),
             url: window.location.pathname,
             has_prerendered: false,
             client_timezone: tz,

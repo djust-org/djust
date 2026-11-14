@@ -680,14 +680,13 @@ def push_handler(func: Optional[F] = None) -> Any:
     ``push_to_view(..., handler="name")`` / ``server_push`` call a method when
     it is ``handle_*``-prefixed or an ``@event_handler``. Neither fits a
     handler that only the server may trigger: ``@event_handler`` makes it a
-    browser event target, and an undecorated ``handle_*`` method is refused to
-    browsers only under ``event_security = "strict"`` (``"warn"`` and
-    ``"open"`` let a browser call it). ``@push_handler`` is the explicit
-    marker. A marked method:
+    browser event target, and an undecorated ``handle_*`` method, though refused
+    to browsers, does not say that only the server may call it.
+    ``@push_handler`` is the explicit marker. A marked method:
 
     * is a valid server-push target under ANY name (``handle_*`` prefix not
       required);
-    * is refused to a browser event in every ``event_security`` mode, on every
+    * is refused to a browser event, even under an ``@event_handler`` override, on every
       transport (WebSocket, SSE, HTTP POST fallback, HTTP API), exactly as if
       the method did not exist;
     * is not an event handler: it is not listed in the view schema, audit or

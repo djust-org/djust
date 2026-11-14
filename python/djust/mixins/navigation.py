@@ -105,6 +105,11 @@ class NavigationMixin:
         }
         if params is not None:
             nav["params"] = params
+            # The page's URL is now this one: the state this turn saves is
+            # saved under it (#4107).
+            from .._automatic_state import note_patched_url
+
+            note_patched_url(self, params)
         if path is not None:
             nav["path"] = path
         self._pending_navigation.append(nav)

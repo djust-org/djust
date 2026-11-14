@@ -170,13 +170,10 @@ class LiveViewConfig:
         # How many views one WebSocket may host besides the page view: the
         # ``dj-lazy`` and ``mount_batch`` views, each a view of its own (#3252).
         "max_views_per_connection": 64,
-        # Event security mode: "open", "warn", or "strict"
-        # "open"   - no decorator check (legacy behavior)
-        # "warn"   - allow unmarked methods but log deprecation warning
-        # "strict" - only @event_handler decorated methods
-        "event_security": "strict",
+        # ``event_security`` was removed in 2.0 (#4101): only @event_handler
+        # methods are client events, on every transport. "open" / "warn" fail
+        # startup (``djust._removed_settings``); "strict" is accepted and ignored.
         # ADR-036: opt-in predictable signature binding and bounded conversion.
-        # Distinct from event_security, which controls callable authorization.
         "event_parameter_policy": "legacy",
         # LiveView transport mode
         "use_websocket": True,  # Set to False to use HTTP polling instead of WebSocket
@@ -519,7 +516,7 @@ class LiveViewConfig:
             # ``DJUST_CONFIG`` dict as a fallback. The two dicts are defined in
             # the same module and easy to confuse — ``DJUST_CONFIG`` already
             # backs tenancy/presence/state-backend/suppress_checks — so a
-            # ``max_message_size`` / ``rate_limit`` / ``event_security`` set
+            # ``max_message_size`` / ``rate_limit`` set
             # there was a SILENT no-op (this method only read ``LIVEVIEW_CONFIG``).
             # Adopt only keys that are genuine LiveView config keys (present in
             # the defaults) so unrelated tenancy/presence keys aren't pulled in;
@@ -641,16 +638,6 @@ class LiveViewConfig:
         ``target`` is omitted)."""
         if target is None:
             target = self._config
-        valid_modes = ("open", "warn", "strict")
-        mode = target.get("event_security")
-        if mode not in valid_modes:
-            logger.warning(
-                "Invalid event_security mode %r (must be one of %s). Falling back to 'strict'.",
-                mode,
-                valid_modes,
-            )
-            target["event_security"] = "strict"
-
         # A limit that is not a non-negative integer is the default, never "no limit" (#3834).
         self._validate_form_limits(target)
         self._validate_status_map(target)
@@ -698,11 +685,6 @@ class LiveViewConfig:
                     "%s is 0 (no limit) with DEBUG=False. "
                     "A client can grow a form's data without bound across events.",
                     ", ".join(unlimited),
-                )
-            if target.get("event_security") == "open":
-                logger.warning(
-                    "event_security is 'open' with DEBUG=False. "
-                    "Consider using 'warn' or 'strict' in production."
                 )
 
     def get(self, key: str, default: Any = None) -> Any:

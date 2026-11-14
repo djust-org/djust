@@ -390,16 +390,17 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
     it does not copy the algorithm. Its small-corpus tests compare this probe
     against normal --splits/--group CLI invocations.
 
-    It collects the whole suite, which the local load guard refuses outside CI, so a
-    local run without ``DJUST_FULL_LOCAL=1`` skips here instead of failing with the
-    guard's refusal (#4089). ``make test-early`` and CI set the variable.
+    It collects the whole suite, which the local load guard refuses outside GitHub
+    Actions, so a local run skips here instead of failing with the guard's refusal
+    (#4089). Since #4111 only ``GITHUB_ACTIONS=true`` lifts the guard; a bare ``CI`` or
+    ``DJUST_FULL_LOCAL`` no longer does, so the pin runs on every PR's CI.
     """
     from tests import local_load_guard
 
     if local_load_guard.active():
         pytest.skip(
-            "collects the whole suite, which the local load guard refuses: set CI=1 or "
-            "DJUST_FULL_LOCAL=1 to run it (make test-early sets DJUST_FULL_LOCAL=1)"
+            "collects the whole suite, which the local load guard refuses outside GitHub "
+            "Actions: it runs in CI (GITHUB_ACTIONS=true) on every pull request (#4111)"
         )
     output = tmp_path / "shards.json"
     assert DURATIONS_TEXT is not None, ".test_durations is missing"
@@ -507,12 +508,14 @@ def test_shard_balance_pin_skips_locally_naming_the_variable(tmp_path: Path, mon
     refusal, which reads like a real failure. Gate-off: without the skip the call
     below runs the probe, which the guard refuses, and the assertion fails.
     """
+    # On a GitHub runner GITHUB_ACTIONS=true is in the environment: take it out, or
+    # the guard is off and the pin runs the whole probe instead of skipping (#4111).
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.delenv("DJUST_FULL_LOCAL", raising=False)
     with pytest.raises(pytest.skip.Exception) as skipped:
         test_shards_cover_current_collection_with_balanced_durations(tmp_path)
-    assert "DJUST_FULL_LOCAL=1" in str(skipped.value)
-    assert "CI=1" in str(skipped.value)
+    assert "GITHUB_ACTIONS=true" in str(skipped.value)
 
 
 @pytest.mark.parametrize("target", ["merge-gates", "test-harness", "test-early"])
