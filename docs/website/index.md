@@ -96,6 +96,7 @@ How to build specific features.
 | **[Deployment](guides/deployment.md)**                    | Deploy to production (uvicorn, nginx, Docker)      |
 | **[djust-deploy CLI](guides/djust-deploy.md)**            | Deploy to djustlive.com from the command line      |
 | **[What Survives a Second Process](guides/state-survival.md)** | Tested table: what a view keeps across a reconnect, a restart and another process |
+| **[The State Store](state/state-store.md)** | Keep saved view state out of the plain session: the sealed store, or your own |
 | **[Template Cheat Sheet](guides/template-cheatsheet.md)** | Quick reference for all directives and filters     |
 | **[PWA](guides/pwa.md)**                                  | Build offline-first Progressive Web Apps           |
 | **[Service Worker](guides/service-worker.md)**            | Instant page shell + WebSocket reconnection bridge |

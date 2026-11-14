@@ -202,6 +202,7 @@ def _as_caller(user_id):
   | `"render"` | every call djust makes to `get_context_data()`, on every transport |
   | `"auth"` | an authorization decision that runs your code: `check_permissions()`, Django's access mixins and replayed `dispatch` decorators (`test_func`), `@permission_required` on a handler, and the object-permission check (`get_object()` + `has_object_permission()`) |
   | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the signed client snapshot's restore gate (`_should_restore_snapshot()`), the restore of a legacy lazy child's private state (`_restore_private_state()`, which re-fetches private model references; a guarded step, so a wrapper that swallows a failure cannot leave a half-restored view), and a released view's teardown hooks **only when they run on a worker thread**; on the event loop they run with no step (see [Not wrapped](#not-wrapped)) |
+  | `"state_store"` | a call into the project's [state store](../state/state-store.md) (`DJUST_STATE_STORE`): the load of a view's saved state, its save after a turn, and the deletion of evicted states. Entered only when a store outside the session is configured (new with #4132) |
 - `view` is the view or component whose code runs; `turn` is
   `djust.turns.current_turn()`, or `None` when the step runs outside a turn (a
   `start_async` callback runs between its start and result turns).
@@ -272,7 +273,8 @@ A wrapper that accepts every step name, today's and any added later:
 ```python
 from contextlib import nullcontext
 
-KNOWN = {"event", "mount", "handle_params", "hook", "async", "tick", "render", "auth", "lifecycle"}
+KNOWN = {"event", "mount", "handle_params", "hook", "async", "tick", "render", "auth", "lifecycle",
+         "state_store"}
 
 def caller_scope(view, step, turn):
     if step not in KNOWN:
