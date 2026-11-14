@@ -334,9 +334,13 @@ class TestOneStringifyMechanism:
             for line in src.split("#[cfg(test)]")[0].splitlines()
             if not line.lstrip().startswith("//")
         )
-        assert code.count(".py_str()") == 2, (
-            "expected exactly two `py_str` call sites in filters.rs (the "
-            f"`@stringfilter` coercion and `safeseq`), found {code.count('.py_str()')}"
+        # Three since #4005's review kept `escape` native: Django's
+        # `conditional_escape` is `str(value)` for a non-`SafeData` object, so
+        # `escape` reads the same one spelling rather than a copy of it.
+        assert code.count(".py_str()") == 3, (
+            "expected exactly three `py_str` call sites in filters.rs (the "
+            "`@stringfilter` coercion, `safeseq` and `escape`), found "
+            f"{code.count('.py_str()')}"
         )
 
     def test_safeseq_maps_its_items_through_py_str(self) -> None:

@@ -1433,13 +1433,25 @@ fn apply_builtin_filter(
         // through), `force_escape` is `escape` (a `SafeString` is escaped
         // AGAIN). `{{ p|safe|escape }}` and `{{ p|safe|force_escape }}` are
         // the cells that tell them apart.
-        "escape" => filter_registry::apply_django_builtin_filter(
-            filter_name,
-            value,
-            django_filter_arg(arg, resolved_arg),
-            autoescape,
-            input_safety,
-        ),
+        //
+        // Native, not routed (#4005 review): `|escape` is a common habit, and a
+        // Python call per value cost 2.8x on a 500-row LiveView render. It is
+        // byte-identical to Django's `escape_filter`, which is
+        // `conditional_escape(value)` and therefore `str(value)` for a
+        // non-`SafeData` object: a `Decimal` / `float` is spelled by `str()`
+        // (`1E-9`, `1e+20`), not by the render form, which is what `py_str`
+        // answers. Pinned against Django by the randomized differential in
+        // `python/tests/test_routed_cold_filters_4005.py`.
+        "escape" => {
+            let text = value.py_str();
+            Ok(Value::String(
+                if input_safety.container || value.is_safe_string() {
+                    text
+                } else {
+                    html_escape(&text)
+                },
+            ))
+        }
         // Django's `mark_safe(obj)` is `SafeString(str(obj))` — it does not
         // merely MARK the value, it changes its TYPE before the rest of the
         // chain sees it. So `|safe` is a stringify, for every variant, and the
@@ -2045,18 +2057,21 @@ fn apply_builtin_filter(
             let spec = arg.unwrap_or("s");
             Ok(Value::String(crate::stringformat::apply(value, spec)))
         }
-        // `arg if value is None else value`, Django's own (#4005). The input
-        // comes back as itself (identity). A resolved argument never gets
-        // here when the fallback fires: `apply_resolved_filter` answers it
-        // with the argument's own `Value`.
-        "default_if_none" => filter_registry::apply_django_builtin_filter_keeping(
-            filter_name,
-            value,
-            None,
-            django_filter_arg(arg, resolved_arg),
-            autoescape,
-            input_safety,
-        ),
+        // Native, not routed (#4005 review): `default_if_none` runs per column
+        // header in `djust_components/table.html`, and a Python call per value
+        // cost 1.8x there.
+        //
+        // Fallback only when the value is None — never for an empty string,
+        // and never for `Missing`: Django substitutes `string_if_invalid` ("")
+        // for an absent variable BEFORE the filter runs, so the filter never
+        // sees None there and returns "" rather than the fallback (#2203
+        // review). A resolved (unquoted) argument never gets here when the
+        // fallback fires: `apply_resolved_filter` answers it with the
+        // argument's own `Value`.
+        "default_if_none" => match value {
+            Value::None => Ok(Value::String(arg.unwrap_or("").to_string())),
+            _ => Ok(value.clone()),
+        },
         "wordcount" => filter_registry::apply_django_builtin_filter(
             filter_name,
             value,
@@ -2250,13 +2265,9 @@ fn apply_builtin_filter(
             // force_escape filter: always HTML-escape (unlike escape which is a no-op)
             Ok(Value::String(html_escape(&value.to_string())))
         }
-        "escapejs" => filter_registry::apply_django_builtin_filter(
-            filter_name,
-            value,
-            django_filter_arg(arg, resolved_arg),
-            autoescape,
-            input_safety,
-        ),
+        // Native, not routed (#4005 review): see `escape_js` for the table,
+        // which is Django's `_js_escapes` exactly.
+        "escapejs" => Ok(Value::String(escape_js(&value.to_string()))),
         "linenumbers" => filter_registry::apply_django_builtin_filter(
             filter_name,
             value,
@@ -5618,6 +5629,36 @@ mod float_sink_set {
     }
 }
 
+/// Django's `escapejs`: `str(value).translate(_js_escapes)`, exactly.
+///
+/// The table is Django's own: the eleven punctuation characters, U+2028 /
+/// U+2029, and EVERY control character below U+0020 as `\uXXXX` (upper-case
+/// hex). The port this replaces escaped only `\n`, `\r`, `\t` and `\0` of the
+/// controls and left the backtick raw, which closes a template literal (#4005
+/// review).
+fn escape_js(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => result.push_str("\\u005C"),
+            '\'' => result.push_str("\\u0027"),
+            '"' => result.push_str("\\u0022"),
+            '>' => result.push_str("\\u003E"),
+            '<' => result.push_str("\\u003C"),
+            '&' => result.push_str("\\u0026"),
+            '=' => result.push_str("\\u003D"),
+            '-' => result.push_str("\\u002D"),
+            ';' => result.push_str("\\u003B"),
+            '`' => result.push_str("\\u0060"),
+            '\u{2028}' => result.push_str("\\u2028"),
+            '\u{2029}' => result.push_str("\\u2029"),
+            '\u{0}'..='\u{1f}' => result.push_str(&format!("\\u{:04X}", c as u32)),
+            _ => result.push(c),
+        }
+    }
+    result
+}
+
 /// `str(int(value))`, or `None` where Python's `int()` would raise.
 ///
 /// ONE definition for every filter that needs Python's `int()` — `add`,
@@ -6893,9 +6934,11 @@ mod tests {
             matches!(&got, Value::String(s) if s == "1E-9"),
             "|safe gave {got:?}"
         );
-        // The `escape` row needs an interpreter since #4005 (Django's own
-        // `escape_filter`, which answers `1E-9`); it is pinned against Django in
-        // `python/tests/test_string_filter_stringification_2250.py`.
+        // `escape` is not a stringfilter, but Django's `conditional_escape` is
+        // `str(value)` for a non-`SafeData` object, so it spells the `Decimal`
+        // as `str()` does too (#4005 review).
+        let got = apply_filter("escape", &value, None).unwrap();
+        assert_eq!(got.to_string(), "1E-9", "|escape gave {got:?}");
     }
 
     /// `|safe` is `SafeString(str(value))` for EVERY variant (#2303).
@@ -7377,9 +7420,20 @@ mod tests {
     #[test]
     fn escape_does_not_double_escape_a_safe_value() {
         let value = Value::String("<b>hi</b>".to_string());
-        // The `escape` half (a safe value passes through) needs an interpreter
-        // since #4005 and is pinned in
-        // `python/tests/test_routed_cold_filters_4005.py`.
+        let (got, _) = apply_filter_full_safe(
+            "escape",
+            &value,
+            None,
+            None,
+            true,
+            InputSafety {
+                container: true,
+                items: false,
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(got.to_string(), "<b>hi</b>");
         // `force_escape` is `escape()`, not `conditional_escape()` — it escapes
         // a `SafeString` too. That is the entire difference between the two.
         let (got, _) = apply_filter_full_safe(
@@ -7396,6 +7450,82 @@ mod tests {
         )
         .unwrap();
         assert_eq!(got.to_string(), "&lt;b&gt;hi&lt;/b&gt;");
+    }
+
+    #[test]
+    fn test_default_if_none_with_null() {
+        // `None` fires the fallback; `Missing` (an ABSENT variable) does not —
+        // Django substitutes "" for it before the filter runs (#2203).
+        let none = apply_filter("default_if_none", &Value::None, Some("NA")).unwrap();
+        assert_eq!(none.to_string(), "NA");
+        let missing = apply_filter("default_if_none", &Value::Missing, Some("NA")).unwrap();
+        assert_eq!(missing.to_string(), "");
+    }
+
+    #[test]
+    fn test_default_if_none_with_empty_string() {
+        let value = Value::String("".to_string());
+        let result = apply_filter("default_if_none", &value, Some("fallback")).unwrap();
+        assert_eq!(result.to_string(), "");
+    }
+
+    #[test]
+    fn test_default_if_none_with_value() {
+        let value = Value::String("hello".to_string());
+        let result = apply_filter("default_if_none", &value, Some("fallback")).unwrap();
+        assert_eq!(result.to_string(), "hello");
+    }
+
+    /// `escape` is EAGER — `conditional_escape`, exactly as Django registers it
+    /// (#2281). It was a no-op deferring to render-time auto-escaping, which is
+    /// indistinguishable for `{{ p|escape }}` alone and wrong for every chain:
+    /// the next filter saw the raw value, and `{{ p|escape|safe }}` emitted it.
+    #[test]
+    fn test_escape_filter_escapes_eagerly() {
+        let value = Value::String("<script>alert('xss')</script>".to_string());
+        let result = apply_filter("escape", &value, None).unwrap();
+        assert_eq!(
+            result.to_string(),
+            "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+        );
+    }
+
+    #[test]
+    fn test_escapejs_filter() {
+        let value = Value::String("hello\\world".to_string());
+        let result = apply_filter("escapejs", &value, None).unwrap();
+        assert!(result.to_string().contains("\\u005C"));
+
+        let value = Value::String("it's \"quoted\"".to_string());
+        let result = apply_filter("escapejs", &value, None).unwrap();
+        assert!(result.to_string().contains("\\u0027"));
+        assert!(result.to_string().contains("\\u0022"));
+
+        let value = Value::String("line1\nline2\ttab".to_string());
+        let result = apply_filter("escapejs", &value, None).unwrap();
+        assert!(result.to_string().contains("\\u000A"));
+        assert!(result.to_string().contains("\\u0009"));
+
+        // Test U+2028/U+2029 (line/paragraph separators)
+        let value = Value::String("a\u{2028}b\u{2029}c".to_string());
+        let result = apply_filter("escapejs", &value, None).unwrap();
+        assert!(result.to_string().contains("\\u2028"));
+        assert!(result.to_string().contains("\\u2029"));
+    }
+
+    /// Django's `_js_escapes` exactly (#4005 review): the backtick, which
+    /// closes a template literal, and EVERY control character below U+0020,
+    /// not only `\n` / `\r` / `\t` / `\0`.
+    #[test]
+    fn test_escapejs_escapes_the_backtick_and_every_control_character() {
+        let value = Value::String("a`b".to_string());
+        let result = apply_filter("escapejs", &value, None).unwrap();
+        assert_eq!(result.to_string(), "a\\u0060b");
+        for code in 0u32..0x20 {
+            let c = char::from_u32(code).unwrap();
+            let result = apply_filter("escapejs", &Value::String(c.to_string()), None).unwrap();
+            assert_eq!(result.to_string(), format!("\\u{code:04X}"), "U+{code:04X}");
+        }
     }
 
     #[test]

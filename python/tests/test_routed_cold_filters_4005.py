@@ -1,27 +1,28 @@
-"""Eleven cold built-in filters run Django's own functions (#4005).
+"""Eight cold built-in filters run Django's own functions (#4005); four stay native.
 
-``cut``, ``last``, ``random``, ``default_if_none``, ``escape``, ``escapejs``,
-``dictsort``, ``dictsortreversed``, ``ljust``, ``rjust`` and ``center`` now call
-``django.template.defaultfilters.<name>`` through the same bridge #3549 and
-#3551 built, instead of a Rust port of each. ``force_escape`` is NOT routed: it
-is no longer cold (every hybrid-template attribute slot ends in it, including
-per-row slots of the data table), so it stays native.
+``cut``, ``last``, ``random``, ``dictsort``, ``dictsortreversed``, ``ljust``,
+``rjust`` and ``center`` call ``django.template.defaultfilters.<name>`` through
+the bridge #3549 and #3551 built, instead of a Rust port of each. ``escape``,
+``escapejs``, ``default_if_none`` and ``force_escape`` stay native because they
+are not cold: a Python call per value cost 1.8-2.9x on a 500-row LiveView
+render for the first three, and every hybrid-template attribute slot ends in
+``force_escape``.
 
-What this file proves, per routed filter:
+What this file proves, per filter in ``CASES`` (routed AND native):
 
 * **Byte-identical to Django** over a seeded randomized sweep of values and
   arguments — quoted, unquoted and variable arguments, ``SafeData`` input, and
-  the chains that tell ``escape`` from ``force_escape`` — rendered through
-  ``_rust.render_template`` AND a ``RustLiveView``, the two engine entry points.
-  An exception is compared as "both raise", since a template that raises in
-  Django must not render in djust either.
+  the chains that tell ``escape`` from ``force_escape`` or show whether a result
+  is safe — rendered through ``_rust.render_template`` AND a ``RustLiveView``,
+  the two engine entry points. An exception is compared as "both raise", since
+  a template that raises in Django must not render in djust either.
 * **The caps stay.** ``ljust`` / ``rjust`` / ``center`` refuse a width past
   ``MAX_PAD_WIDTH`` with the same message as before, without asking Python to
   allocate it; ``dictsort`` over a carried collection walks it through the
   ``OPAQUE_ITEM_CAP`` bound first and raises past it.
 * **What djust carries survives.** The routed ``last`` / ``random`` /
-  ``dictsort`` / ``default_if_none`` hand back djust's own values by identity,
-  so a row picked out of a list keeps its attributes for the next lookup.
+  ``dictsort`` hand back djust's own values by identity, so a row picked out of
+  a list keeps its attributes for the next lookup.
 """
 
 from __future__ import annotations
@@ -190,6 +191,8 @@ CASES: dict[str, list[Case]] = {
         ("{{ p|default_if_none:0 }}", lambda r: {"p": _scalar(r)}, False),
         ("{{ p|default_if_none:q }}", lambda r: {"p": _scalar(r), "q": _scalar(r)}, False),
         ('{{ p|default_if_none:"x"|upper }}', lambda r: {"p": _scalar(r)}, False),
+        ('{{ p|default_if_none:"<i>"|force_escape }}', lambda r: {"p": _scalar(r)}, False),
+        ("{{ p|safe|default_if_none:q }}", lambda r: {"p": _scalar(r), "q": _scalar(r)}, False),
         (
             "{% if p|default_if_none:0 %}T{% else %}F{% endif %}",
             lambda r: {"p": _scalar(r)},
@@ -202,6 +205,8 @@ CASES: dict[str, list[Case]] = {
         ("{{ p|safe|escape }}", lambda r: {"p": _text(r)}, False),
         ("{{ p|escape|safe }}", lambda r: {"p": _text(r)}, False),
         ("{{ p|escape|escape }}", lambda r: {"p": _text(r)}, False),
+        ("{{ p|escape|force_escape }}", lambda r: {"p": _any_value(r)}, False),
+        ("{{ p|safe|escape|upper }}", lambda r: {"p": _scalar(r)}, False),
         (
             "{% autoescape off %}{{ p|escape }}{% endautoescape %}",
             lambda r: {"p": _text(r)},
@@ -210,6 +215,8 @@ CASES: dict[str, list[Case]] = {
     ],
     "escapejs": [
         ("{{ p|escapejs }}", lambda r: {"p": _scalar(r)}, False),
+        ("{{ p|escapejs|safe }}", lambda r: {"p": _text(r) + "`"}, False),
+        ("{{ p|escapejs|upper }}", lambda r: {"p": _scalar(r)}, False),
         ("{{ p|safe|escapejs }}", lambda r: {"p": _text(r)}, False),
         (
             "{% autoescape off %}{{ p|escapejs }}{% endautoescape %}",
@@ -255,7 +262,7 @@ CASES: dict[str, list[Case]] = {
     },
 }
 
-ROUTED = sorted(CASES)
+ROUTED = sorted(CASES)  # routed and native alike: every filter #4005 names
 
 
 def _materialize(source: str, rng: random.Random) -> str:
@@ -426,3 +433,29 @@ def test_escape_then_safe_never_uncovers_live_markup() -> None:
     out = _rust.render_template("{{ html|escape|safe }}", {"html": "<img src=x onerror=alert(1)>"})
     assert "<img" not in out
     assert out == "&lt;img src=x onerror=alert(1)&gt;"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("filter_name", ["dictsort", "dictsortreversed"])
+def test_a_raw_model_list_is_not_ordered_by_a_floor_field(filter_name: str) -> None:
+    """Raw `User` objects straight into the engine, with no `normalize_django_value`
+    in front: the sort must not order rows by `password` (a ranking of hashes is a
+    disclosure). Django sorts by it; djust renders the empty loop."""
+    from django.contrib.auth.models import User
+
+    # Usernames in the OPPOSITE order to the password hashes, so an order that
+    # followed the password is visible.
+    User.objects.create(username="a", password="pbkdf2$z")
+    User.objects.create(username="b", password="pbkdf2$y")
+    User.objects.create(username="c", password="pbkdf2$x")
+    rows = list(User.objects.order_by("username"))
+    source = "{% for u in rows|" + filter_name + ":'password' %}[{{ u.username }}]{% endfor %}"
+    by_password = DjangoTemplate(source).render(DjangoContext({"rows": rows}))
+    assert by_password in ("[c][b][a]", "[a][b][c]"), by_password
+    got = _rust.render_template(source, {"rows": rows})
+    assert got == "", got
+    # Non-vacuity: a readable column sorts.
+    readable = "{% for u in rows|" + filter_name + ":'username' %}[{{ u.username }}]{% endfor %}"
+    assert _rust.render_template(readable, {"rows": rows}) == DjangoTemplate(readable).render(
+        DjangoContext({"rows": rows})
+    )

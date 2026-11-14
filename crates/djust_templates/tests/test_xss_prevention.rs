@@ -186,10 +186,132 @@ fn html_escape_in_if_block() {
 // 2. JavaScript Context Escaping (|escapejs filter)
 // ===========================================================================
 
-// `escapejs` runs Django's own function since #4005, which needs an
-// interpreter: these cases moved to
-// `python/tests/test_routed_cold_filters_4005.py::test_escapejs_neutralizes_every_js_breakout`,
-// which renders each through the engine and checks it against Django too.
+#[test]
+fn escapejs_script_injection() {
+    let ctx = ctx_with("input", "</script><script>alert(1)</script>");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(!result.contains("</script>"));
+    assert!(result.contains("\\u003C"));
+    assert!(result.contains("\\u003E"));
+}
+
+#[test]
+fn escapejs_quote_breaking() {
+    let ctx = ctx_with("input", "'; alert('xss'); //");
+    let result = render("{{ input|escapejs }}", &ctx);
+    // The single quotes are escaped to \\u0027 preventing string breakout.
+    // The word "alert" may still appear as text, but the quotes around it
+    // are escaped so it cannot execute as code.
+    assert!(result.contains("\\u0027"));
+    assert!(!result.contains("'"));
+}
+
+#[test]
+fn escapejs_double_quote_breaking() {
+    let ctx = ctx_with("input", "\"; alert(\"xss\"); //");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(result.contains("\\u0022"));
+    assert!(!result.contains("alert(\"xss\")"));
+}
+
+#[test]
+fn escapejs_backslash_escape() {
+    let ctx = ctx_with("input", "\\'; alert(1); //");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(result.contains("\\u005C"));
+    assert!(result.contains("\\u0027"));
+}
+
+#[test]
+fn escapejs_newline_injection() {
+    // Newlines in JS strings can break out of string context
+    let ctx = ctx_with("input", "line1\nline2");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(!result.contains('\n'));
+    assert!(result.contains("\\u000A"));
+}
+
+#[test]
+fn escapejs_carriage_return() {
+    let ctx = ctx_with("input", "line1\rline2");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(!result.contains('\r'));
+    assert!(result.contains("\\u000D"));
+}
+
+#[test]
+fn escapejs_tab() {
+    let ctx = ctx_with("input", "col1\tcol2");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(!result.contains('\t'));
+    assert!(result.contains("\\u0009"));
+}
+
+#[test]
+fn escapejs_null_byte() {
+    let ctx = ctx_with("input", "null\0byte");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(result.contains("\\u0000"));
+}
+
+#[test]
+fn escapejs_unicode_line_separator() {
+    // U+2028 and U+2029 are valid in JSON but not in JS string literals
+    let ctx = ctx_with("input", "a\u{2028}b\u{2029}c");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(result.contains("\\u2028"));
+    assert!(result.contains("\\u2029"));
+    assert!(!result.contains('\u{2028}'));
+    assert!(!result.contains('\u{2029}'));
+}
+
+#[test]
+fn escapejs_html_entities_in_js() {
+    // Angle brackets and ampersands must also be escaped for JS context
+    let ctx = ctx_with("input", "<>&");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(result.contains("\\u003C"));
+    assert!(result.contains("\\u003E"));
+    assert!(result.contains("\\u0026"));
+}
+
+#[test]
+fn escapejs_equals_sign() {
+    let ctx = ctx_with("input", "a=b");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(result.contains("\\u003D"));
+}
+
+#[test]
+fn escapejs_semicolon() {
+    let ctx = ctx_with("input", "a;b");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(result.contains("\\u003B"));
+}
+
+#[test]
+fn escapejs_backtick_cannot_close_a_template_literal() {
+    // Django escapes the backtick (`\u0060`); the port left it raw (#4005 review).
+    let ctx = ctx_with("input", "`; alert(1); `");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(!result.contains('`'));
+    assert!(result.contains("\\u0060"));
+}
+
+#[test]
+fn escapejs_hyphen() {
+    // Hyphens can form HTML comment closers (-->)
+    let ctx = ctx_with("input", "a-b");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(result.contains("\\u002D"));
+}
+
+// Note: |escapejs is auto-escaped by the renderer after the filter runs,
+// because escapejs is NOT in safe_output_filters. This means the Unicode
+// escape sequences get an additional HTML-escape pass. In a real template
+// you would use it inside a <script> tag where auto-escaping should ideally
+// be off ({% autoescape off %} in Django), or combine with |safe.
+// The test above verifies the filter's own escaping logic is correct.
 
 // ===========================================================================
 // 3. URL Context Escaping (|urlencode filter)
@@ -719,9 +841,8 @@ fn a_string_input_never_gets_an_unearned_safe_grant() {
     for src in [
         "{{ html|safeseq }}",
         "{{ html|safeseq|lower }}",
-        // `{{ html|escape|safe }}` (#2281) was a row here; `escape` is Django's
-        // own function since #4005, which needs an interpreter, and the row is
-        // in `python/tests/test_routed_cold_filters_4005.py`.
+        // #2281: `escape` was a no-op, so `|safe` uncovered the raw value.
+        "{{ html|escape|safe }}",
     ] {
         let ctx = ctx_with("html", "<img src=x onerror=alert(1)>");
         let out = render(src, &ctx);
