@@ -1786,6 +1786,31 @@ def card(assigns):
 
 yields `assigns["slots"]["col"]` as a 3-element list. The inline tag `{% render_slot slots.col.0 %}` emits the content of a slot at a given path — useful when you need to reference a slot inside a rendered loop. `{% render_slot slots.col.0.content %}` names the body directly and emits the same markup; both are the parent's already-rendered output, so both are emitted live rather than escaped a second time. Any OTHER path — a plain context variable, or a `content` key on a dict that is not a slot entry — is escaped, because nothing has vouched for it.
 
+### A function component with its own template
+
+A component whose markup is a template names it with `template_name=` and returns the template's context (or `None` to render it with the assigns):
+
+```python
+from djust import Assign, component
+
+@component(
+    name="status_moves",
+    assigns=[Assign("block", dict, required=True)],
+    template_name="myapp/components/status_moves.html",
+)
+def status_moves(assigns):
+    return {"block": assigns["block"]}
+```
+
+```django
+{# myapp/components/status_moves.html #}
+<section class="moves">
+  {% for move in block.moves %}<button type="button" dj-click="move" data-to="{{ move.key }}">{{ move.label }}</button>{% endfor %}
+</section>
+```
+
+The template renders inside the page's `dj-root`, so its `dj-click` reaches the page's view. `manage.py check` knows it is a component template and does not report `djust.T012` for it. A function that returns a string is used as-is, as before.
+
 ## Markdown editor
 
 See the [Markdown Editor guide](markdown-editor.md) for optional Visual/Markdown editing,

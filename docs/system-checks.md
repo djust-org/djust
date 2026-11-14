@@ -884,6 +884,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   - a partial another template `{% include %}`s: the includer is checked with it inlined. An include inside `{# #}` or `{% comment %}`, or a template including itself, does not count;
   - the template of a view a `{% live_render "dotted.View" %}` embeds, which renders inside the tag's `dj-view` wrapper. The path must be a string literal that imports when the check runs; `{% live_render view_path %}` with a variable is not followed, so its child template is checked on its own;
   - component templates: an element with a real `dj-component` or `data-component-id` attribute;
+  - the template a registered function component names, `@component(template_name="...")` (#4121). The component's module must be imported when the check runs;
   - templates marked `{# djust:partial #}`
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T012"]` or `DJUST_CONFIG = {"suppress_checks": ["T012"]}`
 - **False positives**: Partial templates that intentionally omit `dj-root` / `dj-view` because the parent/wrapper template provides it (mark them with `{# djust:partial #}`)
