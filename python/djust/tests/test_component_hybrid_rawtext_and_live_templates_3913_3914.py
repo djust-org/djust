@@ -1241,6 +1241,8 @@ FILE_SITES = {
     ("components/base.py", "_load_template_source", "get_template"),
     ("components/base.py", "render", "render_to_string"),
     ("components/suspense.py", "render", "render_to_string"),
+    # a @component(template_name=...) function's own file (#4121)
+    ("components/function_component.py", "_render_component", "render_to_string"),
 }
 
 

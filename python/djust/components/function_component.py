@@ -387,8 +387,13 @@ class CallTagHandler:
         if template_name and not isinstance(result, str):
             from django.template.loader import render_to_string
 
+            from .._include_guard import include_guard_scope
+
             template_context = assigns if result is None else result
-            return render_to_string(template_name, template_context)
+            # Django's engine renders this file, so its {% include %} goes
+            # through the guard, as a LiveComponent's template_name does (#3880).
+            with include_guard_scope():
+                return render_to_string(template_name, template_context)
         if result is None:
             return ""
         return str(result)

@@ -694,6 +694,22 @@ def _live_render_site(tag_args: str, named: bool = False) -> Callable[[str, dict
     return site
 
 
+def function_component_site(source: str, ctx: dict) -> str:
+    """A ``@component(template_name=...)`` function called from a template (#4121): Django's
+    engine renders the component's own file with the context the function returns."""
+    from djust.components.function_component import _COMPONENT_REGISTRY, component
+    from djust.testing import render_template_string
+
+    _TEMPLATES["function_component_3880.html"] = source
+    component(name="fc_3880", template_name="function_component_3880.html")(
+        lambda assigns: dict(ctx)
+    )
+    try:
+        return render_template_string('{% call "fc_3880" %}{% endcall %}')
+    finally:
+        _COMPONENT_REGISTRY.pop("fc_3880", None)
+
+
 live_render_plain_site = _live_render_site("")
 live_render_lazy_site = _live_render_site("lazy=True")
 live_render_plain_named_site = _live_render_site("", named=True)
@@ -702,6 +718,7 @@ live_render_lazy_named_site = _live_render_site("lazy=True", named=True)
 
 CHILD_SITES = [
     pytest.param(embedded_site, id="embedded-child"),
+    pytest.param(function_component_site, id="function-component-template"),
     pytest.param(sticky_inline_site, id="sticky-inline"),
     pytest.param(sticky_named_site, id="sticky-named"),
     pytest.param(transient_inline_site, id="transient-inline"),
