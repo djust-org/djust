@@ -1004,6 +1004,7 @@ def register_custom_filter(
     callable: Any,
     is_safe: bool = False,
     needs_autoescape: bool = False,
+    item_key: bool = False,
 ) -> None:
     """Register a project-defined custom template filter (#1121).
 
@@ -1026,6 +1027,9 @@ def register_custom_filter(
             return ``mark_safe(...)``/``format_html(...)`` itself.
         needs_autoescape: Django ``filter.needs_autoescape`` attribute —
             when True, ``autoescape=True`` is passed as a kwarg.
+        item_key: the filter's ``djust_item_key`` opt-in (#3920) — when True,
+            its QUOTED argument names a field read off each item, so the
+            variable extractor files that field on the list (like ``dictsort``).
     """
     ...
 

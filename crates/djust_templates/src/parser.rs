@@ -4108,7 +4108,13 @@ fn is_item_key_path(key: &str) -> bool {
         && key.split('.').all(|segment| {
             !segment.is_empty()
                 && !segment.starts_with('_')
-                && segment.chars().all(|c| c.is_alphanumeric() || c == '_')
+                && segment.chars().enumerate().all(|(i, c)| {
+                    c.is_alphanumeric()
+                        || c == '_'
+                        // A combining mark continues a name (`cafe` + U+0301);
+                        // Django's `dictsort` reads the key as given (#3920).
+                        || (i > 0 && unicode_normalization::char::is_combining_mark(c))
+                })
         })
 }
 
@@ -4155,7 +4161,9 @@ fn record_item_key_filter(
     arg: Option<&str>,
     variables: &mut std::collections::HashMap<String, Vec<String>>,
 ) {
-    if !ITEM_KEY_FILTERS.contains(&name) {
+    // A project's own filter opts in by declaring ``djust_item_key`` (#3920);
+    // the registry records the flag when the filter is bridged.
+    if !ITEM_KEY_FILTERS.contains(&name) && !crate::filter_registry::is_item_key_filter(name) {
         return;
     }
     let Some(arg) = arg.map(str::trim) else {

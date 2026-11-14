@@ -489,3 +489,104 @@ class TestTheServerFloorStillApplies:
             render("{% for u in users %}[{{ u.password }}]{% endfor %}", {"users": users})
         )
         assert direct == "[][]", "the control: a direct read of the floored field is empty"
+
+
+# ---------------------------------------------------------------------------------------------
+# #3920: a project's own filter opts in; a key with a combining mark is a key
+# ---------------------------------------------------------------------------------------------
+PROJECT_FILTER = "sort_desc_by_3920"
+
+
+def _sort_desc_by(rows, field):
+    """A project filter that reads ``field`` off each row (a JIT row is a dict)."""
+
+    def key(row):
+        if isinstance(row, dict):
+            return row.get(field, "")
+        return getattr(row, field, "")
+
+    return sorted(rows, key=key, reverse=True)
+
+
+@pytest.fixture
+def project_filter():
+    """``sort_desc_by_3920`` bridged to the Rust engine the way a project library is."""
+    from djust.template_filters import item_key_filter, register_django_filter
+
+    def sort_desc_by(rows, field):
+        return _sort_desc_by(rows, field)
+
+    item_key_filter(sort_desc_by)
+    assert register_django_filter(PROJECT_FILTER, sort_desc_by)
+    try:
+        yield sort_desc_by
+    finally:
+        _rust.unregister_custom_filter(PROJECT_FILTER)
+
+
+class TestProjectItemKeyFilters:
+    SOURCE = "{% for u in users|" + PROJECT_FILTER + ":'username' %}{{ u.pk }},{% endfor %}"
+
+    def test_an_opted_in_project_filter_files_its_key(self, project_filter) -> None:
+        assert sorted(_paths(self.SOURCE)["users"]) == ["pk", "username"]
+
+    def test_a_project_filter_that_did_not_opt_in_files_nothing(self) -> None:
+        """The flag is the decision: a filter's argument is not a field unless it says so."""
+        from djust.template_filters import register_django_filter
+
+        assert register_django_filter(PROJECT_FILTER, lambda rows, field: rows)
+        try:
+            assert _paths(self.SOURCE)["users"] == ["pk"]
+        finally:
+            _rust.unregister_custom_filter(PROJECT_FILTER)
+
+    def test_the_attribute_is_the_same_declaration_as_the_decorator(self) -> None:
+        from djust.template_filters import register_django_filter
+
+        def pluck(rows, field):
+            return rows
+
+        pluck.djust_item_key = True
+        assert register_django_filter(PROJECT_FILTER, pluck)
+        try:
+            assert sorted(_paths(self.SOURCE)["users"]) == ["pk", "username"]
+        finally:
+            _rust.unregister_custom_filter(PROJECT_FILTER)
+
+    @pytest.mark.django_db
+    @pytest.mark.parametrize("shape", ["QuerySet", "list[Model]"])
+    def test_a_liveview_row_carries_the_key_the_filter_reads(
+        self, world, project_filter, shape
+    ) -> None:
+        """Before: the rows had no ``username``, every key tied and the loop kept pk order."""
+        users = _ctx(shape)["users"]
+        want = "".join(f"{u.pk}," for u in _sort_desc_by(list(users), "username"))
+        assert want == _pk_list(reverse=True)
+        assert _got(_liveview_render, self.SOURCE, shape) == want
+
+
+class TestCombiningMarkKeys:
+    """A quoted key is read by Django as given (``_property_resolver`` splits on ``.`` and looks
+    each part up), so a key spelled with a combining mark (``cafe`` + U+0301) is a key."""
+
+    def test_a_combining_mark_continues_a_key(self) -> None:
+        key = "café"
+        source = "{% for u in users|dictsort:'" + key + "' %}{{ u.pk }}{% endfor %}"
+        assert sorted(_paths(source)["users"]) == sorted(["pk", key])
+
+    def test_a_dotted_key_with_a_combining_mark_in_its_second_segment(self) -> None:
+        key = "profile.naño"
+        source = "{% for u in users|dictsort:'" + key + "' %}{{ u.pk }}{% endfor %}"
+        assert sorted(_paths(source)["users"]) == sorted(["pk", key])
+
+    @pytest.mark.parametrize("key", ["́cafe", "_café", "café.́x"])
+    def test_a_segment_cannot_start_with_a_combining_mark_or_an_underscore(self, key) -> None:
+        source = "{% for u in users|dictsort:'" + key + "' %}{{ u.pk }}{% endfor %}"
+        assert _paths(source)["users"] == ["pk"]
+
+    def test_django_reads_the_combining_mark_key_as_given(self) -> None:
+        """The premise: Django sorts dict rows by the decomposed key, it does not drop it."""
+        key = "café"
+        rows = [{key: 2, "n": "b"}, {key: 1, "n": "a"}]
+        source = "{% for r in rows|dictsort:'" + key + "' %}{{ r.n }}{% endfor %}"
+        assert _django_render(source, {"rows": rows}) == "ab"
