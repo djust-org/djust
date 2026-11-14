@@ -1219,7 +1219,7 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
             for p in ctx.get("optional_context") or []
         ]
 
-        from .catalogue import _PUSH_EVENT_PARAMS
+        from .catalogue import _BROWSER_EVENT_PARAMS, _PUSH_EVENT_PARAMS
 
         # A form-field component declares `name` itself — the HTML field name
         # — and the base class then does not stamp it as the instance
@@ -1251,6 +1251,9 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
             if p["name"] in _PUSH_EVENT_PARAMS:
                 # Server -> client: the name your view pushes to the component.
                 return f"{text} — the event your server pushes to it"
+            if p["name"] in _BROWSER_EVENT_PARAMS:
+                # A DOM event on the element, for page scripts (#4126).
+                return f"{text} — the browser event it dispatches (`djust:<name>`), not sent to the view"
             # ADR-033 D5: `event=` renames the verb; which instance spoke is
             # `name`, carried on every trigger as `dj-value-name`.
             if p["name"] == "event" or p["name"].endswith("_event"):

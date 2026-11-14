@@ -532,6 +532,11 @@ def _is_event_param(name: str) -> bool:
 #: ``content_loader``'s ``data_loaded``), the opposite direction.
 _PUSH_EVENT_PARAMS = frozenset({"stream_event", "loading_event"})
 
+#: Event parameters that name a BROWSER event the component dispatches on its
+#: element for page scripts (``scroll_spy``'s ``active_event``,
+#: ``djust:section_changed``); it never reaches the view (#4126).
+_BROWSER_EVENT_PARAMS = frozenset({"active_event"})
+
 
 def _source_literal(source: Any) -> Any:
     """A default in SOURCE form (``"'toggle_menu'"``) back to its value."""
@@ -600,7 +605,7 @@ def contract_events(params: list, example: dict | None, rendered_html: str) -> l
     ]
     for param in params:
         name = param.get("name", "")
-        if not _is_event_param(name) or name in _PUSH_EVENT_PARAMS:
+        if not _is_event_param(name) or name in _PUSH_EVENT_PARAMS | _BROWSER_EVENT_PARAMS:
             continue
         if "prefix" in str(param.get("doc") or param.get("description") or "").lower():
             continue

@@ -18,6 +18,7 @@ own policy, coercion and strict contract.
 from __future__ import annotations
 
 import bisect
+import html
 import json
 import logging
 import re
@@ -368,9 +369,13 @@ def _node_file(node: Any, default: str) -> str:
 
 
 class _Flattener:
-    def __init__(self, engine: Any, flat: _Flat) -> None:
+    def __init__(self, engine: Any, flat: _Flat, tag_events: bool = False) -> None:
         self.engine = engine
         self.flat = flat
+        #: Write the events a djust component tag sends (``{% modal %}``'s
+        #: ``close_modal``) into the flattened markup, so the binding check
+        #: sees them (#4126). Off for scans that only read attribute names.
+        self.tag_events = tag_events
 
     def template(self, template: Any, file: str, blocks: dict[str, Any], depth: int) -> None:
         from django.template.loader_tags import ExtendsNode
@@ -482,6 +487,8 @@ class _Flattener:
                     )
                 )
                 flat.emit(OPAQUE)
+                if djust_tag and self.tag_events and tag:
+                    self.tag_event_markup(node, tag[0], node_file, line)
                 if djust_tag:
                     # A djust block tag's body is the template's own markup:
                     # scan it, so a target declared inside stays visible.
@@ -491,6 +498,39 @@ class _Flattener:
                             flat.emit(BRANCH)
                             self.nodes(child, node_file, blocks, depth + 1)
                             flat.emit(BRANCH)
+
+    def tag_event_markup(self, node: Any, tag: str, file: str, line: int) -> None:
+        """The events a djust component tag sends, as markup the scan reads.
+
+        Each becomes an element ``<djust-tag-event dj-click="close_modal"
+        data-djust-tag="modal close_event">``, located at the tag, so a missing
+        handler is reported like a ``dj-click`` written by hand (#4126). An
+        event given by a variable is written as a value (dynamic); one turned
+        off (``close_event=None`` or ``""``) or whose control the tag does not
+        draw (``requires`` false) is left out.
+        """
+        from djust.components.tag_events import TAG_EVENTS
+
+        for event in TAG_EVENTS.get(tag, ()):
+            if event.requires is not None:
+                found, required = _tag_argument(node, event.requires)
+                if found is _ABSENT_ARGUMENT or (found is _LITERAL and not required):
+                    continue
+            found, value = _tag_argument(node, event.argument)
+            if found is _ABSENT_ARGUMENT:
+                name = event.default
+            elif found is _LITERAL:
+                if not value or not isinstance(value, str):
+                    continue
+                name = value
+            else:
+                name = VALUE
+            self.flat.emit(
+                '<djust-tag-event dj-click="%s" data-djust-tag="%s %s"></djust-tag-event>'
+                % (html.escape(name), tag, event.argument),
+                file,
+                line,
+            )
 
     def include(self, node: Any, file: str, line: int, depth: int) -> None:
         expression = node.template
@@ -504,6 +544,43 @@ class _Flattener:
             self.flat.emit(OPAQUE)
             return
         self.template(loaded, _template_file(loaded, name), {}, depth + 1)
+
+
+_ABSENT_ARGUMENT = object()
+_LITERAL = object()
+_DYNAMIC = object()
+
+
+def _tag_argument(node: Any, key: str) -> tuple[object, Any]:
+    """A component tag's ``key=`` argument as compiled: absent, a literal
+    (with its value; ``None`` / ``False`` / ``True`` included), or dynamic.
+
+    djust's block tags keep a ``str`` for a quoted literal and a
+    ``template.Variable`` otherwise; ``simple_tag`` nodes keep a
+    ``FilterExpression`` per keyword. A positional argument of a
+    ``simple_tag`` cannot be matched to its name here, so it counts as
+    dynamic.
+    """
+    from django.template.base import FilterExpression, Variable
+
+    if getattr(node, "args", None):
+        return _DYNAMIC, None
+    kwargs = getattr(node, "kwargs", None)
+    if not isinstance(kwargs, dict) or key not in kwargs:
+        return _ABSENT_ARGUMENT, None
+    value = kwargs[key]
+    if isinstance(value, FilterExpression):
+        if value.filters:
+            return _DYNAMIC, None
+        value = value.var
+    if isinstance(value, Variable):
+        if value.literal is not None:
+            return _LITERAL, value.literal
+        constants = {"None": None, "False": False, "True": True}
+        if value.var in constants:
+            return _LITERAL, constants[value.var]
+        return _DYNAMIC, None
+    return _LITERAL, value
 
 
 def _template_file(template: Any, name: str) -> str:
@@ -653,6 +730,9 @@ class Binding:
     unresolved: Optional[str] = None
     #: A value grammar misuse (arguments on a raw directive, invalid name).
     malformed: Optional[str] = None
+    #: ``(tag, argument)`` when a djust component tag sends this event
+    #: (``("modal", "close_event")``), not markup the template wrote (#4126).
+    tag: Optional[tuple[str, str]] = None
 
     @property
     def label(self) -> str:
@@ -842,6 +922,11 @@ def _bindings_of(element: Element, opaque: set[int]) -> list[Binding]:
                     "%s does not take arguments: the whole value is sent as the event name" % base
                 )
             entries.append((name, [], None, malformed))
+        tag_source = element.attr("data-djust-tag") if element.tag == "djust-tag-event" else None
+        tag_pair: Optional[tuple[str, str]] = None
+        if tag_source:
+            tag_name, _, tag_argument = tag_source.partition(" ")
+            tag_pair = (tag_name, tag_argument)
         for name, args, unresolved, malformed in entries:
             payload = _payload(base, spec, element, opaque, args)
             if malformed is None and name and not unresolved and not EVENT_NAME.match(name):
@@ -861,6 +946,7 @@ def _bindings_of(element: Element, opaque: set[int]) -> list[Binding]:
                     payload,
                     unresolved=unresolved,
                     malformed=malformed,
+                    tag=tag_pair,
                 )
             )
     return found
@@ -907,7 +993,7 @@ def scan_source(engine: Any, template: Any, label: str, file: str, source: str) 
     """Scan one compiled Django template. ``file``/``source`` label its own lines."""
     flat = _Flat()
     flat.files[file] = source
-    _Flattener(engine, flat).template(template, file, {}, 0)
+    _Flattener(engine, flat, tag_events=True).template(template, file, {}, 0)
     return _scan_flat(flat, label, file)
 
 

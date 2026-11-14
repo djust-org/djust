@@ -339,7 +339,7 @@ What this gives you:
   one hash per render. On the LiveView path `{{ nav }}` is the rendered HTML
   string, so string filters (`{{ nav|length }}`, `|upper`) act on the markup.
 
-The eight built-in descriptors (`Accordion`, `Tabs`, `Modal`, ... in
+The built-in descriptors (`Accordion`, `Tabs`, `Modal`, ... in
 `djust.components.descriptors`) declare no template: they use the same
 mechanism with a `Meta.event` alias registered on the view, and the
 `djust_components` template tags (`{% tabs %}`, `{% accordion %}`, ...) draw
@@ -865,6 +865,71 @@ arguments and always follows the project setting.
 
 {% toast_container toasts dismiss_event="dismiss_toast" %}
 ```
+
+### Events a tag sends
+
+A tag's controls send an event to the view that renders it: `{% modal %}`'s ×
+sends `close_modal`, `{% expandable_text %}`'s "Read more" sends
+`toggle_expand`. Every event needs a handler on the view; one with none is
+refused ("Event rejected"). For the UI state a tag keeps (open, expanded, the
+current step or image), declare the matching component from
+`djust.components.descriptors` on the view and pass its state to the tag. It
+answers the tag's default events, so you write no handler:
+
+```python
+from djust import LiveView
+from djust.components.descriptors import ExpandableText, Modal
+
+
+class ArticleView(LiveView):
+    template_name = "article.html"
+    confirm = Modal()
+    bio = ExpandableText()
+```
+
+```html
+{% modal title="Delete?" open=confirm.is_open %}...{% endmodal %}
+{% expandable_text expanded=bio.expanded %}{{ article.bio }}{% endexpandable_text %}
+```
+
+| Tag | Events it sends by default | Answered by |
+|---|---|---|
+| `{% modal %}` | `close_modal` (also `open_modal`) | `Modal` |
+| `{% sheet %}` | `close_sheet` (also `open_sheet`) | `Sheet` |
+| `{% carousel %}` | `carousel_prev`, `carousel_next`, `carousel_go` | `Carousel(total=N)` |
+| `{% lightbox %}` | `close_lightbox`, `lightbox_navigate` (also `open_lightbox`) | `Lightbox` |
+| `{% command_palette %}` | `close_palette` (also `open_palette`); `palette_search` | `CommandPalette`; your view |
+| `{% export_dialog %}` | `close_export` (also `open_export`); `export` | `ExportDialog`; your view |
+| `{% announcement_bar dismissible=True %}` | `dismiss_announcement` | `AnnouncementBar` (render the bar only while `dismissed` is false) |
+| `{% nav_menu %}` | `toggle_nav` | `NavMenu` (`mobile_open`) |
+| `{% expandable_text %}` | `toggle_expand` | `ExpandableText` (`expanded`) |
+| `{% truncated_list %}` | `toggle_list` | `TruncatedList` (`expanded`) |
+| `{% markdown_textarea %}` | `toggle_preview` | `MarkdownTextarea` (`preview`) |
+| `{% stepper %}`, `{% wizard %}` | `set_step` | `Stepper` (`active`: an index for `stepper`, a step id for `wizard`) |
+| `{% cookie_consent %}` | `accept_cookies` | your view: it records the consent |
+
+"Your view" means an `@event_handler` of that name: what a search matches, what
+an export contains and where consent is stored are the application's. An
+`@event_handler` of the same name on the view also replaces a component's
+answer (to validate a step before moving on, say), and renaming the event
+(`close_event="shut_dialog"`) makes it yours to answer.
+
+`Carousel` needs `total`, the number of slides: declare `Carousel(total=5)` or
+set `self.slides.total = len(images)` in `mount()`. Without it previous, next
+and the dots do nothing, and the first click logs a warning that names the
+component.
+
+`manage.py check` reports, as `djust.T019`, a tag in a view's template whose
+event nothing on the view answers: for example `{% modal open=show %}` on a
+view that declares no `Modal` and has no `close_modal` handler. A tag that
+sends an event given by a variable is not checked.
+
+Three tag arguments name events that are not sent to the view, so they need no
+handler: `stream_event` (`{% streaming_text %}`, `{% live_counter %}`,
+`{% conversation_thread %}`) and `loading_event` (`{% await %}`) name what the server
+pushes to the component, and `{% scroll_spy %}`'s `active_event` names the
+browser event `djust:section_changed` it dispatches on its element for page
+scripts.
 
 ### Available Components
 

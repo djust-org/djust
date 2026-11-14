@@ -9,8 +9,11 @@ from typing import Any, Optional
 class ScrollSpy(Component):
     """Style-agnostic scroll spy component.
 
-    Uses IntersectionObserver to track which section is currently visible
-    and fires events when the active section changes.
+    Uses IntersectionObserver to track which section is currently visible,
+    marks its link ``dj-scroll-spy__item--active`` in the browser, and
+    dispatches the browser event ``djust:<active_event>`` (``detail.section``
+    is the section id) on the element when it changes. That event is for page
+    scripts: it is not sent to the view, so no handler is needed (#4126).
 
     Usage in a LiveView::
 
@@ -27,7 +30,8 @@ class ScrollSpy(Component):
     Args:
         sections: List of section IDs to observe
         active: Currently active section ID
-        active_event: djust event fired when active section changes
+        active_event: name of the browser event dispatched when the active
+            section changes (``djust:section_changed``); not sent to the view
         offset: Offset from top for intersection (default: "0px")
         custom_class: Additional CSS classes
     """

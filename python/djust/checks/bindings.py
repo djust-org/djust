@@ -207,8 +207,48 @@ class _OwnerContext:
                 return BindingResult(
                     binding, "dynamic", "the owner resolves attributes dynamically"
                 )
+            if binding.tag is not None:
+                finding = self._tag_finding(binding.tag, name, finding)
             return self._result(binding, [finding])
+        if binding.tag is not None:
+            # The tag writes the event's arguments itself (#4126).
+            return BindingResult(binding, "checked", "sent by a component tag; arguments unchecked")
         return self._result(binding, self._arguments(binding, handler))
+
+    def _tag_finding(self, tag: tuple[str, str], name: str, finding: Finding) -> Finding:
+        """T019 for an event a djust component tag sends (#4126): say which tag
+        sends it, and what answers it."""
+        from djust.components.tag_events import TAG_EVENTS
+
+        tag_name, argument = tag
+        event = next((e for e in TAG_EVENTS.get(tag_name, ()) if e.argument == argument), None)
+        message = "{%% %s %%} sends %r (its %s), and %s" % (
+            tag_name,
+            name,
+            argument,
+            finding.message[0].lower() + finding.message[1:],
+        )
+        owner = self.cls.__qualname__
+        if event is not None and event.component and name == event.default:
+            hint = (
+                "Declare the component on the view (for example "
+                "`%s = %s()` from djust.components.descriptors) and pass its state to "
+                "the tag; or add an @event_handler named %r to %s; or set %s= to an "
+                "event the view handles."
+                % (
+                    re.sub(r"(?<!^)(?=[A-Z])", "_", event.component).lower(),
+                    event.component,
+                    name,
+                    owner,
+                    argument,
+                )
+            )
+        else:
+            hint = (
+                "%r is the application's to answer: add an @event_handler named %r to %s, "
+                "or set %s= to an event the view handles." % (name, name, owner, argument)
+            )
+        return Finding(finding.check_id, message, hint)
 
     def _result(self, binding: Any, findings: list[Finding]) -> BindingResult:
         return BindingResult(binding, "checked", findings=findings)
