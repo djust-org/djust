@@ -383,9 +383,10 @@ def save_server_state(view: Any, request: Any) -> None:
 
 
 def reapply_saved_state(view: Any) -> None:
-    """Put the view's restored (undeclared) state back over what
-    ``handle_params()`` just set, on a socket mount (#4107). Declared
-    ``persist="server"`` fields are not touched: for them the URL wins (#3624).
+    """Put the view's restored state back over what ``handle_params()`` just
+    set, on a socket mount (#4107), when the URL is the one it was saved under:
+    declared ``persist="server"`` fields and the rest alike. At another URL
+    ``handle_params()`` has the last word for what it assigns (#3624).
     """
     from . import _automatic_state
 
@@ -464,6 +465,9 @@ def load_server_state(view: Any, request: Any) -> dict[str, Any] | None:
         except ExposureError:
             restored = None
     declared_restored = restored is not None
+    # Assigned again after handle_params() when the URL is the one they were
+    # saved under (``finish_mount``): one rule for declared and undeclared state.
+    view.__dict__["_djust_auto_reapply_declared"] = dict(restored) if restored else None
     # Also puts the saved private attributes back on the view.
     automatic = _automatic_state.load(view, request)
     if automatic is not None:

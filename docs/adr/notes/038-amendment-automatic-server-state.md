@@ -91,12 +91,17 @@ gate-offs, without a browser.
 - **A saved model dict never goes over a live instance** that `mount()` just
   loaded (`put_back(over_mount=True)`).
 - **The URL and the saved state.** `handle_params()` runs on every fallback
-  request and socket mount (2.0 pins that the URL a request carries wins over a
-  declared `persist="server"` field, #3624). The envelope records the query the
-  view last read, canonical (parsed, sorted). On restore the saved state goes
-  on first; `handle_params()` runs; and only while the query is the one the
-  state was saved under is the undeclared saved state put back again over what
-  the hook assigned. When the query changed, the hook has the last word for
+  request and socket mount (#3624 pins that the URL a request carries wins over
+  a declared `persist="server"` field; its test changes the URL, so it holds).
+  The envelope records the query the view last read, canonical (parsed, sorted;
+  a repeated key counts by its last value, because the client's socket mount
+  sends only that). On restore the saved state goes on first; `handle_params()`
+  runs; and only while the query is the one the state was saved under is the
+  saved state put back again over what the hook assigned: declared fields and
+  undeclared attributes alike (one rule; before this, a declared field took the
+  hook's default at an unchanged URL while the attribute beside it kept the
+  handler's value). Without a saved URL to compare with (no tab id), the hook
+  wins for declared fields, as before. When the query changed, the hook has the last word for
   what it assigned. Chosen because it needs no knowledge of which names the
   hook assigns: skipping the second put-back is exactly "handle_params() wins
   for what it assigned, everything else keeps its restored value". Its cost: a

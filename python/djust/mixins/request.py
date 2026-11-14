@@ -897,8 +897,12 @@ class RequestMixin:
             # The session row cannot be updated (it was deleted meanwhile, as a
             # logout in another tab does, or the store refused the write). The
             # page still renders: nothing is saved, so its first fallback
-            # request runs mount() again.
-            _saved_state.report_unsaved_page(self)
+            # request runs mount() again. If the application itself wrote to
+            # the session in this request, Django's session middleware meets
+            # the same failure at the response and answers 400.
+            _saved_state.report_unsaved_page(
+                self, bool(getattr(getattr(request, "session", None), "modified", False))
+            )
         t_save_components = (time.perf_counter() - t0_sc) * 1000
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
@@ -1792,11 +1796,15 @@ class RequestMixin:
             # handle_params() runs on every request: the URL THIS request
             # carries wins over a declared persist="server" field (#3624).
             _run_http_handle_params(self, request)
-            # For the rest of the saved state (#4107): while the URL is the one
-            # the state was saved under, the saved state goes back over what
-            # handle_params() assigned, so the hook's defaults do not reset
-            # what a handler set. When the URL changed, handle_params() has the
-            # last word for what it assigned (``?page=3`` shows page 3).
+            # One rule for declared and undeclared state (#4107): while the URL
+            # is the one the state was saved under, the saved state goes back
+            # over what handle_params() assigned, so the hook's defaults do not
+            # reset what a handler set. When the URL changed, handle_params()
+            # has the last word for what it assigned (``?page=3`` shows page 3).
+            if _automatic_state.url_unchanged(self):
+                # Only when the saved URL is known: without it (no tab id, so
+                # no saved view state) the URL this request carries wins (#3624).
+                _assign(saved_view.declared)
             if not _automatic_state.url_changed(self):
                 _put_saved_state_back()
             # The view is as the next handler finds it: a save records as

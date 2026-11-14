@@ -2522,9 +2522,14 @@ def test_canonical_params_compare_parsed_values():
         _automatic_state.canonical_params(QueryDict("page=2&tab=a%20b&x=1&x=2")),
         _automatic_state.canonical_params(QueryDict("x=1&tab=a+b&x=2&page=2")),
         _automatic_state.canonical_params({"tab": "a b", "x": ["1", "2"], "page": 2}),
+        # What the client sends on a socket mount for the same URL: a repeated
+        # key collapsed to its last value (``Object.fromEntries``).
+        _automatic_state.canonical_params({"tab": "a b", "x": "2", "page": "2"}),
     ]
     assert len(set(same)) == 1
-    assert _automatic_state.canonical_params(QueryDict("x=2&x=1")) != same[0]
+    assert _automatic_state.canonical_params(QueryDict("x=2&x=1")) != (
+        _automatic_state.canonical_params(QueryDict("x=1&x=2"))
+    )
     empty = {_automatic_state.canonical_params(p) for p in (None, {}, QueryDict(""), "nonsense")}
     assert empty == {"[]"}
     assert _automatic_state.canonical_params({"page": ""}) != "[]"  # ?page= is a parameter
@@ -2628,3 +2633,117 @@ def test_the_basis_holds_one_encoding_and_digests_never_a_copy_of_the_values():
         "catalog": "c",
         "cart": [],
     }
+
+
+# ---------------------------------------------------------------------------
+# One URL rule for declared and undeclared state
+# ---------------------------------------------------------------------------
+
+
+class Both(_Base):
+    """A declared ``persist="server"`` field beside an undeclared attribute;
+    ``handle_params()`` gives both a default, a handler sets both."""
+
+    shown = ("page", "tab", "note")
+    tab = state("a", persist="server")
+
+    def mount(self, request, **kwargs):
+        self.page = 1
+        self.note = "a"
+
+    def handle_params(self, params, uri):
+        self.page = int(params.get("page", 1))
+        self.tab = params.get("tab", "a")
+        self.note = params.get("note", "a")
+
+    @event_handler()
+    def pick(self, **kwargs):
+        self.tab = "b"
+        self.note = "b"
+
+    @event_handler()
+    def nothing(self, **kwargs):
+        pass
+
+
+def _both_fallback(steps: List[tuple]) -> Any:
+    first = _request("GET", None, path=harness.PATH + steps[0][0])
+    assert Both().get(first).status_code == 200
+    key = first.session.session_key
+    view = None
+    for query, event in steps:
+        view = Both()
+        assert view.post(_request("POST", key, event, path=harness.PATH + query)).status_code == 200
+    return view
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "later,expected",
+    [
+        ("?page=2", (2, "b", "b")),  # the same URL: the saved state wins, both kinds
+        ("?page=3", (3, "a", "a")),  # another URL: handle_params() wins, both kinds
+        ("?page=2&tab=c&note=c", (2, "c", "c")),  # a URL that carries the values
+        ("?x=1&x=2&page=2", (2, "a", "a")),  # another query, though the page is the same
+    ],
+)
+def test_fallback_declared_and_undeclared_state_follow_one_url_rule(later, expected):
+    view = _both_fallback([("?page=2", "pick"), (later, "nothing")])
+    assert (view.page, view.tab, view.note) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_socket_declared_and_undeclared_state_follow_one_url_rule():
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE):
+        comm, _mount = await _mount_at(Both, key, {"page": "2"})
+        await harness.event(comm, "pick")
+        await comm.disconnect()
+        same, mount_same = await _mount_at(Both, key, {"page": "2"})
+        await same.disconnect()
+        other, mount_other = await _mount_at(Both, key, {"page": "3"})
+        await other.disconnect()
+        carried, mount_carried = await _mount_at(Both, key, {"page": "2", "tab": "c", "note": "c"})
+        await carried.disconnect()
+    assert _probe_of(mount_same["html"]) == {"page": 2, "tab": "b", "note": "b"}
+    assert _probe_of(mount_other["html"]) == {"page": 3, "tab": "a", "note": "a"}
+    assert _probe_of(mount_carried["html"]) == {"page": 2, "tab": "c", "note": "c"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_repeated_key_is_the_same_url_on_the_socket_and_over_http():
+    """``?x=1&x=2&page=2``: HTTP hands handle_params() ``x=["1", "2"]``, the
+    client's socket mount sends ``x="2"``. Neither is a changed URL to the other."""
+    from asgiref.sync import sync_to_async as to_thread
+
+    query = "?x=1&x=2&page=2"
+
+    def over_http(key):
+        view = Both()
+        assert (
+            view.post(_request("POST", key, "nothing", path=harness.PATH + query)).status_code
+            == 200
+        )
+        return (view.page, view.tab, view.note)
+
+    def page_load():
+        first = _request("GET", None, path=harness.PATH + query)
+        assert Both().get(first).status_code == 200
+        picked = Both()
+        key = first.session.session_key
+        assert (
+            picked.post(_request("POST", key, "pick", path=harness.PATH + query)).status_code == 200
+        )
+        return key
+
+    # Saved over HTTP, then read on a socket.
+    key = await to_thread(page_load)()
+    with harness.ws_settings(MODULE):
+        comm, mount = await _mount_at(Both, key, {"x": "2", "page": "2"})
+        assert _probe_of(mount["html"]) == {"page": 2, "tab": "b", "note": "b"}
+        # Then an event on that socket, and the same URL read over HTTP.
+        await harness.event(comm, "nothing")
+        await comm.disconnect()
+    assert await to_thread(over_http)(key) == (2, "b", "b")

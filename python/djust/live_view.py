@@ -1092,6 +1092,7 @@ class LiveView(
         self._djust_auto_changed: Any = None
         self._djust_auto_restore_same = False
         self._djust_auto_reapply: Any = None
+        self._djust_auto_reapply_declared: Any = None
         self._djust_auto_settled: Any = None
         # The tab this view belongs to: minted by the page GET, sent back by
         # that page's client on its socket mount and fallback POSTs (#4106).
