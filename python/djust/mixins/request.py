@@ -887,9 +887,18 @@ class RequestMixin:
         from .. import _automatic_state as _saved_state
 
         self.__dict__["_djust_tab"] = _saved_state.new_tab_id()
+        from django.contrib.sessions.backends.base import UpdateError
+
         from .._exposure_sessions import save_server_state
 
-        save_server_state(self, request)
+        try:
+            save_server_state(self, request)
+        except UpdateError:
+            # The session row cannot be updated (it was deleted meanwhile, as a
+            # logout in another tab does, or the store refused the write). The
+            # page still renders: nothing is saved, so its first fallback
+            # request runs mount() again.
+            _saved_state.report_unsaved_page(self)
         t_save_components = (time.perf_counter() - t0_sc) * 1000
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template

@@ -28,6 +28,7 @@ class HTTPView(LiveView):
         self.service = object()
         self.public_note = "PUBLIC_SENTINEL"
         self._private_note = "PRIVATE_SENTINEL"
+        self.password = "FLOOR_SENTINEL"  # a name on the sensitive-field list
 
     def get_context_data(self, **kwargs):
         return super().get_context_data(count=self.count, render_only="RENDER_SENTINEL", **kwargs)
@@ -65,9 +66,21 @@ def test_get_then_post_uses_server_projection_not_render_context(staged, rf):
     adapter = server_state_adapter(HTTPView(), first)
     stored = SessionStore(session.session_key).load()
     assert stored[adapter.key]["state"]["values"] == {"count": 5, "server_note": "SERVER_SENTINEL"}
-    encoded = json.dumps(stored)
-    for name in ("PUBLIC", "PRIVATE", "RENDER", "TRANSIENT"):
-        assert name + "_SENTINEL" not in encoded
+    # The stored session is not a client destination (ADR-038 amendment,
+    # docs/adr/notes/038-amendment-automatic-server-state.md; #4107). The
+    # declared envelope holds the declared fields only; the view's own state
+    # rests in its saved-state envelope and nowhere else; a render-context
+    # value and a floor value are in no part of the session.
+    automatic = {key: value for key, value in stored.items() if key.startswith("_djust_auto_")}
+    rest = json.dumps({key: value for key, value in stored.items() if key not in automatic})
+    for name in ("PUBLIC", "PRIVATE", "RENDER", "TRANSIENT", "FLOOR"):
+        assert name + "_SENTINEL" not in rest
+    (envelope,) = automatic.values()
+    assert envelope["values"]["public_note"] == "PUBLIC_SENTINEL"
+    assert envelope["private"]["_private_note"] == "PRIVATE_SENTINEL"
+    assert "count" not in envelope["values"] and "server_note" not in envelope["values"]
+    for name in ("RENDER", "FLOOR"):
+        assert name + "_SENTINEL" not in json.dumps(automatic)
     assert "liveview_/explicit/" not in stored
     assert "liveview_/explicit/__private" not in stored
 

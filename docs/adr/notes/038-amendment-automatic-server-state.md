@@ -116,6 +116,21 @@ gate-offs, without a browser.
   oldest is evicted at a write. A navigation that stays on the socket keeps
   the page's tab id with the new route's key. A duplicated browser tab shares
   its original's id until its next page load.
+- **Where the meta goes.** Inside `<head>` when the page has one; otherwise
+  right after `<html>`, else after the doctype, else in front of a page that is
+  only a fragment. The browser's parser leaves it in `document.head` in every
+  case, where the client reads it, and it never precedes a doctype (that would
+  switch the page to quirks mode).
+- **A page load is served even when its state cannot be saved.** If the
+  session row cannot be updated while the page GET saves (it was deleted
+  meanwhile, as a logout in another tab does), the page is still served: one
+  WARNING per view class, nothing is saved or left staged in the session, and
+  the page's next request runs `mount()` again. A failed event save is still
+  an error.
+- **What a connected view holds for this.** One encoding of its saved state to
+  roll a refused turn back to (compressed past 2 KB) and a 16-byte digest per
+  attribute; never a second copy of the values. The numbers are in the scaling
+  guide's per-view memory table.
 
 ## Not done here
 

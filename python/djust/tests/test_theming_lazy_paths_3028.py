@@ -40,6 +40,14 @@ pytestmark = [pytest.mark.theming, pytest.mark.django_db]
 PROCESSORS = {"lazy": PROCESSOR, "old": OLD_PROCESSOR}
 
 
+@pytest.fixture(autouse=True)
+def _one_tab_id(monkeypatch):
+    # Every page load mints a tab id (#4106); these tests compare two loads.
+    from djust import _automatic_state
+
+    monkeypatch.setattr(_automatic_state, "new_tab_id", lambda: "tab-3028-fixed-id")
+
+
 def _mask(text: str) -> str:
     # The CSRF token is masked afresh, and the render digest (#4108) is bound
     # to the request's session: neither is the processor's output.

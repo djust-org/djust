@@ -43,6 +43,7 @@ import json
 import logging
 import re
 import time
+import zlib
 from inspect import getattr_static
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -124,6 +125,21 @@ def _report(view: Any, name: str, kind: str, reason: str, fix: str) -> None:
         name,
         reason,
         fix,
+    )
+
+
+def report_unsaved_page(view: Any) -> None:
+    """A page load whose session could not be updated: say so once per view
+    class. The page is served; nothing of the view was saved for it."""
+    if not _first_time(view, "", "session-update"):
+        return
+    owner = type(view)
+    logger.warning(
+        "djust: the state of %s.%s was not saved for this page load: the session could "
+        "not be updated (it was deleted meanwhile, or the session store refused the "
+        "write). The page is served; mount() runs again on its next request.",
+        owner.__module__,
+        owner.__qualname__,
     )
 
 
@@ -376,6 +392,17 @@ def enum_classes(view_class: type) -> frozenset:
 
 def _encode(values: Any) -> str:
     return json.dumps(values, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _digest(text: str) -> bytes:
+    """What stands for an encoding where only equality is asked. A connected
+    view keeps these, not second copies of its state (#3998)."""
+    return hashlib.blake2b(text.encode("utf-8"), digest_size=16).digest()
+
+
+def _digests(values: Dict[str, Any]) -> Dict[str, bytes]:
+    """Per name, the digest of its encoded value."""
+    return {name: _digest(_encode(value)) for name, value in values.items()}
 
 
 def limits_for(view: Any) -> Tuple[int, int]:
@@ -697,16 +724,27 @@ TAB_HEADER = "X-Djust-Tab"
 TAB_META = "djust-tab"
 
 
+_HEAD_END = re.compile(r"</head\s*>", re.IGNORECASE)
+_HTML_START = re.compile(r"<html(?:\s[^>]*)?>", re.IGNORECASE)
+_DOCTYPE = re.compile(r"\s*<!doctype[^>]*>", re.IGNORECASE)
+
+
 def page_with_tab(html: str, tab: str) -> str:
     """The page with its tab id in a ``<meta name="djust-tab">``, where the
-    client reads it. In ``<head>`` when the page has one, else in front."""
+    client reads it (``document.head``)."""
     if not tab_id(tab):
         return html
     meta = '<meta name="%s" content="%s">' % (TAB_META, tab)
-    found = re.search(r"</head\s*>", html, re.IGNORECASE)
-    if found is None:
-        return meta + html
-    return html[: found.start()] + meta + html[found.start() :]
+    found = _HEAD_END.search(html)
+    if found is not None:
+        at = found.start()
+    else:
+        # No <head>: right after <html>, else after the doctype, else in
+        # front. The browser's parser puts a leading <meta> in the head it
+        # creates. Never before a doctype, which would mean quirks mode.
+        found = _HTML_START.search(html) or _DOCTYPE.search(html)
+        at = found.end() if found is not None else 0
+    return html[:at] + meta + html[at:]
 
 
 def new_tab_id() -> str:
@@ -885,49 +923,74 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
 
 
 class _Basis:
-    """What a view's next save is compared with.
+    """What a view's next save is compared with, and what a refused turn goes
+    back to.
 
-    ``text`` / ``created``: the encoding the store holds (or the view held when
-    its mount sequence finished) and when it was written; a save equal to it is
-    skipped. ``public`` / ``private``: the encoded values at that point, per
-    name. ``changed``: the names a handler, or a later lifecycle step, has
-    changed since ``mount()``. A save adds every name whose value differs from
-    this basis, and the record is stored with the state; a page GET starts it
-    empty again.
+    Held by every connected view, so it holds one encoding and digests, never
+    a second copy of the values (#3998):
+
+    ``stored`` / ``created``: the digest of the encoding the store holds (or
+    the view held when its mount sequence finished) and when it was written; a
+    save equal to it is skipped. ``public`` / ``private``: per name, the digest
+    of the encoded value at that point. ``changed``: the names a handler, or a
+    later lifecycle step, has changed since ``mount()``. A save adds every name
+    whose digest differs from this basis, and the record is stored with the
+    state; a page GET starts it empty again. ``rollback``: the encoding of the
+    view at that point (a ``Projection.text``, compressed when it is long),
+    decoded only when a refused turn is rolled back.
     """
 
     __slots__ = (
-        "text",
+        "stored",
         "created",
         "public",
         "private",
         "changed",
         "deleted",
-        "components",
+        "rollback",
         "names",
     )
 
     def __init__(
         self,
-        text: str,
+        stored: bytes,
         created: Optional[int],
-        public: Dict[str, Any],
-        private: Dict[str, Any],
+        public: Dict[str, bytes],
+        private: Dict[str, bytes],
         changed: frozenset,
-        deleted: frozenset = frozenset(),
-        components: Optional[Dict[str, Any]] = None,
+        deleted: frozenset,
+        rollback: Any,
         names: Optional[frozenset] = None,
     ) -> None:
-        self.text = text
+        self.stored = stored
         self.created = created
         self.public = public
         self.private = private
         self.changed = changed
         self.deleted = deleted
-        self.components = components or {}
+        self.rollback = rollback
         # Every application attribute the view had then, saveable or not
         # (None: read from the store, where that is not known).
         self.names = names
+
+    def values(self) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+        """The encoded public, private and component values to roll back to."""
+        text = self.rollback
+        if type(text) is bytes:
+            text = zlib.decompress(text).decode("utf-8")
+        public, private, _remount, components = json.loads(text)
+        return public, private, components
+
+
+#: A rollback encoding longer than this is kept compressed: a list page's
+#: state is rows that repeat their keys, and every open socket holds one.
+_ROLLBACK_PLAIN = 2048
+
+
+def _rollback(text: str) -> Any:
+    if len(text) <= _ROLLBACK_PLAIN:
+        return text
+    return zlib.compress(text.encode("utf-8"), 1)
 
 
 def _present(view: Any) -> frozenset:
@@ -958,7 +1021,13 @@ def saved(view: Any, request: Any) -> Optional[Saved]:
     view.__dict__["_djust_auto_saved_url"] = found.url if found is not None else None
     if found is not None:
         view.__dict__["_djust_auto_basis"] = _Basis(
-            found.text, found.created, found.raw[0], found.raw[1], found.changed, found.deleted
+            _digest(found.text),
+            found.created,
+            _digests(found.raw[0]),
+            _digests(found.raw[1]),
+            found.changed,
+            found.deleted,
+            _rollback(found.text),
         )
     elif store is not None and any(
         type(other) is dict and other.get("page") == store.page
@@ -1007,11 +1076,12 @@ def load(view: Any, request: Any) -> Optional[Dict[str, Any]]:
         # (kept in memory). Not to the store: after a socket mount the store
         # may still hold the page GET's mount()-computed values, which this
         # connection's mount() has since replaced (a revoked permission flag).
+        then_public, then_private, then_components = settled.values()
         restored = put_back(
             view,
-            _decoded(view, settled.public),
-            _decoded(view, settled.private),
-            _decoded(view, settled.components),
+            _decoded(view, then_public),
+            _decoded(view, then_private),
+            _decoded(view, then_components),
             over_mount=True,
         )
         if settled.names is not None:
@@ -1248,19 +1318,20 @@ def settle(view: Any) -> None:
         state = project(view)
     except ExposureError:
         return  # over its limit: reported; the first save refuses
+    now_digest = _digest(state.text)
     view.__dict__["_djust_auto_basis"] = _Basis(
-        # The store's own text, so that a turn which changes nothing is not
-        # written; the per-name values are the view's.
-        state.text if basis is None or basis.created is None else basis.text,
+        # The store's own encoding, so that a turn which changes nothing is not
+        # written; the per-name digests and the rollback are the view's.
+        now_digest if basis is None or basis.created is None else basis.stored,
         None if basis is None else basis.created,
-        state.public,
-        state.private,
+        _digests(state.public),
+        _digests(state.private),
         frozenset() if basis is None else basis.changed,
         frozenset() if basis is None else basis.deleted,
-        state.components,
+        _rollback(state.text),
         _present(view),
     )
-    view.__dict__["_djust_auto_settled"] = state.text
+    view.__dict__["_djust_auto_settled"] = now_digest
 
 
 def _still_fresh(basis: _Basis, now: int) -> bool:
@@ -1305,7 +1376,8 @@ def stage(view: Any, request: Any, *, create: bool = True) -> Optional[Callable[
             return None
     state = project(view)
     settled = view.__dict__.get("_djust_auto_settled")
-    unchanged = basis is not None and state.text in (basis.text, settled)
+    now_digest = _digest(state.text)
+    unchanged = basis is not None and now_digest in (basis.stored, settled)
     if skip and basis is not None and unchanged and _still_fresh(basis, now):
         return None
     store = _store(view, request, create=create)
@@ -1316,12 +1388,13 @@ def stage(view: Any, request: Any, *, create: bool = True) -> Optional[Callable[
     # basis. With no basis (the page GET's save, a mount with nothing stored)
     # the record starts empty.
     changed: frozenset = frozenset()
+    now_public, now_private = _digests(state.public), _digests(state.private)
     if basis is not None:
         changed = basis.changed | frozenset(
             name
             for now_values, then_values in (
-                (state.public, basis.public),
-                (state.private, basis.private),
+                (now_public, basis.public),
+                (now_private, basis.private),
             )
             for name, value in now_values.items()
             if then_values.get(name, _MISSING) != value
@@ -1367,13 +1440,13 @@ def stage(view: Any, request: Any, *, create: bool = True) -> Optional[Callable[
     previous_basis = view.__dict__.get("_djust_auto_basis")
     previous_settled = settled
     view.__dict__["_djust_auto_basis"] = _Basis(
-        state.text,
+        now_digest,
         now,
-        state.public,
-        state.private,
+        now_public,
+        now_private,
         changed,
         deleted,
-        state.components,
+        _rollback(state.text),
         _present(view),
     )
     view.__dict__["_djust_auto_settled"] = None

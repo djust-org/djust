@@ -2593,3 +2593,38 @@ async def test_socket_live_patch_moves_the_saved_url():
         await again.disconnect()
     assert stored["url"] == _automatic_state.canonical_params({"page": 7})
     assert _probe_of(mount["html"]) == {"page": 7, "tab": "b", "count": 0}
+
+
+# ---------------------------------------------------------------------------
+# What a connected view holds for all this (#3998)
+# ---------------------------------------------------------------------------
+
+
+def test_the_basis_holds_one_encoding_and_digests_never_a_copy_of_the_values():
+    """Every open socket keeps a basis: one (compressed) encoding to roll a
+    refused turn back to, and a digest per name."""
+    view = Cart()
+    view.mount(None)
+    view.cart = [{"sku": "item-%04d" % i, "qty": 1} for i in range(400)]
+    _automatic_state.settle(view)
+    basis = view.__dict__["_djust_auto_basis"]
+    state = _automatic_state.project(view)
+    assert type(basis.rollback) is bytes and len(basis.rollback) < len(state.text) // 4
+    assert set(basis.public) == {"count", "catalog", "cart"}
+    assert all(type(d) is bytes and len(d) == 16 for d in basis.public.values())
+    assert type(basis.stored) is bytes and view.__dict__["_djust_auto_settled"] == basis.stored
+    # Nothing on the basis is, or contains, a row.
+    held = [getattr(basis, slot) for slot in type(basis).__slots__]
+    assert not any(type(item) in (list, dict) and item and "sku" in repr(item) for item in held)
+    # What it decodes to is the view's state at that point.
+    assert basis.values() == (state.public, state.private, state.components)
+
+    small = Cart()
+    small.mount(None)
+    _automatic_state.settle(small)
+    assert type(small.__dict__["_djust_auto_basis"].rollback) is str
+    assert small.__dict__["_djust_auto_basis"].values()[0] == {
+        "count": 0,
+        "catalog": "c",
+        "cart": [],
+    }

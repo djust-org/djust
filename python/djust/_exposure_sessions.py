@@ -358,6 +358,7 @@ def save_server_state(view: Any, request: Any) -> None:
     adapter = _declared_adapter(view, request, create=True)
     # Projected first: a refusal must leave the session dict untouched.
     values = _project_for_save(adapter, view) if adapter is not None else None
+    modified_before = getattr(getattr(request, "session", None), "modified", None)
     undo = _automatic_state.stage(view, request)
     if adapter is not None and values is not None:
         try:
@@ -370,7 +371,15 @@ def save_server_state(view: Any, request: Any) -> None:
             raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
     elif undo is not None:
         session = request.session
-        _flush(session, session.session_key)
+        try:
+            _flush(session, session.session_key)
+        except BaseException:
+            # Never leave a staged envelope behind a write that failed: the
+            # session middleware would try the same write again at the response.
+            undo()
+            if modified_before is not None:
+                session.modified = modified_before
+            raise
 
 
 def reapply_saved_state(view: Any) -> None:

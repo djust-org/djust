@@ -3489,8 +3489,12 @@ class ViewRuntime(RuntimeTurnPort):
         try:
             await call_hook(view_instance.mount, request, **mount_kwargs)
             # Which ``_private`` attributes mount() created (saved with the
-            # view's state, #4107).
-            view_instance._snapshot_user_private_attrs()
+            # view's state, #4107). A view object that is not a LiveView (the
+            # runtime only needs mount/render of it) has no such record, and
+            # nothing of it is saved.
+            snapshot_private = getattr(view_instance, "_snapshot_user_private_attrs", None)
+            if callable(snapshot_private):
+                snapshot_private()
             if not legacy_exposure:
                 from ._exposure_sessions import load_server_state
 
