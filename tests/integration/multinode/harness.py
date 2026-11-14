@@ -221,6 +221,7 @@ class Cluster:
         redis: Optional[str],
         n: int = 2,
         node_env: Optional[Dict[str, Dict[str, str]]] = None,
+        store: Optional[str] = None,
     ) -> None:
         self.node_env = node_env or {}
         self.dir = _short_tempdir("mnc")
@@ -230,6 +231,8 @@ class Cluster:
             "db": os.path.join(self.dir, "db.sqlite3"),
             "cache_dir": os.path.join(self.dir, "cache"),
             "redis": redis,
+            # The state store every node names (#4132): None, "sealed" or "file".
+            "store": store,
         }
         os.makedirs(self.config["cache_dir"])
         self.names = [chr(ord("A") + i) for i in range(n)]

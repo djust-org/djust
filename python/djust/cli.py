@@ -86,6 +86,78 @@ def _print_unlistable_sessions() -> None:
     )
 
 
+def _exit_on_store_call_failure(error: Exception) -> None:
+    """A state-store call failed, in the store or in the ``sync_turn_wrapper``
+    it runs inside: say which wrapper, what the CLI passes it, and stop with a
+    non-zero exit. Nothing was removed from the session being worked on."""
+    from djust.config import config
+    from djust.state_store import configured_store, store_tag
+
+    store = configured_store()
+    wrapper = config.get("sync_turn_wrapper")
+    print("\nError: a call into the state store failed: %s" % error)
+    if store is not None:
+        print("  Store: %s" % store_tag(store))
+    if wrapper:
+        print(
+            "  It ran inside LIVEVIEW_CONFIG['sync_turn_wrapper'] (%s), which this command "
+            'calls with view=None, step="state_store" and turn=None. A wrapper that reads '
+            "the view or the turn must handle None (see the turn middleware guide)."
+            % (wrapper if isinstance(wrapper, str) else getattr(wrapper, "__qualname__", wrapper))
+        )
+    print(
+        "  Stopped. The saved states of the session being cleared were left in place, "
+        "so every row in the store is still named by a session."
+    )
+    sys.exit(1)
+
+
+def _print_state_store_stats(sessions: Optional[list]) -> None:
+    """What the project's state store (``DJUST_STATE_STORE``, #4132) holds."""
+    from djust._automatic_state import _cli_store_call, _kept_in_session, saved_state_stats
+    from djust.state_store import configured_store, store_stats, store_tag
+
+    store = configured_store()
+    if store is None:
+        return
+    print("\n=== djust State Store ===\n")
+    print(f"Store: {store_tag(store)}")
+    if _kept_in_session(store):
+        print("Its payloads rest in the sessions above (the sizes shown include them).")
+        return
+    if sessions is not None:
+        held = sum(saved_state_stats(s).get("store_bytes", 0) for s in sessions)
+        print(f"State held for the sessions above: {held / 1024:.2f} KB")
+    # Inside the project's sync_turn_wrapper, as every store call (view=None).
+    figures = _cli_store_call(store_stats)
+    if figures is None:
+        print("Not listed: the store reports no figures of its own (it has no stats()).")
+        return
+    for name, value in sorted(figures.items()):
+        print(f"{name}: {value}")
+
+
+def _clear_state_store(everything: bool) -> None:
+    """Ask the project's state store to clear itself (``djust clear``, #4132).
+
+    The states removed from sessions above were already deleted from it one by
+    one; this sweeps what no session points at (expired or orphaned bytes)."""
+    from djust._automatic_state import _cli_store_call, _kept_in_session
+    from djust.state_store import configured_store, store_clear, store_tag
+
+    store = configured_store()
+    if store is None or _kept_in_session(store):
+        return
+    removed = _cli_store_call(store_clear, expired_only=not everything)
+    if removed is None:
+        print(
+            "State store %s cannot clear itself (it has no clear()): only the states "
+            "removed from sessions above were deleted from it." % store_tag(store)
+        )
+    else:
+        print("Removed %d view state(s) from the state store %s" % (removed, store_tag(store)))
+
+
 def cmd_stats(args: argparse.Namespace) -> None:
     """Show the view state saved in sessions, then the state backend's statistics."""
     setup_django()
@@ -116,6 +188,8 @@ def cmd_stats(args: argparse.Namespace) -> None:
                         f"  - {shown}...: {stats['entries']} state(s), "
                         f"{stats['bytes'] / 1024:.2f} KB"
                     )
+
+        _print_state_store_stats(sessions)
 
         from djust.state_backends import get_backend
 
@@ -165,6 +239,10 @@ def cmd_stats(args: argparse.Namespace) -> None:
         print(f"Error: Could not import djust modules: {e}")
         sys.exit(1)
     except Exception as e:
+        from djust._automatic_state import StoreCallFailed
+
+        if isinstance(e, StoreCallFailed):
+            _exit_on_store_call_failure(e)
         print(f"Error getting stats: {e}")
         sys.exit(1)
 
@@ -755,6 +833,7 @@ def cmd_clear(args: argparse.Namespace) -> None:
                 "Removed %d saved view state(s) from %d session(s)"
                 % (sum(removed), sum(1 for count in removed if count))
             )
+        _clear_state_store(args.all)
 
         # Get stats before clearing
         stats_before = backend.get_stats()
@@ -773,6 +852,10 @@ def cmd_clear(args: argparse.Namespace) -> None:
         print(f"Sessions after: {stats_after.get('total_sessions', 0)}")
 
     except Exception as e:
+        from djust._automatic_state import StoreCallFailed
+
+        if isinstance(e, StoreCallFailed):
+            _exit_on_store_call_failure(e)
         print(f"Error clearing cache: {e}")
         sys.exit(1)
 

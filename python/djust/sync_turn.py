@@ -6,7 +6,8 @@ handler, ``mount``, ``handle_params``, a ``start_async`` callback and its
 ``get_context_data()`` (where the JIT evaluates the view's QuerySets), the
 authorization checks (``check_permissions``, ``get_object`` and
 ``has_object_permission``) and the ``on_mount`` / ``connected`` /
-``disconnected`` lifecycle hooks. Between the hops the turn awaits, and with
+``disconnected`` lifecycle hooks, and the calls into a configured state store
+(``DJUST_STATE_STORE``). Between the hops the turn awaits, and with
 ``worker_threads`` the pool thread runs other sessions' hops. A ``LIVEVIEW_MIDDLEWARE`` therefore cannot hold a
 database transaction (or any thread-bound state) for the turn: it would span
 those awaits and leak into the other sessions' hops.
@@ -80,8 +81,24 @@ __all__ = [
 #: (``get_object`` and ``has_object_permission``). ``"lifecycle"`` is the
 #: connection lifecycle: the ``on_mount`` hooks, ``connected()`` and
 #: ``disconnected()`` (#3637).
+#:
+#: ``"state_store"`` is a call into the project's state store
+#: (``DJUST_STATE_STORE``, :mod:`djust.state_store`): the load of a view's
+#: saved state, its save after a turn and the deletion of evicted states. It
+#: is entered only when a store outside the session is configured (#4132).
 SYNC_STEPS = frozenset(
-    {"event", "mount", "handle_params", "hook", "async", "tick", "render", "auth", "lifecycle"}
+    {
+        "event",
+        "mount",
+        "handle_params",
+        "hook",
+        "async",
+        "tick",
+        "render",
+        "auth",
+        "lifecycle",
+        "state_store",
+    }
 )
 
 SyncTurnWrapper = Callable[[Any, str, Any], ContextManager[Any]]

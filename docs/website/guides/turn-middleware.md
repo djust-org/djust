@@ -180,6 +180,8 @@ from django.db import connection, transaction
 def caller_scope(view, step, turn):
     if turn is not None and turn.transport == "http":
         return nullcontext()        # the request's own transaction holds
+    if view is None:
+        return nullcontext()        # `djust clear` / `djust stats`: no view, no caller
     user = turn.user if turn is not None else getattr(view.request, "user", None)
     return _as_caller(getattr(user, "pk", None))
 
@@ -202,9 +204,17 @@ def _as_caller(user_id):
   | `"render"` | every call djust makes to `get_context_data()`, on every transport |
   | `"auth"` | an authorization decision that runs your code: `check_permissions()`, Django's access mixins and replayed `dispatch` decorators (`test_func`), `@permission_required` on a handler, and the object-permission check (`get_object()` + `has_object_permission()`) |
   | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the signed client snapshot's restore gate (`_should_restore_snapshot()`), the restore of a legacy lazy child's private state (`_restore_private_state()`, which re-fetches private model references; a guarded step, so a wrapper that swallows a failure cannot leave a half-restored view), and a released view's teardown hooks **only when they run on a worker thread**; on the event loop they run with no step (see [Not wrapped](#not-wrapped)) |
+  | `"state_store"` | a call into the project's [state store](../state/state-store.md) (`DJUST_STATE_STORE`): the load of a view's saved state, its save after a turn, and the deletion of evicted states. Entered only when a store outside the session is configured (new with #4132) |
 - `view` is the view or component whose code runs; `turn` is
   `djust.turns.current_turn()`, or `None` when the step runs outside a turn (a
   `start_async` callback runs between its start and result turns).
+- **`view` is `None` for the command line.** `djust clear` and `djust stats`
+  call a configured [state store](../state/state-store.md) as a
+  `"state_store"` step with `view=None` and `turn=None`: there is no view and
+  no caller. Return `nullcontext()`, or the administrative scope your store
+  needs to delete any caller's rows. A wrapper that fails there stops the
+  command with an error that names it; nothing is removed from the session it
+  was working on.
 - A step that runs inside another step on the same thread (a handler that calls
   `get_context_data()`) does not enter the wrapper again.
 - **Accept every step name.** The list of steps grows (`"auth"` and
@@ -272,7 +282,8 @@ A wrapper that accepts every step name, today's and any added later:
 ```python
 from contextlib import nullcontext
 
-KNOWN = {"event", "mount", "handle_params", "hook", "async", "tick", "render", "auth", "lifecycle"}
+KNOWN = {"event", "mount", "handle_params", "hook", "async", "tick", "render", "auth", "lifecycle",
+         "state_store"}
 
 def caller_scope(view, step, turn):
     if step not in KNOWN:

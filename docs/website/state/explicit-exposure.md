@@ -141,6 +141,10 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   kept either way. See
   [Switching saving off](../guides/state-survival.md#switching-saving-off).
   System check `djust.C035` reports a value that is not a bool.
+- **`DJUST_STATE_STORE`.** Where the saved state is held: unset, the session;
+  `djust.state_store.SealedSessionViewStateStore` encrypts it there; or your
+  own store. Fields declared `persist="server"` do not go through it. See
+  [The state store](state-store.md).
 - **`DJUST_SERVER_STATE_MAX_AGE`.** The lifetime of a server envelope in
   seconds, from 1 to 86400. The default is 3600. System check `djust.C020`
   validates it.

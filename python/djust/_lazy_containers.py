@@ -224,10 +224,30 @@ def _lazy_state_saved(parent: Any, child: Any) -> bool:
     Its state rests in the page's session, so the page's switch governs: saving
     must be on for the page that embeds it AND for the child. A child cannot
     switch saving on under a page that switched it off.
-    """
-    from ._automatic_state import saving_enabled
 
-    return saving_enabled(parent) and saving_enabled(child)
+    This state is written to the session as it is, not through the project's
+    state store (``DJUST_STATE_STORE``, #4132). A project that names a store
+    asked for view content to stay out of the plain session, so with one
+    configured a lazy legacy child's state is not saved: each fallback request
+    mounts the child again.
+    """
+    from ._automatic_state import _first_time, _state_store, logger, saving_enabled
+
+    if not (saving_enabled(parent) and saving_enabled(child)):
+        return False
+    if _state_store() is None:
+        return True
+    if _first_time(child, "*", "lazy-store"):
+        owner = type(child)
+        logger.warning(
+            "djust: the state of the lazy child %s.%s is not saved between requests while "
+            "DJUST_STATE_STORE is set: a legacy lazy child's state does not go through the "
+            "state store, and is not written to the session in the clear instead. It "
+            "mounts again on each page-POST fallback request.",
+            owner.__module__,
+            owner.__qualname__,
+        )
+    return False
 
 
 def save_http_lazy(parent: Any, request: Any, view_id: str, child: Any) -> None:

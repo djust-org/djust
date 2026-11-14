@@ -23,6 +23,7 @@ urlpatterns = [
     path("_mn/push/", views.push_view),
     path("_mn/stats/", views.stats_view),
     path("_mn/session-keys/", views.session_keys_view),
+    path("_mn/saved-state/", views.saved_state_view),
     path("_mn/gate/", views.gate_view),
     path("_mn/release/", views.release_view),
 ]
