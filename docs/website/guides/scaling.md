@@ -140,7 +140,7 @@ The model below is measured, not estimated. `python/djust/tests/test_view_memory
 **The formula** (djust 2.0 on CPython 3.12, bytes one connected view holds after an event):
 
 ```text
-view ≈ 37 KB + P × page_bytes + S × state_bytes
+view ≈ 41 KB + P × page_bytes + S × state_bytes
 ```
 
 - `page_bytes` is the HTML of the view's `dj-root`.
@@ -149,10 +149,10 @@ view ≈ 37 KB + P × page_bytes + S × state_bytes
 
 Two shortcuts that follow from it:
 
-- a page of static markup with a few values: **37 KB + 13.6 × page_bytes**. A 50 KB page is about 0.76 MB per view;
+- a page of static markup with a few values: **41 KB + 13.6 × page_bytes**. A 50 KB page is about 0.76 MB per view;
 - a table whose rows are all in state: **about 5.0 KB per row**. 500 rows (a 56 KB page) is about 2.6 MB per view, 1,000 rows about 5.2 MB.
 
-<!-- view-memory: base_kb=37 static_page=13.6 table_page=28 state=5.1 row_kb=5.0 static_total=13.6 -->
+<!-- view-memory: base_kb=41 static_page=13.6 table_page=28 state=5.1 row_kb=5.0 static_total=13.6 -->
 
 **Who holds it** (bytes, one view, after one event; the Python rows as CPython 3.12 sizes them):
 
@@ -162,18 +162,19 @@ Two shortcuts that follow from it:
 | Rust: copy of the state | 1,810 | 1,810 | 1,207,514 | 8,547 | 4,447 |
 | Rust: text-node index | 217 | 67,167 | 403,889 | 5,015 | 294 |
 | Rust: last HTML, per-node HTML cache, loop cache, fragment map | 464 | 100,464 | 377,033 | 3,494 | 1,030 |
-| Python: the view's state | 10,837 | 10,721 | 397,463 | 27,544 | 17,763 |
+| Python: the view's state | 11,571 | 11,527 | 398,309 | 29,166 | 18,585 |
 | Python: change-detection fingerprints | 1,310 | 1,310 | 369,968 | 9,762 | 3,698 |
 | Python: recovery HTML | 116 | 53,007 | 112,919 | 1,993 | 312 |
-| Python: view and consumer, everything else | 19,260 | 18,942 | 18,672 | 21,899 | 20,598 |
-| Rust: everything else | 3,605 | 3,605 | 3,605 | 5,843 | 3,605 |
-| **Total** | **39 KB** | **0.76 MB** | **5.2 MB** | **119 KB** | **56 KB** |
+| Python: view and consumer, everything else | 22,670 | 22,512 | 32,412 | 22,102 | 23,447 |
+| Rust: everything else | 3,623 | 3,623 | 3,623 | 5,861 | 3,623 |
+| **Total** | **42 KB** | **0.76 MB** | **5.2 MB** | **118 KB** | **58 KB** |
 
 Read it this way:
 
 - **The rendered tree is the largest owner on every page with real markup**: 10 bytes of memory per byte of static HTML, 20 for a table. Each node is a 192-byte struct plus its attribute table.
 - **The page's text is held three more times** as text: the last HTML, the per-node HTML cache and the recovery HTML.
 - **State is held about five times over**: once in Python, three times that in the Rust copy, and once as a fingerprint.
+- **What a refused change goes back to** is in the "view and consumer" row: one encoding of the view's saved state, kept compressed when it is over 2 KB (about 10 KB for the 1,000-row table), and a 16-byte digest per attribute. It is what lets an event whose state is over the size limit be refused whole.
 - **Not per view**: the parsed template and the template's source text are one copy per template in the process, shared by every socket.
 
 These are counted bytes. What the allocator takes for them is higher: block rounding and free lists added about 15% for the Rust side in the one comparison made (`malloc` statistics on macOS arm64), and the Python heap matched `tracemalloc` within 1% plus about 17 KB per socket of event-loop and channel objects the walk does not attribute. Resident size also carries the per-thread heaps described above. Plan with the formula, then confirm with one load step on your own page.

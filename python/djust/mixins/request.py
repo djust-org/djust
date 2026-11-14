@@ -887,9 +887,18 @@ class RequestMixin:
         from .. import _automatic_state as _saved_state
 
         self.__dict__["_djust_tab"] = _saved_state.new_tab_id()
+        from django.contrib.sessions.backends.base import UpdateError
+
         from .._exposure_sessions import save_server_state
 
-        save_server_state(self, request)
+        try:
+            save_server_state(self, request)
+        except UpdateError:
+            # The session row cannot be updated (it was deleted meanwhile, as a
+            # logout in another tab does, or the store refused the write). The
+            # page still renders: nothing is saved, so its first fallback
+            # request runs mount() again.
+            _saved_state.report_unsaved_page(self)
         t_save_components = (time.perf_counter() - t0_sc) * 1000
 
         # IMPORTANT: Always call get_template() on GET requests to set _full_template
@@ -1762,37 +1771,34 @@ class RequestMixin:
                 call_hook_sync(self.mount, request, **kwargs)
                 cast(Any, self)._snapshot_user_private_attrs()
                 mount_work_pending = True
-                # Declared persist="server" fields, then the URL: the URL this
-                # request carries wins over a declared field (#3624), as on the
-                # socket mount.
-                _assign(saved_view.declared)
-                _run_http_handle_params(self, request)
-            else:
-                # Rebuilt from the saved state, no mount(). handle_params()
-                # still runs, because 2.0 pins that the URL THIS request
-                # carries wins over a declared persist="server" field (#3624,
-                # ``test_http_fallback_handle_params_3624``): the saved state
-                # goes on first so the hook can read it, and the undeclared
-                # part goes back again below.
-                _assign(saved_view.declared)
-                _assign(saved_view.public)
-                _automatic_state.apply_private(self, saved_view.private)
-                _run_http_handle_params(self, request)
-            # The rest of the saved state goes over what mount() and
-            # handle_params() built, as 1.3 put it back: what a handler set (a
-            # tab the URL does not carry) is not reset by handle_params().
-            # ``put_back`` decides what goes back (never a saved model dict over
-            # the live instance mount() just loaded) and restores the private
-            # attributes and the components' state.
-            _assign(
-                _automatic_state.put_back(
-                    self,
-                    saved_view.public,
-                    saved_view.private,
-                    saved_view.components,
-                    over_mount=saved_view.must_mount,
+
+            def _put_saved_state_back() -> None:
+                # ``put_back`` decides what goes back (never a saved model dict
+                # over the live instance mount() just loaded) and restores the
+                # private attributes and the components' state.
+                _assign(
+                    _automatic_state.put_back(
+                        self,
+                        saved_view.public,
+                        saved_view.private,
+                        saved_view.components,
+                        over_mount=saved_view.must_mount,
+                    )
                 )
-            )
+
+            # The saved state goes on first, so handle_params() can read it.
+            _assign(saved_view.declared)
+            _put_saved_state_back()
+            # handle_params() runs on every request: the URL THIS request
+            # carries wins over a declared persist="server" field (#3624).
+            _run_http_handle_params(self, request)
+            # For the rest of the saved state (#4107): while the URL is the one
+            # the state was saved under, the saved state goes back over what
+            # handle_params() assigned, so the hook's defaults do not reset
+            # what a handler set. When the URL changed, handle_params() has the
+            # last word for what it assigned (``?page=3`` shows page 3).
+            if not _automatic_state.url_changed(self):
+                _put_saved_state_back()
             # The view is as the next handler finds it: a save records as
             # changed every name that differs from this.
             _automatic_state.settle(self)

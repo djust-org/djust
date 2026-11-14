@@ -73,3 +73,34 @@ it('the socket mount frame, the SSE mount frames and the stream URL all read the
     // #4108's resync request restores the same tab's state.
     expect(source('11-event-handler.js')).toMatch(/'X-Djust-Resync': '1',[\s\S]{0,160}'X-Djust-Tab': djustTabId\(\)/);
 });
+
+// Where the server puts the meta (`page_with_tab`; the same shapes are pinned
+// in python/djust/tests/test_automatic_state_4107.py): before </head> when the
+// page has a head, else right after <html>, else after the doctype, else in
+// front. In every shape the browser's parse leaves it in document.head, and a
+// doctype is never preceded by it (that would mean quirks mode).
+const META = '<meta name="djust-tab" content="tab-placed01">';
+const REST = '<div dj-root dj-view="app.View"><p id="n">0</p>'
+    + '<button id="go" dj-click="bump">Go</button></div>';
+const SHAPES = {
+    'a head': [`<!DOCTYPE html><html><head><title>t</title>${META}</head><body>${REST}</body></html>`, true],
+    'no head': [`<html>${META}<body>${REST}</body></html>`, false],
+    'a doctype and no head': [`<!DOCTYPE html><html lang="en">${META}<body>${REST}</body></html>`, true],
+    'a doctype and no html tag': [`<!DOCTYPE html>${META}${REST}`, true],
+    'only a fragment': [`${META}${REST}`, false],
+};
+
+for (const [name, [html, standards]] of Object.entries(SHAPES)) {
+    it(`a page with ${name}: the id is in document.head and is the one sent`, async () => {
+        const dom = new JSDOM(html, {url: 'http://localhost/', runScripts: 'dangerously'});
+        dom.window.eval(client);
+        try {
+            const doc = dom.window.document;
+            expect(doc.head.querySelectorAll('meta[name="djust-tab"]').length).toBe(1);
+            expect(doc.body.querySelector('meta[name="djust-tab"]')).toBeNull();
+            expect(doc.getElementById('go')).not.toBeNull();
+            expect(doc.compatMode).toBe(standards ? 'CSS1Compat' : 'BackCompat');
+            expect((await postedHeaders(dom))['X-Djust-Tab']).toBe('tab-placed01');
+        } finally { dom.window.close(); }
+    });
+}

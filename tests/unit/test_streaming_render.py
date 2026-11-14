@@ -154,7 +154,7 @@ class TestStreamingRenderEnabled:
         assert 1 <= len(chunks) <= 3
 
     @pytest.mark.django_db
-    def test_streaming_chunks_concatenate_to_original_html(self, get_request):
+    def test_streaming_chunks_concatenate_to_original_html(self, get_request, monkeypatch):
         """Joining all streamed chunks equals the non-streaming render output.
 
         The two code paths (``HttpResponse(html)`` and the streaming
@@ -162,6 +162,12 @@ class TestStreamingRenderEnabled:
         bodies. Using the same view class avoids spurious diffs on the
         ``dj-view="<module>.<class>"`` attribute that ``get()`` injects.
         """
+        # Each page load mints its own tab id (#4106): one id for both here,
+        # so the bodies are comparable byte for byte.
+        from djust import _automatic_state
+
+        monkeypatch.setattr(_automatic_state, "new_tab_id", lambda: "tab-streaming-1")
+
         # Build the streamed response through the streaming iterator.
         streaming_view = _StreamingView()
         streaming_response = streaming_view.get(get_request)
@@ -176,6 +182,7 @@ class TestStreamingRenderEnabled:
         expected_bytes = baseline_response.content
 
         assert streamed_bytes == expected_bytes
+        assert streamed_bytes.count(b'<meta name="djust-tab" content="tab-streaming-1">') == 1
 
     @pytest.mark.django_db
     def test_streaming_main_content_contains_dj_root_wrapper(self, get_request):

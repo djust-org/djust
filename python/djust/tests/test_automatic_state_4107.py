@@ -1485,7 +1485,7 @@ def test_the_store_is_written_and_read_in_one_place_each():
     callers: Dict[str, set] = {}
     pattern = (
         r"_automatic_state\.(stage|load|saved|apply_private|put_back|reapply|settle"
-        r"|finish_mount|apply_components)\("
+        r"|finish_mount|apply_components|url_changed)\("
     )
     for path in root.rglob("*.py"):
         if "tests" in path.parts or path.name == "_automatic_state.py":
@@ -1498,7 +1498,7 @@ def test_the_store_is_written_and_read_in_one_place_each():
         "saved": {"_exposure_sessions.py"},
         "finish_mount": {"_exposure_sessions.py"},
         "put_back": {"request.py"},
-        "apply_private": {"request.py"},
+        "url_changed": {"request.py"},
         "settle": {"request.py"},
     }
 
@@ -2405,3 +2405,226 @@ async def test_a_refused_change_also_takes_back_the_names_the_handler_added():
     stored = await sync_to_async(_saved_envelope)(key)
     assert stored["values"] == {"count": 2}  # neither blob nor extra; the refused +1 undone
     assert "_note" not in stored["private"]
+
+
+# ---------------------------------------------------------------------------
+# The URL: saved state wins while it is the same, handle_params() when it changed
+# ---------------------------------------------------------------------------
+
+
+class Paged(_Base):
+    shown = ("page", "tab", "count")
+
+    def mount(self, request, **kwargs):
+        self.page = 1
+        self.tab = "a"
+        self.count = 0
+
+    def handle_params(self, params, uri):
+        self.page = int(params.get("page", 1))
+        self.tab = params.get("tab", "a")
+
+    @event_handler()
+    def inc(self, **kwargs):
+        self.count += 1
+
+    @event_handler()
+    def pick(self, value: str = "b", **kwargs):
+        self.tab = value
+
+    @event_handler()
+    def go(self, page: int = 1, **kwargs):
+        self.page = page
+        self.live_patch(params={"page": page})
+
+    @event_handler()
+    def nothing(self, **kwargs):
+        pass
+
+
+def _paged(view: Any) -> tuple:
+    return (view.page, view.tab, view.count)
+
+
+def _paged_fallback(steps: List[tuple]) -> Any:
+    """GET the first step's URL, then one POST per step: ``(query, event, params)``."""
+    first = _request("GET", None, path=harness.PATH + steps[0][0])
+    assert Paged().get(first).status_code == 200
+    key = first.session.session_key
+    view = None
+    for query, event, *rest in steps:
+        view = Paged()
+        request = _request("POST", key, event, rest[0] if rest else None, path=harness.PATH + query)
+        assert view.post(request).status_code == 200
+    return view
+
+
+@pytest.mark.django_db
+def test_fallback_a_changed_url_wins_and_unrelated_handler_state_is_kept():
+    view = _paged_fallback([("?page=1", "inc"), ("?page=1", "inc"), ("?page=3", "nothing")])
+    assert _paged(view) == (3, "a", 2)
+
+
+@pytest.mark.django_db
+def test_fallback_the_same_url_keeps_what_a_handler_set_over_the_hooks_default():
+    view = _paged_fallback([("?page=2", "pick", {"value": "b"}), ("?page=2", "inc")])
+    assert _paged(view) == (2, "b", 1)
+
+
+@pytest.mark.django_db
+def test_fallback_a_changed_url_lets_handle_params_reset_what_it_assigns():
+    """Documented cost of the rule: ``tab`` is assigned by handle_params() on
+    every call, so when the URL changed its default wins over the handler's."""
+    view = _paged_fallback([("?page=2", "pick", {"value": "b"}), ("?page=5", "nothing")])
+    assert _paged(view) == (5, "a", 0)
+
+
+@pytest.mark.django_db
+def test_fallback_live_patch_moves_the_saved_url_so_the_next_request_is_not_a_change():
+    """``go`` patches the URL to ?page=7. The state it saves is saved under
+    ?page=7, so the request the browser then makes there keeps the handler-set
+    tab; without that the first request after a live_patch would reset it."""
+    view = _paged_fallback(
+        [
+            ("?page=1", "pick", {"value": "b"}),
+            ("?page=1", "go", {"page": 7}),
+            ("?page=7", "inc"),
+            ("?page=7", "inc"),
+        ]
+    )
+    assert _paged(view) == (7, "b", 2)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "saved,later",
+    [
+        ("?page=2&tab=a", "?tab=a&page=2"),  # another order
+        ("?tab=a%20b&page=2", "?page=2&tab=a+b"),  # another encoding of the same value
+        ("", "?"),  # no query and an empty one
+    ],
+)
+def test_fallback_another_spelling_of_the_same_query_is_not_a_change(saved, later):
+    first = _request("GET", None, path=harness.PATH + saved)
+    assert Paged().get(first).status_code == 200
+    key = first.session.session_key
+    picked = Paged()
+    picked.post(_request("POST", key, "pick", {"value": "z"}, path=harness.PATH + saved))
+    view = Paged()
+    view.post(_request("POST", key, "inc", path=harness.PATH + later))
+    assert (view.tab, view.count) == ("z", 1)  # the handler's tab survived: same URL
+
+
+def test_canonical_params_compare_parsed_values():
+    from django.http import QueryDict
+
+    same = [
+        _automatic_state.canonical_params(QueryDict("page=2&tab=a%20b&x=1&x=2")),
+        _automatic_state.canonical_params(QueryDict("x=1&tab=a+b&x=2&page=2")),
+        _automatic_state.canonical_params({"tab": "a b", "x": ["1", "2"], "page": 2}),
+    ]
+    assert len(set(same)) == 1
+    assert _automatic_state.canonical_params(QueryDict("x=2&x=1")) != same[0]
+    empty = {_automatic_state.canonical_params(p) for p in (None, {}, QueryDict(""), "nonsense")}
+    assert empty == {"[]"}
+    assert _automatic_state.canonical_params({"page": ""}) != "[]"  # ?page= is a parameter
+
+
+async def _mount_at(view_class: type, key: str, params: Dict[str, Any]) -> Any:
+    """A socket mount as the client makes it: the query string travels as ``params``."""
+    from channels.testing import WebsocketCommunicator
+
+    from djust.websocket import LiveViewConsumer
+
+    comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    comm.scope["session"] = SessionStore(key)
+    comm.scope["user"] = AnonymousUser()
+    assert (await comm.connect())[0]
+    await comm.receive_json_from()
+    await comm.send_json_to(
+        {
+            "type": "mount",
+            "view": f"{view_class.__module__}.{view_class.__name__}",
+            "url": harness.PATH,
+            "params": params,
+            "tab": harness.TAB,
+        }
+    )
+    frame = await comm.receive_json_from()
+    assert frame["type"] == "mount", frame
+    return comm, frame
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_socket_a_reconnect_at_the_same_url_keeps_the_handlers_tab_and_another_url_wins():
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE):
+        comm, _mount = await _mount_at(Paged, key, {"page": "2"})
+        await harness.event(comm, "pick", {"value": "b"})
+        await harness.event(comm, "inc")
+        await comm.disconnect()
+        same, mount_same = await _mount_at(Paged, key, {"page": "2"})
+        await same.disconnect()
+        other, mount_other = await _mount_at(Paged, key, {"page": "9"})
+        frame = await harness.event(other, "inc")
+        await other.disconnect()
+        again, mount_again = await _mount_at(Paged, key, {"page": "9"})
+        await again.disconnect()
+    assert _probe_of(mount_same["html"]) == {"page": 2, "tab": "b", "count": 1}
+    # Another URL: handle_params() wins for what it assigns; the count is kept.
+    assert _probe_of(mount_other["html"]) == {"page": 9, "tab": "a", "count": 1}
+    assert frame["type"] != "error"
+    # The event saved the state under ?page=9: the same URL again keeps it.
+    assert _probe_of(mount_again["html"]) == {"page": 9, "tab": "a", "count": 2}
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_socket_live_patch_moves_the_saved_url():
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE):
+        comm, _mount = await _mount_at(Paged, key, {"page": "1"})
+        await harness.event(comm, "pick", {"value": "b"})
+        await harness.event_frames(comm, "go", {"page": 7})
+        await comm.disconnect()
+        stored = await sync_to_async(_saved_envelope)(key)
+        again, mount = await _mount_at(Paged, key, {"page": "7"})
+        await again.disconnect()
+    assert stored["url"] == _automatic_state.canonical_params({"page": 7})
+    assert _probe_of(mount["html"]) == {"page": 7, "tab": "b", "count": 0}
+
+
+# ---------------------------------------------------------------------------
+# What a connected view holds for all this (#3998)
+# ---------------------------------------------------------------------------
+
+
+def test_the_basis_holds_one_encoding_and_digests_never_a_copy_of_the_values():
+    """Every open socket keeps a basis: one (compressed) encoding to roll a
+    refused turn back to, and a digest per name."""
+    view = Cart()
+    view.mount(None)
+    view.cart = [{"sku": "item-%04d" % i, "qty": 1} for i in range(400)]
+    _automatic_state.settle(view)
+    basis = view.__dict__["_djust_auto_basis"]
+    state = _automatic_state.project(view)
+    assert type(basis.rollback) is bytes and len(basis.rollback) < len(state.text) // 4
+    assert set(basis.public) == {"count", "catalog", "cart"}
+    assert all(type(d) is bytes and len(d) == 16 for d in basis.public.values())
+    assert type(basis.stored) is bytes and view.__dict__["_djust_auto_settled"] == basis.stored
+    # Nothing on the basis is, or contains, a row.
+    held = [getattr(basis, slot) for slot in type(basis).__slots__]
+    assert not any(type(item) in (list, dict) and item and "sku" in repr(item) for item in held)
+    # What it decodes to is the view's state at that point.
+    assert basis.values() == (state.public, state.private, state.components)
+
+    small = Cart()
+    small.mount(None)
+    _automatic_state.settle(small)
+    assert type(small.__dict__["_djust_auto_basis"].rollback) is str
+    assert small.__dict__["_djust_auto_basis"].values()[0] == {
+        "count": 0,
+        "catalog": "c",
+        "cart": [],
+    }

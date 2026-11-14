@@ -52,8 +52,16 @@ session:
   with a WARNING on the `djust.automatic_state` logger.
 - **Over the HTTP fallback** a later request rebuilds the view from its saved
   state and does not run `mount()` again; `handle_params()` and
-  `handle_restore()` then run, and what a handler set goes back over
-  `handle_params()`'s defaults. So what `mount()` computed at the page load (a
+  `handle_restore()` then run.
+- **The URL and the saved state.** The state is saved with the query string
+  the view last read. While a request or reconnect comes with that same query
+  (compared as parsed parameters, so order and encoding do not matter), the
+  saved state wins over what `handle_params()` assigns: a tab a handler set
+  survives the hook's default. When the query changed, `handle_params()` has
+  the last word for everything it assigns (`?page=3` shows page 3, and a value
+  it defaults is defaulted), and the rest of the saved state is kept. A
+  handler's `live_patch(params=...)` moves the saved URL with it. A declared
+  `persist="server"` field always takes what `handle_params()` assigns. So what `mount()` computed at the page load (a
   permission flag, a list of rows) continues as saved until the next page
   load, and a model instance `mount()` loaded is a dict of its fields there, as
   in 1.3: read it again in `handle_restore()`.
@@ -101,7 +109,7 @@ a channel layer every process shares. See
 | URL kwargs and the query string (`handle_params`) | kept<br><sub>`test_url_kwargs_and_handle_params`</sub> | read from the request; persisted fields restored<br><sub>`test_url_kwargs_and_handle_params`</sub> | read from the new URL (it wins); persisted fields restored<br><sub>`test_url_kwargs_and_handle_params`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: the URL is read again; it wins over a persisted field of the same name. |
 | A model instance `mount()` loads and keeps (`self.obj = Model.objects.get(...)`) | the instance<br><sub>`test_held_model_and_handle_params`</sub> | a dict of its fields: the view is rebuilt from saved state, `mount()` does not run<br><sub>`test_held_model_and_handle_params`</sub> | the instance `mount()` loaded on the new process<br><sub>`test_held_model_and_handle_params`</sub> | n/a (same mount path as the reconnect to another process) | Over the HTTP fallback read it again in `handle_restore()`: it comes back as a dict of its fields, as in 1.3. |
 | A value a handler set that `handle_params()` would default | kept<br><sub>`test_held_model_and_handle_params`</sub> | kept<br><sub>`test_held_model_and_handle_params`</sub> | kept<br><sub>`test_held_model_and_handle_params`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: the saved value goes back after `handle_params()`. |
-| The URL carries a value (`?tab=z`) for an undeclared attribute a handler also set | n/a (no mount, so `handle_params()` does not run again) | the handler's saved value wins<br><sub>`test_held_model_and_handle_params`</sub> | the handler's saved value wins<br><sub>`test_held_model_and_handle_params`</sub> | n/a (same mount path as the reconnect to another process) | Declare it `state(..., persist="server")` if the URL must win: for a declared field `handle_params()` has the last word. |
+| The URL carries a value (`?tab=z`) for an undeclared attribute a handler also set | n/a (no mount, so `handle_params()` does not run again) | the URL wins when it changed; the same URL keeps the handler's value<br><sub>`test_held_model_and_handle_params`</sub> | the URL wins when it changed; the same URL keeps the handler's value<br><sub>`test_held_model_and_handle_params`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: `handle_params()` has the last word when the URL changed since the state was saved; while it is the same URL, the handler's value is kept. |
 | `FormMixin` input and errors, mid-validation | kept<br><sub>`test_form_mid_validation`</sub> | input and errors restored<br><sub>`test_form_mid_validation`</sub> | input and errors restored<br><sub>`test_form_mid_validation`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: input and errors are saved, except password and other sensitive fields. |
 | `WizardMixin` step and answers | kept<br><sub>`test_wizard_step`</sub> | kept: the step and the answers<br><sub>`test_wizard_step`</sub> | restored: the step and the answers<br><sub>`test_wizard_step`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: the step and the answers are saved. |
 | `exposure_policy = "legacy"` view attribute | kept<br><sub>`test_legacy_view`</sub> | lost: every request runs `mount()`<br><sub>`test_legacy_view`</sub> | lost: `mount()` value<br><sub>`test_legacy_view`</sub> | n/a (same mount path as the reconnect to another process) | Migrate the view to explicit exposure: a legacy view's state is not saved. |

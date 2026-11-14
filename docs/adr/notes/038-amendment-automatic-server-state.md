@@ -52,6 +52,33 @@ are never persisted" and D-e (form input).
 6. **Cost.** The session is written only when the state changed, and a socket
    turn whose change detection found nothing changed serializes nothing.
 
+## The stored session is not a client destination
+
+ADR-038's exposure rule is about the client: under the explicit policy nothing
+outside `get_context_data()` or a declared `state()` field is rendered, sent,
+or settable from the browser. That holds unchanged for every client-facing
+destination: page HTML, socket and SSE frames, fallback answers, patches,
+tokens, the tab meta, error messages and logs.
+
+The caller's own server-side session is a separate destination with its own
+rule:
+
+- A view's undeclared public attributes and the `_private` attributes `mount()`
+  created MAY rest in that view's saved-state envelope (`_djust_auto_...`,
+  under `values` and `private`), and nowhere else in the session. Being saved
+  does not expose them: they are still never rendered, sent, or client-settable.
+- What is on the floor is NEVER in the session, under any policy or transport:
+  names on the sensitive-field list (`password`, ...), request and user
+  objects, secret form controls.
+- The envelope is bound to session, user, tenant and route and has a lifetime,
+  so another session, user or tenant reads nothing.
+
+The E5 matrix (`tests/playwright/test_exposure_matrix.py`) pins both: the
+client-facing rows keep "never appears", and the stored-session row is
+`tests/playwright/_exposure_session_contract.py`, which
+`python/djust/tests/test_exposure_session_contract_4107.py` also runs, with its
+gate-offs, without a browser.
+
 ## Decided after review (2026-11-13)
 
 - **Socket mount restores handler changes only.** The envelope records the
@@ -63,10 +90,19 @@ are never persisted" and D-e (form input).
   differ for values `mount()` computes and no handler changes.
 - **A saved model dict never goes over a live instance** that `mount()` just
   loaded (`put_back(over_mount=True)`).
-- **`handle_params()`** still runs on every fallback request, because 2.0 pins
-  that the URL a request carries wins over a declared `persist="server"` field
-  (#3624); the undeclared saved state goes back after it, so the hook does not
-  reset what a handler set. The same on a socket mount.
+- **The URL and the saved state.** `handle_params()` runs on every fallback
+  request and socket mount (2.0 pins that the URL a request carries wins over a
+  declared `persist="server"` field, #3624). The envelope records the query the
+  view last read, canonical (parsed, sorted). On restore the saved state goes
+  on first; `handle_params()` runs; and only while the query is the one the
+  state was saved under is the undeclared saved state put back again over what
+  the hook assigned. When the query changed, the hook has the last word for
+  what it assigned. Chosen because it needs no knowledge of which names the
+  hook assigns: skipping the second put-back is exactly "handle_params() wins
+  for what it assigned, everything else keeps its restored value". Its cost: a
+  name the hook defaults on every call is defaulted when any parameter changed.
+  `live_patch(params=...)` moves the recorded URL, so the request the browser
+  then makes there is not a change.
 - **Component state** is saved with the view's state and put back onto the
   components the view holds (1.3's `<key>_components`). ADR-034 interactive
   components are left out: their identity is rebuilt per mount (#4046).
@@ -80,6 +116,21 @@ are never persisted" and D-e (form input).
   oldest is evicted at a write. A navigation that stays on the socket keeps
   the page's tab id with the new route's key. A duplicated browser tab shares
   its original's id until its next page load.
+- **Where the meta goes.** Inside `<head>` when the page has one; otherwise
+  right after `<html>`, else after the doctype, else in front of a page that is
+  only a fragment. The browser's parser leaves it in `document.head` in every
+  case, where the client reads it, and it never precedes a doctype (that would
+  switch the page to quirks mode).
+- **A page load is served even when its state cannot be saved.** If the
+  session row cannot be updated while the page GET saves (it was deleted
+  meanwhile, as a logout in another tab does), the page is still served: one
+  WARNING per view class, nothing is saved or left staged in the session, and
+  the page's next request runs `mount()` again. A failed event save is still
+  an error.
+- **What a connected view holds for this.** One encoding of its saved state to
+  roll a refused turn back to (compressed past 2 KB) and a 16-byte digest per
+  attribute; never a second copy of the values. The numbers are in the scaling
+  guide's per-view memory table.
 
 ## Not done here
 

@@ -1371,7 +1371,7 @@ def encode_state_value(
     import datetime as _dt
     import enum
     import uuid
-    import zoneinfo
+    from zoneinfo import ZoneInfo
 
     nodes = [max_nodes]
 
@@ -1382,7 +1382,7 @@ def encode_state_value(
             return "UTC+0"
         if type(tz) is _dt.timezone:
             return ["offset", int(tz.utcoffset(None).total_seconds() * 1000000)]
-        if isinstance(tz, zoneinfo.ZoneInfo) and tz.key:
+        if isinstance(tz, ZoneInfo) and tz.key:
             return ["zone", tz.key]
         raise StateValueError(
             "a datetime with a %s time zone cannot be saved; use zoneinfo or a fixed offset"
@@ -1459,7 +1459,7 @@ def _decode_tagged_value(tagged: Any, enums: Optional[Any], depth: int) -> Any:
     import base64
     import datetime as _dt
     import uuid
-    import zoneinfo
+    from zoneinfo import ZoneInfo
 
     if depth > 64 or type(tagged) is not list or len(tagged) != 2 or type(tagged[0]) is not str:
         raise StateValueError("not a tagged value")
@@ -1476,7 +1476,7 @@ def _decode_tagged_value(tagged: Any, enums: Optional[Any], depth: int) -> Any:
         if type(spec) is list and len(spec) == 2 and spec[0] == "offset" and type(spec[1]) is int:
             return _dt.timezone(_dt.timedelta(microseconds=spec[1]))
         if type(spec) is list and len(spec) == 2 and spec[0] == "zone" and type(spec[1]) is str:
-            return zoneinfo.ZoneInfo(spec[1])
+            return ZoneInfo(spec[1])
         raise StateValueError("not a time zone")
 
     try:

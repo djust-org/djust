@@ -11,12 +11,22 @@ browser and the server expose:
 - the page HTML;
 - every frame the client received (WebSocket frames, or SSE events captured
   by an init script that listens alongside djust's own listeners);
-- the stored Django session rows, decoded;
-- the server log, when ``E5_SERVER_LOG`` points at it.
+- the server log, when ``E5_SERVER_LOG`` points at it;
+- the stored Django session rows, decoded, which are NOT a client destination
+  and have their own contract (below).
 
 The explicit view must never leak ``E5_UNDECLARED_SENTINEL`` (an ordinary
-attribute) or ``E5_PRIVATE_SENTINEL`` (an underscore attribute), in either
-mode. ``E5_ERROR_SENTINEL`` (a handler failure) follows Django (ADR-038 D-a):
+attribute) or ``E5_PRIVATE_SENTINEL`` (an underscore attribute) to any
+client-facing destination (page, frames, patches, tokens, errors, logs), in
+either mode.
+
+The stored session (ADR-038 amendment,
+``docs/adr/notes/038-amendment-automatic-server-state.md``; #4107): a view's
+state is saved server-side in the caller's own session, so those two values MAY
+be in the view's saved-state envelope there and nowhere else in the session;
+``E5_FLOOR_SENTINEL`` (held as ``self.password``, a name on the sensitive-field
+list) must be in no session under either policy and transport, and at no
+destination of the explicit view. The rule is ``_exposure_session_contract.stored_session_failures``. ``E5_ERROR_SENTINEL`` (a handler failure) follows Django (ADR-038 D-a):
 under DEBUG the explicit view's error frame must carry it, in production it
 must reach no frame, page or log. Run the server with ``DJUST_DEMO_DEBUG=0``
 and this script with ``E5_DEBUG=0`` for the production contract. The legacy
@@ -50,6 +60,7 @@ import urllib.request
 
 from playwright.async_api import async_playwright
 
+from _exposure_session_contract import FLOOR_SENTINEL, stored_session_failures
 from _transports import INIT, TransportWatch
 
 BASE = os.environ.get("E5_BASE", "http://localhost:8002")
@@ -96,7 +107,7 @@ def reachable(url):
 
 
 def session_dump(session_key):
-    """This flow's stored session, decoded, as one JSON string (values included).
+    """This flow's stored session rows, decoded (values included).
 
     Only the flow's own session: the legacy twin legitimately stores its public
     attributes, so reading every row would blame the explicit view for them.
@@ -109,7 +120,7 @@ def session_dump(session_key):
     from django.contrib.sessions.models import Session
 
     rows = Session.objects.filter(session_key=session_key)
-    return json.dumps([row.get_decoded() for row in rows], default=str)
+    return [row.get_decoded() for row in rows]
 
 
 async def session_key_of(context):
@@ -324,11 +335,8 @@ async def run_flow(browser, transport, policy, failures, notes):
                     failures.append(f"{label}: {sentinel} in frames after reconnect/navigation")
 
         stored = await asyncio.to_thread(session_dump, await session_key_of(context))
-        if stored == "[]":
+        if not stored:
             failures.append(f"{label}: no stored session found for this flow")
-        for sentinel in SENTINELS:
-            if sentinel in stored:
-                failures.append(f"{label}: {sentinel} in the stored session")
         logged = log_tail(start)
         if SERVER_LOG:
             for sentinel in SENTINELS:
@@ -343,6 +351,16 @@ async def run_flow(browser, transport, policy, failures, notes):
         # Harness control for production mode: legacy logs the detail.
         if ERROR_SENTINEL not in log_tail(start):
             failures.append(f"{label}: control failed, legacy production log lacks the detail")
+
+    # The stored session's own contract: the floor value for both policies,
+    # the saved-state envelope for the explicit view.
+    rows = await asyncio.to_thread(session_dump, await session_key_of(context))
+    failures.extend(stored_session_failures(label, policy, rows))
+    if policy != "legacy":
+        # The floor value at every client-facing destination and the log.
+        seen = "\n".join(await received()) + (await page.content()) + log_tail(start)
+        if FLOOR_SENTINEL in seen:
+            failures.append(f"{label}: {FLOOR_SENTINEL} in the page, a frame or the server log")
 
     watch.check(transport, label, failures)
     await context.close()

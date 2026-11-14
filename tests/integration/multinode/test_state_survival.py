@@ -324,8 +324,8 @@ def test_held_model_and_handle_params(db_cluster, survival):
     assert probe_from(socket_b.event("pick", {"value": "c"}))["member"] == "User"
     socket_b.close()
 
-    # The URL names another tab than the one a handler set: for an undeclared
-    # attribute the handler's saved value wins, on both transports.
+    # The URL now names another tab than the one a handler set: the URL changed
+    # since the state was saved, so handle_params() wins, on both transports.
     socket_c = browser.socket("A")
     with_url = probe_from(socket_c.mount(held, "/held/?tab=z", reconnect_from=socket_b))
     socket_c.close()
@@ -333,14 +333,18 @@ def test_held_model_and_handle_params(db_cluster, survival):
         "state",
         "url_vs_saved",
         "ws",
-        "the handler's saved value wins" if with_url["tab"] == "c" else "? %r" % (with_url,),
+        "the URL wins when it changed; the same URL keeps the handler's value"
+        if with_url["tab"] == "z" and moved["tab"] == "b"
+        else "? %r %r" % (moved, with_url),
     )
-    _, posted = _post(browser, "B", "/held/?tab=z", "noop")
+    _, posted = _post(browser, "B", "/held/?tab=y", "noop")
     survival.observe(
         "state",
         "url_vs_saved",
         "http",
-        "the handler's saved value wins" if posted["tab"] == "c" else "? %r" % (posted,),
+        "the URL wins when it changed; the same URL keeps the handler's value"
+        if posted["tab"] == "y"
+        else "? %r" % (posted,),
     )
 
     _, first = _post(browser, "A", "/held/", "pick", {"value": "d"})

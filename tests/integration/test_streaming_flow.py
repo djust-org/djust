@@ -15,6 +15,7 @@ types, so security headers set by middleware are NOT dropped.
 
 from __future__ import annotations
 
+import re
 import sys
 import types
 
@@ -121,9 +122,24 @@ def test_streaming_response_body_matches_non_streaming_baseline():
     assert b"<p>integration streaming</p>" in streaming_body
     assert b"<p>integration streaming</p>" in non_streaming_response.content
 
-    # Both bodies begin with ``<div dj-root``.
-    assert streaming_body.lstrip().startswith(b"<div dj-root")
-    assert non_streaming_response.content.lstrip().startswith(b"<div dj-root")
+    # Both bodies begin with the page load's tab id (#4106; a page that is
+    # only a fragment carries it in front), then ``<div dj-root``.
+    tab = re.compile(rb'^<meta name="djust-tab" content="[A-Za-z0-9_-]+">')
+    bodies = []
+    for body in (streaming_body, non_streaming_response.content):
+        assert len(re.findall(rb'<meta name="djust-tab"', body)) == 1
+        assert tab.match(body), body[:80]
+        bodies.append(tab.sub(b"", body))
+        assert bodies[-1].lstrip().startswith(b"<div dj-root")
+
+    # Apart from the id and the view's class path, the two are the same bytes.
+    def same(body: bytes) -> bytes:
+        # The render digest (#4108) and the CSRF token belong to each request.
+        body = re.sub(rb'(djust-render-digest" content=")[^"]*', rb"\1X", body)
+        body = re.sub(rb'(csrf-token" content=")[^"]*', rb"\1X", body)
+        return re.sub(rb"_(Non)?StreamingFlowView", b"V", body)
+
+    assert same(bodies[0]) == same(bodies[1])
 
 
 @pytest.mark.django_db

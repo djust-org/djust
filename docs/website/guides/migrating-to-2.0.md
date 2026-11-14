@@ -338,8 +338,10 @@ data only with `client=True`.
 
 **How it comes back.** Over the HTTP fallback a later request restores the
 saved state and does **not** run `mount()` again; then `handle_params()` and
-`handle_restore()` run, and what a handler set goes back over what
-`handle_params()` assigned. `mount()` runs again only when nothing is saved, or
+`handle_restore()` run. While the query string is the one the state was saved
+under, what a handler set goes back over what `handle_params()` assigned; when
+the query changed (`?page=1` then `?page=3`), `handle_params()` has the last
+word for what it assigns and the rest of the saved state is kept. `mount()` runs again only when nothing is saved, or
 when something of the view could not be saved (a queryset, the request's user,
 an arbitrary object, a callable such as a class or a `functools.partial`, work
 `mount()` queued): such a value is skipped, never
@@ -938,3 +940,4 @@ Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
 <!-- generated-doc prose-sha256: 536b0aed4771 -->
+<!-- generated-doc prose-sha256: 2d27264715e1 -->
