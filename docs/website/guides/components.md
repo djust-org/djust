@@ -1113,7 +1113,9 @@ the text it is handed (#3882, #3883).
 
 A column given as a bare name is the column with that key and label: `columns=["claim_number",
 "status"]` draws the same table as `[{"key": "claim_number", "label": "claim_number"}, {"key":
-"status", "label": "status"}]`, on both engines (#3895).
+"status", "label": "status"}]`, on both engines (#3895). Any column that is not a dict is read
+the same way, as its text; that text is plain even when marked safe, so a header with markup uses
+the dict form's `label`.
 
 **Accessibility**: row-clickable `<tr>`s are focusable (`tabindex="0"`),
 announce as buttons (`role="button"`), and activate on Enter or Space.

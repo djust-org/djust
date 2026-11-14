@@ -3,7 +3,8 @@
 ``columns=["name", "age"]`` is drawn by the native handler (the name is the key and the label),
 but ``table.html`` reads ``col.key``, and a filter argument that does not resolve raises
 ``VariableDoesNotExist``: the page's first render, the one under Django's engine, failed. The
-Python tag now reads a bare name (a string, or a number) as ``{"key": name, "label": name}``.
+Python tag now reads any column that is not a dict as the column whose key and label are its text
+(an ``int`` keeps its value as the key), and that text is plain even when it is marked safe.
 
 The comparison is the body rows and the header labels. The header's other attributes and the
 native ``data-row-key`` differ for every column shape, dicts included (#3663, #3869), so they are
@@ -16,6 +17,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from django.utils.safestring import mark_safe
 
 from djust.tests.test_component_dj_attr_parity_3669 import _django, _rust
 from djust.tests.test_data_table_row_url_link_3887 import assert_same, view
@@ -58,6 +60,42 @@ def test_a_numeric_bare_column_reads_its_key(engine) -> None:
     html = engine("{% data_table rows=rows columns=cols %}", {"rows": [{5: "five"}], "cols": [5]})
     assert ">five<" in _body(html), html
     assert _labels(html) == ["5"], html
+
+
+NON_DICT = {"float": (1.5, "1.5"), "bool": (True, "True"), "none": (None, "None")}
+
+
+@pytest.mark.parametrize("engine", [_django, _rust], ids=["python", "rust"])
+@pytest.mark.parametrize("name", sorted(NON_DICT))
+def test_any_non_dict_column_is_the_column_of_its_text(engine, name: str) -> None:
+    """Not only names and ints: every value that is not a dict is its text, as natively."""
+    col, text = NON_DICT[name]
+    html = engine(
+        "{% data_table rows=rows columns=cols %}", {"rows": [{"id": 1, text: "v"}], "cols": [col]}
+    )
+    assert _labels(html) == [text], html
+    assert ">v<" in _body(html), html
+
+
+@pytest.mark.parametrize("name", sorted(NON_DICT))
+def test_any_non_dict_column_agrees_between_the_engines(name: str) -> None:
+    col, text = NON_DICT[name]
+    ctx = {"rows": [{"id": 1, text: "v"}], "cols": [col]}
+    py, rs = assert_same("{% data_table rows=rows columns=cols %}", ctx)
+    assert _body(py) == _body(rs) and _labels(py) == _labels(rs)
+
+
+@pytest.mark.parametrize("engine", [_django, _rust], ids=["python", "rust"])
+def test_a_marked_safe_bare_name_is_text_on_both_engines(engine) -> None:
+    """A bare name is a key, not markup: a header with markup is the dict form's ``label``."""
+    name = mark_safe("<b>H</b>")
+    html = engine(
+        "{% data_table rows=rows columns=cols %}",
+        {"rows": [{"id": 1, "<b>H</b>": "v"}], "cols": [name]},
+    )
+    assert _labels(html) == ["&lt;b&gt;H&lt;/b&gt;"], html
+    assert "<b>H</b>" not in html, html
+    assert ">v<" in _body(html), html
 
 
 def test_a_dict_column_and_its_bare_name_draw_the_same_python_markup() -> None:
