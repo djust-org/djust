@@ -24,6 +24,7 @@ import pytest
 from django.template import Context, Engine
 
 from djust.components import rust_handlers as rh
+from djust.tests.native_call import native_render
 from djust.components.utils import (
     safe_css_color,
     safe_css_length,
@@ -405,15 +406,14 @@ class TestDataTableTwin:
 
     def test_data_table_colour_scale_single_stop(self):
         def render(colors):
-            return str(
-                rh.DataTableHandler().render(
-                    ["rows=rows", "columns=cols", "conditional_formatting=cf"],
-                    {
-                        "rows": [{"id": 1, "n": 50}],
-                        "cols": [{"key": "n", "label": "N"}],
-                        "cf": [{"column": "n", "type": "color_scale", "colors": colors}],
-                    },
-                )
+            return native_render(
+                rh.DataTableHandler(),
+                ["rows=rows", "columns=cols", "conditional_formatting=cf"],
+                {
+                    "rows": [{"id": 1, "n": 50}],
+                    "cols": [{"key": "n", "label": "N"}],
+                    "cf": [{"column": "n", "type": "color_scale", "colors": colors}],
+                },
             )
 
         assert 'style="background-color:#abcdef"' in render(["#abcdef"])
@@ -484,10 +484,8 @@ def _data_table_paths() -> dict[str, Callable[[Any], str]]:
     return {
         "tag": lambda v: _tag("{% data_table rows=r columns=c %}", c=_grid_columns(v), r=rows),
         # ``data_table`` keeps its native twin (one render path per tag where it costs nothing).
-        "handler": lambda v: str(
-            rh.DataTableHandler().render(
-                ["rows=r", "columns=c"], {"c": _grid_columns(v), "r": rows}
-            )
+        "handler": lambda v: native_render(
+            rh.DataTableHandler(), ["rows=r", "columns=c"], {"c": _grid_columns(v), "r": rows}
         ),
     }
 

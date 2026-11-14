@@ -448,15 +448,16 @@ fn read_wants_typed_args(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
     handler.getattr("TYPED_ARGS")?.is_truthy()
 }
 
-/// A `TYPED_ARGS` handler's narrower ask: only the operands the engine stands in for (#3768).
+/// A `TYPED_ARGS` handler's narrower ask: every operand except a container (#3768, #3883).
 ///
 /// `TYPED_ARGS = True` alone hands over EVERY `key=<expression>` operand as a typed Python value,
 /// which materialises a large list or dict a second time (the handler already got it as JSON).
-/// A handler that also sets `TYPED_ARGS_STANDINS_ONLY = True` is handed only the operands whose
-/// string form loses their type, the ones `djust.components.rust_handlers._parse_args` takes back:
-/// a tuple, a namedtuple (#3849) and an object (`UUID`, `Path`, ...). Every other operand is left
-/// out, so the handler reads it from its string argument exactly as it did before the channel
-/// existed. Has no effect without `TYPED_ARGS`.
+/// A handler that also sets `TYPED_ARGS_STANDINS_ONLY = True` is handed every operand whose
+/// string form does not carry it exactly, the ones `djust.components.rust_handlers._parse_args`
+/// takes back: a scalar (a string's text cannot say it was a string, #3883), a tuple, a namedtuple
+/// (#3849) and an object (`UUID`, `Path`, ...). A list, a dict and a dict view are left out: the
+/// handler reads them from their JSON string argument, as it did before the channel existed. Has
+/// no effect without `TYPED_ARGS`.
 fn read_typed_standins_only(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
     if !handler.hasattr("TYPED_ARGS_STANDINS_ONLY")? {
         return Ok(false);

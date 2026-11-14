@@ -28,13 +28,14 @@ Inline handlers implement: render(self, args, context) -> str
 Block handlers implement:  render(self, args, content, context) -> str
 """
 
+import decimal
 import json as _json
+import math
 import re as _re_filters
-import pathlib as _pathlib
-import uuid as _uuid
 from html.parser import HTMLParser
 from typing import Any, cast
 
+from django.utils.functional import Promise
 from django.utils.html import conditional_escape, escape
 from django.utils.safestring import mark_safe
 
@@ -62,6 +63,13 @@ from djust.components.utils import (
 )
 from djust.components.utils import attr_text
 from djust.template_tags import TYPED_ARGS_KEY
+from djust.components._operands import (  # noqa: F401 - TupleValue/NamedTupleValue re-exported
+    STANDIN_TYPES,
+    NamedTupleValue,
+    TupleValue,
+    _from_typed,
+    plain_operand,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -75,78 +83,120 @@ def _quoted(text: str) -> bool:
 
 
 def _parse_args(args: list[str], context: dict[str, object]) -> dict[str, object]:
-    """Parse handler arg list ["key='val'", "key2=var"] into a dict.
+    """The operands of a native handler call, ``["key=<operand>", ...]``, as a dict.
 
-    The engine has already resolved every operand, so ``val`` is the resolved TEXT (a quoted
-    literal arrives as written). Values that are JSON-encoded lists/objects (from the Rust
-    engine's variable resolution) are deserialized automatically.
+    The engine has already resolved every operand, and hands each one that resolved to a scalar,
+    a tuple or an object a second time as the VALUE it is (``TYPED_ARGS_KEY``, declared for every
+    native handler by ``_TypedOperands``). That value is taken through ``plain_operand``, the
+    one conversion of a resolved value into what a handler reads, and the text is not looked at:
+    a resolved string is never re-read as source (#3883: ``"false"`` stayed ``"false"``, not
+    ``False``; ``"007"`` not ``7``; ``'"x"'`` kept its quotes) and never looked up in the context
+    a second time (#3882: a value that is also a variable's name is that value, not the
+    variable's).
 
-    The text is read exactly as it arrived. It used to be stripped (``val.strip()``), which also
-    stripped a RESOLVED value: ``ev = "x "`` reached the page as ``x`` where the Django tag keeps
-    ``"x "`` (#3872). A source token never carries whitespace (the engine splits a tag on it), so
-    nothing but a resolved value was ever stripped.
+    What reaches the text path is what the engine did not hand over as a value: a quoted literal
+    the template wrote (its quotes are stripped), a list or dict the engine encoded as JSON (it
+    is decoded; a large one is not materialised twice), an operand that did not resolve (empty).
+    A bare word is read as the literal it spells (``True``, ``None``, a number) and otherwise kept
+    as the text; it is never looked up in the context.
 
-    A name the engine could not resolve never gets here as a name: an inline tag's argument arrives
-    empty, and ``_TypedBlockOperands`` makes a block tag's the same (#3871). What is left of the
-    ``context.get(val, val)`` fallback is the one thing the engine does not do: a handler called
-    DIRECTLY with a raw token (``render(["users=users"], {"users": ...})``, which is how ~400 tests
-    call one). It also looks a RESOLVED value up a second time, so ``ev = "name"`` becomes whatever
-    the variable ``name`` holds; that is a separate defect, pinned in
-    ``test_a_value_that_is_also_a_variable_name_is_resolved_a_second_time``.
+    The text is read exactly as it arrived (#3872): a source token never carries whitespace.
     """
 
     result: dict[str, object] = {}
-    # The operands the engine could only hand over as a stand-in (#3768): a tuple, a namedtuple,
-    # a UUID, a Path. Read once, and consulted BEFORE the text is parsed: the typed value replaces
-    # the operand, so decoding the stand-in (for a 2,000,000-element tuple, a JSON list built and
-    # thrown away) is work for nothing (#3849). The key keeps its place in ``result``.
-    typed = context.get(TYPED_ARGS_KEY)
-    if not isinstance(typed, dict):
-        typed = {}
+    # Read once, and consulted BEFORE the text is parsed: the typed value replaces the operand, so
+    # decoding its text (for a 2,000,000-element tuple, a JSON list built and thrown away) is work
+    # for nothing (#3849). The key keeps its place in ``result``.
+    typed = _typed_args(context)
     for arg in args:
         if "=" not in arg:
             continue
         key, val = arg.split("=", 1)
         key = key.strip()
-        if key in typed and isinstance(typed[key], _RECOVERED_TYPES):
-            result[key] = _from_typed(typed[key])
+        if key in typed:
+            value = typed[key]
+            if isinstance(value, _TAKEN_TYPES):
+                result[key] = plain_operand(value)
+                continue
+            # An object the engine also gave a text for (a model as its floored dict, a date as
+            # its ``str``): the text is kept as it is, as before, but never re-read as a literal
+            # or a name. The type a Python tag would see is #3768's question.
+            result[key] = _decoded_container(val)
             continue
-        # String literal — strip quotes
         if _quoted(val):
             result[key] = val[1:-1]
-        # JSON array or object (from Rust variable resolution)
-        elif (val.startswith("[") and val.endswith("]")) or (
-            val.startswith("{") and val.endswith("}")
-        ):
-            try:
-                result[key] = _json.loads(val)
-            except (ValueError, TypeError):
-                result[key] = context.get(val, val)
-        # Boolean
+        elif _looks_like_container(val):
+            result[key] = _decoded_container(val)
         elif val in ("True", "true"):
             result[key] = True
         elif val in ("False", "false"):
             result[key] = False
-        elif val == "":
-            result[key] = ""
-        # None
         elif val in ("None", "null"):
             result[key] = None
-        elif val != val.strip():
-            # Padding is part of a resolved value (#3872): ``int(" 5 ")`` is 5, and a text that
-            # was ``" 5 "`` is not the number.
+        elif val == "" or val != val.strip():
+            # Padding is part of a value (#3872): ``int(" 5 ")`` is 5, and ``" 5 "`` is not.
             result[key] = val
         else:
-            # Try numeric before falling back to the text
             try:
                 result[key] = int(val)
             except ValueError:
                 try:
                     result[key] = float(val)
                 except ValueError:
-                    # Variable reference — look up in context
-                    result[key] = context.get(val, val)
+                    result[key] = val
     return result
+
+
+class NotANumber(ValueError):
+    """A numeric-by-contract parameter given something that is not a finite number.
+
+    A ``ValueError``, so every handler that already falls back to a default for a bad number
+    (``except (ValueError, TypeError)``) falls back for this too.
+    """
+
+
+#: The text a numeric parameter takes: ASCII digits, an optional sign and fraction, bounded in
+#: length. Not Python's own ``int`` / ``float`` grammar, which also takes ``"inf"``, ``"nan"``,
+#: ``"1e999"``, ``"1_000"`` and non-ASCII digits (``"\u0662"``), and a 4,301-digit string that
+#: ``int`` refuses with a different error.
+_NUMBER_TEXT = _re_filters.compile(r"-?[0-9]{1,18}(?:\.[0-9]{1,18})?")
+
+
+def _number(value: object, tag: str = "", param: str = "") -> object:
+    """A parameter that is numeric by contract (``page=``, ``value=``, ``min=``), as a number.
+
+    A string operand now arrives as the string it is (#3883), so ``{% pagination page=p %}`` with
+    ``p = request.GET["page"]`` (``"2"``) is handed ``"2"``. Text that spells a number
+    (``_NUMBER_TEXT``) becomes that number (``int``, else ``float``). This is a conversion of the
+    parameter's own value, never a context lookup (#3882).
+
+    Any other string, and a float that is not finite, raises ``NotANumber`` naming the tag and
+    parameter: a caller with a default catches it (it is a ``ValueError``) and falls back, the
+    others let the message reach the developer. Any other value is returned as it is.
+    """
+    if isinstance(value, float) and not math.isfinite(value):
+        raise NotANumber("{%% %s %%}: %s= takes a finite number, got %r" % (tag, param, value))
+    if not isinstance(value, str):
+        return value
+    if _NUMBER_TEXT.fullmatch(value):
+        return int(value) if "." not in value else float(value)
+    raise NotANumber("{%% %s %%}: %s= takes a number, got %r" % (tag, param, value[:40]))
+
+
+def _looks_like_container(text: str) -> bool:
+    return (text.startswith("[") and text.endswith("]")) or (
+        text.startswith("{") and text.endswith("}")
+    )
+
+
+def _decoded_container(text: str) -> object:
+    """``text`` decoded when it is the JSON the engine encodes a list or dict as, else ``text``."""
+    if _looks_like_container(text):
+        try:
+            return _json.loads(text)
+        except (ValueError, TypeError):
+            pass
+    return text
 
 
 def _passed_or_context(
@@ -166,143 +216,17 @@ def _passed_or_context(
     """
     if name in kw:
         return kw[name]
-    return context.get(key if key is not None else name, default)
+    # The context is the second way a value reaches a handler; it goes through the same
+    # conversion as an argument does (``plain_operand``).
+    return plain_operand(context.get(key if key is not None else name, default))
 
 
-class TupleValue(list):  # type: ignore[type-arg]
-    """A tuple a native handler was given (#3768).
-
-    The engine hands a handler a ``tuple`` as a JSON list, and a handler reads a list slot with
-    ``isinstance(rows, list)`` (~55 places): a real ``tuple`` there would be dropped as "not a
-    list", turning ``rows=my_tuple_of_dicts`` (an ordinary thing to pass) into an empty table. So
-    the handler keeps getting a ``list``, a subclass that prints the way the tuple does. A text
-    slot then reads ``(1, 2)`` as Django's tag prints it, where it read ``[1, 2]``.
-
-    ``NamedTupleValue`` is the same for a namedtuple (#3849).
-    """
-
-    __slots__ = ()
-
-    def __repr__(self) -> str:
-        # Iterative, like ``_from_typed``: a tuple nested a few hundred deep is legal input (it
-        # printed under Django and under this engine before #3768), and a recursive ``repr`` here
-        # would raise RecursionError one level at a time. Only TupleValue members recurse in
-        # this walk; any other member is printed by its own ``repr``.
-        out = [_opening(self)]
-        stack: list[tuple[TupleValue, int]] = [(self, 0)]
-        while stack:
-            node, index = stack[-1]
-            if index == len(node):
-                if len(node) == 1 and not isinstance(node, NamedTupleValue):
-                    out.append(",")
-                out.append(")")
-                stack.pop()
-                continue
-            stack[-1] = (node, index + 1)
-            if index:
-                out.append(", ")
-            if isinstance(node, NamedTupleValue) and index < len(node._fields):
-                out.append(node._fields[index] + "=")
-            item = node[index]
-            if isinstance(item, TupleValue):
-                out.append(_opening(item))
-                stack.append((item, 0))
-            else:
-                out.append(repr(item))
-        return "".join(out)
-
-    __str__ = __repr__
-
-
-class NamedTupleValue(TupleValue):
-    """A namedtuple a native handler was given, still a ``list`` (#3849).
-
-    Prints as the namedtuple does (``P(x=1, y=2)``, which is what Django's tag prints), and is a
-    ``list`` for the reason ``TupleValue`` is. The class it came from is gone (the engine holds a
-    namedtuple as a name, its fields and its items), so a ``__repr__`` the class defined for itself
-    is not reproduced: this prints the default one.
-    """
-
-    __slots__ = ("_name", "_fields")
-
-    def __init__(self, items: Any = (), name: str = "tuple", fields: tuple[str, ...] = ()) -> None:
-        super().__init__(items)
-        self._name = name
-        self._fields = fields
-
-
-def _opening(node: TupleValue) -> str:
-    """The text a ``TupleValue`` opens with: ``(`` for a tuple, ``P(`` for a namedtuple."""
-    return node._name + "(" if isinstance(node, NamedTupleValue) else "("
-
-
-def _namedtuple_shape(source: tuple[Any, ...]) -> tuple[str, tuple[str, ...]] | None:
-    """``(name, fields)`` when ``source`` is a namedtuple, else ``None``.
-
-    A ``_fields`` tuple with one name per member. This is NARROWER than the engine's rule when it
-    reads a Python object (``Value::NamedTuple`` also accepts a ``list`` ``_fields``): it does not
-    need to be wider, because the typed channel hands a handler the class the engine REBUILT with
-    ``collections.namedtuple``, whose ``_fields`` is always a ``tuple``.
-    """
-    fields = getattr(source, "_fields", None)
-    if type(fields) is tuple and len(fields) == len(source):
-        return type(source).__name__, fields
-    return None
-
-
-def _empty_like(source: tuple[Any, ...]) -> TupleValue:
-    shape = _namedtuple_shape(source)
-    return TupleValue() if shape is None else NamedTupleValue((), *shape)
-
-
-def _from_typed(value: object) -> object:
-    """A typed operand as a handler is handed it: a ``tuple`` becomes a ``TupleValue``, a
-    namedtuple a ``NamedTupleValue`` (#3849); anything else is returned as it is.
-
-    Iterative, not recursive: the members of a tuple are converted too (a row of a tuple of
-    tuples must be a list), and a recursive walk raised RecursionError for a tuple nested 500
-    deep that rendered before. An explicit stack has no depth limit but memory.
-
-    A tuple with no tuple among its members, the usual case and the only one that can be large, is
-    copied in one C-level pass (``list(value)``): the member types are collected with
-    ``set(map(type, value))``, which runs no Python bytecode per member, and a per-member Python
-    loop on a 2,000,000-element tuple was the cost the review of #3843 measured (#3849).
-    """
-    if not isinstance(value, tuple):
-        return value
-    if not any(issubclass(kind, tuple) for kind in set(map(type, value))):
-        shape = _namedtuple_shape(value)
-        return TupleValue(value) if shape is None else NamedTupleValue(value, *shape)
-    root = _empty_like(value)
-    pending = [(value, root)]
-    while pending:
-        source, target = pending.pop()
-        for item in source:
-            if isinstance(item, tuple):
-                child = _empty_like(item)
-                target.append(child)
-                pending.append((item, child))
-            else:
-                target.append(item)
-    return root
-
-
-#: The types a native handler is handed a stand-in for, which a Python tag tells apart from the
-#: stand-in (#3768): a ``UUID`` or a ``Path`` arrives as its ``str`` (``int(uuid)`` works in
-#: Python, ``int("...")`` does not), and a ``tuple`` (not in this tuple: see ``TupleValue``) as
-#: the JSON list ``[1, 2]`` where Django's tag prints ``(1, 2)``. The engine resolves the operand
-#: through the floored walk ``{{ }}`` uses and, for a handler that declares ``TYPED_ARGS``, passes
-#: the real value (``TYPED_ARGS_KEY``); ``_parse_args`` puts it back. Only these types, so a list,
-#: dict, number, string or object reaches a handler exactly as before.
-#:
-#: NOT a ``bytes``, ``set`` or ``frozenset``: they are iterable, and an iterable crosses to Python
-#: as the engine's ``TemplateObject`` wrapper, not as itself (``value_into_handler_pyobject``), so
-#: they cannot be recovered here (recorded in ``KNOWN_TYPE_LOSS``, #3768).
-STANDIN_TYPES = (_uuid.UUID, _pathlib.PurePath)
-
-#: What ``_parse_args`` takes off the typed channel: ``STANDIN_TYPES`` and any ``tuple`` (a plain
-#: one, and a namedtuple, #3849: the engine hands a namedtuple over as its rebuilt class).
-_RECOVERED_TYPES = (tuple, *STANDIN_TYPES)
+#: What ``_parse_args`` takes off the typed channel (through ``plain_operand``): a string, marked
+#: safe or lazy (#3883), a number, ``None``, a tuple or namedtuple (#3768, #3849) and the stand-in
+#: objects (``UUID``, ``Path``). A list or dict is read from its JSON text (the engine hands an
+#: inline handler a container only as text, so a large one is not materialised twice); any other
+#: object keeps the engine's text for it.
+_TAKEN_TYPES = (str, Promise, int, float, type(None), decimal.Decimal, tuple, *STANDIN_TYPES)
 
 
 def _typed_args(context: dict[str, object]) -> dict[str, object]:
@@ -322,7 +246,7 @@ class _TypedOperands:
 
     A native inline handler reads its operands through ``_parse_args``, which sees the engine's
     stand-ins (text, JSON). Declaring ``TYPED_ARGS`` makes the engine hand it the operands as the
-    values they are, and ``_parse_args`` takes back the ones in ``STANDIN_TYPES``. Done here, once,
+    values they are, and ``_parse_args`` takes them (``_TAKEN_TYPES``, #3883). Done here, once,
     for every inline handler, rather than as a class attribute on each of ~130 (one change instead
     of 130 that can drift); ``json_viewer`` declares it itself and is not wrapped.
 
@@ -330,8 +254,9 @@ class _TypedOperands:
     """
 
     TYPED_ARGS = True
-    #: Hand over only the operands ``_parse_args`` takes back (a tuple, an object), not every one:
-    #: a 100,000-row list is not materialised a second time as Python objects for nothing.
+    #: Hand over every operand but a list or dict (a scalar, a tuple, an object), not every one: a
+    #: 100,000-row list is not materialised a second time as Python objects for nothing; it is
+    #: read from its JSON text.
     TYPED_ARGS_STANDINS_ONLY = True
 
     def __init__(self, handler: Any) -> None:
@@ -377,8 +302,7 @@ class _TypedBlockOperands(_TypedOperands):
     token" (a ``{% regroup %}`` keyword must survive it): ``{% nav_menu toggle_event=nope %}``
     arrived as ``toggle_event=nope`` and the variable's NAME became the event name. The handler
     cannot tell that text from an operand that RESOLVED to ``nope``, and a lookup against the
-    context (``context.get(val, val)``) answers the wrong question: it re-resolves a resolved
-    value.
+    context answers the wrong question: it re-resolves a resolved value (#3882).
 
     The engine knows. A handler that declares ``TYPED_ARGS`` without ``TYPED_ARGS_STANDINS_ONLY``
     is handed every operand that resolved (``TYPED_ARGS_KEY``), keyed by parameter name, and an
@@ -476,7 +400,7 @@ class ProgressHandler:
         # The Python tag's own clamp, so a ``value`` it refuses (``None``: TypeError, ``"abc"``:
         # ValueError) is refused here and not drawn as 0% (#3667). ``int()`` says which key of the
         # tag's context this is: the clamped number, not one of the raw ones beside it (#3847).
-        value = int(_progress(value=kw.get("value", 0))["value"])
+        value = int(_progress(value=_number(kw.get("value", 0), "progress", "value"))["value"])
         label = conditional_escape(kw.get("label", ""))
         size = conditional_escape(kw.get("size", "md"))
         color = conditional_escape(kw.get("color", "primary"))
@@ -525,13 +449,16 @@ class PaginationHandler:
         from djust.components.templatetags.djust_components import pagination_pages
 
         kw = _parse_args(args, context)
+        for numeric in ("page", "total_pages"):
+            if numeric in kw:
+                kw[numeric] = _number(kw[numeric], "pagination", numeric)
         # The Python tag's own page list, first: whatever it raises for these numbers
         # (``total_pages=None``: ``None + 1``) is raised here too (#3667), and the buttons
         # drawn below are the ones it draws (#3669).
         shown = pagination_pages(kw.get("page", 1), kw.get("total_pages", 1))
         try:
-            page = int(cast("str | int | float", kw.get("page", 1)))
-            total_pages = int(cast("str | int | float", kw.get("total_pages", 1)))
+            page = int(cast("str | int | float", _number(kw.get("page", 1))))
+            total_pages = int(cast("str | int | float", _number(kw.get("total_pages", 1))))
         except (ValueError, TypeError):
             page, total_pages = 1, 1
         prev_event = conditional_escape(kw.get("prev_event", "page_prev"))
@@ -567,8 +494,13 @@ class AvatarHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         src = kw.get("src", "")
-        alt = conditional_escape(kw.get("alt", ""))
-        initials = conditional_escape(kw.get("initials", "") or (alt[:2].upper() if alt else ""))
+        raw_alt = kw.get("alt", "")
+        alt = conditional_escape(raw_alt)
+        # The initials are taken from the text, then escaped: slicing the ESCAPED text cut an
+        # entity in half (``O'Brien`` -> ``O&``), and a string arrives with its quotes now (#3883).
+        initials = conditional_escape(
+            kw.get("initials", "") or (str(raw_alt)[:2].upper() if raw_alt else "")
+        )
         size = conditional_escape(kw.get("size", "md"))
         status = conditional_escape(kw.get("status", ""))
         img_html = (
@@ -653,7 +585,9 @@ class DataTableHandler:
         search_query = conditional_escape(str(kw.get("search_query", "")))
         search_event = conditional_escape(kw.get("search_event", "on_table_search"))
         try:
-            search_debounce = int(cast("str | int | float", kw.get("search_debounce", 300)))
+            search_debounce = int(
+                cast("str | int | float", _number(kw.get("search_debounce", 300)))
+            )
         except (ValueError, TypeError):
             search_debounce = 300
         filters = kw.get("filters") or {}
@@ -664,8 +598,8 @@ class DataTableHandler:
         empty_icon = conditional_escape(str(kw.get("empty_icon", "")))
         paginate = kw.get("paginate", False)
         try:
-            page = int(cast("str | int | float", kw.get("page", 1)))
-            total_pages = int(cast("str | int | float", kw.get("total_pages", 1)))
+            page = int(cast("str | int | float", _number(kw.get("page", 1))))
+            total_pages = int(cast("str | int | float", _number(kw.get("total_pages", 1))))
         except (ValueError, TypeError):
             page, total_pages = 1, 1
         page_event = conditional_escape(kw.get("page_event", "on_table_page"))
@@ -696,11 +630,11 @@ class DataTableHandler:
         reorderable = kw.get("reorderable", False)
         reorder_event = conditional_escape(kw.get("reorder_event", "on_table_reorder"))
         try:
-            frozen_left = int(cast("str | int | float", kw.get("frozen_left", 0)))
+            frozen_left = int(cast("str | int | float", _number(kw.get("frozen_left", 0))))
         except (ValueError, TypeError):
             frozen_left = 0
         try:
-            frozen_right = int(cast("str | int | float", kw.get("frozen_right", 0)))
+            frozen_right = int(cast("str | int | float", _number(kw.get("frozen_right", 0))))
         except (ValueError, TypeError):
             frozen_right = 0
         column_visibility = kw.get("column_visibility", False)
@@ -733,11 +667,13 @@ class DataTableHandler:
         keyboard_nav = kw.get("keyboard_nav", False)
         virtual_scroll = kw.get("virtual_scroll", False)
         try:
-            virtual_row_height = int(cast("str | int | float", kw.get("virtual_row_height", 40)))
+            virtual_row_height = int(
+                cast("str | int | float", _number(kw.get("virtual_row_height", 40)))
+            )
         except (ValueError, TypeError):
             virtual_row_height = 40
         try:
-            virtual_buffer = int(cast("str | int | float", kw.get("virtual_buffer", 5)))
+            virtual_buffer = int(cast("str | int | float", _number(kw.get("virtual_buffer", 5))))
         except (ValueError, TypeError):
             virtual_buffer = 5
         server_mode = kw.get("server_mode", False)
@@ -2392,11 +2328,17 @@ _FILTER_MARK = _re_filters.compile(
 
 class _FilterControlHandler:
     KIND = ""
+    #: Parameters that are numeric by contract (``_number``).
+    NUMERIC: tuple[str, ...] = ()
 
     def render(self, args: list[str], context: dict[str, object]) -> str:
         import base64
 
-        payload = _json.dumps(_parse_args(args, context), default=str, separators=(",", ":"))
+        kw = _parse_args(args, context)
+        for numeric in self.NUMERIC:
+            if numeric in kw:
+                kw[numeric] = _number(kw[numeric], "filter_" + self.KIND, numeric)
+        payload = _json.dumps(kw, default=str, separators=(",", ":"))
         token = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
         kind = conditional_escape(self.KIND)
         return _safe(f"<!--djust-filter:{kind}:{conditional_escape(token)}-->")
@@ -2418,6 +2360,7 @@ class FilterSearchHandler(_FilterControlHandler):
     """Inline handler for {% filter_search name="q" %}"""
 
     KIND = "search"
+    NUMERIC = ("debounce",)
 
 
 class FilterBarHandler:
@@ -2474,11 +2417,11 @@ class FormArrayHandler:
         e_class = conditional_escape(str(custom_class))
 
         try:
-            min_rows = int(cast("str | int | float", min_rows))
+            min_rows = int(cast("str | int | float", _number(min_rows)))
         except (ValueError, TypeError):
             min_rows = 1
         try:
-            max_rows = int(cast("str | int | float", max_rows))
+            max_rows = int(cast("str | int | float", _number(max_rows)))
         except (ValueError, TypeError):
             max_rows = 10
 
@@ -2694,10 +2637,11 @@ def register_with_rust_engine() -> None:
         SlotTagHandler,
     )
 
-    _call_handler = CallTagHandler()
+    # Handed their operands typed, as the component handlers are (#3882, #3883).
+    _call_handler = _with_typed_block_operands(CallTagHandler())
     register_block_tag_handler("call", "endcall", _call_handler)
     register_block_tag_handler("component", "endcomponent", _call_handler)
-    register_block_tag_handler("slot", "endslot", SlotTagHandler())
+    register_block_tag_handler("slot", "endslot", _with_typed_block_operands(SlotTagHandler()))
     register_tag_handler("render_slot", RenderSlotTagHandler())
 
     # Async rendering (v0.5.0): {% dj_suspense await="..." fallback="..." %}. See

@@ -82,13 +82,19 @@ def _native(config):
     'visible', or a dict"), which is true on ``main`` and unrelated to the placeholder. The
     handler is the native twin of the Django tag (it delegates to the same function), so it is
     driven directly with the already-resolved context.
+
+    The engine hands the handler the resolved operand on the typed channel (``TYPED_ARGS_KEY``,
+    #3838), so this does too: the handler no longer looks the token ``cfg`` up in the context
+    (#3882), and the text beside it is what the engine would have written for it.
     """
+    from djust.template_tags import TYPED_ARGS_KEY
     from djust.template_tags.live_render import LiveRenderTagHandler
 
     parent, request = _parent()
     with override_settings(DJUST_LIVE_RENDER_ALLOWED_MODULES=ALLOWED):
         return LiveRenderTagHandler().render(
-            [repr(CHILD), "lazy=cfg"], {"view": parent, "request": request, "cfg": config}
+            [repr(CHILD), "lazy=cfg"],
+            {"view": parent, "request": request, TYPED_ARGS_KEY: {"lazy": config}},
         )
 
 

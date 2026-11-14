@@ -181,17 +181,16 @@ def test_a_value_that_reads_like_an_unresolved_name_is_kept() -> None:
         assert ("button", "dj-click", "nope") in dj_attrs(html), html
 
 
-def test_a_value_that_is_also_a_variable_name_is_resolved_a_second_time() -> None:
+def test_a_value_that_is_also_a_variable_name_is_that_value() -> None:
     """#3882: ``same_name`` resolves to the text ``name``, which is ALSO a context variable
-    (``"n"``). The ``context.get(val, val)`` fallback of ``_parse_args`` looks the VALUE up again,
-    so a kept native twin (``nav_menu``) prints ``n`` where Django prints ``name``. A bridged tag
-    (``dj_button``) renders its Python node (one render path per tag) and prints ``name``."""
-    src = "{% nav_menu toggle_event=same_name %}{% endnav_menu %}"
-    assert ("button", "dj-click", "name") in dj_attrs(_django(src, CTX))
-    assert ("button", "dj-click", "n") in dj_attrs(_rust(src, CTX))
-    src = '{% dj_button label="L" event=same_name %}'
-    assert ("button", "dj-click", "name") in dj_attrs(_django(src, CTX))
-    assert dj_attrs(_rust(src, CTX)) == dj_attrs(_django(src, CTX))
+    (``"n"``). The value is the operand; it is not looked up a second time, so a kept native twin
+    (``nav_menu``) prints ``name`` as Django does, and so does a bridged tag (``dj_button``)."""
+    for src in (
+        "{% nav_menu toggle_event=same_name %}{% endnav_menu %}",
+        '{% dj_button label="L" event=same_name %}',
+    ):
+        assert ("button", "dj-click", "name") in dj_attrs(_django(src, CTX)), src
+        assert dj_attrs(_rust(src, CTX)) == dj_attrs(_django(src, CTX)), src
 
 
 def test_a_literal_naming_a_variable_stays_a_literal() -> None:

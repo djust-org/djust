@@ -583,15 +583,13 @@ MARKED_PAYLOADS = [
 
 
 def _direct(rows: list, cols: list, args: tuple[str, ...] = ()) -> str:
-    """The handler called DIRECTLY, with the Python objects (a ``SafeString`` stays one): the
-    engine hands a handler text, so a marked-safe value only reaches it this way."""
+    """The handler handed the Python objects (a ``SafeString`` stays one until the handler reads
+    it): ``rows`` and ``columns`` are not passed, so the handler reads them from the context
+    (``_passed_or_context``), the one way a marked-safe value reaches it from the Rust engine. It is
+    converted there like an argument (``plain_operand``); on ``main`` it reached the row raw."""
     from djust.components.rust_handlers import DataTableHandler
 
-    return str(
-        DataTableHandler().render(
-            ["rows=rows", "columns=cols", 'row_url="u"', *args], {"rows": rows, "cols": cols}
-        )
-    )
+    return str(DataTableHandler().render(['row_url="u"', *args], {"rows": rows, "columns": cols}))
 
 
 @pytest.mark.parametrize("claim", sorted(CLAIMS))

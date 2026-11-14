@@ -564,10 +564,9 @@ class TestTheHandlerBaseClassDoesNotReResolveALiteral:
         out = self._probe_output('{% a2416_resolve "home" %}', {})
         assert "home" in out, out
 
-    def test_a_PLAIN_resolved_string_is_still_re_resolved(self) -> None:
-        """The pre-existing hazard, unchanged: `{% t u %}` with `u = "home"`
-        hands the handler `home`, which `_resolve_arg` has always looked up.
-        This PR narrows the class; it does not close it, and pinning that keeps
-        the guard honest about what it does."""
+    def test_a_PLAIN_resolved_string_is_not_re_resolved(self) -> None:
+        """The hazard this class narrowed, now closed (#3882): `{% t u %}` with
+        `u = "home"` hands the handler `home`, the resolved VALUE, and
+        `_resolve_arg` no longer looks it up a second time."""
         out = self._probe_output("{% a2416_resolve u %}", {"u": "home", "home": "/SHADOWED/"})
-        assert "SHADOWED" in out, out
+        assert "home" in out and "SHADOWED" not in out, out

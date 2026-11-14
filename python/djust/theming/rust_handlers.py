@@ -71,37 +71,6 @@ _THEME_TAG_NAMES: List[str] = [
 ]
 
 
-def _coerce_value(val: str, context: Dict[str, Any]) -> Any:
-    """Coerce a raw Rust-engine arg value string to a Python value.
-
-    The Rust engine resolves context variables before calling the handler,
-    so ``val`` is typically a literal. Handles the shapes a theme tag kwarg
-    can take: quoted strings, booleans, None, ints, floats, else a context
-    lookup (falling back to the raw string).
-    """
-    val = val.strip()
-    if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-        return val[1:-1]
-    if val in ("True", "true"):
-        return True
-    if val in ("False", "false"):
-        return False
-    if val in ("None", "null"):
-        return None
-    if val == "":
-        return ""
-    try:
-        return int(val)
-    except ValueError:
-        pass
-    try:
-        return float(val)
-    except ValueError:
-        pass
-    # Variable reference — look up in context, else keep the raw token.
-    return context.get(val, val)
-
-
 def _parse_kwargs(args: List[str], context: Dict[str, Any]) -> Dict[str, Any]:
     """Parse a Rust-engine ``args`` list into kwargs for a simple_tag.
 
@@ -113,13 +82,11 @@ def _parse_kwargs(args: List[str], context: Dict[str, Any]) -> Dict[str, Any]:
     :mod:`djust._positional_args`, #3664), so a bare value with no ``=`` is an
     ``as <var>`` tail or a stray token and is ignored.
     """
-    kwargs: Dict[str, Any] = {}
-    for arg in args:
-        if "=" not in arg:
-            continue
-        key, val = arg.split("=", 1)
-        kwargs[key.strip()] = _coerce_value(val, context)
-    return kwargs
+    # The one reader of a native handler's operands (#3882, #3883): a resolved value is taken as
+    # the value it is, never re-read as source text or looked up in the context a second time.
+    from djust.components.rust_handlers import _parse_args
+
+    return _parse_args(args, context)
 
 
 class ThemeTagHandler:
@@ -176,6 +143,7 @@ def register_with_rust_engine() -> None:
     from djust._rust import has_tag_handler, register_tag_handler
 
     from djust._positional_args import with_argument_contract
+    from djust.components.rust_handlers import _with_typed_operands
 
     from .templatetags.theme_tags import register as _tag_library
 
@@ -186,6 +154,9 @@ def register_with_rust_engine() -> None:
         # is valid Django; name the positional tokens after the tag's own
         # parameters (#3664).
         register_tag_handler(
-            tag_name, with_argument_contract(tag_name, ThemeTagHandler(tag_name), _tag_library)
+            tag_name,
+            with_argument_contract(
+                tag_name, _with_typed_operands(ThemeTagHandler(tag_name)), _tag_library
+            ),
         )
         logger.debug("Registered Rust theme tag handler: %s", tag_name)

@@ -14,7 +14,7 @@ djust_components:approval_gate,IDENTICAL,0,,,21,7/7,21
 djust_components:aspect_ratio,IDENTICAL,0,,,11,2/2,11
 djust_components:audit_log,IDENTICAL,0,,,10,5/5,10
 djust_components:autocomplete,IDENTICAL,0,,,19,15/15,19
-djust_components:avatar,DIFFERENT,18,a11y:15+classes:18+escaping:1+tags:2+text:4,,18,5/5,18
+djust_components:avatar,DIFFERENT,18,a11y:15+classes:18+escaping:1+tags:2+text:1,,18,5/5,18
 djust_components:avatar_group,IDENTICAL,0,,,17,7/7,17
 djust_components:await,IDENTICAL,0,,,17,5/5,17
 djust_components:badge,DIFFERENT,13,a11y:13+classes:13+escaping:4+tags:13+text:8,,13,3/3,13

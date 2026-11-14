@@ -10,6 +10,7 @@ Usage:
     {% endtabs %}
 """
 
+import math
 import calendar as _calendar
 import datetime
 import contextlib
@@ -1203,12 +1204,31 @@ def pagination_pages(page: Any, total_pages: Any) -> "list[Any]":
 
     Shared with the native handler (#3669), so the two engines wire the same buttons.
     """
+    # The rule is "the first page, the last, and every page within two of ``page``, with one
+    # ``"..."`` per gap". It used to walk every page from 1 to ``total_pages`` to apply it, so a
+    # ``total_pages`` read from a request (30 digits) never finished. The pages it keeps are at
+    # most five plus the two ends, so they are computed directly. ``range`` is still built (lazily,
+    # in constant time) so a ``total_pages`` that is not an int raises the TypeError it raised.
+    every = range(1, total_pages + 1)
+    if not every:
+        return []
+    last = every[-1]
+    kept = {1, last}
+    low, high = 1, 0
+    if last > 2:
+        # Only a page between the two ends is compared with ``page`` (so a ``page`` that is not a
+        # number raises the TypeError it raised, and only when there is such a page).
+        try:
+            low, high = math.ceil(page - 2), math.floor(page + 2)
+        except (ValueError, OverflowError):
+            # A ``page`` of NaN or infinity is within two of no page: only the ends are kept.
+            low, high = 1, 0
+    kept.update(range(max(low, 1), min(high, last) + 1))
     pages: list = []
-    for p in range(1, total_pages + 1):
-        if p == 1 or p == total_pages or abs(p - page) <= 2:
-            pages.append(p)
-        elif pages and pages[-1] != "...":
+    for p in sorted(kept):
+        if pages and p - pages[-1] > 1:
             pages.append("...")
+        pages.append(p)
     return pages
 
 
