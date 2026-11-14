@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 117 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 119 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -42,6 +42,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C029 | Config | Error | `LIVEVIEW_CONFIG['query_budget']` is not `None`, `"off"`, `"warn"` or `"error"` |
 | C030 | Config | Error | A view declares `persist="server"` state and `SESSION_ENGINE` cannot hold it |
 | C031 | Config | Warning | The session store is a cache only one process can see (`LocMemCache`, `DummyCache`) |
+| C032 | Config | Warning | The channel layer is in-memory, so messages never reach another process's sockets |
+| C033 | Config | Warning | A view uses presence and the presence backend counts only one process's sockets |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -312,6 +314,20 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: `SESSION_ENGINE` is `django.contrib.sessions.backends.cache` or `cached_db` and the cache it uses is `LocMemCache` (or `DummyCache`). djust keeps view state in the session, so with more than one process a request or socket served by another process does not find the session (`cache`) or reads a stale copy (`cached_db`), and the view mounts fresh. Reported only with `DEBUG = False`: a development server is one process, where the local cache works (#4103).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C031"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C031"]` (for a site that runs as one process)
 - **False positives**: A deployment that runs exactly one process. The `file` engine is not reported: whether its directory is shared cannot be seen from settings.
+
+### C032 — In-memory channel layer
+- **Severity**: Warning
+- **Method**: Settings inspection (`CHANNEL_LAYERS['default']['BACKEND']`)
+- **What it detects**: The default channel layer is `channels.layers.InMemoryChannelLayer`, `djust.layers.InMemoryChannelLayer` or `djust.layers.MultiLoopInMemoryChannelLayer`. `push_to_view()`, broadcasts, presence updates and `db_notify` travel over the layer, which then delivers only within one process: with several processes they never reach a socket another process holds, and nothing fails. Reported only with `DEBUG = False` (#4104).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C032"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C032"]` (for a site that runs as one process)
+- **False positives**: A deployment that runs exactly one process.
+
+### C033 — Presence counted per process
+- **Severity**: Warning
+- **Method**: Settings inspection (`DJUST_CONFIG['PRESENCE_BACKEND']`) and LiveView classes using `PresenceMixin`
+- **What it detects**: A LiveView uses `PresenceMixin` while the presence backend is `memory` (the default) or `tenant_memory`. Each process then counts only the sockets it holds, so with several processes every process shows its own users online. Reported only with `DEBUG = False` (#4104).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C033"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C033"]` (for a site that runs as one process)
+- **False positives**: A deployment that runs exactly one process.
 
 <!-- END GENERATED check-sections:C -->
 

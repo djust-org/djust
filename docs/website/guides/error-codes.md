@@ -394,6 +394,26 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 ---
 
+### C032: In-memory channel layer
+
+**Severity**: Warning
+
+**What causes it**: `CHANNEL_LAYERS` uses an in-memory layer with `DEBUG = False`. Server pushes, broadcasts and presence updates reach only the sockets of the process that sent them.
+
+**Fix**: Use `channels_redis.core.RedisChannelLayer` (or another shared layer) when the site runs more than one process. See [Scaling](scaling.md).
+
+---
+
+### C033: Presence counted per process
+
+**Severity**: Warning
+
+**What causes it**: A view uses `PresenceMixin` with the in-memory presence backend and `DEBUG = False`. With more than one process, each counts only its own users.
+
+**Fix**: Set `DJUST_CONFIG['PRESENCE_BACKEND'] = 'redis'` (or `'tenant_redis'`) together with a shared channel layer.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error

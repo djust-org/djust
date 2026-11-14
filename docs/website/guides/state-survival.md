@@ -144,6 +144,11 @@ writing process's clock, and a reader refuses one written "in the future" by
 its own clock. A process whose clock is behind the writer's therefore discards
 fresh state and mounts the view from its defaults, without an error.
 
+With `DEBUG = False`, system checks [`djust.C032`](error-codes.md#c032-in-memory-channel-layer)
+(an in-memory channel layer) and [`djust.C033`](error-codes.md#c033-presence-counted-per-process)
+(memory presence used by a view) warn about the two rows above that cover only
+one process.
+
 ## Session engines
 
 Each engine below was run with two processes. The persisted-state machinery

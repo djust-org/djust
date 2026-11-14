@@ -17,7 +17,9 @@ from unittest import mock
 import pytest
 from django.test import override_settings
 
+from djust import LiveView
 from djust.checks import configuration
+from djust.presence import PresenceMixin
 
 LOCMEM = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 REDIS = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache"}}
@@ -76,10 +78,72 @@ def test_c031_is_quiet_in_development_and_when_suppressed():
             assert _ids(configuration._check_process_local_session_cache)[0] == []
 
 
+# ---------------------------------------------------------------------- C032
+
+
+@pytest.mark.parametrize(
+    "backend",
+    [
+        "channels.layers.InMemoryChannelLayer",
+        "djust.layers.InMemoryChannelLayer",
+        "djust.layers.MultiLoopInMemoryChannelLayer",
+    ],
+)
+def test_c032_reports_an_in_memory_channel_layer(backend):
+    with override_settings(CHANNEL_LAYERS={"default": {"BACKEND": backend}}):
+        ids, errors = _ids(configuration._check_in_memory_channel_layer)
+    assert ids == ["djust.C032"]
+    assert errors[0].level == 30
+    assert "RedisChannelLayer" in errors[0].hint
+
+
+def test_c032_is_quiet_for_a_shared_layer_in_development_and_when_suppressed():
+    redis = {"default": {"BACKEND": "channels_redis.core.RedisChannelLayer"}}
+    with override_settings(CHANNEL_LAYERS=redis):
+        assert _ids(configuration._check_in_memory_channel_layer)[0] == []
+    memory = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+    with override_settings(CHANNEL_LAYERS=memory):
+        assert _ids(configuration._check_in_memory_channel_layer, production=False)[0] == []
+        with override_settings(DJUST_CONFIG={"suppress_checks": ["C032"]}):
+            assert _ids(configuration._check_in_memory_channel_layer)[0] == []
+
+
+# ---------------------------------------------------------------------- C033
+
+
+class _RoomView(PresenceMixin, LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root></div>"
+
+
+@pytest.mark.parametrize("config", [{}, {"PRESENCE_BACKEND": "memory"}])
+def test_c033_reports_memory_presence_used_by_a_view(config):
+    with override_settings(DJUST_CONFIG=config):
+        ids, errors = _ids(configuration._check_memory_presence_backend)
+    assert ids == ["djust.C033"]
+    assert errors[0].level == 30
+    assert "_RoomView" in errors[0].msg
+
+
+def test_c033_is_quiet_for_redis_presence_in_development_and_without_presence_views():
+    with override_settings(DJUST_CONFIG={"PRESENCE_BACKEND": "redis"}):
+        assert _ids(configuration._check_memory_presence_backend)[0] == []
+    with override_settings(DJUST_CONFIG={}):
+        assert _ids(configuration._check_memory_presence_backend, production=False)[0] == []
+        with mock.patch.object(configuration, "_walk_subclasses", return_value=[]):
+            assert _ids(configuration._check_memory_presence_backend)[0] == []
+    with override_settings(DJUST_CONFIG={"suppress_checks": ["C033"]}):
+        assert _ids(configuration._check_memory_presence_backend)[0] == []
+
+
 def test_the_checks_run_from_the_registered_configuration_check():
     """Wired into the registered entry point, not only callable on their own."""
     import inspect
 
     source = inspect.getsource(configuration)
-    for name in ("_check_process_local_session_cache(errors)",):
+    for name in (
+        "_check_process_local_session_cache(errors)",
+        "_check_in_memory_channel_layer(errors)",
+        "_check_memory_presence_backend(errors)",
+    ):
         assert source.count(name) == 1, name
