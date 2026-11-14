@@ -8129,15 +8129,15 @@ class ViewRuntime(RuntimeTurnPort):
                 # the WebSocket's NOTIFY turn runs in its consumer.
                 bounded: Any = self.transport
                 context = bounded.event_context(view, lock_wait=lock_wait)
-            entered = False
-            try:
-                async with context:
-                    entered = True
-                    yield
-            except asyncio.TimeoutError:
-                if entered:
-                    raise
-                raise _TurnLockBusy() from None
+            async with contextlib.AsyncExitStack() as stack:
+                try:
+                    await stack.enter_async_context(context)
+                except asyncio.TimeoutError:
+                    # The render lock was still held after ``lock_wait``: the
+                    # turn did not start. A timeout from the turn's own body
+                    # (below) is not this, and propagates unchanged.
+                    raise _TurnLockBusy() from None
+                yield
         finally:
             if explicit is not None:
                 explicit.release()
