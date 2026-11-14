@@ -32,7 +32,7 @@ from djust import LiveView, apush_to_view, event_handler
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 from djust.websocket import LiveViewConsumer
 
-from ._ws_frames import wait_until
+from ._ws_frames import receive_until, wait_until
 from .test_exposure_sse_resilience_3200 import _fresh_key, _request
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -196,11 +196,8 @@ async def _ws(view, url):
     return socket, CONSUMERS[-1]
 
 
-async def _ws_frames(socket, done, timeout=10.0):
-    frames = []
-    while not done(frames):
-        frames.append(await socket.receive_json_from(timeout=timeout))
-    return frames
+async def _ws_frames(socket, done):
+    return await receive_until(socket, done, what="the broadcast frame")
 
 
 def _member(session):
