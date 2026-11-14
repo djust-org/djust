@@ -1547,6 +1547,13 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .dj-nav__dropdown-link:hover { background: hsl(var(--accent, 210 40% 96%)); }
 .dj-nav__dropdown-item--active .dj-nav__dropdown-link { color: hsl(var(--primary-text, var(--primary, 222 47% 51%))); background: hsl(var(--primary, 222 47% 51%) / 0.05); }
 .dj-nav__dropdown-desc { font-size: var(--text-xs, 0.75rem); color: hsl(var(--muted-foreground, 215 16% 47%)); margin-block-start: var(--space-1, 0.25rem); }
+/* Nested items carry the top-level classes at every depth (#4127); inside a dropdown they are
+   styled as dropdown entries. The .dj-nav__dropdown-item / -link rules above stay for markup that
+   still names them. */
+.dj-nav__dropdown-list .dj-nav__item { margin: 0; }
+.dj-nav__dropdown-list .dj-nav__link { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem); color: hsl(var(--foreground, 222 47% 11%)); text-decoration: none; border-radius: var(--radius-sm, 0.25rem); width: 100%; text-align: start; }
+.dj-nav__dropdown-list .dj-nav__link:hover { background: hsl(var(--accent, 210 40% 96%)); }
+.dj-nav__dropdown-list .dj-nav__item--active > .dj-nav__link { color: hsl(var(--primary-text, var(--primary, 222 47% 51%))); background: hsl(var(--primary, 222 47% 51%) / 0.05); box-shadow: none; }
 @media (max-width: 768px) {
   .dj-nav__hamburger { display: block; margin-inline-start: auto; }
   .dj-nav__list { display: none; flex-direction: column; position: absolute; inset-block-start: 100%; inset-inline-start: 0; width: 100%; background: hsl(var(--card, 0 0% 100%)); border-block-end: 1px solid hsl(var(--border, 214 32% 91%)); box-shadow: var(--shadow-md, 0 4px 6px -1px rgb(0 0 0 / 0.1)); z-index: 40; }

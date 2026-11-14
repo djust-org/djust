@@ -6616,10 +6616,13 @@ class NavItemNode(template.Node):
 
         # Truthiness first, as the native item: no ``id`` and no menu ``active`` is not a match.
         is_active = bool(item_id and item_id == active_path) or bool(href and href == active_path)
-        top = depth == 0
-        li_cls = "dj-nav__item" if top else "dj-nav__dropdown-item"
-        link_cls = "dj-nav__link" if top else "dj-nav__dropdown-link"
-        active_cls = f" {li_cls}--active" if is_active else ""
+        # The same classes at every depth, as the native handler draws them (#4127): a nested
+        # item is styled by where it sits (``.dj-nav__dropdown-list .dj-nav__item``), not by a
+        # second class family. ``dj-nav__dropdown-item`` / ``-link`` stay styled in
+        # components.css for markup that still names them.
+        li_cls = "dj-nav__item"
+        link_cls = "dj-nav__link"
+        active_cls = " dj-nav__item--active" if is_active else ""
 
         if own["items"]:
             mega_cls = " dj-nav__dropdown--mega" if mega else ""
