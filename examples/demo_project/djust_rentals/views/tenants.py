@@ -224,11 +224,14 @@ class TenantDetailView(BaseViewWithNavbar):
         )
 
         # Count maintenance requests by status
+        # Over all of the tenant's requests: self.maintenance_requests is the
+        # sliced "recent 10", and a sliced queryset cannot be filtered (#3994).
+        all_requests = MaintenanceRequest.objects.filter(tenant=self.tenant)
         maintenance_stats = {
-            'total': self.maintenance_requests.count(),
-            'open': self.maintenance_requests.filter(status='open').count(),
-            'in_progress': self.maintenance_requests.filter(status='in_progress').count(),
-            'completed': self.maintenance_requests.filter(status='completed').count(),
+            'total': all_requests.count(),
+            'open': all_requests.filter(status='open').count(),
+            'in_progress': all_requests.filter(status='in_progress').count(),
+            'completed': all_requests.filter(status='completed').count(),
         }
 
         context.update({
@@ -265,6 +268,10 @@ class TenantFormView(BaseViewWithNavbar):
         """Initialize tenant form"""
         self.tenant_id = pk
         self.is_edit = pk is not None
+        # Set before the not-found return below: get_context_data reads them (#3994).
+        self.success_message = ""
+        self.error_message = ""
+        self.validation_errors = {}
 
         if self.is_edit:
             # Load existing tenant

@@ -655,19 +655,19 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 )
             )
 
-        # V005 -- module not allowlisted. Mirror the WebSocket mount
-        # enforcement (websocket.py): the allowlist is enforced ONLY when
-        # non-empty, and a view is permitted when an allowed entry is a PREFIX
-        # of its view path — NOT by exact membership. Keeping V005 in sync with
-        # the runtime check avoids false positives now that URL-routed views are
-        # also discovered (#1674; parallel-path-drift, CLAUDE.md #1646): e.g. an
-        # allowlist of ['myapp'] permits 'myapp.views.MyView', and an explicitly
-        # empty [] means allow-all (no longer flags every view).
+        # V005 -- module not allowlisted. Asks the WebSocket mount gate itself
+        # (``djust.security.mount.is_view_path_allowed``), so the check and the
+        # runtime cannot disagree (#1674; parallel-path-drift, CLAUDE.md #1646):
+        # the allowlist is enforced ONLY when non-empty (an explicitly empty []
+        # means allow-all), and an entry admits a module on a dotted-segment
+        # boundary. ['myapp'] permits 'myapp.views.MyView' but not
+        # 'myapp_docs.views.MyView'; a bare ``startswith`` admitted the second,
+        # which the mount then refused (#3994).
+        from djust.security.mount import is_view_path_allowed
+
         allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
         view_path = "%s.%s" % (module, getattr(cls, "__name__", ""))
-        is_allowlisted = allowed and any(
-            view_path.startswith(m) or module.startswith(m) for m in allowed
-        )
+        is_allowlisted = allowed and is_view_path_allowed(view_path)
         if allowed and not is_allowlisted and not _is_check_suppressed("djust.V005"):
             errors.append(
                 DjustWarning(

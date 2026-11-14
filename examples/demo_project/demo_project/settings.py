@@ -159,9 +159,13 @@ if os.environ.get("DJUST_DEMO_REAUTH_ON_EVENT") == "1":
 LIVEVIEW_ALLOWED_MODULES = [
     "demo_app.views",
     "djust_demos.views",
+    "djust_docs.views",
+    "djust_forms.views",
+    "djust_homepage.views",
     "djust_shared.views",
     "djust_rentals.views",
     "djust_tests.views",
+    "sticky_demo.views",
     # djust's own routed LiveViews (the admin extension at /djust-admin-demo/).
     # An explicit list replaces the default that admits them (check V015).
     "djust",

@@ -352,10 +352,11 @@ class NoTemplateDemo(LiveView):
             action="switch_tab"
         )
 
-    def render_full_template(self, request=None):
+    def render_full_template(self, request=None, serialized_context=None):
         """Override to wrap template_string content with full HTML document"""
-        # Get the inner content (just the template_string rendered, no wrapper)
-        inner_content = super().render_full_template(request)
+        # Get the inner content (just the template_string rendered, no wrapper).
+        # Keep the base signature: the page GET passes serialized_context (#3994).
+        inner_content = super().render_full_template(request, serialized_context)
 
         # Get view path for WebSocket mounting
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"

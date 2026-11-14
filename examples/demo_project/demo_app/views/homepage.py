@@ -10,6 +10,7 @@ from djust.decorators import event_handler
 import time
 import random
 from djust import state
+from djust.components.layout import NavbarComponent, NavItem
 
 
 # A persisted list a client can grow is capped: persist="server" state is kept
@@ -25,7 +26,7 @@ class HomeCounterDemo(LiveView):
     exposure_policy = "explicit"
     count = state(0, persist="server")
     template = """
-    <div class="text-center">
+    <div dj-root class="text-center">
         <div class="display-1 fw-bold mb-3" style="color: #667eea;">{{ count }}</div>
         <div class="d-flex gap-2 justify-content-center">
             <button dj-click="decrement" class="btn btn-outline-primary btn-lg">
@@ -76,7 +77,7 @@ class HomeSearchDemo(LiveView):
         ])
     filtered_items = state()
     template = """
-    <div>
+    <div dj-root>
         <input
             dj-input="filter_items"
             type="text"
@@ -135,7 +136,7 @@ class HomeLiveDataDemo(LiveView):
     metrics = state()
     last_update = state()
     template = """
-    <div>
+    <div dj-root>
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h5 class="mb-0">Live Performance Metrics</h5>
             <button dj-click="refresh_data" class="btn btn-sm btn-primary">
@@ -229,7 +230,7 @@ class HomeTodoDemo(LiveView):
         ], persist="server")
     next_id = state(3, persist="server")
     template = """
-    <div>
+    <div dj-root>
         <form dj-submit="add_todo" class="mb-3">
             <div class="input-group input-group-lg">
                 <input
@@ -336,4 +337,93 @@ class HomeTodoDemo(LiveView):
         context = super().get_context_data(**kwargs)
         context["active_count"] = self.active_count
         context["done_count"] = self.done_count
+        return context
+
+
+# Moved from demo_app.views_old (#3994): routed views live in modules
+# LIVEVIEW_ALLOWED_MODULES lists, and views_old (unrouted legacy views) is not one.
+class NavbarBadgeDemo(LiveView):
+    """
+    Standalone demo showing reactive navbar badges.
+
+    This is embedded in the homepage to demonstrate how navbar badges
+    update in real-time when state changes.
+    """
+    exposure_policy = "explicit"
+    notification_count = state(0, persist="server")
+    template = """
+    <div dj-root class="p-4 bg-white rounded-lg border border-gray-200">
+        <!-- Navbar with badge -->
+        {{ navbar.render }}
+
+        <!-- Demo controls -->
+        <div class="mt-6 text-center">
+            <h3 class="text-xl font-bold text-gray-900 mb-4">
+                Reactive Navbar Badge Demo
+            </h3>
+            <p class="text-gray-600 mb-4">
+                Click buttons to see the navbar badge update in real-time!
+            </p>
+
+            <div class="flex gap-3 justify-center items-center mb-4">
+                <button dj-click="increment_notifications"
+                        class="px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
+                    🔔 Add Notification
+                </button>
+                <button dj-click="reset_notifications"
+                        class="px-6 py-3 bg-gray-600 text-white rounded-lg font-semibold hover:bg-gray-700 transition">
+                    🔄 Reset
+                </button>
+            </div>
+
+            <div class="inline-block bg-blue-50 px-6 py-3 rounded-lg">
+                <p class="text-sm text-gray-600 mb-1">Current Notifications</p>
+                <p class="text-4xl font-bold text-blue-600">{{ notification_count }}</p>
+            </div>
+
+            <div class="mt-4 text-sm text-gray-500">
+                <p>👆 Look at the "Demos" link in the navbar above</p>
+                <p>The badge updates instantly via WebSocket!</p>
+            </div>
+        </div>
+    </div>
+    """
+
+    def mount(self, request, **kwargs):
+        """Initialize with notification counter"""
+        self.notification_count = 0
+
+    @event_handler
+    def increment_notifications(self):
+        """Event handler to increment notifications"""
+        self.notification_count += 1
+
+    @event_handler
+    def reset_notifications(self):
+        """Event handler to reset notifications"""
+        self.notification_count = 0
+
+    def get_context_data(self, **kwargs):
+        """Add navbar with notification badge"""
+        context = super().get_context_data(**kwargs)
+
+        # Create navbar with notification badge on Demos
+        context['navbar'] = NavbarComponent(
+            brand_name="",
+            brand_logo="/static/images/djust.png",
+            brand_href="/",
+            items=[
+                NavItem("Home", "/", active=False),
+                NavItem("Demos", "/demos/", badge=self.notification_count, badge_variant="danger"),
+                NavItem("Components", "/kitchen-sink/"),
+                NavItem("Forms", "/forms/"),
+                NavItem("Docs", "/docs/"),
+                NavItem("Hosting ↗", "https://djustlive.com", external=True),
+            ],
+            fixed_top=False,  # Not fixed in the iframe
+            logo_height=16,
+        )
+
+        context['notification_count'] = self.notification_count
+
         return context

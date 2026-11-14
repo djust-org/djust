@@ -8,7 +8,6 @@ This package organizes views into logical modules for better maintainability.
 # Import all views from the old views file for backwards compatibility
 from ..views_old import (
     IndexView,
-    NavbarBadgeDemo,
     CounterView,
     TodoView,
     ChatView,
@@ -89,6 +88,7 @@ from .test_index import TestIndexView
 
 # Import homepage demo views
 from .homepage import (
+    NavbarBadgeDemo,
     HomeCounterDemo,
     HomeSearchDemo,
     HomeLiveDataDemo,

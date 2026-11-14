@@ -283,6 +283,12 @@ class LeaseFormView(BaseViewWithNavbar):
         """Initialize lease form"""
         self.lease_id = pk
         self.is_edit = pk is not None
+        # Set before the not-found return below: get_context_data reads them (#3994).
+        self.success_message = ""
+        self.error_message = ""
+        self.validation_errors = {}
+        self.properties = Property.objects.none()
+        self.tenants = Tenant.objects.none()
 
         if self.is_edit:
             # Load existing lease

@@ -202,9 +202,11 @@ class RustComponentsDemo(LiveView):
             label="Disabled",
             variant="secondary",
             disabled=True,
+            # No action: the view has no "noop" handler, and a disabled
+            # dropdown's items have nothing to call (#3994).
             items=[
-                DropdownItem(text='Option 1', action='noop'),
-                DropdownItem(text='Option 2', action='noop'),
+                DropdownItem(text='Option 1'),
+                DropdownItem(text='Option 2'),
             ]
         )
 

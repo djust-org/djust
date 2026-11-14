@@ -331,7 +331,12 @@ CHANGING = [
     ("demo_app.views_old.IndexView", "increment_counter", {}, "demo_counter"),
     ("demo_app.views_old.IndexView", "increment_notifications", {}, "notification_count"),
     ("demo_app.views_old.IndexView", "add_todo", {"todo_text": "t"}, "demo_todos"),
-    ("demo_app.views_old.NavbarBadgeDemo", "increment_notifications", {}, "notification_count"),
+    (
+        "demo_app.views.homepage.NavbarBadgeDemo",
+        "increment_notifications",
+        {},
+        "notification_count",
+    ),
     ("djust_homepage.views.IndexView", "increment_counter", {}, "demo_counter"),
 ]
 

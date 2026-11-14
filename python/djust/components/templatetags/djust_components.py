@@ -27,6 +27,7 @@ from typing import Any, Iterator, Optional
 
 from django import template
 from django.utils.html import conditional_escape, format_html, format_html_join
+from django.utils.functional import Promise
 from django.utils.safestring import SafeString
 
 from djust._template_guards import call_method_for_template
@@ -790,14 +791,38 @@ def do_card(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 
+#: The column values ``data_table`` reads as a bare name (#3895): text (``str`` and its
+#: subclasses, lazy text), numbers and bools; ``None`` too. Not "anything that is not a dict": an
+#: object column is read through its attributes (#3894).
+_BARE_COLUMN_TYPES: tuple[type, ...] = (str, Promise, int, float)
+
+
 def _checked_column_widths(columns: Any) -> Any:
     """Columns with any ``width`` that is not a plain CSS length cleared.
 
-    ``table.html`` writes ``col.width`` into a style attribute."""
+    ``table.html`` writes ``col.width`` into a style attribute.
+
+    A SCALAR column (:data:`_BARE_COLUMN_TYPES`: a bare name such as ``columns=["name", "age"]``,
+    a ``str`` subclass or lazy text, a number, a bool, ``None``) is the column whose key and label
+    are its text, as the native handler draws it. ``table.html`` reads ``col.key``, and a filter
+    argument that does not resolve raises, so a shape the native handler accepted made the first,
+    Django-engine render fail (#3895). The text is plain: a ``mark_safe`` name is escaped like any
+    other, as natively (a header with markup is the dict form's ``label``). An ``int`` keeps its
+    value as the key, so it still reads a row's ``int`` key (the native handler reads the row
+    after a JSON round trip, where that key is the same text).
+
+    Any other object (a column class, a namedtuple) is left as it is: the template reads its
+    ``key`` / ``label`` / ``width`` attributes, the #3894 contract."""
     if not isinstance(columns, (list, tuple)):
         return columns
     checked = []
     for col in columns:
+        if col is None or isinstance(col, _BARE_COLUMN_TYPES):
+            # ``_exact_str`` returns an exact ``str``: a ``SafeString`` name loses its safe flag
+            # (``str()`` and ``"%s" %`` keep it), so the template escapes it like any text.
+            text = _exact_str(col)
+            key = col if type(col) is int else text
+            col = {"key": key, "label": text}
         if isinstance(col, dict) and col.get("width") and not safe_css_length(col["width"], ""):
             col = {**col, "width": ""}
         checked.append(col)
@@ -970,7 +995,8 @@ def data_table(
 
     Phase 1 args:
         rows: list of dicts
-        columns: list of dicts with keys: key, label, sortable, filterable, filter_type, filter_options, width
+        columns: list of dicts with keys: key, label, sortable, filterable, filter_type, filter_options, width;
+            any other value (a bare name ``"name"``) is the column whose key and label are its text
         sort_by: current sort column key
         sort_desc: sort descending?
         sort_event: djust event for sorting

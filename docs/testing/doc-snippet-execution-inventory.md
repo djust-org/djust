@@ -20,6 +20,8 @@ A block is counted as passing when it has no inline template too: it is mounted 
 
 > **Update 2026-11-12 (#4055).** The scope grows to the rest of the teaching material: `docs/website/*/*.md` (core concepts, advanced, API reference, state, forms), the top-level `docs/*.md`, `docs/ai`, `docs/state-management` and `docs/templates`, dated records excepted. `docs/components` is in too, now that its LiveComponent-in-`mount()` examples are rewritten per #4063 (a `LiveComponent` in the class body, a plain component as a `state(default_factory=...)` field). The blocks #4055 listed are fixed: phantom imports (`LiveViewForm`, `TabsMixin`, `djust.mixins.DraftModeMixin`) and `use_actors` moved into marked "Before" fences or corrected, inline templates given a `dj-root`, handlers given the state they read and the `@event_handler` the consumer requires. A `LiveComponent` block with no template now runs on a stub template, as a view block does. The same command gives 482 blocks: 272 pass, 207 not runnable in isolation, 1 deliberate failure, and 2 `docs/components` navbar examples recorded in `KNOWN_FAILURES` because the demo settings the suite runs under have a `navbar` context processor that collides with a declared `navbar`.
 
+> **Update 2026-11-14 (#3994).** The two `docs/components` navbar examples now execute: `test_doc_snippet_executes` runs every block under `TEMPLATES` without `demo_app.context_processors.navbar`, a context processor the demo project has and a reader's project does not. `KNOWN_FAILURES` holds the deliberate `error-overlay.md` example and the `docs/state-management` blocks that teach `@optimistic` / `@client_state`, which #4006 removed.
+
 ### 1a. Failures
 
 > **Update 2026-11-11 (#3994).** Seven of the eight rows below are fixed in the guides and removed from `KNOWN_FAILURES`. The one that remains is the deliberate `error-overlay.md` example. The table is kept as the record of what the first run found.
@@ -62,6 +64,8 @@ Handlers that take required arguments are not fired (the block documents their s
 The first visible `dj-click` control was clicked on 49 pages; the dj-root's HTML changed on 29 of them and the socket stayed connected on 36.
 
 ### 2a. Defects, verified against the demo source
+
+> **Update 2026-11-14 (#3994).** `tests/integration/test_demo_project_pages_3994.py` now re-checks this section on every run, without a browser: it GETs every routed demo URL (the `<int:pk>` ones included) on an empty database and on one with a row in each rentals table, checks that every LiveView page has a `[dj-view]` root naming its own class, that every routed LiveView passes the WebSocket mount allowlist, and that every event name a first paint binds on its root view is an `@event_handler`. The rows below are fixed except `/demos/markdown-stream/` (a Rust-engine tag under the demo's Django template backend, pinned there as a strict expected failure). The undecorated-handler rows were fixed by `ede5450f2` (#4097), and `/demos/model-form/` already answered 200 on `cf89695e5`.
 
 | page | symptom in the browser | source |
 |---|---|---|

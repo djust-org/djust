@@ -284,6 +284,20 @@ class KitchenSinkView(BaseViewWithNavbar):
         self.alert_info.set_message("Archive action triggered!")
         self.alert_info.show()
 
+    # The split dropdown's two items name these handlers; without them the
+    # first click on either item raised "no such handler" (#3994).
+    @event_handler
+    def action1(self):
+        """Handle the split dropdown's first item"""
+        self.alert_info.set_message("Action 1 triggered!")
+        self.alert_info.show()
+
+    @event_handler
+    def action2(self):
+        """Handle the split dropdown's second item"""
+        self.alert_info.set_message("Action 2 triggered!")
+        self.alert_info.show()
+
     @event_handler
     def dismiss_tag(self):
         """Handle tag dismissal"""
