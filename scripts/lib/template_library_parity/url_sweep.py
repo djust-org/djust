@@ -410,16 +410,19 @@ def is_dangerous(attr: Attr) -> bool:
     ``javascript:`` / ``vbscript:`` and every other scheme outside
     :data:`NAVIGATION_SCHEMES` (#3677) anywhere; ``data:`` unless it is an image
     URI on an attribute that only ever loads an image (``<img src>``,
-    ``poster``, ``srcset``) or the resource a ``<link>`` loads (a stylesheet,
+    ``poster``, ``srcset`` on any element) or the resource a ``<link>`` loads (a stylesheet,
     manifest or icon) — there ``data:`` is legitimate and runs no script.
     """
     if attr.name == "srcset":
         # A candidate's URL ends at whitespace, so ``java<TAB>script:`` is the
         # URL ``java`` and a descriptor here, unlike in an ``href``. Split by the
         # INDEPENDENT port of the spec (``spec_srcset``), never by production's parser.
-        return any(
-            is_dangerous(Attr(attr.element, "src", url)) for url, _desc in spec_srcset(attr.value)
-        )
+        # A ``srcset`` is only ever fetched AS AN IMAGE (on ``<img>`` / ``<source>``; on any
+        # other element no browser fetches it at all), so each candidate is judged as an image
+        # source whatever the element: ``data:image/...`` passes, ``data:text/html`` and the
+        # script schemes do not. That is production's decision too (``url_allowed(url,
+        # image=True)`` for every ``srcset`` in ``djust/_attr_policy.py``), recorded in #4130.
+        return any(is_dangerous(Attr("img", "src", url)) for url, _desc in spec_srcset(attr.value))
     scheme = scheme_of(attr.value)
     if not scheme or not is_url_attr(attr.name):
         return False
@@ -1106,3 +1109,70 @@ def component_holes(cells: Iterable[ComponentCell]) -> dict[tuple[str, str, str,
                 cell.label
             )
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Decided holes: the one baseline the tests and the script share (#4130)
+#
+# A "hole" is a dangerous payload that reached an attribute the scanner NAMES as a URL. Some of
+# those were judged and decided to be printed as written; they are recorded here, with the
+# reason, so ``python/tests/test_url_scheme_sweep_3665.py`` and
+# ``scripts/template-library-url-sweep.py`` excuse exactly the same set. Exit 1 from the script
+# means an UNDECIDED hole. Each entry is pinned by a test that fails once it stops occurring.
+
+#: The theming tags whose ``**attrs`` reach the element as ``name="value"`` pairs (pinned against
+#: the templates that print ``{{ extra_attrs }}`` by ``test_theming_url_hardening_3749.py``).
+PASSTHROUGH_TAGS = frozenset({"theme_button", "theme_input", "theme_select", "theme_progress"})
+
+#: Names the scanner reads as URL attributes that theming deliberately does NOT judge, with the
+#: decision (#3765). HTML URL attributes that no browser follows on the elements these tags print
+#: (a citation, an obsolete object attribute, an icon NAME, a microdata identifier), and
+#: ``data-url``, one author-defined name of the ``data-*`` family: all printed as written.
+UNJUDGED_PASSTHROUGH = {
+    "cite": "a citation URL no browser follows; also used as text (`Smith: 2020`)",
+    "longdesc": "obsolete; modern browsers do not follow it",
+    "manifest": "obsolete AppCache attribute of <html>",
+    "codebase": "obsolete <object>/<applet> attribute",
+    "usemap": "a fragment reference to a <map>, not a fetch",
+    "icon": "an icon NAME in design systems (`mdi:home`); obsolete <menuitem> attribute in HTML",
+    "profile": "obsolete <head> attribute",
+    "archive": "obsolete <object>/<applet> attribute",
+    "classid": "obsolete <object> attribute",
+    "itemid": "a microdata identifier, not fetched",
+    "itemtype": "a microdata vocabulary identifier, not fetched",
+    "data_url": "author-defined `data-*`: the page author's own script reads it",
+}
+
+#: Class components whose ``data=`` mapping becomes ``data-<key>`` attributes: the CALLER names
+#: the attribute, and djust prints the value it was given (escaped). The sweep's dict has
+#: URL-worded keys, so ``data-href`` / ``data-url`` appear; there is no framework URL parameter
+#: here, and no djust script navigates on them (a page script that does must validate the value).
+KNOWN_AUTHOR_NAMED = frozenset(
+    {
+        ("djust.components.components.button.Button", "data"),
+        ("djust.components.components.card.Card", "data"),
+    }
+)
+
+#: Gaps in a RUST mirror of ``url_attr``: ``(class, parameter, payload label)`` for a payload one
+#: Rust component still lets through where the Python rule refuses it. Empty since #3748.
+KNOWN_RUST_MIRROR_GAPS: frozenset[tuple[str, str, str]] = frozenset()
+
+
+def decided_tag_hole(hole: tuple[str, ...]) -> bool:
+    """Whether a tag hole ``(engine, "<library>:<tag>", param, element, "attr:class")`` is a
+    pass-through name theming DECIDED not to judge (:data:`UNJUDGED_PASSTHROUGH`)."""
+    tag = hole[1].split(":", 1)[1] if ":" in hole[1] else hole[1]
+    return tag in PASSTHROUGH_TAGS and hole[2] in UNJUDGED_PASSTHROUGH
+
+
+def decided_component_hole(hole: tuple[str, ...], labels: Iterable[str]) -> bool:
+    """Whether a component hole ``(class, param, element, "attr:class")`` reached by ``labels``
+    is decided: an author-named ``data-*`` (:data:`KNOWN_AUTHOR_NAMED`) or a recorded Rust
+    mirror gap for every one of its payloads."""
+    if (hole[0], hole[1]) in KNOWN_AUTHOR_NAMED:
+        return True
+    labels = list(labels)
+    return bool(labels) and all(
+        (hole[0], hole[1], label) in KNOWN_RUST_MIRROR_GAPS for label in labels
+    )

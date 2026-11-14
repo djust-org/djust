@@ -337,23 +337,9 @@ PASSTHROUGH_ATTRS = sorted(
 )
 
 #: Names the sweep scanner reads as URL attributes that theming deliberately does NOT judge, with
-#: the decision. HTML URL attributes that no browser follows on the elements these tags print
-#: (a citation, an obsolete object attribute, an icon NAME, a microdata identifier), and
-#: ``data-url``, one author-defined name of the ``data-*`` family: all printed as written.
-UNJUDGED_PASSTHROUGH = {
-    "cite": "a citation URL no browser follows; also used as text (`Smith: 2020`)",
-    "longdesc": "obsolete; modern browsers do not follow it",
-    "manifest": "obsolete AppCache attribute of <html>",
-    "codebase": "obsolete <object>/<applet> attribute",
-    "usemap": "a fragment reference to a <map>, not a fetch",
-    "icon": "an icon NAME in design systems (`mdi:home`); obsolete <menuitem> attribute in HTML",
-    "profile": "obsolete <head> attribute",
-    "archive": "obsolete <object>/<applet> attribute",
-    "classid": "obsolete <object> attribute",
-    "itemid": "a microdata identifier, not fetched",
-    "itemtype": "a microdata vocabulary identifier, not fetched",
-    "data_url": "author-defined `data-*`: the page author's own script reads it",
-}
+#: the decision. The table lives in the sweep library so the tests and
+#: ``scripts/template-library-url-sweep.py`` excuse the same holes (#4130).
+UNJUDGED_PASSTHROUGH = url_sweep.UNJUDGED_PASSTHROUGH
 
 #: The HTML URL-named attributes among them (all but the author-defined ``data_url`` sample), in
 #: the form the scanner lists them: the decision record that production's comment points to.
@@ -667,6 +653,8 @@ class TestThePassthroughSetIsPinned:
         )
         names = {Path(p).name for p in printers}
         assert names == {"button.html", "input.html", "select.html", "progress.html"}, printers
+        # the sweep's baseline excuses unjudged names on exactly these tags (#4130)
+        assert set(PASSTHROUGH_TAGS) == url_sweep.PASSTHROUGH_TAGS
 
     def test_every_url_attribute_the_scanner_reads_is_judged_or_decided_not_to_be(self):
         """The scanner keeps its own list (it must not use production as its oracle); this is

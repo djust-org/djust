@@ -14,7 +14,10 @@ script-capable URL. See ``scripts/lib/template_library_parity/url_sweep.py``.
     scripts/template-library-url-sweep.py --only avatar     restrict to some tags
     scripts/template-library-url-sweep.py --quick           fewer payloads (what the test runs)
 
-Exit codes: 0 no hole in either engine; 1 at least one; 2 the harness could not run.
+Exit codes: 0 no UNDECIDED hole in either engine; 1 at least one; 2 the harness could not run.
+A hole the tests already excuse (``url_sweep.decided_tag_hole`` / ``decided_component_hole``:
+a pass-through name theming decided not to judge, an author-named ``data-*``) is counted and,
+with ``--verbose``, listed as DECIDED; it does not fail the run (#4130).
 
 Like ``template-library-parity.py`` this replaces ``uuid`` / ``datetime`` for its
 whole process, so it must be the only thing running in it; the tests start it as
@@ -56,6 +59,9 @@ TEST_CORPUS = (
     "blob", "blob-lead-control", "blob-lead-nul", "blob-embedded-tab", "file-lead-control",
     "intent-lead-control", "custom",
     "https", "relative", "mailto", "data-png",
+    # the payloads ``--quick`` drives that the test did not (#4130): the make target and the
+    # test must not disagree on what is a hole because one of them never sent the payload.
+    "js-upper", "data-svg", "srcset-comma", "anchor",
 )  # fmt: skip
 
 
@@ -117,34 +123,51 @@ def main(argv: list[str] | None = None) -> int:
         )
     component_holes = url_sweep.component_holes(component_cells)
     holes = url_sweep.holes(sweep)
+    decided = {k for k in holes if url_sweep.decided_tag_hole(k)}
+    decided_components = {
+        k for k, labels in component_holes.items() if url_sweep.decided_component_hole(k, labels)
+    }
+    undecided = {k: v for k, v in holes.items() if k not in decided}
+    undecided_components = {k: v for k, v in component_holes.items() if k not in decided_components}
     diffs = url_sweep.disagreements(sweep)
     rendered = sum(1 for c in sweep.cells if c.rendered_both)
     print(
-        "djust from %s\n%d tags, %d cells, %d rendered in both engines; %d holes, %d disagreements"
+        "djust from %s\n%d tags, %d cells, %d rendered in both engines; %d holes (%d decided), "
+        "%d disagreements"
         % (
             sweep.probe["djust"],
             len(sweep.driven),
             len(sweep.cells),
             rendered,
-            len(holes),
+            len(undecided),
+            len(decided),
             len(diffs),
         )
     )
     for (engine, tag, param, element, attr), labels in sorted(holes.items()):
-        print(
-            "HOLE %-6s %-40s %-22s <%s %s>  %s"
-            % (engine, tag, param, element, attr, ",".join(sorted(labels)))
-        )
+        kind = "DECIDED" if (engine, tag, param, element, attr) in decided else "HOLE"
+        if kind == "HOLE" or args.verbose:
+            print(
+                "%s %-6s %-40s %-22s <%s %s>  %s"
+                % (kind, engine, tag, param, element, attr, ",".join(sorted(labels)))
+            )
     if args.components or args.components_only:
         print(
-            "%d component classes, %d cells; %d holes"
-            % (len(component_driven), len(component_cells), len(component_holes))
+            "%d component classes, %d cells; %d holes (%d decided)"
+            % (
+                len(component_driven),
+                len(component_cells),
+                len(undecided_components),
+                len(decided_components),
+            )
         )
     for (cls, param, element, attr), labels in sorted(component_holes.items()):
-        print(
-            "HOLE component %-60s %-14s <%s %s>  %s"
-            % (cls, param, element, attr, ",".join(sorted(labels)))
-        )
+        kind = "DECIDED" if (cls, param, element, attr) in decided_components else "HOLE"
+        if kind == "HOLE" or args.verbose:
+            print(
+                "%s component %-60s %-14s <%s %s>  %s"
+                % (kind, cls, param, element, attr, ",".join(sorted(labels)))
+            )
     if args.verbose:
         for cell in diffs[:200]:
             print("DISAGREE %s %s %s %s py=%s/%s rs=%s/%s" % (
@@ -174,6 +197,13 @@ def main(argv: list[str] | None = None) -> int:
                     "component_holes": sorted(
                         [list(k) + [sorted(v)] for k, v in component_holes.items()]
                     ),
+                    # what makes the exit code 1: the holes no recorded decision excuses (#4130)
+                    "undecided_holes": sorted(
+                        [list(k) + [sorted(v)] for k, v in undecided.items()], key=lambda r: r[:5]
+                    ),
+                    "undecided_component_holes": sorted(
+                        [list(k) + [sorted(v)] for k, v in undecided_components.items()]
+                    ),
                     "component_driven": component_driven,
                     "component_unrendered": component_unrendered,
                     "reached": sorted(
@@ -202,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
             + "\n",
             encoding="utf-8",
         )
-    return 1 if (holes or component_holes) else 0
+    return 1 if (undecided or undecided_components) else 0
 
 
 if __name__ == "__main__":

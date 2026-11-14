@@ -98,22 +98,11 @@ NO_PARAMETERS = {
 #: when one stops occurring.
 KNOWN_ENGINE_DISAGREEMENTS: set[tuple[str, str, str]] = set()
 
-#: Class components whose ``data=`` mapping becomes ``data-<key>`` attributes: the
-#: CALLER names the attribute, and djust emits what it was given. The sweep's
-#: dict has URL-worded keys, so ``data-href`` / ``data-url`` appear; there is no
-#: framework URL parameter here.
-KNOWN_AUTHOR_NAMED = {
-    ("djust.components.components.button.Button", "data"),
-    ("djust.components.components.card.Card", "data"),
-}
-
-#: Gaps in a RUST mirror of ``url_attr``: ``(class, parameter, payload label)`` for a payload one
-#: Rust component still lets through where the Python rule refuses it. Empty since #3748: the
-#: avatar's ``url_scheme`` read a value with a leading C0 control character (``\x01blob:...``) as
-#: having no scheme, where Python's ``urlsplit`` (and a browser) strip it first, and now strips
-#: it too. The mechanism stays, with ``test_the_known_rust_mirror_gap_still_occurs``: an entry
-#: added here is a recorded decision, and the test fails once it stops occurring.
-KNOWN_RUST_MIRROR_GAPS: set[tuple[str, str, str]] = set()
+#: The decided holes (author-named ``data-*`` on the class components, recorded Rust mirror gaps)
+#: live in the sweep library, so this test and ``make template-library-url-sweep`` excuse the
+#: same set (#4130); see ``url_sweep.KNOWN_AUTHOR_NAMED`` / ``KNOWN_RUST_MIRROR_GAPS``.
+KNOWN_AUTHOR_NAMED = url_sweep.KNOWN_AUTHOR_NAMED
+KNOWN_RUST_MIRROR_GAPS = url_sweep.KNOWN_RUST_MIRROR_GAPS
 
 #: Renderable classes the sweep cannot drive generically, and why (the sweep DERIVES the
 #: set from the class; the pin makes a NEW undriven class a visible decision).
@@ -255,6 +244,17 @@ class TestScanner:
         assert not self._flagged('<img src="data:image/png;base64,AAAA">')
         assert self._flagged('<a href="data:image/png;base64,AAAA">')
         assert self._flagged('<iframe src="data:image/png;base64,AAAA">')
+
+    @pytest.mark.parametrize("element", ["img", "source", "div", "button", "input", "select"])
+    def test_a_srcset_is_an_image_sink_on_any_element(self, element):
+        """#4130: a ``srcset`` is only ever fetched as an image, so ``data:image/...`` in it is
+        an image on every element (production's decision, ``url_allowed(url, image=True)``);
+        the scanner accepted it only on ``img`` / ``source`` and reported the theming
+        pass-through tags (``<button srcset>`` ...) as holes. Anything else stays a hole."""
+        svg = "data:image/svg+xml,<svg onload=alert(1)>"
+        assert not self._flagged('<%s srcset="/a.png 1x, %s 2x">' % (element, svg))
+        assert self._flagged('<%s srcset="/a.png 1x, data:text/html,x 2x">' % element)
+        assert self._flagged('<%s srcset="/a.png 1x, javascript:x 2x">' % element)
 
     @pytest.mark.parametrize(
         "name,url",
@@ -413,14 +413,9 @@ def _hardening():
 
 
 def _decided_unjudged(hole) -> bool:
-    """A hole on a pass-through name that theming DECIDED not to judge (#3765).
-
-    ``(engine, tag, param, element, "attr:class")`` where ``tag`` is one of the tags that print
-    ``**attrs`` and ``param`` a name in ``UNJUDGED_PASSTHROUGH`` (a citation URL no browser
-    follows, an icon name, an author-defined ``data-*``). Anything else is a hole."""
-    module = _hardening()
-    tag = hole[1].split(":", 1)[1] if ":" in hole[1] else hole[1]
-    return tag in module.PASSTHROUGH_TAGS and hole[2] in module.UNJUDGED_PASSTHROUGH
+    """A hole on a pass-through name that theming DECIDED not to judge (#3765): the sweep
+    library's baseline, shared with the script (#4130). Anything else is a hole."""
+    return url_sweep.decided_tag_hole(hole)
 
 
 def _holes(run: dict) -> list[str]:
@@ -444,12 +439,8 @@ class TestTheSweep:
         still sees printed with a payload on one of the pass-through tags (else delete it), and
         no other name is excused."""
         module = _hardening()
-        seen = {
-            h[2]
-            for h in runs["tags"].get("holes", [])
-            if h[1].split(":", 1)[1] in module.PASSTHROUGH_TAGS
-            and h[2] in module.UNJUDGED_PASSTHROUGH
-        }
+        seen = {h[2] for h in runs["tags"].get("holes", []) if _decided_unjudged(h)}
+        assert set(module.PASSTHROUGH_TAGS) == url_sweep.PASSTHROUGH_TAGS
         assert seen == set(module.UNJUDGED_PASSTHROUGH), sorted(
             set(module.UNJUDGED_PASSTHROUGH) ^ seen
         )
@@ -458,10 +449,24 @@ class TestTheSweep:
         remaining = [
             h
             for h in runs["components"].get("component_holes", [])
-            if (h[0], h[1]) not in KNOWN_AUTHOR_NAMED
-            and not any((h[0], h[1], label) in KNOWN_RUST_MIRROR_GAPS for label in h[-1])
+            if not url_sweep.decided_component_hole(tuple(h[:4]), h[-1])
         ]
         assert remaining == [], runs["components"]["stdout"][-3000:]
+
+    def test_the_script_exits_0_when_every_hole_is_decided(self, runs):
+        """#4130: ``make template-library-url-sweep`` exited 1 on a clean ``main`` because the
+        script printed raw holes while this test filtered the decided ones. The script now
+        applies the same baseline, so its exit code means the same thing as this test: 0 when
+        every hole is decided, 1 for an undecided one (the planted hole below)."""
+        for name in ("tags", "components", "control"):
+            assert runs[name]["returncode"] == 0, (name, runs[name]["stdout"][-3000:])
+            assert runs[name].get("undecided_holes") == [], name
+            assert runs[name].get("undecided_component_holes") == [], name
+        # presence before absence: the decided holes are still reported, only not failed on
+        assert any(_decided_unjudged(h) for h in runs["tags"]["holes"])
+        assert "decided" in runs["tags"]["stdout"]
+        assert runs["plant"]["returncode"] == 1, runs["plant"]["stdout"][-3000:]
+        assert runs["plant"]["undecided_holes"], runs["plant"]["stdout"][-3000:]
 
     def test_the_known_rust_mirror_gap_still_occurs(self, runs):
         """A pin that cannot rot: each recorded gap must still occur (else delete it)."""
