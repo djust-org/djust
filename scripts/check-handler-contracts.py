@@ -25,7 +25,6 @@ _APP_LEVEL_EVENTS = {
     "approve",
     "clear_notifications",
     "copy_code",
-    "counter_update",
     "dashboard_move",
     "dashboard_resize",
     "date_next_month",
@@ -46,7 +45,6 @@ _APP_LEVEL_EVENTS = {
     "load_more",
     "mark_notification_read",
     "mark_read",
-    "new_message",
     "page_next",
     "page_prev",
     "rate_response",
@@ -65,23 +63,20 @@ _APP_LEVEL_EVENTS = {
     "tree_select",
     "upload_file",
     "x_event",
-    # UI-state events of a component tag: no framework handler yet, tracked in #4126.
+    # #4126: recording consent and searching the app's commands are application
+    # actions; ``manage.py check`` (djust.T019) reports a view that renders the
+    # tag without a handler. The UI-state defaults those tags send (close,
+    # toggle, navigate, step) are answered by descriptors since #4126.
     "accept_cookies",
-    "close_export",
-    "close_lightbox",
-    "close_palette",
-    "data_loaded",
-    "dismiss_announcement",
-    "lightbox_navigate",
     "palette_search",
-    "section_changed",
-    "set_step",
-    "stream_chunk",
-    "toggle_expand",
-    "toggle_list",
-    "toggle_nav",
-    "toggle_preview",
 }
+
+#: Tag arguments whose event never reaches the view, so no handler answers it
+#: (#4126). ``stream_event`` / ``loading_event`` name what the SERVER pushes to
+#: the component (``stream_chunk``, ``new_message``, ``counter_update``,
+#: ``data_loaded``), and ``{% scroll_spy %}``'s ``active_event`` is a browser
+#: event (``djust:section_changed``) dispatched on the element for page scripts.
+_NOT_SENT_TO_THE_VIEW = frozenset({"stream_event", "loading_event", "active_event"})
 
 
 def extract_event_defaults(path: Path) -> dict:
@@ -105,6 +100,7 @@ def extract_event_defaults(path: Path) -> dict:
             if (
                 isinstance(key, str)
                 and (key == "event" or key.endswith("_event"))
+                and key not in _NOT_SENT_TO_THE_VIEW
                 and isinstance(default, str)
                 and default
             ):
@@ -114,6 +110,8 @@ def extract_event_defaults(path: Path) -> dict:
             continue
         args_with_defaults = node.args.args[-len(node.args.defaults):]
         for arg, default in zip(args_with_defaults, node.args.defaults):
+            if arg.arg in _NOT_SENT_TO_THE_VIEW:
+                continue
             if arg.arg.endswith("_event") and isinstance(default, ast.Constant):
                 if isinstance(default.value, str) and default.value:
                     out.setdefault(default.value, []).append(
@@ -124,6 +122,7 @@ def extract_event_defaults(path: Path) -> dict:
         ):
             if (
                 default
+                and arg.arg not in _NOT_SENT_TO_THE_VIEW
                 and arg.arg.endswith("_event")
                 and isinstance(default, ast.Constant)
                 and isinstance(default.value, str)

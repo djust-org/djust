@@ -925,6 +925,9 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .kanban { display: flex; gap: var(--space-4); overflow-x: auto; padding: var(--space-2) 0; align-items: flex-start; }
 .kanban-col { display: flex; flex-direction: column; min-width: 16rem; max-width: 20rem; flex-shrink: 0; background: hsl(var(--muted) / 0.3); border: 1px solid hsl(var(--border)); border-radius: var(--radius-lg); overflow: hidden; transition: border-color var(--duration-fast) var(--ease-in-out, ease), background var(--duration-fast) var(--ease-in-out, ease); }
 .kanban-col-over { border-color: hsl(var(--primary) / 0.5); background: hsl(var(--primary) / 0.03); }
+.kanban-col-target { border-style: dashed; border-color: hsl(var(--primary) / 0.4); }
+.kanban-card:focus-visible { outline: 2px solid hsl(var(--ring, var(--primary))); outline-offset: 2px; }
+.kanban-card-grabbed { box-shadow: 0 0 0 2px hsl(var(--primary)); }
 .kanban-col-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3) var(--space-4); border-top: 3px solid hsl(var(--primary)); background: hsl(var(--card) / 0.6); }
 .kanban-col--primary { border-top-color: hsl(var(--primary)); }
 .kanban-col--success { border-top-color: hsl(var(--success)); }

@@ -407,6 +407,163 @@ describe('dropzone and kanban', () => {
     });
 });
 
+// #4120: a card's data-targets limits where it may go; the keyboard moves it.
+const BOARD = `
+<div class="kanban" data-move-event="moved">
+  <div class="kanban-col" data-col-id="todo"><div class="kanban-col-header"><span class="kanban-col-title">To do</span></div><div class="kanban-cards">
+    <div class="kanban-card" draggable="true" data-card-id="c1" data-col-id="todo" data-targets="done" tabindex="0"><div class="kanban-card-title">One</div></div>
+    <div class="kanban-card" draggable="true" data-card-id="c2" data-col-id="todo" tabindex="0"><div class="kanban-card-title">Two</div></div>
+  </div></div>
+  <div class="kanban-col" data-col-id="doing"><div class="kanban-col-header"><span class="kanban-col-title">Doing</span></div><div class="kanban-cards"></div></div>
+  <div class="kanban-col" data-col-id="done"><div class="kanban-col-header"><span class="kanban-col-title">Done</span></div><div class="kanban-cards"></div></div>
+</div>
+<div class="dj-modal" id="around"></div>`;
+
+function board(dom) {
+    const doc = dom.window.document;
+    const sent = [];
+    dom.window.djust.handleEvent = (name, params) => { sent.push([name, params]); };
+    const col = (id) => doc.querySelector('.kanban-col[data-col-id="' + id + '"]');
+    const card = (id) => doc.querySelector('.kanban-card[data-card-id="' + id + '"]');
+    const live = () => (doc.getElementById('dj-component-live') || {}).textContent || '';
+    return { doc, sent, col, card, live };
+}
+
+describe('kanban allowed columns (#4120)', () => {
+    it('a drag offers a drop only on the columns in data-targets, and marks them', () => {
+        const dom = createDom(BOARD);
+        const { sent, col, card } = board(dom);
+        const transfer = fakeTransfer();
+        fire(dom, card('c1'), 'dragstart', { extra: { dataTransfer: transfer } });
+        expect(col('done').classList.contains('kanban-col-target')).toBe(true);
+        expect(col('doing').classList.contains('kanban-col-target')).toBe(false);
+        expect(col('todo').classList.contains('kanban-col-target')).toBe(false);
+        expect(fire(dom, col('doing'), 'dragover').defaultPrevented).toBe(false);
+        expect(col('doing').classList.contains('kanban-col-over')).toBe(false);
+        expect(fire(dom, col('done'), 'dragover').defaultPrevented).toBe(true);
+        // A drop the browser should not have fired still sends nothing.
+        fire(dom, col('doing'), 'drop', { extra: { dataTransfer: transfer } });
+        expect(sent).toEqual([]);
+        fire(dom, col('done'), 'drop', { extra: { dataTransfer: transfer } });
+        fire(dom, card('c1'), 'dragend');
+        expect(sent).toEqual([['moved', { card_id: 'c1', from_col: 'todo', to_col: 'done' }]]);
+        expect(col('done').classList.contains('kanban-col-target')).toBe(false);
+    });
+
+    it('a card without data-targets may go to any column', () => {
+        const dom = createDom(BOARD);
+        const { col, card } = board(dom);
+        fire(dom, card('c2'), 'dragstart', { extra: { dataTransfer: fakeTransfer() } });
+        expect(col('doing').classList.contains('kanban-col-target')).toBe(true);
+        expect(col('done').classList.contains('kanban-col-target')).toBe(true);
+        expect(fire(dom, col('doing'), 'dragover').defaultPrevented).toBe(true);
+    });
+});
+
+describe('kanban keyboard move (#4120)', () => {
+    it('Space picks a card up, the arrows choose a column, Enter drops it there', () => {
+        const dom = createDom(BOARD);
+        const { sent, col, card, live } = board(dom);
+        card('c2').focus();
+        expect(key(dom, card('c2'), ' ').defaultPrevented).toBe(true);
+        expect(card('c2').classList.contains('kanban-card-grabbed')).toBe(true);
+        expect(live()).toContain('Two picked up');
+        key(dom, card('c2'), 'ArrowRight');
+        expect(col('doing').classList.contains('kanban-col-over')).toBe(true);
+        expect(live()).toBe('Doing');
+        key(dom, card('c2'), 'ArrowRight');
+        expect(col('doing').classList.contains('kanban-col-over')).toBe(false);
+        expect(col('done').classList.contains('kanban-col-over')).toBe(true);
+        key(dom, card('c2'), 'Enter');
+        expect(sent).toEqual([['moved', { card_id: 'c2', from_col: 'todo', to_col: 'done' }]]);
+        expect(live()).toBe('Two moved to Done');
+        expect(card('c2').classList.contains('kanban-card-grabbed')).toBe(false);
+        expect(col('done').classList.contains('kanban-col-over')).toBe(false);
+    });
+
+    it('the arrows skip the columns the card may not go to, and wrap', () => {
+        const dom = createDom(BOARD);
+        const { sent, col, card } = board(dom);
+        key(dom, card('c1'), ' ');
+        key(dom, card('c1'), 'ArrowRight');
+        expect(col('done').classList.contains('kanban-col-over')).toBe(true);
+        expect(col('doing').classList.contains('kanban-col-over')).toBe(false);
+        key(dom, card('c1'), 'ArrowRight');
+        expect(col('todo').classList.contains('kanban-col-over')).toBe(true);
+        key(dom, card('c1'), 'ArrowLeft');
+        key(dom, card('c1'), ' ');
+        expect(sent).toEqual([['moved', { card_id: 'c1', from_col: 'todo', to_col: 'done' }]]);
+    });
+
+    it('Escape cancels without sending, and does not reach a dialog around the board', () => {
+        const dom = createDom(BOARD);
+        const { doc, sent, col, card, live } = board(dom);
+        const outside = [];
+        doc.addEventListener('keydown', (e) => outside.push(e.key));
+        key(dom, card('c2'), ' ');
+        key(dom, card('c2'), 'ArrowRight');
+        const esc = key(dom, card('c2'), 'Escape');
+        expect(esc.defaultPrevented).toBe(true);
+        expect(outside).not.toContain('Escape');
+        expect(sent).toEqual([]);
+        expect(live()).toBe('Move cancelled');
+        expect(col('doing').classList.contains('kanban-col-over')).toBe(false);
+        expect(card('c2').classList.contains('kanban-card-grabbed')).toBe(false);
+    });
+
+    it('dropping on the card\'s own column sends nothing; leaving the card cancels', () => {
+        const dom = createDom(BOARD);
+        const { sent, card, live } = board(dom);
+        key(dom, card('c2'), ' ');
+        key(dom, card('c2'), 'Enter');
+        expect(sent).toEqual([]);
+        expect(live()).toBe('Two not moved');
+        card('c2').focus();
+        key(dom, card('c2'), ' ');
+        card('c2').dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true }));
+        expect(card('c2').classList.contains('kanban-card-grabbed')).toBe(false);
+        key(dom, card('c2'), 'Enter');
+        expect(sent).toEqual([]);
+    });
+
+    it('focus returns to the moved card after the re-render replaces its node', () => {
+        const dom = createDom(BOARD);
+        const { doc, col, card } = board(dom);
+        card('c2').focus();
+        key(dom, card('c2'), ' ');
+        expect(card('c2').hasAttribute('aria-pressed')).toBe(false);
+        key(dom, card('c2'), 'ArrowRight');
+        key(dom, card('c2'), 'Enter');
+        // The server's re-render: the card leaves "todo" and a new node for it
+        // is created in "doing"; the old node, and its focus, are gone.
+        const moved = card('c2').cloneNode(true);
+        moved.setAttribute('data-col-id', 'doing');
+        card('c2').remove();
+        col('doing').querySelector('.kanban-cards').appendChild(moved);
+        expect(doc.activeElement).toBe(doc.body);
+        dom.window.dispatchEvent(new dom.window.CustomEvent('djust:patched', { detail: {} }));
+        expect(doc.activeElement).toBe(moved);
+    });
+
+    it('the refocus does not take focus the reader moved elsewhere', () => {
+        const dom = createDom(BOARD);
+        const { doc, card } = board(dom);
+        key(dom, card('c2'), ' ');
+        key(dom, card('c2'), 'ArrowRight');
+        key(dom, card('c2'), 'Enter');
+        card('c1').focus();
+        dom.window.dispatchEvent(new dom.window.CustomEvent('djust:patched', { detail: {} }));
+        expect(doc.activeElement).toBe(card('c1'));
+    });
+
+    it('Space on a card of a board without a move event does nothing', () => {
+        const dom = createDom(BOARD.replace('data-move-event="moved"', ''));
+        const { card } = board(dom);
+        expect(key(dom, card('c2'), ' ').defaultPrevented).toBe(false);
+        expect(card('c2').classList.contains('kanban-card-grabbed')).toBe(false);
+    });
+});
+
 const EDITORS = `
 <div class="rte" id="rte-body"><div class="rte-toolbar">
   <button class="rte-btn" type="button" data-command="formatBlock" data-command-arg="h2">H2</button></div>

@@ -284,3 +284,87 @@ class TestKwGetDefaultsAndDescriptorMeta:
             assert name in defaults, name
             assert name in handlers, name
             assert name not in mod._APP_LEVEL_EVENTS, name
+
+
+def _load_linter():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_chc_4126", _LINTER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestUiStateEvents4126:
+    """#4126: no UI-state default of the listed tags is an app action."""
+
+    UI_STATE = (
+        "close_lightbox",
+        "lightbox_navigate",
+        "close_palette",
+        "close_export",
+        "dismiss_announcement",
+        "toggle_nav",
+        "toggle_expand",
+        "toggle_preview",
+        "toggle_list",
+        "set_step",
+    )
+
+    def _scan(self):
+        mod = _load_linter()
+        root = _SELF.parents[1]
+        defaults = mod.extract_event_defaults(
+            root / "python/djust/components/templatetags/djust_components.py"
+        )
+        handlers = set()
+        for f in sorted((root / "python/djust/components/descriptors").glob("*.py")):
+            handlers |= mod.extract_handler_names(f)
+        return mod, defaults, handlers
+
+    def test_ui_state_defaults_are_answered_by_descriptors(self):
+        mod, defaults, handlers = self._scan()
+        for name in self.UI_STATE:
+            assert name in defaults, name
+            assert name in handlers, name
+            assert name not in mod._APP_LEVEL_EVENTS, name
+
+    def test_events_never_sent_to_the_view_are_not_scanned(self):
+        """``stream_event`` / ``loading_event`` are pushed by the server and
+        ``active_event`` is a browser event: none needs a handler."""
+        mod, defaults, _ = self._scan()
+        for name in (
+            "stream_chunk",
+            "data_loaded",
+            "section_changed",
+            "new_message",
+            "counter_update",
+        ):
+            assert name not in defaults, name
+            assert name not in mod._APP_LEVEL_EVENTS, name
+
+    def test_a_pushed_event_argument_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            tag = _write_file(
+                d,
+                "tags.py",
+                """
+                def render(kw):
+                    a = kw.get("stream_event", "pushed_thing")
+                    b = kw.get("active_event", "browser_thing")
+
+                def tag(loading_event="loaded_thing"):
+                    pass
+            """,
+            )
+            other = _write_file(d, "other.py", "def unrelated(self): pass\n")
+            exit_code, stdout = _run(tag_files=[tag], handler_files=[other])
+            assert exit_code == 0, stdout
+
+    def test_app_actions_of_those_tags_stay_app_level(self):
+        mod, defaults, handlers = self._scan()
+        for name in ("accept_cookies", "palette_search"):
+            assert name in defaults, name
+            assert name not in handlers, name
+            assert name in mod._APP_LEVEL_EVENTS, name

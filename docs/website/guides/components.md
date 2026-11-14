@@ -339,7 +339,7 @@ What this gives you:
   one hash per render. On the LiveView path `{{ nav }}` is the rendered HTML
   string, so string filters (`{{ nav|length }}`, `|upper`) act on the markup.
 
-The eight built-in descriptors (`Accordion`, `Tabs`, `Modal`, ... in
+The built-in descriptors (`Accordion`, `Tabs`, `Modal`, ... in
 `djust.components.descriptors`) declare no template: they use the same
 mechanism with a `Meta.event` alias registered on the view, and the
 `djust_components` template tags (`{% tabs %}`, `{% accordion %}`, ...) draw
@@ -865,6 +865,87 @@ arguments and always follows the project setting.
 
 {% toast_container toasts dismiss_event="dismiss_toast" %}
 ```
+
+### Events a tag sends
+
+A tag's controls send an event to the view that renders it: `{% modal %}`'s ×
+sends `close_modal`, `{% expandable_text %}`'s "Read more" sends
+`toggle_expand`. Every event needs a handler on the view; one with none is
+refused ("Event rejected"). For the UI state a tag keeps (open, expanded, the
+current step or image), declare the matching component from
+`djust.components.descriptors` on the view and pass its state to the tag. It
+answers the tag's default events, so you write no handler:
+
+```python
+from djust import LiveView
+from djust.components.descriptors import ExpandableText, Modal
+
+
+class ArticleView(LiveView):
+    template_name = "article.html"
+    confirm = Modal()
+    bio = ExpandableText()
+```
+
+```html
+{% modal title="Delete?" open=confirm.is_open %}...{% endmodal %}
+{% expandable_text expanded=bio.expanded %}{{ article.bio }}{% endexpandable_text %}
+```
+
+| Tag | Events it sends by default | Answered by |
+|---|---|---|
+| `{% modal %}` | `close_modal` (also `open_modal`) | `Modal` |
+| `{% sheet %}` | `close_sheet` (also `open_sheet`) | `Sheet` |
+| `{% carousel %}` | `carousel_prev`, `carousel_next`, `carousel_go` | `Carousel(total=N)` |
+| `{% tabs %}` | `set_tab` (none with `param=`, which draws links) | `Tabs` |
+| `{% accordion %}` | `accordion_toggle` | `Accordion` |
+| `{% dropdown %}` | `toggle_dropdown` (also `close_dropdown`) | `Dropdown` |
+| `{% lightbox %}` | `close_lightbox`, `lightbox_navigate` (also `open_lightbox`) | `Lightbox` (give it `total` so previous and next wrap) |
+| `{% command_palette %}` | `close_palette` (also `open_palette`); `palette_search` | `CommandPalette`; your view |
+| `{% export_dialog %}` | `close_export` (also `open_export`); `export` | `ExportDialog`; your view |
+| `{% announcement_bar dismissible=True %}` | `dismiss_announcement` | `AnnouncementBar` (render the bar only while `dismissed` is false) |
+| `{% nav_menu %}` | `toggle_nav` | `NavMenu` (`mobile_open`) |
+| `{% expandable_text %}` | `toggle_expand` | `ExpandableText` (`expanded`) |
+| `{% truncated_list %}` | `toggle_list` | `TruncatedList` (`expanded`) |
+| `{% markdown_textarea %}` | `toggle_preview` | `MarkdownTextarea` (`preview`) |
+| `{% stepper %}`, `{% wizard %}` | `set_step` | `Stepper(active=0)` for `stepper`, which counts by index; `Stepper(active="<first step id>")` for `wizard`, which sends step ids |
+| `{% cookie_consent %}` | `accept_cookies` | your view: it records the consent |
+
+"Your view" means an `@event_handler` of that name: what a search matches, what
+an export contains and where consent is stored are the application's. An
+`@event_handler` of the same name on the view also replaces a component's
+answer (to validate a step before moving on, say), and renaming the event
+(`close_event="shut_dialog"`) makes it yours to answer.
+
+A tag has no off state: `close_event=None` (or `False`, `""`) does not remove
+the control, it draws one that sends `None`, which nothing answers. Leave the
+argument out to send the default event.
+
+A component answers an event without `component_id` only when the view
+declares one component of that type. With two (`confirm = Modal()` and
+`delete = Modal()`), each tag must say which one it drives with
+`component_id="confirm"`. `{% modal %}`, `{% sheet %}`, `{% carousel %}`,
+`{% tabs %}`, `{% accordion %}`, `{% dropdown %}`, `{% tooltip %}` and
+`{% collapsible %}` take `component_id=`; the tags of the other components
+above do not yet (tracked in #4134), so on such a view write the handler
+yourself.
+
+`Carousel` needs `total`, the number of slides: declare `Carousel(total=5)` or
+set `self.slides.total = len(images)` in `mount()`. Without it previous, next
+and the dots do nothing, and the first click logs a warning that names the
+component.
+
+`manage.py check` reports, as `djust.T019`, a tag in a view's template whose
+event nothing on the view answers: for example `{% modal open=show %}` on a
+view that declares no `Modal` and has no `close_modal` handler. A tag that
+sends an event given by a variable is not checked.
+
+Three tag arguments name events that are not sent to the view, so they need no
+handler: `stream_event` (`{% streaming_text %}`, `{% live_counter %}`,
+`{% conversation_thread %}`) and `loading_event` (`{% await %}`) name what the server
+pushes to the component, and `{% scroll_spy %}`'s `active_event` names the
+browser event `djust:section_changed` it dispatches on its element for page
+scripts.
 
 ### Available Components
 
@@ -1830,6 +1911,8 @@ columns = [
 - `move_event` is sent when a card is dropped on another column, with `card_id`, `from_col` and `to_col`. The server decides whether the move is allowed.
 - `add_card_event` (default `kanban_add_card`) is sent by each column's "+ Add card" button with the column id as `value`. `add_card_event=None` leaves the button out, for a board whose cards are created elsewhere.
 - A card's `href` makes its title a link (`javascript:` and other unsafe schemes are refused).
+- A card's `targets` lists the column ids it may move to, for a board whose cards follow a state machine: `{"id": "c1", "title": "A", "targets": ["doing", "done"]}`. While the card drags, only those columns take a drop and are marked `kanban-col-target`; elsewhere the browser shows no drop. Without `targets` every column is offered. `targets` (a list, any iterable of strings, or one string) is guidance for the reader, not authorization: your `move_event` handler must still check the move. Column ids may not contain whitespace (the list is space-separated; such an id logs a warning).
+- A card moves by keyboard too: Tab to it, Space picks it up, the arrow keys choose a column (only the allowed ones), Enter or Space drops it there and sends the same `move_event`, and Escape (or moving focus away) cancels. Each step is announced to screen readers.
 - A column's `color` is a theme name, `primary`, `success`, `warning`, `destructive`, `info` or `muted`, rendered as the class `kanban-col--<name>`. No `color` gives the stylesheet's default. Any other CSS colour (`"#6366F1"`) still works, but as an inline `style` attribute, which a CSP with `style-src-attr 'none'` refuses; use a theme name under a strict policy.
 - `add_col_event` is accepted and not used.
 
@@ -1853,8 +1936,10 @@ The drag and drop is the client bundle's delegated behaviour, with no script of 
 | `.kanban[data-move-event]` | yes | the board; `data-move-event` names the event a drop sends |
 | `.kanban-col[data-col-id]` | yes | a drop target; `data-col-id` is sent as `to_col` |
 | `.kanban-card[draggable="true"][data-card-id][data-col-id]` | yes | a draggable card; `data-card-id` is sent as `card_id`, its `data-col-id` as `from_col` |
+| `.kanban-card[data-targets]` | no | the column ids, space-separated, the card may move to; absent means any |
+| `.kanban-card[tabindex="0"]` | for the keyboard | a card must take focus for the keyboard move |
 
-The client adds `dragging` to the card while it is dragged (removed when the drag ends) and `kanban-col-over` to the column under it (removed when the pointer leaves it or the card drops). A drop on the card's own column sends nothing. Cards and columns may hold any other markup. Give each card and column a stable `dj-key` (the tag uses their ids) so a re-render after a move matches them by identity.
+The client adds `dragging` to the card while it is dragged (removed when the drag ends), `kanban-col-target` to each column it may drop on, and `kanban-col-over` to the column under it (removed when the pointer leaves it or the card drops). A keyboard move marks the card `kanban-card-grabbed` and the chosen column `kanban-col-over`. A drop on the card's own column sends nothing. Cards and columns may hold any other markup. Give each card and column a stable `dj-key` (the tag uses their ids) so a re-render after a move matches them by identity.
 
 ## Markdown editor
 
