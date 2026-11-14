@@ -2050,30 +2050,28 @@ _NAV_ITEM_MARKUP = '<li class="dj-nav__item'
 
 #: How an item with no ``active=`` of its own asks the ``{% nav_menu %}`` that holds it whether
 #: the menu's ``active`` names it. The item is rendered before the menu, so it leaves its ``id``
-#: and ``href`` (base64 JSON) in a comment right after its ``<li ...>``; the menu reads and
+#: and ``href`` (hex of a JSON pair: only ``0-9a-f``, so no value can end the comment, open
+#: another, or read as markup) in a comment right after its ``<li ...>``; the menu reads and
 #: removes every one, adding the active class to the matches. Outside a menu the comment is
 #: invisible. The Django node is handed the menu's ``active`` directly.
 _NAV_ACTIVE_MARK = _re_filters.compile(
-    r'(<li class="dj-nav__item[^"]*)(">)<!--djust-nav-key:([A-Za-z0-9_=-]*)-->'
+    r'(<li class="dj-nav__item[^"]*)(">)<!--djust-nav-key:([0-9a-f]*)-->'
 )
 
 
 def _nav_active_mark(item_id: object, href: object) -> str:
-    import base64
-
     payload = _json.dumps([item_id, href], default=str, separators=(",", ":"))
-    return "<!--djust-nav-key:" + base64.urlsafe_b64encode(payload.encode("utf-8")).decode() + "-->"
+    return "<!--djust-nav-key:" + payload.encode("utf-8").hex() + "-->"
 
 
 def _apply_menu_active(content: str, active: object) -> str:
     """Add ``dj-nav__item--active`` to the items that match the menu's ``active`` (the Django
     rule: a non-empty ``id`` or ``href`` equal to it) and remove every marker."""
-    import base64
 
     def resolve(match: "_re_filters.Match[str]") -> str:
         try:
-            item_id, href = _json.loads(base64.urlsafe_b64decode(match.group(3).encode("ascii")))
-        except ValueError:
+            item_id, href = _json.loads(bytes.fromhex(match.group(3)).decode("utf-8"))
+        except (ValueError, TypeError):
             return match.group(1) + match.group(2)
         hit = bool(active) and (
             bool(item_id and item_id == active) or bool(href and href == active)
