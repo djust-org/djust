@@ -1104,11 +1104,16 @@ A column can be a link too: `{"key": "claim_number", "label": "Claim #", "link":
 (Django's template engine) and by every render after the socket opens (the native handler), with
 two exceptions: the URL goes through the same scheme allowlist on the server, so `javascript:`,
 `data:` and other non-navigation schemes become `#` before they reach the page, and a `None` /
-`""` / `0` / `False` `row_url` or `link` draws nothing (it is not the key `"None"`). The
-exceptions: a `row_url` given as a template VARIABLE that holds the text `"0"`, `"None"` or
-`"False"` makes a clickable row in the Python tag but not natively, because the native handler
-re-types the text it is handed (#3882, #3883); and a row whose URL value is `None` or missing
-still draws `<a href="None">` / `<a href="">` on both engines (#3895).
+`""` / `0` / `False` `row_url` or `link` draws nothing (it is not the key `"None"`). A row whose
+URL value is `None`, missing or blank has no URL: the cell is plain text and the row is not
+clickable, on both engines (#3895). One exception remains: a `row_url` given as a template
+VARIABLE that holds the text `"0"`, `"None"` or `"False"`, over rows that have a key spelled that
+way, makes a clickable row in the Python tag but not natively, because the native handler re-types
+the text it is handed (#3882, #3883).
+
+A column given as a bare name is the column with that key and label: `columns=["claim_number",
+"status"]` draws the same table as `[{"key": "claim_number", "label": "claim_number"}, {"key":
+"status", "label": "status"}]`, on both engines (#3895).
 
 **Accessibility**: row-clickable `<tr>`s are focusable (`tabindex="0"`),
 announce as buttons (`role="button"`), and activate on Enter or Space.
