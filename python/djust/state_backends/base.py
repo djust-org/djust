@@ -212,6 +212,10 @@ class StateBackend(ABC):
         """
         Retrieve a RustLiveView instance and its timestamp from storage.
 
+        Not used by the framework since 2.0 (#4087): view state is kept in the
+        session, and nothing fills this view cache. Kept as public API for
+        applications that call it.
+
         Args:
             key: Unique session key
 
@@ -224,6 +228,10 @@ class StateBackend(ABC):
     def set(self, key: str, view: RustLiveView, ttl: Optional[int] = None) -> None:
         """
         Store a RustLiveView instance with optional TTL.
+
+        Not used by the framework since 2.0 (#4087): view state is kept in the
+        session, and nothing fills this view cache. Kept as public API for
+        applications that call it.
 
         Args:
             key: Unique session key
@@ -245,6 +253,8 @@ class StateBackend(ABC):
         state written by :meth:`set`, as it always has. (So the large-state
         warning raised from here is an in-memory-backend behaviour; the Redis
         backend has none.) ``warn_on_large_state=False`` turns the warning off.
+
+        Not called by the framework since 2.0 (#4087); see :meth:`get`.
         """
 
     @abstractmethod

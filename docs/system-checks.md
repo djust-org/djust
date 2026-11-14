@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 116 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 119 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -41,6 +41,9 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C028 | Config | Error | `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is not `None` or a number of seconds greater than 0 |
 | C029 | Config | Error | `LIVEVIEW_CONFIG['query_budget']` is not `None`, `"off"`, `"warn"` or `"error"` |
 | C030 | Config | Error | A view declares `persist="server"` state and `SESSION_ENGINE` cannot hold it |
+| C031 | Config | Warning | The session store is a cache only one process can see (`LocMemCache`, `DummyCache`) |
+| C032 | Config | Warning | The channel layer is in-memory, so messages never reach another process's sockets |
+| C033 | Config | Warning | A view uses presence and the presence backend counts only one process's sockets |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -304,6 +307,27 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: A LiveView declares `state(..., persist="server")` and `SESSION_ENGINE` is not one of `django.contrib.sessions.backends.db`, `cached_db`, `cache` or `file` (for example `signed_cookies`, or a custom engine). Server state is kept in a server-side session, so every request of such a view fails; at runtime it is refused with `UnsupportedSessionEngine`, which names the supported engines (#4092).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C030"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C030"]`
 - **False positives**: None. The engine is judged by the `SessionStore` class it resolves to, as the runtime judges the request's session, so a module that re-exports a supported store is accepted. A subclass of a supported store is reported because the runtime refuses it too (only the exact audited stores are accepted).
+
+### C031 — Session store local to one process
+- **Severity**: Warning
+- **Method**: Settings inspection (`SESSION_ENGINE`, `SESSION_CACHE_ALIAS`, `CACHES`)
+- **What it detects**: `SESSION_ENGINE` is `django.contrib.sessions.backends.cache` or `cached_db` and the cache it uses is `LocMemCache` (or `DummyCache`). djust keeps view state in the session, so with more than one process a request or socket served by another process does not find the session (`cache`) or reads a stale copy (`cached_db`), and the view mounts fresh. Reported only with `DEBUG = False` for `LocMemCache`: a development server is one process, where the local cache works. A `DummyCache` stores nothing, so the `cache` engine loses every session even with one process; it is reported in development too (#4103).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C031"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C031"]` (for a site that runs as one process)
+- **False positives**: A deployment that runs exactly one process. The `file` engine is not reported: whether its directory is shared cannot be seen from settings.
+
+### C032 — In-memory channel layer
+- **Severity**: Warning
+- **Method**: Settings inspection (`CHANNEL_LAYERS['default']['BACKEND']`)
+- **What it detects**: The default channel layer is `channels.layers.InMemoryChannelLayer`, `djust.layers.InMemoryChannelLayer` or `djust.layers.MultiLoopInMemoryChannelLayer`. `push_to_view()`, broadcasts, presence updates and `db_notify` travel over the layer, which then delivers only within one process: with several processes they never reach a socket another process holds, and nothing fails. Reported only with `DEBUG = False` (#4104).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C032"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C032"]` (for a site that runs as one process)
+- **False positives**: A deployment that runs exactly one process.
+
+### C033 — Presence counted per process
+- **Severity**: Warning
+- **Method**: Settings inspection (`DJUST_CONFIG['PRESENCE_BACKEND']`) and LiveView classes using `PresenceMixin`
+- **What it detects**: A LiveView uses `PresenceMixin` while the presence backend is `memory` (the default) or `tenant_memory`. Each process then counts only the sockets it holds, so with several processes every process shows its own users online. Reported only with `DEBUG = False` (#4104).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C033"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C033"]` (for a site that runs as one process)
+- **False positives**: A deployment that runs exactly one process.
 
 <!-- END GENERATED check-sections:C -->
 

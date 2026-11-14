@@ -60,15 +60,69 @@ def setup_django() -> bool:
         return False
 
 
+def _saved_state_sessions() -> Optional[list]:
+    """The stored sessions holding saved view state, or ``None`` when the
+    session engine cannot list its sessions (only ``db`` / ``cached_db`` can)."""
+    from importlib import import_module
+
+    from django.conf import settings
+
+    from djust._automatic_state import database_sessions_with_saved_state
+    from djust._exposure_sessions import CachedDBSession, DBSession
+
+    store = getattr(import_module(settings.SESSION_ENGINE), "SessionStore", None)
+    if store is None or not issubclass(store, (DBSession, CachedDBSession)):
+        return None
+    return list(database_sessions_with_saved_state())
+
+
+def _print_unlistable_sessions() -> None:
+    from django.conf import settings
+
+    print(
+        "SESSION_ENGINE %s cannot list its sessions, so saved view state is not shown "
+        "here; it expires with each session and after DJUST_SERVER_STATE_MAX_AGE."
+        % settings.SESSION_ENGINE
+    )
+
+
 def cmd_stats(args: argparse.Namespace) -> None:
-    """Show state backend statistics."""
+    """Show the view state saved in sessions, then the state backend's statistics."""
     setup_django()
 
     try:
+        from djust._automatic_state import saved_state_stats
+
+        print("\n=== djust Saved View State (sessions) ===\n")
+        sessions = _saved_state_sessions()
+        if sessions is None:
+            _print_unlistable_sessions()
+        else:
+            sizes = sorted(
+                ((saved_state_stats(s), s.session_key) for s in sessions),
+                key=lambda item: item[0]["bytes"],
+                reverse=True,
+            )
+            entries = sum(stats["entries"] for stats, _ in sizes)
+            total = sum(stats["bytes"] for stats, _ in sizes)
+            print(f"Sessions with saved state: {len(sizes)}")
+            print(f"Saved view states: {entries}")
+            print(f"Total size: {total / 1024:.2f} KB")
+            if sizes:
+                print("\nLargest Sessions:")
+                for stats, key in sizes[:5]:
+                    shown = (key or "")[:8]
+                    print(
+                        f"  - {shown}...: {stats['entries']} state(s), "
+                        f"{stats['bytes'] / 1024:.2f} KB"
+                    )
+
         from djust.state_backends import get_backend
 
         backend = get_backend()
 
+        # The backend no longer holds view state (2.0): it keeps the
+        # interactive-component visibility ledger. Its figures follow.
         print("\n=== djust State Backend Statistics ===\n")
 
         # Basic stats
@@ -673,7 +727,8 @@ def _find_manage_py() -> Optional[str]:
 
 
 def cmd_clear(args: argparse.Namespace) -> None:
-    """Clear state backend caches."""
+    """Remove view state saved in sessions (expired only, or all with ``--all``),
+    then clear the state backend the same way."""
     setup_django()
 
     try:
@@ -687,6 +742,19 @@ def cmd_clear(args: argparse.Namespace) -> None:
             if response.lower() != "yes":
                 print("Aborted.")
                 return
+
+        from djust._automatic_state import clear_expired_saved_state, clear_saved_state
+
+        sessions = _saved_state_sessions()
+        if sessions is None:
+            _print_unlistable_sessions()
+        else:
+            clear = clear_saved_state if args.all else clear_expired_saved_state
+            removed = [clear(session) for session in sessions]
+            print(
+                "Removed %d saved view state(s) from %d session(s)"
+                % (sum(removed), sum(1 for count in removed if count))
+            )
 
         # Get stats before clearing
         stats_before = backend.get_stats()
@@ -1321,7 +1389,9 @@ def main() -> None:
     sa_parser.add_argument("name", help="App name")
 
     # stats command
-    subparsers.add_parser("stats", help="Show state backend statistics")
+    subparsers.add_parser(
+        "stats", help="Show the view state saved in sessions and state backend statistics"
+    )
 
     # health command
     subparsers.add_parser("health", help="Run health checks")
@@ -1381,10 +1451,15 @@ def main() -> None:
     add_serve_parser(subparsers)
 
     # clear command
-    clear_parser = subparsers.add_parser("clear", help="Clear state backend caches")
+    clear_parser = subparsers.add_parser(
+        "clear", help="Remove view state saved in sessions and clear the state backend"
+    )
     clear_parser.add_argument("-f", "--force", action="store_true", help="Skip confirmation prompt")
     clear_parser.add_argument(
-        "-a", "--all", action="store_true", help="Clear all sessions (not just expired)"
+        "-a",
+        "--all",
+        action="store_true",
+        help="Remove all saved view state and backend sessions (not just expired)",
     )
 
     args = parser.parse_args()

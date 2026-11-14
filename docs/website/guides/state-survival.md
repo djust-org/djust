@@ -140,15 +140,24 @@ is the exception: it has one envelope per route, and a tab whose copy is older
 than what the other saved overwrites it.
 
 The persisted envelope records when it was written, in whole seconds of the
-writing process's clock, and a reader refuses one written "in the future" by
-its own clock. A process whose clock is behind the writer's therefore discards
-fresh state and mounts the view from its defaults, without an error.
+writing process's clock. A reader accepts one written up to 30 seconds "in the
+future" by its own clock (`CLOCK_SKEW_TOLERANCE` in `djust._exposure_sessions`),
+so small differences between servers' clocks do not lose state. A process whose
+clock is further behind the writer's discards the state, mounts the view from
+its defaults and logs a warning naming the skew; keep the clocks in sync.
+
+With `DEBUG = False`, system checks [`djust.C032`](error-codes.md#c032-in-memory-channel-layer)
+(an in-memory channel layer) and [`djust.C033`](error-codes.md#c033-presence-counted-per-process)
+(memory presence used by a view) warn about the two rows above that cover only
+one process.
 
 ## Session engines
 
 Each engine below was run with two processes. The persisted-state machinery
-accepts every server-side engine, including ones that are local to a process;
-nothing checks that the processes actually share it.
+accepts every server-side engine, including ones that are local to a process.
+With `DEBUG = False`, system check [`djust.C031`](error-codes.md#c031-session-store-local-to-one-process)
+warns about a `cache` or `cached_db` engine over `LocMemCache`; whether a `file`
+engine's directory is shared cannot be checked.
 
 <!-- BEGIN GENERATED survival-engines: python -m tests.integration.multinode.survival_table --write -->
 |  | HTTP fallback on another process | WebSocket reconnect to another process | What the app author must do |

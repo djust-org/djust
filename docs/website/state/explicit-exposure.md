@@ -172,7 +172,12 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   WebSocket the replacement never reaches the browser, so it expires after
   `DJUST_SERVER_STATE_MAX_AGE`, and repeated mounts on one socket reuse it. Over
   SSE the stream response issues it as a cookie with Django's normal lifetime,
-  as a page load does. A socket with no session cookie at all is still refused.
+  as a page load does. An HTTP fallback POST whose session is gone mounts
+  fresh the same way. The browser's cookie decides this even when the
+  socket's connect-time sign-in check already read the lost session. A socket
+  with no session cookie at all is still refused. Between two events on an
+  open socket or stream a lost session is treated as a revocation (as a
+  logout is, above); the next page load or reconnect mounts fresh.
   With `cache` sessions, Django treats a failed cache read as a missing
   session, so a transient cache error on mount also takes this path: that
   socket mounts anonymous while the real session survives.

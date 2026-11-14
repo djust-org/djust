@@ -433,3 +433,26 @@ def build_session_for_request(session_key: Optional[str] = None) -> Optional[Any
     if store is None:
         return None
     return store(session_key=session_key) if session_key else store()
+
+
+def presented_session_key(scope: Any) -> Optional[str]:
+    """The session key a socket's browser presented, for a synthesized request.
+
+    ``scope["session"].session_key`` is not enough: Channels'
+    ``AuthMiddlewareStack`` resolves the user at connect, which reads the
+    session, and a read of a session the store no longer has clears the key.
+    The socket then looks cookieless, and an explicit mount could not tell a
+    vanished session (which mounts fresh, #3201) from no session at all (which
+    is refused). The cookie the browser sent is the key it presented (#4102).
+    """
+    if not scope:
+        return None
+    from django.conf import settings
+
+    session = scope.get("session")
+    key = getattr(session, "session_key", None) if session is not None else None
+    if isinstance(key, str) and key:
+        return key
+    cookies = scope.get("cookies")
+    cookie = cookies.get(settings.SESSION_COOKIE_NAME) if isinstance(cookies, dict) else None
+    return cookie if isinstance(cookie, str) and cookie else None

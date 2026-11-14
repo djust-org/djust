@@ -242,7 +242,7 @@ Each item below caused a failure in a multi-pod test when it was missing.
 
 #### In-process state under Option B
 
-Anything that lives in one process's memory is invisible to the others: room objects, game clocks, module-level dicts, `functools.lru_cache` contents that must agree. Keep shared state in Redis or the database, and reach other sessions only through the channel layer. The benchmark app kept each chat room's history in a Redis list and broadcast with `push_to_view(..., scope=room)`. If your shared state is a live object that can't move to Redis, look at Option A.
+Anything that lives in one process's memory is invisible to the others. djust's own in-memory stores are reported by system checks when `DEBUG` is off: a `LocMemCache` session store (`djust.C031`), an in-memory channel layer (`djust.C032`) and the memory presence backend (`djust.C033`); see [What survives a second process](state-survival.md). The same holds for your own: room objects, game clocks, module-level dicts, `functools.lru_cache` contents that must agree. Keep shared state in Redis or the database, and reach other sessions only through the channel layer. The benchmark app kept each chat room's history in a Redis list and broadcast with `push_to_view(..., scope=room)`. If your shared state is a live object that can't move to Redis, look at Option A.
 
 #### Measured capacity
 

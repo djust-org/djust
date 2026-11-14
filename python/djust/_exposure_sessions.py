@@ -101,6 +101,30 @@ def unsupported_session_message(session: Any) -> str:
 _VERSION = 2
 _DEFAULT_MAX_AGE = 3600
 
+#: How far ahead of this process's clock saved state may say it was written
+#: (#4105). Processes' clocks differ a little, and ``created`` is in whole
+#: seconds, so a reader one second behind the writer saw fresh state as
+#: "written in the future" and discarded it. Beyond this the state is still
+#: refused, and the refusal is logged.
+CLOCK_SKEW_TOLERANCE = 30
+
+
+def written_in_the_future(created: int, now: int, what: str) -> bool:
+    """True (and logged) when ``created`` is ahead of ``now`` by more than the
+    clock-skew tolerance. Within the tolerance it is accepted."""
+    ahead = created - now
+    if ahead <= CLOCK_SKEW_TOLERANCE:
+        return False
+    logger.warning(
+        "djust: discarded %s written %d s ahead of this process's clock (more than the "
+        "%d s tolerated); keep the servers' clocks in sync. The view mounts fresh.",
+        what,
+        ahead,
+        CLOCK_SKEW_TOLERANCE,
+    )
+    return True
+
+
 logger = logging.getLogger(__name__)
 
 StateMigration = Callable[[int, dict[str, Any]], Any]
@@ -589,8 +613,8 @@ class ServerStateSession:
             type(created) is not int
             or type(expires) is not int
             or created < 0
-            or created > now
             or not 0 < expires - created <= 86400
+            or written_in_the_future(created, now, "declared server state")
         ):
             raise ExposureError("Invalid server state timestamp")
         if now >= min(expires, created + self.max_age):

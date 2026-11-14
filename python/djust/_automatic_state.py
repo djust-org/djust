@@ -836,7 +836,6 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
         or type(created) is not int
         or type(expires) is not int
         or created < 0
-        or created > now
         or not 0 < expires - created <= 86400
         or now >= min(expires, created + store.max_age)
         or type(public) is not dict
@@ -847,6 +846,10 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
         or type(envelope["bytes"]) is not int
         or type(envelope["remount"]) is not bool
     ):
+        return None
+    from ._exposure_sessions import written_in_the_future
+
+    if written_in_the_future(created, now, "saved view state"):
         return None
     names = _Names(view)
     enums = enum_classes(type(view))
@@ -1415,6 +1418,26 @@ def clear_saved_state(session: Any) -> int:
     if keys:
         session.save()
     return len(keys)
+
+
+def clear_expired_saved_state(session: Any, now: Optional[int] = None) -> int:
+    """Remove the saved view states of one session that have expired; the count removed.
+
+    An entry whose ``expires`` is not a time in the future is expired (a state
+    no reader would take back). Other keys are left alone (``djust clear``).
+    """
+    now = int(time.time()) if now is None else now
+    expired = []
+    for key in saved_state_keys(session):
+        envelope = session[key]
+        expires = envelope.get("expires") if type(envelope) is dict else None
+        if type(expires) is not int or expires <= now:
+            expired.append(key)
+    for key in expired:
+        del session[key]
+    if expired:
+        session.save()
+    return len(expired)
 
 
 def database_sessions_with_saved_state() -> Any:
