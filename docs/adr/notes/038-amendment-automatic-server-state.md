@@ -52,6 +52,33 @@ are never persisted" and D-e (form input).
 6. **Cost.** The session is written only when the state changed, and a socket
    turn whose change detection found nothing changed serializes nothing.
 
+## The stored session is not a client destination
+
+ADR-038's exposure rule is about the client: under the explicit policy nothing
+outside `get_context_data()` or a declared `state()` field is rendered, sent,
+or settable from the browser. That holds unchanged for every client-facing
+destination: page HTML, socket and SSE frames, fallback answers, patches,
+tokens, the tab meta, error messages and logs.
+
+The caller's own server-side session is a separate destination with its own
+rule:
+
+- A view's undeclared public attributes and the `_private` attributes `mount()`
+  created MAY rest in that view's saved-state envelope (`_djust_auto_...`,
+  under `values` and `private`), and nowhere else in the session. Being saved
+  does not expose them: they are still never rendered, sent, or client-settable.
+- What is on the floor is NEVER in the session, under any policy or transport:
+  names on the sensitive-field list (`password`, ...), request and user
+  objects, secret form controls.
+- The envelope is bound to session, user, tenant and route and has a lifetime,
+  so another session, user or tenant reads nothing.
+
+The E5 matrix (`tests/playwright/test_exposure_matrix.py`) pins both: the
+client-facing rows keep "never appears", and the stored-session row is
+`tests/playwright/_exposure_session_contract.py`, which
+`python/djust/tests/test_exposure_session_contract_4107.py` also runs, with its
+gate-offs, without a browser.
+
 ## Decided after review (2026-11-13)
 
 - **Socket mount restores handler changes only.** The envelope records the
