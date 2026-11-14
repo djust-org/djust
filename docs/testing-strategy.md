@@ -386,15 +386,22 @@ below that limit.
 full 3.12-3.15 matrix on every PR head and every `main` push, so a whole-suite run locally adds
 nothing CI will not report and costs the CPU of everything else on the machine (load averages of
 23-25 with three agents each running `-n 8`, 2026-11-05). `tests/local_load_guard.py` (registered
-in the root `conftest.py`) enforces it. Outside CI, unless `DJUST_FULL_LOCAL=1`:
+in the root `conftest.py`) enforces it (#4111). Outside CI:
 
-- xdist is held to 2 workers however many `-n N` / `-n auto` asked for (`DJUST_LOCAL_MAX_WORKERS`);
 - a run that collects more than 5,000 tests (`DJUST_LOCAL_MAX_ITEMS`; the full suite is about
-  35,000) stops before running any, with the way out in the message.
+  35,000) stops before running any, with the ways out in the message, unless the developer has
+  approved it: the file `~/.djust/full-run-approval` holds a Unix time in the future, at most 24
+  hours ahead. The developer writes it by hand; nothing in the repository or an agent does.
+  `DJUST_FULL_LOCAL=1` (still set by the `make test*` full gates and the pre-push full-suite
+  fallback) no longer lets a run past the limit on its own;
+- an approved run holds a machine-wide lock (`~/.djust/full-run.lock`), so a second run over the
+  limit refuses at once while one is in progress, from any worktree;
+- xdist is held to 2 workers however many `-n N` / `-n auto` asked for (`DJUST_LOCAL_MAX_WORKERS`),
+  unless the run is approved.
 
-The `make test*` targets and the pre-push full-suite fallback set `DJUST_FULL_LOCAL=1` themselves:
-they are the deliberate gates. Everything else should be a file, a class, `-k`, or
-`make test-selected`. Results for a pushed commit: `gh pr checks N`, or
+`make test-early` (the bounded early tier) and targeted runs are never restricted. Everything else
+should be a file, a class, `-k`, `make test-early` or `make test-selected`. Results for a pushed
+commit: `gh pr checks N`, or
 `gh run list --workflow Tests --branch main --commit <FULL 40-char sha>` (a short sha returns nothing).
 
 **Time per PR and per issue is measured, not remembered:** `make flow-metrics` (`DAYS=3`, `CHECK=1` to

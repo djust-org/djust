@@ -89,8 +89,9 @@ fi
 # slow tests (they are about the change); DJUST_PREPUSH_FULL=1 runs everything;
 # CI runs the slow tier. Combined with the nightly filter below into ONE -m:
 # pytest honours only the last -m it is given.
-# The full-suite fallback is the deliberate full gate, so it is allowed past the local
-# load guard (tests/local_load_guard.py); a targeted selection never needs the opt-in.
+# The full-suite fallback is the deliberate full gate. Since #4111 the variable alone does
+# not pass the local load guard (tests/local_load_guard.py): over the limit it also needs the
+# developer's time-limited approval, and one heavy run at a time. A targeted selection never does.
 if [ "${PATHS[*]}" = "tests/ python/tests/ python/djust/tests/" ]; then
     export DJUST_FULL_LOCAL=1
 fi
