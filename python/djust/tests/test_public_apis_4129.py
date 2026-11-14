@@ -239,12 +239,14 @@ def test_render_component_renders_a_registered_component():
 
 
 class InventoryLoginView(LiveView):
+    exposure_policy = "explicit"
     login_required = True
     permission_required = ["app.view_thing"]
     template = "<div dj-root></div>"
 
 
 class InventoryOpenView(LiveView):
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
 
