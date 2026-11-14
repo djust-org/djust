@@ -16,6 +16,9 @@ import pytest
 
 from djust.cli import cmd_clear
 
+# ``djust clear`` also reads the saved view state in database sessions (#4087).
+pytestmark = pytest.mark.django_db
+
 
 def _make_args(all_flag=False, force=True):
     args = argparse.Namespace(all=all_flag, force=force)

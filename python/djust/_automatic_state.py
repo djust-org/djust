@@ -1420,6 +1420,26 @@ def clear_saved_state(session: Any) -> int:
     return len(keys)
 
 
+def clear_expired_saved_state(session: Any, now: Optional[int] = None) -> int:
+    """Remove the saved view states of one session that have expired; the count removed.
+
+    An entry whose ``expires`` is not a time in the future is expired (a state
+    no reader would take back). Other keys are left alone (``djust clear``).
+    """
+    now = int(time.time()) if now is None else now
+    expired = []
+    for key in saved_state_keys(session):
+        envelope = session[key]
+        expires = envelope.get("expires") if type(envelope) is dict else None
+        if type(expires) is not int or expires <= now:
+            expired.append(key)
+    for key in expired:
+        del session[key]
+    if expired:
+        session.save()
+    return len(expired)
+
+
 def database_sessions_with_saved_state() -> Any:
     """Every stored session that holds saved view state, for the ``db`` and
     ``cached_db`` engines (the only ones Django can enumerate).

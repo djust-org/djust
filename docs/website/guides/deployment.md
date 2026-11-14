@@ -40,6 +40,16 @@ The diagrammed setup is **Tier 1** (pilot / soft-launch, ≤50 concurrent active
 
 ## State Backend Configuration
 
+Since 2.0 a view's state is kept in the session, not in the state backend. The
+backend holds the visibility ledger of client-owned interactive components, and
+its `get()` / `set()` / `refresh()` view cache is no longer used by the
+framework (it stays available to applications that call it). `djust stats`
+reports the view state saved in sessions, then the backend's figures; `djust
+clear` removes expired saved view state from sessions (all of it with `--all`)
+and clears the backend the same way. Only the `db` and `cached_db` session
+engines can list their sessions; with another engine the saved state expires
+with each session and after `DJUST_SERVER_STATE_MAX_AGE`.
+
 ### In-Memory (one process)
 
 ```python
