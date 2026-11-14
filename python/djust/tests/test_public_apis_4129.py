@@ -260,6 +260,39 @@ def test_live_views_lists_project_views_and_not_framework_ones():
     assert InventoryLoginView not in live_views(app_label="nosuchapp")
 
 
+def test_live_views_leaves_out_a_framework_view_whatever_imported_it():
+    """A view djust ships stays out once its module is imported. ``interactive_examples`` has
+    "example" in its NAME; it is not an example project, so its demo view is framework code
+    (it was listed whenever another test had imported the module first)."""
+    import importlib
+
+    from djust.introspection import is_user_class, live_views
+
+    examples = importlib.import_module("djust.components.interactive_examples")
+    assert examples.DropdownMenuExample not in live_views()
+    assert not is_user_class(examples.DropdownMenuExample)
+
+
+@pytest.mark.parametrize(
+    "module,user",
+    [
+        ("djust.tests.test_x", True),
+        ("djust.examples.demo", True),
+        ("djust.contrib.test_fixture", True),
+        ("djust.components.interactive_examples", False),
+        ("djust.components.gallery.examples", False),
+        ("djust.testing", False),
+        ("djust.shipped_for_test", False),
+        ("djust.live_view", False),
+        ("myapp.views", True),
+    ],
+)
+def test_is_user_class_reads_the_module_segments(module, user):
+    from djust.introspection import is_user_class
+
+    assert is_user_class(type("V", (), {"__module__": module})) is user
+
+
 def test_view_auth_info_matches_the_audit_reading():
     from djust.introspection import view_auth_info
     from djust.management.commands.djust_audit import _extract_auth_info
