@@ -1811,6 +1811,47 @@ def status_moves(assigns):
 
 The template renders inside the page's `dj-root`, so its `dj-click` reaches the page's view. `manage.py check` knows it is a component template and does not report `djust.T012` for it. A function that returns a string is used as-is, as before.
 
+## Kanban board
+
+`{% kanban_board columns=columns move_event="move_card" %}` draws a board whose cards drag between columns:
+
+```python
+columns = [
+    {"id": "todo", "title": "To do", "color": "warning",
+     "cards": [{"id": "c1", "title": "Write docs", "href": "/tasks/1/", "label": "docs"}]},
+    {"id": "done", "title": "Done", "color": "success", "cards": []},
+]
+```
+
+- `move_event` is sent when a card is dropped on another column, with `card_id`, `from_col` and `to_col`. The server decides whether the move is allowed.
+- `add_card_event` (default `kanban_add_card`) is sent by each column's "+ Add card" button with the column id as `value`. `add_card_event=None` leaves the button out, for a board whose cards are created elsewhere.
+- A card's `href` makes its title a link (`javascript:` and other unsafe schemes are refused).
+- A column's `color` is a theme name, `primary`, `success`, `warning`, `destructive`, `info` or `muted`, rendered as the class `kanban-col--<name>`. No `color` gives the stylesheet's default. Any other CSS colour (`"#6366F1"`) still works, but as an inline `style` attribute, which a CSP with `style-src-attr 'none'` refuses; use a theme name under a strict policy.
+- `add_col_event` is accepted and not used.
+
+The `KanbanBoard` class component draws a static board: its cards do not drag.
+
+### Kanban board markup
+
+The drag and drop is the client bundle's delegated behaviour, with no script of the board's own. It reads this markup, so a board you write by hand (to add per-card links, buttons, or your own layout) drags the same way:
+
+```html
+<div class="kanban" data-move-event="move_card">
+  <div class="kanban-col" data-col-id="todo">
+    <div class="kanban-card" draggable="true" data-card-id="c1" data-col-id="todo">...</div>
+  </div>
+  <div class="kanban-col" data-col-id="done">...</div>
+</div>
+```
+
+| Element | Required | Read for |
+|---|---|---|
+| `.kanban[data-move-event]` | yes | the board; `data-move-event` names the event a drop sends |
+| `.kanban-col[data-col-id]` | yes | a drop target; `data-col-id` is sent as `to_col` |
+| `.kanban-card[draggable="true"][data-card-id][data-col-id]` | yes | a draggable card; `data-card-id` is sent as `card_id`, its `data-col-id` as `from_col` |
+
+The client adds `dragging` to the card while it is dragged (removed when the drag ends) and `kanban-col-over` to the column under it (removed when the pointer leaves it or the card drops). A drop on the card's own column sends nothing. Cards and columns may hold any other markup. Give each card and column a stable `dj-key` (the tag uses their ids) so a re-render after a move matches them by identity.
+
 ## Markdown editor
 
 See the [Markdown Editor guide](markdown-editor.md) for optional Visual/Markdown editing,

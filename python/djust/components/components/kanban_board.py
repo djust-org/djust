@@ -7,11 +7,17 @@ from typing import Any, Optional
 
 
 class KanbanBoard(Component):
-    """Kanban board component.
+    """Kanban board component: a static board, without drag and drop.
+
+    It renders no ``draggable`` cards and no ``data-card-id`` /
+    ``data-col-id`` / ``data-move-event``, so the client's drag and drop does
+    not act on it and ``move_event`` is never sent (#4120). For a board whose
+    cards drag between columns, use the ``{% kanban_board %}`` tag, or write
+    the markup the components guide documents ("Kanban board markup").
 
     Args:
-        columns: list of dicts with keys: id, title, color, cards (list of dicts)
-        move_event: dj-click event for drag-drop
+        columns: list of dicts with keys: id, title, cards (list of dicts)
+        move_event: stored, but not sent: this component does not drag
         add_card_event: dj-click event for adding cards"""
 
     #: ADR-033 D3: the walked state keys; ``columns`` (the data) compares by
