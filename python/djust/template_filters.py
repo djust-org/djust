@@ -280,6 +280,28 @@ def _filter_meta(callable_obj: Callable[..., Any]) -> tuple[bool, bool]:
     return is_safe, needs_autoescape
 
 
+def item_key_filter(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Declare that a project filter's QUOTED argument names a field of each item (#3920).
+
+    ``dictsort:'username'`` reads ``username`` off every row, so the extractor files that field
+    on the list and a path-JIT row (a model row on a LiveView) carries it. A project filter that
+    does the same (sort, group or pluck by a field it is handed) opts in with this decorator,
+    above or below ``@register.filter``::
+
+        @register.filter
+        @item_key_filter
+        def sort_by(rows, field):
+            return sorted(rows, key=lambda row: getattr(row, field))
+
+    Without it a row read by field elsewhere in the template (``{{ u.pk }}``) would not carry
+    ``field``, and the filter would see rows without it. Setting ``sort_by.djust_item_key = True``
+    is the same declaration. The flag is read when the filter is bridged to the Rust engine, so it
+    must be set before the template library is loaded (decorating the function does that).
+    """
+    func.djust_item_key = True  # type: ignore[attr-defined]
+    return func
+
+
 def register_django_filter(
     name: str,
     callable_obj: Callable[..., Any],
@@ -315,7 +337,8 @@ def register_django_filter(
 
     from djust._rust import register_custom_filter
 
-    register_custom_filter(name, callable_obj, is_safe, needs_autoescape)
+    item_key = getattr(callable_obj, "djust_item_key", False) is True
+    register_custom_filter(name, callable_obj, is_safe, needs_autoescape, item_key)
     return True
 
 

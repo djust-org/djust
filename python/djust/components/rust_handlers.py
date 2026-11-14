@@ -2015,7 +2015,10 @@ class NavMenuHandler:
         brand_href = data_url_attr(kw.get("brand_href", "/"))
         toggle_event = conditional_escape(kw.get("toggle_event", "toggle_nav"))
         mobile_open = kw.get("mobile_open", False)
-        custom_class = conditional_escape(kw.get("class", ""))
+        # A falsy ``class`` (``None``, ``False``) adds nothing, as in the Django tag (#4127);
+        # escaping it first would turn ``None`` into the class ``None``.
+        raw_class = kw.get("class", "")
+        custom_class = conditional_escape(raw_class) if raw_class else ""
 
         cls = "dj-nav"
         if custom_class:

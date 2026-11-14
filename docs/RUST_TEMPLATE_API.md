@@ -283,6 +283,25 @@ the rows of a nested list cross as their text, which carries no field (#3918).
 `{% regroup %}`'s groups read their rows through `.list`; a field read there is
 filed on the regroup's source (#3920).
 
+A project's own filter that reads a field of each item opts in the same way
+(#3920): decorate it with `djust.template_filters.item_key_filter` (or set
+`djust_item_key = True` on the function) and its QUOTED argument is filed like
+`dictsort`'s. The flag is read when the filter is bridged to the Rust engine, so
+it must be on the function when its template library loads.
+```python
+from djust.template_filters import item_key_filter
+
+@register.filter
+@item_key_filter
+def sort_by(rows, field):
+    return sorted(rows, key=lambda row: row[field] if isinstance(row, dict) else getattr(row, field))
+
+# Template: {% for u in users|sort_by:'username' %}{{ u.pk }}{% endfor %}
+# Result: {"users": ["pk", "username"], "u": ["pk"]}
+```
+A key is read as Django reads it: a combining mark continues a name, so
+`dictsort:'café'` written with a decomposed `é` (`e` + U+0301) is filed too.
+
 A bare argument (`dictsort:key`) is a context variable whose value is the field,
 which a static pass cannot know. The list is filed with `*key`, the variable's
 name, and the Python JIT resolves it from the context it renders with and adds

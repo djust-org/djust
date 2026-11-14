@@ -247,7 +247,7 @@ KNOWN_DIVERGENCES = {
     "filter_select": "DIFFERENT-escape-policy-only",
     "form_array": "DIFFERENT",
     "nav_item": "DIFFERENT",  # draws a third level (#3873)
-    "nav_menu": "DIFFERENT",  # draws what the body renders (#3878)
+    "nav_menu": "DIFFERENT-escape-policy-only",  # body (#3878); same classes since #4127
     "page_header": "DIFFERENT-escape-policy-only",
     "pagination": "DIFFERENT",
     "progress": "DIFFERENT",
