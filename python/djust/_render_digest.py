@@ -96,8 +96,13 @@ _TOKEN = re.compile(
 # bare value, or none.
 _ATTRS = re.compile(r"""([^\s"'=<>/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?""")
 #: Attributes client code writes on a page that is still the server's render.
-#: Kept equal to ``_SHAPE_SKIPPED`` / ``_SHAPE_SKIPPED_PREFIX`` in
-#: ``12-vdom-patch.js`` by the shared vectors.
+#: ``data-open``, ``data-current``, ``data-position`` and ``data-visible`` are
+#: written by djust's own client (popovers, the theme toggle, the tutorial
+#: bubble), so they stay out although an app may render them too; the
+#: http-only-mode guide names them (#4114). Kept equal to ``_SHAPE_SKIPPED`` /
+#: ``_SHAPE_SKIPPED_PREFIX`` in ``12-vdom-patch.js`` by
+#: ``test_the_client_and_the_server_leave_out_the_same_attributes`` and the
+#: shared vector ``every_skipped_attribute``.
 _SKIPPED_ATTRS = frozenset(
     "class style dj-id open hidden disabled checked selected tabindex role "
     "data-live-hydrated data-open data-visible data-position data-current "

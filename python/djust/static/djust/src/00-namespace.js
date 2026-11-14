@@ -225,3 +225,25 @@ function djustTabId() {
     const meta = metas[metas.length - 1];
     return (meta && meta.getAttribute('content')) || '';
 }
+
+// ============================================================================
+// A query string as handle_params() receives it (#4125)
+// ============================================================================
+// A key given once is its value; a key given more than once is the list of
+// its values, in order. That is what the page GET and the fallback POST hand
+// handle_params() (``_http_url_params``), so every mount, live_redirect and
+// url_change frame sends this shape. `Object.fromEntries` kept only the last
+// value of a repeated key.
+function djustQueryParams(search) {
+    const params = {};
+    for (const [key, value] of new URLSearchParams(search)) {
+        if (!Object.prototype.hasOwnProperty.call(params, key)) {
+            params[key] = value; // eslint-disable-line security/detect-object-injection
+        } else if (Array.isArray(params[key])) { // eslint-disable-line security/detect-object-injection
+            params[key].push(value); // eslint-disable-line security/detect-object-injection
+        } else {
+            params[key] = [params[key], value]; // eslint-disable-line security/detect-object-injection
+        }
+    }
+    return params;
+}

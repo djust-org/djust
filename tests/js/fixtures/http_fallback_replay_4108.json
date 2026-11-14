@@ -206,14 +206,61 @@
      "render_digest": "digest-2.3733e5d3c28a7f6b"
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><form dj-id=\"1\" dj-submit=\"submit_form\"><div class=\"row\" dj-id=\"2\"><label dj-id=\"3\">name</label><input dj-change=\"validate_field\" dj-id=\"4\" name=\"name\" type=\"text\" value=\"Al\" /><div class=\"err\" dj-id=\"5\"><span dj-id=\"6\">Ensure this value has at least 3 characters (it has 2).</span></div></div><div class=\"row\" dj-id=\"7\"><label dj-id=\"8\">email</label><input dj-change=\"validate_field\" dj-id=\"9\" name=\"email\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"a\"></div></div><div class=\"row\" dj-id=\"b\"><label dj-id=\"c\">city</label><input dj-change=\"validate_field\" dj-id=\"d\" name=\"city\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"e\"></div></div><button dj-id=\"f\" type=\"submit\">Send</button></form></div>",
-     "render_digest": "digest-3.1a100412acf28459",
-     "version": 1
+     "patches": [
+      {
+       "key": "value",
+       "path": [
+        0,
+        0,
+        1
+       ],
+       "type": "SetAttr",
+       "value": "Al"
+      },
+      {
+       "index": 0,
+       "node": {
+        "attrs": {
+         "dj-id": "m"
+        },
+        "children": [
+         {
+          "attrs": {},
+          "children": [],
+          "key": null,
+          "tag": "#text",
+          "text": "Ensure this value has at least 3 characters (it has 2)."
+         }
+        ],
+        "djust_id": "m",
+        "key": null,
+        "tag": "span",
+        "text": null
+       },
+       "path": [
+        0,
+        0,
+        2
+       ],
+       "type": "InsertChild"
+      }
+     ],
+     "render_digest": "digest-3.783c34484a919534"
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><form dj-id=\"1\" dj-submit=\"submit_form\"><div class=\"row\" dj-id=\"2\"><label dj-id=\"3\">name</label><input dj-change=\"validate_field\" dj-id=\"4\" name=\"name\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"5\"></div></div><div class=\"row\" dj-id=\"6\"><label dj-id=\"7\">email</label><input dj-change=\"validate_field\" dj-id=\"8\" name=\"email\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"9\"></div></div><div class=\"row\" dj-id=\"a\"><label dj-id=\"b\">city</label><input dj-change=\"validate_field\" dj-id=\"c\" name=\"city\" type=\"text\" value=\"Lyon\" /><div class=\"err\" dj-id=\"d\"></div></div><button dj-id=\"e\" type=\"submit\">Send</button></form></div>",
-     "render_digest": "digest-4.9b80b54b04437032",
-     "version": 1
+     "patches": [
+      {
+       "key": "value",
+       "path": [
+        0,
+        2,
+        1
+       ],
+       "type": "SetAttr",
+       "value": "Lyon"
+      }
+     ],
+     "render_digest": "digest-4.81cb0c61ae7e96d6"
     }
    ],
    "answers_whole": [
@@ -222,15 +269,15 @@
      "version": 1
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><form dj-id=\"1\" dj-submit=\"submit_form\"><div class=\"row\" dj-id=\"2\"><label dj-id=\"3\">name</label><input dj-change=\"validate_field\" dj-id=\"4\" name=\"name\" type=\"text\" value=\"Al\" /><div class=\"err\" dj-id=\"5\"><span dj-id=\"6\">Ensure this value has at least 3 characters (it has 2).</span></div></div><div class=\"row\" dj-id=\"7\"><label dj-id=\"8\">email</label><input dj-change=\"validate_field\" dj-id=\"9\" name=\"email\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"a\"></div></div><div class=\"row\" dj-id=\"b\"><label dj-id=\"c\">city</label><input dj-change=\"validate_field\" dj-id=\"d\" name=\"city\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"e\"></div></div><button dj-id=\"f\" type=\"submit\">Send</button></form></div>",
+     "html": "<div dj-id=\"0\" dj-root=\"\"><form dj-id=\"1\" dj-submit=\"submit_form\"><div class=\"row\" dj-id=\"2\"><label dj-id=\"3\">name</label><input dj-change=\"validate_field\" dj-id=\"4\" name=\"name\" type=\"text\" value=\"Al\" /><div class=\"err\" dj-id=\"5\"><span dj-id=\"6\">Ensure this value has at least 3 characters (it has 2).</span></div></div><div class=\"row\" dj-id=\"7\"><label dj-id=\"8\">email</label><input dj-change=\"validate_field\" dj-id=\"9\" name=\"email\" type=\"text\" value=\"not-an-email\" /><div class=\"err\" dj-id=\"a\"><span dj-id=\"b\">Enter a valid email address.</span></div></div><div class=\"row\" dj-id=\"c\"><label dj-id=\"d\">city</label><input dj-change=\"validate_field\" dj-id=\"e\" name=\"city\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"f\"></div></div><button dj-id=\"g\" type=\"submit\">Send</button></form></div>",
      "version": 1
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><form dj-id=\"1\" dj-submit=\"submit_form\"><div class=\"row\" dj-id=\"2\"><label dj-id=\"3\">name</label><input dj-change=\"validate_field\" dj-id=\"4\" name=\"name\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"5\"></div></div><div class=\"row\" dj-id=\"6\"><label dj-id=\"7\">email</label><input dj-change=\"validate_field\" dj-id=\"8\" name=\"email\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"9\"></div></div><div class=\"row\" dj-id=\"a\"><label dj-id=\"b\">city</label><input dj-change=\"validate_field\" dj-id=\"c\" name=\"city\" type=\"text\" value=\"Lyon\" /><div class=\"err\" dj-id=\"d\"></div></div><button dj-id=\"e\" type=\"submit\">Send</button></form></div>",
+     "html": "<div dj-id=\"0\" dj-root=\"\"><form dj-id=\"1\" dj-submit=\"submit_form\"><div class=\"row\" dj-id=\"2\"><label dj-id=\"3\">name</label><input dj-change=\"validate_field\" dj-id=\"4\" name=\"name\" type=\"text\" value=\"Al\" /><div class=\"err\" dj-id=\"5\"><span dj-id=\"6\">Ensure this value has at least 3 characters (it has 2).</span></div></div><div class=\"row\" dj-id=\"7\"><label dj-id=\"8\">email</label><input dj-change=\"validate_field\" dj-id=\"9\" name=\"email\" type=\"text\" value=\"not-an-email\" /><div class=\"err\" dj-id=\"a\"><span dj-id=\"b\">Enter a valid email address.</span></div></div><div class=\"row\" dj-id=\"c\"><label dj-id=\"d\">city</label><input dj-change=\"validate_field\" dj-id=\"e\" name=\"city\" type=\"text\" value=\"Lyon\" /><div class=\"err\" dj-id=\"f\"></div></div><button dj-id=\"g\" type=\"submit\">Send</button></form></div>",
      "version": 1
     }
    ],
-   "equal_to_socket": false,
+   "equal_to_socket": true,
    "events": [
     [
      "validate_field",
@@ -254,13 +301,13 @@
      }
     ]
    ],
-   "expected_dom": "<div dj-root=\"\"><form dj-submit=\"submit_form\"><div class=\"row\"><label>name</label><input dj-change=\"validate_field\" name=\"name\" type=\"text\" value=\"\" /><div class=\"err\"></div></div><div class=\"row\"><label>email</label><input dj-change=\"validate_field\" name=\"email\" type=\"text\" value=\"\" /><div class=\"err\"></div></div><div class=\"row\"><label>city</label><input dj-change=\"validate_field\" name=\"city\" type=\"text\" value=\"Lyon\" /><div class=\"err\"></div></div><button type=\"submit\">Send</button></form></div>",
-   "fallback_final": "<div dj-root=\"\"><form dj-submit=\"submit_form\"><div class=\"row\"><label>name</label><input dj-change=\"validate_field\" name=\"name\" type=\"text\" value=\"\" /><div class=\"err\"></div></div><div class=\"row\"><label>email</label><input dj-change=\"validate_field\" name=\"email\" type=\"text\" value=\"\" /><div class=\"err\"></div></div><div class=\"row\"><label>city</label><input dj-change=\"validate_field\" name=\"city\" type=\"text\" value=\"Lyon\" /><div class=\"err\"></div></div><button type=\"submit\">Send</button></form></div>",
+   "expected_dom": "<div dj-root=\"\"><form dj-submit=\"submit_form\"><div class=\"row\"><label>name</label><input dj-change=\"validate_field\" name=\"name\" type=\"text\" value=\"Al\" /><div class=\"err\"><span>Ensure this value has at least 3 characters (it has 2).</span></div></div><div class=\"row\"><label>email</label><input dj-change=\"validate_field\" name=\"email\" type=\"text\" value=\"not-an-email\" /><div class=\"err\"><span>Enter a valid email address.</span></div></div><div class=\"row\"><label>city</label><input dj-change=\"validate_field\" name=\"city\" type=\"text\" value=\"Lyon\" /><div class=\"err\"></div></div><button type=\"submit\">Send</button></form></div>",
+   "fallback_final": "<div dj-root=\"\"><form dj-submit=\"submit_form\"><div class=\"row\"><label>name</label><input dj-change=\"validate_field\" name=\"name\" type=\"text\" value=\"Al\" /><div class=\"err\"><span>Ensure this value has at least 3 characters (it has 2).</span></div></div><div class=\"row\"><label>email</label><input dj-change=\"validate_field\" name=\"email\" type=\"text\" value=\"not-an-email\" /><div class=\"err\"><span>Enter a valid email address.</span></div></div><div class=\"row\"><label>city</label><input dj-change=\"validate_field\" name=\"city\" type=\"text\" value=\"Lyon\" /><div class=\"err\"></div></div><button type=\"submit\">Send</button></form></div>",
    "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.bf54cd573ae66e90\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.ContactForm\">\n<form dj-submit=\"submit_form\">\n<div class=\"row\"><label>name</label><input type=\"text\" name=\"name\" value=\"\" dj-change=\"validate_field\"><div class=\"err\"></div></div>\n<div class=\"row\"><label>email</label><input type=\"text\" name=\"email\" value=\"\" dj-change=\"validate_field\"><div class=\"err\"></div></div>\n<div class=\"row\"><label>city</label><input type=\"text\" name=\"city\" value=\"\" dj-change=\"validate_field\"><div class=\"err\"></div></div>\n<button type=\"submit\">Send</button></form>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"reset_form\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"Reset the form to its initial state.\\n\\nAn event handler, so a template can call it directly\\n(``dj-click=\\\"reset_form\\\"``), and safe to call from ``form_valid``:\\n``submit_form`` does not sync the submitted values back over a reset\\n(#2974).\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"submit_form\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"Handle form submission.\\n\\nThis is called when the form is submitted (dj-submit event).\\nValidates all fields and calls form_valid() or form_invalid().\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"validate_field\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"field_name\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"field_name\", \"value\"], \"description\": \"Validate a single field in real-time.\\n\\nThis is called when a field changes (dj-change / dj-input event).\\n\\nThe client sends the field name under the key ``field``, because\\n``buildFormEventParams`` (``09-event-binding.js:525``) HARDCODES that\\nkey, sourcing the value from ``getFieldName`` \\u2014 ``data-field``, then\\nthe element's ``name``, then its ``id``. It merges only ``dj-value-*``;\\nit does NOT collect ``data-*``, which is what ``extractTypedParams``\\ndoes on the click/poll/mount paths. (An earlier version of this\\ndocstring said \\\"djust maps ``data-*`` attributes to handler\\nparameters\\\" \\u2014 true for those other paths, false for this one, and a\\nmaintainer acting on it would expect ``data-foo`` on an input to reach\\nthe handler. It does not.) ``field_name`` is\\naccepted for backwards compatibility and is what this signature used\\nto take EXCLUSIVELY \\u2014 which meant the client's payload matched nothing,\\n``**kwargs`` swallowed it instead of raising ``TypeError``, and the\\nhandler ran on every keystroke doing nothing at all (#2137). No error,\\nno warning; the form looked live and was inert.\\n\\n``WizardMixin.validate_field`` already had this coalesce; this is the\\nsame shape, applied to the two implementations that did not (#1646).\\n\\nPOSITIONAL CALLERS: ``field`` is the first parameter, so\\n``validate_field(\\\"email\\\", \\\"text\\\")`` binds ``field_name=\\\"text\\\"`` and\\nleaves ``value`` as ``None`` \\u2014 a filled field then reports \\\"required\\\".\\nCall with keywords. The order is deliberate: djust admin's own adapters\\nemit ``validate_field('\\u003cname\\u003e', value)`` (``admin_ext/adapters.py``, 8\\nsites), whose second positional token is the literal string\\n``\\\"value\\\"``; with ``field`` first that junk lands in ``field_name`` and\\nthe real value survives as a keyword. Under the previous order it\\noverwrote the real value, so the admin validated the string \\\"value\\\" on\\nevery change.\\n\\nArgs:\\n    field: Name of the field to validate \\u2014 what the client sends\\n    field_name: Legacy alias for ``field``\\n    value: Current field value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"field_name\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
    "kinds": [
     "patches",
-    "html",
-    "html"
+    "patches",
+    "patches"
    ],
    "renders": [
     2,
@@ -270,7 +317,7 @@
    "sent_digests": [
     "digest-1.bf54cd573ae66e90",
     "digest-2.3733e5d3c28a7f6b",
-    "digest-3.1a100412acf28459"
+    "digest-3.783c34484a919534"
    ],
    "socket_final": "<div dj-root=\"\"><form dj-submit=\"submit_form\"><div class=\"row\"><label>name</label><input dj-change=\"validate_field\" name=\"name\" type=\"text\" value=\"Al\" /><div class=\"err\"><span>Ensure this value has at least 3 characters (it has 2).</span></div></div><div class=\"row\"><label>email</label><input dj-change=\"validate_field\" name=\"email\" type=\"text\" value=\"not-an-email\" /><div class=\"err\"><span>Enter a valid email address.</span></div></div><div class=\"row\"><label>city</label><input dj-change=\"validate_field\" name=\"city\" type=\"text\" value=\"Lyon\" /><div class=\"err\"></div></div><button type=\"submit\">Send</button></form></div>",
    "url": "/m/form/"
@@ -980,14 +1027,50 @@
      "render_digest": "digest-2.a223162181e007aa"
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Kept: <b dj-id=\"2\">2</b>, lost: <i dj-id=\"3\">1</i></p></div>",
-     "render_digest": "digest-3.0175908881f307ab",
-     "version": 1
+     "patches": [
+      {
+       "path": [
+        0,
+        1,
+        0
+       ],
+       "text": "2",
+       "type": "SetText"
+      },
+      {
+       "path": [
+        0,
+        3,
+        0
+       ],
+       "text": "2",
+       "type": "SetText"
+      }
+     ],
+     "render_digest": "digest-3.13c03f6681f707ac"
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Kept: <b dj-id=\"2\">3</b>, lost: <i dj-id=\"3\">1</i></p></div>",
-     "render_digest": "digest-4.d69710d0820607ac",
-     "version": 1
+     "patches": [
+      {
+       "path": [
+        0,
+        1,
+        0
+       ],
+       "text": "3",
+       "type": "SetText"
+      },
+      {
+       "path": [
+        0,
+        3,
+        0
+       ],
+       "text": "3",
+       "type": "SetText"
+      }
+     ],
+     "render_digest": "digest-4.7c9ed85b820e07ae"
     }
    ],
    "answers_whole": [
@@ -996,15 +1079,15 @@
      "version": 1
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Kept: <b dj-id=\"2\">2</b>, lost: <i dj-id=\"3\">1</i></p></div>",
+     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Kept: <b dj-id=\"2\">2</b>, lost: <i dj-id=\"3\">2</i></p></div>",
      "version": 1
     },
     {
-     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Kept: <b dj-id=\"2\">3</b>, lost: <i dj-id=\"3\">1</i></p></div>",
+     "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Kept: <b dj-id=\"2\">3</b>, lost: <i dj-id=\"3\">3</i></p></div>",
      "version": 1
     }
    ],
-   "equal_to_socket": false,
+   "equal_to_socket": true,
    "events": [
     [
      "bump",
@@ -1019,13 +1102,13 @@
      {}
     ]
    ],
-   "expected_dom": "<div dj-root=\"\"><p>Kept: <b>3</b>, lost: <i>1</i></p></div>",
-   "fallback_final": "<div dj-root=\"\"><p>Kept: <b>3</b>, lost: <i>1</i></p></div>",
+   "expected_dom": "<div dj-root=\"\"><p>Kept: <b>3</b>, lost: <i>3</i></p></div>",
+   "fallback_final": "<div dj-root=\"\"><p>Kept: <b>3</b>, lost: <i>3</i></p></div>",
    "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.cd7df11c81c907a8\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Volatile\">\n<p>Kept: <b>0</b>, lost: <i>0</i></p>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"bump\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
    "kinds": [
     "patches",
-    "html",
-    "html"
+    "patches",
+    "patches"
    ],
    "renders": [
     2,
@@ -1035,7 +1118,7 @@
    "sent_digests": [
     "digest-1.cd7df11c81c907a8",
     "digest-2.a223162181e007aa",
-    "digest-3.0175908881f307ab"
+    "digest-3.13c03f6681f707ac"
    ],
    "socket_final": "<div dj-root=\"\"><p>Kept: <b>3</b>, lost: <i>3</i></p></div>",
    "url": "/m/volatile/"

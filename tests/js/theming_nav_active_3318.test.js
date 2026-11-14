@@ -25,6 +25,13 @@ const COMPONENTS_JS = fs.readFileSync(
     'utf-8'
 );
 const NAV_SOURCE = fs.readFileSync('./python/djust/static/djust/src/18-navigation.js', 'utf-8');
+// #4125: 18-navigation.js reads the query through the bundle-wide
+// djustQueryParams() (00-namespace.js); load the real one.
+const NAMESPACE_SOURCE = fs.readFileSync('./python/djust/static/djust/src/00-namespace.js', 'utf-8');
+const QUERY_PARAMS_START = NAMESPACE_SOURCE.indexOf('function djustQueryParams(');
+const QUERY_PARAMS_SOURCE = NAMESPACE_SOURCE.slice(
+    QUERY_PARAMS_START, NAMESPACE_SOURCE.indexOf('\n}\n', QUERY_PARAMS_START) + 3,
+);
 const CLIENT_JS = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
 
 const link = (id, url, extra = '') =>
@@ -65,6 +72,7 @@ function createDom({ url = 'http://localhost/', nav, autoNav = false, pageLoadin
     const ws = { ws: {}, viewMounted: true, sendMessage() {}, liveRedirectMount() {} };
     w.liveViewWS_mock = ws;
     w.eval('var liveViewWS = window.liveViewWS_mock;');
+    w.eval(QUERY_PARAMS_SOURCE);
     w.eval(NAV_SOURCE);
     w.djust.navigation.installAutoNavigate();
     w.eval(COMPONENTS_JS);

@@ -86,8 +86,13 @@ const namespaceSource = readFileSync(
 );
 const tabIdStart = namespaceSource.indexOf('function djustTabId()');
 const tabIdSource = namespaceSource.slice(tabIdStart, namespaceSource.indexOf('\n}\n', tabIdStart) + 3);
+// #4125: the reconnect and slot remounts read the query through djustQueryParams().
+const queryParamsStart = namespaceSource.indexOf('function djustQueryParams(');
+const queryParamsSource = namespaceSource.slice(
+    queryParamsStart, namespaceSource.indexOf('\n}\n', queryParamsStart) + 3,
+);
 // Use the real shared registry rather than mocking acknowledgement semantics.
-eval(tabIdSource + '\n' + requestSource.slice(requestSource.indexOf('// Event sequencing'),
+eval(tabIdSource + '\n' + queryParamsSource + '\n' + requestSource.slice(requestSource.indexOf('// Event sequencing'),
     requestSource.indexOf('// State management')) + '\n' + frameDispatchSource + '\n' + src); // eslint-disable-line no-eval
 
 const { LiveViewSSE } = global.window.djust;

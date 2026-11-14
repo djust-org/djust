@@ -1222,25 +1222,21 @@ def canonical_params(params: Any) -> str:
     the same query compare equal: parsed values, sorted by key.
     No query and an empty query are the same (``"[]"``).
 
-    A repeated key (``?a=1&a=2``) counts by its LAST value. That is the one
-    reading every transport shares: the page GET and the fallback POST hand
-    ``handle_params()`` the list, while the client builds a socket mount's
-    params with ``Object.fromEntries(new URLSearchParams(...))``, which keeps
-    the last value only. Comparing lists would call the same URL "changed" on
-    one transport and not the other."""
+    A repeated key (``?a=1&a=2``) counts by ALL its values, in order: every
+    transport hands ``handle_params()`` the list (#4125), so ``?a=1&a=2`` and
+    ``?a=3&a=2`` are two URLs. A key given once compares as before (one pair).
+    The sort is by key only and stable, so the order of a key's values counts."""
     pairs = []
     try:
         lists = params.lists() if hasattr(params, "lists") else None
         items = lists if lists is not None else dict(params or {}).items()
         for key, value in items:
-            if isinstance(value, (list, tuple)):
-                if not value:
-                    continue
-                value = value[-1]
-            pairs.append((str(key), "" if value is None else str(value)))
+            values = value if isinstance(value, (list, tuple)) else [value]
+            for item in values:
+                pairs.append((str(key), "" if item is None else str(item)))
     except Exception:  # noqa: BLE001 — not a mapping: no parameters
         pairs = []
-    return json.dumps(sorted(pairs), separators=(",", ":"))
+    return json.dumps(sorted(pairs, key=lambda pair: pair[0]), separators=(",", ":"))
 
 
 def note_url(view: Any, params: Any) -> None:

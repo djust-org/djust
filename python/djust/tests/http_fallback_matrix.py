@@ -94,7 +94,7 @@ def _field(name: str) -> str:
 
 
 class ContactForm(FormMixin, LiveView):
-    """``field_errors`` is not persisted (ADR-038 D-e): not reproducible after an error."""
+    """Validated field by field: its input and errors are the tab's saved state (#4109)."""
 
     exposure_policy = "explicit"
     form_class = _ContactForm
@@ -182,7 +182,7 @@ class Unstable(LiveView):
 
 
 class Volatile(LiveView):
-    """Its handler sets a plain attribute, which no later request sees."""
+    """Its handler sets a plain attribute, kept as the tab's saved state (#4107)."""
 
     exposure_policy = "explicit"
     template = PAGE % "\n<p>Kept: <b>{{ kept }}</b>, lost: <i>{{ lost }}</i></p>\n"
@@ -417,6 +417,10 @@ def run_fallback(
     assert got.status_code == 200, got.status_code
     document = got.content.decode()
     token = meta_digest(document)
+    # The page load's tab id, which the client sends with every fallback POST
+    # (``11-event-handler.js``): it selects the tab's saved state (#4107).
+    tab = re.search(r'<meta name="djust-tab" content="([^"]+)">', document)
+    tab_headers = {"HTTP_X_DJUST_TAB": tab.group(1)} if tab else {}
     send_tokens = echo
     echo = DigestEcho(token)
     out: dict = {
@@ -434,7 +438,7 @@ def run_fallback(
         before = len(log.htmls)
         sent = echo.to_send() if send_tokens else None
         out["sent_digests"].append(sent)
-        response = post_event(client, url, event, params, sent)
+        response = post_event(client, url, event, params, sent, **tab_headers)
         assert response.status_code == 200, (response.status_code, response.content[:300])
         answer = json.loads(response.content)
         echo.note(answer, sent)

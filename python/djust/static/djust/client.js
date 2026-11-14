@@ -228,6 +228,28 @@ function djustTabId() {
 }
 
 // ============================================================================
+// A query string as handle_params() receives it (#4125)
+// ============================================================================
+// A key given once is its value; a key given more than once is the list of
+// its values, in order. That is what the page GET and the fallback POST hand
+// handle_params() (``_http_url_params``), so every mount, live_redirect and
+// url_change frame sends this shape. `Object.fromEntries` kept only the last
+// value of a repeated key.
+function djustQueryParams(search) {
+    const params = {};
+    for (const [key, value] of new URLSearchParams(search)) {
+        if (!Object.prototype.hasOwnProperty.call(params, key)) {
+            params[key] = value; // eslint-disable-line security/detect-object-injection
+        } else if (Array.isArray(params[key])) { // eslint-disable-line security/detect-object-injection
+            params[key].push(value); // eslint-disable-line security/detect-object-injection
+        } else {
+            params[key] = [params[key], value]; // eslint-disable-line security/detect-object-injection
+        }
+    }
+    return params;
+}
+
+// ============================================================================
 // DOM Helper Functions
 // ============================================================================
 
@@ -2778,7 +2800,7 @@ class LiveViewWebSocket {
      * (reconnect): the server holds no view for a connection that closed.
      */
     remountSlots() {
-        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+        const urlParams = djustQueryParams(window.location.search);
         for (const [targetId, slot] of Array.from(_mountedSlots.entries())) {
             const container = slotContainer(targetId);
             if (!container) {
@@ -2824,7 +2846,7 @@ class LiveViewWebSocket {
 
                 // Always send mount message to initialize server-side session
                 // Pass URL query params so server mount can read filters (e.g., ?sender=80)
-                const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+                const urlParams = djustQueryParams(window.location.search);
                 this.mount(viewPath, urlParams, { primary: true });
             } else {
                 console.warn('[LiveView] Container found but no view path specified');
@@ -3103,7 +3125,12 @@ class LiveViewSSE {
         // runtime's early-return when view_instance is already set), which
         // is the only path that includes ``url`` for URL-kwarg resolution
         // (fixes #1237 bug 1).
-        const urlParams = new URLSearchParams(params);
+        // Every value of a repeated key goes on the stream URL (#4125):
+        // `new URLSearchParams(params)` would join a list into "a,b".
+        const urlParams = new URLSearchParams();
+        for (const [key, value] of Object.entries(params || {})) {
+            for (const item of (Array.isArray(value) ? value : [value])) urlParams.append(key, item);
+        }
         urlParams.set('view', viewPath);
         urlParams.set('_djust_url', window.location.pathname);
         urlParams.set('_djust_tab', djustTabId());
@@ -3180,7 +3207,7 @@ class LiveViewSSE {
             // the current route instead of remounting the wrong view.
             if (this.eventSource && pageUrl !== window.location.pathname + window.location.search) {
                 this.disconnect();
-                this.connect(this.primaryViewPath, Object.fromEntries(new URLSearchParams(window.location.search)));
+                this.connect(this.primaryViewPath, djustQueryParams(window.location.search));
                 return;
             }
             // #3164: the server refuses (409) a session id that is live under
@@ -3526,7 +3553,7 @@ class LiveViewSSE {
      */
     remountSlots() {
         if (!this.enabled || !this.viewMounted) return;
-        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+        const urlParams = djustQueryParams(window.location.search);
         for (const [targetId, slot] of Array.from(_mountedSlots.entries())) {
             if (!slotContainer(targetId)) {
                 forgetSlot(targetId);
@@ -12924,7 +12951,7 @@ const lazyHydrationManager = {
         );
         if (useBatch) {
             const viewEntries = [];
-            const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+            const urlParams = djustQueryParams(window.location.search);
             mounts.forEach(({ element, viewPath }) => {
                 const targetId = this.targetIdFor(element);
                 registerSlot(targetId, viewPath, null);
@@ -12976,7 +13003,7 @@ const lazyHydrationManager = {
         registerSlot(targetId, viewPath, null);
 
         // Pass URL query params
-        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+        const urlParams = djustQueryParams(window.location.search);
         liveViewWS.mount(viewPath, urlParams, { targetId: targetId, hasPrerendered: !!hasContent });
 
         // Remove lazy attribute to indicate hydration complete
@@ -13379,7 +13406,7 @@ function _switchToSSETransport() {
     liveViewWS = sseInstance;
     window.djust.liveViewInstance = sseInstance;
 
-    const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+    const urlParams = djustQueryParams(window.location.search);
     sseInstance.connect(viewPath, urlParams);
 }
 
@@ -15368,7 +15395,7 @@ window.djust.getActiveStreams = getActiveStreams;
             }));
         } catch (_e) { /* CustomEvent may fail in old environments */ }
 
-        const urlParams = Object.fromEntries(newUrl.searchParams);
+        const urlParams = djustQueryParams(newUrl.search);
         const outgoing = {
             type: 'live_redirect_mount',
             view: viewPath,
@@ -15498,7 +15525,7 @@ window.djust.getActiveStreams = getActiveStreams;
         if (!isNavigationConnected()) return;
 
         const url = new URL(window.location.href);
-        const params = Object.fromEntries(url.searchParams);
+        const params = djustQueryParams(url.search);
 
         // Redirect (different path → remount) vs patch (same path, different
         // params → url_change). The pathname is the thing that decides it. The
@@ -15635,7 +15662,7 @@ window.djust.getActiveStreams = getActiveStreams;
         window.history.pushState({ djust: true }, '', newUrl.toString());
         _setRenderedPathname(newUrl.pathname, newUrl.search);
 
-        const allParams = Object.fromEntries(newUrl.searchParams);
+        const allParams = djustQueryParams(newUrl.search);
         liveViewWS.sendMessage({
             type: 'url_change',
             params: allParams,
@@ -15857,7 +15884,7 @@ window.djust.getActiveStreams = getActiveStreams;
             _setRenderedPathname(url.pathname, url.search);
             liveViewWS.sendMessage({
                 type: 'url_change',
-                params: Object.fromEntries(url.searchParams),
+                params: djustQueryParams(url.search),
                 uri: url.pathname + url.search,
             });
         } else {

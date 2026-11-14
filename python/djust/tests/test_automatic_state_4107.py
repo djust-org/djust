@@ -2521,12 +2521,18 @@ def test_canonical_params_compare_parsed_values():
     same = [
         _automatic_state.canonical_params(QueryDict("page=2&tab=a%20b&x=1&x=2")),
         _automatic_state.canonical_params(QueryDict("x=1&tab=a+b&x=2&page=2")),
+        # What the client sends on a socket mount for the same URL (#4125):
+        # every value of a repeated key, as a list.
         _automatic_state.canonical_params({"tab": "a b", "x": ["1", "2"], "page": 2}),
-        # What the client sends on a socket mount for the same URL: a repeated
-        # key collapsed to its last value (``Object.fromEntries``).
-        _automatic_state.canonical_params({"tab": "a b", "x": "2", "page": "2"}),
     ]
     assert len(set(same)) == 1
+    # #4125: all values count, so a change to an earlier one is a URL change,
+    # and a list of one value is that value.
+    assert _automatic_state.canonical_params(QueryDict("x=3&x=2")) != same[0]
+    assert _automatic_state.canonical_params({"x": "2"}) != same[0]
+    assert _automatic_state.canonical_params({"x": ["2"]}) == (
+        _automatic_state.canonical_params(QueryDict("x=2"))
+    )
     assert _automatic_state.canonical_params(QueryDict("x=2&x=1")) != (
         _automatic_state.canonical_params(QueryDict("x=1&x=2"))
     )
@@ -2714,8 +2720,8 @@ async def test_socket_declared_and_undeclared_state_follow_one_url_rule():
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 async def test_a_repeated_key_is_the_same_url_on_the_socket_and_over_http():
-    """``?x=1&x=2&page=2``: HTTP hands handle_params() ``x=["1", "2"]``, the
-    client's socket mount sends ``x="2"``. Neither is a changed URL to the other."""
+    """``?x=1&x=2&page=2``: HTTP hands handle_params() ``x=["1", "2"]``, and so
+    does the client's socket mount (#4125). Neither is a changed URL to the other."""
     from asgiref.sync import sync_to_async as to_thread
 
     query = "?x=1&x=2&page=2"
@@ -2741,7 +2747,7 @@ async def test_a_repeated_key_is_the_same_url_on_the_socket_and_over_http():
     # Saved over HTTP, then read on a socket.
     key = await to_thread(page_load)()
     with harness.ws_settings(MODULE):
-        comm, mount = await _mount_at(Both, key, {"x": "2", "page": "2"})
+        comm, mount = await _mount_at(Both, key, {"x": ["1", "2"], "page": "2"})
         assert _probe_of(mount["html"]) == {"page": 2, "tab": "b", "note": "b"}
         # Then an event on that socket, and the same URL read over HTTP.
         await harness.event(comm, "nothing")

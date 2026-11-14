@@ -56,8 +56,8 @@ session:
 - **The URL and the saved state.** The state is saved with the query string
   the view last read. While a request or reconnect comes with that same query
   (compared as parsed parameters, so order and encoding do not matter; a
-  repeated key such as `?a=1&a=2` counts by its last value, the one reading the
-  socket and HTTP share), the saved state wins over what `handle_params()`
+  repeated key such as `?a=1&a=2` counts by all its values, in order), the
+  saved state wins over what `handle_params()`
   assigns: a tab a handler set survives the hook's default. When the query changed, `handle_params()` has
   the last word for everything it assigns (`?page=3` shows page 3, and a value
   it defaults is defaulted), and the rest of the saved state is kept. A
