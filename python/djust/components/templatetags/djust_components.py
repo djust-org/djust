@@ -6831,7 +6831,13 @@ class ToolbarNode(template.Node):
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        toolbar_id = kw.get("id", f"toolbar-{uuid.uuid4().hex[:8]}")
+        # A default id that repeats on every render of the same call (#4108):
+        # a random one differs on each, so the page never renders the same twice.
+        toolbar_id = (
+            kw["id"]
+            if "id" in kw
+            else _render_id("toolbar", sorted(kw.items(), key=repr), context=context)
+        )
         custom_class = kw.get("class", "")
         size = kw.get("size", "md")
         variant = kw.get("variant", "default")

@@ -651,6 +651,12 @@ class LiveView(
     template_name: Optional[str] = None
     template: Optional[str] = None
     tick_interval: Optional[int] = None  # Periodic tick in ms (e.g. 2000 for 2s)
+    # #4108: over the page-POST fallback an event is answered with patches when
+    # the server can show the browser displays the render it diffs against,
+    # which costs a second render of the view per event (``get_context_data()``
+    # runs twice). ``False`` keeps the whole-page answer and the single render
+    # for this view; ``LIVEVIEW_CONFIG["http_fallback_patches"]`` does so for all.
+    http_fallback_patches: bool = True
     # Scoped server push (#3004): the scope(s) this session receives
     # ``push_to_view(..., scope=...)`` for — a str or int (a room, a document
     # id), a list/tuple/set of them (at most 64), or None (default: only

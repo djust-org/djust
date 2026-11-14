@@ -41,7 +41,11 @@ PROCESSORS = {"lazy": PROCESSOR, "old": OLD_PROCESSOR}
 
 
 def _mask(text: str) -> str:
-    return re.sub(r'(csrf-token" content=")[^"]*', r"\1X", text)
+    # The CSRF token is masked afresh, and the render digest (#4108) is bound
+    # to the request's session: neither is the processor's output.
+    text = re.sub(r'(csrf-token" content=")[^"]*', r"\1X", text)
+    text = re.sub(r'(djust-render-digest" content=")[^"]*', r"\1X", text)
+    return re.sub(r'("render_digest": ")[^"]*', r"\1X", text)
 
 
 def _templates(processor):
@@ -185,7 +189,9 @@ class TestPostFallback:
         old = _post(view_cls, PROCESSORS["old"])
         assert lazy[0] == old[0]
         assert lazy[1] == old[1] == 200
-        assert json.dumps(lazy[2], sort_keys=True) == json.dumps(old[2], sort_keys=True)
+        assert _mask(json.dumps(lazy[2], sort_keys=True)) == _mask(
+            json.dumps(old[2], sort_keys=True)
+        )
 
     def test_an_unused_post_renders_no_chunk(self):
         with patch.object(theme_tags, "theme_head", wraps=theme_tags.theme_head) as head:

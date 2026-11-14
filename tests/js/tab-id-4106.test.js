@@ -70,4 +70,6 @@ it('the socket mount frame, the SSE mount frames and the stream URL all read the
     expect(source('03-websocket.js')).toMatch(/type: 'mount',[\s\S]{0,120}tab: djustTabId\(\)/);
     expect(source('03b-sse.js').match(/tab: djustTabId\(\)/g)).toHaveLength(2);
     expect(source('03b-sse.js')).toContain("urlParams.set('_djust_tab', djustTabId())");
+    // #4108's resync request restores the same tab's state.
+    expect(source('11-event-handler.js')).toMatch(/'X-Djust-Resync': '1',[\s\S]{0,160}'X-Djust-Tab': djustTabId\(\)/);
 });

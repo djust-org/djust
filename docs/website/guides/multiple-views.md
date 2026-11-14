@@ -103,12 +103,12 @@ The contract above holds on every connection the page can have; what differs is 
 |---|---|---|---|
 | Page view | yes | yes | yes |
 | Lazy views (`dj-lazy`) | one `mount` frame each, or one `mount_batch` | one `mount` POST each (no `mount_batch`) | not hydrated: `djust:error` with `code: "view_unavailable"` |
-| Events, routed by view | yes | yes | the page view's and `{% live_render %}` children's; a lazy view's are refused |
+| Events, routed by view | yes | yes | the page view's, and a legacy page's legacy `{% live_render %}` children's; an explicit child's and a lazy view's are refused |
 | Hooks (`pushEvent`) | to the view they sit in | to the view they sit in | no |
 | Uploads | yes | no | no |
 | `push_to_view` groups and scopes, presence, `db_notify` | per view | none, for any view | none |
 | Tick, and `self.server_push()` from the view's own code | per view | per view | none |
-| `start_async` and background work | per view | per view | no |
+| `start_async` and background work | per view | per view | runs inside the request, before the answer: no loading state is shown |
 | Saved state, snapshots, authorization | per view | per view | the page view's |
 | Unmount one view | `unmount` frame | `unmount` frame | n/a |
 | Teardown | a disconnect, `live_redirect` or a page mount | the stream closing, `live_redirect` or an `unmount` frame | n/a |
