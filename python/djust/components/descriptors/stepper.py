@@ -12,7 +12,7 @@ Usage::
 
 from djust.decorators import event_handler
 
-from .base import LiveComponent, TypedState, bound_state
+from .base import LiveComponent, TypedState, attribute_name, bound_state, warn_once
 from typing import Any
 
 
@@ -36,13 +36,42 @@ class Stepper(LiveComponent):
 
     @event_handler
     def set_step(self, value: Any = "", **kwargs: Any) -> None:
-        """Go to the clicked step (the tags' default ``event``)."""
+        """Go to the clicked step (the tags' default ``event``).
+
+        An ``int`` ``active`` takes a non-negative step index; a ``str`` one a
+        step id. A value that does not fit is refused, and the first refusal
+        logs a warning naming the component.
+        """
         state = bound_state(self)
         if isinstance(state.active, int) and not isinstance(state.active, bool):
-            try:
-                state.active = int(value)
-            except (TypeError, ValueError):
-                # Not a step index; keep the current step.
+            step = None
+            if not isinstance(value, bool):
+                try:
+                    step = int(value)
+                except (TypeError, ValueError):
+                    step = None
+            if step is None or step < 0:
+                name = attribute_name(self)
+                warn_once(
+                    self,
+                    "index",
+                    "Stepper %r counts steps by index (active=%r), so set_step %r was "
+                    "refused. For {%% wizard %%}, which sends step ids, declare "
+                    '%s = Stepper(active="<first step id>").',
+                    name,
+                    state.active,
+                    value,
+                    name,
+                )
                 return
+            state.active = step
+        elif isinstance(value, str) and value:
+            state.active = value
         else:
-            state.active = str(value)
+            warn_once(
+                self,
+                "id",
+                "Stepper %r counts steps by id, so set_step %r was refused.",
+                attribute_name(self),
+                value,
+            )

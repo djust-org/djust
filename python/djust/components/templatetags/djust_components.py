@@ -17,11 +17,12 @@ import contextvars
 import hashlib
 import itertools
 import json as _json
+import logging
 import re as _re
 import uuid
 from urllib.parse import urlencode
 from collections.abc import Mapping
-from typing import Any, Iterator
+from typing import Any, Iterator, Optional
 
 from django import template
 from django.utils.html import conditional_escape, format_html, format_html_join
@@ -3849,6 +3850,47 @@ def virtual_list(
 KANBAN_COLUMN_COLORS = ("primary", "success", "warning", "destructive", "info", "muted")
 
 
+_kanban_logger = logging.getLogger("djust.components")
+
+#: Column ids already warned about containing whitespace (#4120).
+_KANBAN_SPACED_IDS: set = set()
+
+
+def _warn_spaced_column_id(column_id: Any) -> None:
+    """A card's ``data-targets`` is a space-separated list of column ids, so an
+    id with whitespace in it cannot be listed: warn once per id (#4120)."""
+    text = str(column_id)
+    if text.split() == [text] or not text.strip() or text in _KANBAN_SPACED_IDS:
+        return
+    _KANBAN_SPACED_IDS.add(text)
+    _kanban_logger.warning(
+        "kanban_board column id %r contains whitespace, so a card's targets cannot name it "
+        "(data-targets is space-separated). Use an id without spaces.",
+        text,
+    )
+
+
+def _kanban_targets(targets: Any) -> Optional[list]:
+    """A card's ``targets`` as a list of column ids, or None for "any column".
+
+    A single string is one id; any other iterable of strings (list, tuple, set,
+    generator) is a list of ids, a set sorted so the markup is stable."""
+    if targets is None:
+        return None
+    if isinstance(targets, str):
+        ids = [targets]
+    elif isinstance(targets, (set, frozenset)):
+        ids = sorted(str(t) for t in targets)
+    else:
+        try:
+            ids = [str(t) for t in targets]
+        except TypeError:
+            return None
+    for target in ids:
+        _warn_spaced_column_id(target)
+    return ids
+
+
 @register.simple_tag
 def kanban_board(
     columns: Any = None,
@@ -3895,11 +3937,17 @@ def kanban_board(
 
     e_add_card = conditional_escape(add_card_event) if add_card_event else ""
 
+    # One visually hidden instruction per board, read before a card is picked
+    # up; its id comes from the first column so two boards rarely share it.
+    first = next((c for c in columns if isinstance(c, dict)), {})
+    hint_id = "kanban-hint-" + attr_text(first.get("id", ""))
+
     cols_html = ""
     for col in columns:
         if not isinstance(col, dict):
             continue
         col_id = attr_text(col.get("id", ""))  # only in dj-key= / data-* (#3904)
+        _warn_spaced_column_id(col.get("id", ""))
         col_title = conditional_escape(str(col.get("title", "")))
         # No style attribute unless the column asks for a custom CSS colour:
         # a theme name is a class (#4120).
@@ -3944,11 +3992,9 @@ def kanban_board(
             # The columns this card may move to (#4120): the client offers a
             # drop, and a keyboard move, only on those. Guidance, not
             # authorization: the server still checks the move.
-            targets = card.get("targets")
+            targets = _kanban_targets(card.get("targets"))
             targets_attr = (
-                ' data-targets="%s"' % attr_text(" ".join(str(t) for t in targets))
-                if isinstance(targets, (list, tuple))
-                else ""
+                ' data-targets="%s"' % attr_text(" ".join(targets)) if targets is not None else ""
             )
             cards_html += (
                 # dj-key anchors each card by its stable id so the VDOM differ
@@ -3958,9 +4004,12 @@ def kanban_board(
                 # a storm of failed patches + full html_recovery on every drag
                 # (#1678). `data-card-id` is for the drag JS, not the differ.
                 # tabindex: a card takes focus for the keyboard move (#4120).
+                # role="group" names it (aria-roledescription needs a role),
+                # and the board's hidden hint says how to move it.
                 f'<div class="kanban-card" dj-key="{card_id}" draggable="true" '
                 f'data-card-id="{card_id}" data-col-id="{col_id}"{targets_attr} '
-                f'tabindex="0" aria-roledescription="movable card">'
+                f'tabindex="0" role="group" aria-roledescription="movable card" '
+                f'aria-describedby="{hint_id}">'
                 f'<div class="kanban-card-title">{card_title}</div>'
                 f"{sub_html}"
                 f"{label_html}"
@@ -3991,7 +4040,11 @@ def kanban_board(
             f"</div>"
         )
 
-    return mark_safe(f'<div class="kanban" data-move-event="{e_move}">{cols_html}</div>')
+    hint = (
+        f'<span class="sr-only kanban-hint" id="{hint_id}">Press Space to pick up the card, '
+        "the arrow keys to choose a column, Enter to drop it, Escape to cancel.</span>"
+    )
+    return mark_safe(f'<div class="kanban" data-move-event="{e_move}">{hint}{cols_html}</div>')
 
 
 # ---------------------------------------------------------------------------

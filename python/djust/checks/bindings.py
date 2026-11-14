@@ -197,6 +197,8 @@ class _OwnerContext:
             return BindingResult(
                 binding, "dynamic", "%s always reaches the host view" % binding.directive
             )
+        if binding.tag is not None and binding.tag_off is not None:
+            return self._result(binding, [self._tag_off_finding(binding.tag, binding.tag_off)])
         name = binding.name
         handler = self.handlers.get(name)
         if handler is None:
@@ -215,6 +217,21 @@ class _OwnerContext:
             return BindingResult(binding, "checked", "sent by a component tag; arguments unchecked")
         return self._result(binding, self._arguments(binding, handler))
 
+    def _tag_off_finding(self, tag: tuple[str, str], literal: str) -> Finding:
+        """T019 for ``close_event=None`` (or ``False``, ``""``): the tag has no
+        off state, so it still draws the control, sending an event no handler
+        has (#4126 review)."""
+        tag_name, argument = tag
+        rendered = "" if literal in ("''", '""') else literal
+        return Finding(
+            "T019",
+            "{%% %s %%} has no off state: %s=%s still draws the control, with "
+            'dj-click="%s", which no handler answers, so every click is rejected.'
+            % (tag_name, argument, literal, rendered),
+            "Leave %s= out to send the default event, or set it to an event %s handles."
+            % (argument, self.cls.__qualname__),
+        )
+
     def _tag_finding(self, tag: tuple[str, str], name: str, finding: Finding) -> Finding:
         """T019 for an event a djust component tag sends (#4126): say which tag
         sends it, and what answers it."""
@@ -232,12 +249,12 @@ class _OwnerContext:
         if event is not None and event.component and name == event.default:
             hint = (
                 "Declare the component on the view (for example "
-                "`%s = %s()` from djust.components.descriptors) and pass its state to "
+                "`%s = %s` from djust.components.descriptors) and pass its state to "
                 "the tag; or add an @event_handler named %r to %s; or set %s= to an "
                 "event the view handles."
                 % (
                     re.sub(r"(?<!^)(?=[A-Z])", "_", event.component).lower(),
-                    event.component,
+                    event.declare or "%s()" % event.component,
                     name,
                     owner,
                     argument,

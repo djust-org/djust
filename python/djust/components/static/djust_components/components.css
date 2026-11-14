@@ -495,7 +495,7 @@ html a.btn:where(:hover) { color: hsl(var(--foreground)); }
 .form-input-success:focus { border-color: hsl(var(--success)); box-shadow: 0 0 0 3px hsl(var(--success) / 0.15); }
 
 /* Bootstrap form-control focus — matches .form-input:focus but for Bootstrap's native class */
-.form-control:focus { border-color: hsl(var(--ring)); box-shadow: 0 0 0 var(--form-focus-ring-width, 3px) hsl(var(--ring, var(--primary)) / var(--form-focus-ring-opacity, 0.2)); outline: none; }
+.form-control:focus { border-color: hsl(var(--ring, var(--primary))); box-shadow: 0 0 0 var(--form-focus-ring-width, 3px) hsl(var(--ring, var(--primary)) / var(--form-focus-ring-opacity, 0.2)); outline: none; }
 
 /* Select */
 .form-select { display: block; width: 100%; box-sizing: border-box; padding: var(--space-2) var(--space-8) var(--space-2) var(--space-3); background: hsl(var(--input-background, var(--card))) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") no-repeat right var(--space-3) center; border: 1px solid hsl(var(--input, var(--border))); border-radius: var(--radius-md); font-family: inherit; font-size: var(--text-sm); color: hsl(var(--foreground)); appearance: none; -webkit-appearance: none; cursor: pointer; transition: border-color var(--duration-fast) var(--ease-in-out, ease), box-shadow var(--duration-fast) var(--ease-in-out, ease); }
@@ -926,7 +926,7 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .kanban-col { display: flex; flex-direction: column; min-width: 16rem; max-width: 20rem; flex-shrink: 0; background: hsl(var(--muted) / 0.3); border: 1px solid hsl(var(--border)); border-radius: var(--radius-lg); overflow: hidden; transition: border-color var(--duration-fast) var(--ease-in-out, ease), background var(--duration-fast) var(--ease-in-out, ease); }
 .kanban-col-over { border-color: hsl(var(--primary) / 0.5); background: hsl(var(--primary) / 0.03); }
 .kanban-col-target { border-style: dashed; border-color: hsl(var(--primary) / 0.4); }
-.kanban-card:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.kanban-card:focus-visible { outline: 2px solid hsl(var(--ring, var(--primary))); outline-offset: 2px; }
 .kanban-card-grabbed { box-shadow: 0 0 0 2px hsl(var(--primary)); }
 .kanban-col-header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3) var(--space-4); border-top: 3px solid hsl(var(--primary)); background: hsl(var(--card) / 0.6); }
 .kanban-col--primary { border-top-color: hsl(var(--primary)); }

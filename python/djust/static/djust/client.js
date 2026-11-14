@@ -24187,6 +24187,8 @@ globalThis.djust.djTransitionGroup = {
     let _kanbanDragged = null;
     // A keyboard move in progress: {card, board, cols, index}.
     let _kanbanGrab = null;
+    // The card a keyboard drop moved, to focus again after the re-render.
+    let _kanbanRefocus = null;
 
     // A card's data-targets lists the columns it may move to; without it, any.
     function _kanbanAllows(card, col) {
@@ -24250,7 +24252,6 @@ globalThis.djust.djTransitionGroup = {
         if (!grab) return;
         _kanbanGrab = null;
         grab.card.classList.remove('kanban-card-grabbed');
-        grab.card.removeAttribute('aria-pressed');
         grab.cols.forEach(function (col) { col.classList.remove('kanban-col-over'); });
         _kanbanMark(grab.card, false);
         if (message) _announce(message);
@@ -24284,7 +24285,6 @@ globalThis.djust.djTransitionGroup = {
             e.preventDefault();
             _kanbanGrab = { card: card, board: board, cols: cols, index: index };
             card.classList.add('kanban-card-grabbed');
-            card.setAttribute('aria-pressed', 'true');
             _kanbanMark(card, true);
             cols.at(index).classList.add('kanban-col-over');
             _announce(_kanbanTitle(card) + ' picked up. Left and right arrows choose a column, ' +
@@ -24304,7 +24304,12 @@ globalThis.djust.djTransitionGroup = {
             _kanbanEndGrab(moved
                 ? _kanbanTitle(grab.card) + ' moved to ' + _kanbanColTitle(to)
                 : _kanbanTitle(grab.card) + ' not moved');
-            if (moved) _kanbanSend(grab.board, grab.card, to.dataset.colId);
+            if (moved) {
+                // The re-render that moves the card may replace its node:
+                // focus it again by id once the patch is applied.
+                _kanbanRefocus = grab.card.dataset.cardId || null;
+                _kanbanSend(grab.board, grab.card, to.dataset.colId);
+            }
         } else if (e.key === 'Escape') {
             // Capture phase: the Escape is the move's alone, so it does not
             // also close a dialog or sheet around the board.
@@ -24316,6 +24321,18 @@ globalThis.djust.djTransitionGroup = {
 
     document.addEventListener('focusout', function (e) {
         if (_kanbanGrab && e.target === _kanbanGrab.card) _kanbanEndGrab('Move cancelled');
+    });
+
+    window.addEventListener('djust:patched', function () {
+        const id = _kanbanRefocus;
+        _kanbanRefocus = null;
+        if (id === null) return;
+        const card = Array.prototype.filter.call(document.querySelectorAll('.kanban-card'),
+            function (el) { return el.dataset.cardId === id; })[0];
+        // Only when the patch dropped focus: never take it from where the
+        // reader has moved on to.
+        const active = document.activeElement;
+        if (card && (!active || active === document.body)) card.focus();
     });
 
     // ---- drag and drop: dropzone, kanban --------------------------------

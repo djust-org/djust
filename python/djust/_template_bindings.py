@@ -516,18 +516,26 @@ class _Flattener:
                 found, required = _tag_argument(node, event.requires)
                 if found is _ABSENT_ARGUMENT or (found is _LITERAL and not required):
                     continue
+            if event.unless is not None:
+                found, replaced = _tag_argument(node, event.unless)
+                if found is _LITERAL and replaced:
+                    continue
             found, value = _tag_argument(node, event.argument)
+            off = ""
             if found is _ABSENT_ARGUMENT:
                 name = event.default
             elif found is _LITERAL:
-                if not value or not isinstance(value, str):
-                    continue
-                name = value
+                if value is None or value is False or value == "":
+                    # The tag has no off state: it still draws the control,
+                    # with dj-click="None" (or empty), which nothing answers.
+                    name, off = "off", ' data-djust-tag-off="%s"' % html.escape(repr(value))
+                else:
+                    name = str(value)
             else:
                 name = VALUE
             self.flat.emit(
-                '<djust-tag-event dj-click="%s" data-djust-tag="%s %s"></djust-tag-event>'
-                % (html.escape(name), tag, event.argument),
+                '<djust-tag-event dj-click="%s" data-djust-tag="%s %s"%s></djust-tag-event>'
+                % (html.escape(name), tag, event.argument, off),
                 file,
                 line,
             )
@@ -557,18 +565,35 @@ def _tag_argument(node: Any, key: str) -> tuple[object, Any]:
 
     djust's block tags keep a ``str`` for a quoted literal and a
     ``template.Variable`` otherwise; ``simple_tag`` nodes keep a
-    ``FilterExpression`` per keyword. A positional argument of a
-    ``simple_tag`` cannot be matched to its name here, so it counts as
-    dynamic.
+    ``FilterExpression`` per argument; a positional one is matched to the
+    tag function's parameter by position.
     """
+    import inspect
+
     from django.template.base import FilterExpression, Variable
 
-    if getattr(node, "args", None):
-        return _DYNAMIC, None
     kwargs = getattr(node, "kwargs", None)
-    if not isinstance(kwargs, dict) or key not in kwargs:
+    args = getattr(node, "args", None)
+    value: Any = _ABSENT_ARGUMENT
+    if isinstance(kwargs, dict) and key in kwargs:
+        value = kwargs[key]
+    elif args:
+        # A simple_tag's positional arguments, matched to its parameters.
+        func = getattr(node, "func", None)
+        try:
+            names = list(inspect.signature(func).parameters) if func is not None else []
+        except (TypeError, ValueError):
+            return _DYNAMIC, None
+        if getattr(node, "takes_context", False):
+            names = names[1:]
+        if key not in names:
+            return _ABSENT_ARGUMENT, None
+        index = names.index(key)
+        if index >= len(args):
+            return _ABSENT_ARGUMENT, None
+        value = args[index]
+    if value is _ABSENT_ARGUMENT:
         return _ABSENT_ARGUMENT, None
-    value = kwargs[key]
     if isinstance(value, FilterExpression):
         if value.filters:
             return _DYNAMIC, None
@@ -733,6 +758,10 @@ class Binding:
     #: ``(tag, argument)`` when a djust component tag sends this event
     #: (``("modal", "close_event")``), not markup the template wrote (#4126).
     tag: Optional[tuple[str, str]] = None
+    #: The literal (``'None'``, ``'False'``, ``"''"``) a tag's event argument
+    #: was given in place of an event name: the tag has no off state, so it
+    #: still draws a control nothing answers (#4126 review).
+    tag_off: Optional[str] = None
 
     @property
     def label(self) -> str:
@@ -924,6 +953,7 @@ def _bindings_of(element: Element, opaque: set[int]) -> list[Binding]:
             entries.append((name, [], None, malformed))
         tag_source = element.attr("data-djust-tag") if element.tag == "djust-tag-event" else None
         tag_pair: Optional[tuple[str, str]] = None
+        tag_off = element.attr("data-djust-tag-off") if tag_source else None
         if tag_source:
             tag_name, _, tag_argument = tag_source.partition(" ")
             tag_pair = (tag_name, tag_argument)
@@ -947,6 +977,7 @@ def _bindings_of(element: Element, opaque: set[int]) -> list[Binding]:
                     unresolved=unresolved,
                     malformed=malformed,
                     tag=tag_pair,
+                    tag_off=tag_off,
                 )
             )
     return found

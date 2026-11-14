@@ -526,6 +526,36 @@ describe('kanban keyboard move (#4120)', () => {
         expect(sent).toEqual([]);
     });
 
+    it('focus returns to the moved card after the re-render replaces its node', () => {
+        const dom = createDom(BOARD);
+        const { doc, col, card } = board(dom);
+        card('c2').focus();
+        key(dom, card('c2'), ' ');
+        expect(card('c2').hasAttribute('aria-pressed')).toBe(false);
+        key(dom, card('c2'), 'ArrowRight');
+        key(dom, card('c2'), 'Enter');
+        // The server's re-render: the card leaves "todo" and a new node for it
+        // is created in "doing"; the old node, and its focus, are gone.
+        const moved = card('c2').cloneNode(true);
+        moved.setAttribute('data-col-id', 'doing');
+        card('c2').remove();
+        col('doing').querySelector('.kanban-cards').appendChild(moved);
+        expect(doc.activeElement).toBe(doc.body);
+        dom.window.dispatchEvent(new dom.window.CustomEvent('djust:patched', { detail: {} }));
+        expect(doc.activeElement).toBe(moved);
+    });
+
+    it('the refocus does not take focus the reader moved elsewhere', () => {
+        const dom = createDom(BOARD);
+        const { doc, card } = board(dom);
+        key(dom, card('c2'), ' ');
+        key(dom, card('c2'), 'ArrowRight');
+        key(dom, card('c2'), 'Enter');
+        card('c1').focus();
+        dom.window.dispatchEvent(new dom.window.CustomEvent('djust:patched', { detail: {} }));
+        expect(doc.activeElement).toBe(card('c1'));
+    });
+
     it('Space on a card of a board without a move event does nothing', () => {
         const dom = createDom(BOARD.replace('data-move-event="moved"', ''));
         const { card } = board(dom);

@@ -897,7 +897,10 @@ class ArticleView(LiveView):
 | `{% modal %}` | `close_modal` (also `open_modal`) | `Modal` |
 | `{% sheet %}` | `close_sheet` (also `open_sheet`) | `Sheet` |
 | `{% carousel %}` | `carousel_prev`, `carousel_next`, `carousel_go` | `Carousel(total=N)` |
-| `{% lightbox %}` | `close_lightbox`, `lightbox_navigate` (also `open_lightbox`) | `Lightbox` |
+| `{% tabs %}` | `set_tab` (none with `param=`, which draws links) | `Tabs` |
+| `{% accordion %}` | `accordion_toggle` | `Accordion` |
+| `{% dropdown %}` | `toggle_dropdown` (also `close_dropdown`) | `Dropdown` |
+| `{% lightbox %}` | `close_lightbox`, `lightbox_navigate` (also `open_lightbox`) | `Lightbox` (give it `total` so previous and next wrap) |
 | `{% command_palette %}` | `close_palette` (also `open_palette`); `palette_search` | `CommandPalette`; your view |
 | `{% export_dialog %}` | `close_export` (also `open_export`); `export` | `ExportDialog`; your view |
 | `{% announcement_bar dismissible=True %}` | `dismiss_announcement` | `AnnouncementBar` (render the bar only while `dismissed` is false) |
@@ -905,7 +908,7 @@ class ArticleView(LiveView):
 | `{% expandable_text %}` | `toggle_expand` | `ExpandableText` (`expanded`) |
 | `{% truncated_list %}` | `toggle_list` | `TruncatedList` (`expanded`) |
 | `{% markdown_textarea %}` | `toggle_preview` | `MarkdownTextarea` (`preview`) |
-| `{% stepper %}`, `{% wizard %}` | `set_step` | `Stepper` (`active`: an index for `stepper`, a step id for `wizard`) |
+| `{% stepper %}`, `{% wizard %}` | `set_step` | `Stepper(active=0)` for `stepper`, which counts by index; `Stepper(active="<first step id>")` for `wizard`, which sends step ids |
 | `{% cookie_consent %}` | `accept_cookies` | your view: it records the consent |
 
 "Your view" means an `@event_handler` of that name: what a search matches, what
@@ -913,6 +916,19 @@ an export contains and where consent is stored are the application's. An
 `@event_handler` of the same name on the view also replaces a component's
 answer (to validate a step before moving on, say), and renaming the event
 (`close_event="shut_dialog"`) makes it yours to answer.
+
+A tag has no off state: `close_event=None` (or `False`, `""`) does not remove
+the control, it draws one that sends `None`, which nothing answers. Leave the
+argument out to send the default event.
+
+A component answers an event without `component_id` only when the view
+declares one component of that type. With two (`confirm = Modal()` and
+`delete = Modal()`), each tag must say which one it drives with
+`component_id="confirm"`. `{% modal %}`, `{% sheet %}`, `{% carousel %}`,
+`{% tabs %}`, `{% accordion %}`, `{% dropdown %}`, `{% tooltip %}` and
+`{% collapsible %}` take `component_id=`; the tags of the other components
+above do not yet (tracked in #4134), so on such a view write the handler
+yourself.
 
 `Carousel` needs `total`, the number of slides: declare `Carousel(total=5)` or
 set `self.slides.total = len(images)` in `mount()`. Without it previous, next
@@ -1893,7 +1909,7 @@ columns = [
 - `move_event` is sent when a card is dropped on another column, with `card_id`, `from_col` and `to_col`. The server decides whether the move is allowed.
 - `add_card_event` (default `kanban_add_card`) is sent by each column's "+ Add card" button with the column id as `value`. `add_card_event=None` leaves the button out, for a board whose cards are created elsewhere.
 - A card's `href` makes its title a link (`javascript:` and other unsafe schemes are refused).
-- A card's `targets` lists the column ids it may move to, for a board whose cards follow a state machine: `{"id": "c1", "title": "A", "targets": ["doing", "done"]}`. While the card drags, only those columns take a drop and are marked `kanban-col-target`; elsewhere the browser shows no drop. Without `targets` every column is offered. `targets` is guidance for the reader, not authorization: the `move_event` handler still checks the move.
+- A card's `targets` lists the column ids it may move to, for a board whose cards follow a state machine: `{"id": "c1", "title": "A", "targets": ["doing", "done"]}`. While the card drags, only those columns take a drop and are marked `kanban-col-target`; elsewhere the browser shows no drop. Without `targets` every column is offered. `targets` (a list, any iterable of strings, or one string) is guidance for the reader, not authorization: your `move_event` handler must still check the move. Column ids may not contain whitespace (the list is space-separated; such an id logs a warning).
 - A card moves by keyboard too: Tab to it, Space picks it up, the arrow keys choose a column (only the allowed ones), Enter or Space drops it there and sends the same `move_event`, and Escape (or moving focus away) cancels. Each step is announced to screen readers.
 - A column's `color` is a theme name, `primary`, `success`, `warning`, `destructive`, `info` or `muted`, rendered as the class `kanban-col--<name>`. No `color` gives the stylesheet's default. Any other CSS colour (`"#6366F1"`) still works, but as an inline `style` attribute, which a CSP with `style-src-attr 'none'` refuses; use a theme name under a strict policy.
 - `add_col_event` is accepted and not used.

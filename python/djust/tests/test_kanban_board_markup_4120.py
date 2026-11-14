@@ -155,4 +155,65 @@ def test_every_card_takes_focus_for_the_keyboard_move():
     cards = re.findall(r'<div class="kanban-card"[^>]*>', out)
     assert len(cards) == 2
     for card in cards:
-        assert 'tabindex="0"' in card and 'aria-roledescription="movable card"' in card, card
+        assert 'tabindex="0"' in card, card
+        # aria-roledescription needs a role; aria-pressed is not allowed on a group.
+        assert 'role="group" aria-roledescription="movable card"' in card, card
+        assert "aria-pressed" not in card
+        assert 'aria-describedby="kanban-hint-todo"' in card, card
+    # The instruction a screen reader announces on focus, before pickup.
+    assert (
+        '<span class="sr-only kanban-hint" id="kanban-hint-todo">Press Space to pick up the card'
+    ) in out
+
+
+@pytest.mark.parametrize(
+    "targets, expected",
+    [
+        ("done", "done"),
+        (("doing", "done"), "doing done"),
+        ({"done", "doing"}, "doing done"),
+        (iter(["a", "b"]), "a b"),
+    ],
+)
+def test_card_targets_accept_a_string_or_any_iterable(targets, expected):
+    from djust.components.templatetags.djust_components import kanban_board
+
+    cols = [{"id": "t", "title": "T", "cards": [{"id": "c", "title": "C", "targets": targets}]}]
+    assert 'data-targets="%s"' % expected in str(kanban_board(columns=cols))
+
+
+def test_a_column_id_with_whitespace_warns_once(caplog):
+    import logging
+
+    from djust.components.templatetags import djust_components as tags
+
+    tags._KANBAN_SPACED_IDS.discard("in review")
+    cols = [
+        {
+            "id": "in review",
+            "title": "R",
+            "cards": [{"id": "c", "title": "C", "targets": ["in review"]}],
+        },
+    ]
+    with caplog.at_level(logging.WARNING, logger="djust.components"):
+        tags.kanban_board(columns=cols)
+        tags.kanban_board(columns=cols)
+    warnings = [r.getMessage() for r in caplog.records if "whitespace" in r.getMessage()]
+    assert len(warnings) == 1, warnings
+    assert "'in review'" in warnings[0]
+
+
+def test_form_control_focus_rule_keeps_its_ring_fallback():
+    """An unrelated rule a kanban change once edited by accident (#4120 review)."""
+    from pathlib import Path
+
+    import djust
+
+    css = (
+        Path(djust.__file__).parent / "components/static/djust_components/components.css"
+    ).read_text()
+    assert (
+        ".form-control:focus { border-color: hsl(var(--ring, var(--primary))); "
+        "box-shadow: 0 0 0 var(--form-focus-ring-width, 3px) "
+        "hsl(var(--ring, var(--primary)) / var(--form-focus-ring-opacity, 0.2)); outline: none; }"
+    ) in css

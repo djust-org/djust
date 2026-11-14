@@ -102,7 +102,8 @@ CASES = [
         {"images": ["/a.png", "/b.png", "/c.png"]},
         [
             ("lightbox_navigate", {"value": "1"}, "active", 1),
-            ("lightbox_navigate", {"value": "-1"}, "active", 0),
+            # Without total a negative index is refused (#4126 review).
+            ("lightbox_navigate", {"value": "-1"}, "active", 1),
             ("close_lightbox", {}, "is_open", False),
             ("open_lightbox", {"value": "2"}, "active", 2),
         ],
@@ -128,23 +129,27 @@ CASES = [
 APP_EVENTS = {"palette_search", "export"}
 
 
-def _page(descriptor, state):
+def _page(descriptor, state, policy="legacy"):
     return type(
         "Page_%s" % descriptor.__name__,
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": policy,
+            "template": "<div dj-root>x</div>",
             "widget": descriptor(**state),
             "mount": lambda self, request, **kwargs: None,
         },
     )
 
 
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("engine", ["django", "rust"])
 @pytest.mark.parametrize(
     "descriptor, state, src, ctx, steps", CASES, ids=[c[0].__name__ + c[2][3:16] for c in CASES]
 )
-def test_descriptor_answers_every_event_the_tag_draws(engine, descriptor, state, src, ctx, steps):
+def test_descriptor_answers_every_event_the_tag_draws(
+    policy, engine, descriptor, state, src, ctx, steps
+):
     drawn = set(_events(_ENGINES[engine](src, ctx)))
     framework = drawn - APP_EVENTS
     assert framework, drawn
@@ -152,7 +157,7 @@ def test_descriptor_answers_every_event_the_tag_draws(engine, descriptor, state,
     assert framework <= set(descriptor.Meta.events), (drawn, descriptor.Meta.events)
     assert {s[0] for s in steps} >= framework
 
-    client = LiveViewTestClient(_page(descriptor, state)).mount()
+    client = LiveViewTestClient(_page(descriptor, state, policy)).mount()
     for event, params, attr, expected in steps:
         assert client.send_event(event, **params)["success"], event
         assert getattr(client.view_instance.widget, attr) == expected, (event, params)
@@ -180,6 +185,14 @@ def test_an_app_handler_of_the_same_name_wins():
 #: For each tag in TAG_EVENTS: a template drawing every control, with no
 #: event argument given.
 DRAW_ALL = {
+    "accordion": (
+        '{% accordion id="a" %}{% accordion_item id="q" title="Q" %}x{% endaccordion_item %}'
+        "{% endaccordion %}",
+        {},
+    ),
+    "carousel": ("{% carousel images=i %}", {"i": ["/a.png", "/b.png"]}),
+    "dropdown": ('{% dropdown label="L" %}x{% enddropdown %}', {}),
+    "tabs": ('{% tabs id="t" %}{% tab id="a" label="A" %}x{% endtab %}{% endtabs %}', {}),
     "modal": ("{% modal open=True %}x{% endmodal %}", {}),
     "sheet": ("{% sheet open=True %}x{% endsheet %}", {}),
     "lightbox": ("{% lightbox images=i open=True %}", {"i": ["/a.png", "/b.png"]}),
@@ -282,13 +295,48 @@ def test_t019_quiet_when_the_app_handles_the_event():
     assert findings == []
 
 
-def test_t019_follows_a_renamed_and_a_turned_off_event():
+def test_t019_follows_a_renamed_and_a_variable_event():
     findings, _ = _findings(_view('{% modal open=show close_event="shut" %}x{% endmodal %}'))
     assert [(f[0], f[1]) for f in findings] == [("shut", "T019")]
-    findings, _ = _findings(_view("{% modal open=show close_event=None %}x{% endmodal %}"))
-    assert findings == []
     _, report = _findings(_view("{% modal open=show close_event=name %}x{% endmodal %}"))
     assert [r.status for r in report.results if r.binding.tag] == ["dynamic"]
+
+
+@pytest.mark.parametrize("literal", ["None", "False", '""'])
+def test_t019_reports_an_event_set_to_none_since_the_tag_has_no_off_state(literal):
+    """``close_event=None`` does not remove the control: the tag still draws
+    it, with ``dj-click="None"``, and every click is rejected. Only an ABSENT
+    argument means the default. Reported even when ``Modal()`` is declared."""
+    src = "{%% modal open=dialog.is_open close_event=%s %%}x{%% endmodal %%}" % literal
+    rendered = _django(src.replace("dialog.is_open", "True"))
+    assert "dj-click=" in rendered and "close_modal" not in rendered
+    findings, _ = _findings(_view(src, dialog=D.Modal()))
+    assert [f[1] for f in findings] == ["T019"], findings
+    message, hint = findings[0][2], findings[0][3]
+    assert "{% modal %} has no off state" in message, message
+    assert "close_event=%s still draws the control" % literal.replace('""', "''") in message
+    assert "Leave close_event= out" in hint
+
+
+def test_t019_tabs_with_param_sends_no_event():
+    findings, _ = _findings(_view('{% tabs id="t" param="section" %}{% endtabs %}'))
+    assert findings == []
+    findings, _ = _findings(_view('{% tabs id="t" %}{% endtabs %}'))
+    assert [f[0] for f in findings] == ["set_tab"]
+
+
+def test_t019_reads_a_simple_tags_positional_arguments():
+    """``{% carousel images 0 "back" %}``: the third positional argument is
+    ``prev_event``."""
+    findings, _ = _findings(_view('{% carousel images 0 "back" %}'))
+    assert {f[0] for f in findings} == {"back", "carousel_next", "carousel_go"}
+
+
+def test_t019_wizard_hint_declares_a_stepper_counting_by_id():
+    findings, _ = _findings(_view("{% wizard steps=s %}{% endwizard %}"))
+    assert 'Stepper(active="<first step id>")' in findings[0][3], findings[0][3]
+    findings, _ = _findings(_view("{% stepper steps=s %}"))
+    assert "Stepper()" in findings[0][3]
 
 
 def test_t019_app_action_hint_says_the_application_answers_it():
@@ -309,6 +357,10 @@ def test_t019_announcement_bar_only_when_dismissible():
 @pytest.mark.parametrize(
     "src",
     [
+        "{% accordion %}{% endaccordion %}",
+        "{% carousel images=i %}",
+        "{% dropdown %}{% enddropdown %}",
+        "{% tabs %}{% endtabs %}",
         "{% stepper steps=s %}",
         "{% wizard steps=s %}{% endwizard %}",
         "{% nav_menu %}{% endnav_menu %}",
@@ -328,7 +380,7 @@ def test_t019_reports_each_ui_state_tag_without_its_descriptor(src):
     for event in TAG_EVENTS[tag]:
         if event.component:
             hint = next(f[3] for f in findings if f[0] == event.default)
-            assert "%s()" % event.component in hint, hint
+            assert (event.declare or "%s()" % event.component) in hint, hint
 
 
 # --- Carousel without total --------------------------------------------------
@@ -401,3 +453,82 @@ def test_scroll_spy_event_is_a_browser_event_not_a_view_event():
     # A server-bound event parameter still counts.
     params.append({"name": "toggle_event", "default": "'toggle_nav'"})
     assert contract_events(params, {}, html) == ["toggle_nav"]
+
+
+# --- Stepper and Lightbox refuse what they cannot apply (#4126 review) -------
+
+
+def _one(descriptor, **state):
+    page = type(
+        "One",
+        (LiveView,),
+        {
+            "exposure_policy": "explicit",
+            "template": "<div dj-root></div>",
+            "w": descriptor(**state),
+        },
+    )
+    return page()
+
+
+@pytest.mark.parametrize("value", ["-1", True, "account"])
+def test_stepper_by_index_refuses_and_warns_once(caplog, value):
+    view = _one(D.Stepper, active=1)
+    with caplog.at_level(logging.WARNING, logger="djust.components"):
+        view.set_step(value=value)
+        view.set_step(value=value)
+    assert view.w.active == 1
+    warnings = [r.getMessage() for r in caplog.records if r.name == "djust.components"]
+    assert len(warnings) == 1, warnings
+    assert "Stepper 'w' counts steps by index" in warnings[0]
+    assert 'Stepper(active="<first step id>")' in warnings[0]
+
+
+def test_stepper_by_id_takes_an_id_and_refuses_an_empty_one(caplog):
+    view = _one(D.Stepper, active="a")
+    view.set_step(value="b")
+    assert view.w.active == "b"
+    with caplog.at_level(logging.WARNING, logger="djust.components"):
+        view.set_step(value="")
+    assert view.w.active == "b"
+    assert any("counts steps by id" in r.getMessage() for r in caplog.records)
+
+
+def test_lightbox_without_total_refuses_negative_huge_and_bool():
+    view = _one(D.Lightbox, active=2)
+    for bad in ("-1", "10001", True, "x"):
+        view.lightbox_navigate(value=bad)
+        view.open_lightbox(value=bad)
+        assert view.w.active == 2, bad
+    view.lightbox_navigate(value="10000")
+    assert view.w.active == 10000
+
+
+def test_lightbox_with_total_wraps_like_carousel():
+    view = _one(D.Lightbox, total=3)
+    view.lightbox_navigate(value="-1")
+    assert view.w.active == 2
+    view.lightbox_navigate(value="3")
+    assert view.w.active == 0
+    view.open_lightbox(value="4")
+    assert (view.w.is_open, view.w.active) == (True, 1)
+
+
+# --- what the guide and changelog promise (#4126 review) ---------------------
+
+
+def _repo_text(path):
+    from pathlib import Path
+
+    import djust
+
+    return (Path(djust.__file__).resolve().parents[2] / path).read_text()
+
+
+def test_guide_says_two_components_of_one_type_need_component_id():
+    guide = _repo_text("docs/website/guides/components.md")
+    assert (
+        'With two (`confirm = Modal()` and\n`delete = Modal()`), each tag must say which one it drives with\n`component_id="confirm"`.'
+        in guide
+    )
+    assert "do not yet (tracked in #4134)" in guide
