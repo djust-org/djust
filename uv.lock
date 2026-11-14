@@ -751,6 +751,9 @@ redis = [
 s3 = [
     { name = "boto3" },
 ]
+sealed-state = [
+    { name = "cryptography" },
+]
 tenants-postgres = [
     { name = "psycopg", extra = ["binary"] },
 ]
@@ -767,6 +770,7 @@ requires-dist = [
     { name = "channels", extras = ["daphne"], marker = "extra == 'dev'", specifier = ">=4.0.0,<5" },
     { name = "click", specifier = ">=8.0,<9" },
     { name = "click", marker = "extra == 'dev'", specifier = ">=8.0,<9" },
+    { name = "cryptography", marker = "extra == 'sealed-state'", specifier = ">=42" },
     { name = "django", specifier = ">=4.2.29,<6.2" },
     { name = "django-allauth", marker = "extra == 'auth-allauth'", specifier = ">=65.0,<66" },
     { name = "django-allauth", marker = "extra == 'dev'", specifier = ">=65.0,<66" },
@@ -806,7 +810,7 @@ requires-dist = [
     { name = "zstandard", marker = "extra == 'dev'", specifier = ">=0.22.0,<1" },
     { name = "zstandard", marker = "extra == 'performance'", specifier = ">=0.22.0,<1" },
 ]
-provides-extras = ["daphne", "redis", "compression", "performance", "auth", "auth-allauth", "tenants", "tenants-redis", "tenants-postgres", "theming", "admin", "deploy", "components", "s3", "gcs", "azure", "all", "dev"]
+provides-extras = ["daphne", "redis", "sealed-state", "compression", "performance", "auth", "auth-allauth", "tenants", "tenants-redis", "tenants-postgres", "theming", "admin", "deploy", "components", "s3", "gcs", "azure", "all", "dev"]
 
 [[package]]
 name = "execnet"

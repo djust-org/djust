@@ -75,7 +75,7 @@ redis = [
 # djust.state_store.SealedSessionViewStateStore. Only needed when
 # DJUST_STATE_STORE names that store.
 sealed-state = [
-    "cryptography>=42,<47",
+    "cryptography>=42",
 ]
 compression = [
     "zstandard>=0.22.0,<1",  # zstd compression for state backend
