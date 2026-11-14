@@ -365,6 +365,21 @@ and payment-card inputs.
 `persist="server"` is the strict form: a value that cannot be saved is an
 error instead of being skipped.
 
+**Switching it off.** `DJUST_AUTOMATIC_STATE = False` in settings saves nothing
+of any view between requests, and `automatic_state = False` on a view does the
+same for that view (`True` there overrides a project that switched it off).
+This replaces 1.x's `view_state_in_session = False`. Every fallback request
+then runs `mount()` again. A field declared `persist="server"` is still kept.
+See [Switching saving off](state-survival.md#switching-saving-off).
+
+**Check your session engine before upgrading.** Saved state, and
+`persist="server"` fields, now work with an engine whose `SessionStore`
+subclasses Django's `db`, `cached_db`, `cache` or `file` store. Earlier 2.0
+pre-releases accepted only those exact classes: a project with its own subclass
+had nothing saved (one log line) and its `persist="server"` fields refused. If
+your project relied on that, it will start saving view state in its session on
+upgrade. Set `DJUST_AUTOMATIC_STATE = False` to keep saving nothing.
+
 ```python
 from djust import LiveView
 from djust.decorators import event_handler, state
@@ -765,7 +780,7 @@ To open or close from your own handler, set the state:
 | `DJUST_REDIS_URL` | `DJUST_CONFIG['REDIS_URL']` |
 | `TEMPLATES[...]['BACKEND'] = "djust.template_backend.DjustTemplateBackend"` | `"djust.template.backend.DjustTemplateBackend"` |
 | `template_auto_call`, `virtual_keyed_ops`, `django_value_repr` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the key. What each one could switch off is always on. |
-| `view_state_in_session` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the key. No view state is kept in the session any more ([below](#state-a-legacy-view-no-longer-keeps)), so there is nothing to switch off. System check `djust.C027`, which validated it, is retired. |
+| `view_state_in_session` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the key. A view's state is saved in the server-side session by default. To save nothing, as `view_state_in_session = False` did, set `DJUST_AUTOMATIC_STATE = False` in settings (the whole project) or `automatic_state = False` on a view ([Switching saving off](state-survival.md#switching-saving-off)). System check `djust.C027`, which validated the old key, is retired. |
 | `event_security` set to `"open"` or `"warn"` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Put `@event_handler` on every method a template binds (`dj-click`, `dj-submit`, ...), then delete the key. Only decorated methods are client events, on every transport (WebSocket, SSE, the page-POST fallback, components and the test client); startup refuses the two modes (any case) with this hint and any other value except `"strict"` as unknown (#4101). `"strict"` is accepted and does nothing. |
 
 <!-- END GENERATED removed-table:settings -->
@@ -939,4 +954,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 0681d1491cc9 -->
+<!-- generated-doc prose-sha256: 7c2c874f4a1d -->

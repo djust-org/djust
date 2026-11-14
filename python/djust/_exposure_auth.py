@@ -9,7 +9,7 @@ from copy import copy
 from typing import Any
 
 from ._exposure import ExposureError
-from ._exposure_sessions import StateBinding, _SERVER_SESSION_TYPES, request_binding
+from ._exposure_sessions import StateBinding, request_binding, session_store_supported
 from ._session_merge import track_session
 
 
@@ -62,7 +62,7 @@ def establish_mount_session(
     from ._exposure_sessions import server_state_max_age
 
     session = getattr(request, "session", None)
-    if type(session) not in _SERVER_SESSION_TYPES:
+    if not session_store_supported(type(session)):
         return None
     if not session.session_key:
         return None
@@ -92,7 +92,7 @@ def fresh_socket_request(view: Any) -> Any:
 
     mounted = view._djust_mount_request
     session = mounted.session
-    if type(session) not in _SERVER_SESSION_TYPES or not session.session_key:
+    if not session_store_supported(type(session)) or not session.session_key:
         raise ExposureError("Explicit events require a supported live server session")
     request = copy(mounted)
     request.session = type(session)(session.session_key)
@@ -161,7 +161,7 @@ def _event_request(view: Any, request: Any, binding: StateBinding) -> Any:
         raise ExposureError("Explicit events require a fresh trusted request")
     request = copy(request)
     session = getattr(request, "session", None)
-    if type(session) not in _SERVER_SESSION_TYPES:
+    if not session_store_supported(type(session)):
         raise ExposureError("Explicit events require a supported server session")
     session.get("_auth_user_id")
     # The turn's saves merge what this session object changes into the stored

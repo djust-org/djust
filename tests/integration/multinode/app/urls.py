@@ -6,6 +6,7 @@ urlpatterns = [
     path("counter/", views.CounterView.as_view()),
     path("counter2/", views.CounterView.as_view()),
     path("legacy/", views.LegacyCounterView.as_view()),
+    path("off/", views.SwitchedOffView.as_view()),
     path("held/", views.HeldView.as_view()),
     path("items/<int:pk>/", views.ItemView.as_view()),
     path("form/", views.FormView.as_view()),
@@ -21,6 +22,7 @@ urlpatterns = [
     path("_mn/logout/", views.logout_view),
     path("_mn/push/", views.push_view),
     path("_mn/stats/", views.stats_view),
+    path("_mn/session-keys/", views.session_keys_view),
     path("_mn/gate/", views.gate_view),
     path("_mn/release/", views.release_view),
 ]

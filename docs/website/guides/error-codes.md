@@ -380,7 +380,7 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 **What causes it**: A view declares `state(..., persist="server")` while `SESSION_ENGINE` names a store that cannot hold server state, such as `django.contrib.sessions.backends.signed_cookies`. Every request of that view fails.
 
-**Fix**: Set `SESSION_ENGINE` to `django.contrib.sessions.backends.db`, `cached_db`, `cache` or `file`, or declare the state without `persist="server"`.
+**Fix**: Set `SESSION_ENGINE` to `django.contrib.sessions.backends.db`, `cached_db`, `cache` or `file` (or an engine whose store subclasses one of theirs), or declare the state without `persist="server"`.
 
 ---
 
@@ -411,6 +411,26 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 **What causes it**: A view uses `PresenceMixin` with the in-memory presence backend and `DEBUG = False`. With more than one process, each counts only its own users.
 
 **Fix**: Set `DJUST_CONFIG['PRESENCE_BACKEND'] = 'redis'` (or `'tenant_redis'`) together with a shared channel layer.
+
+---
+
+### C034: Saved view state with an unsupported session engine
+
+**Severity**: Warning
+
+**What causes it**: Views save their state in the server-side session, and `SESSION_ENGINE` names a store that cannot hold it, such as `django.contrib.sessions.backends.signed_cookies` or a store built on none of Django's server-side stores. Nothing is saved, so each fallback request starts from `mount()`.
+
+**Fix**: Set `SESSION_ENGINE` to a server-side engine (`db`, `cached_db`, `cache`, `file`, or one whose store subclasses theirs). Or say that nothing is to be saved: `DJUST_AUTOMATIC_STATE = False` in settings, or `automatic_state = False` on a view.
+
+---
+
+### C035: Saved-state switch is not a bool
+
+**Severity**: Error
+
+**What causes it**: The switch holds a string, a number or another object, for example `DJUST_AUTOMATIC_STATE = "False"` or `automatic_state = 0`. djust reads anything but `True` as off, so a mistake never saves state nobody asked for.
+
+**Fix**: Set `DJUST_AUTOMATIC_STATE` to `True` or `False`, and a view's `automatic_state` to `True`, `False` or `None` (the project's value).
 
 ---
 
