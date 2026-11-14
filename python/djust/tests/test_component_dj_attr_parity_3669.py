@@ -708,3 +708,63 @@ def test_a_deep_item_label_and_a_dangerous_href_are_neutralised_on_both_engines(
     for html in (_django(src, CTX), _rust(src, CTX)):
         assert "<b>" not in html and "javascript:" not in html, html
         assert 'href="#"' in html, html
+
+
+# --- nav_item: which item is active (#3873 follow-up) ---------------------------------------------
+
+
+def _active_labels(html: str) -> list[str]:
+    """The labels of the items drawn active, whatever the active class's element prefix
+    (the two engines name a dropdown child's class differently, #4127)."""
+    return re.findall(
+        r'<li class="[^"]*--active[^"]*">(?:<!--[^>]*-->)?<(?:a|button)[^>]*>([^<]*)', html
+    )
+
+
+@pytest.mark.parametrize(
+    "src, expected",
+    [
+        # No ``active`` anywhere: nothing is active (an item with no id matched ``""``).
+        (
+            '{% nav_menu %}{% nav_item label="A" event="a" %}{% endnav_item %}'
+            '{% nav_item label="B" href="/b" %}{% endnav_item %}{% endnav_menu %}',
+            [],
+        ),
+        # The menu's ``active`` reaches its items, by id or by href, at any depth.
+        (
+            '{% nav_menu active="/b" %}{% nav_item label="A" href="/a" %}{% endnav_item %}'
+            '{% nav_item label="B" href="/b" %}{% endnav_item %}{% endnav_menu %}',
+            ["B"],
+        ),
+        (
+            '{% nav_menu active="x" %}{% nav_item label="Top" %}'
+            '{% nav_item label="Deep" id="x" event="d" %}{% endnav_item %}{% endnav_item %}'
+            '{% nav_item label="Other" id="y" event="o" %}{% endnav_item %}{% endnav_menu %}',
+            ["Deep"],
+        ),
+        # An item's own ``active=`` is read before the menu's.
+        (
+            '{% nav_menu active="/a" %}{% nav_item label="A" href="/a" active="/z" %}'
+            '{% endnav_item %}{% nav_item label="Z" href="/z" active="/z" %}{% endnav_item %}'
+            "{% endnav_menu %}",
+            ["Z"],
+        ),
+        # An empty id or href never matches.
+        (
+            '{% nav_menu active="" %}{% nav_item label="A" id="" event="a" %}{% endnav_item %}'
+            "{% endnav_menu %}",
+            [],
+        ),
+    ],
+)
+def test_the_active_item_is_the_same_on_both_engines(src: str, expected: list[str]) -> None:
+    py_html, rs_html = _django(src, CTX), _rust(src, CTX)
+    assert _active_labels(py_html) == expected, py_html
+    assert _active_labels(rs_html) == expected, rs_html
+    assert "djust-nav-key" not in rs_html, rs_html
+
+
+def test_a_top_level_item_draws_its_description_on_both_engines() -> None:
+    src = '{% nav_menu %}{% nav_item label="A" event="e" description="d" %}{% endnav_item %}{% endnav_menu %}'
+    for html in (_django(src, CTX), _rust(src, CTX)):
+        assert '<span class="dj-nav__dropdown-desc">d</span>' in html, html

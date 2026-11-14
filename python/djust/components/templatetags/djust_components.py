@@ -6632,7 +6632,7 @@ class NavItemNode(template.Node):
             )
 
         desc_html = ""
-        if desc and not top:
+        if desc:
             desc_html = f'<span class="dj-nav__dropdown-desc">{conditional_escape(desc)}</span>'
 
         if event:
