@@ -108,11 +108,12 @@ Translation blocks
     rebound around it (``{% with name=name|force_escape %}``), a ``with`` argument gets
     ``|force_escape`` appended, a ``count`` argument is a number and is left alone, and the
     literal text prints as written. A block with ``asvar`` prints nothing. Django stores what it
-    sets as a marked-safe string (a context variable escaped once, a marked-safe one not at all),
-    so a slot that prints exactly that name in an attribute or in escaped text reads a twin of the
-    block instead: the same block with each variable it reads ``|force_escape``-d in its own
-    ``with`` clause, stored under a synthetic name and placed right after it, so the text is
-    escaped exactly once whatever it is marked as (#3938). Only where the slot is sure to read that
+    sets as a marked-safe string (a context variable escaped once, a marked-safe one and the
+    block's own text not at all), so a slot that prints exactly that name in an attribute or in
+    escaped text reads a twin of the block instead: the same block inside
+    ``{% autoescape off %}``, stored as plain text under a synthetic name placed right after it,
+    and printed with ``|force_escape``: escaped exactly once, the block's own text (the msgid or
+    the translator's msgstr) included, where Django prints that text as it is (#3938). Only where the slot is sure to read that
     block (one ``asvar`` block for the name, at the top level, no other tag binding it, no
     ``{% extends %}``, the slot after it); anywhere else, and for a filtered expression
     (``{{ label|upper }}``), the slot keeps ``|force_escape`` and the text is escaped twice. The
@@ -218,7 +219,8 @@ _NAME = re.compile(r"[A-Za-z_]\w*")
 _TAG_NAME = re.compile(r"\{%-?\s*(\w+)")
 _FOR = re.compile(r"\{%-?\s*for\s+(.+?)\s+in\s", re.S)
 _WITH = re.compile(r"\{%-?\s*with\s+(.+?)-?%\}", re.S)
-_AS = re.compile(r"\sas\s+(\w+)\s*-?%\}")
+#: ``... as name %}``, also with words after the name (``{% cycle ... as x silent %}``).
+_AS = re.compile(r"\sas\s+(\w+)(?:\s+\w+)*\s*-?%\}")
 _QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
 _OPEN_TAG = re.compile(r"\{%-?\s*(?:blocktrans|blocktranslate)\b.*?-?%\}", re.S)
 
@@ -595,11 +597,14 @@ def _asvar_twins(template: str, scan: "_Scanner") -> dict[str, tuple[int, str, s
     slot may read as the twin instead (#3938).
 
     Django's ``asvar`` stores the block's output as a marked-safe string: a context variable
-    escaped once, a marked-safe one not at all. An attribute slot that ends in ``|force_escape``
-    escapes it again (``A &amp;amp; B``), and one that did not would let a marked-safe value out.
-    The twin is the same block, with every variable it reads made ``|force_escape`` in its own
-    ``with`` clause, stored under a synthetic name: escaped exactly once whatever it is marked as.
-    It is placed right after the author's block, which is left as it is for every other use.
+    escaped once, a marked-safe one not at all, and the block's own text (the msgid, or the
+    translator's msgstr) not at all. An attribute slot that ends in ``|force_escape`` escapes it
+    again (``A &amp;amp; B``), and one that did not would let a marked-safe value, or markup in
+    the text, out. The twin is the same block inside ``{% autoescape off %}`` (which pushes no
+    context, so the variable stays visible), stored under a synthetic name: PLAIN text, variables
+    and literal text alike. The slot prints it with ``|force_escape``, so everything is escaped
+    exactly once. It is placed right after the author's block, which is left as it is for every
+    other use. Unlike Django, the block's literal text is escaped too (a catalog is an input).
 
     Only where the slot is sure to read that block's value: one ``asvar`` block for the name, at
     the template's top level (not inside ``{% if %}`` / ``{% for %}`` / ``{% with %}`` ...), no
@@ -636,39 +641,21 @@ def _hardened_asvar(text: str, key: str) -> str | None:
     if opened is None or closed is None:
         return None
     inner = re.sub(r"^\{%-?\s*\w+|-?%\}$", "", opened.group(0))
-    out: list[str] = []
-    pairs: list[str] = []
-    bound: set[str] = set()
     section = ""
     for token in smart_split(inner):
-        if section == "context":
-            out += ["context", token]
-            section = ""
-        elif section == "asvar":
+        if section in ("context", "asvar"):
             section = ""
         elif token in ("context", "asvar", "with", "count"):
             section = token
-            if token == "count":
-                out.append(token)
         elif token == "trimmed":
-            out.append(token)
             section = ""
         elif section in ("with", "count"):
-            pair = re.fullmatch(r"(\w+)=(.+)", token, re.S)
-            if pair is None:  # the legacy ``with expr as name`` form
+            if re.fullmatch(r"\w+=.+", token, re.S) is None:  # the legacy ``with expr as name``
                 return None
-            bound.add(pair.group(1))
-            if section == "with":
-                pairs.append(f"{pair.group(1)}={pair.group(2)}|force_escape")
-            else:
-                out.append(token)
         else:
             return None
-    body = text[opened.end() : closed.start()]
-    names = [n for n in dict.fromkeys(re.findall(r"\{\{\s*(\w+)\s*\}\}", body)) if n not in bound]
-    pairs += [f"{n}={n}|force_escape" for n in names]
-    head = [_tag_name(opened.group(0)), *out, *(["with", *pairs] if pairs else []), "asvar", key]
-    return "{% " + " ".join(head) + " %}" + body + text[closed.start() :]
+    head = re.sub(r"(\sasvar\s+)\w+", lambda m: m.group(1) + key, opened.group(0), count=1)
+    return "{% autoescape off %}" + head + text[opened.end() :] + "{% endautoescape %}"
 
 
 def _filter_names(expr: str) -> list[str]:
@@ -974,8 +961,8 @@ def plan(template: str) -> Plan:
                 expr = part.text[2:-2].strip()
                 key = twin_of(expr, part.start)
                 if key is not None:
-                    # escaped exactly once by the twin block: printed as it is
-                    edits.append((part.start, part.end, "{{ " + key + " }}"))
+                    # plain text from the twin block: escaped exactly once here
+                    edits.append((part.start, part.end, "{{ " + key + "|force_escape }}"))
                     used_twins.add(expr)
                     continue
                 edits.append((part.start, part.end, "{{ " + _force_escaped(expr) + " }}"))
@@ -989,7 +976,7 @@ def plan(template: str) -> Plan:
         expr = slot.expr.strip()
         twin_key = twin_of(expr, slot.start)
         if twin_key is not None:
-            edits.append((slot.start, slot.end, "{{ " + twin_key + " }}"))
+            edits.append((slot.start, slot.end, "{{ " + twin_key + "|force_escape }}"))
             used_twins.add(expr)
         elif engine_escapes and _simple(expr, bound):
             # a plain name: when the context hands over a plain string, a number, a date ...
@@ -1218,7 +1205,7 @@ def _refused(group: Group, path: tuple[tuple[str, str], ...], texts: dict[str, s
     return not _allowed(group.attr, group.kind, assembled)
 
 
-def _neutralise(group: Group, texts: dict[str, str]) -> None:
+def _neutralise(group: Group, texts: dict[str, str], owner: str = "") -> None:
     """Replace the slots of every refused path of ``group`` until every path is allowed.
 
     The first slot of a refused path becomes ``#`` and the rest nothing, repeated (a slot emptied
@@ -1237,7 +1224,8 @@ def _neutralise(group: Group, texts: dict[str, str]) -> None:
                     first = False
     if any(_refused(group, p, texts) for p in group.paths):
         raise RuntimeError(
-            f"djust: the {group.attr!r} value of a hybrid template could not be made safe"
+            f"djust: {owner or 'a component'}: the {group.attr!r} value of its hybrid template"
+            " could not be made safe"
         )
 
 
@@ -1381,6 +1369,6 @@ def harden_context(
             (key,) = texts
             texts[key] = srcset_attr(texts[key], honor_safe=False)
         else:
-            _neutralise(group, texts)
+            _neutralise(group, texts, owner)
         hardened.update(texts)
     return rewrite.template, hardened

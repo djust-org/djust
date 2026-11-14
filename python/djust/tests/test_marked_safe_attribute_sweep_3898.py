@@ -40,9 +40,11 @@ What each class here proves, and what it does NOT:
   function (``s = '<a title="'`` ... ``s += v``, #3935); every finding it makes is judged in
   ``STATIC_SINK_ALLOWED``. It does not see: an unquoted attribute; ``format_html``; a helper that
   escapes a value it is handed (the item is read in the caller); a ``%`` mapping or a ``.format``
-  argument built elsewhere (``% ctx``, ``.format(**ctx)``, ``.format_map``); a join over a name
+  argument built elsewhere (``% ctx``, ``% {**ctx, "k": v}``, ``.format(**ctx)``,
+  ``.format_map``); a join over a name
   (``"".join(parts)`` after ``parts.append(...)``); ``s = s + x`` (a re-assignment starts the
-  string over); a string assembled across functions or returned and concatenated by the caller;
+  string over); an annotated assignment (``s: str = ...``); a string assembled in a
+  ``match`` / ``case`` body; a string assembled across functions or returned and concatenated by the caller;
   ``string.Template``. None of those patterns writes an item in the tag modules today. The run-time derivation above is the SECOND
   net, not the first: a numeric key it does not know, a branch chosen by a named constant or a
   membership test, a numeric threshold, or a child tag missing from ``variants.PARENT`` can each

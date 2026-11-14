@@ -6,7 +6,11 @@ marked-safe one not at all. The hybrid path ends every attribute slot in ``|forc
 plain ``A & B`` printed ``A &amp;amp; B`` (escaped twice), while dropping ``|force_escape`` would
 let a marked-safe value out of the attribute. The rewrite adds a twin of the block (each
 variable it reads made ``|force_escape`` in its own ``with`` clause, stored under a synthetic
-name) and points the slot at it. Every case is compared with Django rendering the same template.
+name) and points the slot at it. The twin runs inside ``{% autoescape off %}`` so it stores
+plain text, and the slot prints it with ``|force_escape``: escaped exactly once, the block's own
+literal text included. That text (the msgid, or a translator's msgstr) is where this is stricter
+than Django, which prints it as it is: a catalog is an input. Every case is compared with Django
+rendering the same template.
 """
 
 from __future__ import annotations
@@ -109,7 +113,50 @@ class TestEscapedOnce:
         rewritten = hybrid.plan(LOAD + BLOCK + SINKS["attribute"]).template
         assert rewritten.index(BLOCK) < rewritten.index("asvar djust_asvar_")
         assert 'aria-label="{{ djust_asvar_' in rewritten
-        assert "item=item|force_escape" in rewritten
+        assert "{% autoescape off %}{% blocktranslate asvar djust_asvar_" in rewritten
+        assert "|force_escape }}" in rewritten
+
+
+class TestTheBlocksOwnText:
+    """The block's literal text is escaped once too (stricter than Django: a catalog is an
+    input)."""
+
+    @pytest.mark.parametrize("sink", list(SINKS))
+    def test_quotes_and_markup_in_the_body(self, sink: str) -> None:
+        body = 'Say "hi"><b>it\'s</b>'
+        template = LOAD + "{% blocktranslate asvar label %}" + body + "{% endblocktranslate %}"
+        out = _draw(template + SINKS[sink])
+        tags = [t for t, _a in _starttags(out)]
+        assert "b" not in tags, out
+        assert "&quot;hi&quot;&gt;&lt;b&gt;" in out, out
+
+    def test_the_textarea_cannot_be_ended_by_the_body(self) -> None:
+        template = (
+            LOAD
+            + "{% blocktranslate asvar label %}</textarea><script>1</script>"
+            + "{% endblocktranslate %}"
+            + SINKS["textarea"]
+        )
+        assert "<script>" in _django(template)
+        out = _draw(template)
+        assert out == "<textarea>&lt;/textarea&gt;&lt;script&gt;1&lt;/script&gt;</textarea>", out
+
+    def test_a_catalog_msgstr_with_markup(self, monkeypatch) -> None:
+        from django.utils import translation
+
+        catalog = {"Delete %(item)s": 'Remove "%(item)s"><img src=x onerror=alert(1)>'}
+        real = translation.gettext
+        monkeypatch.setattr(translation, "gettext", lambda m: catalog.get(m, real(m)))
+        template = LOAD + BLOCK + SINKS["attribute"]
+        assert "<img" in _django(template, item="A & B")
+        tags = _starttags(_draw(template, item="A & B"))
+        assert [t for t, _a in tags] == ["button"], tags
+        assert tags[0][1]["aria-label"] == 'Remove "A & B"><img src=x onerror=alert(1)>'
+
+    def test_a_variable_with_an_ampersand_is_escaped_once(self) -> None:
+        template = LOAD + BLOCK + SINKS["attribute"]
+        out = _draw(template, item="A & B")
+        assert out == '<button aria-label="Delete A &amp; B">x</button>', out
 
 
 class TestWhereTheTwinIsNotUsed:
@@ -151,6 +198,16 @@ class TestWhereTheTwinIsNotUsed:
             + SINKS["attribute"]
         )
         assert "djust_asvar_" not in hybrid.plan(template).template
+
+    def test_a_name_a_silent_cycle_binds(self) -> None:
+        """``{% cycle ... as x silent %}`` binds ``x``: the slot reads the cycle, as Django's does."""
+        template = (
+            LOAD
+            + "{% blocktranslate asvar x %}D{% endblocktranslate %}"
+            + '{% cycle "a" v as x silent %}{% cycle x %}<b title="{{ x }}">'
+        )
+        assert "djust_asvar_" not in hybrid.plan(template).template
+        assert _draw(template, v="b") == _django(template, v="b")
 
     def test_a_legacy_with_form_is_not_rewritten(self) -> None:
         template = (

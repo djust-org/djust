@@ -82,5 +82,7 @@ class TestThePlanMutations:
         """If the replacement did not make every path allowed, the value is never printed."""
         monkeypatch.setattr(hybrid, "_NEUTRAL", "javascript:")
         hybrid.plan.cache_clear()
-        with pytest.raises(RuntimeError, match="could not be made safe"):
-            hybrid.harden_context('<a href="{{ s }}">', {"s": "javascript:alert(1)"})
+        with pytest.raises(RuntimeError, match="Linkish: .*could not be made safe"):
+            hybrid.harden_context(
+                '<a href="{{ s }}">', {"s": "javascript:alert(1)"}, owner="Linkish"
+            )
