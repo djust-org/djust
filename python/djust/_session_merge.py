@@ -223,6 +223,19 @@ class TrackedSessionData(dict):
             self[key] = default
             return default
 
+    def put_back(self, key: Any, value: Any) -> None:
+        """Undo a removal made through this object, without recording a write.
+
+        The key is as this object first held it again, so the next merged save
+        neither writes it nor removes it: the stored session keeps whatever
+        another writer has put there meanwhile (or removed)."""
+        with self._lock:
+            super().__setitem__(key, value)
+            self.removed.discard(key)
+            self.written.discard(key)
+            self._stamp.pop(key, None)
+            self._seen.pop(key, None)
+
     # -- reads of a mutable value ------------------------------------------
 
     def _read(self, key: Any, value: Any) -> Any:
@@ -303,6 +316,17 @@ class TrackedSessionData(dict):
             for key, baseline in snap.baselines.items():
                 if self._stamp.get(key, 0) <= snap.gen and key in self:
                     self._seen[key] = baseline
+
+
+def put_back_unrecorded(session: Any, key: Any, value: Any) -> None:
+    """Put a removed key back in ``session`` as an undo, not as a write
+    (:meth:`TrackedSessionData.put_back`). A session that is not tracked is
+    saved whole anyway: there the key is simply assigned."""
+    data = getattr(session, "_session_cache", None)
+    if type(data) is TrackedSessionData:
+        data.put_back(key, value)
+    else:
+        session[key] = value
 
 
 def track_session(session: Any) -> bool:

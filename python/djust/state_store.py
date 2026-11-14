@@ -403,6 +403,9 @@ def store_tag(store: ViewStateStore) -> str:
     return "%s.%s" % (owner.__module__, owner.__qualname__)
 
 
+_strict_warned = False
+
+
 def strict() -> bool:
     """Whether an event whose state cannot be stored is refused.
 
@@ -411,9 +414,22 @@ def strict() -> bool:
     try:
         from django.conf import settings
 
-        return getattr(settings, STRICT_SETTING, False) is True
+        value = getattr(settings, STRICT_SETTING, False)
     except Exception:  # noqa: BLE001 — settings unavailable: the default
         return False
+    global _strict_warned
+    if type(value) is not bool and not _strict_warned:
+        # A server started without system checks never sees C038: say it once
+        # per process where the setting is read.
+        _strict_warned = True
+        logger.warning(
+            "djust: %s is a %s, not True or False, so it is read as NOT strict: an event "
+            "whose state the state store cannot take is served unsaved. Set it to True "
+            "or False (system check djust.C038).",
+            STRICT_SETTING,
+            type(value).__name__,
+        )
+    return value is True
 
 
 def store_stats() -> Optional[Dict[str, Any]]:

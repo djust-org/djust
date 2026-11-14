@@ -1520,3 +1520,165 @@ def test_plaintext_is_purged_on_first_contact_even_when_that_requests_save_is_re
     response, _view = _post(key)
     assert response.status_code == 503
     assert not _entries(key)
+
+
+# ---------------------------------------------------------------------------
+# Review round 3 (#4132)
+# ---------------------------------------------------------------------------
+
+
+def _connection(key: str, tab: str):
+    """A second connection of the session: its own tracked copy of it, and a
+    mounted view on another tab of the same page."""
+    from djust._session_merge import track_session
+
+    request = _request("POST", key, tab=tab)
+    assert track_session(request.session)
+    view = Page()
+    view.__dict__["_djust_tab"] = tab
+    view.mount(request)
+    return view, request
+
+
+@pytest.mark.django_db
+def test_a_failed_save_does_not_bring_back_another_tabs_older_state(settings, monkeypatch):
+    """Two connections share a session, tab cap 1. A's turn evicts tab X in A's
+    copy; before A's store write lands, X has an event with the store down (it
+    is served, and its entry is dropped: the next request mounts fresh). Then
+    A's write fails and its undo puts X's entry back IN A'S COPY ONLY: the
+    stored session keeps what X did, so X never reads its older state."""
+    from djust._session_merge import save_merged
+
+    settings.DJUST_STATE_STORE = EXTERNAL
+    monkeypatch.setattr(_automatic_state, "MAX_TABS", 1)
+    key = _page()
+    assert _bump(key) == 1  # tab X: count 1, and the store's row says so
+    (x_name,) = _entries(key)
+    view_a, request_a = _connection(key, "another-tab-0002")
+    staged = _automatic_state.stage(view_a, request_a)
+    assert x_name not in request_a.session  # evicted in A's copy
+    MemoryStore.DOWN = {"save"}
+    response, view_x = _post(key)
+    assert response.status_code == 200 and view_x.count == 2
+    assert x_name not in _entries(key)  # X was promised a fresh mount
+    _automatic_state.write_pending(view_a, staged)  # A's write fails too
+    assert x_name in request_a.session  # back in A's copy ...
+    save_merged(request_a.session, key)
+    assert x_name not in _entries(key)  # ... and not written over what X did
+    MemoryStore.DOWN = set()
+    MOUNTS.clear()
+    assert _bump(key) == 1 and MOUNTS == ["Page"]  # fresh, never the older count
+
+
+@pytest.mark.django_db
+def test_a_refused_save_does_not_write_an_evicted_tabs_older_entry_back(settings, monkeypatch):
+    """The same on the refused-save path: while A's staged write waits, X saves
+    a newer state; A's undo must not store X's older entry over it."""
+    from djust._session_merge import save_merged
+
+    settings.DJUST_STATE_STORE = EXTERNAL
+    monkeypatch.setattr(_automatic_state, "MAX_TABS", 1)
+    key = _page()
+    assert _bump(key) == 1
+    (x_name,) = _entries(key)
+    view_a, request_a = _connection(key, "another-tab-0002")
+    undo = _automatic_state.stage(view_a, request_a)
+    assert _bump(key) == 2  # X saves meanwhile: a new stamp in the stored session
+    newer = _entries(key)[x_name]
+    undo()  # A's save is refused
+    save_merged(request_a.session, key)
+    assert _entries(key)[x_name] == newer
+    MOUNTS.clear()
+    assert _bump(key) == 3 and MOUNTS == []
+
+
+def guide_like_wrapper(view, step, turn):
+    """A wrapper that reads the view, as an RLS scope does: it fails for the
+    command line's ``view=None``."""
+    from contextlib import nullcontext
+
+    getattr(view.request, "user", None)
+    return nullcontext()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("everything", [True, False])
+def test_the_cli_reports_a_wrapper_failure_and_leaves_the_session_as_it_was(
+    everything, settings, capsys
+):
+    from djust.cli import cmd_clear, cmd_stats
+    from djust.config import config as djust_config
+
+    settings.DJUST_STATE_STORE = EXTERNAL
+    key = _page()
+    assert _bump(key) == 1
+    name, entry = _sealed_entry(key)
+    if not everything:
+        _rewrite(key, name, {**entry, "expires": 1})  # expired: plain `djust clear` takes it
+    before = dict(SessionStore(key).items())
+    settings.LIVEVIEW_CONFIG = {
+        **getattr(settings, "LIVEVIEW_CONFIG", {}),
+        "sync_turn_wrapper": MODULE + ".guide_like_wrapper",
+    }
+    djust_config.reset()
+    try:
+        with pytest.raises(SystemExit) as stopped:
+            cmd_clear(argparse.Namespace(all=everything, force=True))
+        out = capsys.readouterr().out
+        with pytest.raises(SystemExit) as stats_stopped:
+            cmd_stats(argparse.Namespace())
+        stats_out = capsys.readouterr().out
+    finally:
+        djust_config.reset()
+    assert stopped.value.code == 1 and stats_stopped.value.code == 1
+    for text in (out, stats_out):
+        assert "guide_like_wrapper" in text and "view=None" in text, text
+        assert "AttributeError" in text
+    # No index entry left the session while its row is still in the store.
+    assert dict(SessionStore(key).items()) == before
+    assert len(MemoryStore.DATA) == 1
+
+
+urlpatterns += [path("sized-%d/" % number, Sized.as_view()) for number in range(4)]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("store", [EXTERNAL, SEALED])
+def test_the_session_budget_counts_what_the_session_holds(store, settings, monkeypatch):
+    """Four pages of 3.6 KB of state: 14.6 KB encoded, under a 16 KB budget. A
+    store outside the session keeps all four; sealed into the session they
+    would take about 21 KB, so the oldest go until the session is under it."""
+    settings.DJUST_STATE_STORE = store
+    monkeypatch.setattr(_automatic_state, "SESSION_BUDGET_KB", 16)
+    key = None
+    for number in range(4):
+        key = _page(Sized, key=key, url="/sized-%d/" % number)
+    entries = list(_entries(key).values())
+    assert sum(entry["bytes"] for entry in entries) <= 16 * 1024
+    if store == EXTERNAL:
+        assert len(entries) == 4
+    else:
+        held = sum(len(entry["sealed"]) for entry in entries)
+        assert held <= 16 * 1024, held
+        assert len(entries) == 3  # the oldest went; three sealed states fit
+
+
+@pytest.mark.parametrize("value", [1, "true"])
+def test_a_strict_setting_that_is_not_a_bool_warns_once_per_process(
+    value, settings, caplog, monkeypatch
+):
+    monkeypatch.setattr(state_store, "_strict_warned", False)
+    settings.DJUST_STATE_STORE_STRICT = value
+    with caplog.at_level(logging.WARNING, logger="djust.state_store"):
+        assert [state_store.strict() for _ in range(3)] == [False, False, False]
+    said = [r.getMessage() for r in caplog.records if "DJUST_STATE_STORE_STRICT" in r.getMessage()]
+    assert len(said) == 1 and "NOT strict" in said[0] and type(value).__name__ in said[0]
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_a_bool_strict_setting_does_not_warn(value, settings, caplog, monkeypatch):
+    monkeypatch.setattr(state_store, "_strict_warned", False)
+    settings.DJUST_STATE_STORE_STRICT = value
+    with caplog.at_level(logging.WARNING, logger="djust.state_store"):
+        assert state_store.strict() is value
+    assert not caplog.records

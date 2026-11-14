@@ -1089,8 +1089,14 @@ class _StagedForStore:
         owed, self.pending = self.pending, None
         self._undo()
         if owed is not None:
+            # Put back as an undo, never as a write: this object's copy of an
+            # evicted tab's entry may be older than what the stored session
+            # holds now (that tab saved, or dropped its entry, meanwhile), and
+            # a recorded write would store the old entry over it.
+            from ._session_merge import put_back_unrecorded
+
             for key, entry in self._removed:
-                self._session[key] = entry
+                put_back_unrecorded(self._session, key, entry)
 
 
 def _store_failed(
@@ -2060,6 +2066,18 @@ def stage(
 SESSION_BUDGET_KB = 2 * DEFAULT_MAX_KB
 
 
+def _held_in_session(entry: Any, size: int) -> int:
+    """What one saved state adds to the SESSION, for the session budget.
+
+    A state sealed into its session entry (#4132) takes its sealed size there,
+    about 1.4 times the encoded state; the session budget exists to bound what
+    the session store is asked to hold, so that is what it counts. The
+    per-view limit and the tabs of one page keep counting the encoded state
+    (``size``), with or without a store."""
+    sealed = entry.get("sealed") if type(entry) is dict else None
+    return len(sealed) if type(sealed) is str else size
+
+
 def _evict_old_tabs(
     session: Any, store: _Store, maximum: int, now: int, removed: Optional[list] = None
 ) -> None:
@@ -2071,7 +2089,8 @@ def _evict_old_tabs(
       together at most this view's size limit (``automatic_state_max_kb``),
       so a page's reloads and tabs cannot multiply its limit. Oldest first.
     * All saved view states of the session together: at most
-      :data:`SESSION_BUDGET_KB`. Oldest first, whatever page they belong to.
+      :data:`SESSION_BUDGET_KB`, counted as the session holds them
+      (:func:`_held_in_session`). Oldest first, whatever page they belong to.
 
     ``removed``: a list that receives ``(key, entry)`` for each entry dropped,
     for the caller to delete from a state store, or to put back (#4132).
@@ -2092,24 +2111,27 @@ def _evict_old_tabs(
                 removed.append((key, envelope))
             continue
         size = envelope.get("bytes")
+        size = size if type(size) is int and size >= 0 else 0
         others.append(
             (
                 created if type(created) is int else 0,
                 key,
-                size if type(size) is int and size >= 0 else 0,
+                size,
                 envelope.get("page") == store.page,
+                _held_in_session(envelope, size),
             )
         )
     others.sort(reverse=True)  # newest first: keep while the budgets allow
-    page_count, page_bytes, total = 1, written, written
-    for _created, key, size, same_page in others:
+    page_count, page_bytes = 1, written
+    total = _held_in_session(mine, written)
+    for _created, key, size, same_page, held in others:
         over_page = same_page and (page_count + 1 > MAX_TABS or page_bytes + size > maximum)
-        if over_page or total + size > SESSION_BUDGET_KB * 1024:
+        if over_page or total + held > SESSION_BUDGET_KB * 1024:
             if removed is not None:
                 removed.append((key, session.get(key)))
             del session[key]
             continue
-        total += size
+        total += held
         if same_page:
             page_count += 1
             page_bytes += size
@@ -2162,18 +2184,57 @@ def saved_state_stats(session: Any) -> Dict[str, int]:
     return stats
 
 
+class StoreCallFailed(Exception):
+    """A state-store call made for ``djust clear`` / ``djust stats`` failed
+    (in the store, or in the ``sync_turn_wrapper`` around it). Nothing was
+    removed from the session it was made for."""
+
+
+def _cli_store_call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    try:
+        return _store_call(None, fn, *args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 — the store's or the wrapper's failure
+        raise StoreCallFailed("%s: %s" % (type(exc).__name__, exc)) from exc
+
+
+def _cli_delete_from_store(session: Any, entries: list) -> None:
+    """Delete from the state store what these index entries point at, BEFORE
+    they leave the session: a delete that fails raises
+    :class:`StoreCallFailed`, and the entries stay, still naming their rows."""
+    state_store = _state_store()
+    if state_store is None or _kept_in_session(state_store) or not session.session_key:
+        return
+    from .state_store import StateKey
+
+    keys = [
+        StateKey(
+            str(session.session_key),
+            entry["binding"],
+            entry["page"],
+            entry["tab"],
+            entry["user"],
+            entry["tenant"],
+        )
+        for entry in entries
+        if _is_index_entry(entry, state_store)
+    ]
+    if keys:
+        _cli_store_call(state_store.delete, keys)
+
+
 def clear_saved_state(session: Any) -> int:
     """Remove every saved view state from one session and save it; the count removed.
 
     The session's other keys (the login, the application's own) are left alone.
+    With a state store, the states are deleted from it first; if that fails
+    (:class:`StoreCallFailed`) the session is left as it was.
     """
     keys = saved_state_keys(session)
-    entries = [session[key] for key in keys]
+    _cli_delete_from_store(session, [session[key] for key in keys])
     for key in keys:
         del session[key]
     if keys:
         session.save()
-        _delete_from_store(None, session.session_key, entries)
     return len(keys)
 
 
@@ -2191,12 +2252,11 @@ def clear_expired_saved_state(session: Any, now: Optional[int] = None) -> int:
         expires = envelope.get("expires") if type(envelope) is dict else None
         if type(expires) is not int or expires <= now:
             expired.append(key)
-    entries = [session[key] for key in expired]
+    _cli_delete_from_store(session, [session[key] for key in expired])
     for key in expired:
         del session[key]
     if expired:
         session.save()
-        _delete_from_store(None, session.session_key, entries)
     return len(expired)
 
 
