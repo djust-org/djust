@@ -72,11 +72,13 @@ python -c "from djust.state_store import generate_key; print(generate_key())"
   billion) messages. At 100 saves a second that is over a year; rotate at
   least yearly, and sooner the busier the site (at 1,000 saves a second,
   every month).
-- **Sizes.** The per-view limit, the tab cap and the session budget all count
-  the encoded state, exactly as without a store, so a view evicts its other
-  tabs at the same state sizes. The sealed text in the session is about 1.4
-  times that size. On a session store with a small item limit (Memcached:
-  1 MB) lower `DJUST_AUTOMATIC_STATE_MAX_KB` accordingly.
+- **Sizes.** The per-view limit and the tabs of one page count the encoded
+  state, exactly as without a store, so a view evicts its other tabs at the
+  same state sizes. The sealed text in the session is about 1.4 times that
+  size, and the session budget (1 MB for all saved view states of a session)
+  counts the sealed text, because it bounds what the session store is asked to
+  hold: with the sealed store a session keeps fewer states before the oldest
+  go. One view at the default 512 KB limit seals to about 700 KB.
 
 System check `djust.C037` reports the sealed store without the `cryptography`
 package or without usable keys. Until that is fixed nothing is saved: djust
@@ -139,7 +141,10 @@ so a wrapper that opens a caller-scoped transaction is open around your query.
 A wrapper that raises on a step name it does not know must let this one
 through. `djust clear` and `djust stats` call the store inside the wrapper as
 well, with `view=None` and `turn=None`: a wrapper that scopes a transaction to
-the caller must handle that case (an administrative scope, or no scope).
+the caller must handle that case (an administrative scope, or no scope). If a
+store call fails there, the command stops with a non-zero exit and names the
+wrapper; `djust clear` deletes a session's states from the store before it
+removes their index entries, so a failure leaves that session as it was.
 
 `load()` may return `bytes`, a `bytearray` or a `memoryview` (what a database
 driver hands back for a binary column), or `None`.
@@ -176,7 +181,8 @@ unsaved: nothing is written, the last saved state stays, and the client gets
 the "State unavailable. Please reload the page." error (`code="state_error"`;
 HTTP status 503 on the page-POST fallback). Page loads are served either way.
 Only `True` is strict; any other value that is not `False` is a startup error
-(system check `djust.C038`).
+(system check `djust.C038`) and, on a server that runs no system checks, one
+WARNING per process the first time the setting is read.
 
 A log line about a store failure names the view class and the exception's
 type. The exception's message is included only where the view allows

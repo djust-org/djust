@@ -180,6 +180,8 @@ from django.db import connection, transaction
 def caller_scope(view, step, turn):
     if turn is not None and turn.transport == "http":
         return nullcontext()        # the request's own transaction holds
+    if view is None:
+        return nullcontext()        # `djust clear` / `djust stats`: no view, no caller
     user = turn.user if turn is not None else getattr(view.request, "user", None)
     return _as_caller(getattr(user, "pk", None))
 
@@ -206,6 +208,13 @@ def _as_caller(user_id):
 - `view` is the view or component whose code runs; `turn` is
   `djust.turns.current_turn()`, or `None` when the step runs outside a turn (a
   `start_async` callback runs between its start and result turns).
+- **`view` is `None` for the command line.** `djust clear` and `djust stats`
+  call a configured [state store](../state/state-store.md) as a
+  `"state_store"` step with `view=None` and `turn=None`: there is no view and
+  no caller. Return `nullcontext()`, or the administrative scope your store
+  needs to delete any caller's rows. A wrapper that fails there stops the
+  command with an error that names it; nothing is removed from the session it
+  was working on.
 - A step that runs inside another step on the same thread (a handler that calls
   `get_context_data()`) does not enter the wrapper again.
 - **Accept every step name.** The list of steps grows (`"auth"` and
