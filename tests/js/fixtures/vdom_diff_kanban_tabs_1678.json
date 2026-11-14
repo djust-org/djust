@@ -20,10 +20,10 @@
           "path": [],
           "d": "0",
           "index": 7,
-          "html": "<!--dj-if id=\"if-4017a4e7-13\"--><div class=\"kanban\" data-move-event=\"move_card\" dj-id=\"9\"><div class=\"kanban-col\" data-col-id=\"todo\" dj-id=\"a\" dj-key=\"todo\"><div class=\"kanban-col-header\" dj-id=\"b\"><span class=\"kanban-col-title\" dj-id=\"c\">To Do</span><span class=\"kanban-col-count\" dj-id=\"d\">2</span></div><div class=\"kanban-cards\" dj-id=\"e\"><div class=\"kanban-card\" data-card-id=\"c1\" data-col-id=\"todo\" dj-id=\"f\" dj-key=\"c1\" draggable=\"true\"><div class=\"kanban-card-title\" dj-id=\"g\">Alpha</div></div><div class=\"kanban-card\" data-card-id=\"c2\" data-col-id=\"todo\" dj-id=\"h\" dj-key=\"c2\" draggable=\"true\"><div class=\"kanban-card-title\" dj-id=\"i\">Bravo</div></div></div><button class=\"kanban-add-card\" data-value=\"todo\" dj-click=\"kanban_add_card\" dj-id=\"j\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"doing\" dj-id=\"k\" dj-key=\"doing\"><div class=\"kanban-col-header\" dj-id=\"l\"><span class=\"kanban-col-title\" dj-id=\"m\">Doing</span><span class=\"kanban-col-count\" dj-id=\"n\">1</span></div><div class=\"kanban-cards\" dj-id=\"o\"><div class=\"kanban-card\" data-card-id=\"c3\" data-col-id=\"doing\" dj-id=\"p\" dj-key=\"c3\" draggable=\"true\"><div class=\"kanban-card-title\" dj-id=\"q\">Charlie</div></div></div><button class=\"kanban-add-card\" data-value=\"doing\" dj-click=\"kanban_add_card\" dj-id=\"r\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"done\" dj-id=\"s\" dj-key=\"done\"><div class=\"kanban-col-header\" dj-id=\"t\"><span class=\"kanban-col-title\" dj-id=\"u\">Done</span><span class=\"kanban-col-count\" dj-id=\"v\">0</span></div><div class=\"kanban-cards\" dj-id=\"w\"></div><button class=\"kanban-add-card\" data-value=\"done\" dj-click=\"kanban_add_card\" dj-id=\"x\">+ Add card</button></div></div><!--/dj-if-->"
+          "html": "<!--dj-if id=\"if-4017a4e7-13\"--><div class=\"kanban\" data-move-event=\"move_card\" dj-id=\"9\"><span class=\"sr-only kanban-hint\" dj-id=\"a\" id=\"kanban-hint-todo\">Press Space to pick up the card, the arrow keys to choose a column, Enter to drop it, Escape to cancel.</span><div class=\"kanban-col\" data-col-id=\"todo\" dj-id=\"b\" dj-key=\"todo\"><div class=\"kanban-col-header\" dj-id=\"c\"><span class=\"kanban-col-title\" dj-id=\"d\">To Do</span><span class=\"kanban-col-count\" dj-id=\"e\">2</span></div><div class=\"kanban-cards\" dj-id=\"f\"><div aria-describedby=\"kanban-hint-todo\" aria-roledescription=\"movable card\" class=\"kanban-card\" data-card-id=\"c1\" data-col-id=\"todo\" dj-id=\"g\" dj-key=\"c1\" draggable=\"true\" role=\"group\" tabindex=\"0\"><div class=\"kanban-card-title\" dj-id=\"h\">Alpha</div></div><div aria-describedby=\"kanban-hint-todo\" aria-roledescription=\"movable card\" class=\"kanban-card\" data-card-id=\"c2\" data-col-id=\"todo\" dj-id=\"i\" dj-key=\"c2\" draggable=\"true\" role=\"group\" tabindex=\"0\"><div class=\"kanban-card-title\" dj-id=\"j\">Bravo</div></div></div><button class=\"kanban-add-card\" data-value=\"todo\" dj-click=\"kanban_add_card\" dj-id=\"k\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"doing\" dj-id=\"l\" dj-key=\"doing\"><div class=\"kanban-col-header\" dj-id=\"m\"><span class=\"kanban-col-title\" dj-id=\"n\">Doing</span><span class=\"kanban-col-count\" dj-id=\"o\">1</span></div><div class=\"kanban-cards\" dj-id=\"p\"><div aria-describedby=\"kanban-hint-todo\" aria-roledescription=\"movable card\" class=\"kanban-card\" data-card-id=\"c3\" data-col-id=\"doing\" dj-id=\"q\" dj-key=\"c3\" draggable=\"true\" role=\"group\" tabindex=\"0\"><div class=\"kanban-card-title\" dj-id=\"r\">Charlie</div></div></div><button class=\"kanban-add-card\" data-value=\"doing\" dj-click=\"kanban_add_card\" dj-id=\"s\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"done\" dj-id=\"t\" dj-key=\"done\"><div class=\"kanban-col-header\" dj-id=\"u\"><span class=\"kanban-col-title\" dj-id=\"v\">Done</span><span class=\"kanban-col-count\" dj-id=\"w\">0</span></div><div class=\"kanban-cards\" dj-id=\"x\"></div><button class=\"kanban-add-card\" data-value=\"done\" dj-click=\"kanban_add_card\" dj-id=\"y\">+ Add card</button></div></div><!--/dj-if-->"
         }
       ],
-      "expected_html": "<div class=\"tabs-content\" dj-id=\"0\"><!--dj-if id=\"if-4017a4e7-0\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-4\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-8\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-12\"--><!--dj-if id=\"if-4017a4e7-13\"--><div class=\"kanban\" data-move-event=\"move_card\" dj-id=\"9\"><div class=\"kanban-col\" data-col-id=\"todo\" dj-id=\"a\" dj-key=\"todo\"><div class=\"kanban-col-header\" dj-id=\"b\"><span class=\"kanban-col-title\" dj-id=\"c\">To Do</span><span class=\"kanban-col-count\" dj-id=\"d\">2</span></div><div class=\"kanban-cards\" dj-id=\"e\"><div class=\"kanban-card\" data-card-id=\"c1\" data-col-id=\"todo\" dj-id=\"f\" dj-key=\"c1\" draggable=\"true\"><div class=\"kanban-card-title\" dj-id=\"g\">Alpha</div></div><div class=\"kanban-card\" data-card-id=\"c2\" data-col-id=\"todo\" dj-id=\"h\" dj-key=\"c2\" draggable=\"true\"><div class=\"kanban-card-title\" dj-id=\"i\">Bravo</div></div></div><button class=\"kanban-add-card\" data-value=\"todo\" dj-click=\"kanban_add_card\" dj-id=\"j\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"doing\" dj-id=\"k\" dj-key=\"doing\"><div class=\"kanban-col-header\" dj-id=\"l\"><span class=\"kanban-col-title\" dj-id=\"m\">Doing</span><span class=\"kanban-col-count\" dj-id=\"n\">1</span></div><div class=\"kanban-cards\" dj-id=\"o\"><div class=\"kanban-card\" data-card-id=\"c3\" data-col-id=\"doing\" dj-id=\"p\" dj-key=\"c3\" draggable=\"true\"><div class=\"kanban-card-title\" dj-id=\"q\">Charlie</div></div></div><button class=\"kanban-add-card\" data-value=\"doing\" dj-click=\"kanban_add_card\" dj-id=\"r\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"done\" dj-id=\"s\" dj-key=\"done\"><div class=\"kanban-col-header\" dj-id=\"t\"><span class=\"kanban-col-title\" dj-id=\"u\">Done</span><span class=\"kanban-col-count\" dj-id=\"v\">0</span></div><div class=\"kanban-cards\" dj-id=\"w\"></div><button class=\"kanban-add-card\" data-value=\"done\" dj-click=\"kanban_add_card\" dj-id=\"x\">+ Add card</button></div></div><!--/dj-if--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-14\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-15\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-16\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-17\"--><!--/dj-if--></div>"
+      "expected_html": "<div class=\"tabs-content\" dj-id=\"0\"><!--dj-if id=\"if-4017a4e7-0\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-4\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-8\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-12\"--><!--dj-if id=\"if-4017a4e7-13\"--><div class=\"kanban\" data-move-event=\"move_card\" dj-id=\"9\"><span class=\"sr-only kanban-hint\" dj-id=\"a\" id=\"kanban-hint-todo\">Press Space to pick up the card, the arrow keys to choose a column, Enter to drop it, Escape to cancel.</span><div class=\"kanban-col\" data-col-id=\"todo\" dj-id=\"b\" dj-key=\"todo\"><div class=\"kanban-col-header\" dj-id=\"c\"><span class=\"kanban-col-title\" dj-id=\"d\">To Do</span><span class=\"kanban-col-count\" dj-id=\"e\">2</span></div><div class=\"kanban-cards\" dj-id=\"f\"><div aria-describedby=\"kanban-hint-todo\" aria-roledescription=\"movable card\" class=\"kanban-card\" data-card-id=\"c1\" data-col-id=\"todo\" dj-id=\"g\" dj-key=\"c1\" draggable=\"true\" role=\"group\" tabindex=\"0\"><div class=\"kanban-card-title\" dj-id=\"h\">Alpha</div></div><div aria-describedby=\"kanban-hint-todo\" aria-roledescription=\"movable card\" class=\"kanban-card\" data-card-id=\"c2\" data-col-id=\"todo\" dj-id=\"i\" dj-key=\"c2\" draggable=\"true\" role=\"group\" tabindex=\"0\"><div class=\"kanban-card-title\" dj-id=\"j\">Bravo</div></div></div><button class=\"kanban-add-card\" data-value=\"todo\" dj-click=\"kanban_add_card\" dj-id=\"k\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"doing\" dj-id=\"l\" dj-key=\"doing\"><div class=\"kanban-col-header\" dj-id=\"m\"><span class=\"kanban-col-title\" dj-id=\"n\">Doing</span><span class=\"kanban-col-count\" dj-id=\"o\">1</span></div><div class=\"kanban-cards\" dj-id=\"p\"><div aria-describedby=\"kanban-hint-todo\" aria-roledescription=\"movable card\" class=\"kanban-card\" data-card-id=\"c3\" data-col-id=\"doing\" dj-id=\"q\" dj-key=\"c3\" draggable=\"true\" role=\"group\" tabindex=\"0\"><div class=\"kanban-card-title\" dj-id=\"r\">Charlie</div></div></div><button class=\"kanban-add-card\" data-value=\"doing\" dj-click=\"kanban_add_card\" dj-id=\"s\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"done\" dj-id=\"t\" dj-key=\"done\"><div class=\"kanban-col-header\" dj-id=\"u\"><span class=\"kanban-col-title\" dj-id=\"v\">Done</span><span class=\"kanban-col-count\" dj-id=\"w\">0</span></div><div class=\"kanban-cards\" dj-id=\"x\"></div><button class=\"kanban-add-card\" data-value=\"done\" dj-click=\"kanban_add_card\" dj-id=\"y\">+ Add card</button></div></div><!--/dj-if--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-14\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-15\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-16\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-17\"--><!--/dj-if--></div>"
     },
     {
       "label": "move card c1 todo -> done",
@@ -32,7 +32,7 @@
           "type": "SetText",
           "path": [
             8,
-            0,
+            1,
             0,
             1,
             0
@@ -43,18 +43,18 @@
           "type": "RemoveChild",
           "path": [
             8,
-            0,
+            1,
             1
           ],
-          "d": "e",
+          "d": "f",
           "index": 0,
-          "child_d": "f"
+          "child_d": "g"
         },
         {
           "type": "SetText",
           "path": [
             8,
-            2,
+            3,
             0,
             1,
             0
@@ -65,27 +65,31 @@
           "type": "InsertChild",
           "path": [
             8,
-            2,
+            3,
             1
           ],
-          "d": "w",
+          "d": "x",
           "index": 0,
           "node": {
             "tag": "div",
             "attrs": {
+              "aria-describedby": "kanban-hint-todo",
+              "aria-roledescription": "movable card",
               "class": "kanban-card",
               "data-card-id": "c1",
               "data-col-id": "done",
-              "dj-id": "V",
+              "dj-id": "X",
               "dj-key": "c1",
-              "draggable": "true"
+              "draggable": "true",
+              "role": "group",
+              "tabindex": "0"
             },
             "children": [
               {
                 "tag": "div",
                 "attrs": {
                   "class": "kanban-card-title",
-                  "dj-id": "W"
+                  "dj-id": "Y"
                 },
                 "children": [
                   {
@@ -98,16 +102,16 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "W"
+                "djust_id": "Y"
               }
             ],
             "text": null,
             "key": "c1",
-            "djust_id": "V"
+            "djust_id": "X"
           }
         }
       ],
-      "expected_html": "<div class=\"tabs-content\" dj-id=\"0\"><!--dj-if id=\"if-4017a4e7-0\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-4\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-8\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-12\"--><!--dj-if id=\"if-4017a4e7-13\"--><div class=\"kanban\" data-move-event=\"move_card\" dj-id=\"9\"><div class=\"kanban-col\" data-col-id=\"todo\" dj-id=\"a\" dj-key=\"todo\"><div class=\"kanban-col-header\" dj-id=\"b\"><span class=\"kanban-col-title\" dj-id=\"c\">To Do</span><span class=\"kanban-col-count\" dj-id=\"d\">1</span></div><div class=\"kanban-cards\" dj-id=\"e\"><div class=\"kanban-card\" data-card-id=\"c2\" data-col-id=\"todo\" dj-id=\"h\" dj-key=\"c2\" draggable=\"true\"><div class=\"kanban-card-title\" dj-id=\"i\">Bravo</div></div></div><button class=\"kanban-add-card\" data-value=\"todo\" dj-click=\"kanban_add_card\" dj-id=\"j\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"doing\" dj-id=\"k\" dj-key=\"doing\"><div class=\"kanban-col-header\" dj-id=\"l\"><span class=\"kanban-col-title\" dj-id=\"m\">Doing</span><span class=\"kanban-col-count\" dj-id=\"n\">1</span></div><div class=\"kanban-cards\" dj-id=\"o\"><div class=\"kanban-card\" data-card-id=\"c3\" data-col-id=\"doing\" dj-id=\"p\" dj-key=\"c3\" draggable=\"true\"><div class=\"kanban-card-title\" dj-id=\"q\">Charlie</div></div></div><button class=\"kanban-add-card\" data-value=\"doing\" dj-click=\"kanban_add_card\" dj-id=\"r\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"done\" dj-id=\"s\" dj-key=\"done\"><div class=\"kanban-col-header\" dj-id=\"t\"><span class=\"kanban-col-title\" dj-id=\"u\">Done</span><span class=\"kanban-col-count\" dj-id=\"v\">1</span></div><div class=\"kanban-cards\" dj-id=\"w\"><div class=\"kanban-card\" data-card-id=\"c1\" data-col-id=\"done\" dj-id=\"V\" dj-key=\"c1\" draggable=\"true\"><div class=\"kanban-card-title\" dj-id=\"W\">Alpha</div></div></div><button class=\"kanban-add-card\" data-value=\"done\" dj-click=\"kanban_add_card\" dj-id=\"x\">+ Add card</button></div></div><!--/dj-if--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-14\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-15\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-16\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-17\"--><!--/dj-if--></div>"
+      "expected_html": "<div class=\"tabs-content\" dj-id=\"0\"><!--dj-if id=\"if-4017a4e7-0\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-4\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-8\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-12\"--><!--dj-if id=\"if-4017a4e7-13\"--><div class=\"kanban\" data-move-event=\"move_card\" dj-id=\"9\"><span class=\"sr-only kanban-hint\" dj-id=\"a\" id=\"kanban-hint-todo\">Press Space to pick up the card, the arrow keys to choose a column, Enter to drop it, Escape to cancel.</span><div class=\"kanban-col\" data-col-id=\"todo\" dj-id=\"b\" dj-key=\"todo\"><div class=\"kanban-col-header\" dj-id=\"c\"><span class=\"kanban-col-title\" dj-id=\"d\">To Do</span><span class=\"kanban-col-count\" dj-id=\"e\">1</span></div><div class=\"kanban-cards\" dj-id=\"f\"><div aria-describedby=\"kanban-hint-todo\" aria-roledescription=\"movable card\" class=\"kanban-card\" data-card-id=\"c2\" data-col-id=\"todo\" dj-id=\"i\" dj-key=\"c2\" draggable=\"true\" role=\"group\" tabindex=\"0\"><div class=\"kanban-card-title\" dj-id=\"j\">Bravo</div></div></div><button class=\"kanban-add-card\" data-value=\"todo\" dj-click=\"kanban_add_card\" dj-id=\"k\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"doing\" dj-id=\"l\" dj-key=\"doing\"><div class=\"kanban-col-header\" dj-id=\"m\"><span class=\"kanban-col-title\" dj-id=\"n\">Doing</span><span class=\"kanban-col-count\" dj-id=\"o\">1</span></div><div class=\"kanban-cards\" dj-id=\"p\"><div aria-describedby=\"kanban-hint-todo\" aria-roledescription=\"movable card\" class=\"kanban-card\" data-card-id=\"c3\" data-col-id=\"doing\" dj-id=\"q\" dj-key=\"c3\" draggable=\"true\" role=\"group\" tabindex=\"0\"><div class=\"kanban-card-title\" dj-id=\"r\">Charlie</div></div></div><button class=\"kanban-add-card\" data-value=\"doing\" dj-click=\"kanban_add_card\" dj-id=\"s\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"done\" dj-id=\"t\" dj-key=\"done\"><div class=\"kanban-col-header\" dj-id=\"u\"><span class=\"kanban-col-title\" dj-id=\"v\">Done</span><span class=\"kanban-col-count\" dj-id=\"w\">1</span></div><div class=\"kanban-cards\" dj-id=\"x\"><div aria-describedby=\"kanban-hint-todo\" aria-roledescription=\"movable card\" class=\"kanban-card\" data-card-id=\"c1\" data-col-id=\"done\" dj-id=\"X\" dj-key=\"c1\" draggable=\"true\" role=\"group\" tabindex=\"0\"><div class=\"kanban-card-title\" dj-id=\"Y\">Alpha</div></div></div><button class=\"kanban-add-card\" data-value=\"done\" dj-click=\"kanban_add_card\" dj-id=\"y\">+ Add card</button></div></div><!--/dj-if--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-14\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-15\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-16\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-17\"--><!--/dj-if--></div>"
     }
   ]
 }
