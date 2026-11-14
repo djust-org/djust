@@ -384,6 +384,16 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 ---
 
+### C031: Session store local to one process
+
+**Severity**: Warning
+
+**What causes it**: Sessions are stored in a `LocMemCache` (or `DummyCache`) through the `cache` or `cached_db` engine, with `DEBUG = False`. Each process has its own copy, so a page served by another process loses the view's saved state.
+
+**Fix**: Use a session store every process shares: the `db` engine, `cached_db` or `cache` over Redis or Memcached, or `file` on shared storage. If the site really runs one process, suppress the check.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error

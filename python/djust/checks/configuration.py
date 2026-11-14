@@ -810,6 +810,69 @@ def _check_server_state_session_engine(errors: list[CheckMessage]) -> None:
     )
 
 
+#: Django cache backends whose entries one process cannot see from another.
+_PROCESS_LOCAL_CACHES = {
+    "django.core.cache.backends.locmem.LocMemCache": "LocMemCache (one copy per process)",
+    "django.core.cache.backends.dummy.DummyCache": "DummyCache (stores nothing)",
+}
+
+
+def _check_process_local_session_cache(errors: list[CheckMessage]) -> None:
+    """C031 — the session store is a cache only this process can see (#4103).
+
+    A view's state is kept in the session (every view's since #4107, declared
+    ``persist="server"`` fields included). With ``SESSION_ENGINE`` ``cache``
+    over ``LocMemCache`` each process holds its own sessions, so a request or a
+    socket that lands on another process does not find the session; with
+    ``cached_db`` another process may read its own stale copy. Reported with
+    ``DEBUG`` off only (``_is_production``): a development server is one
+    process, where the local cache works.
+    """
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C031") or not _is_production():
+        return
+    engine = getattr(settings, "SESSION_ENGINE", "django.contrib.sessions.backends.db")
+    if engine not in (
+        "django.contrib.sessions.backends.cache",
+        "django.contrib.sessions.backends.cached_db",
+    ):
+        return
+    alias = getattr(settings, "SESSION_CACHE_ALIAS", "default")
+    caches = getattr(settings, "CACHES", None) or {}
+    config = caches.get(alias)
+    if not isinstance(config, dict):
+        return
+    backend = config.get("BACKEND", "")
+    label = _PROCESS_LOCAL_CACHES.get(backend)
+    if label is None:
+        return
+    effect = (
+        "each process keeps its own sessions, so a request or socket served by another "
+        "process mounts fresh and loses the view's state"
+        if engine.endswith(".cache")
+        else "another process can read its own stale copy of the session"
+    )
+    errors.append(
+        DjustWarning(
+            "SESSION_ENGINE is %r over the %r cache, which is %s: with more than one "
+            "process, %s." % (engine, alias, label, effect),
+            hint=(
+                "djust keeps view state in the session. Use a session store every process "
+                "shares: the db or cached_db engine over a shared cache, the cache engine "
+                "over Redis or Memcached, or the file engine on shared storage. Ignore this "
+                "if the site runs as a single process (suppress djust.C031)."
+            ),
+            id="djust.C031",
+            fix_hint=(
+                "Set `SESSION_ENGINE = 'django.contrib.sessions.backends.db'`, or point "
+                "`CACHES[%r]` at a shared cache such as `django.core.cache.backends.redis."
+                "RedisCache`." % alias
+            ),
+        )
+    )
+
+
 def _check_liveview_middleware(errors: list[CheckMessage]) -> None:
     """C026 — every ``LIVEVIEW_MIDDLEWARE`` entry is an importable ``async def`` (ADR-044).
 
@@ -1453,6 +1516,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C030 -- persist="server" state with a session engine that cannot hold it (#4092)
     _check_server_state_session_engine(errors)
+
+    # C031 -- the session store is a cache local to one process (#4103)
+    _check_process_local_session_cache(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)

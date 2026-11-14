@@ -147,8 +147,10 @@ fresh state and mounts the view from its defaults, without an error.
 ## Session engines
 
 Each engine below was run with two processes. The persisted-state machinery
-accepts every server-side engine, including ones that are local to a process;
-nothing checks that the processes actually share it.
+accepts every server-side engine, including ones that are local to a process.
+With `DEBUG = False`, system check [`djust.C031`](error-codes.md#c031-session-store-local-to-one-process)
+warns about a `cache` or `cached_db` engine over `LocMemCache`; whether a `file`
+engine's directory is shared cannot be checked.
 
 <!-- BEGIN GENERATED survival-engines: python -m tests.integration.multinode.survival_table --write -->
 |  | HTTP fallback on another process | WebSocket reconnect to another process | What the app author must do |
