@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
-from typing import Iterator, Optional, Sequence, Set, Tuple
+from typing import Iterator, Mapping, Optional, Sequence, Set, Tuple
 
 import pytest
 
@@ -77,11 +78,31 @@ def survival(request) -> Iterator[SurvivalRecorder]:
         )
 
 
-def _need_redis() -> None:
+#: Set to ``1`` by the CI job that exists to run the Redis rows (#4136): there a
+#: missing ``redis-server`` or ``channels_redis`` FAILS the row instead of
+#: skipping it, so the rows cannot silently go unexercised again.
+REQUIRE_REDIS_ENV = "DJUST_REQUIRE_REDIS_ROWS"
+
+
+def _redis_missing() -> Optional[str]:
+    """Why the Redis rows cannot run here, or ``None`` when they can."""
     if shutil.which("redis-server") is None:
-        pytest.skip("redis-server is not installed: the Redis rows are not exercised here")
+        return "redis-server is not installed"
     if importlib.util.find_spec("channels_redis") is None:
-        pytest.skip("channels_redis is not installed: the Redis rows are not exercised here")
+        return "channels_redis is not installed"
+    return None
+
+
+def _need_redis(environ: Mapping[str, str] = os.environ) -> None:
+    reason = _redis_missing()
+    if reason is None:
+        return
+    if environ.get(REQUIRE_REDIS_ENV) == "1":
+        pytest.fail(
+            "%s, and %s=1 requires the Redis rows to run (#4136)" % (reason, REQUIRE_REDIS_ENV),
+            pytrace=False,
+        )
+    pytest.skip("%s: the Redis rows are not exercised here" % reason)
 
 
 @pytest.fixture(scope="module")

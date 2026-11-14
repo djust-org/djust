@@ -132,6 +132,9 @@ dev = [
     # "daphne" in INSTALLED_APPS, so the dev env needs the `daphne` extra.
     "channels[daphne]>=4.0.0,<5",
     "redis>=5.0.0,<9",
+    # channels_redis: the multi-process harness's Redis channel-layer rows
+    # (tests/integration/multinode, #4136) need it to run instead of skip.
+    "channels-redis>=4.2,<5",
     "watchdog>=3.0.0,<8",  # File system monitoring for hot reload
     "zstandard>=0.22.0,<1",  # Compression support
     "orjson>=3.11.6,<4",
