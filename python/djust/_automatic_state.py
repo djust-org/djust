@@ -1008,7 +1008,10 @@ def _index_entry(store: _Store, envelope: Dict[str, Any], state_store: Any) -> T
         "tenant": store.tenant,
         "created": envelope["created"],
         "expires": envelope["expires"],
-        "bytes": len(payload),
+        # The size the per-view limit is measured in (the encoded state, as
+        # without a store), not the stored or sealed size: the tab cap and the
+        # budgets then evict at the same state sizes with or without a store.
+        "bytes": envelope["bytes"],
         "stamp": stamp,
     }
     return entry, payload
@@ -1017,9 +1020,10 @@ def _index_entry(store: _Store, envelope: Dict[str, Any], state_store: Any) -> T
 def _store_call(view: Any, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """One call into a state store, as a ``"state_store"`` step of the
     project's ``sync_turn_wrapper``: an application that opens a caller-scoped
-    transaction per sync step has it around the store's query too."""
-    if view is None:
-        return fn(*args, **kwargs)  # the CLI: no view, no turn
+    transaction per sync step has it around the store's query too.
+
+    ``view`` is None for ``djust clear`` / ``djust stats``: the wrapper is then
+    called with ``view=None`` and ``turn=None``."""
     from .sync_turn import run_sync_step
 
     return run_sync_step(view, STORE_STEP, fn, *args, **kwargs)
@@ -1069,15 +1073,24 @@ class _StagedForStore:
     """The undo :func:`stage` returns when a store write is still owed: called
     like any undo, and carrying the write for :func:`write_pending`."""
 
-    __slots__ = ("_undo", "pending")
+    __slots__ = ("_undo", "pending", "_session", "_removed")
 
     def __init__(self, undo: Callable[[], None], pending: _Pending) -> None:
         self._undo = undo
         self.pending: Optional[_Pending] = pending
+        self._session = pending.store.session
+        self._removed = list(pending.removed)
 
     def __call__(self) -> None:
-        self.pending = None
+        """Take the staged write back. The index entries it evicted go back
+        too, while their bytes are still in the store: a save that was refused
+        or failed must not leave rows in the store that no index entry names
+        (nothing would ever delete them), nor forget another tab's state."""
+        owed, self.pending = self.pending, None
         self._undo()
+        if owed is not None:
+            for key, entry in self._removed:
+                self._session[key] = entry
 
 
 def _store_failed(
@@ -1158,10 +1171,11 @@ def write_pending(view: Any, staged: Any, *, page_load: bool = False) -> None:
             view, state_store.save, store.state_key(), pending.payload, expires=pending.expires
         )
     except Exception as exc:  # noqa: BLE001 — the store's failure, whatever it is
-        staged()
+        staged.pending = pending
+        staged()  # the index entry back, and those this write evicted
         _store_failed(view, store, exc, page_load)
         return
-    _delete_from_store(view, store.session.session_key, pending.removed)
+    _delete_from_store(view, store.session.session_key, [entry for _key, entry in pending.removed])
 
 
 def _delete_from_store(view: Any, session_key: Any, entries: Any) -> None:
@@ -1199,27 +1213,67 @@ def _delete_from_store(view: Any, session_key: Any, entries: Any) -> None:
         )
 
 
+def _drop_foreign_entries(session: Any, own_key: str, state_store: Any) -> int:
+    """With a state store configured, remove from the session dict every saved
+    view state that is not an index entry of that store: an envelope written
+    in the clear before the store was named (any tab's), or another store's
+    index entry. Nothing reads them any more, and a project that named a store
+    asked for view content not to rest in the session. Returns how many went.
+
+    ``own_key`` is left for the caller (it is about to be written, or read)."""
+    dropped = 0
+    for key in list(session.keys()):
+        if type(key) is not str or not key.startswith(_KEY_PREFIX) or key == own_key:
+            continue
+        if not _is_index_entry(session.get(key), state_store):
+            del session[key]
+            dropped += 1
+    return dropped
+
+
+def _purge_foreign_entries(view: Any, store: _Store) -> None:
+    """A tab's first contact after a state store was named (a read): what
+    :func:`_drop_foreign_entries` removes, and this tab's own entry when it is
+    one of those, written through at once. One write, and only when there is
+    something to remove; once per view object (as :func:`_forget`)."""
+    state_store = _state_store()
+    if state_store is None or view.__dict__.get("_djust_auto_purged"):
+        return
+    view.__dict__["_djust_auto_purged"] = True
+    session = store.session
+    dropped = _drop_foreign_entries(session, store.key, state_store)
+    own = session.get(store.key, _MISSING)
+    if own is not _MISSING and not _is_index_entry(own, state_store):
+        del session[store.key]
+        dropped += 1
+    if dropped:
+        from ._session_merge import save_merged
+
+        save_merged(session, session.session_key)
+
+
 def _stored_envelope(view: Any, store: _Store) -> Any:
     """The envelope stored for this view, from wherever it is kept.
 
     With no state store: the session entry, as always. With one (#4132): the
-    session's index entry must be this store's, for this binding, page and
-    tab, and unexpired; the store's bytes must then name this very key and
-    carry the index entry's stamp. Anything else is nothing stored. What comes
-    back still goes through every check of :func:`_read`.
+    session's index entry must be this store's and unexpired; the store's
+    bytes must then name this very key (binding, page and tab) and carry the
+    index entry's stamp. Anything else is nothing stored. What comes back still
+    goes through every check of :func:`_read`.
+
+    The binding, page and tab the index entry records are not compared here:
+    they exist to rebuild the key of an evicted state for ``delete``. The
+    bytes name the key they were written for, and that is what is checked.
     """
     entry = store.session.get(store.key)
     state_store = _state_store()
     if state_store is None:
         return entry
-    if (
-        not _is_index_entry(entry, state_store)
-        or entry["binding"] != store.binding
-        or entry["page"] != store.page
-        or entry["tab"] != store.tab
-        or type(entry["expires"]) is not int
-        or entry["expires"] <= int(time.time())
-    ):
+    if not _is_index_entry(entry, state_store):
+        return None
+    if type(entry["expires"]) is not int or entry["expires"] <= int(time.time()):
+        # Expired: the envelope check would refuse it too, after a store call
+        # for nothing. This is the one thing the index entry decides alone.
         return None
     key = store.state_key()
     try:
@@ -1241,11 +1295,24 @@ def _stored_envelope(view: Any, store: _Store) -> Any:
             )
         return None
     wrapper: Any = None
-    if type(payload) is bytes:
+    if isinstance(payload, (bytes, bytearray, memoryview)):
         try:
-            wrapper = json.loads(payload.decode("utf-8"))
-        except ValueError:  # also UnicodeDecodeError
+            wrapper = json.loads(bytes(payload).decode("utf-8"))
+        except (ValueError, RecursionError):
+            # ValueError covers UnicodeDecodeError; RecursionError is what a
+            # deeply nested document raises (``b"[" * 200000``).
             wrapper = None
+    elif payload is not None:
+        if _first_time(view, "*", "store-type"):
+            owner = type(view)
+            logger.warning(
+                "djust: the state store returned a %s for %s.%s. load() (or open()) must "
+                "return bytes, or None when it holds nothing; the view starts from mount().",
+                type(payload).__name__,
+                owner.__module__,
+                owner.__qualname__,
+            )
+        return None
     if (
         type(wrapper) is not dict
         or set(wrapper) != _PAYLOAD
@@ -1476,6 +1543,8 @@ def saved(view: Any, request: Any) -> Optional[Saved]:
         _forget(view, request)
         return None
     store = _store(view, request, create=False)
+    if store is not None:
+        _purge_foreign_entries(view, store)
     found = _read(view, store) if store is not None else None
     # The query the state was saved under, for ``note_url`` to compare with.
     view.__dict__["_djust_auto_saved_url"] = found.url if found is not None else None
@@ -1942,6 +2011,7 @@ def stage(
     else:
         # The store holds the envelope; the session holds an index entry with
         # no values (#4132).
+        _drop_foreign_entries(session, store.key, state_store)
         entry, payload = _index_entry(store, envelope, state_store)
         if _kept_in_session(state_store):
             try:
@@ -1951,7 +2021,6 @@ def stage(
             except Exception as exc:  # noqa: BLE001 — the store's failure, whatever it is
                 return _store_failed(view, store, exc, page_load)
             entry["sealed"] = sealed
-            entry["bytes"] = len(sealed)
         session[store.key] = entry
         removed = []
     _evict_old_tabs(session, store, limits_for(view)[0], now, removed)
@@ -2004,8 +2073,8 @@ def _evict_old_tabs(
     * All saved view states of the session together: at most
       :data:`SESSION_BUDGET_KB`. Oldest first, whatever page they belong to.
 
-    ``removed``: a list that receives each entry dropped, for the caller to
-    delete from a state store (#4132).
+    ``removed``: a list that receives ``(key, entry)`` for each entry dropped,
+    for the caller to delete from a state store, or to put back (#4132).
     """
     mine = session.get(store.key) or {}
     written = mine.get("bytes", 0) if type(mine) is dict else 0
@@ -2020,7 +2089,7 @@ def _evict_old_tabs(
         if type(expires) is not int or expires <= now:
             del session[key]
             if removed is not None:
-                removed.append(envelope)
+                removed.append((key, envelope))
             continue
         size = envelope.get("bytes")
         others.append(
@@ -2037,7 +2106,7 @@ def _evict_old_tabs(
         over_page = same_page and (page_count + 1 > MAX_TABS or page_bytes + size > maximum)
         if over_page or total + size > SESSION_BUDGET_KB * 1024:
             if removed is not None:
-                removed.append(session.get(key))
+                removed.append((key, session.get(key)))
             del session[key]
             continue
         total += size
@@ -2055,12 +2124,20 @@ def _evict_old_tabs(
 SAVED_STATE_PREFIXES = (_KEY_PREFIX, "_djust_explicit_")
 
 
-def saved_state_keys(session: Any) -> list:
-    """The keys of one session that hold saved view state."""
+def _is_lazy_child_key(key: Any) -> bool:
+    """A lazy legacy child's saved state (``_lazy_containers``):
+    ``liveview_<path>__lazy__<view id>``. It carries no expiry of its own."""
+    return isinstance(key, str) and key.startswith("liveview_") and "__lazy__" in key
+
+
+def saved_state_keys(session: Any, *, lazy: bool = True) -> list:
+    """The keys of one session that hold saved view state. ``lazy=False``
+    leaves out a lazy legacy child's entries."""
     return sorted(
         key
         for key in session.keys()
-        if isinstance(key, str) and key.startswith(SAVED_STATE_PREFIXES)
+        if isinstance(key, str)
+        and (key.startswith(SAVED_STATE_PREFIXES) or (lazy and _is_lazy_child_key(key)))
     )
 
 
@@ -2108,7 +2185,8 @@ def clear_expired_saved_state(session: Any, now: Optional[int] = None) -> int:
     """
     now = int(time.time()) if now is None else now
     expired = []
-    for key in saved_state_keys(session):
+    # A lazy child's entry records no expiry: it goes with ``--all`` only.
+    for key in saved_state_keys(session, lazy=False):
         envelope = session[key]
         expires = envelope.get("expires") if type(envelope) is dict else None
         if type(expires) is not int or expires <= now:

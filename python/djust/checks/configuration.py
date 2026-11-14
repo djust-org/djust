@@ -931,7 +931,7 @@ def _check_automatic_state_switch(errors: list[CheckMessage]) -> None:
 
 
 def _check_state_store(errors: list[CheckMessage]) -> None:
-    """C036 / C037 — the state store named in settings cannot be used (#4132).
+    """C036 / C037 / C038 — the state store named in settings cannot be used (#4132).
 
     ``DJUST_STATE_STORE`` names where a view's saved state is kept. A path
     that does not import, or does not name a store, is C036; the built-in
@@ -945,6 +945,22 @@ def _check_state_store(errors: list[CheckMessage]) -> None:
         from djust import state_store
     except ImportError:
         return
+    strict = getattr(settings, state_store.STRICT_SETTING, False)
+    if type(strict) is not bool and not _is_check_suppressed("djust.C038"):
+        # C038: only True is strict, so 1 or "true" would silently serve an
+        # event whose state was not stored.
+        errors.append(
+            DjustError(
+                "%s must be True or False, not %r."
+                % (state_store.STRICT_SETTING, type(strict).__name__),
+                hint=(
+                    "Only True refuses an event whose state cannot be stored. Any other "
+                    "value is read as not strict: such an event is served unsaved."
+                ),
+                id="djust.C038",
+                fix_hint="Set `%s` to `True` or `False`." % state_store.STRICT_SETTING,
+            )
+        )
     raw = getattr(settings, state_store.SETTING, None)
     if raw is None:
         return
@@ -979,6 +995,12 @@ def _check_state_store(errors: list[CheckMessage]) -> None:
         state_store.sealing_keys()
     except state_store.StateStoreConfigurationError as error:
         problem = str(error)
+    except Exception as error:  # noqa: BLE001 — a keys callable may raise anything
+        # Its message may hold key material: the type only.
+        problem = "%s could not be read: its callable raised %s." % (
+            state_store.KEYS_SETTING,
+            type(error).__name__,
+        )
     if problem is None:
         return
     errors.append(

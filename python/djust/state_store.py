@@ -43,10 +43,24 @@ Writing a store::
         def delete(self, keys):
             ViewState.objects.filter(pk__in=[key.id for key in keys]).delete()
 
+        def clear(self, *, expired_only):
+            # The sweep: djust deletes a state when it evicts it or `djust clear`
+            # removes it, but never on logout or when a session ends. Run
+            # `djust clear` on a schedule (or this query) to drop expired rows.
+            rows = ViewState.objects.all()
+            if expired_only:
+                rows = rows.filter(expires__lte=int(time.time()))
+            return rows.delete()[0]
+
 ``load``, ``save`` and ``delete`` are sync and run on the Django thread, each
 as a ``"state_store"`` step of ``LIVEVIEW_CONFIG["sync_turn_wrapper"]``
 (``djust.sync_turn``), so a wrapper that opens a caller-scoped transaction is
-open around them.
+open around them. ``djust clear`` and ``djust stats`` call the store inside
+the wrapper too, with ``view=None`` and ``turn=None``.
+
+djust never deletes a state because a user logged out or a session ended
+(``session.flush()``): what is left is unreadable without its index entry and
+is removed by the store's own ``expires`` sweep.
 """
 
 from __future__ import annotations
@@ -334,11 +348,16 @@ def build_store(raw: Any) -> Optional[ViewStateStore]:
     if isinstance(raw, str):
         from django.utils.module_loading import import_string
 
+        path = raw
         try:
-            raw = import_string(raw)
-        except ImportError:
+            raw = import_string(path)
+        except Exception as error:  # noqa: BLE001 — whatever importing the module raised
+            # Not only ImportError: a store module that fails while it is
+            # imported (a NameError, a missing setting) is just as unusable,
+            # and must not fail every request or the system checks.
             raise StateStoreConfigurationError(
-                "%s names a store that cannot be imported." % SETTING
+                "%s = %r cannot be imported (%s: %s)."
+                % (SETTING, path, type(error).__name__, str(error)[:300])
             ) from None
     if not (isinstance(raw, type) and issubclass(raw, ViewStateStore)):
         raise StateStoreConfigurationError(
@@ -385,7 +404,10 @@ def store_tag(store: ViewStateStore) -> str:
 
 
 def strict() -> bool:
-    """Whether an event whose state cannot be stored is refused."""
+    """Whether an event whose state cannot be stored is refused.
+
+    Only ``True`` is strict. Any other value that is not ``False`` is a
+    startup error (system check ``djust.C038``), as for the saving switch."""
     try:
         from django.conf import settings
 

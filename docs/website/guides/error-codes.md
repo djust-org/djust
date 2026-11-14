@@ -454,6 +454,16 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 ---
 
+### C038: State-store strict setting is not a bool
+
+**Severity**: Error
+
+**What causes it**: The setting holds a number, a string or `None`, for example `DJUST_STATE_STORE_STRICT = "true"` read from an environment variable.
+
+**Fix**: Set `DJUST_STATE_STORE_STRICT` to `True` or `False`.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error

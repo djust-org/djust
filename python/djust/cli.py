@@ -88,7 +88,7 @@ def _print_unlistable_sessions() -> None:
 
 def _print_state_store_stats(sessions: Optional[list]) -> None:
     """What the project's state store (``DJUST_STATE_STORE``, #4132) holds."""
-    from djust._automatic_state import _kept_in_session, saved_state_stats
+    from djust._automatic_state import _kept_in_session, _store_call, saved_state_stats
     from djust.state_store import configured_store, store_stats, store_tag
 
     store = configured_store()
@@ -101,8 +101,9 @@ def _print_state_store_stats(sessions: Optional[list]) -> None:
         return
     if sessions is not None:
         held = sum(saved_state_stats(s).get("store_bytes", 0) for s in sessions)
-        print(f"Held for the sessions above: {held / 1024:.2f} KB")
-    figures = store_stats()
+        print(f"State held for the sessions above: {held / 1024:.2f} KB")
+    # Inside the project's sync_turn_wrapper, as every store call (view=None).
+    figures = _store_call(None, store_stats)
     if figures is None:
         print("Not listed: the store reports no figures of its own (it has no stats()).")
         return
@@ -115,13 +116,13 @@ def _clear_state_store(everything: bool) -> None:
 
     The states removed from sessions above were already deleted from it one by
     one; this sweeps what no session points at (expired or orphaned bytes)."""
-    from djust._automatic_state import _kept_in_session
+    from djust._automatic_state import _kept_in_session, _store_call
     from djust.state_store import configured_store, store_clear, store_tag
 
     store = configured_store()
     if store is None or _kept_in_session(store):
         return
-    removed = store_clear(expired_only=not everything)
+    removed = _store_call(None, store_clear, expired_only=not everything)
     if removed is None:
         print(
             "State store %s cannot clear itself (it has no clear()): only the states "

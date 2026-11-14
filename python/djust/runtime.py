@@ -6202,6 +6202,7 @@ class ViewRuntime(RuntimeTurnPort):
         """
         from ._exposure import ExposureError, uses_legacy_exposure
         from ._exposure_sessions import StateLimitExceeded
+        from .state_store import StateStoreError
 
         if uses_legacy_exposure(view):
             return True
@@ -6235,6 +6236,16 @@ class ViewRuntime(RuntimeTurnPort):
             return False
         except StateLimitExceeded as refused:
             return await self._refuse_over_limit_turn(view, refused, extra)
+        except StateStoreError:
+            # ``DJUST_STATE_STORE_STRICT`` (#4132): the state store could not
+            # take this turn's state and the project asked for the event to be
+            # refused. Nothing was written; the store's failure was logged
+            # where it happened, once, so nothing is logged again here.
+            view._force_full_html = True
+            await self.transport.send_error(
+                "State unavailable. Please reload the page.", code="state_error", **extra
+            )
+            return False
         except Exception as exc:  # noqa: BLE001 — storage errors can carry server-only values
             from ._exposure_diagnostics import log_failure_for
 

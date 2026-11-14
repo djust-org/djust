@@ -121,9 +121,11 @@ class MemoryStore(ViewStateStore):
             type(self).DATA.pop(key.id, None)
 
     def stats(self) -> dict:
+        self._called("stats", None)
         return {"states": len(type(self).DATA)}
 
     def clear(self, *, expired_only: bool) -> int:
+        self._called("clear", None)
         if expired_only:
             return 0
         count = len(type(self).DATA)
@@ -314,7 +316,8 @@ def test_the_fallback_keeps_state_and_the_session_holds_no_content(store, settin
     else:
         (payload,) = MemoryStore.DATA.values()
         assert b"STORE_HANDLER" in payload and b"STORE_PRIVATE" in payload
-        assert entry["bytes"] == len(payload)
+        # The size the per-view limit counts: the encoded state.
+        assert entry["bytes"] == json.loads(payload)["state"]["bytes"]
     assert set(entry) == wanted
     assert "values" not in entry and "private" not in entry
 
@@ -498,7 +501,52 @@ def test_garbage_from_a_store_yields_a_fresh_mount(answer, settings, caplog):
     with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
         assert _bump(key) == 1
     assert MOUNTS == ["Page"]
-    assert "was refused" in caplog.text
+    if isinstance(answer, bytes):
+        assert "was refused" in caplog.text
+    else:
+        # Not bytes at all: the message names the type the store returned.
+        assert "returned a %s" % type(answer).__name__ in caplog.text
+        assert "must return bytes" in caplog.text
+
+
+@pytest.mark.django_db
+def test_a_deeply_nested_document_from_a_store_is_refused_not_an_error(settings):
+    """``json.loads`` raises RecursionError, not ValueError, for this one."""
+    settings.DJUST_STATE_STORE = EXTERNAL
+    key = _page()
+    assert _bump(key) == 1
+    MemoryStore.ANSWER = b"[" * 200000
+    MOUNTS.clear()
+    assert _bump(key) == 1 and MOUNTS == ["Page"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("kind", [bytearray, memoryview])
+def test_bytes_like_values_from_a_store_are_accepted(kind, settings):
+    """A driver that hands back a ``memoryview`` (psycopg's ``bytea``) or a
+    ``bytearray`` is a working store."""
+    settings.DJUST_STATE_STORE = EXTERNAL
+    key = _page()
+    assert _bump(key) == 1
+    (real,) = MemoryStore.DATA.values()
+    MemoryStore.ANSWER = kind(real)
+    MOUNTS.clear()
+    assert _bump(key) == 2 and MOUNTS == []
+
+
+@pytest.mark.django_db
+def test_an_expired_index_entry_is_not_loaded_from_the_store(settings):
+    """The one thing the index entry decides alone: no store call for a state
+    that has expired."""
+    settings.DJUST_STATE_STORE = EXTERNAL
+    key = _page()
+    assert _bump(key) == 1
+    name, entry = _sealed_entry(key)
+    _rewrite(key, name, {**entry, "expires": 1})
+    MemoryStore.CALLS.clear()
+    MOUNTS.clear()
+    assert _bump(key) == 1 and MOUNTS == ["Page"]
+    assert "load" not in [call[0] for call in MemoryStore.CALLS]
 
 
 @pytest.mark.django_db
@@ -921,9 +969,8 @@ def test_clearing_a_session_deletes_its_states_from_the_store(settings):
     other = _page()
     assert len(MemoryStore.DATA) == 2
     stats = _automatic_state.saved_state_stats(SessionStore(key))
-    assert stats["entries"] == 2 and stats["store_bytes"] == len(
-        MemoryStore.DATA[_entry_key(key).id]
-    )
+    held = json.loads(MemoryStore.DATA[_entry_key(key).id])["state"]["bytes"]
+    assert stats["entries"] == 2 and stats["store_bytes"] == held
     removed = _automatic_state.clear_saved_state(SessionStore(key))
     assert removed == 2  # the index entry and the declared envelope
     assert list(MemoryStore.DATA) == [_entry_key(other).id]
@@ -960,7 +1007,7 @@ def test_the_cli_reports_and_clears_the_store(settings, capsys):
     cmd_stats(argparse.Namespace())
     out = capsys.readouterr().out
     assert "Store: %s" % EXTERNAL in out
-    assert "states: 2" in out and "Held for the sessions above" in out
+    assert "states: 2" in out and "State held for the sessions above" in out
     cmd_clear(argparse.Namespace(all=True, force=True))
     out = capsys.readouterr().out
     assert "Removed 1 view state(s) from the state store" in out, out
@@ -1080,13 +1127,13 @@ class LazyPage(LiveView):
 urlpatterns += [path("lazy/", LazyPage.as_view())]
 
 
-def _lazy_flow() -> List[int]:
+def _lazy_flow(client: Any = None) -> List[int]:
     import re
 
     from django.conf import settings
     from django.test import Client
 
-    client = Client(enforce_csrf_checks=True)
+    client = client or Client(enforce_csrf_checks=True)
     page = client.get("/lazy/").content.decode()
     (view_id,) = re.findall(r'data-djust-lazy-id="([^"]+)"', page)
     counts = []
@@ -1118,3 +1165,358 @@ def test_a_lazy_legacy_childs_state_is_not_written_in_the_clear_with_a_store(sto
 def test_control_a_lazy_legacy_child_is_saved_in_the_session_without_a_store(settings):
     assert _lazy_flow() == [0, 1, 2]
     assert "STORE_LAZY" in _all_sessions_text()
+
+
+# ---------------------------------------------------------------------------
+# Review round 2 (#4132)
+# ---------------------------------------------------------------------------
+
+BROKEN_MODULE = "djust.tests._broken_store_module_4132.Store"
+
+
+@pytest.mark.django_db
+def test_a_store_module_that_raises_at_import_is_an_unusable_store(settings, caplog):
+    """Not only ImportError: the page is served, nothing is saved, C036 fires
+    and names the path and the error."""
+    settings.DJUST_STATE_STORE = BROKEN_MODULE
+    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
+        key = _page()
+        assert [_bump(key), _bump(key)] == [1, 1]
+    assert not _entries(key)
+    from djust.checks.configuration import _check_state_store
+
+    found: list = []
+    _check_state_store(found)
+    assert [message.id for message in found] == ["djust.C036"]
+    text = found[0].msg
+    assert BROKEN_MODULE in text and "RuntimeError" in text and "boom at import" in text
+
+
+def test_c036_names_the_path_and_the_import_error(settings):
+    from djust.checks.configuration import _check_state_store
+
+    settings.DJUST_STATE_STORE = "no.such.module.Store"
+    found: list = []
+    _check_state_store(found)
+    assert "no.such.module.Store" in found[0].msg
+    assert "ModuleNotFoundError" in found[0].msg and "No module named" in found[0].msg
+
+
+def test_c037_reports_a_keys_callable_that_raises(settings):
+    def keys():
+        raise RuntimeError("KEY_MATERIAL_IN_MESSAGE")
+
+    settings.DJUST_STATE_STORE = SEALED
+    settings.DJUST_STATE_STORE_KEYS = keys
+    from djust.checks.configuration import _check_state_store
+
+    found: list = []
+    _check_state_store(found)
+    assert [message.id for message in found] == ["djust.C037"]
+    assert "RuntimeError" in found[0].msg and "KEY_MATERIAL_IN_MESSAGE" not in found[0].msg
+
+
+@pytest.mark.parametrize("value", [1, 0, "true", "false", None])
+def test_c038_reports_a_strict_setting_that_is_not_a_bool(value, settings):
+    settings.DJUST_STATE_STORE_STRICT = value
+    assert _check_ids() == ["djust.C038"]
+    assert state_store.strict() is False  # only True is strict
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_c038_is_silent_for_a_bool(value, settings):
+    settings.DJUST_STATE_STORE_STRICT = value
+    assert _check_ids() == []
+
+
+class Plain(LiveView):
+    """No declared field: its save takes the path with no declared adapter."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ count }}</div>"
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.count += 1
+
+
+urlpatterns += [path("plain/", Plain.as_view())]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("view_class, url", [(Page, PATH), (Plain, "/plain/")])
+def test_the_store_is_written_before_the_session(view_class, url, settings, monkeypatch):
+    """Store first, index second, on both save paths (with and without a
+    declared field): never an index entry vouching for bytes not yet stored."""
+    from djust import _session_merge
+
+    settings.DJUST_STATE_STORE = EXTERNAL
+    key = _page(view_class, url=url)
+    order: List[str] = []
+    real = _session_merge.save_merged
+
+    def recording(session, expected_key=None):
+        order.append("session")
+        return real(session, expected_key)
+
+    monkeypatch.setattr(_session_merge, "save_merged", recording)
+    MemoryStore.CALLS.clear()
+    stamps_at_save: List[Any] = []
+    real_save = MemoryStore.save
+
+    def save(self, key_, payload, *, expires):
+        order.append("store")
+        # What the stored session vouches for while the store is written.
+        stamps_at_save.append(
+            [entry["stamp"] for entry in _entries(key).values()] == [json.loads(payload)["stamp"]]
+        )
+        return real_save(self, key_, payload, expires=expires)
+
+    monkeypatch.setattr(MemoryStore, "save", save)
+    response, _view = _post(key, view_class, url=url)
+    assert response.status_code == 200
+    assert order[:2] == ["store", "session"], order
+    assert stamps_at_save == [False]  # the index entry is not written yet
+
+
+def _mounted(key: str, tab: str = harness.TAB):
+    """A mounted view and its request, for driving ``stage`` directly."""
+    request = _request("POST", key, tab=tab)
+    view = Plain()
+    view.__dict__["_djust_tab"] = tab
+    view.mount(request)
+    return view, request
+
+
+@pytest.mark.django_db
+def test_a_save_in_flight_keeps_its_owed_store_write_when_the_next_turn_stages(settings):
+    """The owed write rides on what ``stage`` returned, not on the view."""
+    settings.DJUST_STATE_STORE = EXTERNAL
+    key = harness.new_session_key()
+    view, request = _mounted(key)
+    first = _automatic_state.stage(view, request)
+    assert first is not None and not MemoryStore.DATA
+    view.count = 5
+    second = _automatic_state.stage(view, request)  # the next turn stages
+    assert second is not None and second is not first
+    _automatic_state.write_pending(view, first)  # the earlier save lands now
+    (payload,) = MemoryStore.DATA.values()
+    assert json.loads(payload)["state"]["values"]["count"] == 0
+    _automatic_state.write_pending(view, second)
+    (payload,) = MemoryStore.DATA.values()
+    assert json.loads(payload)["state"]["values"]["count"] == 5
+
+
+def _ids_in_index(key: str) -> set:
+    return {
+        StateKey(key, e["binding"], e["page"], e["tab"], e["user"], e["tenant"]).id
+        for e in _entries(key).values()
+    }
+
+
+@pytest.mark.django_db
+def test_a_failed_save_that_also_evicted_leaves_no_row_without_an_index_entry(
+    settings, monkeypatch
+):
+    settings.DJUST_STATE_STORE = EXTERNAL
+    monkeypatch.setattr(_automatic_state, "MAX_TABS", 1)
+    key = _page()
+    assert _bump(key) == 1
+    # A second tab's page load evicts the first, and its save fails.
+    other = "another-tab-0002"
+    monkeypatch.setattr(_automatic_state, "new_tab_id", lambda: other)
+    MemoryStore.DOWN = {"save"}
+    _page(key=key)
+    # The first tab's row is still in the store, so its index entry is too.
+    assert set(MemoryStore.DATA) == _ids_in_index(key) and len(MemoryStore.DATA) == 1
+    MemoryStore.DOWN = set()
+    _page(key=key)  # now the eviction goes through, and deletes the row
+    assert set(MemoryStore.DATA) == _ids_in_index(key) and len(MemoryStore.DATA) == 1
+    assert {entry["tab"] for entry in _entries(key).values()} == {other}
+
+
+@pytest.mark.django_db
+def test_a_refused_save_puts_back_the_entries_it_evicted(settings, monkeypatch):
+    """The over-limit refusal runs the undo: nothing was written, so the tabs
+    the staged write evicted keep their index entries and their rows."""
+    settings.DJUST_STATE_STORE = EXTERNAL
+    monkeypatch.setattr(_automatic_state, "MAX_TABS", 1)
+    key = _page(Plain, url="/plain/")
+    before = _entries(key)
+    assert len(before) == 1 and len(MemoryStore.DATA) == 1
+    request = _request("POST", key, url="/plain/", tab="another-tab-0002")
+    view = Plain()
+    view.__dict__["_djust_tab"] = "another-tab-0002"
+    view.mount(request)
+    undo = _automatic_state.stage(view, request)
+    assert len([k for k in request.session.keys() if k.startswith("_djust_auto_")]) == 1
+    undo()
+    held = {k: v for k, v in request.session.items() if k.startswith("_djust_auto_")}
+    assert held == before
+    assert len(MemoryStore.DATA) == 1 and "delete" not in [c[0] for c in MemoryStore.CALLS]
+
+
+@pytest.mark.django_db
+def test_the_clis_store_calls_run_inside_the_sync_turn_wrapper(settings, capsys):
+    from djust.cli import cmd_clear, cmd_stats
+    from djust.config import config as djust_config
+
+    settings.DJUST_STATE_STORE = EXTERNAL
+    key = _page()
+    assert _bump(key) == 1
+    settings.LIVEVIEW_CONFIG = {
+        **getattr(settings, "LIVEVIEW_CONFIG", {}),
+        "sync_turn_wrapper": MODULE + ".recording_wrapper",
+    }
+    djust_config.reset()
+    MemoryStore.CALLS.clear()
+    MemoryStore.STEPS.clear()
+    try:
+        cmd_stats(argparse.Namespace())
+        cmd_clear(argparse.Namespace(all=True, force=True))
+    finally:
+        djust_config.reset()
+    capsys.readouterr()
+    names = [call[0] for call in MemoryStore.CALLS]
+    assert names == ["stats", "delete", "clear"], names
+    assert MemoryStore.STEPS == ["state_store"] * 3, MemoryStore.STEPS
+
+
+class Sized(LiveView):
+    """A view whose state is about 45% of its own limit."""
+
+    exposure_policy = "explicit"
+    automatic_state_max_kb = 8
+    template = "<div dj-root>{{ count }}</div>"
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+        self.blob = "x" * 3600
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.count += 1
+
+
+urlpatterns += [path("sized/", Sized.as_view())]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("store", [None, EXTERNAL, SEALED])
+def test_two_tabs_under_the_page_limit_both_survive_with_any_store(store, settings, monkeypatch):
+    """Eviction counts the size the per-view limit counts (the encoded state),
+    not the sealed size: two tabs at 45% of the limit fit, as with no store."""
+    if store is not None:
+        settings.DJUST_STATE_STORE = store
+    tabs = ["tab-number-0001", "tab-number-0002"]
+    key = None
+    for tab in tabs:
+        monkeypatch.setattr(_automatic_state, "new_tab_id", lambda tab=tab: tab)
+        key = _page(Sized, key=key, url="/sized/")
+    entries = _entries(key)
+    assert len(entries) == 2, "a sibling tab was evicted"
+    sizes = {entry["bytes"] for entry in entries.values()}
+    assert len(sizes) == 1 and 3600 < sizes.pop() < 4096  # under half of 8 KB
+    if store == SEALED:
+        # ... though the sealed text itself is well over half the limit.
+        assert all(len(entry["sealed"]) > 4096 for entry in entries.values())
+    for tab in tabs:
+        response, view = _post(key, Sized, url="/sized/", tab=tab)
+        assert response.status_code == 200 and view.count == 1
+    assert len(_entries(key)) == 2
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("store", STORES)
+@pytest.mark.parametrize("contact", ["event", "page-load"])
+def test_plaintext_saved_before_the_store_is_purged_on_first_contact(
+    store, contact, settings, monkeypatch
+):
+    """Enabling a store must not leave earlier envelopes in the clear: this
+    tab's, and every other tab's of the session."""
+    key = _page()
+    assert _bump(key) == 1
+    other = "another-tab-0002"
+    monkeypatch.setattr(_automatic_state, "new_tab_id", lambda: other)
+    _page(key=key)
+    assert "STORE_PUBLIC" in json.dumps(_entries(key)) and len(_entries(key)) == 2
+    settings.DJUST_STATE_STORE = store
+    if contact == "event":
+        assert _bump(key) == 1  # this tab's old state is not read
+    else:
+        monkeypatch.setattr(_automatic_state, "new_tab_id", lambda: "a-third-tab-0003")
+        _page(key=key)
+    text = json.dumps(_entries(key))
+    assert not [marker for marker in MARKERS if marker in text], text
+    assert all("values" not in entry for entry in _entries(key).values())
+
+
+@pytest.mark.django_db
+def test_a_lazy_childs_plaintext_is_removed_on_first_contact_and_a_warning_names_it(
+    settings, caplog
+):
+    from django.test import Client
+
+    client = Client(enforce_csrf_checks=True)
+    assert _lazy_flow(client) == [0, 1, 2]
+    assert "STORE_LAZY" in _all_sessions_text()
+    settings.DJUST_STATE_STORE = EXTERNAL
+    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
+        assert _lazy_flow(client) == [0, 1, 1]
+    assert "STORE_LAZY" not in _all_sessions_text()
+    named = [r for r in caplog.records if "LazyChild" in r.getMessage()]
+    assert len(named) == 1 and "DJUST_STATE_STORE" in named[0].getMessage()
+
+
+@pytest.mark.django_db
+def test_djust_clear_all_removes_a_lazy_childs_entry_and_plain_clear_keeps_it(capsys):
+    from djust.cli import cmd_clear
+
+    assert _lazy_flow() == [0, 1, 2]
+    cmd_clear(argparse.Namespace(all=False, force=True))  # expired only
+    assert "STORE_LAZY" in _all_sessions_text()
+    cmd_clear(argparse.Namespace(all=True, force=True))
+    capsys.readouterr()
+    assert "STORE_LAZY" not in _all_sessions_text()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_strict_refusal_on_a_socket_is_logged_once(settings, caplog):
+    from djust.tests._ws_frames import has_frame, receive_until
+
+    settings.DJUST_STATE_STORE = EXTERNAL
+    settings.DJUST_STATE_STORE_STRICT = True
+    key = await sync_to_async(_page)()
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
+        comm, _mount = await harness.mount_view(Page, key)
+        MemoryStore.DOWN = {"save"}
+        with caplog.at_level(logging.WARNING):
+            await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 9})
+            await receive_until(comm, has_frame("error"), what="the refusal")
+        await comm.disconnect()
+    about_it = [
+        r
+        for r in caplog.records
+        if r.levelno >= logging.WARNING
+        and ("state store" in r.getMessage() or "Protected view operation" in r.getMessage())
+    ]
+    assert [r.levelname for r in about_it] == ["ERROR"], [r.getMessage() for r in about_it]
+
+
+@pytest.mark.django_db
+def test_plaintext_is_purged_on_first_contact_even_when_that_requests_save_is_refused(settings):
+    """The purge at the read is written through at once: a first contact
+    whose own save never happens (here: refused) still clears the session."""
+    key = _page()
+    assert _bump(key) == 1
+    assert "STORE_HANDLER" in json.dumps(_entries(key))
+    settings.DJUST_STATE_STORE = EXTERNAL
+    settings.DJUST_STATE_STORE_STRICT = True
+    MemoryStore.DOWN = {"save"}
+    response, _view = _post(key)
+    assert response.status_code == 503
+    assert not _entries(key)

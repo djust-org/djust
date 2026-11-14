@@ -231,9 +231,23 @@ def _lazy_state_saved(parent: Any, child: Any) -> bool:
     configured a lazy legacy child's state is not saved: each fallback request
     mounts the child again.
     """
-    from ._automatic_state import _state_store, saving_enabled
+    from ._automatic_state import _first_time, _state_store, logger, saving_enabled
 
-    return _state_store() is None and saving_enabled(parent) and saving_enabled(child)
+    if not (saving_enabled(parent) and saving_enabled(child)):
+        return False
+    if _state_store() is None:
+        return True
+    if _first_time(child, "*", "lazy-store"):
+        owner = type(child)
+        logger.warning(
+            "djust: the state of the lazy child %s.%s is not saved between requests while "
+            "DJUST_STATE_STORE is set: a legacy lazy child's state does not go through the "
+            "state store, and is not written to the session in the clear instead. It "
+            "mounts again on each page-POST fallback request.",
+            owner.__module__,
+            owner.__qualname__,
+        )
+    return False
 
 
 def save_http_lazy(parent: Any, request: Any, view_id: str, child: Any) -> None:
