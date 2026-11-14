@@ -7747,7 +7747,6 @@ class FeedbackWidgetNode(template.Node):
         if mode not in self.VALID_MODES:
             mode = "thumbs"
 
-        e_event = conditional_escape(str(event))
         e_class = conditional_escape(str(custom_class))
 
         cls = f"dj-feedback dj-feedback--{mode}"
@@ -7755,15 +7754,16 @@ class FeedbackWidgetNode(template.Node):
             cls += f" {e_class}"
 
         if mode == "thumbs":
-            buttons = self._render_thumbs(e_event, value)
+            buttons = self._render_thumbs(event, value)
         elif mode == "stars":
-            buttons = self._render_stars(e_event, value)
+            buttons = self._render_stars(event, value)
         else:
-            buttons = self._render_emoji(e_event, value)
+            buttons = self._render_emoji(event, value)
 
         return mark_safe(f'<div class="{cls}" role="group" aria-label="Feedback">{buttons}</div>')
 
-    def _render_thumbs(self, e_event: Any, value: Any) -> Any:
+    def _render_thumbs(self, event: Any, value: Any) -> Any:
+        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)
         up_cls = "dj-feedback__btn--active" if value == "up" else ""
         down_cls = "dj-feedback__btn--active" if value == "down" else ""
         return (
@@ -7783,7 +7783,8 @@ class FeedbackWidgetNode(template.Node):
             f"</svg></button>"
         )
 
-    def _render_stars(self, e_event: Any, value: Any) -> Any:
+    def _render_stars(self, event: Any, value: Any) -> Any:
+        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)
         parts = []
         current = int(value) if value and str(value).isdigit() else 0
         for i in range(1, 6):
@@ -7799,7 +7800,8 @@ class FeedbackWidgetNode(template.Node):
             )
         return "".join(parts)
 
-    def _render_emoji(self, e_event: Any, value: Any) -> Any:
+    def _render_emoji(self, event: Any, value: Any) -> Any:
+        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)
         emojis = [
             ("\U0001f44d", "thumbs_up"),
             ("\u2764\ufe0f", "heart"),

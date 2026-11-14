@@ -250,17 +250,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (FM, 'safe_row[k] = conditional_escape(str(v)) if v is not None else ""'),
         (FM, "total_pages = int(total_pages)"),
     ),
-    (ADV, "OrgChartNode.render"): S(
-        1,
-        "the tree comes from _render_node, which conditional_escape's id, name and title and sends the avatar through url_attr",
-        (ADV, "tree_html = self._render_node(root_id, node_map, children, e_event)"),
-        (
-            ADV,
-            "def _render_node(self, nid: Any, node_map: Any, children: Any, e_event: Any) -> Any:",
-            "OrgChartNode._render_node",
-        ),
-        (ADV, 'src="{data_url_attr(avatar, image=True)}"', "OrgChartNode._render_node"),
-    ),
     (ADV, "PromptEditorNode.render"): S(
         1,
         "the template text is conditional_escape'd FIRST; {{var}} tokens are \\w+ and are replaced by conditional_escape'd values inside <mark>; rows int()",
@@ -381,12 +370,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         ),
         (DC, "f'href=\"{safe_url(href)}\">'", "SidebarNode._render_item"),
     ),
-    (DC, "FeedbackWidgetNode.render"): S(
-        1,
-        "mode is checked against VALID_MODES; the buttons are constants plus the conditional_escape'd event, an int star index and escaped emoji keys",
-        (DC, 'VALID_MODES = {"thumbs", "stars", "emoji"}', "FeedbackWidgetNode"),
-        (DC, "if mode not in self.VALID_MODES:"),
-    ),
     (DC, "render_dropdown_menu"): S(
         1,
         "label, event, class and align conditional_escape'd; items come from render_menu_item (labels escaped, href through url_attr); a block body is the rendered tag body",
@@ -428,24 +411,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         ),
         (RH, "vals.append(float(v))"),
         (RH, "agg_val = round(sum(vals) / len(vals), 2)"),
-    ),
-    (RH, "ProgressHandler.render"): S(
-        1,
-        "value is the Python tag's clamp, max(0, min(100, int(value))): an int in 0..100; label, size and colour conditional_escape'd; the track size is a constant looked up by the escaped size",
-        (RH, 'value = _progress(value=kw.get("value", 0))["value"]'),
-        (RH, 'label = conditional_escape(kw.get("label", ""))'),
-        (DC, "value = max(0, min(100, int(value)))", "progress"),
-    ),
-    (DT, "FileTreeNode.render"): S(
-        1,
-        "class, event and selected conditional_escape'd; the tree is _render_tree_node, which conditional_escape's name and type, takes its icons from class constants, and whose `depth` is an int at every call site (0 here, depth + 1 in the recursion)",
-        (DT, "e_class = conditional_escape(str(custom_class))"),
-        (
-            DT,
-            "nodes_html.append(self._render_tree_node(node, 0, event, show_icons, str(selected)))",
-        ),
-        (DT, "e_name = conditional_escape(name)", "FileTreeNode._render_tree_node"),
-        (DT, "e_event = conditional_escape(str(event))", "FileTreeNode._render_tree_node"),
     ),
     (JS, "JSChain.__html__"): S(
         1,

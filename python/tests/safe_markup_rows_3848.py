@@ -1260,7 +1260,13 @@ for _helper in ("data_url_attr", "attr_text"):
         ("an unquoted attribute", f'f"<a href={{{_helper}(x)}}>go</a>"', True),
         ("an attribute name", f'f"<a {{{_helper}(x)}}=1>go</a>"', True),
         ("a tag name", f"f'<{{{_helper}(x)}}>x'", True),
-        ("a quoted attribute", f"f'<a href=\"{{{_helper}(x)}}\">go</a>'", False),
+        # ``attr_text`` only HTML-escapes: right in ``title=``, not at the start of an ``href``
+        # (``javascript:alert(1)`` survives it), which the guard flags since #3864
+        (
+            "a quoted attribute",
+            f"f'<a {'title' if _helper == 'attr_text' else 'href'}=\"{{{_helper}(x)}}\">go</a>'",
+            False,
+        ),
         ("text", f'f"<p>{{{_helper}(x)}}</p>"', False),
     ):
         row(
@@ -1268,6 +1274,12 @@ for _helper in ("data_url_attr", "attr_text"):
             f"{_imp}def f(x):\n    return mark_safe({_body})\n",
             _bad,
         )
+row(
+    "attr_text at the start of a quoted URL attribute",
+    "from djust.components.utils import attr_text\n"
+    "def f(x):\n    return mark_safe(f'<a href=\"{attr_text(x)}\">go</a>')\n",
+    True,
+)
 
 # --- #3850 follow-up: each rule that turned a pinned miss into a catch, with its clean twin ------
 # The caught cases themselves are in ``safe_markup_corpus_3848`` (RUN, and flagged); these rows pin

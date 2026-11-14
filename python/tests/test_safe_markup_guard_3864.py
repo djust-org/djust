@@ -247,34 +247,48 @@ ROWS: dict[str, tuple[str, bool]] = {
 }
 
 KNOWN_GAPS: dict[str, tuple[str]] = {
-    "escape() written into an href": (
-        "def f(x):\n    return mark_safe(f'<a href=\"{escape(x)}\">l</a>')\n",
-    ),
-    "escape() written into an event handler string": (
-        "def f(x):\n    return mark_safe(f'<b onclick=\"go(\\'{escape(x)}\\')\">b</b>')\n",
-    ),
-    "escape() written into a script body": (
-        "def f(x):\n    return mark_safe(f'<script>var a={escape(x)};</script>')\n",
-    ),
     "a helper's whole attributes with an escaped value in a URL attribute": (
         "S = ['']\ndef w():\n    return f' href=\"{escape(S[0])}\"'\ndef f(x):\n    S[0] = x\n    return mark_safe(f'<a{w()}>l</a>')\n",
     ),
     "a zero-argument helper's markup, placed in a quoted attribute": (
         "S = ['']\ndef w():\n    return f'<i title=\"{escape(S[0])}\">'\ndef f(x):\n    S[0] = x\n    return mark_safe(f'<div title=\"{w()}\">d</div>')\n",
     ),
-    "an escaped argument in the helper's href": (
-        "def tag(u):\n    return f'<a href=\"{u}\">l</a>'\ndef f(x):\n    return mark_safe(tag(escape(x)))\n",
-    ),
-    "an escaped argument in the helper's iframe src": (
-        "def tag(u):\n    return f'<iframe src=\"{u}\"></iframe>'\ndef f(x):\n    return mark_safe(tag(escape(x)))\n",
-    ),
-    "an escaped argument in the helper's event handler": (
-        "def tag(u):\n    return f'<b onclick=\"go(\\'{u}\\')\">b</b>'\ndef f(x):\n    return mark_safe(tag(escape(x)))\n",
-    ),
-    "an escaped argument in the helper's style body": (
-        "def css(u):\n    return f'<style>.c{{color:{u}}}</style>'\ndef f(x):\n    return mark_safe(css(escape(x)))\n",
-    ),
 }
+
+#: Known gaps until #3864 taught the guard where HTML escaping is not enough (a URL attribute, an
+#: event handler, a script or style body): flagged now, and each is unsafe when run.
+ROWS.update(
+    {
+        "escape() written into an href": (
+            "def f(x):\n    return mark_safe(f'<a href=\"{escape(x)}\">l</a>')\n",
+            True,
+        ),
+        "escape() written into an event handler string": (
+            "def f(x):\n    return mark_safe(f'<b onclick=\"go(\\'{escape(x)}\\')\">b</b>')\n",
+            True,
+        ),
+        "escape() written into a script body": (
+            "def f(x):\n    return mark_safe(f'<script>var a={escape(x)};</script>')\n",
+            True,
+        ),
+        "an escaped argument in the helper's href": (
+            "def tag(u):\n    return f'<a href=\"{u}\">l</a>'\ndef f(x):\n    return mark_safe(tag(escape(x)))\n",
+            True,
+        ),
+        "an escaped argument in the helper's iframe src": (
+            "def tag(u):\n    return f'<iframe src=\"{u}\"></iframe>'\ndef f(x):\n    return mark_safe(tag(escape(x)))\n",
+            True,
+        ),
+        "an escaped argument in the helper's event handler": (
+            "def tag(u):\n    return f'<b onclick=\"go(\\'{u}\\')\">b</b>'\ndef f(x):\n    return mark_safe(tag(escape(x)))\n",
+            True,
+        ),
+        "an escaped argument in the helper's style body": (
+            "def css(u):\n    return f'<style>.c{{color:{u}}}</style>'\ndef f(x):\n    return mark_safe(css(escape(x)))\n",
+            True,
+        ),
+    }
+)
 
 #: Flagged although one run is safe: the guard of main flags them too (a call's result is not
 #: cleared), or the call cannot be bound (``*args``, a keyword it does not take).
@@ -444,8 +458,10 @@ class TestTheRowsAreTrue:
 
 class TestKnownGaps:
     """Unsafe when run and cleared, here AND by the guard of ``main``: an HTML escaper where HTML
-    escaping is not enough (a URL, an event handler, a script or style body), written in place or
-    reached through a helper whose result is handed to the sink as it is."""
+    escaping is not enough, inside the result of a helper that is placed in a larger string (the
+    guard does not look inside a call's result there). Written in place, held by a name or handed
+    to a helper as an argument it is flagged since #3864
+    (``test_safe_markup_html_context_3864.py``)."""
 
     @pytest.mark.parametrize("label", sorted(KNOWN_GAPS))
     def test_the_gap_is_real(self, label):

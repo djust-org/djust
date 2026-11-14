@@ -2565,12 +2565,22 @@ class TestTheRealTree:
         sinks = sum(len(v) for v in found.values())
         # Over the same tree, with `_safe` / `safe_html` as sinks, the first guard flagged 199 sinks.
         assert sinks == sum(e.sites for e in audit.AUDITED.values())
-        assert sinks <= 46, sinks  # 57 before #3845 / #3846 / #3847 proved ten functions
+        # 57 before #3845 / #3846 / #3847 proved ten functions; 39 since the last four of #3845 and
+        # #3847 (OrgChartNode, FeedbackWidgetNode, FileTreeNode, ProgressHandler) escape or coerce
+        # the value where it is written
+        assert sinks <= 39, sinks
 
     def test_the_wrappers_are_scanned_in_every_file_that_calls_them(self, tree_scan):
         files = {path for (path, _fn) in tree_scan}
         assert any(f.endswith("rust_handlers.py") for f in files)
-        assert any(f.endswith("_dev_tools.py") for f in files)
+        # ``_dev_tools.py`` has no flagged sink left since #3845 proved ``FileTreeNode.render``, so
+        # its wrapper is shown to be scanned by a raw interpolation added to the file's own text
+        path = audit.ROOT / audit.DT
+        assert not any(f.endswith("_dev_tools.py") for f in files)
+        module, is_package = audit.module_name(path)
+        probe = path.read_text() + "\n\ndef _probe_3845(v):\n    return _safe(f'<b>{v}</b>')\n"
+        found = {f.function for f in find_unsafe_markup(probe, module, is_package)}
+        assert found == {"_probe_3845"}
 
 
 class TestCleanProjectOrigins:
