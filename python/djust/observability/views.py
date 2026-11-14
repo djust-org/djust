@@ -546,22 +546,18 @@ def eval_handler(request: HttpRequest) -> HttpResponse:
             status=404,
         )
 
-    # Security: only @event_handler-decorated methods may be invoked — the same
-    # allowlist the WebSocket event path enforces (_check_event_security). The
+    # Security: only what a browser event may call may be invoked — the same
+    # check every event transport runs (_check_event_security, #4101). The
     # `_`-prefix reject above blocks dunders/internals, but without this an
     # arbitrary PUBLIC business method (e.g. delete_account, charge_card) would
     # be callable with attacker params. eval_handler is an introspection aid,
-    # not a general RPC surface (finding #9).
-    from djust.decorators import is_event_handler
+    # not a general RPC surface (finding #9). DEBUG-only, so the detailed
+    # message is returned as is.
+    from djust.websocket_utils import _check_event_security
 
-    if not is_event_handler(handler):
-        return JsonResponse(
-            {
-                "error": f"'{handler_name}' is not an @event_handler — only decorated "
-                "event handlers may be invoked via eval_handler",
-            },
-            status=403,
-        )
+    security_error = _check_event_security(handler, view, handler_name)
+    if security_error:
+        return JsonResponse({"error": security_error}, status=403)
 
     # v1: sync handlers only.
     import inspect as _inspect

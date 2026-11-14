@@ -275,9 +275,9 @@ class WizardMixin:
         replaces the answers and the current step, so calling it later throws
         away what the person has entered.
 
-        Never a client event, in any ``event_security`` mode: it is public and
-        undecorated, so under ``"warn"`` / ``"open"`` a browser could otherwise
-        call it to reset the wizard (``websocket_utils._check_event_security``).
+        Never a client event, even when an override carries ``@event_handler``:
+        a browser must not be able to reset the wizard
+        (``websocket_utils._check_event_security``).
         """
         self._resume_wizard()
 

@@ -943,97 +943,67 @@ async def test_a_tick_of_an_explicit_root_whose_session_was_revoked_stops():
 # -- S2: a browser event named like the push API -----------------------------
 
 
-@pytest.mark.parametrize("mode", ["strict", "warn", "open"])
-async def test_a_client_event_named_server_push_is_refused_over_sse(mode):
-    previous = config.get("event_security")
-    config.set("event_security", mode)
+async def test_a_client_event_named_server_push_is_refused_over_sse():
+    session, key = await _sse(MOD + "GuardedPage", "/guarded/")
+    view = session.view_instance
+    await _sse_event(
+        session,
+        key,
+        "server_push",
+        {"handler": "trusted_update", "payload": {"who": "ATTACKER"}},
+    )
+    frames = await _sse_frames(session, lambda fs: any(f.get("type") == "error" for f in fs))
+    assert view.calls == [], frames
+
+
+async def test_a_client_event_named_server_push_is_refused_over_a_websocket():
+    socket, consumer = await _ws(MOD + "GuardedPage")
     try:
-        session, key = await _sse(MOD + "GuardedPage", "/guarded/")
-        view = session.view_instance
-        await _sse_event(
-            session,
-            key,
-            "server_push",
-            {"handler": "trusted_update", "payload": {"who": "ATTACKER"}},
+        view = consumer.view_instance
+        await socket.send_json_to(
+            {
+                "type": "event",
+                "event": "server_push",
+                "params": {"handler": "trusted_update", "payload": {"who": "ATTACKER"}},
+            }
         )
-        frames = await _sse_frames(session, lambda fs: any(f.get("type") == "error" for f in fs))
-        assert view.calls == [], frames
+        await receive_until(socket, lambda fs: any(f.get("type") == "error" for f in fs))
+        assert view.calls == []
     finally:
-        config.set("event_security", previous)
+        await socket.disconnect()
 
 
-@pytest.mark.parametrize("mode", ["strict", "warn", "open"])
-async def test_a_client_event_named_server_push_is_refused_over_a_websocket(mode):
-    previous = config.get("event_security")
-    config.set("event_security", mode)
-    try:
-        socket, consumer = await _ws(MOD + "GuardedPage")
-        try:
-            view = consumer.view_instance
-            await socket.send_json_to(
-                {
-                    "type": "event",
-                    "event": "server_push",
-                    "params": {"handler": "trusted_update", "payload": {"who": "ATTACKER"}},
-                }
-            )
-            await receive_until(socket, lambda fs: any(f.get("type") == "error" for f in fs))
-            assert view.calls == []
-        finally:
-            await socket.disconnect()
-    finally:
-        config.set("event_security", previous)
-
-
-@pytest.mark.parametrize("mode", ["strict", "warn", "open"])
-async def test_a_client_event_named_resume_wizard_is_refused_over_a_websocket(mode):
+async def test_a_client_event_named_resume_wizard_is_refused_over_a_websocket():
     """``WizardMixin.resume_wizard`` is public and undecorated: never a client event (#4011)."""
-    previous = config.get("event_security")
-    config.set("event_security", mode)
+    socket, consumer = await _ws(MOD + "ResumeWizardPage")
     try:
-        socket, consumer = await _ws(MOD + "ResumeWizardPage")
-        try:
-            view = consumer.view_instance
-            view.wizard_step_index = 1
-            view.wizard_step_data = {"a": {"name": "typed"}}
-            await socket.send_json_to({"type": "event", "event": "resume_wizard", "params": {}})
-            await receive_until(socket, lambda fs: any(f.get("type") == "error" for f in fs))
-            assert view.wizard_step_index == 1
-            assert view.wizard_step_data == {"a": {"name": "typed"}}
-        finally:
-            await socket.disconnect()
+        view = consumer.view_instance
+        view.wizard_step_index = 1
+        view.wizard_step_data = {"a": {"name": "typed"}}
+        await socket.send_json_to({"type": "event", "event": "resume_wizard", "params": {}})
+        await receive_until(socket, lambda fs: any(f.get("type") == "error" for f in fs))
+        assert view.wizard_step_index == 1
+        assert view.wizard_step_data == {"a": {"name": "typed"}}
     finally:
-        config.set("event_security", previous)
+        await socket.disconnect()
 
 
-def test_resume_wizard_is_refused_by_name_and_by_function_in_every_mode():
+def test_resume_wizard_is_refused_by_name_and_by_function():
     from djust.websocket_utils import _check_event_security
 
     view = ResumeWizardPage()
-    for mode in ("strict", "warn", "open"):
-        previous = config.get("event_security")
-        config.set("event_security", mode)
-        try:
-            assert _check_event_security(view.resume_wizard, view, "resume_wizard"), mode
-            view.innocent_name = view.resume_wizard  # an alias: same function, other name
-            assert _check_event_security(view.innocent_name, view, "innocent_name"), mode
-        finally:
-            config.set("event_security", previous)
+    assert _check_event_security(view.resume_wizard, view, "resume_wizard")
+    view.innocent_name = view.resume_wizard  # an alias: same function, other name
+    assert _check_event_security(view.innocent_name, view, "innocent_name")
 
 
 def test_the_push_method_is_refused_by_function_not_only_by_name():
     from djust.websocket_utils import _check_event_security
 
     view = PushPage()
-    for mode in ("strict", "warn", "open"):
-        previous = config.get("event_security")
-        config.set("event_security", mode)
-        try:
-            # An alias: the name is innocent, the function is the push API.
-            view.innocent_name = view.server_push
-            assert _check_event_security(view.innocent_name, view, "innocent_name"), mode
-        finally:
-            config.set("event_security", previous)
+    # An alias: the name is innocent, the function is the push API.
+    view.innocent_name = view.server_push
+    assert _check_event_security(view.innocent_name, view, "innocent_name")
 
 
 # -- F2: a render error in a push turn is logged, never raised ---------------
@@ -1190,64 +1160,46 @@ async def test_the_runtime_push_turn_enforces_the_allowlist_itself():
     assert view.log == []
 
 
-@pytest.mark.parametrize("mode", ["strict", "warn", "open"])
-async def test_a_subclass_override_of_server_push_is_not_a_client_event_over_sse(mode):
-    previous = config.get("event_security")
-    config.set("event_security", mode)
+async def test_a_subclass_override_of_server_push_is_not_a_client_event_over_sse():
+    session, key = await _sse(MOD + "OverridePage", "/override/")
+    view = session.view_instance
+    await _sse_event(
+        session,
+        key,
+        "server_push",
+        {"handler": "trusted_update", "payload": {"who": "ATTACKER"}},
+    )
+    await _sse_frames(session, lambda fs: any(f.get("type") == "error" for f in fs))
+    assert view.calls == [] and getattr(view, "overridden", 0) == 0
+
+
+async def test_a_subclass_override_of_server_push_is_not_a_client_event_over_a_websocket():
+    socket, consumer = await _ws(MOD + "OverridePage")
     try:
-        session, key = await _sse(MOD + "OverridePage", "/override/")
-        view = session.view_instance
-        await _sse_event(
-            session,
-            key,
-            "server_push",
-            {"handler": "trusted_update", "payload": {"who": "ATTACKER"}},
+        view = consumer.view_instance
+        await socket.send_json_to(
+            {
+                "type": "event",
+                "event": "server_push",
+                "params": {"handler": "trusted_update", "payload": {"who": "ATTACKER"}},
+            }
         )
-        await _sse_frames(session, lambda fs: any(f.get("type") == "error" for f in fs))
+        await receive_until(socket, lambda fs: any(f.get("type") == "error" for f in fs))
         assert view.calls == [] and getattr(view, "overridden", 0) == 0
     finally:
-        config.set("event_security", previous)
+        await socket.disconnect()
 
 
-@pytest.mark.parametrize("mode", ["strict", "warn", "open"])
-async def test_a_subclass_override_of_server_push_is_not_a_client_event_over_a_websocket(mode):
-    previous = config.get("event_security")
-    config.set("event_security", mode)
-    try:
-        socket, consumer = await _ws(MOD + "OverridePage")
-        try:
-            view = consumer.view_instance
-            await socket.send_json_to(
-                {
-                    "type": "event",
-                    "event": "server_push",
-                    "params": {"handler": "trusted_update", "payload": {"who": "ATTACKER"}},
-                }
-            )
-            await receive_until(socket, lambda fs: any(f.get("type") == "error" for f in fs))
-            assert view.calls == [] and getattr(view, "overridden", 0) == 0
-        finally:
-            await socket.disconnect()
-    finally:
-        config.set("event_security", previous)
-
-
-def test_override_and_alias_are_refused_in_every_mode():
+def test_override_and_alias_are_refused():
     from djust.websocket_utils import _check_event_security
 
     view = OverridePage()
     plain = PushPage()
     plain.innocent = plain.server_push
-    for mode in ("strict", "warn", "open"):
-        previous = config.get("event_security")
-        config.set("event_security", mode)
-        try:
-            # By name: the override is a different function.
-            assert _check_event_security(view.server_push, view, "server_push"), mode
-            # By function: an alias of the mixin's method under an innocent name.
-            assert _check_event_security(plain.innocent, plain, "innocent"), mode
-        finally:
-            config.set("event_security", previous)
+    # By name: the override is a different function.
+    assert _check_event_security(view.server_push, view, "server_push")
+    # By function: an alias of the mixin's method under an innocent name.
+    assert _check_event_security(plain.innocent, plain, "innocent")
 
 
 async def test_stop_server_work_on_a_closed_loop_does_not_raise_and_shutdown_completes():

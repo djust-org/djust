@@ -226,8 +226,8 @@ How it behaves:
   them in the hook as you would in `mount()`.
 - **Optional.** A child that does not define it behaves as before: the new values
   are ignored and djust logs one warning naming the changed kwargs.
-- **Not a client event.** The leading underscore keeps it out of event dispatch in
-  every `event_security` mode; only the tag calls it. Do not decorate it with
+- **Not a client event.** The leading underscore keeps it out of event dispatch;
+  only the tag calls it. Do not decorate it with
   `@event_handler`.
 - **Preserved children.** A sticky preserved across a `live_redirect` is not
   rendered again (the browser keeps its DOM), so the hook does not run and a

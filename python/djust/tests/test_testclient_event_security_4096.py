@@ -76,18 +76,20 @@ def test_a_decorated_handler_still_runs():
     assert client.view_instance.n == 1
 
 
-def test_open_event_security_runs_it_as_the_transports_do():
+def test_a_leftover_open_mode_in_the_config_does_not_reopen_it():
+    """#4101: "open" was removed; startup refuses it, and a value that reaches
+    the live config anyway (set at runtime) changes nothing."""
     client = LiveViewTestClient(CounterView).mount()
     from djust.config import config as djust_config
 
-    previous = djust_config.get("event_security", "strict")
+    previous = djust_config.get("event_security")
     djust_config.set("event_security", "open")
     try:
-        result = client.send_event("bump")
+        result = client.send_event("bump", raise_on_missing=False)
     finally:
         djust_config.set("event_security", previous)
-    assert result["success"] is True
-    assert client.view_instance.n == 1
+    assert result["code"] == "event_rejected"
+    assert client.view_instance.n == 0
 
 
 @pytest.mark.parametrize("name", ["__class__", "_private", "server_push", "resume_wizard"])

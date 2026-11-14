@@ -117,8 +117,8 @@ def get_handler_coerce_setting(handler: Callable[..., Any]) -> bool:
     return get_handler_coercion(handler)
 
 
-#: Public, undecorated framework methods a client event must never reach, whatever the
-#: ``event_security`` mode (see :func:`_check_event_security`).
+#: Public framework methods a client event must never reach, even when an override
+#: carries ``@event_handler`` (see :func:`_check_event_security`).
 _SERVER_ONLY_METHOD_NAMES = frozenset({"resume_wizard"})
 
 
@@ -126,24 +126,25 @@ def _check_event_security(
     handler: Callable[..., Any], owner_instance: object, event_name: str
 ) -> Optional[str]:
     """
-    Check the event_security policy for a handler.
+    The one handler check every client-event transport runs (#4101).
 
     Returns None if allowed, or an error message string if blocked.
-    Only @event_handler-decorated methods are allowed.
+    Only @event_handler-decorated methods are allowed; the WebSocket, SSE,
+    runtime, page-POST fallback, component and test-client paths all call
+    this, so they cannot disagree about what a client may call.
     """
     from ._component_subscriptions import ComponentDeclaration, is_component_subscription
 
     if is_component_subscription(handler):
         return "Component output subscription callbacks cannot be invoked as client events"
-    # Server-push only, in EVERY event_security mode (strict/warn/open).
+    # Server-push only, even when an override carries @event_handler.
     # _validate_event_security already treats such a handler as missing; this
     # keeps the gate closed for a caller that reaches the check directly.
     if is_push_only(owner_instance, event_name, handler):
         return "Server push handlers cannot be invoked as client events"
     # ``LiveView.server_push(handler, payload)`` is the view's own way to run a
-    # push handler. It is public and undecorated, so under ``event_security``
-    # "warn" / "open" a browser event named ``server_push`` would run a
-    # push-only handler with a client payload. Refused in every mode, by NAME
+    # push handler; a browser event named ``server_push`` would run a
+    # push-only handler with a client payload. Refused by NAME
     # (a subclass that overrides ``server_push`` is still the push API) and by
     # FUNCTION (whatever name the event carries, it is the same method) (#3809).
     from .mixins.server_push import ServerPushMixin
@@ -153,7 +154,7 @@ def _check_event_security(
     ):
         return "Server push methods cannot be invoked as client events"
     # Public framework methods that only server code may call (``WizardMixin.resume_wizard``,
-    # #4011), refused in every mode by NAME (an override keeps the name) and by marker
+    # #4011), refused by NAME (an override keeps the name) and by marker
     # (whatever name the event carries, it is the same method).
     if event_name in _SERVER_ONLY_METHOD_NAMES or getattr(
         getattr(handler, "__func__", handler), "_djust_server_only", False
@@ -162,30 +163,31 @@ def _check_event_security(
     if isinstance(owner_instance, ComponentDeclaration) and not is_event_handler(handler):
         return "Interactive components accept only declared event actions"
 
-    mode = djust_config.get("event_security", "strict")
-    if mode not in ("warn", "strict"):
-        return None
-
+    # Only an @event_handler method is a client event, on every transport. djust
+    # 2.0 removed the ``event_security`` "warn" and "open" modes that let an
+    # undecorated public method run (#4101); a project that still sets them
+    # fails startup (``djust._removed_settings``). The message is the same on
+    # every transport; callers pass it through :func:`_safe_error`, so a
+    # production client sees only "Event rejected".
     if is_event_handler(handler):
         return None
+    from .components.base import BoundComponent
 
-    if mode == "strict":
-        cls_name = type(owner_instance).__name__
-        return (
-            f"Event '{event_name}' on {cls_name} is not decorated with "
-            "@event_handler.\n"
-            f"  Fix: Add the decorator:\n"
-            f"    @event_handler\n"
-            f"    def {event_name}(self, **kwargs):"
-        )
-
-    logger.warning(
-        "Deprecation: handler '%s' on %s is not decorated with @event_handler. "
-        "This will be blocked in strict mode.",
-        sanitize_for_log(event_name),
-        type(owner_instance).__name__,
+    # A descriptor component's methods run on its per-view proxy; name the
+    # class the developer wrote.
+    owner_type = (
+        type(object.__getattribute__(owner_instance, "_descriptor"))
+        if isinstance(owner_instance, BoundComponent)
+        else type(owner_instance)
     )
-    return None
+    cls_name = owner_type.__name__
+    return (
+        f"Event '{event_name}' on {cls_name} is not decorated with "
+        "@event_handler.\n"
+        f"  Fix: Add the decorator:\n"
+        f"    @event_handler\n"
+        f"    def {event_name}(self, **kwargs):"
+    )
 
 
 def _ensure_handler_rate_limit(

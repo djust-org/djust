@@ -324,7 +324,7 @@ If the WebSocket exhausts its reconnect attempts and the SSE endpoint is mounted
 
 Check:
 1. `sse_urlpatterns` is mounted (see [Mount the SSE endpoint](#mount-the-sse-endpoint)); the stream at `/djust/sse/<session>/` must not 404
-2. Event handlers are decorated with `@event_handler`. The page POST refuses an undecorated method whatever `event_security` says
+2. Event handlers are decorated with `@event_handler`. Every transport, the page POST included, refuses an undecorated method
 3. Browser console for errors
 4. Django middleware allows POST requests
 

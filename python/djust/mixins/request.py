@@ -48,7 +48,7 @@ from ..validation import (
 )
 from ..security import safe_setattr, sanitize_for_log
 from ..security.event_guard import is_safe_event_name
-from ..decorators import is_event_handler, is_push_only
+from ..decorators import is_push_only
 from ..hooks import run_on_mount_hooks
 from .._exposure import uses_legacy_exposure
 from .._view_hooks import call_async_result_sync, call_hook_sync
@@ -1936,18 +1936,33 @@ class RequestMixin:
                     event_name,
                     component_id if owner is not self else type(self).__name__,
                 )
-                return JsonResponse({"error": "Event handler not found"}, status=400)
+                # The WebSocket's answer (#4101): outside DEBUG a missing name
+                # and a refused one read alike, so the answer does not tell a
+                # client which methods exist.
+                from ..websocket_utils import _format_handler_not_found_error, _safe_error
+
+                return JsonResponse(
+                    {
+                        "error": _safe_error(
+                            _format_handler_not_found_error(owner, event_name), "Event rejected"
+                        )
+                    },
+                    status=400,
+                )
             if handler and callable(handler):
-                if not is_event_handler(handler):
+                # The handler check every transport runs (#4101): an
+                # undecorated method is refused with the same message as on
+                # the WebSocket, whatever else differs about this path.
+                from ..websocket_utils import _check_event_security, _safe_error
+
+                security_error = _check_event_security(handler, owner, event_name)
+                if security_error:
                     logger.warning(
-                        "HTTP POST blocked undecorated handler '%s' on %s",
-                        event_name,
-                        type(self).__name__,
+                        "HTTP POST security check failed for event %s on %s",
+                        sanitize_for_log(event_name),
+                        type(owner).__name__,
                     )
-                    return JsonResponse(
-                        {"error": "Event handler not found"},
-                        status=400,
-                    )
+                    return JsonResponse({"error": _safe_error(security_error)}, status=400)
                 # --- Authorization layer 2 of 3: handler-level -----------
                 # ``@permission_required`` on the handler — the same check the
                 # WS path runs (websocket_utils._validate_event_security →

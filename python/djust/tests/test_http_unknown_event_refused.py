@@ -89,5 +89,5 @@ def test_an_unknown_or_non_callable_event_is_refused_and_saves_nothing(session, 
     before = dict(session.items())
     response = _post(session, event)
     assert response.status_code == 400
-    assert json.loads(response.content) == {"error": "Event handler not found"}
+    assert json.loads(response.content) == {"error": "Event rejected"}  # #4101
     assert dict(session.items()) == before

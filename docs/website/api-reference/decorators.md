@@ -374,7 +374,7 @@ def search(self, q: str = "", **kwargs) -> list[dict]:
 
 ## `@push_handler`
 
-Mark a method that only server push may call. `push_to_view(..., handler="name")` reaches it under any name, and a browser event naming it is refused in every `event_security` mode (`strict`, `warn` and `open`) on every transport, with the same response as a method that does not exist.
+Mark a method that only server push may call. `push_to_view(..., handler="name")` reaches it under any name, and a browser event naming it is refused on every transport, with the same response as a method that does not exist.
 
 ```python
 @push_handler

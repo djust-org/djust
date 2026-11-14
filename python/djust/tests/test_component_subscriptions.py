@@ -192,10 +192,8 @@ def test_transport_decorator_conflicts_in_both_orders(decorator, outer):
             selected(source)(decorator(callback))
 
 
-@pytest.mark.parametrize("mode", ["open", "warn", "strict"])
-def test_subscription_rejected_by_transport_even_in_permissive_mode(mode, monkeypatch):
+def test_subscription_rejected_by_transport():
     from djust.websocket_utils import _check_event_security
-    from djust.config import config
 
     class Page(LiveView):
         exposure_policy = "explicit"
@@ -205,9 +203,6 @@ def test_subscription_rejected_by_transport_even_in_permissive_mode(mode, monkey
         def callback(self, component: Menu, value: str) -> None:
             pass
 
-    monkeypatch.setattr(
-        config, "get", lambda key, default=None: mode if key == "event_security" else default
-    )
     assert "subscription" in _check_event_security(Page.callback, Page(), "callback")
 
 
@@ -259,11 +254,9 @@ def test_untyped_callback_gets_actionable_class_time_error():
                 pass
 
 
-@pytest.mark.parametrize("mode", ["open", "warn", "strict"])
 @pytest.mark.asyncio
-async def test_shared_dispatch_security_rejects_subscription_before_invocation(mode, monkeypatch):
+async def test_shared_dispatch_security_rejects_subscription_before_invocation():
     from djust.websocket_utils import _validate_event_security
-    from djust.config import config
 
     class Page(LiveView):
         exposure_policy = "explicit"
@@ -274,9 +267,6 @@ async def test_shared_dispatch_security_rejects_subscription_before_invocation(m
             raise AssertionError("A client must not reach an output callback")
 
     transport = AsyncMock()
-    monkeypatch.setattr(
-        config, "get", lambda key, default=None: mode if key == "event_security" else default
-    )
     assert await _validate_event_security(transport, "callback", Page(), None) is None
     transport.send_error.assert_awaited_once()
 
@@ -310,7 +300,8 @@ def test_actual_http_fallback_rejects_direct_callback():
     request.user, request.session, request.tenant = initial.user, initial.session, None
     response = Page().post(request)
     assert response.status_code == 400
-    assert b"Event handler not found" in response.content
+    # The shared check every transport runs (#4101); generic outside DEBUG.
+    assert json.loads(response.content) == {"error": "Event rejected"}
 
 
 @pytest.mark.parametrize(

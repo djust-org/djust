@@ -2,8 +2,9 @@
 Event name guard for WebSocket event dispatch.
 
 Validates event name format before getattr() to prevent calling private
-or malformed method names. The @event_handler decorator allowlist (event_security
-config) is the primary access control — this guard is a fast first filter.
+or malformed method names. The @event_handler decorator allowlist
+(``websocket_utils._check_event_security``) is the primary access control;
+this guard is a fast first filter.
 """
 
 import re
@@ -27,7 +28,7 @@ def is_safe_event_name(name: str) -> bool:
 
     This is a fast syntactic check only — it blocks obviously dangerous
     names (private methods, dunders, malformed strings). The real access
-    control is the event_security decorator allowlist in websocket.py.
+    control is the @event_handler allowlist, ``websocket_utils._check_event_security``.
 
     Args:
         name: The event name received from the client.

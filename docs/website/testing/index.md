@@ -155,10 +155,8 @@ class TestAllViews(TestCase, LiveViewSmokeTest):
    [`query_budget`](#per-view-query-budgets)
 4. If `fuzz=True`, sends malformed event payloads to handlers and asserts no 500 errors
 
-The fuzzer sends events only to `@event_handler` handlers, the ones dispatch
-resolves in every `event_security` mode. Under `"warn"` or `"open"` a client can
-still call an undecorated public method, so the smoke test emits one
-`UserWarning` per view naming those methods: decorate them, or test them directly.
+The fuzzer sends events to every `@event_handler` handler, which is everything a
+client event can call.
 
 ### Per-view query budgets
 

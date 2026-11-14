@@ -263,4 +263,4 @@ class TestErrorHandling:
         # Refused outright, as the socket transports do: no render, no save.
         assert response.status_code == 400
         data = json.loads(response.content.decode())
-        assert data == {"error": "Event handler not found"}
+        assert data == {"error": "Event rejected"}  # the WebSocket answer, #4101
