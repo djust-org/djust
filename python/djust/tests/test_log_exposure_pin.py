@@ -107,7 +107,7 @@ RUNTIME_LEGACY_GATED = {
 }
 
 RUNTIME_FRAMEWORK_ONLY = {
-    ("_join_listen_channels", "Error joining db_notify group for %s: %s"): (
+    ("join_listen_channels", "Error joining db_notify group for %s: %s"): (
         "channel-layer group_add"
     ),
     ("leave_consumer_view_groups", "Error leaving channel group %s: %s"): (

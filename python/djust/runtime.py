@@ -595,14 +595,16 @@ def _unmount_on_failure(method: Callable[..., Awaitable[None]]) -> Callable[...,
     after ``on_view_mounted`` (the state restore, the route binding, the
     baselines, the post-render hooks) raised out with the view still on the
     runtime, in its groups and in presence. The exception still propagates,
-    so its error frame is unchanged."""
+    so its error frame is unchanged. A mount cancelled by a client
+    disconnect (``CancelledError``) is undone the same way (#3885): the
+    view's tick, channel-layer groups and presence do not outlive it."""
 
     @wraps(method)
     async def guarded(runtime: Any, *args: Any, **kwargs: Any) -> None:
         runtime._admitted_mount_view = None
         try:
             await method(runtime, *args, **kwargs)
-        except Exception:
+        except BaseException:
             view = runtime._admitted_mount_view
             if view is not None and runtime.view_instance is view:
                 await runtime._on_mount_failed(view)
@@ -614,6 +616,10 @@ def _unmount_on_failure(method: Callable[..., Awaitable[None]]) -> Callable[...,
             runtime._admitted_mount_view = None
 
     return guarded
+
+
+class _TurnLockBusy(Exception):
+    """A server turn's locks stayed held past its bounded wait (db_notify, #3885)."""
 
 
 def _runtime_diagnostic_scope(
@@ -776,6 +782,51 @@ async def leave_consumer_view_groups(consumer: Any, groups: Any = None) -> None:
             await channel_layer.group_discard(group, consumer.channel_name)
         except Exception as e:  # noqa: BLE001
             logger.warning("Error leaving channel group %s: %s", group, e)
+
+
+async def join_view_push_group(member: Any, view: Any) -> None:
+    """Join ``member`` to the server-push group of ``view``'s class.
+
+    ``member`` is what holds a channel on the channel layer: the WebSocket
+    consumer, or an SSE view's :class:`~djust._sse_channels.SSEChannelMember`
+    (#3885). The group name is keyed on the dotted path the mount frame named
+    (``_djust_mount_view_path``), byte-for-byte the string a publisher's
+    ``push_to_view("app.MyView")`` mangles, and it is recorded on ``member``
+    as ``_view_path`` / ``_view_group`` so :func:`leave_consumer_view_groups`
+    and the scoped-push sync (``push.sync_push_scope_groups``) find it.
+    """
+    from .push import view_group_name
+
+    dotted = getattr(view, "_djust_mount_view_path", None) or ""
+    member._view_path = dotted
+    member._view_group = view_group_name(dotted)
+    await member.channel_layer.group_add(member._view_group, member.channel_name)
+
+
+async def join_listen_channels(member: Any, view: Any) -> None:
+    """Join the ``djust_db_notify_<channel>`` group for every channel the
+    view listens on that ``member`` has not joined yet (#2962).
+
+    ``NotificationMixin.listen()`` only records the channel and starts the
+    process listener; the group join is transport work, the same for the
+    WebSocket consumer and an SSE view's channel member (#3885). It is
+    idempotent (already-joined channels are skipped), so it is safe to call
+    after mount() and after every turn. A join failure is logged and the
+    channel is retried on the next call.
+    """
+    listen_channels = getattr(view, "_listen_channels", None)
+    if not listen_channels:
+        return
+    joined = getattr(member, "_db_notify_channels", None)
+    if not isinstance(joined, set):
+        joined = set()
+        member._db_notify_channels = joined
+    for ch in sorted(set(listen_channels) - joined):
+        try:
+            await member.channel_layer.group_add(f"djust_db_notify_{ch}", member.channel_name)
+            joined.add(ch)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Error joining db_notify group for %s: %s", ch, e)
 
 
 def maybe_start_tick_task(consumer: Any, view_class: Any) -> bool:
@@ -1033,8 +1084,9 @@ class Transport(Protocol):
         pre-mount auth sequence + on_mount hooks have admitted it, so a
         transport can attach its own back-references the way the legacy bespoke
         mount paths did. SSE stamps ``_sse_session_id`` / ``_sse_session`` (used
-        for introspection + limits) and the real query string. WS performs the
-        WS-only post-mount channel-layer wiring (server-push view group,
+        for introspection + limits) and the real query string, and joins its
+        view's channel to the server-push view group and the class-level NOTIFY
+        groups (#3885). WS performs the post-mount channel-layer wiring (server-push view group,
         db_notify groups; the presence group is joined later, after mount(), by
         ``on_mount_render_ready`` — #3202), the periodic ``_tick_task`` start,
         and the real-scope path/query-string stamps (ADR-022
@@ -1583,14 +1635,9 @@ class WSConsumerTransport:
         # broadcasters (``apush_to_view("app.MyView")``) string-mangle the same
         # value — so they MUST agree byte-for-byte. The consumer also stashes it as
         # ``_view_path`` (websocket.py:2172) for server-push introspection.
-        dotted = getattr(view_instance, "_djust_mount_view_path", None) or ""
-        consumer._view_path = dotted
-
-        # Join per-view channel group for server-push (websocket.py:2169-2174).
-        from .push import view_group_name
-
-        consumer._view_group = view_group_name(dotted)
-        await consumer.channel_layer.group_add(consumer._view_group, consumer.channel_name)
+        # Join per-view channel group for server-push (websocket.py:2169-2174);
+        # shared with the SSE transport (#3885).
+        await join_view_push_group(consumer, view_instance)
 
         # The presence group is joined AFTER mount() / session restore, by
         # ``_join_presence_group`` from ``on_mount_render_ready`` (#3202): a
@@ -1625,22 +1672,7 @@ class WSConsumerTransport:
         mount() and after every event turn. A join failure is logged and the
         channel is retried on the next call.
         """
-        consumer = self._consumer
-        listen_channels = getattr(view, "_listen_channels", None)
-        if not listen_channels:
-            return
-        joined = getattr(consumer, "_db_notify_channels", None)
-        if not isinstance(joined, set):
-            joined = set()
-            consumer._db_notify_channels = joined
-        for ch in sorted(set(listen_channels) - joined):
-            try:
-                await consumer.channel_layer.group_add(
-                    f"djust_db_notify_{ch}", consumer.channel_name
-                )
-                joined.add(ch)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("Error joining db_notify group for %s: %s", ch, e)
+        await join_listen_channels(self._consumer, view)
 
     async def _join_presence_group(self, view: Any) -> None:
         """Join the presence group of the view's FORMATTED presence key (#3202).
@@ -2346,7 +2378,32 @@ class SSESessionTransport:
     turn_transport = "sse"
 
     def __init__(self, session: Any):
+        from ._sse_channels import SSEChannelMember
+
         self._session = session
+        #: This view's channel on the channel layer (#3885): what joins the
+        #: ``push_to_view`` / push-scope / ``db_notify`` groups for it.
+        self.channel_member = SSEChannelMember(self)
+
+    @property
+    def runtime(self) -> Any:
+        """The runtime this transport carries (the page's, or a slot's)."""
+        return self._session.runtime
+
+    @property
+    def origin_token(self) -> Optional[str]:
+        """What a push sent from one of this view's handlers is tagged with (#1677).
+
+        The view's own channel: each SSE view has one, so only a view's push
+        to its own class is skipped as its own echo."""
+        return self.channel_member.channel_name
+
+    def release_channel_member(self) -> None:
+        """Stop receiving channel-layer messages and leave every group (#3885).
+
+        Part of :meth:`ViewRuntime.stop_server_work`, the teardown every SSE
+        close, navigation, slot release and failed mount runs."""
+        self.channel_member.release()
 
     @property
     def turn_request(self) -> Any:
@@ -2437,6 +2494,10 @@ class SSESessionTransport:
         request = getattr(session, "_request", None)
         if request is not None:
             view_instance._websocket_query_string = request.META.get("QUERY_STRING", "")
+        # The server-push view group and the class-level NOTIFY groups, joined
+        # here as the WebSocket transport joins them (#3885): after the mount
+        # was admitted, before mount().
+        await self.channel_member.attach(view_instance)
         # The periodic tick, as the WebSocket starts it (#3809): the same
         # opt-in rule, run by this session's runtime.
         maybe_start_tick_task(session.runtime, type(view_instance))
@@ -2529,10 +2590,31 @@ class SSESessionTransport:
         return None
 
     @contextlib.asynccontextmanager
-    async def event_context(self, view: Any) -> AsyncIterator[None]:
-        """Serialize event/results with SSE page replacement."""
-        async with self._session._render_lock:
+    async def event_context(
+        self, view: Any, lock_wait: Optional[float] = None
+    ) -> AsyncIterator[None]:
+        """Serialize event/results with SSE page replacement.
+
+        With ``lock_wait`` the render lock is waited for at most that long, and
+        ``asyncio.TimeoutError`` is raised before the turn runs (the bounded
+        wait of a NOTIFY turn, #3885). At the end of a turn that completed,
+        while it still holds the lock, the view's channel joins the NOTIFY
+        groups of channels ``listen()`` added and follows a changed
+        ``push_scope`` (#3885), as the WebSocket transport does after its
+        turns (#2962, #3004)."""
+        from .websocket import _acquire_render_lock
+
+        lock = self._session._render_lock
+        if lock_wait is None:
+            await lock.acquire()
+        else:
+            await _acquire_render_lock(lock, lock_wait)
+        try:
             yield
+            if getattr(self._session, "view_instance", None) is view:
+                await self.channel_member.sync(view)
+        finally:
+            lock.release()
 
     async def recheck_event_auth(self, view: Any) -> bool:
         """SSE per-event auth re-check against the LIVE event-POST request (#1777).
@@ -2664,11 +2746,14 @@ class SSESessionTransport:
         return rust_version
 
     async def on_mount_render_ready(self, view: Any, html: Optional[str]) -> Optional[str]:
-        """No-op for SSE (#1915, Finding B residual).
+        """Join the groups mount() asked for; ``html`` is returned unchanged.
 
-        SSE has no sticky / ``live_redirect`` surface, so there is no survivor
-        set to reconcile and no ``sticky_hold`` frame to emit. Returns ``html``
-        unchanged."""
+        mount() (or a session restore) has run and the view is admitted: its
+        channel joins the NOTIFY groups of channels ``listen()`` added and the
+        scoped-push groups of its ``push_scope`` (#3885), as the WebSocket
+        transport does here (#2962, #3004). SSE has no sticky /
+        ``live_redirect`` surface (#1915), so there is nothing else to do."""
+        await self.channel_member.sync(view)
         return html
 
     async def finalize_mount_auth(self, view: Any, verdict: Any) -> None:
@@ -3981,6 +4066,9 @@ class ViewRuntime(RuntimeTurnPort):
         # From here a server-originated turn (push / tick, #3809) may address
         # this view: before the mount frame the client has nothing to patch.
         self._mount_sent_for = view_instance
+        if self._deferred_pushes:
+            # Pushes that arrived while mount() ran (#3885), in arrival order.
+            self._start_push_drain()
         logger.info(
             "Runtime: mounted view %s (session %s)",
             sanitize_for_log(view_path),
@@ -7861,9 +7949,11 @@ class ViewRuntime(RuntimeTurnPort):
     # These are the SSE twins of those two turns, on the session's render lock
     # borrowed through ``transport.event_context`` (the #560 version-interleave
     # guard; a runtime-local lock would not serialize against the event spine).
-    # What stays WebSocket-only over SSE: ``push_to_view`` groups, push scopes
-    # and ``db_notify`` (they need the channel layer), the worker-pool offload
-    # of a push turn, and ``sync_push_scope_groups``.
+    # ``push_to_view`` groups, push scopes and ``db_notify`` arrive through the
+    # channel layer: each SSE view's ``SSEChannelMember`` (``_sse_channels``)
+    # joins the same groups as the WebSocket consumer and hands each message to
+    # :meth:`server_push` / :meth:`db_notify` below (#3885). What stays
+    # WebSocket-only over SSE is the worker-pool offload of a push turn.
     #
     # Back-pressure. A WebSocket tick or push awaits ``send`` under the render
     # lock, so a client that does not read slows them. An SSE frame is a
@@ -7883,12 +7973,22 @@ class ViewRuntime(RuntimeTurnPort):
         pushes still queued, is queued and replayed in arrival order once the
         render lock frees; identical queued pushes coalesce and the queue is
         bounded, as on the socket (#3001). A failing handler or render is
-        logged and swallowed, as on the socket. Returns whether the push was run
-        or queued; ``False`` when ``view`` is not the mounted view (replaced,
-        closed, or its mount frame not sent).
+        logged and swallowed, as on the socket. A push for a view whose mount
+        was admitted but whose mount frame is not out yet (mount() is running)
+        is queued and replayed once the frame is sent, as the socket delivers
+        it after the mount; if that mount then fails or is refused, the queued
+        push is discarded with the view (``stop_server_work``) (#3885).
+        Returns whether the push was run or queued; ``False`` when ``view`` is
+        not the mounted view (replaced, closed, or not admitted).
         """
-        if view is None or self.view_instance is not view or self._mount_sent_for is not view:
+        if view is None or self.view_instance is not view:
             return False
+        if self._mount_sent_for is not view:
+            if self._admitted_mount_view is not view:
+                return False
+            logger.debug("[djust] server_push on %s deferred — mounting", type(view).__name__)
+            self._defer_server_push(view, event, start_drain=False)
+            return True
         task = self._push_drain_task
         draining = task is not None and not task.done()
         # ``draining`` also covers earlier pushes still queued (the queue is only
@@ -7914,7 +8014,9 @@ class ViewRuntime(RuntimeTurnPort):
         backlogged = getattr(self.transport, "client_backlogged", None)
         return bool(backlogged and backlogged())
 
-    def _defer_server_push(self, view: Any, event: Dict[str, Any]) -> None:
+    def _defer_server_push(
+        self, view: Any, event: Dict[str, Any], *, start_drain: bool = True
+    ) -> None:
         """Queue a push that found the session busy and make sure a drain runs.
 
         ``LiveViewConsumer._defer_server_push``'s rules: an identical push
@@ -7935,6 +8037,11 @@ class ViewRuntime(RuntimeTurnPort):
         if len(queue) == queue.maxlen:
             logger.debug("[djust] deferred server_push queue full — dropping the oldest")
         queue.append((view, event))
+        if start_drain:
+            self._start_push_drain()
+
+    def _start_push_drain(self) -> None:
+        """Make sure a drain of the deferred pushes is running."""
         task = self._push_drain_task
         if task is None or task.done():
             self._push_drain_task = asyncio.ensure_future(self._drain_deferred_pushes())
@@ -7966,28 +8073,99 @@ class ViewRuntime(RuntimeTurnPort):
 
             await self._run_server_push(view, take)
 
-    async def _run_server_push(self, view: Any, take: Callable[[], List[Dict[str, Any]]]) -> None:
+    async def db_notify(self, view: Any, message: Dict[str, Any]) -> bool:
+        """Run ``view.handle_info(message)`` for a PostgreSQL NOTIFY as a
+        ``push``/``db_notify`` turn, and render. The SSE twin of
+        ``LiveViewConsumer._db_notify_to_view`` (#3885).
+
+        Best-effort, as on the WebSocket (#813): it waits for the turn locks at
+        most ``websocket._SERVER_TURN_LOCK_WAIT_S`` (the bound the socket's
+        push, tick and NOTIFY turns use), then is dropped, not queued. A NOTIFY
+        is also dropped while the client is not reading. Returns whether the
+        turn ran.
+        """
+        from . import websocket as _ws
+
+        if view is None or self.view_instance is not view or self._mount_sent_for is not view:
+            return False
+        if self._client_backlogged():
+            logger.debug("[djust] db_notify on %s skipped — client backlogged", type(view).__name__)
+            return False
+        ran = await self._run_server_push(
+            view,
+            lambda: [message],
+            source="db_notify",
+            lock_wait=_ws._SERVER_TURN_LOCK_WAIT_S,
+        )
+        if not ran:
+            logger.debug("[djust] db_notify on %s skipped — render lock held", type(view).__name__)
+        return ran
+
+    @contextlib.asynccontextmanager
+    async def _server_turn_locks(
+        self, view: Any, lock_wait: Optional[float]
+    ) -> AsyncIterator[None]:
+        """The explicit-exposure turn lock (non-legacy views), then the
+        transport's render lock (``event_context``). With ``lock_wait``, each is
+        waited for at most that long; one still held then raises
+        :class:`_TurnLockBusy` before the body runs."""
+        from ._exposure import uses_legacy_exposure
+        from .websocket import _acquire_render_lock
+
+        explicit = None if uses_legacy_exposure(view) else self._explicit_event_lock
+        if explicit is not None:
+            if lock_wait is None:
+                await explicit.acquire()
+            else:
+                try:
+                    await _acquire_render_lock(explicit, lock_wait)
+                except asyncio.TimeoutError:
+                    raise _TurnLockBusy() from None
+        try:
+            if lock_wait is None:
+                context = self.transport.event_context(view)
+            else:
+                # A bounded wait is SSE-only (``SSESessionTransport.event_context``):
+                # the WebSocket's NOTIFY turn runs in its consumer.
+                bounded: Any = self.transport
+                context = bounded.event_context(view, lock_wait=lock_wait)
+            entered = False
+            try:
+                async with context:
+                    entered = True
+                    yield
+            except asyncio.TimeoutError:
+                if entered:
+                    raise
+                raise _TurnLockBusy() from None
+        finally:
+            if explicit is not None:
+                explicit.release()
+
+    async def _run_server_push(
+        self,
+        view: Any,
+        take: Callable[[], List[Dict[str, Any]]],
+        source: str = "server_push",
+        lock_wait: Optional[float] = None,
+    ) -> bool:
         """Take the render lock, then run what ``take()`` returns as one push turn.
 
         Never raises: a failure is logged and the caller (a view's task, or the
         drain with a batch already popped) carries on, as the socket's push turn
         does. Work the handlers queued with ``start_async`` runs once the lock is
-        free (#2955), even when the render failed.
+        free (#2955), even when the render failed. Returns ``False`` only when
+        ``lock_wait`` ran out before the locks were free (nothing ran).
         """
-        from ._exposure import uses_legacy_exposure
-
         applied = [False]
-        explicit_lock = (
-            contextlib.nullcontext() if uses_legacy_exposure(view) else self._explicit_event_lock
-        )
         try:
-            async with explicit_lock, self.transport.event_context(view):
+            async with self._server_turn_locks(view, lock_wait):
                 events = take()
                 if events and self.view_instance is view:
                     turn = Turn(
                         "push",
                         self.turn_transport,
-                        source="server_push",
+                        source=source,
                         view=view,
                         scope=self.scope,
                         session_id=self._turn_session_id(),
@@ -7999,6 +8177,8 @@ class ViewRuntime(RuntimeTurnPort):
                         await self._server_push_body(view, events, applied)
 
                     await run_turn(turn, body)
+        except _TurnLockBusy:
+            return False
         except Exception as exc:  # noqa: BLE001 — logged, never into the caller
             from ._exposure_diagnostics import log_failure_for
 
@@ -8013,6 +8193,7 @@ class ViewRuntime(RuntimeTurnPort):
             )
         if applied[0] and self.view_instance is view:
             self._dispatch_async_work(None)
+        return True
 
     async def _server_push_body(
         self, view: Any, events: List[Dict[str, Any]], applied: List[bool]
@@ -8025,9 +8206,14 @@ class ViewRuntime(RuntimeTurnPort):
         or ``@push_handler``; anything else is refused with a warning, and a
         payload cannot name another), each hook runs in arrival order and a
         raising one is logged and skipped, and the turn renders unless every
-        applied hook asked to skip.
+        applied hook asked to skip. A push stamped for another tenant is
+        dropped here as well as on arrival: the turn that held the lock may
+        have moved the view (``push_tenant_matches``, as the WebSocket's drain
+        re-checks). A ``{"type": "db_notify", ...}`` entry is a NOTIFY: its
+        hook is ``handle_info(message)`` (#3885).
         """
         from ._exposure import uses_legacy_exposure
+        from .push import push_tenant_matches
         from .websocket import LiveViewConsumer, _resolve_skip_render
 
         legacy = uses_legacy_exposure(view)
@@ -8044,10 +8230,18 @@ class ViewRuntime(RuntimeTurnPort):
                 render = False
                 for event in events:
                     try:
-                        hook = LiveViewConsumer._prepare_server_push(view, event)
-                        if hook is not None:
-                            handler_fn, payload = hook
-                            await call_hook(handler_fn, **payload)
+                        if event.get("type") == "db_notify":
+                            handle_info = getattr(view, "handle_info", None)
+                            if not callable(handle_info):
+                                continue
+                            await call_hook(handle_info, event)
+                        elif not push_tenant_matches(view, event):
+                            continue
+                        else:
+                            hook = LiveViewConsumer._prepare_server_push(view, event)
+                            if hook is not None:
+                                handler_fn, payload = hook
+                                await call_hook(handler_fn, **payload)
                     except Exception as exc:  # noqa: BLE001 — logged, the next push still runs
                         from ._exposure_diagnostics import log_failure_for
 
@@ -8204,7 +8398,7 @@ class ViewRuntime(RuntimeTurnPort):
 
     def stop_server_work(self, view: Any = None) -> None:
         """Stop the tick and drop the queued pushes of ``view`` (every one when
-        ``None``). Safe from any thread: ``SSESession.shutdown`` also runs on a
+        ``None``), and release the transport's channel-layer membership (#3885). Safe from any thread: ``SSESession.shutdown`` also runs on a
         worker thread (``_StreamGuard.abandon``), where ``Task.cancel`` on the
         loop's task is not allowed, so off the loop the work is handed to it.
 
@@ -8230,6 +8424,13 @@ class ViewRuntime(RuntimeTurnPort):
                 else:
                     for queued in [q for q in queue if q[0] is view]:
                         queue.remove(queued)
+
+        # The view's channel-layer membership goes with it (#3885). Thread-safe
+        # on its own (it hands the work to its loop), so it runs here, not in
+        # ``stop`` which may be deferred to a loop that is not running.
+        release = getattr(self.transport, "release_channel_member", None)
+        if release is not None:
+            release()
 
         owner = self._tick_task or self._push_drain_task
         loop = owner.get_loop() if owner is not None else None
