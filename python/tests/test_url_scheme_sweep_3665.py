@@ -121,14 +121,23 @@ UNDRIVEN = {
     "djust.components.descriptors.%s" % n: "descriptor"
     for n in (
         "accordion.Accordion",
+        "announcement_bar.AnnouncementBar",
         "base.LiveComponent",
         "carousel.Carousel",
         "collapsible.Collapsible",
+        "command_palette.CommandPalette",
         "dropdown.Dropdown",
+        "expandable_text.ExpandableText",
+        "export_dialog.ExportDialog",
+        "lightbox.Lightbox",
+        "markdown_textarea.MarkdownTextarea",
         "modal.Modal",
+        "nav_menu.NavMenu",
         "sheet.Sheet",
+        "stepper.Stepper",
         "tabs.Tabs",
         "tooltip.Tooltip",
+        "truncated_list.TruncatedList",
     )
 } | {
     "djust.components.gallery.live_views.%s" % n: "page"
