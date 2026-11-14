@@ -153,7 +153,19 @@ What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
   text leaves no quote open. A plain ``<`` or an unclosed quote does not qualify. Such a fragment is placed UNCHECKED: between
   attributes, which is its purpose, but also inside a quoted value or as an unquoted value, where it
   would be wrong and the guard does not see it (#3864). A bare output anywhere nobody checked
-  (``join`` of bare outputs, an argument) is not clean. What that check still cannot see (#3850,
+  (``join`` of bare outputs, an argument) is not clean. AN ESCAPER THAT ONLY HTML-ESCAPES
+  (``escape`` / ``conditional_escape`` / ``html.escape`` / ``attr_text``) is clean as text and in an
+  ordinary quoted value, and since #3864 flagged where that is not enough, by the same literal text
+  in front of it (``_html_context``): at the START of a URL attribute's value (``href="{escape(x)}"``:
+  ``javascript:`` has nothing to escape; ``data-href`` counts, the client follows it; an escaper
+  around a URL escaper's output does not), in an ``on*`` handler, a ``<script>`` or ``<style>`` body,
+  ``srcdoc`` and an unquoted value. A URL escaper's output is flagged in the handler, script, style
+  and ``srcdoc`` positions too. A ``<script>`` whose literal ``type`` is a JSON data block
+  (``application/json`` / ``ld+json``) is not a script body. Seen where the output is written in
+  place, held by a name, or bound to a parameter of a judged call; NOT inside the result of a helper
+  placed in a larger string, in a ``join`` or a container, after a part of the value the guard cannot
+  read, between attributes or as an attribute or tag name, or in a ``style`` ATTRIBUTE (escaped
+  values sit there in eleven functions of the tree; ``safe_css_*`` is the rule for CSS). What that check still cannot see (#3850,
   #3864): a prefix the guard cannot read (any unknown earlier part is assumed position-neutral;
   treating markup-carrying parts as unknown flagged over a hundred correct sites in the tree, so it
   was not done), a function that takes the output as a PARAMETER and builds the tag (the helper is
@@ -184,7 +196,7 @@ import copy
 import re
 import string
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -289,6 +301,61 @@ CONTEXT_SENSITIVE_ORIGINS = frozenset(
         "djust.components.utils.safe_css_number",
     }
 )
+#: Escapers that only HTML-escape (``&``, ``<``, ``>`` and the quotes): right in element text and in an
+#: ordinary quoted value, not enough where the text is read as something else afterwards (#3864).
+HTML_ONLY_ORIGINS = frozenset(
+    {
+        "django.utils.html.escape",
+        "django.utils.html.conditional_escape",
+        "html.escape",
+        "djust.components.utils.attr_text",
+    }
+)
+#: Escapers that also refuse a URL that is not a navigation: an HTML escaper wrapped around one of
+#: these is still a checked URL (``conditional_escape(safe_url(x))``).
+URL_ESCAPER_ORIGINS = frozenset(
+    {
+        "djust.components.utils.safe_url",
+        "djust.components.utils.url_attr",
+        "djust.components.utils.data_url_attr",
+        "djust.components.utils.srcset_attr",
+    }
+)
+#: Attributes whose value is a URL the browser may run or load (``javascript:`` in ``href``).
+URL_ATTRIBUTES = frozenset(
+    {
+        "href",
+        "src",
+        "srcset",
+        "action",
+        "formaction",
+        "xlink:href",
+        "data",
+        "poster",
+        "background",
+        "cite",
+        "codebase",
+        "longdesc",
+        "manifest",
+        "ping",
+        "icon",
+        "profile",
+        "usemap",
+        "classid",
+        "archive",
+    }
+)
+#: Elements whose body is not HTML text: entities are not decoded there, the text is code.
+RAW_TEXT_ELEMENTS = frozenset({"script", "style"})
+#: The positions of :meth:`_Module._html_context` where the text is run or parsed again.
+_CODE_CONTEXTS = frozenset({"handler", "script", "style", "srcdoc"})
+#: ``<script type=...>`` values that make the element a JSON data block: the browser never runs it,
+#: and an HTML escaper leaves no ``<`` to close it with (the reader decodes the entities itself).
+DATA_BLOCK_TYPES = frozenset({"application/json", "application/ld+json"})
+#: A URL attribute's value up to the field is "the start of the URL" when it is only this: a browser
+#: drops leading spaces and control characters before it reads the scheme.
+_URL_LEAD = re.compile(r"[\x01-\x20]*")
+
 #: A call to any of these (or a class body that defines one) means attributes can be written under a
 #: name the source does not show: ``setattr(self, key, value)`` over constructor kwargs (what
 #: ``Component`` does), ``self.__dict__.update``, ``object.__setattr__``, ``vars(self)[...]``. No class
@@ -2261,6 +2328,8 @@ class _Module:
         before = ""
         for leaf in leaves:
             kind = self._sens_kind(leaf, sc)
+            if self._html_only_misplaced(leaf, sc, before):
+                return False
             if kind:
                 if not self._position_ok(kind, before):
                     return False
@@ -2290,6 +2359,8 @@ class _Module:
             return False
         for i, arg in enumerate(args):
             kind = self._sens_kind(arg, sc)
+            if prefixes is not None and self._html_only_misplaced(arg, sc, prefixes[i]):
+                return False
             if kind:
                 if prefixes is None or not self._position_ok(kind, prefixes[i]):
                     return False
@@ -2338,6 +2409,8 @@ class _Module:
                 before += self._leaf_text(arg, sc) if arg is not None else "\x00"
         for arg in [*call.args, *(kw.value for kw in call.keywords)]:
             kind = self._sens_kind(arg, sc)
+            if any(self._html_only_misplaced(arg, sc, p) for p in marks.get(id(arg), ())):
+                return False
             if kind:
                 prefixes = marks.get(id(arg))
                 if not prefixes or not all(self._position_ok(kind, p) for p in prefixes):
@@ -2371,6 +2444,198 @@ class _Module:
                 state = "tag"
         return state
 
+    @staticmethod
+    def _html_context(prefix: str) -> str | None:
+        """Where HTML escaping is NOT enough for the next field after ``prefix`` (#3864), or ``None``:
+        ``"script"`` / ``"style"`` (the body of that element: entities are not decoded, the text is
+        code), ``"handler"`` (the quoted value of an ``on*`` attribute: the HTML parser decodes
+        ``&#x27;`` back to a quote before the script runs), ``"srcdoc"`` (decoded once, then parsed as a
+        document) and ``"url"`` (the START of the quoted value of a URL attribute, or anywhere after a
+        literal ``javascript:``: an escaped ``javascript:alert(1)`` is still that URL).
+
+        It reads the literal text only (``\x00`` is a part it cannot read, taken as an ordinary
+        character, so a URL attribute whose value starts with an unknown part is not "the start").
+        Names are matched in lower case; an attribute name ends at white space, ``/``, ``=`` or ``>``,
+        an unquoted value at white space or ``>``. ``"unquoted"`` is an unquoted attribute value
+        (``title={escape(x)}``: a space in ``x`` starts a new attribute). A ``<script>`` whose literal
+        ``type`` is a JSON data block is not a script body.
+        """
+        ws = " \t\n\r\f"
+        i, n = 0, len(prefix)
+        raw = ""  # the raw-text element whose body we are in
+        inert = False  # ... and it is a JSON data block: never run, and ``<`` is escaped
+        while i < n:
+            if raw:
+                end = prefix.lower().find("</" + raw, i)
+                if end < 0:
+                    return None if inert else raw
+                i, raw = end, ""
+            while i < n and not (
+                prefix[i] == "<"
+                and (i + 1 == n or prefix[i + 1].isalpha() or prefix[i + 1] in "/!?")
+            ):
+                i += 1
+            if i >= n:
+                return None  # element text
+            closing = prefix[i + 1 : i + 2] == "/"
+            i += 2 if closing else 1
+            start = i
+            while i < n and prefix[i] not in ws + "/>":
+                i += 1
+            tag = prefix[start:i].lower()
+            kind = None  # the ``type`` attribute's value, when the literal text shows it
+            while True:  # the attributes of this tag
+                while i < n and prefix[i] in ws + "/":
+                    i += 1
+                if i >= n:
+                    return None  # inside the tag, between attributes
+                if prefix[i] == ">":
+                    i += 1
+                    if not closing and tag in RAW_TEXT_ELEMENTS:
+                        raw = tag
+                        inert = tag == "script" and kind in DATA_BLOCK_TYPES
+                    break
+                start = i
+                i += 1  # a name is at least one character (``=`` first is part of the name)
+                while i < n and prefix[i] not in ws + "/>=":
+                    i += 1
+                attr = prefix[start:i].lower()
+                while i < n and prefix[i] in ws:
+                    i += 1
+                if i >= n or prefix[i] != "=":
+                    continue  # an attribute without a value
+                i += 1
+                while i < n and prefix[i] in ws:
+                    i += 1
+                if i >= n:
+                    return "unquoted"  # the field starts an unquoted value
+                if prefix[i] not in "\"'":
+                    start = i
+                    while i < n and prefix[i] not in ws + ">":
+                        i += 1
+                    if i >= n:
+                        return "unquoted"  # the field continues one
+                    if attr == "type" and kind is None:
+                        kind = prefix[start:i].lower()
+                    continue
+                close = prefix.find(prefix[i], i + 1)
+                if close >= 0:
+                    if attr == "type" and kind is None:  # the first of a repeated name counts
+                        kind = prefix[i + 1 : close].strip(ws).lower()
+                    i = close + 1
+                    continue
+                value = prefix[i + 1 :]  # the field is inside this quoted value
+                if len(attr) > 2 and attr.startswith("on"):
+                    return "handler"
+                if attr == "srcdoc":
+                    return "srcdoc"
+                # ``data-href`` too: the client follows it (a table row's link), as ``xlink:href``
+                if (attr in URL_ATTRIBUTES or attr.endswith(("-href", ":href"))) and (
+                    _URL_LEAD.fullmatch(value) is not None
+                    or re.sub(r"[\x01-\x20]", "", value).lower().startswith("javascript:")
+                ):
+                    return "url"
+                return None
+        return (None if inert else raw) or None
+
+    def _text_escapers(self, value: ast.expr, sc: _Scope) -> list[tuple[ast.Call, _Scope, str]]:
+        """The calls ``value`` can be (itself, through a name, either arm of a conditional, a bound
+        parameter) that are an HTML-only escaper or a URL escaper, each with its origin."""
+        out = []
+        for alt, asc in self._alternatives(value, sc):
+            if isinstance(alt, ast.Call):
+                origin = self.origin(alt.func, asc)
+                if origin in HTML_ONLY_ORIGINS or origin in URL_ESCAPER_ORIGINS:
+                    out.append((alt, asc, origin))
+        return out
+
+    def _after(
+        self, text: Callable[[], str | None], earlier: ast.expr, sc: _Scope
+    ) -> Callable[[], str | None]:
+        """The literal text in front of a part that follows ``earlier`` in a string that itself
+        follows ``text()``."""
+
+        def read() -> str | None:
+            before = text()
+            return None if before is None else before + self._leaf_text(earlier, sc)
+
+        return read
+
+    def _html_only_misplaced(
+        self, value: ast.expr, sc: _Scope, prefix: str | None | Callable[[], str]
+    ) -> bool:
+        """``value`` is (or may be) the output of an escaper that only HTML-escapes, written where
+        that is not enough (:meth:`_html_context`): ``href="{escape(x)}"``, ``onclick="go('{escape(x)}')"``,
+        ``<script>var a={escape(x)}</script>`` (#3864). Seen where the output is written in place or
+        held by a name (or a parameter a judged call binds to it), in the four builders whose literal
+        text gives it a position; only pass B asks (it adds findings, pass A is the guard as it was).
+        ``prefix`` is the literal text in front (or a function that reads it, called only when
+        ``value`` can be such an output)."""
+        if not self.call_binding:
+            return False
+        return self._misplaced(value, sc, prefix, 0)
+
+    def _misplaced(
+        self, value: ast.expr, sc: _Scope, prefix: str | None | Callable[[], str], depth: int
+    ) -> bool:
+        """:meth:`_html_only_misplaced` for one part, and for the parts of a string it builds in
+        place: an f-string or a ``+`` chain written as the part (``'<a href="' + f'{escape(x)}'``)
+        or held by the name, each judged after the text in front of IT."""
+        if depth > 6:
+            return False
+        d = depth + 1
+
+        def text() -> str | None:
+            return prefix() if callable(prefix) else prefix
+
+        for alt, asc in self._alternatives(value, sc):
+            if isinstance(alt, ast.JoinedStr):
+                for i, part in enumerate(alt.values):
+                    if isinstance(part, ast.FormattedValue) and self._misplaced(
+                        part.value,
+                        asc,
+                        self._after(text, ast.JoinedStr(values=alt.values[:i]), asc),
+                        d,
+                    ):
+                        return True
+            elif isinstance(alt, ast.BinOp) and isinstance(alt.op, ast.Add):
+                if self._misplaced(alt.left, asc, text, d) or self._misplaced(
+                    alt.right, asc, self._after(text, alt.left, asc), d
+                ):
+                    return True
+            elif (
+                isinstance(alt, ast.Call)
+                and len(alt.args) == 1
+                and not alt.keywords
+                and isinstance(alt.func, ast.Name)
+                and alt.func.id == "str"
+                and asc.find("str") is None
+            ):
+                if self._misplaced(alt.args[0], asc, text, d):  # ``str(escape(x))``: the same text
+                    return True
+        escapers = self._text_escapers(value, sc)
+        if not escapers:
+            return False
+        before = text()
+        where = self._html_context(before) if before is not None else None
+        if where is None:
+            return False
+        for alt, asc, origin in escapers:
+            if origin in URL_ESCAPER_ORIGINS:
+                # a checked URL is text too: it is code in a handler, a script or style body and
+                # ``srcdoc`` like any other (its own unquoted position is ``_position_ok``'s)
+                if where in _CODE_CONTEXTS:
+                    return True
+                continue
+            if (
+                where == "url"
+                and alt.args
+                and self._hold_level(alt.args[0], asc, URL_ESCAPER_ORIGINS) == 1
+            ):
+                continue  # ``conditional_escape(safe_url(x))``: the URL was checked first
+            return True
+        return False
+
     def _field_clean(
         self,
         field: ast.FormattedValue,
@@ -2396,6 +2661,12 @@ class _Module:
         ):
             return True
         kind = self._sens_kind(field.value, sc)
+        if joined is not None and self._html_only_misplaced(
+            field.value,
+            sc,
+            lambda: self._leaf_text(ast.JoinedStr(values=list(joined.values[:index])), sc),
+        ):
+            return False
         if kind:
             if joined is None:
                 return False

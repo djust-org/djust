@@ -1,0 +1,233 @@
+{
+  "_comment": "Each mechanism of the 'HTML escaper where HTML escaping is not enough' check of the safe-markup guard (#3864) turned off in turn: every mutation must turn a real row red (the tests that pin the mutation lists are deselected, since they fail for every mutation). Run: .venv/bin/python scripts/gate_off.py scripts/safe-markup-html-context-gateoff.json",
+  "root": ".",
+  "command": [
+    "env",
+    "PYTHONDONTWRITEBYTECODE=1",
+    "{python}",
+    "-m",
+    "pytest",
+    "-q",
+    "-x",
+    "-p",
+    "no:cacheprovider",
+    "python/tests/test_safe_markup_html_context_3864.py",
+    "python/tests/test_safe_markup_guard_3864.py",
+    "python/tests/test_safe_markup_guard_3848.py",
+    "-m",
+    "not slow",
+    "--deselect",
+    "python/tests/test_safe_markup_html_context_3864.py::TestTheGateOffListApplies::test_every_mutation_text_still_applies",
+    "--deselect",
+    "python/tests/test_safe_markup_guard_3864.py::TestTheGateOffListApplies::test_every_mutation_text_still_applies"
+  ],
+  "deadline": 400,
+  "rss_mb": 4096,
+  "mutations": [
+    {
+      "label": "the check is never asked (the whole mechanism)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        where = self._html_context(before) if before is not None else None\n        if where is None:\n            return False\n        for alt, asc, origin in escapers:",
+      "new": "        where = None\n        if where is None:\n            return False\n        for alt, asc, origin in escapers:"
+    },
+    {
+      "label": "an f-string field is not asked",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if joined is not None and self._html_only_misplaced(\n            field.value,",
+      "new": "        if False and joined is not None and self._html_only_misplaced(\n            field.value,"
+    },
+    {
+      "label": "a + chain is not asked",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if self._html_only_misplaced(leaf, sc, before):\n                return False",
+      "new": "            if False and self._html_only_misplaced(leaf, sc, before):\n                return False"
+    },
+    {
+      "label": "a % format is not asked",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if prefixes is not None and self._html_only_misplaced(arg, sc, prefixes[i]):",
+      "new": "            if False and prefixes is not None and self._html_only_misplaced(arg, sc, prefixes[i]):"
+    },
+    {
+      "label": "str.format is not asked",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if any(self._html_only_misplaced(arg, sc, p) for p in marks.get(id(arg), ())):",
+      "new": "            if False and any(self._html_only_misplaced(arg, sc, p) for p in marks.get(id(arg), ())):"
+    },
+    {
+      "label": "a URL attribute is not a position",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    return \"url\"\n                return None",
+      "new": "                    return None\n                return None"
+    },
+    {
+      "label": "only href is a URL attribute",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                if (attr in URL_ATTRIBUTES or attr.endswith((\"-href\", \":href\"))) and (",
+      "new": "                if (attr == \"href\") and ("
+    },
+    {
+      "label": "data-href is not a URL attribute",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                if (attr in URL_ATTRIBUTES or attr.endswith((\"-href\", \":href\"))) and (",
+      "new": "                if (attr in URL_ATTRIBUTES) and ("
+    },
+    {
+      "label": "a URL value past its start is still the start",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    _URL_LEAD.fullmatch(value) is not None\n",
+      "new": "                    True\n"
+    },
+    {
+      "label": "leading white space hides the start of a URL",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    _URL_LEAD.fullmatch(value) is not None\n",
+      "new": "                    value == \"\"\n"
+    },
+    {
+      "label": "a literal javascript: in front is not code",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    or re.sub(r\"[\\x01-\\x20]\", \"\", value).lower().startswith(\"javascript:\")",
+      "new": "                    or False"
+    },
+    {
+      "label": "an event handler is not a position",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                if len(attr) > 2 and attr.startswith(\"on\"):\n                    return \"handler\"",
+      "new": "                if False:\n                    return \"handler\""
+    },
+    {
+      "label": "srcdoc is not a position",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                if attr == \"srcdoc\":\n                    return \"srcdoc\"",
+      "new": "                if False:\n                    return \"srcdoc\""
+    },
+    {
+      "label": "a script or style body is not a position",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    if not closing and tag in RAW_TEXT_ELEMENTS:\n                        raw = tag",
+      "new": "                    if False:\n                        raw = tag"
+    },
+    {
+      "label": "a closing tag opens a raw-text body",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    if not closing and tag in RAW_TEXT_ELEMENTS:\n                        raw = tag",
+      "new": "                    if tag in RAW_TEXT_ELEMENTS:\n                        raw = tag"
+    },
+    {
+      "label": "a raw-text body never ends",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                i, raw = end, \"\"\n",
+      "new": "                return None if inert else raw\n"
+    },
+    {
+      "label": "every script is a JSON data block",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                        inert = tag == \"script\" and kind in DATA_BLOCK_TYPES",
+      "new": "                        inert = tag == \"script\""
+    },
+    {
+      "label": "no script is a JSON data block",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                        inert = tag == \"script\" and kind in DATA_BLOCK_TYPES",
+      "new": "                        inert = False"
+    },
+    {
+      "label": "a style element can be a data block",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                        inert = tag == \"script\" and kind in DATA_BLOCK_TYPES",
+      "new": "                        inert = kind in DATA_BLOCK_TYPES"
+    },
+    {
+      "label": "the last type attribute wins",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    if attr == \"type\" and kind is None:  # the first of a repeated name counts",
+      "new": "                    if attr == \"type\":  # the first of a repeated name counts"
+    },
+    {
+      "label": "an unquoted value is not a position (at its start)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    return \"unquoted\"  # the field starts an unquoted value",
+      "new": "                    return None  # the field starts an unquoted value"
+    },
+    {
+      "label": "an unquoted value is not a position (continued)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                        return \"unquoted\"  # the field continues one",
+      "new": "                        return None  # the field continues one"
+    },
+    {
+      "label": "an escaper around a checked URL is flagged in an href",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                and self._hold_level(alt.args[0], asc, URL_ESCAPER_ORIGINS) == 1\n            ):\n                continue",
+      "new": "                and self._hold_level(alt.args[0], asc, URL_ESCAPER_ORIGINS) == 1\n            ):\n                return True"
+    },
+    {
+      "label": "a checked URL is trusted in a handler or a script",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                if where in _CODE_CONTEXTS:\n                    return True\n                continue",
+      "new": "                continue"
+    },
+    {
+      "label": "a checked URL is flagged in an href",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                if where in _CODE_CONTEXTS:\n                    return True\n                continue",
+      "new": "                return True"
+    },
+    {
+      "label": "attr_text is not an HTML-only escaper",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        \"html.escape\",\n        \"djust.components.utils.attr_text\",\n    }\n)",
+      "new": "        \"html.escape\",\n    }\n)"
+    },
+    {
+      "label": "html.escape is not an HTML-only escaper",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        \"django.utils.html.conditional_escape\",\n        \"html.escape\",\n        \"djust.components.utils.attr_text\",",
+      "new": "        \"django.utils.html.conditional_escape\",\n        \"djust.components.utils.attr_text\",",
+      "expect": 1
+    },
+    {
+      "label": "pass A asks too (no longer the guard as it was)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if not self.call_binding:\n            return False\n        return self._misplaced(value, sc, prefix, 0)",
+      "new": "        return self._misplaced(value, sc, prefix, 0)"
+    },
+    {
+      "label": "an f-string written as the part is not read",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if isinstance(alt, ast.JoinedStr):\n                for i, part in enumerate(alt.values):",
+      "new": "            if False:\n                for i, part in enumerate(alt.values):"
+    },
+    {
+      "label": "an inner f-string's own text is not counted",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "part.value, asc, self._after(text, ast.JoinedStr(values=alt.values[:i]), asc), d",
+      "new": "part.value, asc, text, d"
+    },
+    {
+      "label": "a + chain written as the part is not read",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            elif isinstance(alt, ast.BinOp) and isinstance(alt.op, ast.Add):\n                if self._misplaced(alt.left, asc, text, d) or self._misplaced(",
+      "new": "            elif False:\n                if self._misplaced(alt.left, asc, text, d) or self._misplaced("
+    },
+    {
+      "label": "the right side of an inner + is read without its left",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    alt.right, asc, self._after(text, alt.left, asc), d",
+      "new": "                    alt.right, asc, text, d"
+    },
+    {
+      "label": "str() of the output hides it",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                if self._misplaced(alt.args[0], asc, text, d):  # ``str(escape(x))``: the same text\n                    return True",
+      "new": "                pass"
+    },
+    {
+      "label": "a local function named str is taken for the builtin",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                and alt.func.id == \"str\"\n                and asc.find(\"str\") is None",
+      "new": "                and alt.func.id == \"str\""
+    }
+  ]
+}
