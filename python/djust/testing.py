@@ -2016,22 +2016,17 @@ def render_component(name: str, content: str = "", **assigns: Any) -> str:
     return render_template_string(source, {"__djust_component_name": name, **assigns})
 
 
-_component_tags_registered = False
-
-
+@functools.cache
 def _ensure_component_tags_registered() -> None:
     """Register the component tags with the Rust engine once per process.
 
     ``djust.components``' app config does this at startup; a test settings
     module that does not install that app still gets the tags here.
     """
-    global _component_tags_registered
-    if _component_tags_registered:
-        return
+    # functools.cache makes the body run once per process: no module-level flag.
     from djust.components.rust_handlers import register_with_rust_engine
 
     register_with_rust_engine()
-    _component_tags_registered = True
 
 
 def assert_all_routed_liveviews_allowlisted() -> None:
