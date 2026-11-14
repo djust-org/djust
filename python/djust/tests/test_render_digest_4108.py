@@ -477,3 +477,30 @@ def test_path_addressed_removes_the_id_hints_and_nothing_else():
     ]
     # The input is not changed.
     assert patches[0]["d"] == "1a"
+
+
+def _client_skipped_lists() -> tuple[set[str], tuple[str, ...]]:
+    """``_SHAPE_SKIPPED`` and ``_SHAPE_SKIPPED_PREFIX`` as the client source spells them."""
+    source = (
+        Path(__file__).resolve().parents[1] / "static" / "djust" / "src" / "12-vdom-patch.js"
+    ).read_text(encoding="utf-8")
+    block = re.search(r"const _SHAPE_SKIPPED = new Set\(\((.*?)\)\.split", source, re.DOTALL)
+    prefixes = re.search(r"const _SHAPE_SKIPPED_PREFIX = /\^\(([^)]*)\)/;", source)
+    assert block and prefixes, "the client's skipped-attribute lists moved"
+    names = set(" ".join(re.findall(r"'([^']*)'", block.group(1))).split())
+    return names, tuple(prefixes.group(1).split("|"))
+
+
+def test_the_client_and_the_server_leave_out_the_same_attributes():
+    """#4114: one list on each side, held equal here and by the shared vector
+    ``every_skipped_attribute`` (which the client must shape like ``<p>x</p>``)."""
+    names, prefixes = _client_skipped_lists()
+    assert names == set(_render_digest._SKIPPED_ATTRS)
+    assert prefixes == _render_digest._SKIPPED_ATTR_PREFIXES
+    by_name = {vector["name"]: vector for vector in VECTORS}
+    every = by_name["every_skipped_attribute"]
+    for name in _render_digest._SKIPPED_ATTRS - {"dj-id"}:
+        assert ' %s="v"' % name in every["html"], name
+    for prefix in _render_digest._SKIPPED_ATTR_PREFIXES:
+        assert ' %sx="v"' % prefix in every["html"], prefix
+    assert every["shape"] == by_name["every_skipped_attribute_left_out"]["shape"]
