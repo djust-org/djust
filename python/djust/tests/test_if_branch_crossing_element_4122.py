@@ -10,7 +10,11 @@ from djust import LiveView
 from djust.testing import LiveViewTestClient
 from djust.utils import clear_template_dirs_cache
 
-ROOT = '<!DOCTYPE html><html><body><div dj-view="{{ view_path }}" dj-root>%s</div></body></html>'
+# Bare ``dj-root``: djust stamps ``dj-view`` itself (#2631). A template-variable
+# ``dj-view="{{ ... }}"`` renders empty on Django < 6.0 and is refused as an
+# unauthored root on Django >= 6.0, where any ``{% extends %}`` page renders
+# through the authenticated-root path (lazy_provenance.rs, T013).
+ROOT = "<!DOCTYPE html><html><body><div dj-root>%s</div></body></html>"
 BASES = {
     "if_else": ROOT
     % (
@@ -24,7 +28,7 @@ BASES = {
         "{% if app %}</div>{% endif %}"
     ),
     # refused: the root closes in every branch (see the refusal test below)
-    "both": '<!DOCTYPE html><html><body><div dj-view="{{ view_path }}" dj-root>'
+    "both": "<!DOCTYPE html><html><body><div dj-root>"
     "{% if app %}A{% block content %}{% endblock %}</div>{% else %}B</div>{% endif %}"
     "</body></html>",
     "balanced": ROOT
