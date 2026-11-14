@@ -6470,8 +6470,7 @@ impl TemplateObject {
     /// wrapper. Two live objects compare as Python compares them, exceptions and
     /// all: a pair Python cannot order raises its `TypeError` and Django's
     /// `dictsort` renders `""`, exactly as it does for the objects themselves.
-    /// A wrapper with no live object to ask (restored from state) uses the
-    /// measured `cmp_key` where both sides have one, and otherwise answers
+    /// A wrapper with no live object to ask (restored from state) answers
     /// "neither smaller", which keeps the input order: what the native sort
     /// did for a pair it had no comparison for.
     fn __lt__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
@@ -6530,14 +6529,14 @@ impl TemplateObject {
             };
             return Ok(mine.bind(py).rich_compare(theirs, op)?.unbind());
         }
-        let Some(wrapper) = other_wrapper else {
+        if other_wrapper.is_none() {
             return Ok(py.NotImplemented());
-        };
-        let ordering = match (&self.value, &wrapper.value) {
-            (Value::Encoded(a), Value::Encoded(b)) => a.python_partial_cmp(b),
-            _ => None,
         }
-        .unwrap_or(std::cmp::Ordering::Equal);
+        // Neither smaller: the stable sort keeps the input order. (A temporal
+        // value never gets here — it crosses as the real `datetime`, which
+        // Python orders — and asking `cmp_key` directly would be a second
+        // caller beside the engine's `encoded_partial_cmp` chokepoint.)
+        let ordering = std::cmp::Ordering::Equal;
         let answer = match op {
             CompareOp::Lt => ordering.is_lt(),
             CompareOp::Le => ordering.is_le(),
