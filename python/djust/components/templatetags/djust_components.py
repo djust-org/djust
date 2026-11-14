@@ -793,11 +793,18 @@ def do_card(parser: Any, token: Any) -> template.Node:
 def _checked_column_widths(columns: Any) -> Any:
     """Columns with any ``width`` that is not a plain CSS length cleared.
 
-    ``table.html`` writes ``col.width`` into a style attribute."""
+    ``table.html`` writes ``col.width`` into a style attribute.
+
+    A column given as a bare name (``columns=["name", "age"]``, or a number) is the column
+    ``{"key": name, "label": name}``, as the native handler draws it. ``table.html`` reads
+    ``col.key``, and a filter argument that does not resolve raises, so the bare shape the native
+    handler accepted made the first, Django-engine render fail (#3895)."""
     if not isinstance(columns, (list, tuple)):
         return columns
     checked = []
     for col in columns:
+        if isinstance(col, str) or (isinstance(col, int) and not isinstance(col, bool)):
+            col = {"key": col, "label": str(col)}
         if isinstance(col, dict) and col.get("width") and not safe_css_length(col["width"], ""):
             col = {**col, "width": ""}
         checked.append(col)
@@ -970,7 +977,8 @@ def data_table(
 
     Phase 1 args:
         rows: list of dicts
-        columns: list of dicts with keys: key, label, sortable, filterable, filter_type, filter_options, width
+        columns: list of dicts with keys: key, label, sortable, filterable, filter_type, filter_options, width;
+            a bare name (``"name"``) is the column ``{"key": "name", "label": "name"}``
         sort_by: current sort column key
         sort_desc: sort descending?
         sort_event: djust event for sorting
