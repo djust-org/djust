@@ -53,17 +53,15 @@ EXPECTED_KINDS = {
     "counter": ["patches", "patches", "patches"],
     # Rows added and removed, an ``{% if %}`` block appearing and disappearing.
     "list": ["patches", "patches", "patches", "patches", "patches"],
-    # The first event meets the page GET's form. Its error is not persisted, so
-    # the next request's baseline (a clean form) is not what the client shows.
-    "form": ["patches", "html", "html"],
+    # The form's input and errors are the tab's saved state (#4107, #4109).
+    "form": ["patches", "patches", "patches"],
     "paged": ["patches", "patches"],
     # ``temporary_assigns``: a render consumes the rows, so there is no pre-render.
     "feed": ["html", "html"],
     # A different value on every render: the digest never matches.
     "unstable": ["html", "html"],
-    # The first event meets the page GET's state; then a plain attribute the
-    # handler set is gone, and the baseline differs from the client's page.
-    "volatile": ["patches", "html", "html"],
+    # A plain attribute the handler set is the tab's saved state (#4107).
+    "volatile": ["patches", "patches", "patches"],
     "stamped": ["html", "html"],
     "leaving": ["patches", "patches", "patches"],
     "hooked": ["patches", "patches", "patches"],
@@ -76,12 +74,9 @@ EXPECTED_RENDERS = {
 }
 
 #: Scenarios whose final DOM over the fallback differs from the socket's, with
-#: the reason. Both are state the handler set that no later request can see:
-#: a known limit of the stateless transport, not of the answer's shape.
-KNOWN_DIFFERENT = {
-    "form": "field_errors and form_data are not persisted (ADR-038 D-e)",
-    "volatile": "a plain attribute set by a handler is not persisted",
-}
+#: the reason. Empty since the tab's state is saved (#4107): the form and the
+#: plain attribute that used to be listed here are kept (#4109).
+KNOWN_DIFFERENT: dict[str, str] = {}
 
 #: The server renders only the new rows; the client keeps the earlier ones
 #: (``dj-update="append"``). Equality holds in the browser, not between two

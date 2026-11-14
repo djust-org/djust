@@ -540,7 +540,9 @@ def _discard_turn_effects(view: Any) -> None:
             method()
 
 
-async def apply_restored_state(view: Any, restored: Dict[str, Any], request: Any) -> None:
+async def apply_restored_state(
+    view: Any, restored: Dict[str, Any], request: Any, *, run_hook: bool = True
+) -> None:
     """Put validated declared state back on ``view``, then let it reconcile.
 
     The one runtime restore (#4095): the reconnect mount and the over-limit
@@ -550,15 +552,19 @@ async def apply_restored_state(view: Any, restored: Dict[str, Any], request: Any
     does after every restore (#3989): the values came back after the view's
     other state was set, so the view rebuilds what it derives from them (rows
     read for a restored id, a "running" flag whose work did not survive).
-    Exceptions propagate; each caller answers them its own way.
+    ``run_hook=False`` leaves the hook to the caller: the mount runs it later,
+    after ``handle_params()`` and the object-permission check, the point every
+    transport runs it at (#4088). Exceptions propagate; each caller answers
+    them its own way.
     """
     from .security import safe_setattr
 
     for key, value in restored.items():
         safe_setattr(view, key, value, allow_private=False, raise_on_blocked=True)
-    handle_restore = getattr(view, "handle_restore", None)
-    if callable(handle_restore):
-        await call_hook(handle_restore, request)
+    if run_hook:
+        handle_restore = getattr(view, "handle_restore", None)
+        if callable(handle_restore):
+            await call_hook(handle_restore, request)
 
 
 def _diagnostics_policy_allows(owner: Any) -> bool:
@@ -3435,7 +3441,15 @@ class ViewRuntime(RuntimeTurnPort):
         # valid (it routes the close through the consumer regardless).
         from .hooks import run_on_mount_hooks
 
-        hook_redirect = await sync_to_async(run_on_mount_hooks)(view_instance, request, **params)
+        # mount() and the on_mount hooks take each repeated query key's LAST
+        # value, as in 1.3; handle_params() alone gets the list (#4125).
+        last_values = {
+            key: (value[-1] if value else "") if isinstance(value, list) else value
+            for key, value in params.items()
+        }
+        hook_redirect = await sync_to_async(run_on_mount_hooks)(
+            view_instance, request, **last_values
+        )
         if hook_redirect:
             if not await self._refused_view("redirect", hook_redirect):
                 await self.transport.send({"type": "navigate", "to": hook_redirect})
@@ -3473,12 +3487,15 @@ class ViewRuntime(RuntimeTurnPort):
                 await result
 
         # ---- Mount kwargs ----
-        mount_kwargs = dict(params)
+        mount_kwargs = dict(last_values)
         url_kwargs = self._resolve_url_kwargs(page_url)
         if url_kwargs:
             mount_kwargs.update(url_kwargs)
 
         legacy_exposure = uses_legacy_exposure(view_instance)
+        # Whether saved state was put back over mount(): handle_restore() then
+        # runs after the object-permission check (#4088).
+        run_restore_hook = False
 
         # ADR-035: a view that looks its object up from the route gets only the
         # kwargs of its own route, never client params. Bound before mount().
@@ -3523,30 +3540,16 @@ class ViewRuntime(RuntimeTurnPort):
                         restored = {**(restored or {}), **client_values}
                 if restored is not None:
                     # #3989: the declared state came back AFTER mount() ran, so
-                    # mount() never saw it. ``apply_restored_state`` runs the
-                    # same ``handle_restore`` hook the HTTP fallback calls, so
-                    # the view can act on what was restored: read rows again
-                    # from a restored id, or clear a persisted "running" flag
-                    # whose background work did not survive the reconnect. The
-                    # HTTP fallback (mixins/request.py) and an embedded child
-                    # (templatetags/live_tags.py) call it too (#1646).
-                    try:
-                        await apply_restored_state(view_instance, restored, request)
-                    except Exception as exc:
-                        # Named for what failed: the handler below would
-                        # report this as an error in mount().
-                        response = handle_exception(
-                            exc,
-                            error_type="mount",
-                            view_class=view_path,
-                            logger=logger,
-                            log_message=(
-                                f"Error in {sanitize_for_log(view_path)}.handle_restore()"
-                            ),
-                            expose_details=_diagnostics_policy_allows(view_instance),
-                        )
-                        await self._fail_mount(view_instance, exc, response)
-                        return
+                    # mount() never saw it. The ``handle_restore`` hook lets the
+                    # view act on what was restored (read rows again from a
+                    # restored id, clear a persisted "running" flag whose work
+                    # did not survive). It runs below, after handle_params(),
+                    # the saved state's re-apply and the object-permission
+                    # check: the order of the HTTP fallback (mixins/request.py)
+                    # and an embedded child (templatetags/live_tags.py), so the
+                    # hook sees the same view on every transport (#4088).
+                    await apply_restored_state(view_instance, restored, request, run_hook=False)
+                    run_restore_hook = True
                     # #1977: the client's DOM predates this restore, so the
                     # Rust diff baseline primed by the mount render does not
                     # match it. The first event after the restore must send
@@ -3602,7 +3605,7 @@ class ViewRuntime(RuntimeTurnPort):
         try:
             from urllib.parse import urlencode
 
-            query_string = urlencode(params) if params else ""
+            query_string = urlencode(params, doseq=True) if params else ""
             uri = f"{page_url}?{query_string}" if query_string else page_url
             await run_handle_params(view_instance, params, uri)
             if not legacy_exposure:
@@ -3669,6 +3672,30 @@ class ViewRuntime(RuntimeTurnPort):
             self._explicit_mount_binding = None
             await _release_failed_view(view_instance)
             return
+
+        # ---- handle_restore() (#3989, #4088) ----
+        # One order on every transport: mount() (or the restore), the saved
+        # state put back, handle_params(), the saved state re-applied, the
+        # object-permission check, then this hook, so it reads from the state
+        # the view will render and never for a denied object. The HTTP fallback
+        # (mixins/request.py) and an embedded child (templatetags/live_tags.py)
+        # call it at the same point.
+        if run_restore_hook:
+            handle_restore = getattr(view_instance, "handle_restore", None)
+            if callable(handle_restore):
+                try:
+                    await call_hook(handle_restore, request)
+                except Exception as exc:
+                    response = handle_exception(
+                        exc,
+                        error_type="mount",
+                        view_class=view_path,
+                        logger=logger,
+                        log_message=f"Error in {sanitize_for_log(view_path)}.handle_restore()",
+                        expose_details=_diagnostics_policy_allows(view_instance),
+                    )
+                    await self._fail_mount(view_instance, exc, response)
+                    return
 
         # ---- connected() view hook (#3007) ----
         # The live mount only: the view is admitted, set up (mount() or a
@@ -5633,7 +5660,7 @@ class ViewRuntime(RuntimeTurnPort):
         # _build_request without going through dispatch_mount's validation.
         page_url = validate_mount_url(page_url)
         factory = RequestFactory()
-        query_string = urlencode(params) if params else ""
+        query_string = urlencode(params, doseq=True) if params else ""
         path_with_query = f"{page_url}?{query_string}" if query_string else page_url
 
         # Finding #26: propagate the validated client Host (and TLS scheme) into

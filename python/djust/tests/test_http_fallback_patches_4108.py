@@ -450,10 +450,41 @@ def test_switched_off_the_answer_is_the_whole_page_from_one_render(renders, wher
         from djust.config import config
 
         config.reload() if hasattr(config, "reload") else None
-        client, digest = _open(url)
-        answer, count = _counted(renders, client, url, "increment", digest)
+        client = Client()
+        page = client.get(url)
+        # #4114: no token is computed or sent for a view that never patches.
+        assert page.status_code == 200 and meta_digest(page.content.decode()) is None
+        answer, count = _counted(renders, client, url, "increment", WRONG)
     assert count == 1
     assert "patches" not in answer and answer["version"] == 1
+    assert "render_digest" not in answer
+
+
+@pytest.mark.parametrize("where", ["setting", "view"])
+def test_switched_off_no_render_token_is_computed(renders, where, monkeypatch):
+    """#4114: the page GET and the fallback answer skip the token when opted out."""
+    from djust import _render_digest
+
+    calls: list[int] = []
+    real = _render_digest.render_token
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(_render_digest, "render_token", counting)
+    url = "/p/opted-out/" if where == "view" else "/m/counter/"
+    overrides = {"LIVEVIEW_CONFIG": {"http_fallback_patches": False}} if where == "setting" else {}
+    with override_settings(**overrides):
+        client = Client()
+        assert client.get(url).status_code == 200
+        _send(client, url, "increment", None)
+    assert calls == []
+    # Switched on, both the page and the answer carry one.
+    client = Client()
+    client.get("/m/counter/")
+    _send(client, "/m/counter/", "increment", None)
+    assert len(calls) == 2
 
 
 def test_a_refused_digest_gets_byte_for_byte_the_answer_of_a_request_that_sent_none(renders):

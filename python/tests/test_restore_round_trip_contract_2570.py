@@ -296,10 +296,14 @@ def test_the_snapshot_restore_twin_forces_a_full_html_render() -> None:
         branch.append(line)
     body = "\n".join(branch)
     # The values are applied by ``apply_restored_state`` (shared with the
-    # over-limit rollback, #4095), whose own body assigns them.
-    assert "apply_restored_state(view_instance, restored, request)" in body, (
+    # over-limit rollback, #4095), whose own body assigns them. Since #4088 the
+    # ``handle_restore`` hook is not run there: the branch arms it, and it runs
+    # later, at the HTTP fallback's point (after handle_params and the
+    # object-permission check).
+    assert "apply_restored_state(view_instance, restored, request, run_hook=False)" in body, (
         "the branch applies the restored values"
     )
+    assert "run_restore_hook = True" in body, "the branch arms the deferred handle_restore"
     assert "safe_setattr(" in inspect.getsource(runtime.apply_restored_state)
     assert "view_instance._force_full_html = True" in body, (
         "dispatch_mount must set _force_full_html on a restore mount"

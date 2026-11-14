@@ -9,6 +9,13 @@ import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
 const navSourceCode = readScript('./python/djust/static/djust/src/18-navigation.js');
+// #4125: 18-navigation.js reads the query through the bundle-wide
+// djustQueryParams() (00-namespace.js); load the real one.
+const namespaceSource = fs.readFileSync('./python/djust/static/djust/src/00-namespace.js', 'utf-8');
+const queryParamsStart = namespaceSource.indexOf('function djustQueryParams(');
+const queryParamsSource = namespaceSource.slice(
+    queryParamsStart, namespaceSource.indexOf('\n}\n', queryParamsStart) + 3,
+);
 
 function createEnv(bodyHtml = '') {
     const dom = new JSDOM(
@@ -146,6 +153,7 @@ function createNavSourceEnv(bodyHtml = '', liveViewWSMock = null, opts = {}) {
         window.eval('var liveViewWS = window.liveViewWS_mock;');
     }
 
+    window.eval(queryParamsSource);
     try {
         window.eval(navSourceCode);
     } catch (e) {}

@@ -188,6 +188,10 @@ def main(argv: list[str] | None = None) -> int:
                     "component_cells": len(component_cells),
                     "context_names": sweep.context_names,
                     "carries_measured": sweep.carries_measured,
+                    # What the shortcut must measure: the cells something reads ``carries`` of.
+                    "carries_needed": sum(
+                        1 for c in sweep.cells if url_sweep.needs_carries(c.native, c.label)
+                    ),
                     "digest": url_sweep.digest(sweep),
                     "driven": sweep.driven,
                     "no_params": sweep.no_params,

@@ -261,7 +261,7 @@
             }));
         } catch (_e) { /* CustomEvent may fail in old environments */ }
 
-        const urlParams = Object.fromEntries(newUrl.searchParams);
+        const urlParams = djustQueryParams(newUrl.search);
         const outgoing = {
             type: 'live_redirect_mount',
             view: viewPath,
@@ -391,7 +391,7 @@
         if (!isNavigationConnected()) return;
 
         const url = new URL(window.location.href);
-        const params = Object.fromEntries(url.searchParams);
+        const params = djustQueryParams(url.search);
 
         // Redirect (different path → remount) vs patch (same path, different
         // params → url_change). The pathname is the thing that decides it. The
@@ -528,7 +528,7 @@
         window.history.pushState({ djust: true }, '', newUrl.toString());
         _setRenderedPathname(newUrl.pathname, newUrl.search);
 
-        const allParams = Object.fromEntries(newUrl.searchParams);
+        const allParams = djustQueryParams(newUrl.search);
         liveViewWS.sendMessage({
             type: 'url_change',
             params: allParams,
@@ -750,7 +750,7 @@
             _setRenderedPathname(url.pathname, url.search);
             liveViewWS.sendMessage({
                 type: 'url_change',
-                params: Object.fromEntries(url.searchParams),
+                params: djustQueryParams(url.search),
                 uri: url.pathname + url.search,
             });
         } else {

@@ -35,10 +35,17 @@ What each class here proves, and what it does NOT:
   planted ones, and nothing when its detection is switched off.
 * ``TestTheStaticHunt``: the STRUCTURAL check. An AST pass over the tag modules for an escaped ITEM
   written to a quoted attribute, found without enumeration (a helper function included), whether
-  the string is an f-string, a concatenation, ``%`` or ``.format``; every finding it makes is
-  judged in ``STATIC_SINK_ALLOWED``. It does not see an unquoted attribute, ``format_html``, or a
-  helper that escapes a value it is handed (the item is read in the caller); none of those
-  patterns writes an item in the tag modules today. The run-time derivation above is the SECOND
+  the string is an f-string, a concatenation, ``%`` with a tuple or a literal mapping,
+  ``.format``, ``"".join([...])`` of literal pieces, or assembled over several statements in one
+  function (``s = '<a title="'`` ... ``s += v``, #3935); every finding it makes is judged in
+  ``STATIC_SINK_ALLOWED``. It does not see: an unquoted attribute; ``format_html``; a helper that
+  escapes a value it is handed (the item is read in the caller); a ``%`` mapping or a ``.format``
+  argument built elsewhere (``% ctx``, ``% {**ctx, "k": v}``, ``.format(**ctx)``,
+  ``.format_map``); a join over a name
+  (``"".join(parts)`` after ``parts.append(...)``); ``s = s + x`` (a re-assignment starts the
+  string over); an annotated assignment (``s: str = ...``); a string assembled in a
+  ``match`` / ``case`` body; a string assembled across functions or returned and concatenated by the caller;
+  ``string.Template``. None of those patterns writes an item in the tag modules today. The run-time derivation above is the SECOND
   net, not the first: a numeric key it does not know, a branch chosen by a named constant or a
   membership test, a numeric threshold, or a child tag missing from ``variants.PARENT`` can each
   hide a site from it, and the hunt does not depend on any of them.
@@ -2492,7 +2499,8 @@ _BRACE = re.compile(r"\{\{|\}\}|\{([^{}!:]*)(?:![rsa])?(?::[^{}]*)?\}")
 
 def _pieces(node: ast.expr) -> list[str | ast.expr]:
     """A string-building expression as the text and the expressions it is made of, in order:
-    an f-string, ``"a" + x + "b"``, ``"a%sb" % x`` and ``"a{}b".format(x)``."""
+    an f-string, ``"a" + x + "b"``, ``"a%sb" % x``, ``"a%(k)sb" % {"k": x}``, ``"a{}b".format(x)``
+    and ``"".join(["a", x, "b"])`` (#3935)."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return [node.value]
     if isinstance(node, ast.JoinedStr):
@@ -2513,12 +2521,28 @@ def _pieces(node: ast.expr) -> list[str | ast.expr]:
     ):
         right = node.right
         args = list(right.elts) if isinstance(right, ast.Tuple) else [right]
+        # a mapping: ``%(name)s`` reads its key (#3935)
+        mapping = (
+            {
+                k.value: v
+                for k, v in zip(right.keys, right.values)
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)
+            }
+            if isinstance(right, ast.Dict)
+            else None
+        )
         out, taken, last = [], 0, 0
         text = node.left.value
         for m in _PERCENT.finditer(text):
             out.append(text[last : m.start()])
+            key = re.match(r"%\(([^)]*)\)", m.group(0))
             if m.group(0) == "%%":
                 out.append("%")
+            elif key is not None:
+                if mapping is not None and key.group(1) in mapping:
+                    out.append(mapping[key.group(1)])
+                elif mapping is None:
+                    out.append(right)  # a mapping built elsewhere: what it holds is not known
             elif taken < len(args):
                 out.append(args[taken])
                 taken += 1
@@ -2553,16 +2577,75 @@ def _pieces(node: ast.expr) -> list[str | ast.expr]:
             last = m.end()
         out.append(text[last:])
         return out
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "join"
+        and isinstance(node.func.value, ast.Constant)
+        and isinstance(node.func.value.value, str)
+        and len(node.args) == 1
+        and isinstance(node.args[0], (ast.List, ast.Tuple))
+    ):
+        # ``sep.join([piece, piece, ...])`` (#3935); a join over a generator is a loop, and the
+        # string each round builds is found as its own builder
+        sep = node.func.value.value
+        out = []
+        for i, element in enumerate(node.args[0].elts):
+            if i:
+                out.append(sep)
+            out.extend(_pieces(element))
+        return out
     return [node]
+
+
+def _assembled(func: ast.AST) -> list[list[str | ast.expr]]:
+    """The strings a function assembles over several statements (#3935): ``s = "a"`` then
+    ``s += x`` ... ``s += "b"``, as one list of pieces per name, in source order. A new plain
+    assignment starts the name over; branches and loops are read in source order (a hunt may
+    over-report, never under-report, and every finding is judged)."""
+    built: dict[str, list[str | ast.expr]] = {}
+    done: list[list[str | ast.expr]] = []
+
+    def visit(statements: list[ast.stmt]) -> None:
+        for stmt in statements:
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+            ):
+                name = stmt.targets[0].id
+                if name in built:
+                    done.append(built.pop(name))
+                built[name] = list(_pieces(stmt.value))
+            elif (
+                isinstance(stmt, ast.AugAssign)
+                and isinstance(stmt.op, ast.Add)
+                and isinstance(stmt.target, ast.Name)
+                and stmt.target.id in built
+            ):
+                built[stmt.target.id].extend(_pieces(stmt.value))
+            for field in ("body", "orelse", "finalbody", "handlers"):
+                inner = getattr(stmt, field, None)
+                if isinstance(inner, list) and inner and isinstance(inner[0], ast.AST):
+                    visit([x for h in inner for x in h.body] if field == "handlers" else inner)
+
+    visit(getattr(func, "body", []))
+    return done + list(built.values())
 
 
 def _quoted_attribute_values(node: ast.expr) -> list[ast.expr]:
     """The expressions of a string-building expression that land inside a quoted attribute value
     (``="{x}"``, ``="' + x``, ``="%s"``)."""
+    return _quoted_in(_pieces(node))
+
+
+def _quoted_in(pieces: list[str | ast.expr]) -> list[ast.expr]:
+    """The expressions among ``pieces`` (text and expressions, in order) inside a quoted
+    attribute value."""
     quote: str | None = None
     last = ""
     found: list[ast.expr] = []
-    for part in _pieces(node):
+    for part in pieces:
         if isinstance(part, str):
             for ch in part:
                 if quote is None:
@@ -2646,18 +2729,19 @@ def static_sink_hunt(source: str, *, lines: bool = False) -> list[str]:
             n
             for n in ast.walk(func)
             if isinstance(n, (ast.JoinedStr, ast.BinOp))
-            or (isinstance(n, ast.Call) and _call_name(n) == "format")
+            or (isinstance(n, ast.Call) and _call_name(n) in ("format", "join"))
         ]
-        for built in builders:
-            for expr in _quoted_attribute_values(built):
-                candidates = (
-                    bound_before(expr.id, expr.lineno) if isinstance(expr, ast.Name) else [expr]
-                )
-                for candidate in candidates:
-                    if _call_name(candidate) in ESCAPERS and candidate.args:
-                        if reads_item(candidate.args[0]):
-                            at = f" (line {candidate.lineno})" if lines else ""
-                            findings.append(f"{func.name}: {ast.unparse(candidate)[:90]}{at}")
+        quoted = [expr for built in builders for expr in _quoted_attribute_values(built)]
+        quoted += [expr for pieces in _assembled(func) for expr in _quoted_in(pieces)]
+        for expr in quoted:
+            candidates = (
+                bound_before(expr.id, expr.lineno) if isinstance(expr, ast.Name) else [expr]
+            )
+            for candidate in candidates:
+                if _call_name(candidate) in ESCAPERS and candidate.args:
+                    if reads_item(candidate.args[0]):
+                        at = f" (line {candidate.lineno})" if lines else ""
+                        findings.append(f"{func.name}: {ast.unparse(candidate)[:90]}{at}")
     return sorted(set(findings))
 
 
@@ -2724,6 +2808,32 @@ def formatted(items):
 
 def formatted_by_name(items):
     return "".join('<option value="{v}">'.format(v=conditional_escape(str(i.get("v", "")))) for i in items)
+
+
+def percent_mapping(items):
+    return "".join('<option value="%(v)s">' % {"v": conditional_escape(str(i.get("v", "")))} for i in items)
+
+
+def joined_pieces(items):
+    return "".join("".join(['<option value="', conditional_escape(str(i.get("v", ""))), '">']) for i in items)
+
+
+def assembled(items):
+    out = ""
+    for i in items:
+        out += '<option value="'
+        out += conditional_escape(str(i.get("v", "")))
+        out += '">'
+    return out
+
+
+def assembled_through_a_name(items):
+    for i in items:
+        v = conditional_escape(str(i.get("v", "")))
+        html = '<option title="x" value="'
+        html += v
+        html += '">'
+    return html
 """
 CLEAN_BUILDERS = """
 def concatenated(items, kw):
@@ -2734,6 +2844,16 @@ def concatenated(items, kw):
 def percent_and_format(items):
     out = "".join('<option value="%s">' % attr_text(i.get("v", "")) for i in items)
     return out + "".join('<i title="{}">'.format(attr_text(i.get("t", ""))) for i in items)
+
+
+def mapping_join_and_assembly(items, kw):
+    out = "".join('<option value="%(v)s">' % {"v": attr_text(i.get("v", ""))} for i in items)
+    out += "".join(['<i title="', attr_text(kw.get("t", "")), '">'])
+    for i in items:
+        out += '<b title="x">'
+        out += conditional_escape(str(i.get("label", "")))  # text, not an attribute
+        out += "</b>"
+    return out
 """
 CLEAN_SINK = """
 def clean(items, kw):
@@ -2753,14 +2873,15 @@ class TestTheStaticHunt:
         assert len(planted) == 2, planted
         assert static_sink_hunt(CLEAN_SINK) == []
 
-    def test_it_finds_a_string_built_by_concatenation_percent_or_format(self) -> None:
+    def test_it_finds_a_string_built_by_every_builder_it_knows(self) -> None:
+        """Concatenation, ``%`` (a tuple and a mapping), ``.format``, ``"".join([...])`` and a
+        string assembled over several statements (#3935). Every function of the planted source is
+        one builder with one leak: the expected set is read from it, not restated."""
         planted = static_sink_hunt(PLANTED_BUILDERS)
-        assert sorted(f.split(":")[0] for f in planted) == [
-            "concatenated",
-            "formatted",
-            "formatted_by_name",
-            "percent",
-        ], planted
+        defined = sorted(
+            n.name for n in ast.walk(ast.parse(PLANTED_BUILDERS)) if isinstance(n, ast.FunctionDef)
+        )
+        assert sorted({f.split(":")[0] for f in planted}) == defined, planted
         assert static_sink_hunt(CLEAN_BUILDERS) == []
 
     def test_the_tag_modules_have_exactly_the_judged_findings(self) -> None:

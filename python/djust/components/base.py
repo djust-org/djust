@@ -1115,6 +1115,20 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         event_name = getattr(meta, "event", None)
         if event_name and not hasattr(owner, event_name):
             setattr(owner, event_name, self._make_event_handler(event_name))
+        # ``Meta.events``: further ``@event_handler`` methods of the component
+        # that a tag emits by default (``close_modal``, ``carousel_next`` ...,
+        # #4037). Each gets the same view-level alias, so the tag's default
+        # event has a framework answer whether or not it carries
+        # ``component_id``; with ``component_id`` the runtime reaches the
+        # method on the bound component directly.
+        for extra in getattr(meta, "events", ()) or ():
+            if (
+                isinstance(extra, str)
+                and not extra.startswith("_")
+                and not hasattr(owner, extra)
+                and is_event_handler(getattr(self.__class__, extra, None))
+            ):
+                setattr(owner, extra, self._make_event_handler(extra, method=extra))
 
     def __get__(self, obj: Any, objtype: Optional[type] = None) -> Any:
         """Return this view's :class:`BoundComponent` (ADR-031 D1).
@@ -1231,8 +1245,14 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
             # Legacy path — direct attribute set
             obj.__dict__[self._descriptor_attr_name or "component"] = value
 
-    def _make_event_handler(self, event_name: str) -> Callable[..., Any]:
+    def _make_event_handler(
+        self, event_name: str, method: Optional[str] = None
+    ) -> Callable[..., Any]:
         """Create the view-level ``Meta.event`` alias for this component type.
+
+        With ``method`` (a ``Meta.events`` name), the alias calls that
+        ``@event_handler`` method on the resolved bound component instead of
+        ``_handle_event``.
 
         The client names the target with ``component_id``. It is resolved only
         against the owner class's declared descriptors of this component type,
@@ -1267,6 +1287,10 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
             descriptor = owned[component_id]
 
             state = getattr(view_self, component_id, None)
+            if method is not None:
+                if isinstance(state, BoundComponent):
+                    getattr(state, method)(value=value, **kwargs)
+                return
             if isinstance(state, BoundComponent):
                 state = state.state
             if state is None:

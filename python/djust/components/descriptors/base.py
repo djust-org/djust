@@ -31,4 +31,15 @@ class LiveComponent(_DjustLiveComponent):
         return {}
 
 
-__all__ = ["LiveComponent", "TypedState"]
+def bound_state(component: Any) -> Any:
+    """The per-view State of a bound component.
+
+    Inside a component ``@event_handler`` method ``self`` is the view's
+    ``BoundComponent`` (ADR-031 D4), not the shared declaration, so its State
+    is ``self.state``. This helper names that for the type checker, which only
+    sees the declaration class.
+    """
+    return component.state
+
+
+__all__ = ["LiveComponent", "TypedState", "bound_state"]

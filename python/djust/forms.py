@@ -183,11 +183,11 @@ class PersistedFormInput(StateProperty[Dict[str, Any]]):
 def persisted_form_input(*field_names: str) -> Any:
     """Opt named form fields into server persistence under the explicit policy.
 
-    ADR-038 D-e: form input and errors are not persisted by default. Declare
+    ADR-038 D-e: form input and errors are saved with the view's automatic
+    server-side state (#4107), secret controls excepted. Declaring
     ``form_input = persisted_form_input("name", "email")`` on a ``FormMixin``
-    view to restore those fields' input across reconnect and HTTP POST;
-    every other field, all errors and ``is_valid`` reset to their mount
-    values. A field with a ``PasswordInput`` widget or a sensitive name can
+    view is the strict form: those fields' input is part of the declared
+    state contract. A field with a ``PasswordInput`` widget or a sensitive name can
     never be listed: that is an ``ExposureConfigurationError`` when the class
     is defined (static ``form_class``) or mounted (``get_form_class()``).
     Like any ``state()`` grant, it requires ``exposure_policy = "explicit"``.

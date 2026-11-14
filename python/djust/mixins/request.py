@@ -949,9 +949,14 @@ class RequestMixin:
             # ``_inject_client_script``). A page prepared in one evaluation
             # (the branch not taken here) has no separate diff render; it gets
             # its first digest from its first fallback answer.
-            from .._render_digest import render_token
+            # Not computed for a view (or project) that turned the patches off
+            # (#4114): nothing would ever echo it.
+            from .._http_fallback_baseline import patches_enabled
 
-            self.__dict__["_page_render_digest"] = render_token(self, request, baseline_html)
+            if patches_enabled(self):
+                from .._render_digest import render_token
+
+                self.__dict__["_page_render_digest"] = render_token(self, request, baseline_html)
             t_render_diff = (time.perf_counter() - t0) * 1000
             self._lazy_thunks = list(page_lazy_thunks)
             if not uses_legacy_exposure(self):
@@ -2210,11 +2215,15 @@ class RequestMixin:
 
             # #4108: every render answer names the digest of the render it
             # delivers; the client echoes it with its next fallback POST.
-            from .._render_digest import ANSWER_FIELD, render_token
+            # Skipped when the patches are off for this view or project (#4114).
+            from .._http_fallback_baseline import patches_enabled
 
-            answer_digest = render_token(self, request, html)
-            if answer_digest:
-                response_fields[ANSWER_FIELD] = answer_digest
+            if patches_enabled(self):
+                from .._render_digest import ANSWER_FIELD, render_token
+
+                answer_digest = render_token(self, request, html)
+                if answer_digest:
+                    response_fields[ANSWER_FIELD] = answer_digest
 
             cache_request_id = params.get("_cacheRequestId")
 

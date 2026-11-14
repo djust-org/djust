@@ -102,7 +102,7 @@ def test_no_inline_navigation_sink_uses_bare_conditional_escape():
 
 
 def test_safe_url_sink_count_pinned():
-    """All 11 navigation URL sinks route through safe_url. Pinning the count
+    """All 10 navigation URL sinks route through safe_url. Pinning the count
     catches a revert of a *precomputed-var* sink (e_url = conditional_escape(...))
     that the inline-regex test above can't see (#1646 whole-class guard).
 
@@ -121,6 +121,8 @@ def test_safe_url_sink_count_pinned():
         for f in ["djust_components.py", "_advanced.py", "_forms.py"]
     }
     total = sum(counts.values())
-    # 7 (djust_components: breadcrumb, citation, cookie-consent, 4×dj_nav)
-    # + 3 (_advanced: error-page, 2×breadcrumb) + 1 (_forms: form action) = 11
-    assert total >= 11, f"safe_url sink count dropped to {total} (expected >= 11): {counts}"
+    # 6 (djust_components: breadcrumb, citation, cookie-consent, 3×dj_nav)
+    # + 3 (_advanced: error-page, 2×breadcrumb) + 1 (_forms: form action) = 10.
+    # dj_nav had 4 until #3873: one node now draws a top-level link and a
+    # dropdown link (the class follows the depth), through one safe_url(href).
+    assert total >= 10, f"safe_url sink count dropped to {total} (expected >= 10): {counts}"

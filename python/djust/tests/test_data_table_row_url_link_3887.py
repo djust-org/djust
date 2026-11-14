@@ -28,10 +28,10 @@ What is NOT compared, and why (each measured, none guessed):
 * A callable nested inside a column dict (``{"link": fn}``): Django calls it while reading
   ``col.link``; the native handler is handed the column serialised, so the callable is the text
   ``<function ...>`` (``test_a_callable_inside_a_column_dict_is_not_reachable_natively``).
-* A link whose row value is ``None`` or missing is ``<a href="None">`` / ``<a href="">`` on BOTH
-  engines (copied, so they agree): a decision for the reference, not for this parity fix.
+* A link whose row value is ``None``, missing or blank is no longer a link on either engine
+  (#3895 item 1): ``test_data_table_no_url_3895.py``.
 
-The last three are #3895.
+The other residuals are #3895.
 """
 
 from __future__ import annotations
@@ -368,7 +368,8 @@ def test_missing_keys_and_many_rows_agree() -> None:
     py, rs = assert_same(
         '{% data_table rows=rows columns=cols row_url="u" %}', ctx(rows=rows, cols=LINKED)
     )
-    assert [r["attrs"]["data-href"] for r in view(rs).rows] == ["/1", "", "None", "#", "/5"]
+    # Rows 2 (no key) and 3 (None) have no URL: not clickable, no data-href (#3895).
+    assert [r["attrs"].get("data-href") for r in view(rs).rows] == ["/1", None, None, "#", "/5"]
 
 
 def test_grouped_rows_and_selection_keep_the_links() -> None:
@@ -509,7 +510,8 @@ def test_a_callable_row_url_is_called_only_where_a_template_may_call_it(
     called = member in guard.calls
     assert called == (member == "plain"), (member, guard.calls, html)
     expect_link = member == "plain"
-    assert ("data-href" in html) == (expect_link or member == "hands_off"), (member, html)
+    # ``hands_off`` resolves to the method itself, a key no row has: no URL, no link (#3895).
+    assert ("data-href" in html) == expect_link, (member, html)
 
 
 @pytest.mark.parametrize("member", ["plain", "altering", "hands_off", "needs_args"])
@@ -527,8 +529,9 @@ def test_a_callable_inside_a_column_dict_is_not_reachable_natively() -> None:
     py = view(_django("{% data_table rows=rows columns=cols %}", ctx(cols=cols)))
     rs = view(_rust("{% data_table rows=rows columns=cols %}", ctx(cols=cols)))
     assert [a["href"] for a in py.rows[0]["anchors"]] == ["/claims/1"]
-    # The serialised callable is the text ``<function ...>``: a key no row has, so an empty href.
-    assert [a["href"] for a in rs.rows[0]["anchors"]] == [""]
+    # The serialised callable is the text ``<function ...>``: a key no row has, so no URL and
+    # no link (#3895).
+    assert rs.rows[0]["anchors"] == []
 
 
 # --- the declined parts, pinned so they cannot silently widen ------------------------------------------
@@ -625,12 +628,13 @@ def test_a_marked_safe_link_class_stays_inside_the_class_attribute_natively(
 
 
 def test_a_row_that_is_not_a_dict_is_dropped_natively() -> None:
-    """Declined, pinned: the Python tag draws an empty row (``data-href=""``), the native handler
-    omits it. That is the row set (every native feature reads ``row.get``), not navigation."""
+    """Declined, pinned: the Python tag draws an empty row (not clickable: no URL, #3895), the
+    native handler omits it. That is the row set (every native feature reads ``row.get``), not
+    navigation."""
     rows = [{"id": 1, "name": "N", "age": 3, "u": "/1"}, "not a dict", None]
     src = '{% data_table rows=rows columns=cols row_url="u" %}'
     py, rs = render_both(src, ctx(rows=rows, cols=LINKED))
-    assert [r["attrs"]["data-href"] for r in view(py).rows] == ["/1", "", ""]
+    assert [r["attrs"].get("data-href") for r in view(py).rows] == ["/1", None, None]
     assert [r["attrs"]["data-href"] for r in view(rs).rows] == ["/1"]
 
 

@@ -226,7 +226,7 @@ const lazyHydrationManager = {
         );
         if (useBatch) {
             const viewEntries = [];
-            const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+            const urlParams = djustQueryParams(window.location.search);
             mounts.forEach(({ element, viewPath }) => {
                 const targetId = this.targetIdFor(element);
                 registerSlot(targetId, viewPath, null);
@@ -278,7 +278,7 @@ const lazyHydrationManager = {
         registerSlot(targetId, viewPath, null);
 
         // Pass URL query params
-        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+        const urlParams = djustQueryParams(window.location.search);
         liveViewWS.mount(viewPath, urlParams, { targetId: targetId, hasPrerendered: !!hasContent });
 
         // Remove lazy attribute to indicate hydration complete

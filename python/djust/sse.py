@@ -1442,9 +1442,13 @@ class DjustSSEStreamView(View):
             # userless RequestFactory request and deny every authenticated SSE view.
             from ._sse_navigation import page_request
 
+            # The shape the page GET hands handle_params(): a repeated key is
+            # the list of its values, not its last value (#4125).
+            from .mixins.request import _http_url_params
+
             mount_params = {
                 k: v
-                for k, v in request.GET.items()
+                for k, v in _http_url_params(request).items()
                 if k not in {"view", "_djust_url", "_djust_track_static", "_djust_tab"}
             }
             # #2966: dj-track-static over SSE. The stream GET is the mount (a later
