@@ -78,11 +78,12 @@ class Meter(Component):
                 pct = 0
             color = html.escape(safe_css_color(seg.get("color", ""), ""))
             seg_label = html.escape(str(seg.get("label", "")))
-            style = f"width:{pct:.1f}%"
-            if color:
-                style += f";background:{color}"
+            # The width is a class, as `{% progress %}` draws it (#3969, #3979). A
+            # segment's own colour has no class to stand for it, so it is the one
+            # thing still written as a style, and only when one is given.
+            style_attr = f' style="background:{color}"' if color else ""
             bar_parts.append(
-                f'<div class="dj-meter__segment" style="{style}" '
+                f'<div class="dj-meter__segment dj-progress-w-{round(pct)}"{style_attr} '
                 f'role="meter" aria-valuenow="{conditional_escape(val)}" '
                 f'aria-valuemin="0" aria-valuemax="{conditional_escape(self.total)}" '
                 f'aria-label="{seg_label}"></div>'
@@ -97,10 +98,11 @@ class Meter(Component):
                 color = html.escape(safe_css_color(seg.get("color", ""), ""))
                 seg_label = html.escape(str(seg.get("label", "")))
                 val = seg.get("value", 0)
-                swatch_style = f"background:{color}" if color else ""
+                # No `style` attribute at all without a colour (#3979).
+                swatch_style = f' style="background:{color}"' if color else ""
                 legend_items.append(
                     f'<div class="dj-meter__legend-item">'
-                    f'<span class="dj-meter__legend-swatch" style="{swatch_style}"></span>'
+                    f'<span class="dj-meter__legend-swatch"{swatch_style}></span>'
                     f'<span class="dj-meter__legend-label">{seg_label}</span>'
                     f'<span class="dj-meter__legend-value">{conditional_escape(val)}</span>'
                     f"</div>"

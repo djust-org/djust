@@ -99,7 +99,9 @@ class TokenCounter(Component):
             f'aria-label="Token usage">'
             f"{label_html}"
             f'<div class="dj-token__track">'
-            f'<div class="dj-token__bar" style="width:{pct:.1f}%"></div>'
+            # The fill's width is a class, as `{% progress %}` draws it (#3969): a
+            # `style-src` without 'unsafe-inline' refuses `style="width:N%"` (#3979).
+            f'<div class="dj-token__bar dj-progress-w-{round(min(max(pct, 0), 100))}"></div>'
             f"</div>"
             f"</div>"
         )

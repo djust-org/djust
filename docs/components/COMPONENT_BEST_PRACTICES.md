@@ -215,11 +215,12 @@ class ProgressComponent(Component):
         super().__init__(value=value, max=max, variant=variant, percentage=percentage)
 
     def _render_custom(self):
+        # A native <progress>, not `style="width: N%"`: a `style-src` without
+        # 'unsafe-inline' refuses an inline style attribute (#3979).
         return format_html(
-            '<div class="progress"><div class="progress-bar bg-{}" '
-            'style="width: {}%">{}%</div></div>',
+            '<progress class="progress-{}" value="{}" max="100">{}%</progress>',
             self.variant,
-            self.percentage,
+            format(self.percentage, ".0f"),
             format(self.percentage, ".0f"),
         )
 ```
