@@ -1811,6 +1811,8 @@ def status_moves(assigns):
 
 The template renders inside the page's `dj-root`, so its `dj-click` reaches the page's view. `manage.py check` knows it is a component template and does not report `djust.T012` for it. A function that returns a string is used as-is, as before.
 
+The template is rendered with Django's `render_to_string(template_name, context)` and no request: autoescaping is on, context processors do not run (no `request`, `user` or `messages` unless you return them), and `{% csrf_token %}` renders nothing.
+
 ## Kanban board
 
 `{% kanban_board columns=columns move_event="move_card" %}` draws a board whose cards drag between columns:
