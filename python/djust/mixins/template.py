@@ -1778,6 +1778,14 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
                 # int match position, never the float("inf") sentinel.
                 pos = int(open_pos) + 1 + len(tag)
             else:
+                if depth == 1 and branch_stack:
+                    # The root opened outside every ``{% if %}`` this scan is
+                    # in, so its close cannot be inside one: this ``</tag>``
+                    # closes an element an earlier branch opened and a
+                    # sibling ``{% else %}`` reset (#4122 — a wrapper opened in
+                    # one if/else and closed in another).
+                    pos = close_match.end()
+                    continue
                 depth -= 1
                 if depth == 0:
                     return close_pos, close_match.end()
