@@ -107,8 +107,16 @@ Translation blocks
     attribute value and in escaped text instead: a variable the block reads from the context is
     rebound around it (``{% with name=name|force_escape %}``), a ``with`` argument gets
     ``|force_escape`` appended, a ``count`` argument is a number and is left alone, and the
-    literal text prints as written. A block with ``asvar`` prints nothing (the variable it sets
-    is a marked-safe string, escaped again where an attribute prints it). The legacy
+    literal text prints as written. A block with ``asvar`` prints nothing. Django stores what it
+    sets as a marked-safe string (a context variable escaped once, a marked-safe one not at all),
+    so a slot that prints exactly that name in an attribute or in escaped text reads a twin of the
+    block instead: the same block with each variable it reads ``|force_escape``-d in its own
+    ``with`` clause, stored under a synthetic name and placed right after it, so the text is
+    escaped exactly once whatever it is marked as (#3938). Only where the slot is sure to read that
+    block (one ``asvar`` block for the name, at the top level, no other tag binding it, no
+    ``{% extends %}``, the slot after it); anywhere else, and for a filtered expression
+    (``{{ label|upper }}``), the slot keeps ``|force_escape`` and the text is escaped twice. The
+    legacy
     ``with expr as name`` form cannot be rewritten and is named by the warning. A block in a URL
     attribute is escaped and not judged.
 
@@ -269,6 +277,9 @@ class _Scanner:
         self.raw_slots: list[Slot] = []
         #: a ``{% blocktranslate %}`` block in that text (``expr`` holds the whole block)
         self.raw_blocks: list[Slot] = []
+        #: ``(start, end, whole block, template block depth)`` of each ``{% blocktranslate ...
+        #: asvar name %}`` block (#3938)
+        self.asvars: list[tuple[int, int, str, int]] = []
         #: ``(element, tag name)`` of each ``{% %}`` in that text that may print text
         self.raw_tags: list[tuple[str, str]] = []
         #: shapes this scanner cannot follow like a browser does (named by the warning)
@@ -427,6 +438,7 @@ class _Scanner:
         translation catalog, so its body is never read as slots; a block that stores its result
         (``asvar``) prints nothing here and is a silent tag."""
         if re.search(r"\sasvar\s", _OPEN_TAG.match(text).group(0)):  # type: ignore[union-attr]
+            self.asvars.append((start, end, text, self.depth))
             self.atom("{# asvar #}", start, end)
         else:
             self.atom(text, start, end, opaque=True)
@@ -561,6 +573,11 @@ def slots(template: str) -> list[Slot]:
 
 def _bound_names(template: str) -> frozenset[str]:
     """Names a ``{% for %}`` / ``{% with %}`` / ``{% ... as x %}`` binds: not context keys."""
+    return _binders(template, asvar=True)
+
+
+def _binders(template: str, asvar: bool) -> frozenset[str]:
+    """``_bound_names``, with or without the ``{% blocktranslate ... asvar x %}`` names."""
     names: set[str] = set()
     for m in _FOR.finditer(template):
         names.update(_NAME.findall(m.group(1)))
@@ -568,8 +585,90 @@ def _bound_names(template: str) -> frozenset[str]:
         names.update(re.findall(r"(\w+)\s*=", m.group(1)))
         names.update(re.findall(r"\sas\s+(\w+)", " " + m.group(1)))
     names.update(_AS.findall(template))
-    names.update(re.findall(r"\sasvar\s+(\w+)", template))
+    if asvar:
+        names.update(re.findall(r"\sasvar\s+(\w+)", template))
     return frozenset(names)
+
+
+def _asvar_twins(template: str, scan: "_Scanner") -> dict[str, tuple[int, str, str]]:
+    """``{asvar name: (end of its block, twin key, twin block)}`` for each ``asvar`` variable a
+    slot may read as the twin instead (#3938).
+
+    Django's ``asvar`` stores the block's output as a marked-safe string: a context variable
+    escaped once, a marked-safe one not at all. An attribute slot that ends in ``|force_escape``
+    escapes it again (``A &amp;amp; B``), and one that did not would let a marked-safe value out.
+    The twin is the same block, with every variable it reads made ``|force_escape`` in its own
+    ``with`` clause, stored under a synthetic name: escaped exactly once whatever it is marked as.
+    It is placed right after the author's block, which is left as it is for every other use.
+
+    Only where the slot is sure to read that block's value: one ``asvar`` block for the name, at
+    the template's top level (not inside ``{% if %}`` / ``{% for %}`` / ``{% with %}`` ...), no
+    other tag binding the name, no ``{% extends %}``, a block this can rewrite, and the slot after
+    the block. Anything else keeps ``|force_escape`` (escaped twice, never let out).
+    """
+    if re.search(r"\{%-?\s*extends\b", template):
+        return {}
+    other = _binders(template, asvar=False)
+    seen: dict[str, list[tuple[int, int, str, int]]] = {}
+    for start, end, text, depth in scan.asvars:
+        opened = _OPEN_TAG.match(text)
+        named = re.search(r"\sasvar\s+(\w+)", opened.group(0)) if opened else None
+        if named is not None:
+            seen.setdefault(named.group(1), []).append((start, end, text, depth))
+    twins: dict[str, tuple[int, str, str]] = {}
+    for name, blocks in seen.items():
+        if len(blocks) != 1 or name in other:
+            continue
+        start, end, text, depth = blocks[0]
+        key = f"djust_asvar_{start}"
+        twin = _hardened_asvar(text, key) if depth == 0 else None
+        if twin is not None:
+            twins[name] = (end, key, twin)
+    return twins
+
+
+def _hardened_asvar(text: str, key: str) -> str | None:
+    """The twin of an ``asvar`` block (see ``_asvar_twins``), or None when it cannot be built."""
+    from django.utils.text import smart_split
+
+    opened = _OPEN_TAG.match(text)
+    closed = re.search(r"\{%-?\s*end(?:blocktrans|blocktranslate)\s*-?%\}\s*$", text)
+    if opened is None or closed is None:
+        return None
+    inner = re.sub(r"^\{%-?\s*\w+|-?%\}$", "", opened.group(0))
+    out: list[str] = []
+    pairs: list[str] = []
+    bound: set[str] = set()
+    section = ""
+    for token in smart_split(inner):
+        if section == "context":
+            out += ["context", token]
+            section = ""
+        elif section == "asvar":
+            section = ""
+        elif token in ("context", "asvar", "with", "count"):
+            section = token
+            if token == "count":
+                out.append(token)
+        elif token == "trimmed":
+            out.append(token)
+            section = ""
+        elif section in ("with", "count"):
+            pair = re.fullmatch(r"(\w+)=(.+)", token, re.S)
+            if pair is None:  # the legacy ``with expr as name`` form
+                return None
+            bound.add(pair.group(1))
+            if section == "with":
+                pairs.append(f"{pair.group(1)}={pair.group(2)}|force_escape")
+            else:
+                out.append(token)
+        else:
+            return None
+    body = text[opened.end() : closed.start()]
+    names = [n for n in dict.fromkeys(re.findall(r"\{\{\s*(\w+)\s*\}\}", body)) if n not in bound]
+    pairs += [f"{n}={n}|force_escape" for n in names]
+    head = [_tag_name(opened.group(0)), *out, *(["with", *pairs] if pairs else []), "asvar", key]
+    return "{% " + " ".join(head) + " %}" + body + text[closed.start() :]
 
 
 def _filter_names(expr: str) -> list[str]:
@@ -828,7 +927,14 @@ def plan(template: str) -> Plan:
     if not (has_slots or scan.raw_slots or scan.raw_blocks):
         return Plan(template, (), (), (), (), raw_tags, includes, include_names, _named(shapes))
     bound = _bound_names(template)
+    twins = _asvar_twins(template, scan)
     edits: list[tuple[int, int, str]] = []
+
+    def twin_of(expr: str, start: int) -> str | None:
+        """The twin key a slot reading ``expr`` at ``start`` prints instead (#3938)."""
+        found = twins.get(expr)
+        return found[1] if found is not None and start >= found[0] else None
+
     groups: list[Group] = []
     unchecked: list[tuple[str, str, str]] = []
     unquoted: list[tuple[str, str, str]] = []
@@ -839,6 +945,7 @@ def plan(template: str) -> Plan:
             shapes.append("translation block it cannot rewrite")
         edits.append((part_or_slot_start, end, new))
 
+    used_twins: set[str] = set()
     for value in found:
         variables = [p for p in value.parts if p.kind in ("var", "blk")]
         if not variables:
@@ -865,6 +972,12 @@ def plan(template: str) -> Plan:
                 edits.append((part.start, part.end, "{{ " + key + "|" + filt + " }}"))
             else:
                 expr = part.text[2:-2].strip()
+                key = twin_of(expr, part.start)
+                if key is not None:
+                    # escaped exactly once by the twin block: printed as it is
+                    edits.append((part.start, part.end, "{{ " + key + " }}"))
+                    used_twins.add(expr)
+                    continue
                 edits.append((part.start, part.end, "{{ " + _force_escaped(expr) + " }}"))
         if group is not None:
             groups.append(group)
@@ -874,7 +987,11 @@ def plan(template: str) -> Plan:
     engine_escapes = not re.search(r"\{%-?\s*autoescape\b", template)
     for slot in scan.raw_slots:
         expr = slot.expr.strip()
-        if engine_escapes and _simple(expr, bound):
+        twin_key = twin_of(expr, slot.start)
+        if twin_key is not None:
+            edits.append((slot.start, slot.end, "{{ " + twin_key + " }}"))
+            used_twins.add(expr)
+        elif engine_escapes and _simple(expr, bound):
             # a plain name: when the context hands over a plain string, a number, a date ...
             # (or a marked-safe string, made plain) the engine prints it as it always did, byte
             # for byte; in every other case (a callable, a lazy value, an object, a name the
@@ -890,6 +1007,9 @@ def plan(template: str) -> Plan:
             edits.append((slot.start, slot.end, "{{ " + _force_escaped(expr) + " }}"))
     for slot in scan.raw_blocks:
         block_edit(slot.start, slot.end, slot.expr)
+    for name in used_twins:
+        end, _key, twin = twins[name]
+        edits.append((end, end, twin))
     out, pos = [], 0
     for start, end, text in sorted(edits):
         out.append(template[pos:start])
