@@ -836,7 +836,6 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
         or type(created) is not int
         or type(expires) is not int
         or created < 0
-        or created > now
         or not 0 < expires - created <= 86400
         or now >= min(expires, created + store.max_age)
         or type(public) is not dict
@@ -847,6 +846,10 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
         or type(envelope["bytes"]) is not int
         or type(envelope["remount"]) is not bool
     ):
+        return None
+    from ._exposure_sessions import written_in_the_future
+
+    if written_in_the_future(created, now, "saved view state"):
         return None
     names = _Names(view)
     enums = enum_classes(type(view))

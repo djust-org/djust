@@ -140,9 +140,11 @@ is the exception: it has one envelope per route, and a tab whose copy is older
 than what the other saved overwrites it.
 
 The persisted envelope records when it was written, in whole seconds of the
-writing process's clock, and a reader refuses one written "in the future" by
-its own clock. A process whose clock is behind the writer's therefore discards
-fresh state and mounts the view from its defaults, without an error.
+writing process's clock. A reader accepts one written up to 30 seconds "in the
+future" by its own clock (`CLOCK_SKEW_TOLERANCE` in `djust._exposure_sessions`),
+so small differences between servers' clocks do not lose state. A process whose
+clock is further behind the writer's discards the state, mounts the view from
+its defaults and logs a warning naming the skew; keep the clocks in sync.
 
 With `DEBUG = False`, system checks [`djust.C032`](error-codes.md#c032-in-memory-channel-layer)
 (an in-memory channel layer) and [`djust.C033`](error-codes.md#c033-presence-counted-per-process)

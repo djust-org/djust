@@ -48,7 +48,8 @@ def test_identity_changes_reject_replay(codec, part):
     assert other.restore(token) is None
 
 
-@pytest.mark.parametrize("elapsed", [-1, 60, 61])
+# Written more than the clock-skew tolerance (30 s) "in the future" (#4105).
+@pytest.mark.parametrize("elapsed", [-31, 60, 61])
 def test_future_or_expired_envelopes_are_rejected(codec, monkeypatch, elapsed):
     monkeypatch.setattr("djust._exposure_snapshots.time.time", lambda: 1000)
     token = codec.capture(object.__new__(SnapshotView))

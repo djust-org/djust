@@ -14,7 +14,7 @@ from typing import Any
 from django.core import signing
 
 from ._exposure import ExposureContract, ExposureError, clone_json_state
-from ._exposure_sessions import StateBinding, request_binding
+from ._exposure_sessions import StateBinding, request_binding, written_in_the_future
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +149,12 @@ class ClientSnapshot:
                 return None
             created = envelope["created"]
             now = int(time.time())
-            if type(created) is not int or created < 0 or not 0 <= now - created < self.max_age:
+            if (
+                type(created) is not int
+                or created < 0
+                or now - created >= self.max_age
+                or written_in_the_future(created, now, "client snapshot")
+            ):
                 return None
             return self.contract.prepare_restore(envelope["state"], "snapshot")
         except (signing.BadSignature, ValueError, TypeError, RecursionError, OverflowError):
