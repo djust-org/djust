@@ -909,26 +909,43 @@ class ArticleView(LiveView):
 | `{% truncated_list %}` | `toggle_list` | `TruncatedList` (`expanded`) |
 | `{% markdown_textarea %}` | `toggle_preview` | `MarkdownTextarea` (`preview`) |
 | `{% stepper %}`, `{% wizard %}` | `set_step` | `Stepper(active=0)` for `stepper`, which counts by index; `Stepper(active="<first step id>")` for `wizard`, which sends step ids |
+| `{% dropdown_menu %}` | `toggle_menu` | `Dropdown` (`open=menu.is_open`); the items send your events |
+| `{% split_button %}` | `toggle_split_menu`; its `event` and the options' events | `Dropdown` (`is_open=menu.is_open`); your view |
+| `{% sidebar %}` | `toggle_sidebar` | `Sidebar` (`collapsed`) |
+| `{% notification_center %}` | `toggle_notifications`; `mark_notification_read`, `clear_notifications` | `NotificationCenter` (`is_open=bell.is_open`); your view |
+| `{% notification_popover %}` | `toggle_notifications`; `mark_read` | `NotificationCenter` (`open=bell.is_open`); your view |
+| `{% tree_view %}` | `tree_expand`; `tree_select` | `TreeView` (`expanded=tree.expanded`); your view |
+| `{% alert dismissible=True %}`, `{% page_alert dismissible=True %}` | `dismiss_alert` | `Alert` (render it only while `dismissed` is false) |
+| `{% toast_container %}` | `dismiss_toast` | `Toasts` (`{% toast_container toasts.items %}`; add one with `self.toasts.show("Saved", type="success")`) |
+| `{% date_picker %}` | `date_prev_month`, `date_next_month`; `date_select` | `DatePicker` (`year=cal.year month=cal.month`); your view |
 | `{% cookie_consent %}` | `accept_cookies` | your view: it records the consent |
 
 "Your view" means an `@event_handler` of that name: what a search matches, what
-an export contains and where consent is stored are the application's. An
+an export contains, what a menu item or a selected tree node does, which date
+was picked, which notifications are read and where consent is stored are the
+application's. An
 `@event_handler` of the same name on the view also replaces a component's
 answer (to validate a step before moving on, say), and renaming the event
 (`close_event="shut_dialog"`) makes it yours to answer.
 
-A tag has no off state: `close_event=None` (or `False`, `""`) does not remove
-the control, it draws one that sends `None`, which nothing answers. Leave the
-argument out to send the default event.
+A close or dismiss control is optional: `close_event=None` leaves it out of
+`{% modal %}`, `{% sheet %}`, `{% lightbox %}`, `{% command_palette %}` and
+`{% export_dialog %}` (no ×, no backdrop click, no Cancel), as `dismiss_event=None`
+does from `{% announcement_bar %}`, `{% page_alert %}` and `{% toast_container %}`
+and `event=None` from `{% alert %}`. `False` and `""` mean the same: none of the
+three is an event name. The dialog then closes only when your view sets it
+closed. Every other event argument names the control the tag is for (a toggle, a
+step, previous and next), which it always draws: there `None`, `False` or `""`
+draws a control that sends `None`, which nothing answers, and `manage.py check`
+reports it. Leave the argument out to send the default event.
 
 A component answers an event without `component_id` only when the view
 declares one component of that type. With two (`confirm = Modal()` and
 `delete = Modal()`), each tag must say which one it drives with
-`component_id="confirm"`. `{% modal %}`, `{% sheet %}`, `{% carousel %}`,
-`{% tabs %}`, `{% accordion %}`, `{% dropdown %}`, `{% tooltip %}` and
-`{% collapsible %}` take `component_id=`; the tags of the other components
-above do not yet (tracked in #4134), so on such a view write the handler
-yourself.
+`component_id="confirm"`. Every tag in the table above that a component answers
+takes `component_id=`, as do `{% tooltip %}` and `{% collapsible %}`. Only the controls the component
+answers carry it; a control that sends your view's event (a search, a menu item,
+a picked date) does not, so that event still reaches your handler.
 
 `Carousel` needs `total`, the number of slides: declare `Carousel(total=5)` or
 set `self.slides.total = len(images)` in `mount()`. Without it previous, next

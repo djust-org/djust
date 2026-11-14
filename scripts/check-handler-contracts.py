@@ -27,12 +27,8 @@ _APP_LEVEL_EVENTS = {
     "copy_code",
     "dashboard_move",
     "dashboard_resize",
-    "date_next_month",
-    "date_prev_month",
     "date_select",
     "default",
-    "dismiss_alert",
-    "dismiss_toast",
     "export",
     "filter_change",
     "filter_clear",
@@ -55,11 +51,6 @@ _APP_LEVEL_EVENTS = {
     "save_signature",
     "select_model",
     "send",
-    "toggle_menu",
-    "toggle_notifications",
-    "toggle_sidebar",
-    "toggle_split_menu",
-    "tree_expand",
     "tree_select",
     "upload_file",
     "x_event",
@@ -69,6 +60,10 @@ _APP_LEVEL_EVENTS = {
     # toggle, navigate, step) are answered by descriptors since #4126.
     "accept_cookies",
     "palette_search",
+    # #4134: the remaining UI-state defaults (open a menu, collapse the sidebar,
+    # expand a tree node, dismiss an alert or a toast, step the date picker's
+    # month) are answered by descriptors too. What a menu item, a tree
+    # selection, a picked date or a notification does stays listed above.
 }
 
 #: Tag arguments whose event never reaches the view, so no handler answers it

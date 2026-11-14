@@ -368,3 +368,34 @@ class TestUiStateEvents4126:
             assert name in defaults, name
             assert name not in handlers, name
             assert name in mod._APP_LEVEL_EVENTS, name
+
+
+class TestUiStateEvents4134(TestUiStateEvents4126):
+    """#4134: the last nine UI-state defaults are answered by descriptors, while
+    what a menu item, a tree selection, a picked date or a notification does
+    stays the application's."""
+
+    UI_STATE = (
+        "toggle_menu",
+        "toggle_sidebar",
+        "toggle_notifications",
+        "toggle_split_menu",
+        "tree_expand",
+        "dismiss_alert",
+        "dismiss_toast",
+        "date_prev_month",
+        "date_next_month",
+    )
+
+    def test_app_actions_of_those_tags_stay_app_level(self):
+        mod, defaults, handlers = self._scan()
+        for name in (
+            "date_select",
+            "tree_select",
+            "mark_notification_read",
+            "clear_notifications",
+            "mark_read",
+        ):
+            assert name in defaults, name
+            assert name not in handlers, name
+            assert name in mod._APP_LEVEL_EVENTS, name

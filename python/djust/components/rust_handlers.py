@@ -60,7 +60,7 @@ from djust.components.utils import (
     url_attr,
     data_url_attr,
 )
-from djust.components.utils import attr_text
+from djust.components.utils import attr_text, component_id_attr
 from djust.template_tags import TYPED_ARGS_KEY
 
 
@@ -438,10 +438,22 @@ def _with_typed_block_operands(handler: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
+#: Left by ``AccordionItemHandler`` right after its trigger's opening tag, for the enclosing
+#: ``AccordionHandler`` to replace: the items render first, so only the parent knows its
+#: ``component_id=`` (#4134). An item's marker is consumed by the nearest accordion, so a
+#: nested accordion's items keep their own.
+_ACCORDION_CID_MARKER = '"><!--djust-accordion-cid-->'
+
+
 class AccordionHandler:
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         accordion_id = conditional_escape(kw.get("id", "accordion"))
+        # The triggers carry ``component_id=`` as the Django tag's do (#4134). Only literals and
+        # the escaped id are written, so ``content`` stays the engine-rendered body.
+        content = content.replace(
+            _ACCORDION_CID_MARKER, f'"{component_id_attr(kw.get("component_id"))}>'
+        )
         return _safe(f'<div class="accordion" id="{accordion_id}">{content}</div>')
 
 
@@ -458,7 +470,7 @@ class AccordionItemHandler:
         return _safe(
             f'<div class="accordion-item {open_cls}">'
             f'<button class="accordion-trigger" aria-expanded="{expanded}" '
-            f'dj-click="{event}" data-value="{item_id}">'
+            f'dj-click="{event}" data-value="{item_id}{_ACCORDION_CID_MARKER}'
             f'<span class="accordion-title">{title}</span>'
             f'<svg class="accordion-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
             f'<polyline points="6 9 12 15 18 9"></polyline></svg>'
@@ -1922,6 +1934,8 @@ class SidebarHandler:
         title = kw.get("title", "")
         toggle_event = conditional_escape(kw.get("toggle_event", "toggle_sidebar"))
         custom_class = conditional_escape(kw.get("class", ""))
+        # ``component_id=`` names which ``Sidebar`` the toggle drives (#4134).
+        cid_attr = component_id_attr(kw.get("component_id"))
 
         collapsed_cls = " dj-sidebar--collapsed" if collapsed else ""
         cls = f"dj-sidebar{collapsed_cls}"
@@ -1933,11 +1947,11 @@ class SidebarHandler:
             header_html = (
                 f'<div class="dj-sidebar__header">'
                 f'<span class="dj-sidebar__title">{conditional_escape(title)}</span>'
-                f'<button class="dj-sidebar__toggle" dj-click="{toggle_event}">'
+                f'<button class="dj-sidebar__toggle" dj-click="{toggle_event}"{cid_attr}>'
                 f"&#9776;</button></div>"
             )
 
-        backdrop = f'<div class="dj-sidebar__backdrop" dj-click="{toggle_event}"></div>'
+        backdrop = f'<div class="dj-sidebar__backdrop" dj-click="{toggle_event}"{cid_attr}></div>'
 
         return _safe(
             f'<nav class="{cls}" id="{sidebar_id}" role="navigation">'
@@ -2034,8 +2048,9 @@ class NavMenuHandler:
             )
 
         hamburger = (
-            f'<button class="dj-nav__hamburger" dj-click="{toggle_event}" '
-            f'aria-label="Toggle navigation">&#9776;</button>'
+            f'<button class="dj-nav__hamburger" dj-click="{toggle_event}"'
+            f'{component_id_attr(kw.get("component_id"))} aria-label="Toggle navigation">'
+            f"&#9776;</button>"
         )
 
         # The menu's ``active`` reaches the items that left a marker (#3873 follow-up). Each

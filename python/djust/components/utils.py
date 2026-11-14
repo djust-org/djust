@@ -534,6 +534,31 @@ def attr_text(value: Any) -> str:
     return str(escape(_exact_str(value)))
 
 
+def event_is_off(value: Any) -> bool:
+    """Whether a tag's event argument turns its control off (#4134).
+
+    ``None``, ``False`` and ``""`` all mean "no control": a tag whose control is
+    optional (a close or dismiss button) leaves it out, so nothing sends an event
+    no handler answers. Any other value is an event name. One rule for all three
+    because each of them, drawn as ``dj-click``, sends a name nothing answers.
+    """
+    return value is None or value is False or value == ""
+
+
+def component_id_attr(component_id: Any) -> str:
+    """`` data-component-id="..."`` for a control whose event a declared component
+    answers, or ``""`` when no ``component_id=`` was given (#4134).
+
+    The client sends the nearest ``data-component-id`` with the event, so with two
+    components of one type on a view (``confirm = Modal()``, ``delete = Modal()``)
+    the event reaches the one the tag names. Put it on those controls only, never
+    on an element that also holds controls sending the application's own events.
+    """
+    if event_is_off(component_id):
+        return ""
+    return f' data-component-id="{attr_text(component_id)}"'
+
+
 #: The HTML spec's "ASCII whitespace": TAB, LF, FF, CR and SPACE. Not VT, and not
 #: Unicode whitespace (``str.isspace()`` would be both): a browser does not split
 #: a ``srcset`` on U+00A0, so neither may this.

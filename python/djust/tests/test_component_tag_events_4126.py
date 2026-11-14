@@ -209,6 +209,29 @@ DRAW_ALL = {
     "markdown_textarea": ("{% markdown_textarea %}", {}),
     "stepper": ("{% stepper steps=s %}", {"s": ["a", "b"]}),
     "wizard": ("{% wizard steps=s %}{% endwizard %}", {"s": [{"id": "a", "label": "A"}]}),
+    # #4134
+    "dropdown_menu": ('{% dropdown_menu label="L" %}{% enddropdown_menu %}', {}),
+    "split_button": ('{% split_button label="L" %}', {}),
+    "sidebar": ('{% sidebar title="T" %}{% endsidebar %}', {}),
+    "notification_center": (
+        "{% notification_center notifications=n %}",
+        {"n": [{"id": 1, "message": "m"}]},
+    ),
+    "notification_popover": (
+        "{% notification_popover notifications=n open=True %}",
+        {"n": [{"id": 1, "title": "t"}]},
+    ),
+    "tree_view": (
+        "{% tree_view nodes=n %}",
+        {"n": [{"id": "a", "label": "A", "children": [{"id": "b", "label": "B"}]}]},
+    ),
+    "alert": ("{% alert dismissible=True %}x{% endalert %}", {}),
+    "page_alert": ("{% page_alert dismissible=True %}x{% endpage_alert %}", {}),
+    "toast_container": (
+        "{% toast_container toasts=t %}",
+        {"t": [{"id": "1", "type": "info", "message": "m"}]},
+    ),
+    "date_picker": ("{% date_picker %}", {}),
 }
 
 
@@ -304,18 +327,22 @@ def test_t019_follows_a_renamed_and_a_variable_event():
 
 @pytest.mark.parametrize("literal", ["None", "False", '""'])
 def test_t019_reports_an_event_set_to_none_since_the_tag_has_no_off_state(literal):
-    """``close_event=None`` does not remove the control: the tag still draws
-    it, with ``dj-click="None"``, and every click is rejected. Only an ABSENT
-    argument means the default. Reported even when ``Modal()`` is declared."""
-    src = "{%% modal open=dialog.is_open close_event=%s %%}x{%% endmodal %%}" % literal
-    rendered = _django(src.replace("dialog.is_open", "True"))
-    assert "dj-click=" in rendered and "close_modal" not in rendered
-    findings, _ = _findings(_view(src, dialog=D.Modal()))
+    """``toggle_event=None`` does not remove a toggle: the tag still draws it,
+    with ``dj-click="None"``, and every click is rejected. Only an ABSENT
+    argument means the default. Reported even when ``NavMenu()`` is declared.
+    (A close or dismiss button has an off state since #4134:
+    ``test_component_tag_events_4134.py``.)"""
+    src = (
+        "{%% nav_menu mobile_open=nav.mobile_open toggle_event=%s %%}{%% endnav_menu %%}" % literal
+    )
+    rendered = _django(src.replace("nav.mobile_open", "True"))
+    assert "dj-click=" in rendered and "toggle_nav" not in rendered
+    findings, _ = _findings(_view(src, nav=D.NavMenu()))
     assert [f[1] for f in findings] == ["T019"], findings
     message, hint = findings[0][2], findings[0][3]
-    assert "{% modal %} has no off state" in message, message
-    assert "close_event=%s still draws the control" % literal.replace('""', "''") in message
-    assert "Leave close_event= out" in hint
+    assert "{% nav_menu %} has no off state" in message, message
+    assert "toggle_event=%s still draws the control" % literal.replace('""', "''") in message
+    assert "Leave toggle_event= out" in hint
 
 
 def test_t019_tabs_with_param_sends_no_event():
@@ -531,4 +558,6 @@ def test_guide_says_two_components_of_one_type_need_component_id():
         'With two (`confirm = Modal()` and\n`delete = Modal()`), each tag must say which one it drives with\n`component_id="confirm"`.'
         in guide
     )
-    assert "do not yet (tracked in #4134)" in guide
+    # Every tag in the table takes it since #4134.
+    assert "do not yet (tracked in #4134)" not in guide
+    assert "Every tag in the table above that a component answers\ntakes `component_id=`" in guide
