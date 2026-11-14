@@ -15,9 +15,9 @@ from demo_app.views.homepage import (  # noqa: F401 - routed from djust_homepage
     HomeLiveDataDemo,
     HomeSearchDemo,
     HomeTodoDemo,
+    NavbarBadgeDemo,
 )
 from demo_app.views_old import IndexView as _IndexView
-from demo_app.views_old import NavbarBadgeDemo  # noqa: F401 - routed from djust_homepage.urls
 
 
 class IndexView(_IndexView):

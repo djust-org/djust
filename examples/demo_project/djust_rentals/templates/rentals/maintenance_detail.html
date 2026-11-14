@@ -1,6 +1,6 @@
 {% extends "rentals/base.html" %}
 
-{% block title %}{{ request.title }} - Maintenance Request{% endblock %}
+{% block title %}{{ maintenance_request.title }} - Maintenance Request{% endblock %}
 
 {% block content %}
 <div class="py-6" dj-root dj-view="djust_rentals.views.maintenance.MaintenanceDetailView">
@@ -37,7 +37,7 @@
             <!-- Description -->
             <div>
               <p class="text-sm text-muted-foreground mb-1">Description</p>
-              <p class="text-card-foreground">{{ request.description }}</p>
+              <p class="text-card-foreground">{{ maintenance_request.description }}</p>
             </div>
 
             <!-- Property and Tenant -->
@@ -45,23 +45,23 @@
               <div>
                 <p class="text-sm text-muted-foreground mb-1">Property</p>
                 <p class="font-medium">
-                  <a href="{% url 'rentals:property-detail' request.property.pk %}" class="text-primary hover:underline inline-flex items-center gap-1">
-                    {{ request.property.name }}
+                  <a href="{% url 'rentals:property-detail' maintenance_request.property.pk %}" class="text-primary hover:underline inline-flex items-center gap-1">
+                    {{ maintenance_request.property.name }}
                     <i data-lucide="external-link" class="w-3 h-3"></i>
                   </a>
                 </p>
-                <p class="text-sm text-muted-foreground">{{ request.property.address }}</p>
+                <p class="text-sm text-muted-foreground">{{ maintenance_request.property.address }}</p>
               </div>
-              {% if request.tenant %}
+              {% if maintenance_request.tenant %}
               <div>
                 <p class="text-sm text-muted-foreground mb-1">Reported by</p>
                 <p class="font-medium">
-                  <a href="{% url 'rentals:tenant-detail' request.tenant.pk %}" class="text-primary hover:underline inline-flex items-center gap-1">
-                    {{ request.tenant.user.get_full_name }}
+                  <a href="{% url 'rentals:tenant-detail' maintenance_request.tenant.pk %}" class="text-primary hover:underline inline-flex items-center gap-1">
+                    {{ maintenance_request.tenant.user.get_full_name }}
                     <i data-lucide="external-link" class="w-3 h-3"></i>
                   </a>
                 </p>
-                <p class="text-sm text-muted-foreground">{{ request.tenant.user.email }}</p>
+                <p class="text-sm text-muted-foreground">{{ maintenance_request.tenant.user.email }}</p>
               </div>
               {% endif %}
             </div>
@@ -72,7 +72,7 @@
                 <p class="text-sm text-muted-foreground mb-1">Created</p>
                 <div class="flex items-center gap-1">
                   <i data-lucide="calendar" class="w-4 h-4 text-muted-foreground"></i>
-                  <p class="text-card-foreground">{{ request.created_at|date:"M d, Y" }}</p>
+                  <p class="text-card-foreground">{{ maintenance_request.created_at|date:"M d, Y" }}</p>
                 </div>
               </div>
               <div>
@@ -84,12 +84,12 @@
                   </p>
                 </div>
               </div>
-              {% if request.completed_at %}
+              {% if maintenance_request.completed_at %}
               <div>
                 <p class="text-sm text-muted-foreground mb-1">Completed</p>
                 <div class="flex items-center gap-1">
                   <i data-lucide="check-circle" class="w-4 h-4 text-green-600 dark:text-green-400"></i>
-                  <p class="text-card-foreground">{{ request.completed_at|date:"M d, Y" }}</p>
+                  <p class="text-card-foreground">{{ maintenance_request.completed_at|date:"M d, Y" }}</p>
                 </div>
               </div>
               <div>
@@ -103,22 +103,22 @@
             </div>
 
             <!-- Assigned Contractor -->
-            {% if request.assigned_to %}
+            {% if maintenance_request.assigned_to %}
             <div class="pt-4 border-t border-border">
               <p class="text-sm text-muted-foreground mb-1">Assigned To</p>
               <div class="flex items-center gap-1">
                 <i data-lucide="user-check" class="w-4 h-4 text-primary"></i>
-                <p class="text-card-foreground font-medium">{{ request.assigned_to }}</p>
+                <p class="text-card-foreground font-medium">{{ maintenance_request.assigned_to }}</p>
               </div>
             </div>
             {% endif %}
 
             <!-- Notes -->
-            {% if request.notes %}
+            {% if maintenance_request.notes %}
             <div class="pt-4 border-t border-border">
               <p class="text-sm text-muted-foreground mb-2">Notes</p>
               <div class="bg-accent/50 rounded-md p-3 border border-border">
-                <p class="text-card-foreground whitespace-pre-line text-sm">{{ request.notes }}</p>
+                <p class="text-card-foreground whitespace-pre-line text-sm">{{ maintenance_request.notes }}</p>
               </div>
             </div>
             {% endif %}
@@ -137,22 +137,22 @@
           <div class="space-y-3">
             <div>
               <p class="text-sm text-muted-foreground mb-1">Estimated Cost</p>
-              {% if request.estimated_cost %}
-              <p class="text-2xl font-bold text-card-foreground">${{ request.estimated_cost|floatformat:0 }}</p>
+              {% if maintenance_request.estimated_cost %}
+              <p class="text-2xl font-bold text-card-foreground">${{ maintenance_request.estimated_cost|floatformat:0 }}</p>
               {% else %}
               <p class="text-xl text-muted-foreground">TBD</p>
               {% endif %}
             </div>
             <div class="pt-3 border-t border-border">
               <p class="text-sm text-muted-foreground mb-1">Actual Cost</p>
-              {% if request.actual_cost %}
-              <p class="text-2xl font-bold text-green-600 dark:text-green-400">${{ request.actual_cost|floatformat:0 }}</p>
-              {% if request.estimated_cost %}
+              {% if maintenance_request.actual_cost %}
+              <p class="text-2xl font-bold text-green-600 dark:text-green-400">${{ maintenance_request.actual_cost|floatformat:0 }}</p>
+              {% if maintenance_request.estimated_cost %}
               <p class="text-xs text-muted-foreground mt-1">
-                {% if request.actual_cost > request.estimated_cost %}
-                  Over budget by ${{ request.actual_cost|add:"-"|add:request.estimated_cost|floatformat:0 }}
-                {% elif request.actual_cost < request.estimated_cost %}
-                  Under budget by ${{ request.estimated_cost|add:"-"|add:request.actual_cost|floatformat:0 }}
+                {% if maintenance_request.actual_cost > maintenance_request.estimated_cost %}
+                  Over budget by ${{ maintenance_request.actual_cost|add:"-"|add:maintenance_request.estimated_cost|floatformat:0 }}
+                {% elif maintenance_request.actual_cost < maintenance_request.estimated_cost %}
+                  Under budget by ${{ maintenance_request.estimated_cost|add:"-"|add:maintenance_request.actual_cost|floatformat:0 }}
                 {% else %}
                   On budget
                 {% endif %}
@@ -173,15 +173,15 @@
           </div>
           <div class="space-y-3">
             <div class="flex items-center gap-3">
-              {% if request.status == 'completed' %}
+              {% if maintenance_request.status == 'completed' %}
               <div class="w-10 h-10 rounded-full bg-green-500/10 border border-green-500/20 flex items-center justify-center">
                 <i data-lucide="check-circle" class="w-5 h-5 text-green-600 dark:text-green-400"></i>
               </div>
-              {% elif request.status == 'in_progress' %}
+              {% elif maintenance_request.status == 'in_progress' %}
               <div class="w-10 h-10 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
                 <i data-lucide="loader" class="w-5 h-5 text-blue-600 dark:text-blue-400"></i>
               </div>
-              {% elif request.status == 'cancelled' %}
+              {% elif maintenance_request.status == 'cancelled' %}
               <div class="w-10 h-10 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
                 <i data-lucide="x-circle" class="w-5 h-5 text-red-600 dark:text-red-400"></i>
               </div>
@@ -191,7 +191,7 @@
               </div>
               {% endif %}
               <div>
-                <p class="font-medium text-card-foreground">{{ request.get_status_display }}</p>
+                <p class="font-medium text-card-foreground">{{ maintenance_request.get_status_display }}</p>
                 <p class="text-sm text-muted-foreground">Current status</p>
               </div>
             </div>
@@ -205,16 +205,16 @@
             <h3 class="text-lg font-semibold text-card-foreground">Quick Actions</h3>
           </div>
           <div class="space-y-2">
-            <a href="{% url 'rentals:maintenance-update' request.pk %}" class="flex items-center justify-center gap-2 w-full bg-primary text-primary-foreground hover:bg-primary/90 py-2 rounded-md transition-colors">
+            <a href="{% url 'rentals:maintenance-update' maintenance_request.pk %}" class="flex items-center justify-center gap-2 w-full bg-primary text-primary-foreground hover:bg-primary/90 py-2 rounded-md transition-colors">
               <i data-lucide="edit" class="w-4 h-4"></i>
               Update Request
             </a>
-            <a href="{% url 'rentals:property-detail' request.property.pk %}" class="flex items-center justify-center gap-2 w-full bg-muted text-muted-foreground hover:bg-accent py-2 rounded-md border border-border transition-colors">
+            <a href="{% url 'rentals:property-detail' maintenance_request.property.pk %}" class="flex items-center justify-center gap-2 w-full bg-muted text-muted-foreground hover:bg-accent py-2 rounded-md border border-border transition-colors">
               <i data-lucide="home" class="w-4 h-4"></i>
               View Property
             </a>
-            {% if request.tenant %}
-            <a href="{% url 'rentals:tenant-detail' request.tenant.pk %}" class="flex items-center justify-center gap-2 w-full bg-muted text-muted-foreground hover:bg-accent py-2 rounded-md border border-border transition-colors">
+            {% if maintenance_request.tenant %}
+            <a href="{% url 'rentals:tenant-detail' maintenance_request.tenant.pk %}" class="flex items-center justify-center gap-2 w-full bg-muted text-muted-foreground hover:bg-accent py-2 rounded-md border border-border transition-colors">
               <i data-lucide="user" class="w-4 h-4"></i>
               View Tenant
             </a>

@@ -12,12 +12,13 @@ from djust.decorators import event_handler
 
 
 class _Receiver:
-    """The same four handlers on both views; each records what arrived."""
+    """The same four handlers on both views; each records what arrived.
 
-    # Declared state: under explicit exposure an undeclared attribute renders
-    # as an empty string (T027). Persisted on the server so the HTTP-only
-    # transport, which mounts again for every event, keeps what arrived.
-    received = state("", persist="server")
+    The ``received`` field is declared on each concrete view, not here: an
+    exposure grant (``persist="server"``) is not inherited, so a base that
+    declares one refuses to compile, and the embedded child may not persist
+    at all (#3994).
+    """
 
     def _record(self, name):
         self.received = (self.received + " " + name).strip()
@@ -41,6 +42,12 @@ class _Receiver:
 
 class EmbeddedDirectivesChild(_Receiver, LiveView):
     exposure_policy = "explicit"
+    # Declared state: under explicit exposure an undeclared attribute renders
+    # as an empty string (T027). Not persisted: a non-sticky embedded child is
+    # transient, and {% live_render %} refuses one that declares persisted
+    # state. Each event's answer is the child's own HTML, so the token that
+    # just arrived is on the page without persistence.
+    received = state("")
     template = """<div>
 <p>Child received: <span id="child-received">{{ received }}</span></p>
 <div id="away-box" dj-click-away="got_away" style="padding:1rem;border:1px solid #999">inside</div>
@@ -55,6 +62,10 @@ class EmbeddedDirectivesChild(_Receiver, LiveView):
 
 class EmbeddedDirectivesView(_Receiver, LiveView):
     exposure_policy = "explicit"
+    # Declared state: under explicit exposure an undeclared attribute renders
+    # as an empty string (T027). Persisted on the server so the HTTP-only
+    # transport, which mounts again for every event, keeps what arrived.
+    received = state("", persist="server")
     template_name = "demos/embedded_directives.html"
 
     def mount(self, request, **kwargs):

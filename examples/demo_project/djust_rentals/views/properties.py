@@ -284,6 +284,10 @@ class PropertyFormView(BaseViewWithNavbar):
         """Initialize property form"""
         self.property_id = pk
         self.is_edit = pk is not None
+        # Set before the not-found return below: get_context_data reads them (#3994).
+        self.success_message = ""
+        self.error_message = ""
+        self.validation_errors = {}
 
         if self.is_edit:
             # Load existing property
@@ -370,6 +374,11 @@ class PropertyDeleteView(BaseViewWithNavbar):
     def mount(self, request, pk=None, **kwargs):
         """Initialize property delete view"""
         self.property_id = pk
+        # Set before the not-found return below: get_context_data reads them (#3994).
+        self.has_active_lease = False
+        self.lease_count = 0
+        self.maintenance_count = 0
+        self.deleted = False
 
         try:
             self.property = Property.objects.get(pk=pk)

@@ -106,19 +106,6 @@ KNOWN_FAILURES: dict[str, str] = {
         "deliberate: OrderView.charge raises ValueError('amount must be positive') to show what "
         "the overlay displays; fired with no args, amount=0 takes that branch"
     ),
-    # --- the test settings, not the doc ---
-    # The demo project the suite runs under has a ``navbar`` context processor
-    # (demo_app.context_processors.navbar). A component declared as ``navbar``
-    # is a reserved provider name, so the two collide (ExposureError) here; a
-    # project without that processor renders the example.
-    # was docs/components/COMPONENTS.md line 180
-    "docs/components/COMPONENTS.md@4db04422": (
-        "test settings: the demo's navbar context processor collides with the declared navbar"
-    ),
-    # was docs/components/COMPONENTS.md line 463
-    "docs/components/COMPONENTS.md@271f636d": (
-        "test settings: the demo's navbar context processor collides with the declared navbar"
-    ),
     # --- removed in 2.0, doc not yet rewritten ---
     # #4006 removed @optimistic and @client_state; these state-management pages
     # still teach them. They were not executed until #4076 widened DOC_FILES, so
@@ -1287,11 +1274,34 @@ def test_known_failure_keys_follow_the_block_not_its_line(tmp_path, monkeypatch)
     assert before.lineno != after.lineno and before.key == after.key
 
 
+# Context processors the demo project (the suite's settings) adds and a
+# reader's project does not have. ``demo_app.context_processors.navbar``
+# supplies ``navbar`` to every template, which makes ``navbar`` a reserved
+# name, so a documented view that declares its own ``navbar`` component
+# (COMPONENTS.md) refused to render here and nowhere else (#3994).
+_DEMO_ONLY_PROCESSORS = frozenset({"demo_app.context_processors.navbar"})
+
+
+def _reader_templates(templates: list[dict]) -> list[dict]:
+    """``TEMPLATES`` without the demo project's own context processors."""
+    readers = []
+    for engine in templates:
+        engine = {**engine, "OPTIONS": dict(engine.get("OPTIONS", {}))}
+        processors = engine["OPTIONS"].get("context_processors")
+        if processors is not None:
+            engine["OPTIONS"]["context_processors"] = [
+                p for p in processors if p not in _DEMO_ONLY_PROCESSORS
+            ]
+        readers.append(engine)
+    return readers
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize("block", [_param(b) for b in _BLOCKS])
 def test_doc_snippet_executes(block: Block, settings, no_network):
     """The block executes, mounts, renders and handles events as documented."""
     settings.LIVEVIEW_ALLOWED_MODULES = [block.module_name]
+    settings.TEMPLATES = _reader_templates(settings.TEMPLATES)
     outcome = run_block(block)
     _record(outcome)
     if outcome.status == "skip":

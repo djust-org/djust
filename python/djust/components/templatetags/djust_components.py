@@ -793,11 +793,26 @@ def do_card(parser: Any, token: Any) -> template.Node:
 def _checked_column_widths(columns: Any) -> Any:
     """Columns with any ``width`` that is not a plain CSS length cleared.
 
-    ``table.html`` writes ``col.width`` into a style attribute."""
+    ``table.html`` writes ``col.width`` into a style attribute.
+
+    A column that is not a dict (a bare name such as ``columns=["name", "age"]``, a number,
+    ``None``, any other value) is the column whose key and label are its text, as the native
+    handler draws it. ``table.html`` reads ``col.key``, and a filter argument that does not
+    resolve raises, so a shape the native handler accepted made the first, Django-engine render
+    fail (#3895). The text is plain: a ``mark_safe`` name is escaped like any other, as natively
+    (a header with markup is the dict form's ``label``). An ``int`` keeps its value as the key, so
+    it still reads a row's ``int`` key (the native handler reads the row after a JSON round trip,
+    where that key is the same text)."""
     if not isinstance(columns, (list, tuple)):
         return columns
     checked = []
     for col in columns:
+        if not isinstance(col, Mapping):
+            # ``str.__str__`` returns an exact ``str``: a ``SafeString`` name loses its safe flag
+            # (``str()`` and ``"%s" %`` keep it), so the template escapes it like any text.
+            text = str.__str__(str(col))
+            key = col if type(col) is int else text
+            col = {"key": key, "label": text}
         if isinstance(col, dict) and col.get("width") and not safe_css_length(col["width"], ""):
             col = {**col, "width": ""}
         checked.append(col)
@@ -970,7 +985,8 @@ def data_table(
 
     Phase 1 args:
         rows: list of dicts
-        columns: list of dicts with keys: key, label, sortable, filterable, filter_type, filter_options, width
+        columns: list of dicts with keys: key, label, sortable, filterable, filter_type, filter_options, width;
+            any other value (a bare name ``"name"``) is the column whose key and label are its text
         sort_by: current sort column key
         sort_desc: sort descending?
         sort_event: djust event for sorting

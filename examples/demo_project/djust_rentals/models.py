@@ -70,7 +70,8 @@ class Property(models.Model):
 
     def get_current_lease(self):
         """Get the currently active lease for this property"""
-        return self.lease_set.filter(status='active').first()
+        # Lease.property declares related_name='leases' (#3994).
+        return self.leases.filter(status='active').first()
 
     def get_current_tenant(self):
         """Get the current tenant (if any)"""

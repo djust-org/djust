@@ -269,7 +269,9 @@ class MaintenanceDetailView(BaseViewWithNavbar):
             'priority_badge': priority_badge,
 
             # Request data
-            'request': self.maintenance_request,
+            # Not 'request': that name is the HttpRequest in every template
+            # context, and it wins over a view's key (#3994).
+            'maintenance_request': self.maintenance_request,
             'time_to_complete': time_to_complete,
             'days_open': days_open,
         })
@@ -384,7 +386,9 @@ class MaintenanceUpdateView(BaseViewWithNavbar):
             'page_header': page_header.render(),
 
             # Request data
-            'request': self.maintenance_request,
+            # Not 'request': that name is the HttpRequest in every template
+            # context, and it wins over a view's key (#3994).
+            'maintenance_request': self.maintenance_request,
             'success_message': self.success_message,
             'error_message': self.error_message,
             'status_choices': MaintenanceRequest.STATUS_CHOICES,
@@ -510,7 +514,9 @@ class MaintenanceFormView(BaseViewWithNavbar):
         context = super().get_context_data(**kwargs)
 
         context.update({
-            'request': self.maintenance_request,
+            # Not 'request': that name is the HttpRequest in every template
+            # context, and it wins over a view's key (#3994).
+            'maintenance_request': self.maintenance_request,
             'is_edit': self.is_edit,
             'success_message': self.success_message,
             'error_message': self.error_message,
@@ -572,7 +578,9 @@ class MaintenanceDeleteView(BaseViewWithNavbar):
         context = super().get_context_data(**kwargs)
 
         context.update({
-            'request': self.maintenance_request,
+            # Not 'request': that name is the HttpRequest in every template
+            # context, and it wins over a view's key (#3994).
+            'maintenance_request': self.maintenance_request,
             'deleted': self.deleted,
             'error_message': self.error_message,
         })

@@ -1148,23 +1148,27 @@ class LiveViewTestClient:
         gap (pairs with the ``djust.V005`` system check, which now also walks
         URL-routed views).
 
-        Matches the runtime enforcement exactly: a NON-empty allowlist is
-        required, and a view is permitted when an allowed entry is a PREFIX of
-        its view path. An unset or empty allowlist means allow-all, so this is a
-        no-op in that case.
+        Asks the runtime enforcement itself
+        (``djust.security.mount.is_view_path_allowed``): a NON-empty allowlist
+        is required, and an entry permits a module on a dotted-segment boundary
+        (``"myapp"`` admits ``myapp.views`` but not ``myapp_docs.views``, #3994).
+        An unset or empty allowlist means allow-all, so this is a no-op in that
+        case.
 
         Raises:
-            AssertionError: If the allowlist is non-empty and no entry is a
-                prefix of this view's path.
+            AssertionError: If the allowlist is non-empty and the WebSocket
+                mount would refuse this view's path.
         """
         from django.conf import settings
+
+        from djust.security.mount import is_view_path_allowed
 
         allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
         if not allowed:
             return
         module = getattr(self.view_class, "__module__", "") or ""
         view_path = f"{module}.{getattr(self.view_class, '__name__', '')}"
-        if not any(view_path.startswith(m) or module.startswith(m) for m in allowed):
+        if not is_view_path_allowed(view_path):
             raise AssertionError(
                 f"{self.view_class.__name__}'s module '{module}' is not permitted "
                 f"by LIVEVIEW_ALLOWED_MODULES {list(allowed)} — its WebSocket mount "
@@ -2039,17 +2043,19 @@ def assert_all_routed_liveviews_allowlisted() -> None:
     one test and the whole app is covered.
 
     Walks the root URLconf via the same discovery the ``djust.V005`` system
-    check uses (single source of truth), and applies the same prefix matching
-    as the WebSocket mount enforcement. No-op when the allowlist is unset/empty
-    (allow-all).
+    check uses (single source of truth), and asks the WebSocket mount gate
+    itself (``djust.security.mount.is_view_path_allowed``, a dotted-segment
+    match: ``"myapp"`` does not admit ``myapp_docs``, #3994). No-op when the
+    allowlist is unset/empty (allow-all).
 
     Raises:
-        AssertionError: listing every routed view whose path no allowlist entry
-            is a prefix of.
+        AssertionError: listing every routed view the WebSocket mount would
+            refuse.
     """
     from django.conf import settings
 
     from djust.checks.components import _routed_liveview_classes
+    from djust.security.mount import is_view_path_allowed
 
     allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
     if not allowed:
@@ -2058,7 +2064,7 @@ def assert_all_routed_liveviews_allowlisted() -> None:
     for view_class in _routed_liveview_classes():
         module = getattr(view_class, "__module__", "") or ""
         view_path = f"{module}.{getattr(view_class, '__name__', '')}"
-        if not any(view_path.startswith(m) or module.startswith(m) for m in allowed):
+        if not is_view_path_allowed(view_path):
             missing.append(view_path)
     if missing:
         raise AssertionError(
