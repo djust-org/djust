@@ -140,24 +140,34 @@ class TestOneFingerprintRule:
         view.probe.active = "billing"
         assert view.label == "tab:billing", "@computed's dependency key walks the State"
 
-    def test_state_field_named_items_is_walked(self):
-        """Review 🟡3: ``items: list`` on a State is a property shadowing
-        ``dict.items``; the walk must not call it."""
+    def test_state_field_named_items_is_refused(self):
+        """Review 🟡3 found ``items: list`` on a State shadowing ``dict.items``
+        and made the fingerprint walk avoid calling it. Saving state still calls
+        it (``state.items()``), so such a field crashed every save of the view;
+        since #4134 a State refuses the name when the class is created."""
+        with pytest.raises(TypeError, match="cannot be named 'items'"):
+
+            class State(TypedState):
+                items: list = []
+
+    def test_a_list_field_is_walked(self):
+        """What the 🟡3 test also pinned, on a field name a State accepts: a
+        nested mutation changes the fingerprint and the snapshot walk is safe."""
 
         class Menu(LiveComponent):
             class State(TypedState):
-                items: list = []
+                entries: list = []
 
         class MenuView(LiveView):
             exposure_policy = "legacy"
             menu = Menu()
 
         view = MenuView()
-        view.menu.state["items"] = ["a"]
+        view.menu.state["entries"] = ["a"]
         before = deep_fingerprint(view.menu)[0]
-        view.menu.state["items"].append("b")
+        view.menu.state["entries"].append("b")
         assert deep_fingerprint(view.menu)[0] != before
-        _snapshot_assigns(view)  # the slot is walked here too; no crash is the pin
+        _snapshot_assigns(view)
 
     def test_fallback_sync_re_renders_a_nested_mutation(self):
         """Review 🟡1: the ``rust_bridge`` arm decides on the no-``changed_keys``

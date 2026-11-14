@@ -438,22 +438,45 @@ def _with_typed_block_operands(handler: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-#: Left by ``AccordionItemHandler`` right after its trigger's opening tag, for the enclosing
-#: ``AccordionHandler`` to replace: the items render first, so only the parent knows its
-#: ``component_id=`` (#4134). An item's marker is consumed by the nearest accordion, so a
-#: nested accordion's items keep their own.
-_ACCORDION_CID_MARKER = '"><!--djust-accordion-cid-->'
+#: What an accordion's own markup is made of, for stamping its triggers (#4134): a ``<div>``
+#: opening (a nested accordion's is told apart), a ``</div>``, and an item's trigger.
+_ACCORDION_TOKEN = _re_filters.compile(
+    r'<div class="accordion"[ >]|<div\b|</div\s*>|<button class="accordion-trigger"'
+)
+
+
+def _accordion_trigger_ends(content: str) -> list[int]:
+    """Where THIS accordion's item triggers' ``<button class="accordion-trigger"`` end (#4134).
+
+    The items render before the accordion, so only it knows its ``component_id=``, which it
+    inserts at these offsets. A trigger inside a nested ``{% accordion %}`` (already rendered,
+    and stamped by that one) is skipped: the scan counts ``<div>`` depth and leaves out
+    everything inside a nested accordion. Only offsets come back, never markup.
+    """
+    nested: list[bool] = []  # one entry per open <div>: is it a nested accordion?
+    ends: list[int] = []
+    for match in _ACCORDION_TOKEN.finditer(content):
+        token = match.group(0)
+        if token.startswith("</div"):
+            if nested:
+                nested.pop()
+        elif token.startswith("<div"):
+            nested.append(token.startswith('<div class="accordion"'))
+        elif not any(nested):
+            ends.append(match.end())
+    return ends
 
 
 class AccordionHandler:
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         accordion_id = conditional_escape(kw.get("id", "accordion"))
-        # The triggers carry ``component_id=`` as the Django tag's do (#4134). Only literals and
-        # the escaped id are written, so ``content`` stays the engine-rendered body.
-        content = content.replace(
-            _ACCORDION_CID_MARKER, f'"{component_id_attr(kw.get("component_id"))}>'
-        )
+        # The triggers carry ``component_id=`` as the Django tag's do (#4134): only
+        # component_id_attr's output is inserted, every other byte of ``content`` is kept.
+        cid_attr = component_id_attr(kw.get("component_id"))
+        if cid_attr:
+            for end in reversed(_accordion_trigger_ends(content)):
+                content = content[:end] + cid_attr + content[end:]
         return _safe(f'<div class="accordion" id="{accordion_id}">{content}</div>')
 
 
@@ -470,7 +493,7 @@ class AccordionItemHandler:
         return _safe(
             f'<div class="accordion-item {open_cls}">'
             f'<button class="accordion-trigger" aria-expanded="{expanded}" '
-            f'dj-click="{event}" data-value="{item_id}{_ACCORDION_CID_MARKER}'
+            f'dj-click="{event}" data-value="{item_id}">'
             f'<span class="accordion-title">{title}</span>'
             f'<svg class="accordion-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
             f'<polyline points="6 9 12 15 18 9"></polyline></svg>'

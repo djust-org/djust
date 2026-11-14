@@ -124,7 +124,7 @@ class TestDemoHandlersMoveThePreview:
         view.preview.state.examples = examples
         view.preview.toggle_menu()
         opened = render_preview_examples(
-            "dropdown_menu", "python", examples, view.preview.state.values
+            "dropdown_menu", "python", examples, view.preview.state.demo_values
         )[0]["html"]
         assert opened != closed
 
@@ -352,8 +352,10 @@ def test_a_descriptor_preview_starts_in_the_state_its_example_documents():
 
     view = _detail("accordion")
     state = view.preview.state
-    assert state.values.get("active") == "1"
-    html = render_preview_examples("accordion", "python", state.examples, state.values)[0]["html"]
+    assert state.demo_values.get("active") == "1"
+    html = render_preview_examples("accordion", "python", state.examples, state.demo_values)[0][
+        "html"
+    ]
     assert "dj-accordion-item--open" in html
 
 
@@ -369,15 +371,15 @@ class TestPreviewFeedback:
         from djust.theming.gallery.live_views import render_preview_examples
 
         state = self._values_after("page_alert", "dismiss_alert")
-        html = render_preview_examples("page_alert", "python", state.examples, state.values)[0][
-            "html"
-        ]
+        html = render_preview_examples("page_alert", "python", state.examples, state.demo_values)[
+            0
+        ]["html"]
         assert "Dismissed" in html and 'dj-click="reset_preview"' in html
         view = _detail("page_alert")
         view.preview.dismiss_alert()
         view.preview.reset_preview()
         html = render_preview_examples(
-            "page_alert", "python", view.preview.state.examples, view.preview.state.values
+            "page_alert", "python", view.preview.state.examples, view.preview.state.demo_values
         )[0]["html"]
         assert "Your trial expires" in html
 
@@ -385,9 +387,9 @@ class TestPreviewFeedback:
         from djust.theming.gallery.live_views import render_preview_examples
 
         state = self._values_after("approval_gate", "approve")
-        note = render_preview_examples("approval_gate", "python", state.examples, state.values)[0][
-            "feedback"
-        ]
+        note = render_preview_examples(
+            "approval_gate", "python", state.examples, state.demo_values
+        )[0]["feedback"]
         assert "Your view received <code>approve</code>" in note
 
     @pytest.mark.parametrize(

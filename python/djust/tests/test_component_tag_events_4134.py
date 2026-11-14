@@ -111,10 +111,10 @@ CASES = [
     ),
     (
         D.Toasts,
-        {"items": [{"id": "t1", "type": "info", "message": "a"}, {"id": "t2", "message": "b"}]},
+        {"toasts": [{"id": "t1", "type": "info", "message": "a"}, {"id": "t2", "message": "b"}]},
         "{% toast_container toasts %}",
         {"toasts": [{"id": "t1", "type": "info", "message": "a"}]},
-        [("dismiss_toast", {"value": "t1"}, "items", [{"id": "t2", "message": "b"}])],
+        [("dismiss_toast", {"value": "t1"}, "toasts", [{"id": "t2", "message": "b"}])],
     ),
     (
         D.DatePicker,
@@ -275,9 +275,9 @@ def test_tree_view_expanded_argument_decides_which_nodes_are_open(engine):
 
 @pytest.mark.parametrize("bad", [True, None, ["t1"], 1.5, "nope"])
 def test_toasts_ignore_what_names_no_toast(bad):
-    view = _one(D.Toasts, items=[{"id": "t1", "message": "a"}])
+    view = _one(D.Toasts, toasts=[{"id": "t1", "message": "a"}])
     view.dismiss_toast(value=bad)
-    assert [t["id"] for t in view.w.items] == ["t1"]
+    assert [t["id"] for t in view.w.toasts] == ["t1"]
 
 
 def test_toasts_show_adds_caps_and_cleans_the_type(monkeypatch):
@@ -286,13 +286,13 @@ def test_toasts_show_adds_caps_and_cleans_the_type(monkeypatch):
     view = _one(D.Toasts)
     first = view.w.show("Saved", type="success")
     second = view.w.show("<b>x</b>", type="<script>")
-    assert [(t["id"], t["type"]) for t in view.w.items] == [(first, "success"), (second, "info")]
+    assert [(t["id"], t["type"]) for t in view.w.toasts] == [(first, "success"), (second, "info")]
     monkeypatch.setattr(toasts, "MAX_TOASTS", 2)
     third = view.w.show("again")
-    assert [t["id"] for t in view.w.items] == [second, third]
+    assert [t["id"] for t in view.w.toasts] == [second, third]
     view.dismiss_toast(value=second)
-    assert [t["id"] for t in view.w.items] == [third]
-    html = _django("{% toast_container t %}", {"t": view.w.items})
+    assert [t["id"] for t in view.w.toasts] == [third]
+    html = _django("{% toast_container t %}", {"t": view.w.toasts})
     assert "<b>" not in html
 
 
@@ -319,14 +319,42 @@ def test_date_picker_steps_across_years_and_stops_at_the_calendar_ends():
     assert (view.w.year, view.w.month) == (datetime.MAXYEAR, 12)
 
 
+_TODAY = datetime.date.today()
+
+
 @pytest.mark.parametrize(
-    "year, month", [(0, 0), (True, 3), (2026, 13), (2026, -1), (10**9, 1), ("2026", "1")]
+    "year, month, shown",
+    [
+        (0, 0, (_TODAY.year, _TODAY.month)),
+        (2030, 0, (2030, _TODAY.month)),  # each field on its own (#4134 review)
+        (0, 3, (_TODAY.year, 3)),
+        (True, 3, (_TODAY.year, 3)),
+        (2026, 13, (2026, _TODAY.month)),
+        (2026, -1, (2026, _TODAY.month)),
+        (10**9, 1, (_TODAY.year, 1)),
+        ("2026", "1", (2026, 1)),
+        ("x", None, (_TODAY.year, _TODAY.month)),
+    ],
 )
-def test_date_picker_steps_from_this_month_when_its_state_is_unset_or_invalid(year, month):
-    today = datetime.date.today()
+def test_date_picker_defaults_each_field_on_its_own_as_the_tag_does(year, month, shown):
+    from djust.components.utils import calendar_month
+
+    assert calendar_month(year, month) == shown
     view = _one(D.DatePicker, year=year, month=month)
     view.date_next_month()
-    expected = (today.year + (today.month == 12), today.month % 12 + 1)
+    index = shown[0] * 12 + shown[1]  # the month after ``shown``, zero-based
+    assert (view.w.year, view.w.month) == divmod(index, 12)[0:1] + (index % 12 + 1,)
+
+
+@pytest.mark.parametrize("engine", ["django", "rust"])
+def test_the_tag_shows_the_month_the_component_steps_from(engine):
+    import calendar
+
+    html = _ENGINES[engine]("{% date_picker year=2030 %}")
+    assert "%s 2030" % calendar.month_name[_TODAY.month] in html
+    view = _one(D.DatePicker, year=2030)
+    view.date_next_month()
+    expected = (2030 + (_TODAY.month == 12), _TODAY.month % 12 + 1)
     assert (view.w.year, view.w.month) == expected
 
 
@@ -340,7 +368,7 @@ def _with_cid(tag: str, cid: str) -> tuple[str, dict]:
     return opening + ' component_id="%s"' % cid + src[len(opening) :], ctx
 
 
-_CONTROL = re.compile(r'<[^>]*\bdj-(?:click|input)="([^"]+)"[^>]*>')
+_CONTROL = re.compile(r'<[^>]*\bdj-(?:click|input)="([^"]*)"[^>]*>')
 _CID = re.compile(r'\bdata-component-id="([^"]*)"')
 
 
@@ -389,7 +417,7 @@ TWO = {
     "notification_center": (D.NotificationCenter, "toggle_notifications", "is_open", False, True),
     "tree_view": (D.TreeView, "tree_expand", "expanded", [], ["a"]),
     "alert": (D.Alert, "dismiss_alert", "dismissed", False, True),
-    "toast_container": (D.Toasts, "dismiss_toast", "items", [{"id": "a"}], []),
+    "toast_container": (D.Toasts, "dismiss_toast", "toasts", [{"id": "a"}], []),
     "date_picker": (D.DatePicker, "date_next_month", "month", 1, 2),
     "lightbox": (D.Lightbox, "close_lightbox", "is_open", True, False),
     "command_palette": (D.CommandPalette, "close_palette", "is_open", True, False),
@@ -400,6 +428,7 @@ TWO = {
     "truncated_list": (D.TruncatedList, "toggle_list", "expanded", False, True),
     "markdown_textarea": (D.MarkdownTextarea, "toggle_preview", "preview", False, True),
     "stepper": (D.Stepper, "set_step", "active", 0, 1),
+    "bottom_sheet": (D.Sheet, "close_sheet", "is_open", True, False),
 }
 
 _PARAMS = {"tree_view": {"value": "a"}, "toast_container": {"value": "a"}, "stepper": {"value": 1}}
@@ -482,6 +511,7 @@ def test_the_optional_controls_are_the_close_and_dismiss_buttons():
     assert {(t, a) for t, a, _ in _OPTIONAL} == {
         ("modal", "close_event"),
         ("sheet", "close_event"),
+        ("bottom_sheet", "close_event"),
         ("lightbox", "close_event"),
         ("command_palette", "close_event"),
         ("export_dialog", "close_event"),
@@ -514,6 +544,9 @@ def test_an_off_event_leaves_its_control_out(engine, tag, argument, default, lit
 def test_an_off_modal_drops_the_native_dialog_close_event_too():
     html = _django("{% modal open=True native=True close_event=None %}x{% endmodal %}")
     assert "dj-dialog-close-event" not in html and "dj-click" not in html
+    # The client then refuses Escape and the backdrop click (35-dj-dialog.js).
+    assert "dj-dialog-no-close" in html
+    assert "dj-dialog-no-close" not in _django("{% modal open=True native=True %}x{% endmodal %}")
     assert "dj-dialog-close-event" in _django("{% modal open=True native=True %}x{% endmodal %}")
 
 
@@ -583,6 +616,8 @@ def test_t019_reports_each_new_tag_without_its_component(src, component):
         hint = next(f[3] for f in findings if f[0] == event.default)
         if event.component:
             assert component in hint, hint
+            # The full import: ``djust.components.Alert`` is another class (#4134 review).
+            assert "from djust.components.descriptors import %s" % event.component in hint, hint
         else:
             assert "the application's to answer" in hint, hint
 
@@ -639,3 +674,109 @@ def test_a_nested_native_accordion_keeps_its_own_component_id():
     html = _rust(src)
     assert _controls(html) == [("accordion_toggle", "outer"), ("accordion_toggle", "inner")]
     assert "djust-accordion-cid" not in html
+
+
+#: ``{% accordion_item id="q" title="Q" %}x{% endaccordion_item %}`` on the Rust engine, as
+#: ``main`` renders it (cf89695e5): nothing of #4134 may reach a standalone item.
+_STANDALONE_ITEM = (
+    '<div class="accordion-item "><button class="accordion-trigger" aria-expanded="false" '
+    'dj-click="accordion_toggle" data-value="q"><span class="accordion-title">Q</span>'
+    '<svg class="accordion-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" '
+    'stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline>'
+    '</svg></button><div class="accordion-panel" hidden>x</div></div>'
+)
+
+
+def test_a_standalone_native_accordion_item_is_byte_identical_to_main():
+    html = _rust('{% accordion_item id="q" title="Q" %}x{% endaccordion_item %}')
+    assert html == _STANDALONE_ITEM
+    assert "<!--" not in html
+
+
+def test_an_accordion_without_component_id_renders_its_items_unchanged():
+    item = '{% accordion_item id="q" title="Q" %}x{% endaccordion_item %}'
+    html = _rust("{% accordion %}" + item + "{% endaccordion %}")
+    assert html == '<div class="accordion" id="accordion">' + _STANDALONE_ITEM + "</div>"
+
+
+def test_a_nested_accordion_without_component_id_is_not_stamped_by_the_outer_one():
+    item = '{%% accordion_item id="%s" title="T" %%}%s{%% endaccordion_item %%}'
+    src = (
+        '{% accordion component_id="outer" %}'
+        + item
+        % ("o", "{% accordion %}" + item % ("i", "<div><div>x</div></div>") + "{% endaccordion %}")
+        + item % ("p", "y")
+        + "{% endaccordion %}"
+    )
+    assert _controls(_rust(src)) == [
+        ("accordion_toggle", "outer"),
+        ("accordion_toggle", None),
+        ("accordion_toggle", "outer"),
+    ]
+
+
+# --- a component_id that cannot be one (#4134 review) --------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", [["right"], {"a": 1}, 7, True, "x" * 257])
+async def test_the_runtime_refuses_a_component_id_that_is_not_a_short_string(bad):
+    """A list ``component_id`` raised an uncaught ``TypeError`` from the lookup
+    (unhashable). It is now refused before it, as "Event rejected", and nothing moves."""
+    from djust.runtime import ViewRuntime
+    from djust.tests.test_bound_component_skip_gate_2900 import MockTransport
+
+    view = _RuntimeTwoSidebars()
+    view.mount(None)
+    view.render_with_diff()
+    transport = MockTransport()
+    runtime = ViewRuntime(transport)
+    runtime.view_instance = view
+    await runtime.dispatch_event(
+        {"type": "event", "event": "toggle_sidebar", "params": {"component_id": bad}, "ref": 1}
+    )
+    errors = [f for f in transport.sent if f.get("type") == "error"]
+    assert errors, transport.sent
+    assert (view.left.collapsed, view.right.collapsed) == (False, False)
+
+
+@pytest.mark.parametrize("value", [None, "", "right"])
+def test_an_absent_or_ordinary_component_id_is_not_refused(value):
+    from djust.websocket_utils import component_id_refusal
+
+    assert component_id_refusal({"component_id": value}) is None
+    assert component_id_refusal({}) is None
+
+
+# --- add_col_event is deprecated (owner decision on #4134) ----------------------
+
+_COLS = [{"id": "todo", "title": "To do", "cards": [{"id": "c1", "title": "A"}]}]
+
+
+def test_add_col_event_warns_once_and_still_draws_nothing(monkeypatch):
+    import warnings
+
+    from djust.components.templatetags import djust_components as tags
+
+    monkeypatch.setattr(tags, "_ADD_COL_EVENT_WARNED", False)
+    plain = _django("{% kanban_board columns=c %}", {"c": _COLS})
+    with pytest.warns(DeprecationWarning, match="add_col_event .*never drawn a control") as got:
+        first = _django('{% kanban_board columns=c add_col_event="add_col" %}', {"c": _COLS})
+    assert "no earlier than 3.0.0" in str(got[0].message)
+    assert first == plain and "add_col" not in first
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _django('{% kanban_board columns=c add_col_event="add_col" %}', {"c": _COLS})
+
+
+def test_leaving_add_col_event_out_does_not_warn(monkeypatch):
+    import warnings
+
+    from djust.components.templatetags import djust_components as tags
+
+    monkeypatch.setattr(tags, "_ADD_COL_EVENT_WARNED", False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _django("{% kanban_board columns=c %}", {"c": _COLS})
+        _rust("{% kanban_board columns=c %}", {"c": _COLS})

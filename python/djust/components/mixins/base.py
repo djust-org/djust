@@ -50,6 +50,15 @@ class TypedState(dict):
         for name in list(cls.__annotations__):
             if name.startswith("_"):
                 continue
+            if hasattr(dict, name):
+                # The field would become a property hiding the dict's own method
+                # (``state.items()`` is called to save and serialize state), so
+                # every save of a view declaring the component would crash (#4134).
+                raise TypeError(
+                    "%s.%s: a state field cannot be named %r, the name of a dict "
+                    "method; state is a dict and djust calls %r on it. Rename the field."
+                    % (cls.__qualname__, name, name, name)
+                )
             default = getattr(cls, name, None)
             cls._make_property(name, default)
 

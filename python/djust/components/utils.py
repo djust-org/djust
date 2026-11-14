@@ -534,6 +534,33 @@ def attr_text(value: Any) -> str:
     return str(escape(_exact_str(value)))
 
 
+def calendar_month(year: Any, month: Any, today: Any = None) -> "tuple[int, int]":
+    """The ``(year, month)`` a ``{% date_picker %}`` shows, each defaulted on its own (#4134).
+
+    A year that is not a whole number from 1 to 9999 is this year; a month that is
+    not one from 1 to 12 is this month. So ``year=2030`` with no month shows this
+    month of 2030, and ``0`` (or nothing) shows today's. A boolean is neither.
+    Shared by the tag and ``djust.components.descriptors.DatePicker`` so the month
+    the calendar shows is the month previous / next step from.
+    """
+    import datetime
+
+    today = today or datetime.date.today()
+
+    def whole(value: Any, low: int, high: int) -> "int | None":
+        if isinstance(value, bool) or value is None or value == "":
+            return None
+        try:
+            number = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if low <= number <= high else None
+
+    y = whole(year, datetime.MINYEAR, datetime.MAXYEAR)
+    m = whole(month, 1, 12)
+    return (today.year if y is None else y, today.month if m is None else m)
+
+
 def event_is_off(value: Any) -> bool:
     """Whether a tag's event argument turns its control off (#4134).
 

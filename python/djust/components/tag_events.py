@@ -62,6 +62,7 @@ TAG_EVENTS: dict[str, tuple[TagEvent, ...]] = {
     "tabs": (TagEvent("event", "set_tab", "Tabs", unless="param"),),
     "modal": (TagEvent("close_event", "close_modal", "Modal", optional=True),),
     "sheet": (TagEvent("close_event", "close_sheet", "Sheet", optional=True),),
+    "bottom_sheet": (TagEvent("close_event", "close_sheet", "Sheet", optional=True),),
     "lightbox": (
         TagEvent("close_event", "close_lightbox", "Lightbox", optional=True),
         TagEvent("navigate_event", "lightbox_navigate", "Lightbox"),

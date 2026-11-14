@@ -250,4 +250,78 @@ describe('dj-dialog', () => {
         dom = createDom('');
         expect(typeof dom.window.djust.djDialog._installCloseListenerOnce).toBe('function');
     });
+
+    // -----------------------------------------------------------------
+    // #4134: a native modal rendered without a close control
+    // ({% modal native=True close_event=None %}) carries dj-dialog-no-close.
+
+    const NO_CLOSE =
+        '<dialog id="d" class="dj-modal dj-modal--native" dj-dialog="open" dj-dialog-no-close>hi</dialog>';
+    const CLOSABLE =
+        '<dialog id="d" class="dj-modal dj-modal--native" dj-dialog="open" dj-dialog-close-event="shut">hi</dialog>';
+
+    it('#4134: Escape (cancel) is refused on a dialog without a close control', async () => {
+        dom = createDom(NO_CLOSE);
+        await waitForMutation(dom);
+        const el = dom.window.document.getElementById('d');
+        const cancel = new dom.window.Event('cancel', { cancelable: true });
+        el.dispatchEvent(cancel);
+        expect(cancel.defaultPrevented).toBe(true);
+    });
+
+    it('#4134: Escape still closes a dialog that has a close event', async () => {
+        dom = createDom(CLOSABLE);
+        await waitForMutation(dom);
+        const el = dom.window.document.getElementById('d');
+        const cancel = new dom.window.Event('cancel', { cancelable: true });
+        el.dispatchEvent(cancel);
+        expect(cancel.defaultPrevented).toBe(false);
+    });
+
+    it('#4134: a backdrop click does not close a dialog without a close control', async () => {
+        dom = createDom(NO_CLOSE);
+        await waitForMutation(dom);
+        const el = dom.window.document.getElementById('d');
+        expect(el.open).toBe(true);
+        el.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+        expect(el.open).toBe(true);
+    });
+
+    it('#4134: a backdrop click still closes a closable native modal', async () => {
+        dom = createDom(CLOSABLE);
+        await waitForMutation(dom);
+        const el = dom.window.document.getElementById('d');
+        el.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+        expect(el.open).toBe(false);
+    });
+
+    it('#4134: a close that gets through re-opens it while dj-dialog is still "open"', async () => {
+        dom = createDom(NO_CLOSE);
+        await waitForMutation(dom);
+        const el = dom.window.document.getElementById('d');
+        el._wasShownAsModal = false;
+        el.removeAttribute('open'); // the browser closed it (a repeated Escape)
+        el.dispatchEvent(new dom.window.Event('close'));
+        expect(el.open).toBe(true);
+        expect(el._wasShownAsModal).toBe(true);
+    });
+
+    it('#4134: the server closing it (dj-dialog="close") is not undone', async () => {
+        dom = createDom(NO_CLOSE);
+        await waitForMutation(dom);
+        const el = dom.window.document.getElementById('d');
+        el.setAttribute('dj-dialog', 'close');
+        await waitForMutation(dom);
+        el.dispatchEvent(new dom.window.Event('close'));
+        expect(el.open).toBe(false);
+    });
+
+    it('#4134: an unmarked dialog without a close event is not re-opened', async () => {
+        dom = createDom('<dialog id="d" dj-dialog="open">hi</dialog>');
+        await waitForMutation(dom);
+        const el = dom.window.document.getElementById('d');
+        el.removeAttribute('open');
+        el.dispatchEvent(new dom.window.Event('close'));
+        expect(el.open).toBe(false);
+    });
 });

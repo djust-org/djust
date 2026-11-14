@@ -5140,6 +5140,14 @@ class ViewRuntime(RuntimeTurnPort):
         view = self.view_instance
         if view is None:  # pragma: no cover — caller guarantees a mounted view
             return False
+        from .websocket_utils import _safe_error, component_id_refusal
+
+        refused = component_id_refusal(params)
+        if refused is not None:
+            # Before the lookup: an unhashable id raised from it (#4134).
+            logger.warning("Runtime: %s", sanitize_for_log(refused))
+            await self.transport.send_error(_safe_error(refused, "Event rejected"))
+            return True
         component_id = params.get("component_id")
         if not component_id:
             return False

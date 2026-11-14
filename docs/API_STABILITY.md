@@ -239,7 +239,7 @@ SemVer rules above are unchanged by it.
 
 The one access pattern deprecated during the `1.x` series (dict-style
 `block.super` reads in a bridged tag) was removed in `2.0.0`; see below. One
-value is deprecated on the 2.0 line:
+value and one tag argument are deprecated on the 2.0 line:
 
 ### `exposure_policy = "legacy"` → the default, `"explicit"`
 
@@ -272,6 +272,14 @@ at import time is easy to miss. djust's own classes are not reported.
 
 This warning and the check are first raised on the 2.0 line. The 1.3.x releases
 raise neither: there `"legacy"` is the default and stating it is not deprecated.
+
+### `{% kanban_board add_col_event=... %}` → nothing (it did nothing)
+
+`add_col_event` has never drawn a control: the board accepted it and ignored
+it. It is deprecated since 2.0 and removed no earlier than `3.0.0`. Passing it
+raises one `DeprecationWarning` through `warn_deprecated` per process; the board
+renders exactly as before. Leave it out, and draw your own "Add column" control
+that sends your view's event (#4134).
 
 ---
 
@@ -847,4 +855,4 @@ API is evaluated. Existing per-session ticks and push/presence behavior retain
 their stability commitments. Phases 1–3 are process-local; distributed ownership
 is deferred.
 
-<!-- generated-doc prose-sha256: cbd4879d771a -->
+<!-- generated-doc prose-sha256: a49ebdcfa0a3 -->

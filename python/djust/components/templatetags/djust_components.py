@@ -37,6 +37,7 @@ from djust.components.utils import (
     url_attr,
     data_url_attr,
     attr_text,
+    calendar_month,
     component_id_attr as _cid,
     event_is_off as _off,
     srcset_attr,
@@ -246,7 +247,11 @@ def render_modal(kw: Any, content: Any) -> SafeString:
         # the keyboard-nav module, as for the <div> modal.
         # <dialog> is a dialog already; only an alertdialog needs the role.
         role_attr = ' role="alertdialog"' if role == "alertdialog" else ""
-        close_attr = f' dj-dialog-close-event="{e_close_event}"' if closable else ""
+        # Without a close control the browser must not close it either (#4134):
+        # the client refuses Escape and the backdrop click for a marked dialog.
+        close_attr = (
+            f' dj-dialog-close-event="{e_close_event}"' if closable else " dj-dialog-no-close"
+        )
         return mark_safe(
             f'<dialog class="dj-modal {size_class} dj-modal--native" dj-dialog="open"'
             f"{close_attr}{role_attr}{labelledby}{describedby}{cid_attr}>"
@@ -595,7 +600,7 @@ def toast_container(
 
     Args:
         toasts: list of dicts with keys: id, type (success|error|warning|info), message
-            (``toasts.items`` of a declared ``Toasts``)
+            (``toasts.toasts`` of a declared ``Toasts``)
         dismiss_event: djust event name for dismissing a toast; a declared ``Toasts``
             answers the default. ``None`` (or ``False``, ``""``) draws no dismiss
             button (#4134).
@@ -3599,15 +3604,10 @@ def date_picker(
     if isinstance(is_range, str):
         is_range = is_range.lower() not in ("false", "0", "")
 
-    try:
-        today = datetime.date.today()
-        year = int(year) if year else today.year
-        month = int(month) if month else today.month
-        today_str = today.strftime("%Y-%m-%d")
-    except (ValueError, TypeError):
-        today = datetime.date.today()
-        year, month = today.year, today.month
-        today_str = today.strftime("%Y-%m-%d")
+    today = datetime.date.today()
+    # Each defaulted on its own, as ``DatePicker`` steps from them (#4134).
+    year, month = calendar_month(year, month, today)
+    today_str = today.strftime("%Y-%m-%d")
 
     e_prev = conditional_escape(prev_event)
     e_next = conditional_escape(next_event)
@@ -3969,12 +3969,36 @@ def _kanban_targets(targets: Any) -> Optional[list]:
     return ids
 
 
+#: Whether ``{% kanban_board add_col_event=... %}`` has warned in this process (#4134).
+_ADD_COL_EVENT_WARNED = False
+
+
+def _warn_add_col_event() -> None:
+    """One ``DeprecationWarning`` per process for ``add_col_event`` (#4134)."""
+    global _ADD_COL_EVENT_WARNED
+    if _ADD_COL_EVENT_WARNED:
+        return
+    _ADD_COL_EVENT_WARNED = True
+    from djust._deprecation import warn_deprecated
+
+    warn_deprecated(
+        "{% kanban_board %}'s add_col_event (it has never drawn a control)",
+        since="2.0",
+        removed_in="3.0.0",
+        instead=(
+            'nothing: leave add_col_event out, and draw your own "Add column" control '
+            "that sends your view's event"
+        ),
+        stacklevel=4,
+    )
+
+
 @register.simple_tag
 def kanban_board(
     columns: Any = None,
     move_event: Any = "kanban_move",
     add_card_event: Any = "kanban_add_card",
-    add_col_event: Any = "kanban_add_column",
+    add_col_event: Any = None,
 ) -> SafeString:
     """Render a Kanban board.
 
@@ -3996,7 +4020,12 @@ def kanban_board(
         move_event: event fired on drag-drop with JSON payload {card_id, from_col, to_col}
         add_card_event: event fired when adding a card, passes column id.
             ``None`` (or ``""``) leaves the "+ Add card" button out.
-        add_col_event: accepted for compatibility and not used.
+        add_col_event: deprecated, and never used: the board has never drawn an
+            "Add column" control. Passing it warns once per process.
+
+            .. deprecated:: 2.0
+               Removed no earlier than 3.0.0. Leave it out, and draw your own
+               "Add column" control that sends your view's event.
 
     A card moves by mouse drag, or by keyboard: Tab to the card, Space picks
     it up, the arrow keys choose a column, Enter (or Space) drops it there and
@@ -4009,6 +4038,8 @@ def kanban_board(
     # Dragging and dropping is the client bundle's delegated ``.kanban``
     # behaviour (no inline handler): a drop sends ``data-move-event`` with
     # {card_id, from_col, to_col}.
+    if add_col_event is not None:
+        _warn_add_col_event()
     e_move = conditional_escape(move_event)
     if not columns:
         return mark_safe(f'<div class="kanban" data-move-event="{e_move}"></div>')
@@ -9121,6 +9152,16 @@ class BottomSheetNode(template.Node):
         e_title = conditional_escape(str(title))
         e_close = conditional_escape(str(close_event))
         e_class = conditional_escape(str(custom_class))
+        # ``component_id=`` names which ``Sheet`` the close controls drive; ``close_event=None``
+        # (or ``False``, ``""``) is the off state: no scrim click and no × (#4134).
+        cid_attr = _cid(kw.get("component_id"))
+        closable = not _off(close_event)
+        scrim_click = f' dj-click="{e_close}"{cid_attr}' if closable else ""
+        close_btn = (
+            f'<button class="dj-bottom-sheet__close" dj-click="{e_close}"{cid_attr}>&times;</button>'
+            if closable
+            else ""
+        )
 
         classes = ["dj-bottom-sheet"]
         if e_class:
@@ -9135,12 +9176,12 @@ class BottomSheetNode(template.Node):
 
         return mark_safe(
             f'<div class="dj-bottom-sheet__backdrop">'
-            f'<div class="dj-scrim" dj-click="{e_close}"></div>'
+            f'<div class="dj-scrim"{scrim_click}></div>'
             f'<div class="{class_str}">'
             f'<div class="dj-bottom-sheet__handle"><div class="dj-bottom-sheet__handle-bar"></div></div>'
             f'<div class="dj-bottom-sheet__header">'
             f"{title_html}"
-            f'<button class="dj-bottom-sheet__close" dj-click="{e_close}">&times;</button>'
+            f"{close_btn}"
             f"</div>"
             f'<div class="dj-bottom-sheet__body">{content}</div>'
             f"</div></div>"

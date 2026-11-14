@@ -30,7 +30,7 @@ from djust.tests.test_component_dj_attr_parity_3669 import _django, _rust
 
 _ENGINES = {"django": _django, "rust": _rust}
 
-_EVENT = re.compile(r'dj-(?:click|input)="([^"]+)"')
+_EVENT = re.compile(r'dj-(?:click|input)="([^"]*)"')
 
 
 def _events(html: str) -> list:
@@ -232,6 +232,7 @@ DRAW_ALL = {
         {"t": [{"id": "1", "type": "info", "message": "m"}]},
     ),
     "date_picker": ("{% date_picker %}", {}),
+    "bottom_sheet": ("{% bottom_sheet open=True %}x{% endbottom_sheet %}", {}),
 }
 
 

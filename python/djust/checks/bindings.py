@@ -248,12 +248,14 @@ class _OwnerContext:
         )
         owner = self.cls.__qualname__
         if event is not None and event.component and name == event.default:
+            # The full import, always: ``djust.components`` has other classes of
+            # the same names (``Alert``, ``Sidebar`` ...), which are not these (#4134).
             hint = (
-                "Declare the component on the view (for example "
-                "`%s = %s` from djust.components.descriptors) and pass its state to "
-                "the tag; or add an @event_handler named %r to %s; or set %s= to an "
-                "event the view handles."
+                "Declare the component on the view (`from djust.components.descriptors "
+                "import %s`, then `%s = %s`) and pass its state to the tag; or add an "
+                "@event_handler named %r to %s; or set %s= to an event the view handles."
                 % (
+                    event.component,
                     re.sub(r"(?<!^)(?=[A-Z])", "_", event.component).lower(),
                     event.declare or "%s()" % event.component,
                     name,

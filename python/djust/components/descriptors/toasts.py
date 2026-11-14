@@ -11,7 +11,7 @@ Usage::
             ...
             self.toasts.show("Saved", type="success")
 
-    # template: {% toast_container toasts.items %}
+    # template: {% toast_container toasts.toasts %}
     # ``dismiss_toast`` answered here, no app handler needed.
 """
 
@@ -38,7 +38,8 @@ class Toasts(LiveComponent):
     toast on screen is ignored."""
 
     class State(TypedState):
-        items: Sequence[dict] = ()
+        #: Not ``items``: state is a dict, and ``items`` is its method.
+        toasts: Sequence[dict] = ()
         #: The id the next ``show()`` gives.
         next_id: int = 1
 
@@ -55,8 +56,8 @@ class Toasts(LiveComponent):
         toast_id = "t%s" % number
         state.next_id = number + 1
         kind = type if type in TYPES else "info"
-        items = [*(state.items or ()), {"id": toast_id, "type": kind, "message": str(message)}]
-        state.items = items[-MAX_TOASTS:]
+        items = [*(state.toasts or ()), {"id": toast_id, "type": kind, "message": str(message)}]
+        state.toasts = items[-MAX_TOASTS:]
         return toast_id
 
     #: Never called from a template (``{{ toasts.show }}``).
@@ -68,7 +69,7 @@ class Toasts(LiveComponent):
         if isinstance(value, bool) or not isinstance(value, (str, int)):
             return
         state = bound_state(self)
-        items = list(state.items or ())
+        items = list(state.toasts or ())
         kept = [t for t in items if not (isinstance(t, dict) and str(t.get("id")) == str(value))]
         if len(kept) != len(items):
-            state.items = kept
+            state.toasts = kept

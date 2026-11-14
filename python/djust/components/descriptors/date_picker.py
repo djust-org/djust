@@ -12,6 +12,7 @@ Usage::
 
 import datetime
 
+from djust.components.utils import calendar_month
 from djust.decorators import event_handler
 
 from .base import LiveComponent, TypedState, bound_state
@@ -22,20 +23,9 @@ __all__ = ["DatePicker"]
 
 
 def _shown(state: Any) -> tuple[int, int]:
-    """The (year, month) the calendar shows: the state's, or this month's when
-    unset (0, as the tag reads it) or out of range."""
-    year, month = state.year, state.month
-    if (
-        isinstance(year, int)
-        and not isinstance(year, bool)
-        and isinstance(month, int)
-        and not isinstance(month, bool)
-        and datetime.MINYEAR <= year <= datetime.MAXYEAR
-        and 1 <= month <= 12
-    ):
-        return year, month
-    today = datetime.date.today()
-    return today.year, today.month
+    """The (year, month) the calendar shows: each field the state's, or today's
+    when unset (0) or out of range, as the tag reads them (#4134)."""
+    return calendar_month(state.year, state.month)
 
 
 def _step(state: Any, delta: int) -> None:
@@ -50,7 +40,8 @@ def _step(state: Any, delta: int) -> None:
 class DatePicker(LiveComponent):
     """The year and month ``{% date_picker %}`` shows.
 
-    ``year`` / ``month`` 0 (the default) show this month, as the tag does; the
+    ``year`` / ``month`` 0 (the default) show this year / this month, each on its
+    own, as the tag does (``DatePicker(year=2030)`` shows this month of 2030); the
     previous / next buttons step from there, across years. Picking a day
     (``date_select``) stays the application's: the chosen date is its data."""
 
