@@ -595,14 +595,16 @@ def _unmount_on_failure(method: Callable[..., Awaitable[None]]) -> Callable[...,
     after ``on_view_mounted`` (the state restore, the route binding, the
     baselines, the post-render hooks) raised out with the view still on the
     runtime, in its groups and in presence. The exception still propagates,
-    so its error frame is unchanged."""
+    so its error frame is unchanged. A mount cancelled by a client
+    disconnect (``CancelledError``) is undone the same way (#3885): the
+    view's tick, channel-layer groups and presence do not outlive it."""
 
     @wraps(method)
     async def guarded(runtime: Any, *args: Any, **kwargs: Any) -> None:
         runtime._admitted_mount_view = None
         try:
             await method(runtime, *args, **kwargs)
-        except Exception:
+        except BaseException:
             view = runtime._admitted_mount_view
             if view is not None and runtime.view_instance is view:
                 await runtime._on_mount_failed(view)
@@ -614,6 +616,10 @@ def _unmount_on_failure(method: Callable[..., Awaitable[None]]) -> Callable[...,
             runtime._admitted_mount_view = None
 
     return guarded
+
+
+class _TurnLockBusy(Exception):
+    """A server turn's locks stayed held past its bounded wait (db_notify, #3885)."""
 
 
 def _runtime_diagnostic_scope(
@@ -2584,17 +2590,31 @@ class SSESessionTransport:
         return None
 
     @contextlib.asynccontextmanager
-    async def event_context(self, view: Any) -> AsyncIterator[None]:
+    async def event_context(
+        self, view: Any, lock_wait: Optional[float] = None
+    ) -> AsyncIterator[None]:
         """Serialize event/results with SSE page replacement.
 
-        At the end of a turn that completed, while it still holds the lock,
-        the view's channel joins the NOTIFY groups of channels ``listen()``
-        added and follows a changed ``push_scope`` (#3885), as the WebSocket
-        transport does after its turns (#2962, #3004)."""
-        async with self._session._render_lock:
+        With ``lock_wait`` the render lock is waited for at most that long, and
+        ``asyncio.TimeoutError`` is raised before the turn runs (the bounded
+        wait of a NOTIFY turn, #3885). At the end of a turn that completed,
+        while it still holds the lock, the view's channel joins the NOTIFY
+        groups of channels ``listen()`` added and follows a changed
+        ``push_scope`` (#3885), as the WebSocket transport does after its
+        turns (#2962, #3004)."""
+        from .websocket import _acquire_render_lock
+
+        lock = self._session._render_lock
+        if lock_wait is None:
+            await lock.acquire()
+        else:
+            await _acquire_render_lock(lock, lock_wait)
+        try:
             yield
             if getattr(self._session, "view_instance", None) is view:
                 await self.channel_member.sync(view)
+        finally:
+            lock.release()
 
     async def recheck_event_auth(self, view: Any) -> bool:
         """SSE per-event auth re-check against the LIVE event-POST request (#1777).
@@ -4046,6 +4066,9 @@ class ViewRuntime(RuntimeTurnPort):
         # From here a server-originated turn (push / tick, #3809) may address
         # this view: before the mount frame the client has nothing to patch.
         self._mount_sent_for = view_instance
+        if self._deferred_pushes:
+            # Pushes that arrived while mount() ran (#3885), in arrival order.
+            self._start_push_drain()
         logger.info(
             "Runtime: mounted view %s (session %s)",
             sanitize_for_log(view_path),
@@ -7939,12 +7962,22 @@ class ViewRuntime(RuntimeTurnPort):
         pushes still queued, is queued and replayed in arrival order once the
         render lock frees; identical queued pushes coalesce and the queue is
         bounded, as on the socket (#3001). A failing handler or render is
-        logged and swallowed, as on the socket. Returns whether the push was run
-        or queued; ``False`` when ``view`` is not the mounted view (replaced,
-        closed, or its mount frame not sent).
+        logged and swallowed, as on the socket. A push for a view whose mount
+        was admitted but whose mount frame is not out yet (mount() is running)
+        is queued and replayed once the frame is sent, as the socket delivers
+        it after the mount; if that mount then fails or is refused, the queued
+        push is discarded with the view (``stop_server_work``) (#3885).
+        Returns whether the push was run or queued; ``False`` when ``view`` is
+        not the mounted view (replaced, closed, or not admitted).
         """
-        if view is None or self.view_instance is not view or self._mount_sent_for is not view:
+        if view is None or self.view_instance is not view:
             return False
+        if self._mount_sent_for is not view:
+            if self._admitted_mount_view is not view:
+                return False
+            logger.debug("[djust] server_push on %s deferred — mounting", type(view).__name__)
+            self._defer_server_push(view, event, start_drain=False)
+            return True
         task = self._push_drain_task
         draining = task is not None and not task.done()
         # ``draining`` also covers earlier pushes still queued (the queue is only
@@ -7970,7 +8003,9 @@ class ViewRuntime(RuntimeTurnPort):
         backlogged = getattr(self.transport, "client_backlogged", None)
         return bool(backlogged and backlogged())
 
-    def _defer_server_push(self, view: Any, event: Dict[str, Any]) -> None:
+    def _defer_server_push(
+        self, view: Any, event: Dict[str, Any], *, start_drain: bool = True
+    ) -> None:
         """Queue a push that found the session busy and make sure a drain runs.
 
         ``LiveViewConsumer._defer_server_push``'s rules: an identical push
@@ -7991,6 +8026,11 @@ class ViewRuntime(RuntimeTurnPort):
         if len(queue) == queue.maxlen:
             logger.debug("[djust] deferred server_push queue full — dropping the oldest")
         queue.append((view, event))
+        if start_drain:
+            self._start_push_drain()
+
+    def _start_push_drain(self) -> None:
+        """Make sure a drain of the deferred pushes is running."""
         task = self._push_drain_task
         if task is None or task.done():
             self._push_drain_task = asyncio.ensure_future(self._drain_deferred_pushes())
@@ -8027,43 +8067,88 @@ class ViewRuntime(RuntimeTurnPort):
         ``push``/``db_notify`` turn, and render. The SSE twin of
         ``LiveViewConsumer._db_notify_to_view`` (#3885).
 
-        Best-effort, as on the WebSocket (#813): a NOTIFY that finds the view
-        busy (a turn in progress, earlier pushes queued, or a client that is not
-        reading) is dropped, not queued. Returns whether the turn ran.
+        Best-effort, as on the WebSocket (#813): it waits for the turn locks at
+        most ``websocket._SERVER_TURN_LOCK_WAIT_S`` (the bound the socket's
+        push, tick and NOTIFY turns use), then is dropped, not queued. A NOTIFY
+        is also dropped while the client is not reading. Returns whether the
+        turn ran.
         """
+        from . import websocket as _ws
+
         if view is None or self.view_instance is not view or self._mount_sent_for is not view:
-            return False
-        task = self._push_drain_task
-        if (task is not None and not task.done()) or self._server_turn_busy(view):
-            logger.debug("[djust] db_notify on %s skipped — session busy", type(view).__name__)
             return False
         if self._client_backlogged():
             logger.debug("[djust] db_notify on %s skipped — client backlogged", type(view).__name__)
             return False
-        await self._run_server_push(view, lambda: [message], source="db_notify")
-        return True
+        ran = await self._run_server_push(
+            view,
+            lambda: [message],
+            source="db_notify",
+            lock_wait=_ws._SERVER_TURN_LOCK_WAIT_S,
+        )
+        if not ran:
+            logger.debug("[djust] db_notify on %s skipped — render lock held", type(view).__name__)
+        return ran
+
+    @contextlib.asynccontextmanager
+    async def _server_turn_locks(
+        self, view: Any, lock_wait: Optional[float]
+    ) -> AsyncIterator[None]:
+        """The explicit-exposure turn lock (non-legacy views), then the
+        transport's render lock (``event_context``). With ``lock_wait``, each is
+        waited for at most that long; one still held then raises
+        :class:`_TurnLockBusy` before the body runs."""
+        from ._exposure import uses_legacy_exposure
+        from .websocket import _acquire_render_lock
+
+        explicit = None if uses_legacy_exposure(view) else self._explicit_event_lock
+        if explicit is not None:
+            if lock_wait is None:
+                await explicit.acquire()
+            else:
+                try:
+                    await _acquire_render_lock(explicit, lock_wait)
+                except asyncio.TimeoutError:
+                    raise _TurnLockBusy() from None
+        try:
+            if lock_wait is None:
+                context = self.transport.event_context(view)
+            else:
+                # A bounded wait is SSE-only (``SSESessionTransport.event_context``):
+                # the WebSocket's NOTIFY turn runs in its consumer.
+                bounded: Any = self.transport
+                context = bounded.event_context(view, lock_wait=lock_wait)
+            entered = False
+            try:
+                async with context:
+                    entered = True
+                    yield
+            except asyncio.TimeoutError:
+                if entered:
+                    raise
+                raise _TurnLockBusy() from None
+        finally:
+            if explicit is not None:
+                explicit.release()
 
     async def _run_server_push(
         self,
         view: Any,
         take: Callable[[], List[Dict[str, Any]]],
         source: str = "server_push",
-    ) -> None:
+        lock_wait: Optional[float] = None,
+    ) -> bool:
         """Take the render lock, then run what ``take()`` returns as one push turn.
 
         Never raises: a failure is logged and the caller (a view's task, or the
         drain with a batch already popped) carries on, as the socket's push turn
         does. Work the handlers queued with ``start_async`` runs once the lock is
-        free (#2955), even when the render failed.
+        free (#2955), even when the render failed. Returns ``False`` only when
+        ``lock_wait`` ran out before the locks were free (nothing ran).
         """
-        from ._exposure import uses_legacy_exposure
-
         applied = [False]
-        explicit_lock = (
-            contextlib.nullcontext() if uses_legacy_exposure(view) else self._explicit_event_lock
-        )
         try:
-            async with explicit_lock, self.transport.event_context(view):
+            async with self._server_turn_locks(view, lock_wait):
                 events = take()
                 if events and self.view_instance is view:
                     turn = Turn(
@@ -8081,6 +8166,8 @@ class ViewRuntime(RuntimeTurnPort):
                         await self._server_push_body(view, events, applied)
 
                     await run_turn(turn, body)
+        except _TurnLockBusy:
+            return False
         except Exception as exc:  # noqa: BLE001 — logged, never into the caller
             from ._exposure_diagnostics import log_failure_for
 
@@ -8095,6 +8182,7 @@ class ViewRuntime(RuntimeTurnPort):
             )
         if applied[0] and self.view_instance is view:
             self._dispatch_async_work(None)
+        return True
 
     async def _server_push_body(
         self, view: Any, events: List[Dict[str, Any]], applied: List[bool]

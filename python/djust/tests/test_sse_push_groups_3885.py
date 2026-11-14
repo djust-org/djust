@@ -17,6 +17,7 @@ delivers a channel's messages in order.
 
 import asyncio
 import json
+import threading
 import uuid
 
 import pytest
@@ -93,12 +94,49 @@ class NotifyPage(LiveView):
         self.seen.append(message)
         self.n += 1
 
+    def handle_bump(self, **kwargs):
+        self.n += 100
+
+
+#: Opened by a test to let a blocked ``mount()`` finish.
+GATE = threading.Event()
+#: The views the blocking pages mounted, newest last.
+BLOCKED = []
+
+
+class BlockingPage(GroupPage):
+    """``mount()`` waits for ``GATE``: a mount still running when something arrives."""
+
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        BLOCKED.append(self)
+        GATE.wait(30)
+
+
+class BlockingTickPage(BlockingPage):
+    tick_interval = 10
+
+    def handle_tick(self):
+        self.n += 1
+
+
+class BlockingDeniedPage(BlockingPage):
+    """Admitted, then refused by the object-permission check after ``mount()``."""
+
+    def get_object(self):
+        from django.core.exceptions import PermissionDenied
+
+        raise PermissionDenied("not yours")
+
 
 urlpatterns = [
     path("group/", GroupPage.as_view()),
     path("room/", RoomOnePage.as_view()),
     path("notify/", NotifyPage.as_view()),
     path("login/", LoginPage.as_view()),
+    path("blocking/", BlockingPage.as_view()),
+    path("blockingtick/", BlockingTickPage.as_view()),
+    path("blockingdenied/", BlockingDeniedPage.as_view()),
 ]
 
 
@@ -112,6 +150,8 @@ def staged(monkeypatch):
         DJUST_TENANTS=None,
     ):
         yield
+    GATE.set()
+    BLOCKED.clear()
     for session in list(_sse_sessions.values()):
         session.shutdown()
     _sse_sessions.clear()
@@ -482,8 +522,12 @@ async def test_a_close_that_races_a_join_leaves_what_the_join_added():
 # ---------------------------------------------------------------------------
 
 
-async def test_a_db_notify_that_finds_the_sse_view_busy_is_dropped():
-    """Best-effort, as on the WebSocket (#813): not queued behind the turn."""
+async def test_a_db_notify_that_finds_the_sse_view_busy_is_dropped(monkeypatch):
+    """Best-effort, as on the WebSocket (#813): once its bounded wait for the
+    lock is over (0 here), it is dropped, not queued behind the turn."""
+    from djust import websocket
+
+    monkeypatch.setattr(websocket, "_SERVER_TURN_LOCK_WAIT_S", 0)
     session, _key = await _sse("NotifyPage", "/notify/")
     view = session.view_instance
     await session._render_lock.acquire()
@@ -677,3 +721,245 @@ async def test_a_view_beside_the_page_skips_its_own_echo_too():
         page, lambda fs: any(f.get("target_id") == "lazy-1" and _shows(20)([f]) for f in fs)
     )
     assert slot.view.log == [20]
+
+
+# ---------------------------------------------------------------------------
+# Review round (#3885): cancelled mounts, races, mount-time pushes, contention
+# ---------------------------------------------------------------------------
+
+MEMBERS = []
+
+
+@pytest.fixture
+def members(monkeypatch):
+    """Every SSE channel member created during the test, in order."""
+    from djust import _sse_channels
+
+    real_init = _sse_channels.SSEChannelMember.__init__
+
+    def init(self, transport):
+        real_init(self, transport)
+        MEMBERS.append(self)
+
+    MEMBERS.clear()
+    monkeypatch.setattr(_sse_channels.SSEChannelMember, "__init__", init)
+    yield MEMBERS
+
+
+async def _start_get(view, url):
+    """The stream GET as a task (what Django runs and cancels on a disconnect)."""
+    key = await sync_to_async(_fresh_key)()
+    sid = str(uuid.uuid4())
+    request = await sync_to_async(_request)(
+        "GET", f"/djust/sse/{sid}/", {"view": MOD + view, "_djust_url": url}, key
+    )
+    GATE.clear()
+    return asyncio.ensure_future(DjustSSEStreamView().get(request, session_id=sid)), sid
+
+
+def _group_of(view):
+    from djust.push import view_group_name
+
+    return view_group_name(MOD + view)
+
+
+async def _cancel(task):
+    """Cancel the mount (Django on a client disconnect), then let the blocked
+    ``mount()`` return: the worker thread is not interruptible, so the task
+    ends once it does."""
+    task.cancel()
+    GATE.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_a_mount_cancelled_by_a_client_disconnect_releases_the_session(members):
+    layer = get_channel_layer()
+    task, sid = await _start_get("BlockingPage", "/blocking/")
+    await wait_until(lambda: layer.groups.get(_group_of("BlockingPage")), what="the group join")
+    member = members[-1]
+    session = member._transport._session
+    receiver = member._receive_task
+    await _cancel(task)
+    await wait_until(lambda: not _all_members(layer, member.channel_name), what="groups left")
+    await wait_until(receiver.done, what="the read loop to stop")
+    assert session.active is False, "the never-registered session is shut down"
+    assert sid not in _sse_sessions
+
+
+async def test_a_cancelled_mount_stops_the_tick_task(members):
+    task, _sid = await _start_get("BlockingTickPage", "/blockingtick/")
+    layer = get_channel_layer()
+    await wait_until(lambda: layer.groups.get(_group_of("BlockingTickPage")), what="admission")
+    runtime = members[-1]._transport.runtime
+    tick = runtime._tick_task
+    assert tick is not None, "on_view_mounted started the tick"
+    await _cancel(task)
+    await wait_until(tick.done, what="the tick task to end")
+    assert BLOCKED[-1].n == 0, "the view never ticked"
+
+
+async def test_the_runtime_undoes_a_cancelled_mount_on_its_own(members):
+    """``_unmount_on_failure`` alone (no SSE view around it): the cancelled
+    mount's view leaves the runtime and its server work stops."""
+    from djust.sse import SSESession
+
+    key = await sync_to_async(_fresh_key)()
+    session = SSESession(str(uuid.uuid4()))
+    session._request = await sync_to_async(_request)("GET", "/blocking/", {}, key)
+    GATE.clear()
+    task = asyncio.ensure_future(
+        session.runtime.dispatch_mount(
+            {"type": "mount", "view": MOD + "BlockingPage", "url": "/blocking/", "params": {}}
+        )
+    )
+    layer = get_channel_layer()
+    await wait_until(lambda: layer.groups.get(_group_of("BlockingPage")), what="admission")
+    member = members[-1]
+    await _cancel(task)
+    assert session.runtime.view_instance is None
+    await wait_until(lambda: not _all_members(layer, member.channel_name), what="groups left")
+
+
+async def _race_join(members, prefix, view, url):
+    layer = get_channel_layer()
+    real_group_add = layer.group_add
+
+    async def group_add_then_close(group, channel):
+        member = members[-1] if members else None
+        if member is not None and channel == member.channel_name and group.startswith(prefix):
+            member.release()
+            # A networked layer yields inside group_add: the release's leave
+            # runs before this join has landed.
+            for _ in range(5):
+                await asyncio.sleep(0)
+        await real_group_add(group, channel)
+
+    layer.group_add = group_add_then_close
+    try:
+        await _sse(view, url)
+    finally:
+        del layer.group_add
+    member = members[-1]
+    await wait_until(
+        lambda: not _all_members(layer, member.channel_name), what="every group to be left"
+    )
+
+
+async def test_a_release_inside_the_view_group_join_leaves_that_group(members):
+    await _race_join(members, "djust_view_", "GroupPage", "/group/")
+
+
+async def test_a_release_inside_a_notify_group_join_leaves_that_group(members):
+    await _race_join(members, "djust_db_notify_", "NotifyPage", "/notify/")
+
+
+async def test_a_release_while_the_channel_is_created_starts_no_reader(members):
+    layer = get_channel_layer()
+    real_new_channel = layer.new_channel
+
+    async def new_channel_then_close(*args, **kwargs):
+        name = await real_new_channel(*args, **kwargs)
+        members[-1].release()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        return name
+
+    layer.new_channel = new_channel_then_close
+    try:
+        await _sse("GroupPage", "/group/")
+    finally:
+        del layer.new_channel
+    member = members[-1]
+    assert member._receive_task is None, "no read loop for a released member"
+    assert not _all_members(layer, member.channel_name)
+
+
+async def test_a_push_published_while_mount_runs_is_delivered_after_the_mount_over_sse():
+    layer = get_channel_layer()
+    task, sid = await _start_get("BlockingPage", "/blocking/")
+    await wait_until(lambda: layer.groups.get(_group_of("BlockingPage")), what="the group join")
+    await apush_to_view(MOD + "BlockingPage", handler="handle_set", payload={"n": 5})
+    view = BLOCKED[-1]
+    await wait_until(
+        lambda: view._sse_session.runtime._deferred_pushes, what="the push to be queued"
+    )
+    assert view.log == [], "not applied before the mount frame"
+    GATE.set()
+    assert (await task).status_code == 200
+    session = _sse_sessions[sid]
+    frames = await _sse_frames(session, _shows(5))
+    assert [f["type"] for f in frames][0] == "mount", "the mount frame comes first"
+    await apush_to_view(MOD + "BlockingPage", handler="handle_set", payload={"n": 6})
+    await _sse_frames(session, _shows(6))
+    assert view.log == [5, 6]
+
+
+async def test_a_push_published_while_mount_runs_is_delivered_over_a_websocket():
+    """The WebSocket twin of the test above: what SSE is measured against."""
+    layer = get_channel_layer()
+    GATE.clear()
+    socket = WebsocketCommunicator(RecordingConsumer.as_asgi(), "/ws/")
+    socket.scope.update(
+        session=await sync_to_async(_saved_session)(), user=AnonymousUser(), tenant=None
+    )
+    assert (await socket.connect())[0]
+    await socket.receive_json_from()
+    await socket.send_json_to({"type": "mount", "view": MOD + "BlockingPage", "url": "/blocking/"})
+    await wait_until(lambda: layer.groups.get(_group_of("BlockingPage")), what="the group join")
+    await apush_to_view(MOD + "BlockingPage", handler="handle_set", payload={"n": 5})
+    GATE.set()
+    await _ws_frames(socket, _shows(5))
+    await apush_to_view(MOD + "BlockingPage", handler="handle_set", payload={"n": 6})
+    await _ws_frames(socket, _shows(6))
+    assert BLOCKED[-1].log == [5, 6]
+    await socket.disconnect()
+
+
+async def test_a_push_for_a_mount_that_is_then_refused_is_discarded():
+    layer = get_channel_layer()
+    task, sid = await _start_get("BlockingDeniedPage", "/blockingdenied/")
+    group = _group_of("BlockingDeniedPage")
+    await wait_until(lambda: layer.groups.get(group), what="admission")
+    await apush_to_view(MOD + "BlockingDeniedPage", handler="handle_set", payload={"n": 5})
+    view = BLOCKED[-1]
+    runtime = view._sse_session.runtime
+    await wait_until(lambda: runtime._deferred_pushes, what="the push to be queued")
+    GATE.set()
+    response = await task
+    assert response.status_code == 200
+    assert sid not in _sse_sessions, "the refused session is not registered"
+    assert view.log == [], "never applied"
+    assert not runtime._deferred_pushes, "discarded with the refused view"
+    queued = []
+    session = view._sse_session
+    while not session.queue.empty():
+        queued.append(session.queue.get_nowait())
+    assert not any(f and f.get("source") == "broadcast" for f in queued), queued
+    assert any(f and f.get("code") == "permission_denied" for f in queued), queued
+    assert not layer.groups.get(group)
+
+
+async def test_a_db_notify_waits_for_a_held_lock_and_then_runs(monkeypatch):
+    """As the WebSocket's NOTIFY turn: it waits (bounded; long here, so the
+    test does not depend on the bound) for a held lock, and pushes queued
+    meanwhile do not make it drop."""
+    from djust import websocket
+
+    monkeypatch.setattr(websocket, "_SERVER_TURN_LOCK_WAIT_S", 60)
+    session, _key = await _sse("NotifyPage", "/notify/")
+    view = session.view_instance
+    lock = session._render_lock
+    await lock.acquire()
+    try:
+        assert await view.server_push("handle_bump") is True  # queued behind the lock
+        await _notify("orders_3885", {"id": 1})
+        await wait_until(
+            lambda: len([w for w in (lock._waiters or ()) if not w.cancelled()]) >= 2,
+            what="the drain and the NOTIFY to wait for the lock",
+        )
+        assert view.seen == []
+    finally:
+        lock.release()
+    await _sse_frames(session, lambda fs: view.seen and view.n >= 101)
+    assert [m["payload"] for m in view.seen] == [{"id": 1}]

@@ -49,6 +49,30 @@ _PENDING_LEAVES: Set["asyncio.Task[Any]"] = set()
 _RECEIVE_RETRY_S = 1.0
 
 
+class _RecordingLayer:
+    """The channel layer, as one member uses it: it records every group the
+    member's channel was actually added to (and removes the ones it left), so a
+    release can discard a join that landed after the release's own leave ran
+    (a networked layer yields inside ``group_add``)."""
+
+    def __init__(self, layer: Any, member: "SSEChannelMember") -> None:
+        self._layer = layer
+        self._member = member
+
+    async def group_add(self, group: str, channel: str) -> None:
+        await self._layer.group_add(group, channel)
+        if channel == self._member.channel_name:
+            self._member._joined.add(group)
+
+    async def group_discard(self, group: str, channel: str) -> None:
+        await self._layer.group_discard(group, channel)
+        if channel == self._member.channel_name:
+            self._member._joined.discard(group)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._layer, name)
+
+
 class SSEChannelMember:
     """The channel, and the groups it joined, of one SSE-mounted view.
 
@@ -62,7 +86,11 @@ class SSEChannelMember:
         from channels.layers import get_channel_layer
 
         self._transport = transport
-        self.channel_layer: Any = get_channel_layer()
+        layer = get_channel_layer()
+        #: Every group this member's channel is in right now, as added (see
+        #: :class:`_RecordingLayer`); what a release discards in the end.
+        self._joined: Set[str] = set()
+        self.channel_layer: Any = _RecordingLayer(layer, self) if layer is not None else None
         self.channel_name: Optional[str] = None
         self._view_path = ""
         self._view_group: Optional[str] = None
@@ -96,6 +124,10 @@ class SSEChannelMember:
             return
         self._loop = asyncio.get_running_loop()
         self.channel_name = await self.channel_layer.new_channel(prefix="djust_sse")
+        if self._released:
+            # Released while the channel was being created (a networked layer
+            # may yield there): start no reader, join nothing.
+            return
         self._receive_task = self._loop.create_task(self._receive_loop())
         try:
             await join_view_push_group(self, view)
@@ -139,6 +171,11 @@ class SSEChannelMember:
         self._released = True
         loop = self._loop
         if loop is None or loop.is_closed():
+            # Never attached, or its loop is gone with every task on it. On a
+            # closed (or stopped, below) loop the groups cannot be left from
+            # here: as for a WebSocket consumer whose loop died before its
+            # ``disconnect`` ran, the layer drops the memberships when they
+            # reach its ``group_expiry`` (a day by default).
             return
         try:
             here: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
@@ -148,9 +185,12 @@ class SSEChannelMember:
             self._stop_and_leave()
         elif loop.is_running():
             loop.call_soon_threadsafe(self._stop_and_leave)
+        # else: a loop that is not running can run nothing; see above.
 
     def _leave_if_released(self) -> None:
-        """A release that raced a join: leave what the join just added."""
+        """A release that raced a join: leave what the join added after the
+        release's own leave ran (``_joined`` records it, whichever attribute
+        the shared helper had already reset)."""
         if self._released and self._loop is not None and not self._loop.is_closed():
             self._schedule_leave()
 
@@ -174,6 +214,13 @@ class SSEChannelMember:
 
         # Logs, never raises, and resets the group attributes.
         await leave_consumer_view_groups(self)
+        # Whatever the attributes no longer name: a join that landed after an
+        # earlier leave reset them.
+        for group in sorted(self._joined):
+            try:
+                await self.channel_layer.group_discard(group, self.channel_name)
+            except Exception:  # noqa: BLE001 - best effort, as the shared leave
+                logger.warning("Error leaving channel group %s", group)
 
     # ------------------------------------------------------------------ #
     # Receiving

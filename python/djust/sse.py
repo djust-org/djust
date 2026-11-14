@@ -1521,6 +1521,13 @@ class DjustSSEStreamView(View):
                         raise
                     protected_failure = True
                     del exc
+                except BaseException:
+                    # A client that went away mid-mount: Django cancels this
+                    # task. The session is never registered, so nothing else
+                    # would close it; release its server work now (#3885), as
+                    # ``_mount_slot`` does for a view beside the page.
+                    session.shutdown()
+                    raise
             if protected_failure:
                 session.shutdown()
                 return cast(
