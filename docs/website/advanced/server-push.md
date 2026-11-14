@@ -175,15 +175,13 @@ When the client falls back to SSE (`use_websocket: False`, or a socket that exha
 
 - its events and its `start_async` results (always did);
 - `tick_interval` / `handle_tick()` (the same opt-in rule: set `tick_interval` **and** override `handle_tick`);
-- `self.server_push()` from its own code.
+- `self.server_push()` from its own code;
+- `push_to_view()` / `apush_to_view()`, view-wide and with `scope=` push scopes (v2.0, [#3885](https://github.com/djust-org/djust/issues/3885));
+- `db_notify` (`handle_info` from `listen()`) (v2.0, #3885).
 
-It does **not** get, and these stay WebSocket-only because they need the channel layer:
+Each SSE-mounted view takes its own channel on the channel layer and joins the same groups a WebSocket session joins: the view-wide group of its class, the groups of its `push_scope` (followed when the view changes it) and the NOTIFY groups of its `listen()` channels. Delivery runs the WebSocket's checks: the tenant stamp, the handler allowlist and private-attribute guard of a push, the skip of a session's own echo, and the `reauth_on_event` re-check of a server turn. Because it goes through the channel layer, a push from another process (a Celery worker) reaches an SSE session with a shared layer (Redis) and does not with an in-memory layer, as for a WebSocket. A `db_notify` that finds the view busy is dropped, as on a WebSocket. When the stream closes, the page navigates or a view beside the page is released, its channel leaves every group.
 
-- `push_to_view()` / `apush_to_view()` groups, including `scope=` push scopes;
-- `db_notify` (`handle_info` from `listen()`);
-- presence broadcasts.
-
-SSE sessions live in the process that served the stream GET, so there is no way for a `push_to_view()` from another process (a Celery worker) to reach one today. Tracked in [#3809](https://github.com/djust-org/djust/issues/3809) follow-ups.
+It does **not** get presence broadcasts: presence is not supported over SSE.
 
 Two things protect an SSE session that a WebSocket gets from `await send`:
 
@@ -276,7 +274,7 @@ push_to_view("games.views.RoomView", handler="handle_refresh", scope="room-42")
   - A tenant view whose tenant did not resolve receives no scoped push, and a scoped push to a tenant-scoped view with no tenant reaches no session. Each logs one warning (per consumer, per view path) that names no value.
   - A push without `scope` goes to the view-wide group, which has no tenant in its name, but every push is also stamped with the tenant it is for (`tenant=`, defaulting to the bound tenant), and a tenant view applies only a push stamped for its own tenant or for none. A tenant's handler that pushes view-wide therefore reaches that tenant's sessions only; a task with no tenant, or `tenant=None`, is a broadcast to every tenant. A view that is not tenant-scoped applies every push, and a message without a stamp (from a process on an older djust) is applied as before. A database NOTIFY (`handle_info`) carries no stamp: qualify the channel name with the tenant if tenants must not see each other's notifications.
 - Scoped groups are ordinary channel-layer groups. They work across processes with the Redis channel layer, like view-wide push.
-- WebSocket sessions only. SSE and HTTP-only sessions receive no `push_to_view` push, scoped or not (see [Over SSE](#over-sse-what-reaches-an-sse-session)). A push from the view's own code, [`self.server_push()`](#a-push-from-the-views-own-code-selfserver_push), works on both.
+- WebSocket and SSE sessions (SSE since v2.0, see [Over SSE](#over-sse-what-reaches-an-sse-session)). HTTP-only sessions receive no `push_to_view` push, scoped or not.
 - **Presence follows.** In a view that also uses `PresenceMixin`, a join or leave then wakes only the sessions that share the presence key, not every room (v1.3+; see [Presence](../guides/presence.md#multi-room-views-who-a-join-wakes)).
 
 ## Event Sequencing

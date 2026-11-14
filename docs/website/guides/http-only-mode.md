@@ -156,7 +156,7 @@ LIVEVIEW_CONFIG = {
 
 ### Polling instead of server push
 
-The page POST has no channel from the server to the browser: `tick_interval`, `self.server_push()`, `push_to_view`, presence and the loading state of `start_async` need a WebSocket (or, for ticks and `server_push`, the SSE stream). What works on every transport is `dj-poll`: a timer in the browser that sends an ordinary event (every 5 seconds by default, paused while the tab is hidden).
+The page POST has no channel from the server to the browser: `tick_interval`, `self.server_push()`, `push_to_view`, presence and the loading state of `start_async` need a WebSocket (or, except presence, the SSE stream). What works on every transport is `dj-poll`: a timer in the browser that sends an ordinary event (every 5 seconds by default, paused while the tab is hidden).
 
 ### What the page-POST fallback keeps between events
 

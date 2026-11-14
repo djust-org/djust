@@ -88,8 +88,8 @@ check [C026](error-codes.md#c026-invalid-liveview_middleware).
 | `async` | `start`, `result`, `catch_up` | `start_async` / `@background` work starts, and its result is handled |
 | `render` | `recovery` | the client asks for full HTML after a failed patch |
 
-Server push, ticks, `db_notify` and presence exist on the WebSocket only (SSE
-joins no channel groups); background work runs on WebSocket and SSE; HTTP and
+Server push, ticks and `db_notify` run on the WebSocket and on SSE; presence
+runs on the WebSocket only; background work runs on WebSocket and SSE; HTTP and
 the API have page mounts and events.
 
 ## Order
