@@ -535,6 +535,11 @@ CHANGE_DETECTION_IGNORED: frozenset = frozenset(
         "_djust_id_counter",  # Render-cycle ID allocation is not reactive state.
         "_sync_done_this_cycle",
         "_force_full_html",
+        # Whether a full render was pending before this turn's first public
+        # request (``set_changed_keys`` / ``request_full_render``), so
+        # ``cancel_full_render`` undoes only that request (#4129). Consumed per
+        # turn by ``_resolve_skip_render``.
+        "_djust_full_render_prior",
         # Names of start_async tasks currently running (#2969). Written by the
         # dispatcher and a task's completion callback, possibly while an
         # unrelated handler's turn is in flight; never read by a template.

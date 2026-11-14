@@ -172,6 +172,22 @@ class ThemeMixin:
         self.theme_mode = state.mode
         self.theme_resolved_mode = state.resolved_mode
 
+    def get_theme_state(self) -> Any:
+        """The current theme: a :class:`~djust.theming.manager.ThemeState`.
+
+        Read ``.mode`` (``"light"``, ``"dark"`` or ``"system"``),
+        ``.resolved_mode`` (``"light"`` or ``"dark"``), ``.preset``,
+        ``.theme``, ``.pack`` and ``.layout``. Works before and after a theme
+        switch, and on a view restored from a saved session (which did not run
+        ``mount()``): the state is then read from the request, as the theme
+        tags read it (#4129).
+
+        Replaces reading ``self._theme_state``, which keeps working after
+        ``mount()``.
+        """
+        _manager, state = self._theme_manager_and_state()
+        return state
+
     # --- the rendered values: computed on read, never stored (#3626) ---------
 
     def _theme_manager_and_state(self) -> tuple[ThemeManager, Any]:

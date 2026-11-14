@@ -1588,6 +1588,14 @@ when they were attributes. This holds for a view that skipped `mount()` as well
 (a reconnect that restores state, a restored sticky child): the values resolve
 their manager from the request.
 
+An application that overrode `_setup_theme_context()` to keep the rendered
+HTML out of the context no longer needs to: unread values are never rendered.
+To read the current theme in Python, call `self.get_theme_state()`. It returns
+the `ThemeState` (`.mode` is `light`, `dark` or `system`; `.resolved_mode` is
+`light` or `dark`; `.preset`, `.theme`, `.pack`, `.layout`), and works on a
+restored view that did not run `mount()`. It replaces reading
+`self._theme_state`.
+
 What changed for code that reached the old attributes through the context:
 
 - `get_context_data()` no longer returns `theme_head`, `theme_css`,

@@ -178,6 +178,29 @@ class PushEventMixin:
         """Alias for :meth:`flush_push_events` — kept for internal use."""
         await self.flush_push_events()
 
+    def clear_push_events(self) -> List[Tuple[str, Dict[str, Any]]]:
+        """Drop the push events queued so far in this turn, and return them.
+
+        Events pushed after this call are sent as usual. Useful when a handler
+        queued events (directly or through a helper) and then decided they
+        should not reach the client::
+
+            @event_handler
+            def save(self, **kwargs):
+                self.push_event("flash", {"message": "Saved"})
+                if not self.form_ok():
+                    self.clear_push_events()   # no "Saved" flash
+
+        Replaces assigning ``self._pending_push_events = []``, which keeps
+        working.
+
+        Returns:
+            The dropped ``(event, payload)`` pairs, oldest first.
+        """
+        dropped = self._pending_push_events
+        self._pending_push_events = []
+        return list(dropped)
+
     def _drain_push_events(self) -> List[Tuple[str, Dict[str, Any]]]:
         """
         Drain and return all pending push events.

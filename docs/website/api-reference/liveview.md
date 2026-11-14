@@ -524,6 +524,37 @@ To reach only some sessions (one room of a multi-room view), set `self.push_scop
 
 ---
 
+### Render Control
+
+These replace private flags some applications set directly. The private names keep working; use the public form in new code.
+
+| Public form | Replaces | What it does |
+|---|---|---|
+| `skip_render()` | `self._skip_render = True` | No render this turn. Works in an event handler, a push handler / `handle_info`, and `handle_tick()`. Push events and navigation are still sent. |
+| `set_changed_keys()` (no arguments) / `request_full_render()` | `self._force_full_html = True` | Render this turn as full HTML, even though no public attribute changed. |
+| `cancel_full_render()` | `self._force_full_html = False` | Withdraw a full render requested earlier in this turn. A full render the framework itself requires (after a restore, after a failed save) stays. |
+| `reset_submitted_form()` | `self._should_reset_form = True` | The browser resets the form whose submit (or button) sent the event. Rides on this turn's render frame. For a view without `FormMixin`; `FormMixin.reset_form()` does it for you. |
+| `clear_push_events()` | `self._pending_push_events = []` | Drop the push events queued so far this turn; returns them. |
+
+A full render requested in the same turn wins over `skip_render()`.
+
+#### Re-render after a change djust cannot see
+
+djust re-renders when a public attribute changes. A handler that changes only the database (or a cache) and touches no `self.*` attribute changes nothing djust can see, so the turn is skipped, although `get_context_data()` would now return different HTML. Call `set_changed_keys()` with no arguments to render anyway:
+
+```python
+from djust.decorators import event_handler
+
+@event_handler
+def archive(self, item_id: int, **kwargs):
+    Item.objects.filter(pk=item_id).update(archived=True)  # database only
+    self.set_changed_keys()  # get_context_data() re-queries; render the result
+```
+
+After an in-place write on an object djust compares by identity (a model instance held in state), name the attribute instead: `self.set_changed_keys("rows")`.
+
+---
+
 ### Standard Django Integration
 
 LiveView is a Django class-based view. Use `as_view()` in URL configuration:
