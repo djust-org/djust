@@ -930,6 +930,96 @@ def _check_automatic_state_switch(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_state_store(errors: list[CheckMessage]) -> None:
+    """C036 / C037 / C038 — the state store named in settings cannot be used (#4132).
+
+    ``DJUST_STATE_STORE`` names where a view's saved state is kept. A path
+    that does not import, or does not name a store, is C036; the built-in
+    sealed store without the ``cryptography`` package or without usable keys
+    is C037. Either way nothing is saved at run time (the state is never
+    written to the session in the clear instead), so this says so at startup.
+    """
+    from django.conf import settings
+
+    try:
+        from djust import state_store
+    except ImportError:
+        return
+    strict = getattr(settings, state_store.STRICT_SETTING, False)
+    if type(strict) is not bool and not _is_check_suppressed("djust.C038"):
+        # C038: only True is strict, so 1 or "true" would silently serve an
+        # event whose state was not stored.
+        errors.append(
+            DjustError(
+                "%s must be True or False, not %r."
+                % (state_store.STRICT_SETTING, type(strict).__name__),
+                hint=(
+                    "Only True refuses an event whose state cannot be stored. Any other "
+                    "value is read as not strict: such an event is served unsaved."
+                ),
+                id="djust.C038",
+                fix_hint="Set `%s` to `True` or `False`." % state_store.STRICT_SETTING,
+            )
+        )
+    raw = getattr(settings, state_store.SETTING, None)
+    if raw is None:
+        return
+    try:
+        store = state_store.build_store(raw)
+    except state_store.StateStoreConfigurationError as error:
+        if not _is_check_suppressed("djust.C036"):
+            errors.append(
+                DjustError(
+                    "%s cannot be used: %s" % (state_store.SETTING, error),
+                    hint=(
+                        "Until it is fixed no view state is saved between requests: every "
+                        "page-POST fallback request and reconnect starts from mount()."
+                    ),
+                    id="djust.C036",
+                    fix_hint=(
+                        "Set `%s` to the dotted path of a `djust.state_store.ViewStateStore` "
+                        "subclass, for example "
+                        "`djust.state_store.SealedSessionViewStateStore`, or remove it to keep "
+                        "state in the session." % state_store.SETTING
+                    ),
+                )
+            )
+        return
+    if not isinstance(store, state_store.SealedSessionViewStateStore):
+        return
+    if _is_check_suppressed("djust.C037"):
+        return
+    problem = None
+    try:
+        state_store._aesgcm()
+        state_store.sealing_keys()
+    except state_store.StateStoreConfigurationError as error:
+        problem = str(error)
+    except Exception as error:  # noqa: BLE001 — a keys callable may raise anything
+        # Its message may hold key material: the type only.
+        problem = "%s could not be read: its callable raised %s." % (
+            state_store.KEYS_SETTING,
+            type(error).__name__,
+        )
+    if problem is None:
+        return
+    errors.append(
+        DjustError(
+            "The sealed state store cannot seal: %s" % problem,
+            hint=(
+                "Until it is fixed no view state is saved between requests. djust never "
+                "falls back to SECRET_KEY or to unsealed state in the session."
+            ),
+            id="djust.C037",
+            fix_hint=(
+                "Install `djust[sealed-state]` and set `%s` to a list of keys (make one with "
+                "`djust.state_store.generate_key()`); the first seals, every one opens."
+                % state_store.KEYS_SETTING
+            ),
+        )
+    )
+
+
 #: Django cache backends whose entries one process cannot see from another.
 _PROCESS_LOCAL_CACHES = {
     "django.core.cache.backends.locmem.LocMemCache": "LocMemCache (one copy per process)",
@@ -1754,6 +1844,7 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # that is not a bool (#4128)
     _check_automatic_state_session_engine(errors)
     _check_automatic_state_switch(errors)
+    _check_state_store(errors)
 
     # C031 -- the session store is a cache local to one process (#4103)
     _check_process_local_session_cache(errors)

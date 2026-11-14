@@ -118,3 +118,108 @@ def test_class_component_without_add_card_event_has_no_button(value):
     for path, out in _class_paths(KanbanBoard(columns=CLASS_COLS, add_card_event=value)).items():
         assert "kanban-add-card" not in out and "+ Add card" not in out, (path, out)
         assert 'data-col-id="todo"' in out, (path, out)
+
+
+# --- allowed columns and the keyboard move (#4120 parts 3 and 4) ------------
+
+
+def test_card_targets_render_as_data_targets():
+    cols = [
+        {
+            "id": "todo",
+            "title": "To do",
+            "cards": [
+                {"id": "c1", "title": "A", "targets": ["doing", "done"]},
+                {"id": "c2", "title": "B", "targets": []},
+                {"id": "c3", "title": "C"},
+            ],
+        }
+    ]
+    out = _render("{% kanban_board columns=cols %}", {"cols": cols})
+    assert 'data-card-id="c1" data-col-id="todo" data-targets="doing done"' in out
+    # An empty list: the card may go nowhere else.
+    assert 'data-card-id="c2" data-col-id="todo" data-targets=""' in out
+    # No targets: any column, so no attribute.
+    assert 'data-card-id="c3" data-col-id="todo" tabindex' in out
+
+
+def test_card_targets_are_escaped():
+    cols = [{"id": "t", "title": "T", "cards": [{"id": "c", "title": "C", "targets": ['a" x="1']}]}]
+    out = _render("{% kanban_board columns=cols %}", {"cols": cols})
+    assert 'data-targets="a&quot; x=&quot;1"' in out
+    assert ' x="1"' not in out
+
+
+def test_every_card_takes_focus_for_the_keyboard_move():
+    out = _render("{% kanban_board columns=cols %}", {"cols": COLS})
+    cards = re.findall(r'<div class="kanban-card"[^>]*>', out)
+    assert len(cards) == 2
+    for card in cards:
+        assert 'tabindex="0"' in card, card
+        # aria-roledescription needs a role; aria-pressed is not allowed on a group.
+        assert 'role="group" aria-roledescription="movable card"' in card, card
+        assert "aria-pressed" not in card
+        assert 'aria-describedby="kanban-hint-todo"' in card, card
+    # The instruction a screen reader announces on focus, before pickup.
+    assert (
+        '<span class="sr-only kanban-hint" id="kanban-hint-todo">Press Space to pick up the card'
+    ) in out
+
+
+@pytest.mark.parametrize(
+    "targets, expected",
+    [
+        ("done", "done"),
+        (("doing", "done"), "doing done"),
+        ({"done", "doing"}, "doing done"),
+        (iter(["a", "b"]), "a b"),
+        # A lazy string is one id, not its characters.
+        ("lazy:done", "done"),
+    ],
+)
+def test_card_targets_accept_a_string_or_any_iterable(targets, expected):
+    from django.utils.functional import lazy
+
+    from djust.components.templatetags.djust_components import kanban_board
+
+    if targets == "lazy:done":
+        targets = lazy(lambda: "done", str)()
+    cols = [{"id": "t", "title": "T", "cards": [{"id": "c", "title": "C", "targets": targets}]}]
+    assert 'data-targets="%s"' % expected in str(kanban_board(columns=cols))
+
+
+def test_a_column_id_with_whitespace_warns_once(caplog):
+    import logging
+
+    from djust.components.templatetags import djust_components as tags
+
+    tags._KANBAN_SPACED_IDS.discard("in review")
+    cols = [
+        {
+            "id": "in review",
+            "title": "R",
+            "cards": [{"id": "c", "title": "C", "targets": ["in review"]}],
+        },
+    ]
+    with caplog.at_level(logging.WARNING, logger="djust.components"):
+        tags.kanban_board(columns=cols)
+        tags.kanban_board(columns=cols)
+    warnings = [r.getMessage() for r in caplog.records if "whitespace" in r.getMessage()]
+    assert len(warnings) == 1, warnings
+    assert "'in review'" in warnings[0]
+
+
+def test_form_control_focus_rule_keeps_its_ring_fallback():
+    """An unrelated rule a kanban change once edited by accident (#4120 review)."""
+    from pathlib import Path
+
+    import djust
+
+    css = (
+        Path(djust.__file__).parent / "components/static/djust_components/components.css"
+    ).read_text()
+    assert (
+        ".form-control:focus { border-color: hsl(var(--ring, var(--primary))); "
+        "box-shadow: 0 0 0 var(--form-focus-ring-width, 3px) "
+        "hsl(var(--ring, var(--primary)) / var(--form-focus-ring-opacity, 0.2)); outline: none; }"
+    ) in css

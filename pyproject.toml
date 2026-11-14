@@ -71,6 +71,12 @@ daphne = [
 redis = [
     "redis>=5.0.0,<9",
 ]
+# The built-in sealed state store (#4132): AES-256-GCM for
+# djust.state_store.SealedSessionViewStateStore. Only needed when
+# DJUST_STATE_STORE names that store.
+sealed-state = [
+    "cryptography>=42",
+]
 compression = [
     "zstandard>=0.22.0,<1",  # zstd compression for state backend
 ]

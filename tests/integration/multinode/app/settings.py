@@ -8,7 +8,10 @@ one session store and one channel layer, as a real deployment's processes do:
   ``cached_db`` (the Redis cache in front of the shared database);
 * ``layer``: ``redis`` (``channels_redis.core.RedisChannelLayer``) or
   ``memory`` (``channels.layers.InMemoryChannelLayer``, one per process);
-* ``db``, ``cache_dir``, ``redis``: the shared locations.
+* ``db``, ``cache_dir``, ``redis``: the shared locations;
+* ``store``: the state store (#4132): absent (the session), ``sealed`` (the
+  built-in sealed store) or ``file`` (a store outside the session, in a
+  directory every node opens).
 """
 
 from __future__ import annotations
@@ -110,6 +113,16 @@ DJUST_CONFIG = {
 if CONFIG.get("redis"):
     DJUST_CONFIG["PRESENCE_BACKEND"] = "redis"
     DJUST_CONFIG["REDIS_URL"] = CONFIG["redis"]
+
+_store = CONFIG.get("store")
+if _store == "sealed":
+    DJUST_STATE_STORE = "djust.state_store.SealedSessionViewStateStore"
+    # 32 bytes, base64: a fixture's key, the same on every node.
+    DJUST_STATE_STORE_KEYS = ["bXVsdGlub2RlLXRlc3Qtb25seS1ub3Qtc2VjcmV0ISE="]
+elif _store == "file":
+    DJUST_STATE_STORE = "tests.integration.multinode.app.stores.FileStateStore"
+elif _store is not None:  # pragma: no cover - a harness typo
+    raise ValueError("unknown state store %r" % _store)
 
 LIVEVIEW_ALLOWED_MODULES = ["tests.integration.multinode.app.views"]
 LIVEVIEW_CONFIG = {"hot_reload_auto_enable": False}

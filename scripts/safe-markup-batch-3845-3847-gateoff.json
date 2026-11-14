@@ -1,0 +1,65 @@
+{
+  "_comment": "The helper methods and the progress handler the safe-markup guard proves since #3845 / #3847: each fix reverted in turn must turn a test red (the method's own row, or the audit, which has no entry for the function any more). Run: .venv/bin/python scripts/gate_off.py scripts/safe-markup-batch-3845-3847-gateoff.json",
+  "root": ".",
+  "command": [
+    "env",
+    "PYTHONDONTWRITEBYTECODE=1",
+    "{python}",
+    "-m",
+    "pytest",
+    "-q",
+    "-x",
+    "-p",
+    "no:cacheprovider",
+    "python/tests/test_safe_markup_batch_3845_3847.py",
+    "python/tests/test_safe_markup_guard_3820.py::TestTheRealTree",
+    "--deselect",
+    "python/tests/test_safe_markup_batch_3845_3847.py::TestTheGateOffListApplies::test_every_mutation_text_still_applies"
+  ],
+  "deadline": 400,
+  "rss_mb": 4096,
+  "mutations": [
+    {
+      "label": "OrgChartNode._render_node writes the event as it is given",
+      "file": "python/djust/components/templatetags/_advanced.py",
+      "old": "        # escaped HERE, where it is written, so the method is safe for any caller (#3845)\n        e_event = conditional_escape(str(event)) if event else \"\"\n",
+      "new": "        e_event = event\n"
+    },
+    {
+      "label": "FeedbackWidgetNode._render_thumbs writes the event as it is given",
+      "file": "python/djust/components/templatetags/djust_components.py",
+      "old": "    def _render_thumbs(self, event: Any, value: Any) -> Any:\n        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)\n",
+      "new": "    def _render_thumbs(self, event: Any, value: Any) -> Any:\n        e_event = event\n"
+    },
+    {
+      "label": "FeedbackWidgetNode._render_stars writes the event as it is given",
+      "file": "python/djust/components/templatetags/djust_components.py",
+      "old": "    def _render_stars(self, event: Any, value: Any) -> Any:\n        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)\n",
+      "new": "    def _render_stars(self, event: Any, value: Any) -> Any:\n        e_event = event\n"
+    },
+    {
+      "label": "FeedbackWidgetNode._render_emoji writes the event as it is given",
+      "file": "python/djust/components/templatetags/djust_components.py",
+      "old": "    def _render_emoji(self, event: Any, value: Any) -> Any:\n        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)\n",
+      "new": "    def _render_emoji(self, event: Any, value: Any) -> Any:\n        e_event = event\n"
+    },
+    {
+      "label": "FileTreeNode._render_tree_node writes depth as it is given",
+      "file": "python/djust/components/templatetags/_dev_tools.py",
+      "old": "{int(depth) * 1.25}rem",
+      "new": "{depth * 1.25}rem"
+    },
+    {
+      "label": "FileTree._render_node writes depth as it is given",
+      "file": "python/djust/components/components/file_tree.py",
+      "old": "{int(depth) * 1.25}rem",
+      "new": "{depth * 1.25}rem"
+    },
+    {
+      "label": "ProgressHandler reads the tag's value without saying it is an int",
+      "file": "python/djust/components/rust_handlers.py",
+      "old": "value = int(_progress(value=kw.get(\"value\", 0))[\"value\"])",
+      "new": "value = _progress(value=kw.get(\"value\", 0))[\"value\"]"
+    }
+  ]
+}

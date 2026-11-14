@@ -17,11 +17,13 @@ import contextvars
 import hashlib
 import itertools
 import json as _json
+import logging
 import re as _re
 import uuid
 from urllib.parse import urlencode
-from collections.abc import Mapping
-from typing import Any, Iterator
+from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
+from typing import Any, Iterator, Optional
 
 from django import template
 from django.utils.html import conditional_escape, format_html, format_html_join
@@ -3849,6 +3851,48 @@ def virtual_list(
 KANBAN_COLUMN_COLORS = ("primary", "success", "warning", "destructive", "info", "muted")
 
 
+_kanban_logger = logging.getLogger("djust.components")
+
+#: Column ids already warned about containing whitespace (#4120).
+_KANBAN_SPACED_IDS: set = set()
+
+
+def _warn_spaced_column_id(column_id: Any) -> None:
+    """A card's ``data-targets`` is a space-separated list of column ids, so an
+    id with whitespace in it cannot be listed: warn once per id (#4120)."""
+    text = _exact_str(column_id)
+    if text.split() == [text] or not text.strip() or text in _KANBAN_SPACED_IDS:
+        return
+    _KANBAN_SPACED_IDS.add(text)
+    _kanban_logger.warning(
+        "kanban_board column id %r contains whitespace, so a card's targets cannot name it "
+        "(data-targets is space-separated). Use an id without spaces.",
+        text,
+    )
+
+
+def _kanban_targets(targets: Any) -> Optional[list]:
+    """A card's ``targets`` as a list of column ids, or None for "any column".
+
+    A collection or iterator (list, tuple, set, generator, ...) is a list of
+    ids, a set sorted so the markup is stable; anything else, a string
+    included, is one id. Each id is read as its exact text (``_exact_str``),
+    so a marked-safe, lazy or other text-like value renders like the plain
+    string (and a lazy string is not split into its characters)."""
+    if targets is None:
+        return None
+    if isinstance(targets, (AbstractSet, Iterator)) or (
+        isinstance(targets, Sequence) and not isinstance(targets, (str, bytes))
+    ):
+        items = sorted(targets, key=_exact_str) if isinstance(targets, AbstractSet) else targets
+        ids = [_exact_str(t) for t in items]
+    else:
+        ids = [_exact_str(targets)]
+    for target in ids:
+        _warn_spaced_column_id(target)
+    return ids
+
+
 @register.simple_tag
 def kanban_board(
     columns: Any = None,
@@ -3861,18 +3905,26 @@ def kanban_board(
     Args:
         columns: list of dicts:
             {"id": "todo", "title": "To Do", "color": "success",
-             "cards": [{"id": "c1", "title": "Task A", "label": "bug", "href": "/tasks/1/"}]}
+             "cards": [{"id": "c1", "title": "Task A", "label": "bug", "href": "/tasks/1/",
+                        "targets": ["doing", "done"]}]}
             A column's ``color`` is a theme name (``primary``, ``success``,
             ``warning``, ``destructive``, ``info``, ``muted``), written as the
             class ``kanban-col--<name>`` (no ``style`` attribute, so a strict
             CSP ``style-src-attr 'none'`` keeps it), or any CSS colour, written
             as an inline ``style`` (refused by such a CSP). No ``color`` means
             no colour of the column's own (#4120). A card's ``href`` makes its
-            title a link.
+            title a link. A card's ``targets`` lists the column ids it may move
+            to (``data-targets``): the client offers a drop and a keyboard move
+            only there. Without it any column is offered. The server still
+            decides: ``targets`` is guidance, not authorization.
         move_event: event fired on drag-drop with JSON payload {card_id, from_col, to_col}
         add_card_event: event fired when adding a card, passes column id.
             ``None`` (or ``""``) leaves the "+ Add card" button out.
         add_col_event: accepted for compatibility and not used.
+
+    A card moves by mouse drag, or by keyboard: Tab to the card, Space picks
+    it up, the arrow keys choose a column, Enter (or Space) drops it there and
+    Escape cancels. Both send ``move_event``.
 
     The markup is the contract the client's drag and drop reads, documented
     in the components guide ("Kanban board markup"), so an application can
@@ -3887,11 +3939,17 @@ def kanban_board(
 
     e_add_card = conditional_escape(add_card_event) if add_card_event else ""
 
+    # One visually hidden instruction per board, read before a card is picked
+    # up; its id comes from the first column so two boards rarely share it.
+    first = next((c for c in columns if isinstance(c, dict)), {})
+    hint_id = "kanban-hint-" + attr_text(first.get("id", ""))
+
     cols_html = ""
     for col in columns:
         if not isinstance(col, dict):
             continue
         col_id = attr_text(col.get("id", ""))  # only in dj-key= / data-* (#3904)
+        _warn_spaced_column_id(col.get("id", ""))
         col_title = conditional_escape(str(col.get("title", "")))
         # No style attribute unless the column asks for a custom CSS colour:
         # a theme name is a class (#4120).
@@ -3933,6 +3991,13 @@ def kanban_board(
                 if card_sub
                 else ""
             )
+            # The columns this card may move to (#4120): the client offers a
+            # drop, and a keyboard move, only on those. Guidance, not
+            # authorization: the server still checks the move.
+            targets = _kanban_targets(card.get("targets"))
+            targets_attr = (
+                ' data-targets="%s"' % attr_text(" ".join(targets)) if targets is not None else ""
+            )
             cards_html += (
                 # dj-key anchors each card by its stable id so the VDOM differ
                 # reconciles cards by IDENTITY (keyed) across a move, instead of
@@ -3940,8 +4005,13 @@ def kanban_board(
                 # counts and the differ patches against stale positional paths →
                 # a storm of failed patches + full html_recovery on every drag
                 # (#1678). `data-card-id` is for the drag JS, not the differ.
+                # tabindex: a card takes focus for the keyboard move (#4120).
+                # role="group" names it (aria-roledescription needs a role),
+                # and the board's hidden hint says how to move it.
                 f'<div class="kanban-card" dj-key="{card_id}" draggable="true" '
-                f'data-card-id="{card_id}" data-col-id="{col_id}">'
+                f'data-card-id="{card_id}" data-col-id="{col_id}"{targets_attr} '
+                f'tabindex="0" role="group" aria-roledescription="movable card" '
+                f'aria-describedby="{hint_id}">'
                 f'<div class="kanban-card-title">{card_title}</div>'
                 f"{sub_html}"
                 f"{label_html}"
@@ -3972,7 +4042,11 @@ def kanban_board(
             f"</div>"
         )
 
-    return mark_safe(f'<div class="kanban" data-move-event="{e_move}">{cols_html}</div>')
+    hint = (
+        f'<span class="sr-only kanban-hint" id="{hint_id}">Press Space to pick up the card, '
+        "the arrow keys to choose a column, Enter to drop it, Escape to cancel.</span>"
+    )
+    return mark_safe(f'<div class="kanban" data-move-event="{e_move}">{hint}{cols_html}</div>')
 
 
 # ---------------------------------------------------------------------------
@@ -7673,7 +7747,6 @@ class FeedbackWidgetNode(template.Node):
         if mode not in self.VALID_MODES:
             mode = "thumbs"
 
-        e_event = conditional_escape(str(event))
         e_class = conditional_escape(str(custom_class))
 
         cls = f"dj-feedback dj-feedback--{mode}"
@@ -7681,15 +7754,16 @@ class FeedbackWidgetNode(template.Node):
             cls += f" {e_class}"
 
         if mode == "thumbs":
-            buttons = self._render_thumbs(e_event, value)
+            buttons = self._render_thumbs(event, value)
         elif mode == "stars":
-            buttons = self._render_stars(e_event, value)
+            buttons = self._render_stars(event, value)
         else:
-            buttons = self._render_emoji(e_event, value)
+            buttons = self._render_emoji(event, value)
 
         return mark_safe(f'<div class="{cls}" role="group" aria-label="Feedback">{buttons}</div>')
 
-    def _render_thumbs(self, e_event: Any, value: Any) -> Any:
+    def _render_thumbs(self, event: Any, value: Any) -> Any:
+        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)
         up_cls = "dj-feedback__btn--active" if value == "up" else ""
         down_cls = "dj-feedback__btn--active" if value == "down" else ""
         return (
@@ -7709,7 +7783,8 @@ class FeedbackWidgetNode(template.Node):
             f"</svg></button>"
         )
 
-    def _render_stars(self, e_event: Any, value: Any) -> Any:
+    def _render_stars(self, event: Any, value: Any) -> Any:
+        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)
         parts = []
         current = int(value) if value and str(value).isdigit() else 0
         for i in range(1, 6):
@@ -7725,7 +7800,8 @@ class FeedbackWidgetNode(template.Node):
             )
         return "".join(parts)
 
-    def _render_emoji(self, e_event: Any, value: Any) -> Any:
+    def _render_emoji(self, event: Any, value: Any) -> Any:
+        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)
         emojis = [
             ("\U0001f44d", "thumbs_up"),
             ("\u2764\ufe0f", "heart"),

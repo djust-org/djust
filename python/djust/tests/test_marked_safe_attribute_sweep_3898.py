@@ -2062,7 +2062,20 @@ ITEM_PARAMETERS: dict[str, tuple[tuple[str, ...], bool]] = {
     "djust_components/import_wizard/model_fields": (("name",), True),
     "djust_components/kanban_board/columns": (
         # ``href``: a card's link (#4120), written through ``safe_url``.
-        ("class", "data-card-id", "data-col-id", "data-value", "dj-key", "href"),
+        # ``data-targets`` (a card's allowed columns), and the board's hint
+        # ``id`` / the cards' ``aria-describedby`` (from the first column id):
+        # #4120, written through ``attr_text``.
+        (
+            "aria-describedby",
+            "class",
+            "data-card-id",
+            "data-col-id",
+            "data-targets",
+            "data-value",
+            "dj-key",
+            "href",
+            "id",
+        ),
         True,
     ),
     "djust_components/line_chart/series": (("fill", "stroke"), True),

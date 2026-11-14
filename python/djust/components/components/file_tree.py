@@ -167,7 +167,7 @@ class FileTree(Component):
             icon = self._get_icon(name, node_type, expanded)
             icon_html = f'<span class="dj-file-tree__icon" aria-hidden="true">{icon}</span>'
 
-        indent_style = f' style="padding-left:{depth * 1.25}rem"'
+        indent_style = f' style="padding-left:{int(depth) * 1.25}rem"'
 
         if node_type == "folder" and isinstance(children, list) and children:
             expand_cls = " dj-file-tree__node--expanded" if expanded else ""

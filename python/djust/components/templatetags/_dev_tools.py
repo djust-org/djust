@@ -554,7 +554,7 @@ class FileTreeNode(template.Node):
                 icon = self.DEFAULT_FILE_ICON
             icon_html = f'<span class="dj-file-tree__icon" aria-hidden="true">{icon}</span>'
 
-        indent_style = f' style="padding-left:{depth * 1.25}rem"'
+        indent_style = f' style="padding-left:{int(depth) * 1.25}rem"'
         e_event = conditional_escape(str(event))
 
         if node_type == "folder" and isinstance(children, list) and children:

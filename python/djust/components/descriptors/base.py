@@ -5,9 +5,17 @@ Provides a DescriptorBase that satisfies LiveComponent's abstract interface
 so descriptors can be instantiated as class attributes on view classes.
 """
 
+import logging
+import weakref
+
 from djust.components.base import LiveComponent as _DjustLiveComponent
 from djust.components.mixins.base import TypedState
 from typing import Any
+
+logger = logging.getLogger("djust.components")
+
+#: Declarations already warned about, per message key (#4126).
+_WARNED: "weakref.WeakKeyDictionary[Any, set]" = weakref.WeakKeyDictionary()
 
 
 class LiveComponent(_DjustLiveComponent):
@@ -42,4 +50,26 @@ def bound_state(component: Any) -> Any:
     return component.state
 
 
-__all__ = ["LiveComponent", "TypedState", "bound_state"]
+def declaration_of(component: Any) -> Any:
+    """The class-level declaration behind a bound component (or the component
+    itself when it is the declaration)."""
+    return getattr(component, "_descriptor", component)
+
+
+def warn_once(component: Any, key: str, message: str, *args: Any) -> None:
+    """Log ``message`` (``%s``-style) once per declaration and ``key``: an event
+    a descriptor cannot apply is otherwise silent (#4126)."""
+    declaration = declaration_of(component)
+    seen = _WARNED.setdefault(declaration, set())
+    if key in seen:
+        return
+    seen.add(key)
+    logger.warning(message, *args)
+
+
+def attribute_name(component: Any) -> str:
+    """The view attribute a descriptor is declared as (``slides``)."""
+    return getattr(declaration_of(component), "_descriptor_attr_name", None) or "component"
+
+
+__all__ = ["LiveComponent", "TypedState", "attribute_name", "bound_state", "warn_once"]

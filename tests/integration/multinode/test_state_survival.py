@@ -196,6 +196,81 @@ def test_saving_switched_off(db_cluster, survival):
         assert not [key for key in keys if key.startswith("_djust_auto_")], keys
 
 
+@pytest.mark.parametrize("store", ["sealed", "file"])
+def test_state_store(store, survival):
+    """#4132: with a state store named, the view's own state crosses processes
+    exactly as it does in the session, and the session holds an index entry
+    with no values. ``sealed``: the built-in sealed store; ``file``: a store
+    outside the session, in a directory both processes open."""
+    row = {"sealed": "store_sealed", "file": "store_external"}[store]
+    survival.scope(rows=[row])
+    rest = ("plain_state", "plain_attr", "private_attr")
+
+    def no_content(browser) -> bool:
+        status, body, _ = browser.get("A", "/_mn/saved-state/")
+        assert status == 200, body[:300]
+        entries = json.loads(body)["entries"]
+        assert entries, "nothing saved: the check would prove nothing"
+        index = {
+            "store",
+            "binding",
+            "page",
+            "tab",
+            "user",
+            "tenant",
+            "created",
+            "expires",
+            "bytes",
+            "stamp",
+        }
+        if store == "sealed":
+            index.add("sealed")
+        return all(set(entry) == index for entry in entries)
+
+    with Cluster("db", "memory", None, store=store) as cluster:
+        browser = Browser(cluster)
+        socket_a, _ = _open(browser, "A", "/counter/", COUNTER)
+        socket_a.event("increment")
+        probe = probe_from(socket_a.event("increment"))
+        survival.observe("state", row, "same", _kept([probe[name] for name in rest], [2, 2, 2]))
+        socket_a.close()
+
+        # A reconnect on the other process: mount() there, then the store's state.
+        socket_b = browser.socket("B")
+        probe = probe_from(socket_b.mount(COUNTER, "/counter/", reconnect_from=socket_a))
+        restored = (
+            [probe[name] for name in rest] == [2, 2, 2]
+            and probe["mounted_pid"] == cluster["B"].pid
+            and no_content(browser)
+        )
+        survival.observe(
+            "state",
+            row,
+            "ws",
+            "restored; the session holds no view content" if restored else "? %r" % (probe,),
+        )
+        socket_b.close()
+
+        # The page-POST fallback across processes: rebuilt from the store each time.
+        other = Browser(cluster)
+        status, _body, _ = other.get("A", "/counter/")
+        assert status == 200
+        probes = [_post(other, node, "/counter/", "increment")[1] for node in ("B", "A", "B")]
+        kept = (
+            [[p[name] for name in rest] for p in probes] == [[1] * 3, [2] * 3, [3] * 3]
+            and {p["mounted_pid"] for p in probes} == {cluster["A"].pid}
+            and no_content(other)
+        )
+        survival.observe(
+            "state",
+            row,
+            "http",
+            "kept (1, 2, 3 across A, B, A); the session holds no view content"
+            if kept
+            else "? %r" % (probes,),
+        )
+
+
 def _render_after_reconnect(mount_frames, first, second) -> str:
     if (
         kinds(mount_frames) == ["mount"]

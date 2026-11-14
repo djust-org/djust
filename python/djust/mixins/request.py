@@ -892,7 +892,7 @@ class RequestMixin:
         from .._exposure_sessions import save_server_state
 
         try:
-            save_server_state(self, request)
+            save_server_state(self, request, page_load=True)
         except UpdateError:
             # The session row cannot be updated (it was deleted meanwhile, as a
             # logout in another tab does, or the store refused the write). The
@@ -2132,8 +2132,18 @@ class RequestMixin:
             # Explicit and legacy views alike (#4107).
             from .._exposure_sessions import StateLimitExceeded, save_server_state
 
+            from ..state_store import StateStoreError
+
             try:
                 save_server_state(self, request)
+            except StateStoreError as refused_by_store:
+                # ``DJUST_STATE_STORE_STRICT`` (#4132): the state store could
+                # not take this event's state, and the project asked for the
+                # event to be refused rather than served unsaved. Nothing was
+                # written; the failure is already logged, without values.
+                return JsonResponse(
+                    {"error": refused_by_store.user_message, "code": "state_error"}, status=503
+                )
             except StateLimitExceeded as refused:
                 # Refused before writing (#4095): the stored state is the
                 # last one that fit, and the next request restores it. This
