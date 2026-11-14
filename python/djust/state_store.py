@@ -70,7 +70,7 @@ import hashlib
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from django.core.exceptions import ImproperlyConfigured
 
@@ -335,7 +335,9 @@ class _UnusableStore(ViewStateStore):
         raise self.error
 
 
-_resolved: Optional[Tuple[Any, Optional[ViewStateStore]]] = None
+#: The store built for the configured value, as ``{"store": (raw, store)}``:
+#: rebuilt when the setting changes (a test's ``settings`` override included).
+_RESOLVED: Dict[str, Tuple[Any, Optional[ViewStateStore]]] = {}
 
 
 def build_store(raw: Any) -> Optional[ViewStateStore]:
@@ -376,7 +378,6 @@ def build_store(raw: Any) -> Optional[ViewStateStore]:
 def configured_store() -> Optional[ViewStateStore]:
     """The project's store, built once per configured value; ``None`` when
     the state rests in the session (nothing set, or the default named)."""
-    global _resolved
     try:
         from django.conf import settings
 
@@ -385,7 +386,7 @@ def configured_store() -> Optional[ViewStateStore]:
         return None
     if raw is None:
         return None
-    cached = _resolved
+    cached = _RESOLVED.get("store")
     if cached is not None and cached[0] is raw:
         return cached[1]
     store: Optional[ViewStateStore]
@@ -393,7 +394,7 @@ def configured_store() -> Optional[ViewStateStore]:
         store = build_store(raw)
     except StateStoreConfigurationError as error:
         store = _UnusableStore(error)
-    _resolved = (raw, store)
+    _RESOLVED["store"] = (raw, store)
     return store
 
 
@@ -403,7 +404,8 @@ def store_tag(store: ViewStateStore) -> str:
     return "%s.%s" % (owner.__module__, owner.__qualname__)
 
 
-_strict_warned = False
+#: Settings already warned about in this process (warn once, #4132).
+_STRICT_WARNED: Set[str] = set()
 
 
 def strict() -> bool:
@@ -417,11 +419,10 @@ def strict() -> bool:
         value = getattr(settings, STRICT_SETTING, False)
     except Exception:  # noqa: BLE001 — settings unavailable: the default
         return False
-    global _strict_warned
-    if type(value) is not bool and not _strict_warned:
+    if type(value) is not bool and STRICT_SETTING not in _STRICT_WARNED:
         # A server started without system checks never sees C038: say it once
         # per process where the setting is read.
-        _strict_warned = True
+        _STRICT_WARNED.add(STRICT_SETTING)
         logger.warning(
             "djust: %s is a %s, not True or False, so it is read as NOT strict: an event "
             "whose state the state store cannot take is served unsaved. Set it to True "

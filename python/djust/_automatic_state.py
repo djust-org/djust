@@ -2187,10 +2187,25 @@ class StoreCallFailed(Exception):
 
 
 def _cli_store_call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """``fn(*args, **kwargs)`` inside the ``sync_turn_wrapper``, for the CLI.
+
+    The result is the one ``fn`` returned, kept from inside the wrapped call:
+    what the wrapper's own step returns is not used, so ``djust clear`` and
+    ``djust stats`` print nothing but the store's own figures. A failure is
+    reported by its exception TYPE only: a store's or a wrapper's message may
+    carry what it was handed (a key, a connection string), and the CLI prints
+    it.
+    """
+    result: Dict[str, Any] = {}
+
+    def call() -> None:
+        result["value"] = fn(*args, **kwargs)
+
     try:
-        return _store_call(None, fn, *args, **kwargs)
+        _store_call(None, call)
     except Exception as exc:  # noqa: BLE001 — the store's or the wrapper's failure
-        raise StoreCallFailed("%s: %s" % (type(exc).__name__, exc)) from exc
+        raise StoreCallFailed(type(exc).__name__) from exc
+    return result.get("value")
 
 
 def _cli_delete_from_store(session: Any, entries: list) -> None:

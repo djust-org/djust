@@ -1667,7 +1667,7 @@ def test_the_session_budget_counts_what_the_session_holds(store, settings, monke
 def test_a_strict_setting_that_is_not_a_bool_warns_once_per_process(
     value, settings, caplog, monkeypatch
 ):
-    monkeypatch.setattr(state_store, "_strict_warned", False)
+    monkeypatch.setattr(state_store, "_STRICT_WARNED", set())
     settings.DJUST_STATE_STORE_STRICT = value
     with caplog.at_level(logging.WARNING, logger="djust.state_store"):
         assert [state_store.strict() for _ in range(3)] == [False, False, False]
@@ -1677,7 +1677,7 @@ def test_a_strict_setting_that_is_not_a_bool_warns_once_per_process(
 
 @pytest.mark.parametrize("value", [True, False])
 def test_a_bool_strict_setting_does_not_warn(value, settings, caplog, monkeypatch):
-    monkeypatch.setattr(state_store, "_strict_warned", False)
+    monkeypatch.setattr(state_store, "_STRICT_WARNED", set())
     settings.DJUST_STATE_STORE_STRICT = value
     with caplog.at_level(logging.WARNING, logger="djust.state_store"):
         assert state_store.strict() is value
