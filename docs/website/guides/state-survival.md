@@ -311,4 +311,7 @@ transport, and Redis presence under failover (see
 They start their own processes and, when `redis-server` and `channels_redis`
 are installed, their own Redis on a Unix socket; without those the Redis rows
 are skipped. They are in the slow tier: CI runs them on pushes to `main` and
-nightly, not on every pull request.
+nightly, not on every pull request. The `multinode Redis rows` job in
+`.github/workflows/test.yml` installs `redis-server` and `channels_redis` and
+sets `DJUST_REQUIRE_REDIS_ROWS=1`, under which a Redis row that cannot run fails
+instead of skipping, so the Redis rows of these tables are exercised there.
