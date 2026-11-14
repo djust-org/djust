@@ -624,6 +624,16 @@ def _row_href(row: dict[str, object], key: object) -> str:
     return str(url_attr(_row_text(row, key), honor_safe=False))
 
 
+def _has_row_href(row: dict[str, object], key: object) -> bool:
+    """Whether ``row[key]`` is a URL at all (#3895): not for a key the row lacks (or cannot
+    have), ``None`` or blank text. The Python tag's ``table_has_href``: a link column draws plain
+    text and a ``row_url`` row is not clickable, instead of ``href="None"`` / ``href=""``."""
+    if isinstance(key, (list, dict, set)):
+        return False
+    value = row.get(key if isinstance(key, str) else str(key))
+    return value is not None and str(value).strip() != ""
+
+
 class DataTableHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
@@ -1287,8 +1297,9 @@ class DataTableHandler:
                     f' data-value="{conditional_escape(str(row.get(row_click_value_key, "")))}"'
                     f" {_ROW_NAV_A11Y}"
                 )
-            elif row_url:
+            elif row_url and _has_row_href(row, row_url):
                 # The row's URL (#3887). ``data-href`` is read by ``data-table-row-click.js``.
+                # A row with no URL under the key is not clickable (#3895).
                 row_classes.append("data-table-row-clickable")
                 row_attrs += f' data-href="{_row_href(row, row_url)}" {_ROW_NAV_A11Y}'
 
@@ -1465,7 +1476,8 @@ class DataTableHandler:
                 # ``col.link_class`` is an optional class on the ``<a>``. Decided on the value:
                 # a falsy ``link`` is plain text, as ``{% if col.link %}`` in the Python template.
                 link_key = col.get("link") if isinstance(col, dict) else None
-                if link_key:
+                # A row with no URL under ``link`` keeps the plain cell (#3895).
+                if link_key and _has_row_href(row, link_key):
                     link_class = col.get("link_class") if isinstance(col, dict) else None
                     link_cls_attr = f' class="{escape(str(link_class))}"' if link_class else ""
                     cell_val = f'<a href="{_row_href(row, link_key)}"{link_cls_attr}>{cell_val}</a>'
@@ -2058,10 +2070,10 @@ class NavItemHandler:
         # The Python tag counts child ``{% nav_item %}`` nodes and ignores any other body, so
         # an item with an ``event`` and a text body stays a clickable button there; "any
         # non-blank body" dropped that ``dj-click`` (#3669).
-        # KNOWN LIMIT (#3873, pinned by a test): a block handler is handed rendered HTML, so a
-        # child is recognised by the markup this handler draws. A literal
-        # ``<li class="dj-nav__item">`` in the body matches too, and a sub-item inside
-        # ``{% if %}`` / ``{% for %}`` counts here where Django counts only direct child nodes.
+        # A block handler is handed rendered HTML, so a child is recognised by the markup this
+        # handler draws (a literal ``<li class="dj-nav__item">`` in the body matches too). A
+        # sub-item at any depth, or inside ``{% if %}`` / ``{% for %}``, counts; the Django node
+        # renders its body the same way since #3873 / #3878.
         has_children = _NAV_ITEM_MARKUP in content
 
         if has_children:

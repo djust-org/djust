@@ -25,10 +25,11 @@ What is NOT compared, and why (each measured, none guessed):
   (empty cells for dict rows, ``sortable: False`` ignored) were #3870 and are fixed: the cells
   are in ``test_component_arg_handling_3870_3871_3872.py`` and the unsortable column is a case
   of ``DATA_TABLE`` below.
-* ``nav_item`` nested three levels deep: a block handler is handed already-rendered children
-  and cannot know its own depth (#3873, ``test_nav_item_three_levels_is_a_declined_case``).
-* ``filter_bar`` / ``nav_item``: what a template nests in a condition, inside another bar or
-  next to the controls is drawn natively and dropped by Django (#3878).
+* ``nav_item`` nested three levels deep (#3873) and what a template nests in a condition,
+  inside another bar or next to the controls of ``filter_bar`` / ``nav_item`` (#3878) were
+  drawn natively and dropped by Django. The native behaviour is the reference: the Django
+  nodes now render their body as the native block handlers are handed it, and those cases
+  are parity tests below.
 * A block tag's argument naming an unresolved variable (#3871) and the whitespace of a resolved
   argument (#3872) are fixed (``test_component_arg_handling_3870_3871_3872.py``). What remains of
   #3872 is the string ``"0"``: see ``test_the_text_channel_cannot_tell_the_string_zero_from_zero``.
@@ -350,6 +351,12 @@ def test_the_matrix_covers_every_tag_of_the_issue() -> None:
         "prev_event=ev next_event=ev %}",
         '{% filter_bar event=ev clear_event=ev %}{% filter_search name="q" value="x" %}'
         "{% endfilter_bar %}",
+        # A control a condition wraps, and an item three levels deep (#3873, #3878).
+        '{% filter_bar event=ev clear_event=ev %}{% if opts %}{% filter_search name="q" value="x" %}'
+        "{% endif %}{% endfilter_bar %}",
+        '{% nav_menu %}{% nav_item label="A" %}{% nav_item label="B" %}'
+        '{% nav_item label="C" event=ev %}{% endnav_item %}{% endnav_item %}{% endnav_item %}'
+        "{% endnav_menu %}",
     ],
 )
 def test_a_hostile_event_name_is_escaped_in_the_attribute_on_both_engines(src: str) -> None:
@@ -403,17 +410,32 @@ def test_data_table_native_extras_only_add_attributes(flag: str) -> None:
     assert rs - py, f"{flag} no longer differs; move it into DATA_TABLE and delete this entry"
 
 
-def test_nav_item_three_levels_is_a_declined_case() -> None:
+def test_nav_item_three_levels_are_drawn_on_both_engines() -> None:
+    """#3873: the native item is the reference. Python drew two levels and dropped the third
+    (and its dj-click); it now renders each item's body, so every level is drawn and an item
+    with sub-items is a dropdown parent without its own dj-click, on both engines."""
     src = (
         '{% nav_menu %}{% nav_item label="Top" %}{% nav_item label="Mid" event="mid" %}'
         '{% nav_item label="Deep" event="deep" %}{% endnav_item %}{% endnav_item %}'
         "{% endnav_item %}{% endnav_menu %}"
     )
     py, rs = dj_attrs(_django(src, CTX)), dj_attrs(_rust(src, CTX))
-    # Python draws two levels and drops the third (including its dj-click); the native handler
-    # is handed rendered children and cannot know its depth, so it still draws "Deep".
-    assert ("button", "dj-click", "deep") not in py
-    assert ("button", "dj-click", "deep") in rs
+    assert py == rs, _diff(py, rs)
+    assert ("button", "dj-click", "deep") in py
+    for html in (_django(src, CTX), _rust(src, CTX)):
+        assert ">Deep<" in html and ">Mid<" in html, html
+        assert html.count('class="dj-nav__dropdown-list"') == 2, html
+
+
+def test_nav_item_four_levels_are_drawn_on_both_engines() -> None:
+    src = (
+        '{% nav_menu %}{% nav_item label="A" %}{% nav_item label="B" %}{% nav_item label="C" %}'
+        '{% nav_item label="D" event="d" %}{% endnav_item %}{% endnav_item %}{% endnav_item %}'
+        "{% endnav_item %}{% endnav_menu %}"
+    )
+    py, rs = dj_attrs(_django(src, CTX)), dj_attrs(_rust(src, CTX))
+    assert py == rs, _diff(py, rs)
+    assert ("button", "dj-click", "d") in py
 
 
 def test_a_preset_supplies_the_event_and_the_confirmation_on_both_engines() -> None:
@@ -549,25 +571,41 @@ def test_nested_filter_bars_still_render() -> None:
         '{% filter_search name="out" %}{% endfilter_bar %}'
     )
     py_html, rs_html = _django(src, CTX), _rust(src, CTX)
-    assert 'name="out"' in py_html and 'name="in"' not in py_html
-    assert 'name="out"' in rs_html
-    # The outer bar's own wiring is the same; the native bar keeps the inner bar the template
-    # put inside it (as it always did), which Django drops.
-    assert dj_attrs(py_html) <= dj_attrs(rs_html)
+    # #3878: both engines keep the inner bar the template put inside the outer one, each bar
+    # drawing its own control.
+    for html in (py_html, rs_html):
+        assert 'name="out"' in html and 'name="in"' in html, html
+        assert html.count('role="search"') == 2, html
+    assert dj_attrs(py_html) == dj_attrs(rs_html), _diff(dj_attrs(py_html), dj_attrs(rs_html))
 
 
-def test_controls_a_template_wraps_in_a_condition_are_a_declined_case() -> None:
-    """Declined: Django's bar draws only the children that are DIRECT nodes of its body, so a
-    ``{% filter_search %}`` inside ``{% if %}`` / ``{% for %}`` is dropped there. The native bar
-    is handed the rendered body, where the condition has already run, and draws it (as on main).
-    The native side never lacks an attribute the Python side has."""
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{% filter_search name="a" %}{% if opts %}{% filter_search name="b" %}{% endif %}',
+        '{% filter_search name="a" %}{% for o in opts %}{% filter_search name="b" %}{% endfor %}',
+        '{% if opts %}{% if rows %}{% filter_search name="a" %}{% filter_search name="b" %}'
+        "{% endif %}{% endif %}",
+    ],
+)
+def test_controls_a_template_wraps_in_a_condition_are_drawn_on_both_engines(body: str) -> None:
+    """#3878: the native bar is the reference. Django's bar used to draw only the DIRECT
+    child nodes of its body, so a control inside ``{% if %}`` / ``{% for %}`` was dropped; it
+    now renders its body and draws every control the body rendered, as the native bar does."""
+    src = "{% filter_bar %}" + body + "{% endfilter_bar %}"
+    py_html, rs_html = _django(src, CTX), _rust(src, CTX)
+    assert dj_attrs(py_html) == dj_attrs(rs_html), _diff(dj_attrs(py_html), dj_attrs(rs_html))
+    for html in (py_html, rs_html):
+        assert 'name="a"' in html and 'name="b"' in html, html
+
+
+def test_a_condition_that_is_false_draws_no_control_on_either_engine() -> None:
     src = (
         '{% filter_bar %}{% filter_search name="a" %}'
-        '{% if opts %}{% filter_search name="b" %}{% endif %}{% endfilter_bar %}'
+        '{% if missing %}{% filter_search name="b" %}{% endif %}{% endfilter_bar %}'
     )
-    py, rs = dj_attrs(_django(src, CTX)), dj_attrs(_rust(src, CTX))
-    assert py < rs
-    assert 'name="b"' not in _django(src, CTX) and 'name="b"' in _rust(src, CTX)
+    for html in (_django(src, CTX), _rust(src, CTX)):
+        assert 'name="a"' in html and 'name="b"' not in html, html
 
 
 def test_the_bar_keeps_a_constant_default_id_and_an_explicit_one() -> None:
@@ -605,19 +643,37 @@ def test_the_pager_draws_the_pages_the_python_tag_does() -> None:
 # --- nav_item: what counts as a child item ----------------------------------------------------------
 
 
-def test_sub_items_a_template_wraps_in_a_condition_are_a_declined_case() -> None:
-    """Declined: Django counts only DIRECT child ``{% nav_item %}`` nodes, so an item whose only
-    sub-item is inside ``{% if %}`` stays a plain button there; the native item sees the rendered
-    body, finds a sub-item (its own ``<li>``) and becomes a dropdown without ``dj-click``. The
-    native item recognises its children by the markup its own handler draws, which a literal
-    ``<li class="dj-nav__item">`` in the body also matches (#3873)."""
-    src = (
+@pytest.mark.parametrize(
+    "src",
+    [
         '{% nav_menu %}{% nav_item label="Menu" event="top" %}'
         '{% if opts %}{% nav_item label="Sub" event="s" %}{% endnav_item %}{% endif %}'
+        "{% endnav_item %}{% endnav_menu %}",
+        '{% nav_menu %}{% nav_item label="Menu" event="top" %}'
+        '{% for o in opts %}{% nav_item label="Sub" event="s" %}{% endnav_item %}{% endfor %}'
+        "{% endnav_item %}{% endnav_menu %}",
+        '{% nav_menu %}{% if opts %}{% nav_item label="Top" event="top" %}{% endnav_item %}'
+        "{% endif %}{% endnav_menu %}",
+    ],
+)
+def test_items_a_template_wraps_in_a_condition_are_drawn_on_both_engines(src: str) -> None:
+    """#3878: the native item is the reference. Django counted only DIRECT child
+    ``{% nav_item %}`` nodes; it now renders the body, so a sub-item inside ``{% if %}`` /
+    ``{% for %}`` makes its parent a dropdown (without its own dj-click), as natively, and a
+    top-level item inside a condition is drawn."""
+    py, rs = dj_attrs(_django(src, CTX)), dj_attrs(_rust(src, CTX))
+    assert py == rs, _diff(py, rs)
+
+
+def test_a_false_condition_leaves_a_plain_item_on_both_engines() -> None:
+    src = (
+        '{% nav_menu %}{% nav_item label="Menu" event="top" %}'
+        '{% if missing %}{% nav_item label="Sub" event="s" %}{% endnav_item %}{% endif %}'
         "{% endnav_item %}{% endnav_menu %}"
     )
-    assert ("button", "dj-click", "top") in dj_attrs(_django(src, CTX))
-    assert ("button", "dj-click", "top") not in dj_attrs(_rust(src, CTX))
+    for html in (_django(src, CTX), _rust(src, CTX)):
+        assert ("button", "dj-click", "top") in dj_attrs(html), html
+        assert "dj-nav__dropdown" not in html, html
 
 
 # --- the row-click value -----------------------------------------------------------------------------
@@ -631,8 +687,24 @@ def test_the_row_click_carries_the_rows_value_on_both_engines() -> None:
         assert re.findall(r'<tr[^>]*data-value="([^"]*)"', html) == ["1", "2"], html
 
 
-def test_the_native_bar_keeps_other_content_in_the_bar() -> None:
-    """As on main (Django drops it): gate-off, passing no ``extra_html`` survived the rest."""
+def test_both_bars_keep_other_content_in_the_bar() -> None:
+    """#3878: the native bar keeps whatever else the template put in it, after the controls;
+    the Django bar dropped it and now keeps it too."""
     src = '{% filter_bar %}<span class="stray">kept</span>{% filter_search name="q" %}{% endfilter_bar %}'
-    assert "kept" in _rust(src, CTX) and "kept" not in _django(src, CTX)
-    assert dj_attrs(_django(src, CTX)) == dj_attrs(_rust(src, CTX))
+    py_html, rs_html = _django(src, CTX), _rust(src, CTX)
+    for html in (py_html, rs_html):
+        assert '<span class="stray">kept</span></div>' in html, html
+    assert dj_attrs(py_html) == dj_attrs(rs_html)
+
+
+def test_a_deep_item_label_and_a_dangerous_href_are_neutralised_on_both_engines() -> None:
+    """#3873: the third level the Django node now draws goes through the same escaping and URL
+    rule as the first two."""
+    src = (
+        '{% nav_menu %}{% nav_item label="A" %}{% nav_item label="B" %}'
+        '{% nav_item label=ev href="javascript:alert(1)" %}{% endnav_item %}{% endnav_item %}'
+        "{% endnav_item %}{% endnav_menu %}"
+    )
+    for html in (_django(src, CTX), _rust(src, CTX)):
+        assert "<b>" not in html and "javascript:" not in html, html
+        assert 'href="#"' in html, html
