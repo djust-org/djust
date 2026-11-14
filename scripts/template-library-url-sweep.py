@@ -76,6 +76,17 @@ def main(argv: list[str] | None = None) -> int:
         metavar="LIB:TAG",
         help="gate-off: make the Python tag emit a javascript: link; the sweep must report it",
     )
+    parser.add_argument(
+        "--plant-when",
+        metavar="PARAM",
+        help="with --plant: plant only in calls passing PARAM= (a hole on one parameter)",
+    )
+    parser.add_argument(
+        "--plant-component",
+        metavar="CLASS:PARAM",
+        help="gate-off: append --plant-markup to the output of every call driving PARAM of CLASS",
+    )
+    parser.add_argument("--plant-markup", help="what a plant emits (default: a javascript: link)")
     parser.add_argument("--corpus", choices=("all", "quick", "test"), default=None)
     parser.add_argument(
         "--exhaustive",
@@ -111,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
             else None,
             args.plant,
             args.exhaustive,
+            args.plant_when,
+            args.plant_markup or url_sweep.PLANT,
         )
     except Exception:  # noqa: BLE001 - exit 2 ("could not run"), distinct from 1 ("a hole")
         traceback.print_exc()
@@ -119,7 +132,11 @@ def main(argv: list[str] | None = None) -> int:
     component_cells, component_driven, component_unrendered = [], {}, []
     if args.components or args.components_only:
         component_cells, component_driven, component_unrendered = url_sweep.run_component_sweep(
-            payloads, only, shapes
+            payloads,
+            only,
+            shapes,
+            tuple(args.plant_component.rsplit(":", 1)) if args.plant_component else None,
+            args.plant_markup or url_sweep.PLANT,
         )
     component_holes = url_sweep.component_holes(component_cells)
     holes = url_sweep.holes(sweep)

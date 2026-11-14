@@ -636,6 +636,86 @@ class TestTheSweep:
         assert "image" in driven["djust.components.ui.card.CardComponent"]
 
 
+CARD = "djust.components.components.card.Card"
+JS_LINK = '<a href="javascript:alert(%s)">x</a>' % url_sweep.MARK
+
+#: A decided parameter landing in an EXECUTING attribute: each must stay a hole (#4130 review).
+#: ``(plant arguments, the hole the predicate must refuse)``.
+UNDECIDED_PLANTS = {
+    "cite-in-a-href": (
+        ["--only", "theme_components:theme_button", "--plant", "theme_components:theme_button",
+         "--plant-when", "cite", "--plant-markup", JS_LINK],
+        ("python", "theme_components:theme_button", "cite", "a", "href:exec"),
+    ),
+    "icon-in-formaction": (
+        ["--only", "theme_components:theme_input", "--plant", "theme_components:theme_input",
+         "--plant-when", "icon", "--plant-markup",
+         '<input formaction="javascript:alert(%s)">' % url_sweep.MARK],
+        ("python", "theme_components:theme_input", "icon", "input", "formaction:exec"),
+    ),
+    "card-data-in-a-href": (
+        ["--components-only", "--only", "Card", "--plant-component", CARD + ":data",
+         "--plant-markup", JS_LINK],
+        (CARD, "data", "a", "href:exec"),
+    ),
+}  # fmt: skip
+
+
+class TestTheDecisionsExcuseOnlyThemselves:
+    """``decided_tag_hole`` / ``decided_component_hole`` excuse the recorded decision (a listed
+    parameter printed in its OWN attribute, of the non-executing class decided), never the same
+    parameter landing somewhere a browser follows (#4130 review)."""
+
+    @pytest.mark.parametrize(
+        "hole",
+        [
+            ("python", "theme_components:theme_button", "cite", "a", "href:exec"),
+            ("python", "djust_theming:theme_button", "cite", "a", "href:exec"),
+            ("rust", "theme_components:theme_input", "icon", "input", "onclick:exec"),
+            ("rust", "theme_components:theme_input", "icon", "input", "formaction:exec"),
+            ("python", "theme_components:theme_input", "icon", "input", "icon:exec"),
+            ("python", "theme_components:theme_input", "cite", "input", "data-url:js"),
+            ("python", "theme_components:theme_input", "data_url", "input", "data-url:exec"),
+            ("python", "theme_components:theme_input", "data_url", "a", "href:exec"),
+        ],
+    )
+    def test_a_listed_tag_parameter_elsewhere_is_a_hole(self, hole) -> None:
+        assert url_sweep.decided_tag_hole(hole) is False
+
+    @pytest.mark.parametrize(
+        "hole",
+        [
+            ("python", "theme_components:theme_button", "cite", "button", "cite:inert"),
+            ("rust", "theme_components:theme_select", "icon", "select", "icon:inert"),
+            ("python", "theme_components:theme_progress", "data_url", "div", "data-url:js"),
+        ],
+    )
+    def test_the_decision_itself_is_excused(self, hole) -> None:
+        assert url_sweep.decided_tag_hole(hole) is True
+
+    @pytest.mark.parametrize(
+        "hole", [(CARD, "data", "a", "href:exec"), (CARD, "data", "div", "data-url:exec")]
+    )
+    def test_an_author_named_component_parameter_in_an_executing_slot_is_a_hole(self, hole):
+        assert url_sweep.decided_component_hole(hole, ["js"]) is False
+
+    def test_an_author_named_data_attribute_is_excused(self) -> None:
+        assert url_sweep.decided_component_hole((CARD, "data", "div", "data-url:js"), ["js"])
+
+    @pytest.mark.parametrize("name", sorted(UNDECIDED_PLANTS))
+    def test_the_script_exits_1_when_a_decided_parameter_reaches_an_executing_attribute(
+        self, name, tmp_path
+    ) -> None:
+        """End to end: the hole is planted on that ONE parameter, the script reports it as
+        undecided and exits 1 (it exited 0 when the baseline keyed on the parameter alone)."""
+        args, hole = UNDECIDED_PLANTS[name]
+        out = tmp_path / "plant.json"
+        result = _finish(_start([*args, "--corpus", "test", "--json", str(out)]), out)
+        assert result["returncode"] == 1, result["stdout"][-3000:]
+        found = result["undecided_holes"] + result["undecided_component_holes"]
+        assert [list(hole) == h[: len(hole)] for h in found].count(True) == 1, found
+
+
 class TestGateOffs:
     def test_a_planted_hole_is_found_end_to_end(self, runs):
         """The tag plants ``<a href=javascript:...>`` in the PYTHON engine only: the
