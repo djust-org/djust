@@ -206,14 +206,15 @@ class TestTheContextKeepsTheNamedtupleForEverythingElse:
         assert _text(engines[0].from_string(src).render({"v": value})) == expected
 
     @pytest.mark.parametrize("filter_name", ["dictsort", "dictsortreversed"])
-    def test_dictsort_over_namedtuples_is_recorded_not_fixed(self, engines, filter_name):
-        """Unchanged from ``main`` and NOT fixed here: the native ``dictsort`` /
-        ``dictsortreversed`` read a dict's key, so a list of namedtuples renders EMPTY natively
-        where Django sorts it by attribute. Pinned so the gap is not mistaken for parity."""
+    def test_dictsort_over_namedtuples_sorts_by_attribute(self, engines, filter_name):
+        """The native ``dictsort`` / ``dictsortreversed`` read a dict's key, so a list of
+        namedtuples rendered EMPTY where Django sorts it by attribute. Since #4005 they run
+        Django's own ``sorted()``, and the rows come back as the context's own namedtuples."""
         src = "{% for r in rows|" + filter_name + ":'x' %}[{{ r.x }}]{% endfor %}"
         rows = [P(2, "b"), P(1, "a")]
-        assert render_django(engines, src, {"rows": rows}) != ""
-        assert render_backend(engines, src, {"rows": rows}) == ""
+        expected = render_django(engines, src, {"rows": rows})
+        assert expected != ""
+        assert render_backend(engines, src, {"rows": rows}) == expected
 
     def test_a_namedtuple_whose_new_wants_more_degrades_to_the_plain_tuple(self, engines):
         """Rebuilding positionally can raise ``TypeError``; the value must still render."""

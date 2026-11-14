@@ -356,7 +356,14 @@ COLOUR_CASES = [
         ['style="--dj-calendar-event-color: {v}"'],
         'style="--dj-calendar-event-color: #3b82f6"',
     ),
-    ("meter", _meter_paths, [';background:{v}"', 'style="background:{v}"'], None),
+    # The segment and the legend swatch: since #3979 the segment's width is a
+    # class, so the colour is the whole of both style attributes.
+    (
+        "meter",
+        _meter_paths,
+        ['" style="background:{v}" role="meter"', 'swatch" style="background:{v}"'],
+        None,
+    ),
     (
         "color_picker",
         _color_picker_paths,

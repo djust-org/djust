@@ -290,6 +290,15 @@ fn escapejs_semicolon() {
 }
 
 #[test]
+fn escapejs_backtick_cannot_close_a_template_literal() {
+    // Django escapes the backtick (`\u0060`); the port left it raw (#4005 review).
+    let ctx = ctx_with("input", "`; alert(1); `");
+    let result = render("{{ input|escapejs }}", &ctx);
+    assert!(!result.contains('`'));
+    assert!(result.contains("\\u0060"));
+}
+
+#[test]
 fn escapejs_hyphen() {
     // Hyphens can form HTML comment closers (-->)
     let ctx = ctx_with("input", "a-b");
