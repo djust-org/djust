@@ -25,6 +25,8 @@ from django.db import models
 from django.utils.datastructures import MultiValueDict
 from django.utils.functional import Promise
 from django.utils.safestring import SafeData
+
+from ._mapping import mapping_items, mapping_values
 from ._class_snapshot import attribute_names, namespace
 
 logger = logging.getLogger(__name__)
@@ -1540,7 +1542,7 @@ def decimal_tags_to_strings(obj: Any) -> Any:
             payload = obj.get(STATE_DECIMAL_TAG)
             if isinstance(payload, str):
                 return payload
-        return {k: decimal_tags_to_strings(v) for k, v in obj.items()}
+        return {k: decimal_tags_to_strings(v) for k, v in mapping_items(obj)}
     if isinstance(obj, list):
         return [decimal_tags_to_strings(v) for v in obj]
     if isinstance(obj, tuple):
@@ -1801,7 +1803,7 @@ def _protect_sidecar_tree(
         )
     elif isinstance(value, dict):
         result = {}
-        for k, v in value.items():
+        for k, v in mapping_items(value):
             protected_key = _protect_sidecar_value(k)
             if protected_key is not k:
                 # A Model/Manager/QuerySet used as a KEY. The floor cannot be
@@ -3071,7 +3073,7 @@ def _filter_floor_keys(value: Any, keep: Any) -> Any:
     if isinstance(value, dict):
         if all(keep(k) for k in value):
             return value
-        return {k: v for k, v in value.items() if keep(k)}
+        return {k: v for k, v in mapping_items(value) if keep(k)}
     return value
 
 
@@ -4436,7 +4438,7 @@ def holds_form(value: Any, _depth: int = 0) -> bool:
         return True
     if _depth >= _FORM_SCAN_DEPTH or not isinstance(value, (dict, list, tuple)):
         return False
-    items = value.values() if isinstance(value, dict) else value
+    items = mapping_values(value) if isinstance(value, dict) else value
     return any(holds_form(item, _depth + 1) for item in items)
 
 
@@ -4632,7 +4634,7 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
     if isinstance(value, dict):
         return {
             k: normalize_django_value(v, _depth, state_roundtrip=state_roundtrip)
-            for k, v in value.items()
+            for k, v in mapping_items(value)
         }
 
     if isinstance(value, (list, tuple)):
@@ -4986,7 +4988,7 @@ def encode_private_model_refs(obj: Any) -> Any:
             "pk": obj.pk,
         }
     if isinstance(obj, dict):
-        return {k: encode_private_model_refs(v) for k, v in obj.items()}
+        return {k: encode_private_model_refs(v) for k, v in mapping_items(obj)}
     if isinstance(obj, (list, tuple)):
         return [encode_private_model_refs(v) for v in obj]
     return obj
@@ -5004,7 +5006,7 @@ def decode_private_model_refs(obj: Any) -> Any:
     if isinstance(obj, dict):
         if _PRIVATE_MODEL_REF_KEY in obj and "pk" in obj:
             return _rehydrate_private_model_ref(obj[_PRIVATE_MODEL_REF_KEY], obj["pk"])
-        return {k: decode_private_model_refs(v) for k, v in obj.items()}
+        return {k: decode_private_model_refs(v) for k, v in mapping_items(obj)}
     if isinstance(obj, list):
         return [decode_private_model_refs(v) for v in obj]
     return obj

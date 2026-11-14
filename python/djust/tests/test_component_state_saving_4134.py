@@ -2,9 +2,10 @@
 
 ``Toasts`` first named its state field ``items``. State is a dict
 (``TypedState``) whose fields are properties, so the field hid ``dict.items``
-and every path that saves a view's state (``state.items()``) crashed on the
-page GET of a view declaring it. ``LiveViewTestClient`` never saves state, so
-the tests that drove the component through it passed.
+and the paths that save a view's state (``state.items()``) crashed on the page
+GET of a view declaring it. ``LiveViewTestClient`` never saves state, so the
+tests that drove the component through it passed. Those paths now read a state
+through the unbound dict methods (``test_state_field_shadows_dict_method_4134.py``).
 
 Here each component is declared on an explicit-policy view and taken through:
 
@@ -13,8 +14,6 @@ Here each component is declared on an explicit-policy view and taken through:
 - the runtime's commit over a real WebSocket, then a reconnect that reads the
   saved state back.
 
-``TypedState`` now refuses a field named after a dict method when the class is
-created, so the mistake cannot come back unseen.
 """
 
 from __future__ import annotations
@@ -29,7 +28,6 @@ from django.test import RequestFactory
 
 from djust import LiveView, _automatic_state
 from djust.components import descriptors as D
-from djust.components.mixins.base import TypedState
 from djust.tests import _per_turn_harness as harness
 
 MODULE = __name__
@@ -162,17 +160,6 @@ async def test_the_runtime_commit_saves_the_component_and_a_reconnect_mounts(
     assert mount["type"] != "error", mount
     saved = await sync_to_async(_saved)(key)
     assert saved, "the runtime commit saved nothing"
-
-
-@pytest.mark.parametrize("name", ["items", "keys", "values", "get", "update", "pop", "copy"])
-def test_a_state_field_named_after_a_dict_method_is_refused(name):
-    with pytest.raises(TypeError, match="cannot be named %r, the name of a dict method" % name):
-        type("Bad", (TypedState,), {"__annotations__": {name: list}, name: ()})
-
-
-def test_an_ordinary_field_name_is_accepted():
-    state = type("Good", (TypedState,), {"__annotations__": {"toasts": list}, "toasts": ()})()
-    assert list(state.items()) == [("toasts", ())]
 
 
 class TwoSidebarsPage(_Page):

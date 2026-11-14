@@ -737,7 +737,9 @@ async def test_the_runtime_refuses_a_component_id_that_is_not_a_short_string(bad
         {"type": "event", "event": "toggle_sidebar", "params": {"component_id": bad}, "ref": 1}
     )
     errors = [f for f in transport.sent if f.get("type") == "error"]
-    assert errors, transport.sent
+    # The refusal itself, not just any error: the lookup answers "Component not
+    # found" for some of these, which would pass with the check removed.
+    assert [f.get("error") for f in errors] == ["Event rejected"], transport.sent
     assert (view.left.collapsed, view.right.collapsed) == (False, False)
 
 

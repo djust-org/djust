@@ -557,7 +557,6 @@ class Preview(LiveComponent):
         #: and the handlers reassign `values` rather than mutating it.
         examples: list = []
         #: Descriptor state + demo values, merged into every example.
-        #: Not ``values``: state is a dict, and ``values`` is its method (#4134).
         demo_values: dict = {}
         #: The playground's overrides (`variant`, `size`, …) over the first
         #: example — the reader's choices, separate from `values` so the

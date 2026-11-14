@@ -38,7 +38,6 @@ class Toasts(LiveComponent):
     toast on screen is ignored."""
 
     class State(TypedState):
-        #: Not ``items``: state is a dict, and ``items`` is its method.
         toasts: Sequence[dict] = ()
         #: The id the next ``show()`` gives.
         next_id: int = 1
