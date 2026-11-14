@@ -118,3 +118,41 @@ def test_class_component_without_add_card_event_has_no_button(value):
     for path, out in _class_paths(KanbanBoard(columns=CLASS_COLS, add_card_event=value)).items():
         assert "kanban-add-card" not in out and "+ Add card" not in out, (path, out)
         assert 'data-col-id="todo"' in out, (path, out)
+
+
+# --- allowed columns and the keyboard move (#4120 parts 3 and 4) ------------
+
+
+def test_card_targets_render_as_data_targets():
+    cols = [
+        {
+            "id": "todo",
+            "title": "To do",
+            "cards": [
+                {"id": "c1", "title": "A", "targets": ["doing", "done"]},
+                {"id": "c2", "title": "B", "targets": []},
+                {"id": "c3", "title": "C"},
+            ],
+        }
+    ]
+    out = _render("{% kanban_board columns=cols %}", {"cols": cols})
+    assert 'data-card-id="c1" data-col-id="todo" data-targets="doing done"' in out
+    # An empty list: the card may go nowhere else.
+    assert 'data-card-id="c2" data-col-id="todo" data-targets=""' in out
+    # No targets: any column, so no attribute.
+    assert 'data-card-id="c3" data-col-id="todo" tabindex' in out
+
+
+def test_card_targets_are_escaped():
+    cols = [{"id": "t", "title": "T", "cards": [{"id": "c", "title": "C", "targets": ['a" x="1']}]}]
+    out = _render("{% kanban_board columns=cols %}", {"cols": cols})
+    assert 'data-targets="a&quot; x=&quot;1"' in out
+    assert ' x="1"' not in out
+
+
+def test_every_card_takes_focus_for_the_keyboard_move():
+    out = _render("{% kanban_board columns=cols %}", {"cols": COLS})
+    cards = re.findall(r'<div class="kanban-card"[^>]*>', out)
+    assert len(cards) == 2
+    for card in cards:
+        assert 'tabindex="0"' in card and 'aria-roledescription="movable card"' in card, card

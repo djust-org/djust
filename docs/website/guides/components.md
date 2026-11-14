@@ -1893,6 +1893,8 @@ columns = [
 - `move_event` is sent when a card is dropped on another column, with `card_id`, `from_col` and `to_col`. The server decides whether the move is allowed.
 - `add_card_event` (default `kanban_add_card`) is sent by each column's "+ Add card" button with the column id as `value`. `add_card_event=None` leaves the button out, for a board whose cards are created elsewhere.
 - A card's `href` makes its title a link (`javascript:` and other unsafe schemes are refused).
+- A card's `targets` lists the column ids it may move to, for a board whose cards follow a state machine: `{"id": "c1", "title": "A", "targets": ["doing", "done"]}`. While the card drags, only those columns take a drop and are marked `kanban-col-target`; elsewhere the browser shows no drop. Without `targets` every column is offered. `targets` is guidance for the reader, not authorization: the `move_event` handler still checks the move.
+- A card moves by keyboard too: Tab to it, Space picks it up, the arrow keys choose a column (only the allowed ones), Enter or Space drops it there and sends the same `move_event`, and Escape (or moving focus away) cancels. Each step is announced to screen readers.
 - A column's `color` is a theme name, `primary`, `success`, `warning`, `destructive`, `info` or `muted`, rendered as the class `kanban-col--<name>`. No `color` gives the stylesheet's default. Any other CSS colour (`"#6366F1"`) still works, but as an inline `style` attribute, which a CSP with `style-src-attr 'none'` refuses; use a theme name under a strict policy.
 - `add_col_event` is accepted and not used.
 
@@ -1916,8 +1918,10 @@ The drag and drop is the client bundle's delegated behaviour, with no script of 
 | `.kanban[data-move-event]` | yes | the board; `data-move-event` names the event a drop sends |
 | `.kanban-col[data-col-id]` | yes | a drop target; `data-col-id` is sent as `to_col` |
 | `.kanban-card[draggable="true"][data-card-id][data-col-id]` | yes | a draggable card; `data-card-id` is sent as `card_id`, its `data-col-id` as `from_col` |
+| `.kanban-card[data-targets]` | no | the column ids, space-separated, the card may move to; absent means any |
+| `.kanban-card[tabindex="0"]` | for the keyboard | a card must take focus for the keyboard move |
 
-The client adds `dragging` to the card while it is dragged (removed when the drag ends) and `kanban-col-over` to the column under it (removed when the pointer leaves it or the card drops). A drop on the card's own column sends nothing. Cards and columns may hold any other markup. Give each card and column a stable `dj-key` (the tag uses their ids) so a re-render after a move matches them by identity.
+The client adds `dragging` to the card while it is dragged (removed when the drag ends), `kanban-col-target` to each column it may drop on, and `kanban-col-over` to the column under it (removed when the pointer leaves it or the card drops). A keyboard move marks the card `kanban-card-grabbed` and the chosen column `kanban-col-over`. A drop on the card's own column sends nothing. Cards and columns may hold any other markup. Give each card and column a stable `dj-key` (the tag uses their ids) so a re-render after a move matches them by identity.
 
 ## Markdown editor
 

@@ -41,7 +41,14 @@
 //   .dropzone         drag-over styling, put dropped files in the input, show
 //                     the file count.
 //   .kanban           drag cards between columns; a drop sends the board's
-//                     `data-move-event` with {card_id, from_col, to_col}.
+//                     `data-move-event` with {card_id, from_col, to_col}. A
+//                     card's `data-targets` (column ids) limits where it may
+//                     go: only those columns take a drop and are marked
+//                     `kanban-col-target` while it drags. Keyboard: Space on a
+//                     focused card picks it up, the arrow keys choose a
+//                     column, Enter or Space drops it there (same event),
+//                     Escape or leaving the card cancels; each step is
+//                     announced in a polite live region.
 //   .rte              toolbar commands (`data-command`) keep the selection;
 //                     the editor's HTML is mirrored into its hidden input.
 //   .multi-select     search-box filtering.
@@ -447,23 +454,170 @@
         menu.setAttribute('data-open', '1');
     });
 
+    // ---- kanban: allowed columns, keyboard move --------------------------
+    // The card being dragged: dataTransfer cannot be read during dragover.
+    let _kanbanDragged = null;
+    // A keyboard move in progress: {card, board, cols, index}.
+    let _kanbanGrab = null;
+
+    // A card's data-targets lists the columns it may move to; without it, any.
+    function _kanbanAllows(card, col) {
+        const targets = card.getAttribute('data-targets');
+        if (targets === null) return true;
+        return targets.split(/\s+/).indexOf(col.getAttribute('data-col-id') || '') !== -1;
+    }
+
+    function _kanbanCols(board) {
+        return Array.prototype.filter.call(board.querySelectorAll('.kanban-col'), function (col) {
+            return _closest(col, '.kanban') === board;
+        });
+    }
+
+    function _kanbanMark(card, on) {
+        const board = _closest(card, '.kanban');
+        if (!board) return;
+        _kanbanCols(board).forEach(function (col) {
+            const target = on && col.dataset.colId !== card.dataset.colId && _kanbanAllows(card, col);
+            col.classList.toggle('kanban-col-target', target);
+        });
+    }
+
+    function _kanbanTitle(card) {
+        const title = card.querySelector('.kanban-card-title');
+        return ((title || card).textContent || '').trim();
+    }
+
+    function _kanbanColTitle(col) {
+        const title = col.querySelector('.kanban-col-title');
+        return ((title || col).textContent || '').trim();
+    }
+
+    function _announce(message) {
+        let live = document.getElementById('dj-component-live');
+        if (!live) {
+            live = document.createElement('div');
+            live.id = 'dj-component-live';
+            live.setAttribute('role', 'status');
+            live.setAttribute('aria-live', 'polite');
+            // CSSOM, not a style attribute: a strict CSP allows it.
+            live.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;' +
+                'clip:rect(0 0 0 0);white-space:nowrap';
+            document.body.appendChild(live);
+        }
+        // The same text twice in a row is not read again by most screen readers.
+        live.textContent = live.textContent === message ? message + '\u00a0' : message;
+    }
+
+    function _kanbanSend(board, card, to) {
+        const moveEvent = board.getAttribute('data-move-event');
+        const from = card.dataset.colId || '';
+        if (moveEvent && from !== to && globalThis.djust && globalThis.djust.handleEvent) {
+            globalThis.djust.handleEvent(moveEvent,
+                { card_id: card.dataset.cardId || '', from_col: from, to_col: to });
+        }
+    }
+
+    function _kanbanEndGrab(message) {
+        const grab = _kanbanGrab;
+        if (!grab) return;
+        _kanbanGrab = null;
+        grab.card.classList.remove('kanban-card-grabbed');
+        grab.card.removeAttribute('aria-pressed');
+        grab.cols.forEach(function (col) { col.classList.remove('kanban-col-over'); });
+        _kanbanMark(grab.card, false);
+        if (message) _announce(message);
+    }
+
+    function _kanbanChoose(index) {
+        const grab = _kanbanGrab;
+        grab.cols.at(grab.index).classList.remove('kanban-col-over');
+        grab.index = index;
+        const col = grab.cols.at(index);
+        col.classList.add('kanban-col-over');
+        _announce(col.dataset.colId === grab.card.dataset.colId
+            ? _kanbanColTitle(col) + ', where it is now'
+            : _kanbanColTitle(col));
+    }
+
+    document.addEventListener('keydown', function (e) {
+        const card = e.target && e.target.classList && e.target.classList.contains('kanban-card')
+            ? e.target : null;
+        const grab = _kanbanGrab;
+        if (grab && card !== grab.card) return;
+        if (!grab) {
+            if (!card || (e.key !== ' ' && e.key !== 'Spacebar')) return;
+            const board = _closest(card, '.kanban');
+            if (!board || !board.getAttribute('data-move-event')) return;
+            const cols = _kanbanCols(board).filter(function (col) {
+                return col.dataset.colId === card.dataset.colId || _kanbanAllows(card, col);
+            });
+            const index = cols.findIndex(function (col) { return col.dataset.colId === card.dataset.colId; });
+            if (index === -1 || cols.length < 2) return;
+            e.preventDefault();
+            _kanbanGrab = { card: card, board: board, cols: cols, index: index };
+            card.classList.add('kanban-card-grabbed');
+            card.setAttribute('aria-pressed', 'true');
+            _kanbanMark(card, true);
+            cols.at(index).classList.add('kanban-col-over');
+            _announce(_kanbanTitle(card) + ' picked up. Left and right arrows choose a column, ' +
+                'Enter drops, Escape cancels.');
+            return;
+        }
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            _kanbanChoose((grab.index + 1) % grab.cols.length);
+        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            _kanbanChoose((grab.index - 1 + grab.cols.length) % grab.cols.length);
+        } else if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+            e.preventDefault();
+            const to = grab.cols.at(grab.index);
+            const moved = to.dataset.colId !== grab.card.dataset.colId;
+            _kanbanEndGrab(moved
+                ? _kanbanTitle(grab.card) + ' moved to ' + _kanbanColTitle(to)
+                : _kanbanTitle(grab.card) + ' not moved');
+            if (moved) _kanbanSend(grab.board, grab.card, to.dataset.colId);
+        } else if (e.key === 'Escape') {
+            // Capture phase: the Escape is the move's alone, so it does not
+            // also close a dialog or sheet around the board.
+            e.preventDefault();
+            e.stopPropagation();
+            _kanbanEndGrab('Move cancelled');
+        }
+    }, true);
+
+    document.addEventListener('focusout', function (e) {
+        if (_kanbanGrab && e.target === _kanbanGrab.card) _kanbanEndGrab('Move cancelled');
+    });
+
     // ---- drag and drop: dropzone, kanban --------------------------------
     document.addEventListener('dragstart', function (e) {
         const card = _closest(e.target, '.kanban-card');
         if (!card || !e.dataTransfer) return;
+        _kanbanEndGrab('');
         e.dataTransfer.setData('card', card.dataset.cardId || '');
         e.dataTransfer.setData('from', card.dataset.colId || '');
         card.classList.add('dragging');
+        _kanbanDragged = card;
+        _kanbanMark(card, true);
     });
 
     document.addEventListener('dragend', function (e) {
         const card = _closest(e.target, '.kanban-card');
-        if (card) card.classList.remove('dragging');
+        if (card) {
+            card.classList.remove('dragging');
+            _kanbanMark(card, false);
+        }
+        _kanbanDragged = null;
     });
 
     document.addEventListener('dragover', function (e) {
         const zone = _closest(e.target, '.dropzone, .kanban-col');
         if (!zone) return;
+        // No preventDefault for a column the card may not go to: the browser
+        // then shows no drop there and fires no drop event.
+        if (_kanbanDragged && zone.classList.contains('kanban-col') &&
+                !_kanbanAllows(_kanbanDragged, zone)) return;
         e.preventDefault();
         zone.classList.add(zone.classList.contains('dropzone') ? 'dropzone-over' : 'kanban-col-over');
     });
@@ -492,6 +646,7 @@
             return;
         }
         const board = _closest(zone, '.kanban');
+        if (_kanbanDragged && !_kanbanAllows(_kanbanDragged, zone)) return;
         const moveEvent = board && board.getAttribute('data-move-event');
         const from = data ? data.getData('from') : '';
         const to = zone.dataset.colId;

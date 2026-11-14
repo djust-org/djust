@@ -3861,18 +3861,26 @@ def kanban_board(
     Args:
         columns: list of dicts:
             {"id": "todo", "title": "To Do", "color": "success",
-             "cards": [{"id": "c1", "title": "Task A", "label": "bug", "href": "/tasks/1/"}]}
+             "cards": [{"id": "c1", "title": "Task A", "label": "bug", "href": "/tasks/1/",
+                        "targets": ["doing", "done"]}]}
             A column's ``color`` is a theme name (``primary``, ``success``,
             ``warning``, ``destructive``, ``info``, ``muted``), written as the
             class ``kanban-col--<name>`` (no ``style`` attribute, so a strict
             CSP ``style-src-attr 'none'`` keeps it), or any CSS colour, written
             as an inline ``style`` (refused by such a CSP). No ``color`` means
             no colour of the column's own (#4120). A card's ``href`` makes its
-            title a link.
+            title a link. A card's ``targets`` lists the column ids it may move
+            to (``data-targets``): the client offers a drop and a keyboard move
+            only there. Without it any column is offered. The server still
+            decides: ``targets`` is guidance, not authorization.
         move_event: event fired on drag-drop with JSON payload {card_id, from_col, to_col}
         add_card_event: event fired when adding a card, passes column id.
             ``None`` (or ``""``) leaves the "+ Add card" button out.
         add_col_event: accepted for compatibility and not used.
+
+    A card moves by mouse drag, or by keyboard: Tab to the card, Space picks
+    it up, the arrow keys choose a column, Enter (or Space) drops it there and
+    Escape cancels. Both send ``move_event``.
 
     The markup is the contract the client's drag and drop reads, documented
     in the components guide ("Kanban board markup"), so an application can
@@ -3933,6 +3941,15 @@ def kanban_board(
                 if card_sub
                 else ""
             )
+            # The columns this card may move to (#4120): the client offers a
+            # drop, and a keyboard move, only on those. Guidance, not
+            # authorization: the server still checks the move.
+            targets = card.get("targets")
+            targets_attr = (
+                ' data-targets="%s"' % attr_text(" ".join(str(t) for t in targets))
+                if isinstance(targets, (list, tuple))
+                else ""
+            )
             cards_html += (
                 # dj-key anchors each card by its stable id so the VDOM differ
                 # reconciles cards by IDENTITY (keyed) across a move, instead of
@@ -3940,8 +3957,10 @@ def kanban_board(
                 # counts and the differ patches against stale positional paths →
                 # a storm of failed patches + full html_recovery on every drag
                 # (#1678). `data-card-id` is for the drag JS, not the differ.
+                # tabindex: a card takes focus for the keyboard move (#4120).
                 f'<div class="kanban-card" dj-key="{card_id}" draggable="true" '
-                f'data-card-id="{card_id}" data-col-id="{col_id}">'
+                f'data-card-id="{card_id}" data-col-id="{col_id}"{targets_attr} '
+                f'tabindex="0" aria-roledescription="movable card">'
                 f'<div class="kanban-card-title">{card_title}</div>'
                 f"{sub_html}"
                 f"{label_html}"
