@@ -953,11 +953,17 @@ def _check_process_local_session_cache(errors: list[CheckMessage]) -> None:
     if _is_check_suppressed("djust.C031"):
         return
     engine = getattr(settings, "SESSION_ENGINE", "django.contrib.sessions.backends.db")
-    if engine not in (
-        "django.contrib.sessions.backends.cache",
-        "django.contrib.sessions.backends.cached_db",
-    ):
+    # Decided by the store class the engine resolves to, as the runtime decides
+    # (#4128): a project's subclass of the cache or cached_db store counts.
+    from django.contrib.sessions.backends.cache import SessionStore as _CacheStore
+    from django.contrib.sessions.backends.cached_db import SessionStore as _CachedDBStore
+
+    from djust._exposure_sessions import session_engine_store
+
+    store = session_engine_store(engine)
+    if not isinstance(store, type) or not issubclass(store, (_CacheStore, _CachedDBStore)):
         return
+    cache_only = issubclass(store, _CacheStore)
     alias = getattr(settings, "SESSION_CACHE_ALIAS", "default")
     caches = getattr(settings, "CACHES", None) or {}
     config = caches.get(alias)
@@ -979,7 +985,7 @@ def _check_process_local_session_cache(errors: list[CheckMessage]) -> None:
                 engine,
                 alias,
                 "every request starts a new session and the view's state is lost"
-                if engine.endswith(".cache")
+                if cache_only
                 else "every session read goes to the database and the cache does nothing",
             )
         )
@@ -987,7 +993,7 @@ def _check_process_local_session_cache(errors: list[CheckMessage]) -> None:
         effect = (
             "each process keeps its own sessions, so a request or socket served by another "
             "process mounts fresh and loses the view's state"
-            if engine.endswith(".cache")
+            if cache_only
             else "another process can read its own stale copy of the session"
         )
         message = (

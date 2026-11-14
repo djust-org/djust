@@ -56,6 +56,15 @@ REMOVED_CONFIG_KEYS: dict[str, str] = {
     ),
 }
 
+#: Keys that are top-level Django settings, never keys of ``LIVEVIEW_CONFIG`` /
+#: ``DJUST_CONFIG``. Inside either dict they would be ignored without a word,
+#: which for a switch that turns saving OFF means state is saved against the
+#: project's wish (#4128). Compared lower-case: key -> the setting to use.
+MISPLACED_CONFIG_KEYS: dict[str, str] = {
+    "automatic_state": "DJUST_AUTOMATIC_STATE",
+    "djust_automatic_state": "DJUST_AUTOMATIC_STATE",
+}
+
 #: ``LIVEVIEW_CONFIG`` / ``DJUST_CONFIG`` keys whose values 2.0 removed: key ->
 #: (the value still accepted, the removed values, the replacement). Values are
 #: compared as ``str(v).strip().lower()``. The accepted value does nothing and is
@@ -281,6 +290,13 @@ def removed_settings_in_use(settings: Any) -> list[str]:
             "%s[%r] was removed in djust 2.0 (%s); delete the key." % (setting, key, behaviour)
             for key, behaviour in REMOVED_CONFIG_KEYS.items()
             if key in cfg
+        )
+        problems.extend(
+            "%s[%r] is not read: it is the top-level setting %s (True or False), or the "
+            "class attribute automatic_state on a view. Move it out of %s."
+            % (setting, key, MISPLACED_CONFIG_KEYS[key.lower()], setting)
+            for key in cfg
+            if isinstance(key, str) and key.lower() in MISPLACED_CONFIG_KEYS
         )
         for key in REMOVED_CONFIG_VALUES:
             if key in cfg:

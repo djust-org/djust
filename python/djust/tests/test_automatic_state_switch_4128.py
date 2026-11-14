@@ -35,7 +35,16 @@ from djust.decorators import state
 from djust.tests import _per_turn_harness as harness
 
 MODULE = __name__
-MARKERS = ("SWEEP_PUBLIC", "SWEEP_PRIVATE", "SWEEP_STATE", "SWEEP_HANDLER", "SWEEP_COMPONENT")
+MARKERS = (
+    "SWEEP_PUBLIC",
+    "SWEEP_PRIVATE",
+    "SWEEP_STATE",
+    "SWEEP_HANDLER",
+    "SWEEP_COMPONENT",
+    "SWEEP_LAZY",
+    "SWEEP_CHILD",
+    "SWEEP_FORM",
+)
 MOUNTS: List[str] = []
 
 
@@ -238,10 +247,21 @@ def sweep(store: type = SessionStore) -> List[str]:
     rows = [dict(store(row.session_key).items()) for row in Session.objects.all()]
     assert rows, "the flow stored no session at all: the sweep would prove nothing"
     for row in rows:
-        wrong += ["key %s" % key for key in row if str(key).startswith("_djust_auto_")]
+        # The WHOLE session: every key is one this list accounts for, and no
+        # marker value is anywhere in it.
+        wrong += ["key %s" % key for key in row if not str(key).startswith(ALLOWED_KEYS)]
         text = json.dumps(row, default=str)
         wrong += ["value %s" % marker for marker in MARKERS if marker in text]
     return wrong
+
+
+#: Every session key a flow with saving off may leave. Anything else is a
+#: finding: view content that reached the session by another road.
+ALLOWED_KEYS = (
+    "_djust_explicit_",  # fields declared persist="server" (asked for by name), and their index
+    "_djust_lazy_binding",  # a random token that binds lazy children to this session
+    "_auth_user_",  # Django's login
+)
 
 
 def _declared(key: str, store: type = SessionStore) -> List[int]:
@@ -519,3 +539,384 @@ def test_the_removed_1x_key_names_its_replacement():
             reject_removed_settings()
     said = str(raised.value)
     assert "DJUST_AUTOMATIC_STATE = False" in said and "automatic_state = False" in said
+
+
+# ---------------------------------------------------------------------------
+# Review of the switch: the other roads into the session
+# ---------------------------------------------------------------------------
+
+LAZY = '<div dj-view="' + MODULE + '.LazyChild" dj-lazy></div>'
+
+
+class LazyChild(LiveView):
+    """A legacy lazy child: over the fallback its state was written to the
+    session by its own code path (``_lazy_containers.save_http_lazy``)."""
+
+    exposure_policy = "legacy"
+    template = '<div><span class="n">{{ count }}</span><i>{{ note }}</i></div>'
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+        self.note = "SWEEP_LAZY"
+        self._hidden = "SWEEP_LAZY"
+
+    @event_handler
+    def inc(self, **kwargs):
+        self.count += 1
+
+
+class LazyPage(LiveView):
+    # Only a legacy page registers lazy children (``register_lazy_containers``).
+    exposure_policy = "legacy"
+    template = "<div dj-root><section>" + LAZY + "</section></div>"
+
+
+class LazyPageOff(LiveView):
+    exposure_policy = "legacy"
+    automatic_state = False
+    template = "<div dj-root><section>" + LAZY + "</section></div>"
+
+
+class LazyChildOff(LazyChild):
+    automatic_state = False
+
+
+class LazyPageChildOff(LiveView):
+    exposure_policy = "legacy"
+    template = (
+        '<div dj-root><section><div dj-view="' + MODULE + '.LazyChildOff" dj-lazy></div>'
+        "</section></div>"
+    )
+
+
+urlpatterns += [
+    path("lazy-on/", LazyPage.as_view()),
+    path("lazy-page-off/", LazyPageOff.as_view()),
+    path("lazy-child-off/", LazyPageChildOff.as_view()),
+]
+
+
+def _lazy_flow(url: str) -> List[int]:
+    """A page GET, then three events for the lazy child over the fallback: the
+    counts each answer showed."""
+    import re
+
+    from django.conf import settings
+    from django.test import Client
+
+    client = Client(enforce_csrf_checks=True)
+    page = client.get(url).content.decode()
+    (view_id,) = re.findall(r'data-djust-lazy-id="([^"]+)"', page)
+    counts = []
+    for event in ("djust_lazy_mount", "inc", "inc"):
+        response = client.post(
+            url,
+            json.dumps({"view_id": view_id}),
+            content_type="application/json",
+            HTTP_X_DJUST_EVENT=event,
+            HTTP_X_CSRFTOKEN=client.cookies[settings.CSRF_COOKIE_NAME].value,
+        )
+        assert response.status_code == 200, response.content
+        found = re.search(r'class="n"[^>]*>(\d+)</span>', json.loads(response.content)["html"])
+        counts.append(int(found.group(1)))
+    return counts
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "url,project",
+    [
+        pytest.param("/lazy-on/", False, id="project-off"),
+        pytest.param("/lazy-page-off/", True, id="page-off"),
+        pytest.param("/lazy-child-off/", True, id="child-off"),
+    ],
+)
+def test_sweep_a_lazy_legacy_child_leaves_nothing(url, project, settings):
+    settings.ROOT_URLCONF = MODULE
+    settings.DJUST_AUTOMATIC_STATE = project
+    assert _lazy_flow(url) == [0, 1, 1]  # each request starts from mount()
+    assert sweep() == []
+
+
+@pytest.mark.django_db
+def test_control_a_lazy_legacy_child_is_saved_with_saving_on(settings):
+    settings.ROOT_URLCONF = MODULE
+    settings.DJUST_AUTOMATIC_STATE = True
+    assert _lazy_flow("/lazy-on/") == [0, 1, 2]
+    wrong = sweep()
+    assert "value SWEEP_LAZY" in wrong and any(item.startswith("key liveview_") for item in wrong)
+
+
+@pytest.mark.django_db
+def test_a_lazy_childs_state_saved_earlier_is_removed_on_first_contact(settings):
+    settings.ROOT_URLCONF = MODULE
+    assert _lazy_flow("/lazy-on/") == [0, 1, 2]
+    assert sweep()
+    settings.DJUST_AUTOMATIC_STATE = False
+    # The same browser would be needed to reach the same entry: do it in place.
+    from djust._lazy_containers import LazyContainer, mount_http_lazy
+
+    (row,) = Session.objects.all()
+    session = SessionStore(row.session_key)
+    (state_key,) = [key for key in session.keys() if key.startswith("liveview_")]
+    parent = LazyPage()
+    parent._http_lazy_containers = {"lazy_x": LazyContainer(LazyChild, state_key, "")}
+    request = _request("GET", row.session_key, "/lazy-on/")
+    child = mount_http_lazy(parent, request, "lazy_x")
+    assert child.count == 0 and state_key not in request.session
+
+
+# --- an embedded child ----------------------------------------------------------
+
+
+def _family(name: str, child_switch: Any, parent_switch: Any):
+    """A page with a sticky child. Both hold undeclared state; the child also
+    declares one ``persist="server"`` field."""
+
+    def child_mount(self, request, **kwargs):
+        self.note = "SWEEP_CHILD"
+        self._hidden = "SWEEP_CHILD"
+
+    def poke(self, **kwargs):
+        self.note = "SWEEP_CHILD"
+        self.kept += 1
+
+    child_body = {
+        "__module__": MODULE,
+        "exposure_policy": "explicit",
+        "sticky": True,
+        "sticky_id": "menu",
+        "template": "<div>Child={{ kept }}</div>",
+        "kept": state(0, persist="server"),
+        "mount": child_mount,
+        "get_context_data": lambda self, **kwargs: {"kept": self.kept},
+        "poke": event_handler()(poke),
+    }
+    if child_switch is not None:
+        child_body["automatic_state"] = child_switch
+    child = type(name + "Child", (LiveView,), child_body)
+    setattr(sys.modules[MODULE], child.__name__, child)
+
+    def parent_mount(self, request, **kwargs):
+        self.title = "SWEEP_PUBLIC"
+
+    def retitle(self, **kwargs):
+        self.title = "SWEEP_HANDLER"
+
+    body = {
+        "__module__": MODULE,
+        "exposure_policy": "explicit",
+        "template": "<div dj-root><h1>{{ title }}</h1>{% load live_tags %}{% live_render "
+        f'"{MODULE}.{child.__name__}" sticky=True %}}</div>',
+        "mount": parent_mount,
+        "get_context_data": lambda self, **kwargs: {"title": self.title},
+        "retitle": event_handler()(retitle),
+    }
+    if parent_switch is not None:
+        body["automatic_state"] = parent_switch
+    parent = type(name + "Page", (LiveView,), body)
+    setattr(sys.modules[MODULE], parent.__name__, parent)
+    return parent
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "child,parent,page_saved",
+    [
+        (None, None, True),
+        (False, None, True),  # the child's switch changes nothing: see below
+        (True, False, False),  # a child cannot switch saving on under a page that is off
+        (None, False, False),
+    ],
+)
+async def test_an_embedded_childs_own_state_is_never_saved_and_the_page_governs(
+    child, parent, page_saved, settings
+):
+    """Only a PAGE's state is saved automatically. An embedded child keeps its
+    declared ``persist="server"`` fields and nothing else, whatever its own
+    ``automatic_state`` says; the page's switch decides the page's state."""
+    settings.DJUST_AUTOMATIC_STATE = True
+    page = _family("Fam%s%s" % (child, parent), child, parent)
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE):
+        comm, _mount = await harness.mount_view(page, key)
+        assert (await harness.event(comm, "retitle"))["type"] != "error"
+        assert (await harness.event(comm, "poke", {"view_id": "menu"}))["type"] != "error"
+        await comm.disconnect()
+
+    def read() -> Dict[str, Any]:
+        return dict(SessionStore(key).items())
+
+    session = await sync_to_async(read)()
+    text = json.dumps(session, default=str)
+    assert "SWEEP_CHILD" not in text  # never, in any combination
+    assert any(name.startswith("_djust_explicit_") for name in session)  # its declared field
+    assert ("SWEEP_HANDLER" in text) is page_saved
+    assert any(name.startswith("_djust_auto_") for name in session) is page_saved
+
+
+# --- form validation errors -----------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_form_input_and_validation_errors_are_not_saved_with_saving_off(settings):
+    from django import forms
+
+    from djust.forms import FormMixin
+
+    class Signup(forms.Form):
+        name = forms.CharField(max_length=5)
+
+    class SignupView(FormMixin, LiveView):
+        exposure_policy = "explicit"
+        automatic_state = False
+        form_class = Signup
+        template = "<div dj-root>{{ form_data.name }}|{{ field_errors.name.0 }}</div>"
+
+    setattr(sys.modules[MODULE], "SignupView", SignupView)
+    first = _request("GET", None, "/signup/")
+    assert SignupView().get(first).status_code == 200
+    key = str(first.session.session_key)
+    view = SignupView()
+    request = RequestFactory().post(
+        "/signup/",
+        data=json.dumps({"field": "name", "value": "SWEEP_FORM-too-long"}),
+        content_type="application/json",
+        HTTP_X_DJUST_EVENT="validate_field",
+        HTTP_X_DJUST_TAB=harness.TAB,
+    )
+    request.user, request.tenant, request.session = AnonymousUser(), None, SessionStore(key)
+    response = view.post(request)
+    assert response.status_code == 200, response.content
+    # The answer carries the input and its error; the session carries neither.
+    assert view.form_data["name"] == "SWEEP_FORM-too-long" and view.field_errors["name"]
+    assert "SWEEP_FORM" in response.content.decode()
+    assert "SWEEP_FORM" not in json.dumps(dict(SessionStore(key).items()), default=str)
+    assert not [name for name in SessionStore(key).keys() if not name.startswith(ALLOWED_KEYS)]
+
+
+# --- Q1: an instance attribute does not switch it, and says so --------------------
+
+
+@pytest.mark.django_db
+def test_an_instance_attribute_is_not_the_switch_and_a_warning_says_so(settings, caplog):
+    import logging
+
+    settings.DJUST_AUTOMATIC_STATE = True
+
+    class SetsItInMount(LiveView):
+        exposure_policy = "explicit"
+        template = "<div dj-root>{{ n }}</div>"
+
+        def mount(self, request, **kwargs):
+            self.automatic_state = False
+            self.n = "SWEEP_PUBLIC"
+
+        def get_context_data(self, **kwargs):
+            return {"n": self.n}
+
+    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
+        for _ in range(2):
+            request = _request("GET", None, "/x/")
+            assert SetsItInMount().get(request).status_code == 200
+    said = [r.getMessage() for r in caplog.records if "on the instance" in r.getMessage()]
+    assert len(said) == 1 and "SetsItInMount" in said[0] and "class attribute" in said[0]
+    assert "SWEEP_PUBLIC" not in said[0]
+    # Still saved: the instance value is not read (and is not itself state).
+    (envelope,) = [v for k, v in request.session.items() if k.startswith("_djust_auto_")]
+    assert envelope["values"] == {"n": "SWEEP_PUBLIC"}
+
+
+# --- Q2: state saved before the switch went off does not stay at rest -------------
+
+
+@pytest.mark.django_db
+def test_switching_off_removes_this_tabs_saved_state_on_first_contact(settings):
+    key, _view = _fallback(Marked)
+    assert [k for k in SessionStore(key).keys() if k.startswith("_djust_auto_")]
+    settings.DJUST_AUTOMATIC_STATE = False
+    view = Marked()
+    assert view.post(_request("POST", key, _url(Marked), "bump")).status_code == 200
+    # Read back from the store, not from the request's own copy.
+    assert not [k for k in SessionStore(key).keys() if k.startswith("_djust_auto_")]
+    assert sweep() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_switching_off_removes_it_on_a_socket_mount_too(settings):
+    settings.DJUST_AUTOMATIC_STATE = True
+    key = await harness.new_session_key_async()
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
+        comm, _mount = await harness.mount_view(Marked, key)
+        await harness.event(comm, "bump")
+        await comm.disconnect()
+        assert await sync_to_async(sweep)()
+        settings.DJUST_AUTOMATIC_STATE = False
+        again, _mount = await harness.mount_view(Marked, key)
+        await again.disconnect()
+    assert await sync_to_async(sweep)() == []
+
+
+@pytest.mark.django_db
+def test_another_tabs_saved_state_is_left_for_djust_clear(settings):
+    """Only the tab that makes contact is known; the rest expire or are cleared."""
+    key, _view = _fallback(Marked)
+    settings.DJUST_AUTOMATIC_STATE = False
+    request = _request("POST", key, _url(Marked), "bump")
+    request.META["HTTP_X_DJUST_TAB"] = "tab-another-one"
+    assert Marked().post(request).status_code == 200
+    assert [k for k in SessionStore(key).keys() if k.startswith("_djust_auto_")]
+
+
+# --- D2: the switch inside a config dict is refused, not ignored ------------------
+
+
+@pytest.mark.parametrize("setting", ["LIVEVIEW_CONFIG", "DJUST_CONFIG"])
+@pytest.mark.parametrize(
+    "key", ["automatic_state", "AUTOMATIC_STATE", "DJUST_AUTOMATIC_STATE", "djust_automatic_state"]
+)
+def test_the_switch_inside_a_config_dict_is_a_startup_error(setting, key):
+    from django.core.exceptions import ImproperlyConfigured
+
+    from djust._removed_settings import reject_removed_settings
+
+    with override_settings(**{setting: {key: False}}):
+        with pytest.raises(ImproperlyConfigured) as raised:
+            reject_removed_settings()
+    said = str(raised.value)
+    assert f"{setting}[{key!r}] is not read" in said
+    assert "top-level setting DJUST_AUTOMATIC_STATE" in said
+
+
+def test_the_top_level_setting_is_not_refused():
+    from djust._removed_settings import reject_removed_settings
+
+    with override_settings(DJUST_AUTOMATIC_STATE=False, LIVEVIEW_CONFIG={}, DJUST_CONFIG={}):
+        reject_removed_settings()
+
+
+# --- D3: C031 decides by the store class too --------------------------------------
+
+
+def test_c031_warns_for_a_subclass_of_the_cache_store_over_a_local_cache(monkeypatch):
+    from django.contrib.sessions.backends.cache import SessionStore as CacheStore
+    from django.contrib.sessions.backends.cached_db import SessionStore as CachedDBStore
+
+    locmem = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+    for base in (CacheStore, CachedDBStore):
+        own = type("Own", (base,), {})
+        engine = _engine(monkeypatch, "project_sessions_c031_%s" % base.__module__[-5:], own)
+        (found,) = _check(
+            "_check_process_local_session_cache", SESSION_ENGINE=engine, CACHES=locmem, DEBUG=False
+        )
+        assert found.id == "djust.C031" and engine in found.msg
+    # A subclass of the db store keeps no sessions in a cache: silent.
+    engine = _engine(monkeypatch, "project_sessions_c031_db", OwnStore)
+    assert (
+        _check(
+            "_check_process_local_session_cache", SESSION_ENGINE=engine, CACHES=locmem, DEBUG=False
+        )
+        == []
+    )

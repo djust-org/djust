@@ -204,9 +204,13 @@ def mount_http_lazy(parent: Any, request: Any, view_id: str) -> Any:
         or snapshot_tenant_scope(child) != entry.child_tenant
     ):
         raise PermissionDenied("Lazy view has no resolved tenant")
-    saved = request.session.get(entry.state_key, {})
-    restore_public_state(child, decode_state_roundtrip(saved.get("public", {})))
-    child._restore_private_state(decode_state_roundtrip(saved.get("private", {})))
+    if _lazy_state_saved(parent, child):
+        saved = request.session.get(entry.state_key, {})
+        restore_public_state(child, decode_state_roundtrip(saved.get("public", {})))
+        child._restore_private_state(decode_state_roundtrip(saved.get("private", {})))
+    elif entry.state_key in request.session:
+        # Saved before the switch was turned off: not read, and not left at rest.
+        del request.session[entry.state_key]
     if snapshot_tenant_scope(child) != entry.child_tenant:
         raise PermissionDenied("Lazy view changed tenant")
     enforce_object_permission(child, request)
@@ -214,10 +218,25 @@ def mount_http_lazy(parent: Any, request: Any, view_id: str) -> Any:
     return child
 
 
+def _lazy_state_saved(parent: Any, child: Any) -> bool:
+    """Whether a lazy child's state is kept in the session (#4128).
+
+    Its state rests in the page's session, so the page's switch governs: saving
+    must be on for the page that embeds it AND for the child. A child cannot
+    switch saving on under a page that switched it off.
+    """
+    from ._automatic_state import saving_enabled
+
+    return saving_enabled(parent) and saving_enabled(child)
+
+
 def save_http_lazy(parent: Any, request: Any, view_id: str, child: Any) -> None:
     """Persist only this child's legacy state under its user/session/tenant binding."""
     entry = getattr(parent, "_http_lazy_containers", {}).get(view_id)
     if entry is None:
+        return
+    if not _lazy_state_saved(parent, child):
+        request.session.pop(entry.state_key, None)
         return
     from .components.base import is_component_collection, LiveComponent
     from .mixins.context import legacy_unsaved_keys

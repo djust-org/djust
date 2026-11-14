@@ -192,9 +192,28 @@ and no empty entry at the page load. What follows:
 - a socket reconnect starts from `mount()`; while the socket is open the view
   object lives on and keeps everything, as always;
 - no size limit applies and nothing is reported as unsaveable;
-- state saved before the switch was turned off is no longer read, but it stays
-  in each session until that session expires. `djust clear --all` removes it at
-  once (on the `db` and `cached_db` engines).
+- state saved before the switch was turned off is not read. The first request
+  or reconnect of a tab removes that tab's saved state from the session; what
+  other tabs left stays until its session expires, or until
+  `djust clear --all` (on the `db` and `cached_db` engines).
+
+The switch covers every road by which a view's content reaches the session:
+
+- the page's own state (above);
+- a **lazy legacy child** (`dj-lazy` under a legacy page), whose state the
+  fallback kept in the session: it is saved only while saving is on for the
+  page AND for the child. A child cannot switch saving on under a page that
+  switched it off;
+- an **embedded child** (`{% live_render %}`, sticky or not) never has its own
+  state saved automatically, whatever its `automatic_state` says. Its declared
+  `persist="server"` fields are kept, as the page's are;
+- form input and validation errors (`FormMixin`) are part of the page's state:
+  with saving off they are in the answer and not in the session.
+
+What djust still writes with saving off: fields declared `persist="server"`
+and their index (`_djust_explicit_...`), and one random token that binds lazy
+children to the session (`_djust_lazy_binding`). Neither holds view content
+you did not declare.
 
 **A field declared `state(..., persist="server")` is still kept.** The
 developer asked for exactly that field, by name, so the switch does not
@@ -204,7 +223,12 @@ declare no field `persist="server"`.
 Only `True` and `False` are accepted (`None` on a view means the project's
 value). Any other value is read as off, so a mistake never saves state nobody
 asked for, and system check `djust.C035` reports it. The setting is read on
-each request and the view's attribute from its class, never from the instance.
+each request and the view's attribute from its class, never from the instance:
+`self.automatic_state = False` in `mount()` does nothing, and a WARNING on the
+`djust.automatic_state` logger says so once per view class.
+`DJUST_AUTOMATIC_STATE` is a top-level Django setting. Inside `LIVEVIEW_CONFIG`
+or `DJUST_CONFIG` (as `automatic_state` or `DJUST_AUTOMATIC_STATE`) it is
+refused at startup instead of being ignored.
 
 ## Every page load creates a session
 

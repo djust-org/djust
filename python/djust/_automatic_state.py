@@ -450,10 +450,43 @@ def saving_enabled(view: Any) -> bool:
     component state, no changed/deleted record. Declared ``persist="server"``
     fields are another store and are not affected.
     """
+    if (
+        not isinstance(view, type)
+        and VIEW_ATTRIBUTE in getattr(view, "__dict__", ())
+        and _first_time(view, "*", "instance-switch")
+    ):
+        owner = type(view)
+        logger.warning(
+            "djust: %s.%s sets %s on the instance (in mount() or a handler). That is not "
+            "read: the switch is a class attribute, `%s = False` in the class body.",
+            owner.__module__,
+            owner.__qualname__,
+            VIEW_ATTRIBUTE,
+            VIEW_ATTRIBUTE,
+        )
     value = getattr_static(type(view), VIEW_ATTRIBUTE, None)
     if value is None:
         return project_saving_enabled()
     return value is True
+
+
+def _forget(view: Any, request: Any) -> None:
+    """Saving is off for this view: the state saved for this tab before that
+    (with its changed/deleted record) is removed from the session, so it is
+    neither read nor left at rest. One write, and only when there is one."""
+    if uses_legacy_exposure(view) or view.__dict__.get("_djust_auto_forgot"):
+        return
+    view.__dict__["_djust_auto_forgot"] = True  # once per view object
+    try:
+        store = _store(view, request, create=False)
+    except Exception:  # noqa: BLE001 — no usable session or identity: nothing to remove
+        return
+    if store is None or store.key not in store.session:
+        return
+    from ._session_merge import save_merged
+
+    del store.session[store.key]
+    save_merged(store.session, store.session.session_key)
 
 
 def _not_saved(view: Any) -> bool:
@@ -1078,6 +1111,7 @@ def saved(view: Any, request: Any) -> Optional[Saved]:
     is skipped.
     """
     if _not_saved(view):
+        _forget(view, request)
         return None
     store = _store(view, request, create=False)
     found = _read(view, store) if store is not None else None
