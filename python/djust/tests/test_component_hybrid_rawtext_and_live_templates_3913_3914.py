@@ -1060,8 +1060,19 @@ class TestBoundComponentTemplate:
 
 
 #: Names that render a TEMPLATE STRING: the raw renderer of this package, Django's ``Template``,
-#: an engine's ``from_string`` and the Rust entry ``render_template``.
-SINK_NAMES = frozenset({"_render_template_string", "Template", "from_string", "render_template"})
+#: an engine's ``from_string``, the Rust entries ``render_template``, ``render_template_with_dirs``
+#: and ``RustLiveView``, and djust's backend template ``DjustTemplate`` (#3938).
+SINK_NAMES = frozenset(
+    {
+        "_render_template_string",
+        "Template",
+        "from_string",
+        "render_template",
+        "render_template_with_dirs",
+        "RustLiveView",
+        "DjustTemplate",
+    }
+)
 #: ... and those that render a template FILE (``template_name``), which the rule does not read (#3933).
 FILE_NAMES = frozenset({"render_to_string", "get_template", "select_template"})
 
@@ -1078,9 +1089,59 @@ def _final(node: ast.AST) -> str:
 def census(source: str, rel: str, names: frozenset[str]) -> set[tuple[str, str, str]]:
     """``(file, enclosing function, name)`` of every place ``source`` reads one of ``names``, under
     ANY spelling: called, passed on, read through a module (``base.f``), imported under another
-    name (``from .base import f as g``) or assigned to one (``g = f``). Reading, not only calling,
-    so a reference that is called later is a site too."""
+    name (``from .base import f as g``) or assigned to one (``g = f``), or looked up by its name
+    (``getattr(module, "f")``, #3938). Reading, not only calling, so a reference that is called
+    later is a site too."""
     tree = ast.parse(source)
+    watch = _watched(tree, names)
+    found: set[tuple[str, str, str]] = set()
+
+    class Visitor(_Scoped):
+        def _seen(self, node: ast.AST) -> None:
+            if _final(node) in watch:
+                found.add((rel, self.where(), _final(node)))
+
+        def visit_Name(self, node: ast.Name) -> None:
+            if isinstance(node.ctx, ast.Load):
+                self._seen(node)
+
+        def visit_Attribute(self, node: ast.Attribute) -> None:
+            self._seen(node)
+            self.generic_visit(node)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if (
+                _final(node.func) == "getattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value in watch
+            ):
+                found.add((rel, self.where(), str(node.args[1].value)))
+            self.generic_visit(node)
+
+    Visitor().visit(tree)
+    return found
+
+
+class _Scoped(ast.NodeVisitor):
+    """A visitor that knows the enclosing function."""
+
+    def __init__(self) -> None:
+        self.stack: list[str] = []
+
+    def where(self) -> str:
+        return self.stack[-1] if self.stack else "<module>"
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.stack.append(node.name)
+        self.generic_visit(node)
+        self.stack.pop()
+
+    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
+
+
+def _watched(tree: ast.AST, names: frozenset[str]) -> set[str]:
+    """``names`` and every alias of them in ``tree`` (imported under another name, assigned)."""
     watch = set(names)
     grew = True
     while grew:  # aliases of aliases
@@ -1100,37 +1161,33 @@ def census(source: str, rel: str, names: frozenset[str]) -> set[tuple[str, str, 
                     if isinstance(target, ast.Name) and target.id not in watch:
                         watch.add(target.id)
                         grew = True
-    found: set[tuple[str, str, str]] = set()
+    return watch
 
-    class Visitor(ast.NodeVisitor):
-        def __init__(self) -> None:
-            self.stack: list[str] = []
 
-        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-            self.stack.append(node.name)
-            self.generic_visit(node)
-            self.stack.pop()
+def template_reads(source: str, rel: str, names: frozenset[str]) -> set[tuple[str, str, str, str]]:
+    """``(file, enclosing function, sink, attribute read)`` of every call of one of ``names``
+    (any alias) handed an attribute whose name holds ``template`` (``x.template``,
+    ``self._full_template``): a template string read off an object and rendered, wherever in the
+    package it is (#3938). A component's ``template`` rendered outside ``CENSUS_ROOTS`` is one."""
+    tree = ast.parse(source)
+    watch = _watched(tree, names)
+    found: set[tuple[str, str, str, str]] = set()
 
-        visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
-
-        def _seen(self, node: ast.AST) -> None:
-            if _final(node) in watch:
-                found.add((rel, self.stack[-1] if self.stack else "<module>", _final(node)))
-
-        def visit_Name(self, node: ast.Name) -> None:
-            if isinstance(node.ctx, ast.Load):
-                self._seen(node)
-
-        def visit_Attribute(self, node: ast.Attribute) -> None:
-            self._seen(node)
+    class Visitor(_Scoped):
+        def visit_Call(self, node: ast.Call) -> None:
+            if _final(node.func) in watch:
+                for arg in [*node.args, *(k.value for k in node.keywords)]:
+                    for sub in ast.walk(arg):
+                        if isinstance(sub, ast.Attribute) and "template" in sub.attr:
+                            found.add((rel, self.where(), _final(node.func), ast.unparse(sub)))
             self.generic_visit(node)
 
     Visitor().visit(tree)
     return found
 
 
-def _tree_census(roots: tuple[str, ...], names: frozenset[str]) -> set[tuple[str, str, str]]:
-    found: set[tuple[str, str, str]] = set()
+def _tree_census(roots: tuple[str, ...], names: frozenset[str], scan=None) -> set:
+    found: set = set()
     base = ROOT / "python/djust"
     for root in roots:
         path = base / root
@@ -1139,7 +1196,7 @@ def _tree_census(roots: tuple[str, ...], names: frozenset[str]) -> set[tuple[str
             posix = file.as_posix()
             if "/tests/" in posix or "/test_" in posix or "/static/" in posix:
                 continue
-            found |= census(file.read_text(), file.relative_to(base).as_posix(), names)
+            found |= (scan or census)(file.read_text(), file.relative_to(base).as_posix(), names)
     return found
 
 
@@ -1159,6 +1216,24 @@ RENDER_SITES = {
         "_render_component_cards",
         "from_string",
     ): "framework-owned gallery demo of a template TAG, not a component's template",
+    (
+        "components/base.py",
+        "_render_template_string",
+        "render_template_with_dirs",
+    ): "the raw renderer itself, read only by _render_inline_template (pinned below)",
+    (
+        "components/base.py",
+        "_render_template_name_with_markers",
+        "RustLiveView",
+    ): "renders a template_name FILE (#3933), not an inline template",
+}
+
+#: Every call in the WHOLE package that renders a template string read off an object attribute
+#: (#3938): a LiveView's own template, never a component's. A new one is a decision.
+TEMPLATE_READS = {
+    ("mixins/template.py", "_render_full_template_inner", "RustLiveView", "self._full_template"),
+    ("simple_live_view.py", "render_template", "render_template_with_dirs", "self.template"),
+    ("streaming.py", "_render_stream_fragment", "Template", "self.template"),
 }
 
 #: Every site that renders a template FILE, all outside the rule (#3933).
@@ -1187,6 +1262,23 @@ class TestOneSink:
         found = _tree_census(CENSUS_ROOTS, FILE_NAMES)
         # the function that renders a template_name differs per class; compare file and name
         assert {(f, n) for f, _fn, n in found} == {(f, n) for f, _fn, n in FILE_SITES}, found
+
+    def test_no_module_renders_a_template_read_off_another_object(self) -> None:
+        """Outside ``CENSUS_ROOTS`` too: a sink handed ``x.template`` is a component's template
+        rendered without the rule unless it is a LiveView's own (#3938)."""
+        found = _tree_census((".",), SINK_NAMES, template_reads)
+        assert found == TEMPLATE_READS, (
+            f"new: {sorted(found - TEMPLATE_READS)}\ngone: {sorted(TEMPLATE_READS - found)}"
+        )
+
+    def test_the_template_read_scan_can_fail(self) -> None:
+        source = (
+            "from django.template import Template as T\n\n"
+            "def draw(component, c):\n    return T(component.template).render(c)\n"
+        )
+        assert template_reads(source, "x.py", SINK_NAMES) == {
+            ("x.py", "draw", "T", "component.template")
+        }
 
     def test_no_other_module_of_the_package_reads_the_raw_renderer(self) -> None:
         """A LiveView's own templates (``live_tags``, ``streaming``, ``websocket``) are rendered
@@ -1232,6 +1324,12 @@ class TestOneSink:
             "def f(engine, t):\n    return engine.from_string(t)\n",
             "from djust._rust import render_template as rt\n\ndef f(t, c):\n    return rt(t, c, True)\n",
             "def f(t, c):\n    return list(map(_render_template_string, [t], [c]))\n",
+            # #3938: the five sites the first census missed
+            "from djust._rust import RustLiveView\n\ndef f(self, d):\n    return RustLiveView(self.template, d)\n",
+            "from djust._rust import render_template_with_dirs\n\ndef f(t, c, d):\n    return render_template_with_dirs(t, c, d)\n",
+            "from djust.template import DjustTemplate\n\ndef f(t, c):\n    return DjustTemplate(t).render(c)\n",
+            "import importlib\n\ndef f(t, c):\n    m = importlib.import_module('djust.components.base')\n    return getattr(m, '_render_template_string')(t, c)\n",
+            "from django.template import Template\n\ndef f(component, c):\n    return Template(component.template).render(c)\n",
         ],
         ids=[
             "name",
@@ -1242,6 +1340,11 @@ class TestOneSink:
             "from_string",
             "rust-alias",
             "passed-on",
+            "RustLiveView",
+            "render_template_with_dirs",
+            "DjustTemplate",
+            "getattr-by-name",
+            "Template-of-another-object",
         ],
     )
     def test_the_census_sees_every_spelling_of_a_render_site(self, source: str) -> None:
