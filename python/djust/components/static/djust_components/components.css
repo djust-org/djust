@@ -2857,8 +2857,9 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 /* The fill's width: one class per whole percent, so no element carries `style="width:N%"`
    (an inline style attribute is refused by a `style-src` without 'unsafe-inline', #3969).
    Used by `{% progress %}` (both engines) and `djust.components.Progress`, and since #3979 by
-   every other percent fill the catalog draws: the token bar, the meter's segments, the
-   data table's data bar and the skeleton lines. */
+   the token bar, the meter's segments, the data table's data bar and loading skeleton, and
+   the `SkeletonFactory` / `{% skeleton_for %}` lines. Not yet by `djust.components.ui`'s
+   framework progress bars, which still write an inline width. */
 .dj-progress-w-0 { width: 0%; } .dj-progress-w-1 { width: 1%; } .dj-progress-w-2 { width: 2%; } .dj-progress-w-3 { width: 3%; } .dj-progress-w-4 { width: 4%; } .dj-progress-w-5 { width: 5%; } .dj-progress-w-6 { width: 6%; } .dj-progress-w-7 { width: 7%; } .dj-progress-w-8 { width: 8%; } .dj-progress-w-9 { width: 9%; }
 .dj-progress-w-10 { width: 10%; } .dj-progress-w-11 { width: 11%; } .dj-progress-w-12 { width: 12%; } .dj-progress-w-13 { width: 13%; } .dj-progress-w-14 { width: 14%; } .dj-progress-w-15 { width: 15%; } .dj-progress-w-16 { width: 16%; } .dj-progress-w-17 { width: 17%; } .dj-progress-w-18 { width: 18%; } .dj-progress-w-19 { width: 19%; }
 .dj-progress-w-20 { width: 20%; } .dj-progress-w-21 { width: 21%; } .dj-progress-w-22 { width: 22%; } .dj-progress-w-23 { width: 23%; } .dj-progress-w-24 { width: 24%; } .dj-progress-w-25 { width: 25%; } .dj-progress-w-26 { width: 26%; } .dj-progress-w-27 { width: 27%; } .dj-progress-w-28 { width: 28%; } .dj-progress-w-29 { width: 29%; }
