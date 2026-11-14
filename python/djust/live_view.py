@@ -1616,12 +1616,13 @@ class LiveView(
             def handle_restore(self, request):
                 self._rows = Chat.objects.filter(pk=self.chat_id)   # chat_id was restored
 
-        It runs on a WebSocket/SSE mount of a view whose declared
-        ``state(persist=...)`` fields were restored (after ``mount()``, with
-        the restored values in place), on an explicit child embedded with
-        ``{% live_render %}`` the same way, and on the HTTP page-POST fallback
-        (after the object permission check, before the event handler). It does
-        not run after a plain ``mount()``. May be ``async def``.
+        It runs on a WebSocket/SSE mount of a view whose saved state was
+        restored, on an explicit child embedded with ``{% live_render %}``, and
+        on the HTTP page-POST fallback, at the same point on each (#4088):
+        after ``mount()`` (when it runs) and the restore, after
+        ``handle_params()`` and the saved state's re-apply, after the object
+        permission check, before the first render or the event handler. It
+        does not run after a plain ``mount()``. May be ``async def``.
 
         Keep it idempotent: what it changes is not saved until the next event,
         so it runs again on every reconnect until one lands. It also cannot

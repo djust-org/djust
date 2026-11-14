@@ -129,7 +129,7 @@ It is called once per render, before the JIT. A key it returns wins over a publi
 
 #### `handle_restore(request)`
 
-Called after the view's saved state was put back on a new view object: on a WebSocket/SSE mount that restored declared `state(persist=...)` fields (after `mount()`), on an explicit `{% live_render %}` child the same way, and on the HTTP page-POST fallback (after the object permission check, before the event handler). `mount()` never sees that state (it runs before the state is put back, or not at all on the fallback), so read here what was not saved, from the restored ids:
+Called after the view's saved state was put back on a new view object: on a WebSocket/SSE mount that restored saved state, on an explicit `{% live_render %}` child, and on the HTTP page-POST fallback. Every transport runs it at the same point: after `mount()` (when it runs) and the state put back, after `handle_params()` and the saved state's re-apply, after the object permission check, and before the first render or the event handler. So it reads from the state the view renders, and never for a denied object. `mount()` never sees that state (it runs before the state is put back, or not at all on the fallback), so read here what was not saved, from the restored ids:
 
 ```python
 def handle_restore(self, request):
@@ -142,7 +142,7 @@ Not called after a plain `mount()`. May be `async def`.
 
 #### `handle_restore(request)`
 
-Called after the view's saved state was put back on a new view object: on a WebSocket/SSE mount that restored declared `state(persist=...)` fields (after `mount()`), on an explicit `{% live_render %}` child the same way, and on the HTTP page-POST fallback (after the object permission check, before the event handler). `mount()` never sees that state (it runs before the state is put back, or not at all on the fallback), so read here what was not saved, from the restored ids:
+Called after the view's saved state was put back on a new view object: on a WebSocket/SSE mount that restored saved state, on an explicit `{% live_render %}` child, and on the HTTP page-POST fallback. Every transport runs it at the same point: after `mount()` (when it runs) and the state put back, after `handle_params()` and the saved state's re-apply, after the object permission check, and before the first render or the event handler. So it reads from the state the view renders, and never for a denied object. `mount()` never sees that state (it runs before the state is put back, or not at all on the fallback), so read here what was not saved, from the restored ids:
 
 ```python
 def handle_restore(self, request):
