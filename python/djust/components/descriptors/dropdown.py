@@ -10,7 +10,9 @@ Usage::
         # toggle_dropdown event auto-registered
 """
 
-from .base import LiveComponent, TypedState
+from djust.decorators import event_handler
+
+from .base import LiveComponent, TypedState, bound_state
 from typing import Any
 
 
@@ -25,6 +27,7 @@ class Dropdown(LiveComponent):
 
     class Meta:
         event = "toggle_dropdown"
+        events = ("close_dropdown",)  # #4037
         tier = "client"
         # TODO(DEP-002 7.4): Client-tier WebSocket skip — when djust core client
         # JS supports it, client-tier components should skip the WebSocket send
@@ -34,3 +37,8 @@ class Dropdown(LiveComponent):
 
     def _handle_event(self, state: "State", **kwargs: Any) -> None:
         state.is_open = not state.is_open
+
+    @event_handler
+    def close_dropdown(self, **kwargs: Any) -> None:
+        """Close the dropdown."""
+        bound_state(self).is_open = False

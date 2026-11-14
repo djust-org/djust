@@ -10,7 +10,9 @@ Usage::
         # toggle_tooltip event auto-registered
 """
 
-from .base import LiveComponent, TypedState
+from djust.decorators import event_handler
+
+from .base import LiveComponent, TypedState, bound_state
 from typing import Any
 
 
@@ -25,6 +27,7 @@ class Tooltip(LiveComponent):
 
     class Meta:
         event = "toggle_tooltip"
+        events = ("show_tooltip", "hide_tooltip")  # #4037
         tier = "client"
         # TODO(DEP-002 7.4): Client-tier WebSocket skip — when djust core client
         # JS supports it, client-tier components should skip the WebSocket send
@@ -34,3 +37,13 @@ class Tooltip(LiveComponent):
 
     def _handle_event(self, state: "State", **kwargs: Any) -> None:
         state.is_visible = not state.is_visible
+
+    @event_handler
+    def show_tooltip(self, **kwargs: Any) -> None:
+        """Show the tooltip."""
+        bound_state(self).is_visible = True
+
+    @event_handler
+    def hide_tooltip(self, **kwargs: Any) -> None:
+        """Hide the tooltip."""
+        bound_state(self).is_visible = False
