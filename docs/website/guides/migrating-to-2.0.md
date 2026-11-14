@@ -939,5 +939,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 536b0aed4771 -->
-<!-- generated-doc prose-sha256: 2d27264715e1 -->
+<!-- generated-doc prose-sha256: 0681d1491cc9 -->

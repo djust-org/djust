@@ -847,6 +847,10 @@ def test_session_engine_across_processes(engine, survival, request):
         moved = browser.socket("B").mount(COUNTER, "/counter/", reconnect_from=socket)
         if kinds(moved) == ["mount"] and probe_from(moved)["count"] == at_a:
             over_ws = "restored"
+        elif kinds(moved) == ["mount"] and probe_from(moved)["count"] == 0:
+            # Since #4102 a socket whose session is not in this process's store
+            # mounts fresh instead of failing; the state is still lost (a gap).
+            over_ws = "the view mounts fresh: this process does not hold the session (#4102)"
         elif kinds(moved) == ["error"]:
             over_ws = "mount fails with an error"
         else:

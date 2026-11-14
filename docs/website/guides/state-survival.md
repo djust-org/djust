@@ -175,7 +175,7 @@ engine's directory is shared cannot be checked.
 | `cache`, `FileBasedCache` in a shared directory | kept<br><sub>`test_session_engine_across_processes`</sub> | restored<br><sub>`test_session_engine_across_processes`</sub> | Only with a cache every process shares. |
 | `cache`, Django's `RedisCache` | kept<br><sub>`test_session_engine_across_processes`</sub> | restored<br><sub>`test_session_engine_across_processes`</sub> | A Redis with persistence. |
 | `cached_db`, `RedisCache` plus the database | kept<br><sub>`test_session_engine_across_processes`</sub> | restored<br><sub>`test_session_engine_across_processes`</sub> | Supported. |
-| `cache`, `LocMemCache` (one per process) | not kept: each process holds its own sessions, so each request starts over **(known gap)**<br><sub>`test_session_engine_across_processes`</sub> | mount fails with an error **(known gap)**<br><sub>`test_session_engine_across_processes`</sub> | Never with more than one process. |
+| `cache`, `LocMemCache` (one per process) | not kept: each process holds its own sessions, so each request starts over **(known gap)**<br><sub>`test_session_engine_across_processes`</sub> | the view mounts fresh: this process does not hold the session (#4102) **(known gap)**<br><sub>`test_session_engine_across_processes`</sub> | Never with more than one process. |
 <!-- END GENERATED survival-engines -->
 
 ## Session reads and writes per event

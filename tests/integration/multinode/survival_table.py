@@ -464,7 +464,9 @@ ENGINE_CELLS[("cache_locmem", HTTP)] = Cell(
     gap=True,
 )
 ENGINE_CELLS[("cache_locmem", WS)] = Cell(
-    "mount fails with an error", _T + "session_engine_across_processes", gap=True
+    "the view mounts fresh: this process does not hold the session (#4102)",
+    _T + "session_engine_across_processes",
+    gap=True,
 )
 
 # ---------------------------------------------------------------------------
