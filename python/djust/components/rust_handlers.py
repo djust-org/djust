@@ -2070,7 +2070,7 @@ def _apply_menu_active(content: str, active: object) -> str:
     rule: a non-empty ``id`` or ``href`` equal to it) and remove every marker."""
     import base64
 
-    def resolve(match: Any) -> str:
+    def resolve(match: "_re_filters.Match[str]") -> str:
         try:
             item_id, href = _json.loads(base64.urlsafe_b64decode(match.group(3).encode("ascii")))
         except ValueError:
