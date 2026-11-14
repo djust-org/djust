@@ -93,9 +93,9 @@ gate-offs, without a browser.
 - **The URL and the saved state.** `handle_params()` runs on every fallback
   request and socket mount (#3624 pins that the URL a request carries wins over
   a declared `persist="server"` field; its test changes the URL, so it holds).
-  The envelope records the query the view last read, canonical (parsed, sorted;
-  a repeated key counts by its last value, because the client's socket mount
-  sends only that). On restore the saved state goes on first; `handle_params()`
+  The envelope records the query the view last read, canonical (parsed, sorted
+  by key; a repeated key counts by all its values in order, which every
+  transport sends since #4125). On restore the saved state goes on first; `handle_params()`
   runs; and only while the query is the one the state was saved under is the
   saved state put back again over what the hook assigned: declared fields and
   undeclared attributes alike (one rule; before this, a declared field took the

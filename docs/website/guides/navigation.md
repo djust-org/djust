@@ -99,7 +99,8 @@ def handle_params(self, params, uri):
 ```
 
 By default `params` holds raw strings from the query string (a repeated key is a
-list). Reading one with `int(...)` raises on `?page=abc` and answers 500, so a view
+list, on the page GET, the socket and SSE mounts, `url_change` and the HTTP
+fallback alike). Reading one with `int(...)` raises on `?page=abc` and answers 500, so a view
 that reads typed or restricted values should declare them with
 [`params_form`](#declared-parameters-params_form).
 

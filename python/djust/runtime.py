@@ -3597,7 +3597,7 @@ class ViewRuntime(RuntimeTurnPort):
         try:
             from urllib.parse import urlencode
 
-            query_string = urlencode(params) if params else ""
+            query_string = urlencode(params, doseq=True) if params else ""
             uri = f"{page_url}?{query_string}" if query_string else page_url
             await run_handle_params(view_instance, params, uri)
             if not legacy_exposure:
@@ -5652,7 +5652,7 @@ class ViewRuntime(RuntimeTurnPort):
         # _build_request without going through dispatch_mount's validation.
         page_url = validate_mount_url(page_url)
         factory = RequestFactory()
-        query_string = urlencode(params) if params else ""
+        query_string = urlencode(params, doseq=True) if params else ""
         path_with_query = f"{page_url}?{query_string}" if query_string else page_url
 
         # Finding #26: propagate the validated client Host (and TLS scheme) into

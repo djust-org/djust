@@ -15,6 +15,13 @@ const navSource = fs.readFileSync(
     './python/djust/static/djust/src/18-navigation.js',
     'utf-8'
 );
+// #4125: 18-navigation.js reads the query through the bundle-wide
+// djustQueryParams() (00-namespace.js); load the real one.
+const namespaceSource = fs.readFileSync('./python/djust/static/djust/src/00-namespace.js', 'utf-8');
+const queryParamsStart = namespaceSource.indexOf('function djustQueryParams(');
+const queryParamsSource = namespaceSource.slice(
+    queryParamsStart, namespaceSource.indexOf('\n}\n', queryParamsStart) + 3,
+);
 
 function createEnv({ routeMap = {}, ws = null, autoNav = true } = {}) {
     const metaTag = autoNav ? '<meta name="djust-auto-navigate" content="1">' : '';
@@ -35,6 +42,7 @@ function createEnv({ routeMap = {}, ws = null, autoNav = true } = {}) {
     window.eval('function findPageViewContainer(){ return document.querySelector("[dj-view]:not([dj-sticky-root]):not([data-djust-embedded])"); }');
     window.liveViewWS_mock = ws;
     window.eval('var liveViewWS = window.liveViewWS_mock;');
+    window.eval(queryParamsSource);
 
     try {
         window.eval(navSource);
