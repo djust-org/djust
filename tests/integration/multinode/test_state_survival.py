@@ -812,6 +812,53 @@ def test_push_with_in_memory_layer(db_cluster, survival):
     on_b.close()
 
 
+def _open_sse(browser: Browser, node: str, url: str, view: str):
+    """A page load on ``node`` and its SSE stream (the fallback transport) on the same node."""
+    status, body, _ = browser.get(node, url)
+    assert status == 200, body[:300]
+    stream = browser.sse(node, view, url)
+    frames = stream.until(lambda f: f.get("type") in ("mount", "error"))
+    assert kinds([f for f in frames if f.get("type") != "sse_connect"]) == ["mount"], frames
+    return stream, probe_from(frames)
+
+
+def test_push_to_sse_across_processes(redis_cluster, survival):
+    """#3885: an SSE session joins the same channel-layer groups as a socket."""
+    browser = Browser(redis_cluster)
+    stream, _ = _open_sse(browser, "B", "/push/", V + "PushView")
+    assert browser.get("A", "/_mn/push/?value=5")[0] == 200
+    frames = stream.until(lambda f: f.get("source") == "broadcast")
+    survival.observe(
+        "sessions",
+        "push_redis_sse",
+        "ws",
+        "delivered" if probe_from(frames)["received"] == [5] else "?",
+    )
+    stream.close()
+
+
+def test_push_to_sse_with_in_memory_layer(db_cluster, survival):
+    browser = Browser(db_cluster)
+    on_a, _ = _open_sse(browser, "A", "/push/", V + "PushView")
+    on_b, _ = _open_sse(Browser(db_cluster), "B", "/push/", V + "PushView")
+    assert browser.get("A", "/_mn/push/?value=1")[0] == 200
+    got_a = probe_from(on_a.until(lambda f: f.get("source") == "broadcast"))
+    survival.observe(
+        "sessions", "push_memory_sse", "same", "delivered" if got_a["received"] == [1] else "?"
+    )
+    # B's own push reaches B; A's push from before it never does.
+    assert browser.get("B", "/_mn/push/?value=2")[0] == 200
+    got_b = probe_from(on_b.until(lambda f: f.get("source") == "broadcast"))
+    survival.observe(
+        "sessions",
+        "push_memory_sse",
+        "ws",
+        "not delivered" if got_b["received"] == [2] else "?",
+    )
+    on_a.close()
+    on_b.close()
+
+
 def _online(socket, count: int):
     return socket.until(lambda f: (probe_from([f]) or {}).get("online") == count)
 

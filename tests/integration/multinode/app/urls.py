@@ -1,8 +1,10 @@
-from django.urls import path
+from django.urls import include, path
 
+from djust.sse import sse_urlpatterns
 from tests.integration.multinode.app import views
 
 urlpatterns = [
+    path("djust/", include(sse_urlpatterns)),
     path("counter/", views.CounterView.as_view()),
     path("counter2/", views.CounterView.as_view()),
     path("legacy/", views.LegacyCounterView.as_view()),

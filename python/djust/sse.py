@@ -11,11 +11,13 @@ Feature limitations compared to WebSocket transport:
 - No binary file uploads (use WebSocket or direct HTTP upload endpoints)
 - No presence tracking (requires persistent bidirectional channel)
 - No embedded child-view scoped updates (full-page updates only)
-- ``push_to_view()`` groups, ``scope=`` push scopes and ``db_notify`` are WebSocket-only:
-  they are delivered through the channel layer, which an SSE session does not join,
-  and SSE sessions are in-process, so a push from another process cannot reach one.
-  What an SSE session does get from the server: ``tick_interval`` / ``handle_tick()``
-  and ``await self.server_push(handler, payload)`` from the view's own code (#3809).
+
+What an SSE session gets from the server, as a WebSocket does: ``tick_interval`` /
+``handle_tick()``, ``await self.server_push(handler, payload)`` from the view's own
+code (#3809), and ``push_to_view()`` groups, ``scope=`` push scopes and ``db_notify``
+(#3885): each SSE view takes a channel on the channel layer and joins the same
+groups (``djust._sse_channels``), so a push from another process reaches it with a
+shared layer.
 
 Usage: Add SSE URL patterns to your Django URL configuration::
 
@@ -449,6 +451,18 @@ class _SSEStream:
         self._guard.abandon()
 
 
+def _originating(runtime: Any) -> Any:
+    """Tag the pushes a POSTed turn's handlers send with the view's channel (#1677).
+
+    ``push_to_view`` stamps the tag on the message, and the view's own channel
+    member skips a push that carries it: the session's event answer already
+    carried that state. The SSE twin of the WebSocket event turn's tag (#3885).
+    """
+    from .push import originating_turn
+
+    return originating_turn(getattr(runtime.transport, "origin_token", None))
+
+
 class SSESession:
     """
     Per-connection state for a single SSE client.
@@ -591,7 +605,8 @@ class SSESession:
                 return
             self._event_request = request
             try:
-                await self.runtime.dispatch_message(data)
+                with _originating(self.runtime):
+                    await self.runtime.dispatch_message(data)
             finally:
                 self._event_request = None
 
@@ -677,7 +692,8 @@ class SSESession:
                 return
             slot.session._event_request = request
             try:
-                await slot.runtime.dispatch_message(data)
+                with _originating(slot.runtime):
+                    await slot.runtime.dispatch_message(data)
             finally:
                 slot.session._event_request = None
 

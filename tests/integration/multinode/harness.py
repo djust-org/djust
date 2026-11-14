@@ -356,6 +356,9 @@ class Browser:
     def socket(self, node: str) -> "Socket":
         return Socket(self, node)
 
+    def sse(self, node: str, view: str, url: str) -> "SSEStream":
+        return SSEStream(self, node, view, url)
+
 
 class Socket:
     """A djust WebSocket to one node."""
@@ -465,6 +468,64 @@ class Socket:
         try:
             self.ws.close()
         except Exception:  # noqa: BLE001 - a socket to a killed node is already gone
+            pass
+
+
+class SSEStream:
+    """A djust SSE stream (the client's EventSource) to one node (#3885).
+
+    The stream GET mounts ``view`` as client.js does on the SSE fallback; its
+    ``data:`` lines are the same protocol frames a socket receives.
+    """
+
+    def __init__(self, browser: Browser, node: str, view: str, url: str) -> None:
+        import uuid
+        from urllib.parse import urlencode
+
+        self.node = node
+        self.session_id = str(uuid.uuid4())
+        port = browser.cluster[node].port
+        headers = dict(browser.headers)
+        if browser.cookies:
+            headers["Cookie"] = browser._cookie_header()
+        headers["Accept"] = "text/event-stream"
+        query = urlencode({"view": view, "_djust_url": url, "_djust_tab": browser.tab(url)})
+        self.conn = http.client.HTTPConnection("127.0.0.1", port, timeout=HANG_GUARD_S)
+        self.conn.request("GET", "/djust/sse/%s/?%s" % (self.session_id, query), headers=headers)
+        self.response = self.conn.getresponse()
+        assert self.response.status == 200, self.response.read()[:300]
+        self.frames: List[Dict[str, Any]] = []
+
+    def recv(self) -> Optional[Dict[str, Any]]:
+        """The next ``data:`` frame (keepalive comments skipped); ``None`` at the end."""
+        while True:
+            try:
+                line = self.response.fp.readline()
+            except (TimeoutError, socket.timeout):
+                raise AssertionError("hang guard: no SSE frame from node %s" % self.node) from None
+            if not line:
+                return None
+            text = line.decode("utf-8", "replace").rstrip("\r\n")
+            if text.startswith("data: "):
+                frame = json.loads(text[len("data: ") :])
+                self.frames.append(frame)
+                return frame
+
+    def until(self, predicate) -> List[Dict[str, Any]]:
+        """Frames up to and including the first one ``predicate`` accepts."""
+        got: List[Dict[str, Any]] = []
+        while True:
+            frame = self.recv()
+            if frame is None:
+                return got
+            got.append(frame)
+            if predicate(frame):
+                return got
+
+    def close(self) -> None:
+        try:
+            self.conn.close()
+        except Exception:  # noqa: BLE001 - a stream to a killed node is already gone
             pass
 
 

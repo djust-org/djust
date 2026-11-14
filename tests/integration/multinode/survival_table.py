@@ -391,6 +391,16 @@ SESSION_ROWS = (
         "Do not run more than one process with it.",
     ),
     Row(
+        "push_redis_sse",
+        "`push_to_view()` to a view mounted over SSE, Redis channel layer",
+        "Use a channel layer every process shares (as for a WebSocket).",
+    ),
+    Row(
+        "push_memory_sse",
+        "`push_to_view()` to a view mounted over SSE, in-memory channel layer",
+        "Do not run more than one process with it (as for a WebSocket).",
+    ),
+    Row(
         "presence_redis",
         "Presence (Redis backend and channel layer)",
         'Set `PRESENCE_BACKEND = "redis"` and a shared channel layer.',
@@ -432,6 +442,12 @@ SESSION_CELLS: Dict[Tuple[str, str], Entry] = {
     ("push_redis", WS): Cell("delivered", _T + "push_to_view_across_processes"),
     ("push_memory", SAME): Cell("delivered", _T + "push_with_in_memory_layer"),
     ("push_memory", WS): Cell("not delivered", _T + "push_with_in_memory_layer", gap=True),
+    ("push_redis_sse", SAME): NA("measured across processes only"),
+    ("push_redis_sse", WS): Cell("delivered", _T + "push_to_sse_across_processes"),
+    ("push_memory_sse", SAME): Cell("delivered", _T + "push_to_sse_with_in_memory_layer"),
+    ("push_memory_sse", WS): Cell(
+        "not delivered", _T + "push_to_sse_with_in_memory_layer", gap=True
+    ),
     ("presence_redis", SAME): NA("measured across processes only"),
     ("presence_redis", WS): Cell(
         "join and leave seen by the other process", _T + "presence_across_processes"
