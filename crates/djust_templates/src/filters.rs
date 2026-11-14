@@ -6836,13 +6836,11 @@ mod tests {
             ("upper", "1E-9"),
             ("lower", "1e-9"),
             ("truncatechars", "1E-9"),
-            ("cut", "1E9"),
-            ("center", "        1E-9        "),
         ] {
+            // `cut` and `center` were rows here until #4005 made them Django's
+            // own functions, which need an interpreter.
             let arg = match name {
                 "truncatechars" => Some("8"),
-                "cut" => Some("-"),
-                "center" => Some("20"),
                 _ => None,
             };
             let got = apply_filter(name, &value, arg).unwrap();
@@ -6895,8 +6893,9 @@ mod tests {
             matches!(&got, Value::String(s) if s == "1E-9"),
             "|safe gave {got:?}"
         );
-        let got = apply_filter("escape", &value, None).unwrap();
-        assert_eq!(got.to_string(), "0.000000001", "|escape gave {got:?}");
+        // The `escape` row needs an interpreter since #4005 (Django's own
+        // `escape_filter`, which answers `1E-9`); it is pinned against Django in
+        // `python/tests/test_string_filter_stringification_2250.py`.
     }
 
     /// `|safe` is `SafeString(str(value))` for EVERY variant (#2303).
@@ -7371,20 +7370,6 @@ mod tests {
         assert_eq!(built.to_string(), "(1, '<b>')");
     }
 
-    /// `escape` is EAGER — `conditional_escape`, exactly as Django registers it
-    /// (#2281). It was a no-op deferring to render-time auto-escaping, which is
-    /// indistinguishable for `{{ p|escape }}` alone and wrong for every chain:
-    /// the next filter saw the raw value, and `{{ p|escape|safe }}` emitted it.
-    #[test]
-    fn test_escape_filter_escapes_eagerly() {
-        let value = Value::String("<script>alert('xss')</script>".to_string());
-        let result = apply_filter("escape", &value, None).unwrap();
-        assert_eq!(
-            result.to_string(),
-            "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
-        );
-    }
-
     /// The half that separates `escape` from `force_escape`: a value already
     /// safe passes through untouched, so `{{ p|safe|escape }}` is not
     /// double-escaped. `apply_filter` cannot know the provenance, so this goes
@@ -7392,20 +7377,9 @@ mod tests {
     #[test]
     fn escape_does_not_double_escape_a_safe_value() {
         let value = Value::String("<b>hi</b>".to_string());
-        let (got, _) = apply_filter_full_safe(
-            "escape",
-            &value,
-            None,
-            None,
-            true,
-            InputSafety {
-                container: true,
-                items: false,
-            },
-            true,
-        )
-        .unwrap();
-        assert_eq!(got.to_string(), "<b>hi</b>");
+        // The `escape` half (a safe value passes through) needs an interpreter
+        // since #4005 and is pinned in
+        // `python/tests/test_routed_cold_filters_4005.py`.
         // `force_escape` is `escape()`, not `conditional_escape()` — it escapes
         // a `SafeString` too. That is the entire difference between the two.
         let (got, _) = apply_filter_full_safe(
@@ -7585,13 +7559,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cut_filter() {
-        let value = Value::String("hello world".to_string());
-        let result = apply_filter("cut", &value, Some(" ")).unwrap();
-        assert_eq!(result.to_string(), "helloworld");
-    }
-
-    #[test]
     fn test_divisibleby_filter() {
         let value = Value::Integer(10);
         let result = apply_filter("divisibleby", &value, Some("2")).unwrap();
@@ -7611,33 +7578,6 @@ mod tests {
         let value = Value::Integer(42);
         let result = apply_filter("floatformat", &value, Some("2")).unwrap();
         assert_eq!(result.to_string(), "42.00");
-    }
-
-    #[test]
-    fn test_random_filter() {
-        let value = Value::List(vec![
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
-            Value::String("c".to_string()),
-        ]);
-        let result = apply_filter("random", &value, None).unwrap();
-        // Result should be one of the list items
-        match result {
-            Value::String(s) => assert!(s == "a" || s == "b" || s == "c"),
-            _ => panic!("Expected string value"),
-        }
-
-        // `random.choice([])` is an `IndexError`, the ONE exception Django's
-        // body catches — and its answer is a literal `return ""`, a `str`,
-        // not an absent value (#2451). The difference is observable through
-        // `pprint`, which renders `''` for the string and `None` for a
-        // `Value::Missing`.
-        let empty = Value::List(vec![]);
-        let result = apply_filter("random", &empty, None).unwrap();
-        assert!(
-            matches!(&result, Value::String(s) if s.is_empty()),
-            "{result:?}"
-        );
     }
 
     #[test]
@@ -7845,59 +7785,6 @@ mod tests {
     }
 
     #[test]
-    fn test_dictsort_filter() {
-        // Create list of dicts
-        let mut dict1 = IndexMap::new();
-        dict1.insert("name".into(), Value::String("Charlie".to_string()));
-        dict1.insert("age".into(), Value::Integer(30));
-
-        let mut dict2 = IndexMap::new();
-        dict2.insert("name".into(), Value::String("Alice".to_string()));
-        dict2.insert("age".into(), Value::Integer(25));
-
-        let mut dict3 = IndexMap::new();
-        dict3.insert("name".into(), Value::String("Bob".to_string()));
-        dict3.insert("age".into(), Value::Integer(35));
-
-        let value = Value::List(vec![
-            Value::Object(dict1),
-            Value::Object(dict2),
-            Value::Object(dict3),
-        ]);
-
-        // Sort by name
-        let result = apply_filter("dictsort", &value, Some("name")).unwrap();
-        if let Value::List(sorted) = result {
-            assert_eq!(sorted.len(), 3);
-            // First should be Alice
-            if let Value::Object(first) = &sorted[0] {
-                assert_eq!(first.get("name").unwrap().to_string(), "Alice");
-            }
-        } else {
-            panic!("Expected List value");
-        }
-    }
-
-    #[test]
-    fn test_dictsortreversed_filter() {
-        let mut dict1 = IndexMap::new();
-        dict1.insert("name".into(), Value::String("Alice".to_string()));
-
-        let mut dict2 = IndexMap::new();
-        dict2.insert("name".into(), Value::String("Bob".to_string()));
-
-        let value = Value::List(vec![Value::Object(dict1), Value::Object(dict2)]);
-
-        let result = apply_filter("dictsortreversed", &value, Some("name")).unwrap();
-        if let Value::List(sorted) = result {
-            // First should be Bob (reversed)
-            if let Value::Object(first) = &sorted[0] {
-                assert_eq!(first.get("name").unwrap().to_string(), "Bob");
-            }
-        }
-    }
-
-    #[test]
     fn test_urlencode_filter() {
         // Basic text with spaces
         let value = Value::String("Hello World".to_string());
@@ -8007,30 +7894,6 @@ mod tests {
     }
 
     #[test]
-    fn test_default_if_none_with_null() {
-        // `None` fires the fallback; `Missing` (an ABSENT variable) does not —
-        // Django substitutes "" for it before the filter runs (#2203).
-        let none = apply_filter("default_if_none", &Value::None, Some("NA")).unwrap();
-        assert_eq!(none.to_string(), "NA");
-        let missing = apply_filter("default_if_none", &Value::Missing, Some("NA")).unwrap();
-        assert_eq!(missing.to_string(), "");
-    }
-
-    #[test]
-    fn test_default_if_none_with_empty_string() {
-        let value = Value::String("".to_string());
-        let result = apply_filter("default_if_none", &value, Some("fallback")).unwrap();
-        assert_eq!(result.to_string(), "");
-    }
-
-    #[test]
-    fn test_default_if_none_with_value() {
-        let value = Value::String("hello".to_string());
-        let result = apply_filter("default_if_none", &value, Some("fallback")).unwrap();
-        assert_eq!(result.to_string(), "hello");
-    }
-
-    #[test]
     fn test_wordwrap_filter_default() {
         // Same as `test_stringformat_filter_default`: `wordwrap`'s argument is
         // required, so there is no no-argument behaviour to pin (#2400).
@@ -8040,71 +7903,6 @@ mod tests {
             format!("{err:?}").contains("wordwrap requires 2 arguments, 1 provided"),
             "{err:?}"
         );
-    }
-
-    #[test]
-    fn test_ljust_filter() {
-        let value = Value::String("hi".to_string());
-        let result = apply_filter("ljust", &value, Some("10")).unwrap();
-        assert_eq!(result.to_string(), "hi        ");
-        assert_eq!(result.to_string().len(), 10);
-    }
-
-    #[test]
-    fn test_ljust_filter_no_pad_needed() {
-        let value = Value::String("hello".to_string());
-        let result = apply_filter("ljust", &value, Some("3")).unwrap();
-        assert_eq!(result.to_string(), "hello");
-    }
-
-    #[test]
-    fn test_rjust_filter() {
-        let value = Value::String("hi".to_string());
-        let result = apply_filter("rjust", &value, Some("10")).unwrap();
-        assert_eq!(result.to_string(), "        hi");
-        assert_eq!(result.to_string().len(), 10);
-    }
-
-    #[test]
-    fn test_center_filter() {
-        let value = Value::String("hi".to_string());
-        let result = apply_filter("center", &value, Some("10")).unwrap();
-        assert_eq!(result.to_string(), "    hi    ");
-        assert_eq!(result.to_string().len(), 10);
-    }
-
-    /// `str.center`'s odd-margin tie-break (#2294).
-    ///
-    /// Rust's `{:^width$}` — what this arm used — always puts the SMALLER half
-    /// on the left. CPython adds `(marg & width & 1)`, which biases left only
-    /// when the width is odd too. Every row below has an ODD margin; the first
-    /// three are the cells the issue reports and the last two are the
-    /// even-width cases where the two rules coincide, kept so a "fix" that
-    /// merely flips the bias fails here.
-    #[test]
-    fn test_center_uses_pythons_odd_margin_tie_break() {
-        for (value, width, want) in [
-            ("ab", 5usize, "  ab "),
-            ("abcd", 5, " abcd"),
-            ("ab", 3, " ab"),
-            ("a", 4, " a  "),
-            ("abc", 6, " abc  "),
-            // Width <= len is the input unchanged, not a pad of zero.
-            ("abcdef", 3, "abcdef"),
-            ("abc", 3, "abc"),
-            // Code points, not bytes: three-byte CJK still pads to 5 chars.
-            ("\u{4e2d}", 5, "  \u{4e2d}  "),
-            ("\u{4e2d}", 4, " \u{4e2d}  "),
-        ] {
-            let got = apply_filter(
-                "center",
-                &Value::String(value.to_string()),
-                Some(&width.to_string()),
-            )
-            .unwrap()
-            .to_string();
-            assert_eq!(got, want, "{value:?}.center({width})");
-        }
     }
 
     /// The `%s` spec grammar (#2294). The Python-side sweep in
@@ -8701,29 +8499,6 @@ mod tests {
         let result = apply_filter("force_escape", &value, None).unwrap();
         assert!(result.to_string().contains("&#x27;"));
         assert!(result.to_string().contains("&quot;"));
-    }
-
-    #[test]
-    fn test_escapejs_filter() {
-        let value = Value::String("hello\\world".to_string());
-        let result = apply_filter("escapejs", &value, None).unwrap();
-        assert!(result.to_string().contains("\\u005C"));
-
-        let value = Value::String("it's \"quoted\"".to_string());
-        let result = apply_filter("escapejs", &value, None).unwrap();
-        assert!(result.to_string().contains("\\u0027"));
-        assert!(result.to_string().contains("\\u0022"));
-
-        let value = Value::String("line1\nline2\ttab".to_string());
-        let result = apply_filter("escapejs", &value, None).unwrap();
-        assert!(result.to_string().contains("\\u000A"));
-        assert!(result.to_string().contains("\\u0009"));
-
-        // Test U+2028/U+2029 (line/paragraph separators)
-        let value = Value::String("a\u{2028}b\u{2029}c".to_string());
-        let result = apply_filter("escapejs", &value, None).unwrap();
-        assert!(result.to_string().contains("\\u2028"));
-        assert!(result.to_string().contains("\\u2029"));
     }
 
     #[test]

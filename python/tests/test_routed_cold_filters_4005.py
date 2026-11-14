@@ -373,3 +373,56 @@ def test_escape_is_conditional_and_force_escape_is_not() -> None:
     assert _djust("{{ p|safe|escape }}", ctx, None) == "<b>"
     assert _djust("{{ p|safe|force_escape }}", ctx, None) == "&lt;b&gt;"
     assert _djust("{{ p|escape|safe }}", ctx, None) == "&lt;b&gt;"
+
+
+@pytest.mark.parametrize("filter_name", ["ljust", "rjust", "center"])
+@pytest.mark.parametrize("width", ['" 5 "', '"+5"', '"1_0"', '"65535"', '"65536"', '"70000"'])
+def test_python_int_spellings_and_the_old_formatter_boundary(filter_name: str, width: str) -> None:
+    """Moved from the Rust suite when the pad filters became Django's own: `int()`'s
+    spellings pass the chokepoint, and the width that once panicked Rust's
+    formatter (65536) renders as Python pads it."""
+    source = "{{ p|%s:%s }}" % (filter_name, width)
+    expected = DjangoTemplate(source).render(DjangoContext({"p": "ab"}))
+    assert _rust.render_template(source, {"p": "ab"}) == expected
+
+
+#: Moved from `crates/djust_templates/tests/test_xss_prevention.rs` when
+#: `escapejs` became Django's own function: (input, escapes that must appear,
+#: raw text that must not).
+ESCAPEJS_CASES = [
+    ("</script><script>alert(1)</script>", ["\\u003C", "\\u003E"], ["</script>"]),
+    ("'; alert('xss'); //", ["\\u0027"], ["'"]),
+    ('"; alert("xss"); //', ["\\u0022"], ['alert("xss")']),
+    ("\\'; alert(1); //", ["\\u005C", "\\u0027"], []),
+    ("line1\nline2", ["\\u000A"], ["\n"]),
+    ("line1\rline2", ["\\u000D"], ["\r"]),
+    ("col1\tcol2", ["\\u0009"], ["\t"]),
+    ("null\x00byte", ["\\u0000"], []),
+    ("a b c", ["\\u2028", "\\u2029"], [" ", " "]),
+    ("<>&", ["\\u003C", "\\u003E", "\\u0026"], []),
+    ("a=b", ["\\u003D"], []),
+    ("a;b", ["\\u003B"], []),
+    ("a-b", ["\\u002D"], []),
+]
+
+
+@pytest.mark.parametrize("value,present,absent", ESCAPEJS_CASES)
+def test_escapejs_neutralizes_every_js_breakout(value, present, absent) -> None:
+    source = "{% autoescape off %}{{ p|escapejs }}{% endautoescape %}"
+    out = _rust.render_template(source, {"p": value})
+    assert out == DjangoTemplate(source).render(DjangoContext({"p": value}))
+    for text in present:
+        assert text in out, (value, text, out)
+    for text in absent:
+        assert text not in out, (value, text, out)
+    # Under autoescape the escapes are HTML-escaped once more, never undone.
+    escaped = _rust.render_template("{{ p|escapejs }}", {"p": value})
+    assert "<" not in escaped and "\n" not in escaped
+
+
+def test_escape_then_safe_never_uncovers_live_markup() -> None:
+    """Moved from the Rust XSS suite (#2281): `escape` is eager, so `|safe` after
+    it marks the ESCAPED text."""
+    out = _rust.render_template("{{ html|escape|safe }}", {"html": "<img src=x onerror=alert(1)>"})
+    assert "<img" not in out
+    assert out == "&lt;img src=x onerror=alert(1)&gt;"

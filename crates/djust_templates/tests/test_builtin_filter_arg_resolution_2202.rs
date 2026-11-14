@@ -89,17 +89,6 @@ fn join_resolves_a_bare_identifier_arg() {
 }
 
 #[test]
-fn cut_resolves_a_bare_identifier_arg() {
-    // Pre-fix this silently no-opped, returning the input unchanged.
-    let ctx = ctx_with(
-        "a",
-        Value::String("hello".into()),
-        Value::String("l".into()),
-    );
-    assert_eq!(render("{{ a|cut:v }}", &ctx), "heo");
-}
-
-#[test]
 fn yesno_resolves_a_bare_identifier_arg() {
     let ctx = ctx_with("a", Value::Bool(true), Value::String("Y,N".into()));
     assert_eq!(render("{{ a|yesno:v }}", &ctx), "Y");
@@ -285,38 +274,6 @@ fn a_return_input_filter_gives_its_value_back() {
     assert_eq!(render(r#"{{ p|truncatechars:"nope" }}"#, &c), "abcdefghij");
 }
 
-/// `int()`'s spellings, which every scattered `parse::<usize>` refused.
-#[test]
-fn the_chokepoint_carries_pythons_int_spellings() {
-    let mut c = Context::new();
-    c.set("p".to_string(), Value::String("ab".into()));
-    assert_eq!(render(r#"{{ p|ljust:" 5 " }}"#, &c), "ab   ");
-    assert_eq!(render(r#"{{ p|ljust:"+5" }}"#, &c), "ab   ");
-    assert_eq!(render(r#"{{ p|ljust:"1_0" }}"#, &c), "ab        ");
-}
-
-/// Rust's format spec holds its width in a `u16`, so `format!("{s:<width$}")`
-/// panics at exactly one past `u16::MAX` with "Formatting argument out of
-/// range" — a `PanicException` across the PyO3 boundary, which derives from
-/// `BaseException` and so escapes every `except Exception`. Pinned as a
-/// BOUNDARY: `65535` was always fine and `65536` was the smallest failure, so
-/// a single large sample says nothing about where the edge is.
-#[test]
-fn the_formatter_width_cap_no_longer_panics() {
-    let mut c = Context::new();
-    c.set("p".to_string(), Value::String("ab".into()));
-    for width in [1usize, 65535, 65536, 70000] {
-        for name in ["ljust", "rjust", "center"] {
-            let source = format!("{{{{ p|{name}:\"{width}\" }}}}");
-            assert_eq!(
-                render(&source, &c).chars().count(),
-                width.max(2),
-                "{name} at width {width}"
-            );
-        }
-    }
-}
-
 /// The regression the boundary test above found in #2328's own first pass.
 ///
 /// `python_int` SATURATES past `isize` rather than failing — correct for
@@ -342,9 +299,7 @@ fn a_width_past_the_pad_cap_raises_rather_than_aborting() {
             );
         }
     }
-    // Non-vacuity: the cap admits every width a page could want.
-    assert_eq!(
-        render(r#"{{ p|ljust:"1000000" }}"#, &c).chars().count(),
-        1_000_000
-    );
+    // The non-vacuity half (the cap admits a width of exactly 1,000,000) runs
+    // Django's own `ljust` since #4005, so it needs an interpreter and lives in
+    // `python/tests/test_routed_cold_filters_4005.py`.
 }
