@@ -434,6 +434,26 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 ---
 
+### C036: State store cannot be used
+
+**Severity**: Error
+
+**What causes it**: `DJUST_STATE_STORE` names a module or class that does not exist, a class that does not subclass `djust.state_store.ViewStateStore`, or a store that fails when created.
+
+**Fix**: Set `DJUST_STATE_STORE` to the dotted path of a `ViewStateStore` subclass, for example `djust.state_store.SealedSessionViewStateStore`, or remove the setting to keep view state in the session.
+
+---
+
+### C037: Sealed state store cannot seal
+
+**Severity**: Error
+
+**What causes it**: The sealed store is named without its key, or without the optional `cryptography` dependency.
+
+**Fix**: `pip install "djust[sealed-state]"`, make a key with `python -c "from djust.state_store import generate_key; print(generate_key())"` and set `DJUST_STATE_STORE_KEYS = [key]`. The first key seals and every key opens, so a key is rotated by putting the new one first.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error

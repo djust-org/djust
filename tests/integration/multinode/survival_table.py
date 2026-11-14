@@ -106,6 +106,19 @@ STATE_ROWS = (
         'field `persist="server"` to keep it anyway.',
     ),
     Row(
+        "store_sealed",
+        "`state()` without `persist`, or an ordinary attribute, with the sealed state store "
+        '(`DJUST_STATE_STORE = "djust.state_store.SealedSessionViewStateStore"`)',
+        "Give every process the same `DJUST_STATE_STORE_KEYS`. A field declared "
+        '`persist="server"` is not sealed: it stays in the session as before.',
+    ),
+    Row(
+        "store_external",
+        "`state()` without `persist`, or an ordinary attribute, with a state store outside "
+        "the session (`DJUST_STATE_STORE` naming your own `ViewStateStore`)",
+        "Use a store every process reaches, as the session engine must be.",
+    ),
+    Row(
         "mount",
         "`mount()`",
         "Put what must be read again on every request in `handle_restore()` or "
@@ -235,6 +248,18 @@ STATE_CELLS: Dict[Tuple[str, str], Entry] = {
         _T + "saving_switched_off",
     ),
     ("switched_off", RESTART): NA("same mount path as the reconnect to another process"),
+    ("store_sealed", SAME): Cell("kept", _T + "state_store"),
+    ("store_sealed", HTTP): Cell(
+        "kept (1, 2, 3 across A, B, A); the session holds no view content", _T + "state_store"
+    ),
+    ("store_sealed", WS): Cell("restored; the session holds no view content", _T + "state_store"),
+    ("store_sealed", RESTART): NA("same mount path as the reconnect to another process"),
+    ("store_external", SAME): Cell("kept", _T + "state_store"),
+    ("store_external", HTTP): Cell(
+        "kept (1, 2, 3 across A, B, A); the session holds no view content", _T + "state_store"
+    ),
+    ("store_external", WS): Cell("restored; the session holds no view content", _T + "state_store"),
+    ("store_external", RESTART): NA("same mount path as the reconnect to another process"),
     ("mount", SAME): NA("runs once, when the page's view is built"),
     ("mount", HTTP): Cell(
         "not run again: the view is rebuilt from its saved state",

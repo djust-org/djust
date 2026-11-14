@@ -105,6 +105,8 @@ a channel layer every process shares. See
 | Ordinary attribute set in `mount()` or a handler, public or `_private` | kept<br><sub>`test_ws_events_on_one_process`</sub> | kept (1, 2, 3 across A, B, A)<br><sub>`test_http_fallback_alternating_processes`</sub> | restored<br><sub>`test_ws_reconnect_to_another_process`</sub> | restored (last completed save)<br><sub>`test_kill_after_save`</sub> | Nothing: it is saved automatically, and is not rendered unless declared. |
 | `state(..., persist=False)` field | kept<br><sub>`test_ws_events_on_one_process`</sub> | lost: every request starts from the default<br><sub>`test_http_fallback_alternating_processes`</sub> | lost: the default<br><sub>`test_ws_reconnect_to_another_process`</sub> | lost: the default<br><sub>`test_kill_after_save`</sub> | Nothing: you asked for it not to be kept. |
 | `state()` without `persist`, or an ordinary attribute, on a view with saving switched off (`automatic_state = False`, or `DJUST_AUTOMATIC_STATE = False` for the project) | kept<br><sub>`test_saving_switched_off`</sub> | not kept: every request runs `mount()` again (a `persist="server"` field is kept)<br><sub>`test_saving_switched_off`</sub> | not kept: starts from `mount()` (a `persist="server"` field is restored)<br><sub>`test_saving_switched_off`</sub> | n/a (same mount path as the reconnect to another process) | Nothing is saved, by your choice: `mount()` builds the view again. Declare a field `persist="server"` to keep it anyway. |
+| `state()` without `persist`, or an ordinary attribute, with the sealed state store (`DJUST_STATE_STORE = "djust.state_store.SealedSessionViewStateStore"`) | kept<br><sub>`test_state_store`</sub> | kept (1, 2, 3 across A, B, A); the session holds no view content<br><sub>`test_state_store`</sub> | restored; the session holds no view content<br><sub>`test_state_store`</sub> | n/a (same mount path as the reconnect to another process) | Give every process the same `DJUST_STATE_STORE_KEYS`. A field declared `persist="server"` is not sealed: it stays in the session as before. |
+| `state()` without `persist`, or an ordinary attribute, with a state store outside the session (`DJUST_STATE_STORE` naming your own `ViewStateStore`) | kept<br><sub>`test_state_store`</sub> | kept (1, 2, 3 across A, B, A); the session holds no view content<br><sub>`test_state_store`</sub> | restored; the session holds no view content<br><sub>`test_state_store`</sub> | n/a (same mount path as the reconnect to another process) | Use a store every process reaches, as the session engine must be. |
 | `mount()` | n/a (runs once, when the page's view is built) | not run again: the view is rebuilt from its saved state<br><sub>`test_http_fallback_alternating_processes`</sub> | runs on the new process, then the saved state is put back over it<br><sub>`test_ws_reconnect_to_another_process`</sub> | n/a (same mount path as the reconnect to another process) | Put what must be read again on every request in `handle_restore()` or `get_context_data()`, not only in `mount()`. |
 | `handle_restore()` hook | n/a (no remount, so nothing to restore) | called on every request<br><sub>`test_http_fallback_alternating_processes`</sub> | called after the restore<br><sub>`test_ws_reconnect_to_another_process`</sub> | called after the restore<br><sub>`test_kill_after_save`</sub> | Use it to reload what the persisted fields point at. |
 | Render baseline (what the next update sends) | patches<br><sub>`test_ws_events_on_one_process`</sub> | full HTML on every request<br><sub>`test_http_fallback_alternating_processes`</sub> | full HTML in the mount, full HTML for the first event, then patches<br><sub>`test_ws_reconnect_to_another_process`</sub> | full HTML in the mount, full HTML for the first event, then patches<br><sub>`test_kill_after_save`</sub> | Nothing: the framework re-sends the page. |
@@ -160,6 +162,13 @@ With `DEBUG = False`, system checks [`djust.C032`](error-codes.md#c032-in-memory
 (an in-memory channel layer) and [`djust.C033`](error-codes.md#c033-presence-counted-per-process)
 (memory presence used by a view) warn about the two rows above that cover only
 one process.
+
+## Keeping saved state out of the plain session
+
+The rows above for the sealed state store and for a state store outside the
+session show the same survival with `DJUST_STATE_STORE` set: the session then
+holds an index entry with no values, and the state itself is sealed, or held
+by your own store. See [The state store](../state/state-store.md).
 
 ## Switching saving off
 

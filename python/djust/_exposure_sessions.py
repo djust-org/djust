@@ -365,7 +365,7 @@ def _flush(session: Any, expected_key: Any) -> None:
     save_merged(session, expected_key)
 
 
-def save_server_state(view: Any, request: Any) -> None:
+def save_server_state(view: Any, request: Any, *, page_load: bool = False) -> None:
     """Save the view's server-side state after the transport's authorization.
 
     Two parts, one session write (#4107):
@@ -378,7 +378,15 @@ def save_server_state(view: Any, request: Any) -> None:
 
     Either part over its size limit raises :class:`StateLimitExceeded` before
     anything is written: state is never saved in part. Called after the page
-    GET's ``mount()`` too, where it overwrites what an earlier page load saved.
+    GET's ``mount()`` too (``page_load``), where it overwrites what an earlier
+    page load saved.
+
+    With a state store configured (#4132) the automatic state's bytes go to
+    the store once both parts are known to fit, and before the session write
+    (``_automatic_state.write_pending``). A store that fails does not fail the
+    save: the response is served and the view starts from ``mount()`` next
+    time. ``DJUST_STATE_STORE_STRICT`` makes an event's save raise
+    :class:`~djust.state_store.StateStoreError` instead, with nothing written.
     """
     from . import _automatic_state
 
@@ -386,10 +394,16 @@ def save_server_state(view: Any, request: Any) -> None:
     # Projected first: a refusal must leave the session dict untouched.
     values = _project_for_save(adapter, view) if adapter is not None else None
     modified_before = getattr(getattr(request, "session", None), "modified", None)
-    undo = _automatic_state.stage(view, request)
+    undo = _automatic_state.stage(view, request, page_load=page_load)
+
+    def to_store() -> None:
+        _automatic_state.write_pending(view, undo, page_load=page_load)
+
     if adapter is not None and values is not None:
         try:
-            adapter.save(values)  # flushes the automatic envelope with it
+            # Flushes the automatic envelope (or its index entry) with it.
+            adapter.before_write = to_store
+            adapter.save(values)
         except StateLimitError as error:
             # The envelope's own overhead tipped it over: the fields are the cause.
             if undo is not None:
@@ -399,6 +413,7 @@ def save_server_state(view: Any, request: Any) -> None:
     elif undo is not None:
         session = request.session
         try:
+            to_store()
             _flush(session, session.session_key)
         except BaseException:
             # Never leave a staged envelope behind a write that failed: the
@@ -685,9 +700,17 @@ class ServerStateSession:
             )
             raise
 
+    #: Run by :meth:`save` once the values are known to fit and before the
+    #: session is touched: the automatic state's store write (#4132). An
+    #: attribute, not a parameter: ``save(values)`` keeps its signature.
+    before_write: "Callable[[], None] | None" = None
+
     def save(self, values: dict[str, Any]) -> None:
         """Write and flush to Django's server storage; never silently downgrade."""
         envelope = self._capture(values)
+        before_write, self.before_write = self.before_write, None
+        if before_write is not None:
+            before_write()
         # Force loading before assignment, then recheck in case load reset a
         # stale session key. Do not bind data to a newly generated replacement.
         self.session.get(self.key)

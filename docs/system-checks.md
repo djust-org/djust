@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 121 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 123 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -46,6 +46,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C033 | Config | Warning | A view uses presence and the presence backend counts only one process's sockets |
 | C034 | Config | Warning | View state is to be saved and `SESSION_ENGINE` cannot hold it, so nothing is saved |
 | C035 | Config | Error | `DJUST_AUTOMATIC_STATE` or a view's `automatic_state` is not `True` or `False` |
+| C036 | Config | Error | `DJUST_STATE_STORE` does not import or does not name a `ViewStateStore` subclass |
+| C037 | Config | Error | The sealed state store has no usable `DJUST_STATE_STORE_KEYS` or `cryptography` is not installed |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -344,6 +346,20 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: `DJUST_AUTOMATIC_STATE` is set to something other than `True` or `False`, or a LiveView's `automatic_state` is something other than `True`, `False` or `None`. Any such value is read as off: the state of the views it covers is not saved between requests (#4128).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C035"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C035"]`
 - **False positives**: None.
+
+### C036 — State store cannot be used
+- **Severity**: Error
+- **Method**: Settings inspection (`DJUST_STATE_STORE`)
+- **What it detects**: `DJUST_STATE_STORE` is set to a dotted path that cannot be imported, to something that is not a `djust.state_store.ViewStateStore` subclass, or to a store whose constructor raises. Until it is fixed no view state is saved between requests; it is never written to the session in the clear instead (#4132).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C036"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C036"]`
+- **False positives**: None.
+
+### C037 — Sealed state store cannot seal
+- **Severity**: Error
+- **Method**: Settings inspection (`DJUST_STATE_STORE`, `DJUST_STATE_STORE_KEYS`) and an import of `cryptography`
+- **What it detects**: `DJUST_STATE_STORE` names `djust.state_store.SealedSessionViewStateStore` and either the `cryptography` package is not installed, or `DJUST_STATE_STORE_KEYS` is missing, empty, or holds a key that is not 32 bytes (or their base64 text). Until it is fixed no view state is saved between requests: djust never falls back to `SECRET_KEY` or to unsealed state in the session (#4132).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C037"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C037"]`
+- **False positives**: A `DJUST_STATE_STORE_KEYS` callable that cannot return keys while system checks run (it is called once by this check).
 
 <!-- END GENERATED check-sections:C -->
 

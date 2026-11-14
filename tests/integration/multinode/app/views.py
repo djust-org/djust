@@ -429,6 +429,20 @@ def session_keys_view(request):
     return JsonResponse({"keys": sorted(str(key) for key in request.session.keys())})
 
 
+def saved_state_view(request):
+    """The caller's own saved-view-state session entries, as the session holds
+    them (#4132: with a state store they are index entries with no values)."""
+    return JsonResponse(
+        {
+            "entries": [
+                value
+                for key, value in request.session.items()
+                if str(key).startswith("_djust_auto_")
+            ]
+        }
+    )
+
+
 def gate_view(request):
     from tests.integration.multinode.app import serve
 

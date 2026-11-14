@@ -86,6 +86,51 @@ def _print_unlistable_sessions() -> None:
     )
 
 
+def _print_state_store_stats(sessions: Optional[list]) -> None:
+    """What the project's state store (``DJUST_STATE_STORE``, #4132) holds."""
+    from djust._automatic_state import _kept_in_session, saved_state_stats
+    from djust.state_store import configured_store, store_stats, store_tag
+
+    store = configured_store()
+    if store is None:
+        return
+    print("\n=== djust State Store ===\n")
+    print(f"Store: {store_tag(store)}")
+    if _kept_in_session(store):
+        print("Its payloads rest in the sessions above (the sizes shown include them).")
+        return
+    if sessions is not None:
+        held = sum(saved_state_stats(s).get("store_bytes", 0) for s in sessions)
+        print(f"Held for the sessions above: {held / 1024:.2f} KB")
+    figures = store_stats()
+    if figures is None:
+        print("Not listed: the store reports no figures of its own (it has no stats()).")
+        return
+    for name, value in sorted(figures.items()):
+        print(f"{name}: {value}")
+
+
+def _clear_state_store(everything: bool) -> None:
+    """Ask the project's state store to clear itself (``djust clear``, #4132).
+
+    The states removed from sessions above were already deleted from it one by
+    one; this sweeps what no session points at (expired or orphaned bytes)."""
+    from djust._automatic_state import _kept_in_session
+    from djust.state_store import configured_store, store_clear, store_tag
+
+    store = configured_store()
+    if store is None or _kept_in_session(store):
+        return
+    removed = store_clear(expired_only=not everything)
+    if removed is None:
+        print(
+            "State store %s cannot clear itself (it has no clear()): only the states "
+            "removed from sessions above were deleted from it." % store_tag(store)
+        )
+    else:
+        print("Removed %d view state(s) from the state store %s" % (removed, store_tag(store)))
+
+
 def cmd_stats(args: argparse.Namespace) -> None:
     """Show the view state saved in sessions, then the state backend's statistics."""
     setup_django()
@@ -116,6 +161,8 @@ def cmd_stats(args: argparse.Namespace) -> None:
                         f"  - {shown}...: {stats['entries']} state(s), "
                         f"{stats['bytes'] / 1024:.2f} KB"
                     )
+
+        _print_state_store_stats(sessions)
 
         from djust.state_backends import get_backend
 
@@ -755,6 +802,7 @@ def cmd_clear(args: argparse.Namespace) -> None:
                 "Removed %d saved view state(s) from %d session(s)"
                 % (sum(removed), sum(1 for count in removed if count))
             )
+        _clear_state_store(args.all)
 
         # Get stats before clearing
         stats_before = backend.get_stats()
