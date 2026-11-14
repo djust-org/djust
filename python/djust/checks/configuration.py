@@ -764,8 +764,8 @@ def _check_server_state_session_engine(errors: list[CheckMessage]) -> None:
     Server state is kept in the session, so a store that cannot hold it (the
     signed-cookies engine, a custom engine) fails every request of such a view.
     The runtime refuses with :class:`~djust._exposure_sessions.UnsupportedSessionEngine`;
-    this reports the combination at startup. Only the exact audited stores
-    count, as at runtime.
+    this reports the combination at startup. Django's server-side stores and
+    their subclasses count, as at runtime (#4128).
     """
     from django.conf import settings
 
@@ -784,7 +784,7 @@ def _check_server_state_session_engine(errors: list[CheckMessage]) -> None:
     engine = getattr(settings, "SESSION_ENGINE", "django.contrib.sessions.backends.db")
     # Decided by the class the engine resolves to, as the runtime decides by
     # the request's session class: an engine module that re-exports a
-    # supported store is supported, a subclass of one is not.
+    # supported store, or subclasses one, is supported.
     store = session_engine_store(engine)
     if store is None or session_store_supported(store):
         return
@@ -798,13 +798,133 @@ def _check_server_state_session_engine(errors: list[CheckMessage]) -> None:
             "(declared by %s)." % (engine, shown),
             hint=(
                 "Server state is kept in a server-side session. Every request of these "
-                "views fails while the engine cannot hold it. Supported engines: %s."
+                "views fails while the engine cannot hold it. Supported engines: %s, "
+                "and any engine whose SessionStore subclasses one of theirs."
                 % ", ".join(SUPPORTED_SESSION_ENGINES)
             ),
             id="djust.C030",
             fix_hint=(
                 "Set `SESSION_ENGINE` to one of the supported engines, or declare the "
                 'state without `persist="server"`.'
+            ),
+        )
+    )
+
+
+def _views_saving_state(LiveView: type) -> tuple[list[str], list[str]]:
+    """Project LiveViews whose state is saved between requests, and those whose
+    ``automatic_state`` is not ``True``, ``False`` or ``None`` (C034 / C035)."""
+    from djust import _automatic_state
+    from djust._exposure import uses_legacy_exposure
+
+    saving, invalid = [], []
+    for cls in _walk_subclasses(LiveView):
+        if _is_framework_internal_class(cls) or cls.__dict__.get("abstract") is True:
+            continue
+        name = "%s.%s" % (cls.__module__, cls.__qualname__)
+        value = inspect.getattr_static(cls, _automatic_state.VIEW_ATTRIBUTE, None)
+        if value is not None and type(value) is not bool:
+            invalid.append(name)
+            continue
+        on = _automatic_state.project_saving_enabled() if value is None else value
+        try:
+            legacy = uses_legacy_exposure(cls)
+        except Exception:  # noqa: BLE001 — an unreadable policy is the V-checks' report
+            legacy = False
+        if on and not legacy:
+            saving.append(name)
+    return sorted(set(saving)), sorted(set(invalid))
+
+
+def _shown(names: list[str]) -> str:
+    return ", ".join(names[:5]) + (" and %d more" % (len(names) - 5) if len(names) > 5 else "")
+
+
+def _check_automatic_state_session_engine(errors: list[CheckMessage]) -> None:
+    """C034 — view state is to be saved, and the session engine cannot hold it (#4128).
+
+    A view's state is saved in the server-side session between requests. With
+    the signed-cookies engine, or an engine built on none of Django's
+    server-side stores, nothing is saved: every fallback request mounts again,
+    with one log line. This says so at startup and names the two ways out.
+    """
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C034"):
+        return
+    try:
+        from djust._automatic_state import SETTING
+        from djust._exposure_sessions import (
+            SUPPORTED_SESSION_ENGINES,
+            session_engine_store,
+            session_store_supported,
+        )
+        from djust.live_view import LiveView
+    except ImportError:
+        return  # LiveView not importable (Rust extension missing) — skip.
+    engine = getattr(settings, "SESSION_ENGINE", "django.contrib.sessions.backends.db")
+    store = session_engine_store(engine)
+    if store is None or session_store_supported(store):
+        return
+    saving, _invalid = _views_saving_state(LiveView)
+    if not saving:
+        return
+    errors.append(
+        DjustWarning(
+            "SESSION_ENGINE is %r, which cannot hold saved view state, so nothing is saved "
+            "between requests for %s." % (engine, _shown(saving)),
+            hint=(
+                "A view's state is saved in a server-side session. With this engine every "
+                "page-POST fallback request runs mount() again and a reconnect starts from "
+                "mount(). Engines that can hold it: %s, and any engine whose SessionStore "
+                "subclasses one of theirs." % ", ".join(SUPPORTED_SESSION_ENGINES)
+            ),
+            id="djust.C034",
+            fix_hint=(
+                "Set `SESSION_ENGINE` to a server-side engine, or say that nothing is to be "
+                "saved: `%s = False` in settings, or `automatic_state = False` on a view." % SETTING
+            ),
+        )
+    )
+
+
+def _check_automatic_state_switch(errors: list[CheckMessage]) -> None:
+    """C035 — the saved-state switch holds something that is not a bool (#4128).
+
+    ``DJUST_AUTOMATIC_STATE`` and a view's ``automatic_state`` are ``True`` or
+    ``False`` (the view's may be ``None``: the project's value). Anything else
+    is read as OFF, so a mistake never saves state nobody asked for; this
+    reports it.
+    """
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C035"):
+        return
+    try:
+        from djust._automatic_state import SETTING, VIEW_ATTRIBUTE
+        from djust.live_view import LiveView
+    except ImportError:
+        return
+    problems = []
+    value = getattr(settings, SETTING, True)
+    if type(value) is not bool:
+        problems.append("%s is %r" % (SETTING, value))
+    _saving, invalid = _views_saving_state(LiveView)
+    if invalid:
+        problems.append("%s on %s" % (VIEW_ATTRIBUTE, _shown(invalid)))
+    if not problems:
+        return
+    errors.append(
+        DjustError(
+            "The saved-state switch must be True or False: %s." % "; ".join(problems),
+            hint=(
+                "Any other value is read as off: the state of the views it covers is not "
+                "saved between requests."
+            ),
+            id="djust.C035",
+            fix_hint=(
+                "Set `%s` to `True` or `False`, and a view's `%s` to `True`, `False` or "
+                "`None` (the project's value)." % (SETTING, VIEW_ATTRIBUTE)
             ),
         )
     )
@@ -1623,6 +1743,11 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C030 -- persist="server" state with a session engine that cannot hold it (#4092)
     _check_server_state_session_engine(errors)
+
+    # C034 / C035 -- saved view state: an engine that cannot hold it, a switch
+    # that is not a bool (#4128)
+    _check_automatic_state_session_engine(errors)
+    _check_automatic_state_switch(errors)
 
     # C031 -- the session store is a cache local to one process (#4103)
     _check_process_local_session_cache(errors)

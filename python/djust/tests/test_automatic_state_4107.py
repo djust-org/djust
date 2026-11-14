@@ -1021,7 +1021,11 @@ def test_a_cookie_session_holds_no_automatic_state(caplog):
     with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
         assert _automatic_state.stage(view, request) is None
     assert not [name for name in request.session.keys() if name.startswith("_djust_")]
-    assert any("session store cannot hold" in r.getMessage() for r in caplog.records)
+    (said,) = [
+        r.getMessage() for r in caplog.records if "is not saved between requests" in r.getMessage()
+    ]
+    # It names the store and both ways out (#4128).
+    assert "signed_cookies" in said and "DJUST_AUTOMATIC_STATE = False" in said
 
 
 @pytest.mark.django_db

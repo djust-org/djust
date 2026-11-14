@@ -39,8 +39,8 @@ from ._exposure import (
 
 _SERVER_SESSION_TYPES = (DBSession, CachedDBSession, CacheSession, FileSession)
 
-#: The ``SESSION_ENGINE`` values whose store can hold ``persist="server"``
-#: state: exactly the store classes in ``_SERVER_SESSION_TYPES`` (#4092).
+#: The ``SESSION_ENGINE`` values whose store can hold server state: the store
+#: classes in ``_SERVER_SESSION_TYPES`` (#4092) and their subclasses (#4128).
 SUPPORTED_SESSION_ENGINES = tuple(cls.__module__ for cls in _SERVER_SESSION_TYPES)
 
 
@@ -56,13 +56,16 @@ class UnsupportedSessionEngine(ExposureConfigurationError, ExposureError):
 
 
 def session_store_supported(store_class: Any) -> bool:
-    """Whether a session store class can hold server state: exactly one of the
-    audited stores. A subclass or a custom store needs a reviewed adapter.
+    """Whether a session store class can hold server state: one of Django's
+    server-side stores (db, cached_db, cache, file) or a subclass of one
+    (#4128: a project's own db store with another expiry or an audit column).
+    The signed-cookies store, and a store built on none of them, cannot.
 
-    The one predicate for the runtime (the request's session) and system check
-    ``djust.C030`` (the configured engine), so the two cannot disagree.
+    The one predicate for the runtime (the request's session) and system
+    checks ``djust.C030`` / ``djust.C034`` (the configured engine), so they
+    cannot disagree.
     """
-    return any(store_class is supported for supported in _SERVER_SESSION_TYPES)
+    return isinstance(store_class, type) and issubclass(store_class, _SERVER_SESSION_TYPES)
 
 
 def session_engine_store(engine: Any) -> Any:
@@ -91,7 +94,7 @@ def unsupported_session_message(session: Any) -> str:
     return (
         'State declared with persist="server" is kept in a server-side session, '
         "and this request's session cannot hold it: %s. Set SESSION_ENGINE to one "
-        'of %s, or declare the state without persist="server".'
+        'of %s (or a subclass of its store), or declare the state without persist="server".'
         % (found, ", ".join(SUPPORTED_SESSION_ENGINES))
     )
 
@@ -561,9 +564,9 @@ class ServerStateSession:
         max_age: int = _DEFAULT_MAX_AGE,
         migrate: StateMigration | None = None,
     ) -> None:
-        # Exact type checks deliberately reject cookie subclasses and custom
-        # implementations masquerading as a known server backend.
-        if type(session) not in _SERVER_SESSION_TYPES:
+        # One of Django's server-side stores or a subclass (#4128). The cookie
+        # store and a store built on none of them are refused.
+        if not session_store_supported(type(session)):
             raise ExposureError("Explicit persistence requires a supported server-side session")
         if type(binding) is not StateBinding or type(contract) is not ExposureContract:
             raise ExposureError("Invalid server state contract or binding")

@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 119 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 121 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -44,6 +44,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C031 | Config | Warning | The session store is a cache only one process can see (`LocMemCache`, `DummyCache`) |
 | C032 | Config | Warning | The channel layer is in-memory, so messages never reach another process's sockets |
 | C033 | Config | Warning | A view uses presence and the presence backend counts only one process's sockets |
+| C034 | Config | Warning | View state is to be saved and `SESSION_ENGINE` cannot hold it, so nothing is saved |
+| C035 | Config | Error | `DJUST_AUTOMATIC_STATE` or a view's `automatic_state` is not `True` or `False` |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -304,9 +306,9 @@ console.log("debug info"); // noqa: Q003
 ### C030 — Server state with an unsupported session engine
 - **Severity**: Error
 - **Method**: Settings inspection and declared `state()` fields
-- **What it detects**: A LiveView declares `state(..., persist="server")` and `SESSION_ENGINE` is not one of `django.contrib.sessions.backends.db`, `cached_db`, `cache` or `file` (for example `signed_cookies`, or a custom engine). Server state is kept in a server-side session, so every request of such a view fails; at runtime it is refused with `UnsupportedSessionEngine`, which names the supported engines (#4092).
+- **What it detects**: A LiveView declares `state(..., persist="server")` and `SESSION_ENGINE` is neither one of `django.contrib.sessions.backends.db`, `cached_db`, `cache` or `file` nor an engine whose `SessionStore` subclasses one of theirs (for example `signed_cookies`, or a store built on none of them). Server state is kept in a server-side session, so every request of such a view fails; at runtime it is refused with `UnsupportedSessionEngine`, which names the supported engines (#4092).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C030"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C030"]`
-- **False positives**: None. The engine is judged by the `SessionStore` class it resolves to, as the runtime judges the request's session, so a module that re-exports a supported store is accepted. A subclass of a supported store is reported because the runtime refuses it too (only the exact audited stores are accepted).
+- **False positives**: None. The engine is judged by the `SessionStore` class it resolves to, as the runtime judges the request's session, so a module that re-exports a supported store, or subclasses one, is accepted (#4128).
 
 ### C031 — Session store local to one process
 - **Severity**: Warning
@@ -328,6 +330,20 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: A LiveView uses `PresenceMixin` while the presence backend is `memory` (the default) or `tenant_memory`. Each process then counts only the sockets it holds, so with several processes every process shows its own users online. Reported only with `DEBUG = False` (#4104).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C033"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C033"]` (for a site that runs as one process)
 - **False positives**: A deployment that runs exactly one process.
+
+### C034 — Saved view state with an unsupported session engine
+- **Severity**: Warning
+- **Method**: Settings inspection (`SESSION_ENGINE`, `DJUST_AUTOMATIC_STATE`) and each LiveView's `automatic_state`
+- **What it detects**: At least one LiveView's state is to be saved between requests (the default) while `SESSION_ENGINE` is neither `django.contrib.sessions.backends.db`, `cached_db`, `cache` or `file` nor an engine whose `SessionStore` subclasses one of theirs. Nothing is saved then: every page-POST fallback request runs `mount()` again and a reconnect starts from `mount()` (#4128).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C034"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C034"]`
+- **False positives**: None. A project that wants nothing saved says so with `DJUST_AUTOMATIC_STATE = False`, which also silences the check.
+
+### C035 — Saved-state switch is not a bool
+- **Severity**: Error
+- **Method**: Settings inspection (`DJUST_AUTOMATIC_STATE`) and each LiveView's `automatic_state`
+- **What it detects**: `DJUST_AUTOMATIC_STATE` is set to something other than `True` or `False`, or a LiveView's `automatic_state` is something other than `True`, `False` or `None`. Any such value is read as off: the state of the views it covers is not saved between requests (#4128).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C035"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C035"]`
+- **False positives**: None.
 
 <!-- END GENERATED check-sections:C -->
 

@@ -66,7 +66,11 @@ _VERSION = 8
 _KEY_PREFIX = "_djust_auto_"
 _MISSING: Any = object()
 #: Public names a transport sets per connection, and this module's own settings.
-_NOT_STATE = frozenset({"client_timezone", "automatic_state_max_kb"})
+_NOT_STATE = frozenset({"client_timezone", "automatic_state_max_kb", "automatic_state"})
+#: The switch (#4128). Project: ``DJUST_AUTOMATIC_STATE`` (default on). View:
+#: the class attribute ``automatic_state`` (None: the project's value).
+SETTING = "DJUST_AUTOMATIC_STATE"
+VIEW_ATTRIBUTE = "automatic_state"
 #: The names Django's ``View.setup()`` sets on a dispatched view.
 _VIEW_SETUP_NAMES = frozenset({"head"})
 _PRIVATE = re.compile(r"_[A-Za-z][A-Za-z0-9_]*\Z", re.ASCII)
@@ -416,6 +420,45 @@ def _digest(text: str) -> bytes:
 def _digests(values: Dict[str, Any]) -> Dict[str, bytes]:
     """Per name, the digest of its encoded value."""
     return {name: _digest(_encode(value)) for name, value in values.items()}
+
+
+def project_saving_enabled() -> bool:
+    """The project's default: on, unless ``DJUST_AUTOMATIC_STATE`` is set to
+    anything but ``True``. A value that is not a bool turns saving OFF (and
+    system check ``djust.C035`` reports it): a project that set the switch
+    wrongly must not have its state written while nobody looks."""
+    try:
+        from django.conf import settings
+
+        value = getattr(settings, SETTING, True)
+    except Exception:  # noqa: BLE001 — settings unavailable: nothing can be saved anyway
+        return False
+    return value is True
+
+
+def saving_enabled(view: Any) -> bool:
+    """Whether this view's state is saved between requests (#4128).
+
+    The view's ``automatic_state`` class attribute decides when it is set
+    (``True`` or ``False``), in either direction over the project's
+    ``DJUST_AUTOMATIC_STATE``; ``None`` or absent takes the project's value.
+    Any other value turns saving off. Never read from the instance: a handler
+    or a restored attribute cannot switch saving on.
+
+    Off means nothing of the view is written to or read from the session by
+    this module: no envelope at the page load, none after an event, no
+    component state, no changed/deleted record. Declared ``persist="server"``
+    fields are another store and are not affected.
+    """
+    value = getattr_static(type(view), VIEW_ATTRIBUTE, None)
+    if value is None:
+        return project_saving_enabled()
+    return value is True
+
+
+def _not_saved(view: Any) -> bool:
+    """The one gate every entry point of this module asks first."""
+    return uses_legacy_exposure(view) or not saving_enabled(view)
 
 
 def limits_for(view: Any) -> Tuple[int, int]:
@@ -793,12 +836,17 @@ def _store(view: Any, request: Any, *, create: bool) -> Optional[_Store]:
 
     session = getattr(request, "session", None)
     if session is None or not session_store_supported(type(session)):
-        # A cookie session is readable by the browser; an unknown store is not
-        # audited. Nothing is written (system check ``djust.C030``).
+        # A cookie session is readable by the browser; a store that is not one
+        # of Django's server-side stores (or a subclass) is not known to keep
+        # its data on the server. Nothing is written (system check ``djust.C034``).
         if _first_time(view, "*", "session"):
             logger.warning(
                 "djust: view state is not saved between requests: this request's session "
-                "store cannot hold server state (use the db, cached_db, cache or file engine)."
+                "store (%s) is not a server-side store djust knows. Use the db, cached_db, "
+                "cache or file engine or a subclass of one, or set %s = False to say that "
+                "nothing is to be saved.",
+                "none" if session is None else getattr(type(session), "__module__", "<unknown>"),
+                SETTING,
             )
         return None
     if not session.session_key:
@@ -1029,7 +1077,7 @@ def saved(view: Any, request: Any) -> Optional[Saved]:
     Records it as the view's basis, so a save that would write the same thing
     is skipped.
     """
-    if uses_legacy_exposure(view):
+    if _not_saved(view):
         return None
     store = _store(view, request, create=False)
     found = _read(view, store) if store is not None else None
@@ -1254,7 +1302,7 @@ def note_url(view: Any, params: Any) -> None:
     wins for what it assigns (``?page=3`` shows page 3); everything it does not
     assign keeps its restored value.
     """
-    if uses_legacy_exposure(view):
+    if _not_saved(view):
         return
     now = canonical_params(params)
     saved_under = view.__dict__.get("_djust_auto_saved_url")
@@ -1265,7 +1313,7 @@ def note_url(view: Any, params: Any) -> None:
 def note_patched_url(view: Any, params: Any) -> None:
     """A handler called ``live_patch(params=...)``: the page's URL is now that
     one, so the state this turn saves is saved under it."""
-    if not uses_legacy_exposure(view):
+    if not _not_saved(view):
         view.__dict__["_djust_auto_url"] = canonical_params(params)
 
 
@@ -1351,7 +1399,7 @@ def settle(view: Any) -> None:
     Called by the socket mount and the fallback POST before the event. A page
     GET does not call it: its save starts the record empty.
     """
-    if uses_legacy_exposure(view):
+    if _not_saved(view):
         return
     basis = _basis(view)
     try:
@@ -1403,7 +1451,7 @@ def stage(view: Any, request: Any, *, create: bool = True) -> Optional[Callable[
     encoded once, and written only when the encoding differs from what the
     view held when its mount sequence finished or last saved.
     """
-    if uses_legacy_exposure(view):
+    if _not_saved(view):
         return None
     hint = view.__dict__.get("_djust_auto_changed")
     if hint is not None:

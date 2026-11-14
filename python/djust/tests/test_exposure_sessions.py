@@ -44,14 +44,31 @@ def test_readable_sessions_rejected_before_values_are_stored(store_class, contra
     assert dict(session.items()) == {}
 
 
-def test_unknown_custom_backends_do_not_inherit_a_confidentiality_grant(contract):
-    class Unknown(SessionStore):
+def test_a_store_built_on_no_server_side_store_is_refused(contract):
+    """A custom store that is not one of Django's server-side stores, nor a
+    subclass of one, is not known to keep its data on the server."""
+    from django.contrib.sessions.backends.base import SessionBase
+
+    class Unknown(SessionBase):
         pass
 
     with pytest.raises(ExposureError, match="server-side"):
         ServerStateSession(
             Unknown(), contract, StateBinding("session123", "anonymous", "none", "/")
         )
+
+
+def test_a_subclass_of_a_server_side_store_holds_server_state(contract, db):
+    """#4128: a project's own db store (another expiry, an extra column)."""
+
+    class Own(SessionStore):
+        pass
+
+    session = Own()
+    session.create()
+    binding = StateBinding(session.session_key, "anonymous", "none", "/")
+    ServerStateSession(session, contract, binding).save({"count": 7})
+    assert ServerStateSession(Own(session.session_key), contract, binding).load() == {"count": 7}
 
 
 @pytest.mark.parametrize("part", ["session", "user", "tenant", "view"])
