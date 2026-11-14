@@ -68,7 +68,9 @@ class Gauge(Component):
         e_label = html.escape(self.label)
         label_html = f'<div class="gauge-label">{e_label}</div>' if self.label else ""
         return (
-            f'<div class="{cls}" style="width:{px}px;height:{px}px;">'
+            # The box's size is a class (`gauge--sm` / `--md` / `--lg`), not an
+            # inline `style`, which a strict `style-src` refuses (#3979).
+            f'<div class="{cls} gauge--{self.size if self.size in sizes else "md"}">'
             # `__svg` marks a component's own drawing surface, which a theme
             # pack's icon style must leave alone — without it the ring was
             # repainted as an outline icon.

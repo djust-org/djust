@@ -184,6 +184,12 @@ __all__ = [
 _IMMUTABLE_TYPES = (str, int, float, bool, type(None), bytes, tuple, frozenset)
 
 
+#: How long a server-originated turn (push, tick, db_notify) waits for a busy
+#: render lock before it is deferred or skipped (#560). The SSE NOTIFY turn
+#: uses the same bound (#3885).
+_SERVER_TURN_LOCK_WAIT_S = 0.1
+
+
 async def _acquire_render_lock(lock: asyncio.Lock, timeout: float) -> None:
     """``await asyncio.wait_for(lock.acquire(), timeout)``, without the timer
     when the lock is free (#3095).
@@ -5858,7 +5864,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # Acquire render lock with timeout to serialize with tick/event
             # renders. Use same 0.1s timeout as tick loop.
             try:
-                await _acquire_render_lock(self._render_lock, 0.1)
+                await _acquire_render_lock(self._render_lock, _SERVER_TURN_LOCK_WAIT_S)
             except asyncio.TimeoutError:
                 logger.debug(
                     "[djust] server_push on %s deferred — render lock held",
@@ -6427,7 +6433,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 return
 
             try:
-                await _acquire_render_lock(self._render_lock, 0.1)
+                await _acquire_render_lock(self._render_lock, _SERVER_TURN_LOCK_WAIT_S)
             except asyncio.TimeoutError:
                 logger.debug(
                     "[djust] db_notify on %s skipped — render lock held",
@@ -6684,7 +6690,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # timeout so ticks don't block indefinitely if an event handler is
         # slow.
         try:
-            await _acquire_render_lock(self._render_lock, 0.1)
+            await _acquire_render_lock(self._render_lock, _SERVER_TURN_LOCK_WAIT_S)
         except asyncio.TimeoutError:
             logger.debug(
                 "[djust] Tick on %s skipped — render lock held",

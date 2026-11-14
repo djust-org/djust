@@ -1473,33 +1473,6 @@ impl Encoded {
         }
         Some((a.hi, a.lo).cmp(&(b.hi, b.lo)))
     }
-
-    /// Python's own `<` between the two live objects, as `sorted()` asks it: `dictsort` over
-    /// keys the engine has no comparison for (a `UUID`, a lazy string, a `date` beside a
-    /// `datetime`) (#3919 review).
-    ///
-    /// * `None`: either side has no live object to ask, so nothing is known; the caller keeps
-    ///   its previous answer.
-    /// * `Some(Err(()))`: Python raised (`TypeError` for a pair it cannot order: two models,
-    ///   two managers, a `date` beside a `datetime`). Django's `dictsort` then renders `""`.
-    /// * `Some(Ok(ordering))`: `Less` when `self < other`, `Greater` when `other < self`,
-    ///   `Equal` otherwise.
-    pub fn python_order(
-        &self,
-        other: &Encoded,
-    ) -> Option<std::result::Result<std::cmp::Ordering, ()>> {
-        let (a, b) = (self.live.as_ref()?, other.live.as_ref()?);
-        Some(Python::attach(|py| {
-            let (a, b) = (a.bind(py), b.bind(py));
-            if a.lt(b).map_err(|_| ())? {
-                return Ok(std::cmp::Ordering::Less);
-            }
-            if b.lt(a).map_err(|_| ())? {
-                return Ok(std::cmp::Ordering::Greater);
-            }
-            Ok(std::cmp::Ordering::Equal)
-        }))
-    }
 }
 
 /// Untagged in human-readable formats, with ONE exception (#2214).
@@ -6490,6 +6463,32 @@ impl TemplateObject {
         hasher.finish()
     }
 
+    /// `sorted()`'s questions, answered by the object this stands for (#4005).
+    ///
+    /// `dictsort` runs Django's own `sorted(value, key=…)`, and a sort key that
+    /// is a carried object (a lazy string, a `set`, a `UUID`) reaches it as this
+    /// wrapper. Two live objects compare as Python compares them, exceptions and
+    /// all: a pair Python cannot order raises its `TypeError` and Django's
+    /// `dictsort` renders `""`, exactly as it does for the objects themselves.
+    /// A wrapper with no live object to ask (restored from state) answers
+    /// "neither smaller", which keeps the input order: what the native sort
+    /// did for a pair it had no comparison for.
+    fn __lt__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        self.order(py, other, pyo3::basic::CompareOp::Lt)
+    }
+
+    fn __le__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        self.order(py, other, pyo3::basic::CompareOp::Le)
+    }
+
+    fn __gt__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        self.order(py, other, pyo3::basic::CompareOp::Gt)
+    }
+
+    fn __ge__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        self.order(py, other, pyo3::basic::CompareOp::Ge)
+    }
+
     /// Pickle / `copy.deepcopy` degrade the wrapper to the `str` that used to
     /// arrive here (PR #2734 review).
     ///
@@ -6511,6 +6510,47 @@ impl TemplateObject {
 }
 
 impl TemplateObject {
+    /// The comparison behind `__lt__` / `__le__` / `__gt__` / `__ge__` (#4005).
+    fn order(
+        &self,
+        py: Python<'_>,
+        other: &Bound<'_, PyAny>,
+        op: pyo3::basic::CompareOp,
+    ) -> PyResult<Py<PyAny>> {
+        use pyo3::basic::CompareOp;
+        let other_wrapper = other.extract::<PyRef<'_, TemplateObject>>().ok();
+        if let Some(mine) = self.live_handle() {
+            let theirs = match &other_wrapper {
+                Some(wrapper) => match wrapper.live_handle() {
+                    Some(handle) => handle.bind(py).clone(),
+                    None => return Ok(py.NotImplemented()),
+                },
+                None => other.clone(),
+            };
+            return Ok(mine.bind(py).rich_compare(theirs, op)?.unbind());
+        }
+        if other_wrapper.is_none() {
+            return Ok(py.NotImplemented());
+        }
+        // Neither smaller: the stable sort keeps the input order. (A temporal
+        // value never gets here — it crosses as the real `datetime`, which
+        // Python orders — and asking `cmp_key` directly would be a second
+        // caller beside the engine's `encoded_partial_cmp` chokepoint.)
+        let ordering = std::cmp::Ordering::Equal;
+        let answer = match op {
+            CompareOp::Lt => ordering.is_lt(),
+            CompareOp::Le => ordering.is_le(),
+            CompareOp::Gt => ordering.is_gt(),
+            CompareOp::Ge => ordering.is_ge(),
+            CompareOp::Eq => ordering.is_eq(),
+            CompareOp::Ne => ordering.is_ne(),
+        };
+        Ok(pyo3::types::PyBool::new(py, answer)
+            .to_owned()
+            .into_any()
+            .unbind())
+    }
+
     /// CPython's `tp_name` for the object this stands for — only ever an
     /// `Encoded`, but spelled defensively so the error text never lies.
     fn value_type_name(&self) -> String {

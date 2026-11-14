@@ -470,9 +470,10 @@ class TestComparisonAgreesWithDjango2471:
         assert du == dj, f"timedelta(0) {op} {other!r}: django={dj!r} djust={du!r}"
 
     def test_dictsort_orders_a_datetime_column(self) -> None:
-        """``compare_sort_values`` reads the same function, so a ``dictsort``
-        over a ``DateTimeField`` column sorts. It answered all-Equal — i.e.
-        did not sort at all — for the same missing-arm reason."""
+        """A ``dictsort`` over a ``DateTimeField`` column sorts. The port's
+        ``compare_sort_values`` answered all-Equal — i.e. did not sort at all —
+        for the same missing-arm reason; since #4005 it is Django's own
+        ``sorted()``, and this still pins the answer."""
         rows = [{"k": datetime.datetime(2020, 3, 1)}, {"k": datetime.datetime(2020, 1, 1)}]
         dj, du = both(
             "{% for r in p|dictsort:'k' %}[{{ r.k|date:'Y-m-d' }}]{% endfor %}", {"p": rows}
@@ -483,8 +484,8 @@ class TestComparisonAgreesWithDjango2471:
     @pytest.mark.parametrize("domain", sorted(GENERATORS))
     def test_dictsort_orders_every_domain_as_python_sorts_it(self, domain: str) -> None:
         """One column per domain, checked against Python's own ``sorted()`` —
-        so ``compare_sort_values``' arm is exercised for every key shape rather
-        than for the one that happened to be written first (#1104)."""
+        so every key shape is exercised rather than the one that happened to be
+        written first (#1104). Django's own ``sorted()`` since #4005."""
         rng = random.Random(24711)
         src = "{% for r in p|dictsort:'k' %}[{{ r.i }}]{% endfor %}"
         for _ in range(8):
@@ -815,12 +816,12 @@ class TestOneComparisonChokepoint:
         "crates/djust_templates/src/renderer.rs": 1,  # encoded_partial_cmp
     }
 
-    #: file -> CALLS of the wrapper, definition excluded. The three sinks:
-    #: `values_equal` (through `encoded_equal`), `try_compare`, and
-    #: `compare_sort_values`.
+    #: file -> CALLS of the wrapper, definition excluded. The two sinks:
+    #: `values_equal` (through `encoded_equal`) and `try_compare`. The third,
+    #: `dictsort`'s `compare_sort_values`, went with the port when `dictsort`
+    #: began running Django's own `sorted()` (#4005).
     EXPECTED_WRAPPER_CALLERS = {
         "crates/djust_templates/src/renderer.rs": 2,  # encoded_equal, try_compare
-        "crates/djust_templates/src/filters.rs": 1,  # compare_sort_values
     }
 
     def _calls(self) -> dict[str, int]:
@@ -860,13 +861,12 @@ class TestOneComparisonChokepoint:
         )
 
     #: file -> CALLS of `Encoded::python_order`, Python's own `<` between two live
-    #: objects (#3919 review). It is a second way into Python comparison beside the
-    #: `encoded_partial_cmp` chokepoint, used ONLY by `dictsort`: `compare_sort_values`
-    #: (to order a pair the engine has no comparison for) and `keys_are_orderable` (to
-    #: refuse a pair Python raises on). A new caller must be added here with a test.
-    EXPECTED_PYTHON_ORDER_CALLERS = {
-        "crates/djust_templates/src/filters.rs": 2,
-    }
+    #: objects (#3919 review). It was a second way into Python comparison beside the
+    #: `encoded_partial_cmp` chokepoint, used ONLY by `dictsort`'s port; since #4005
+    #: `dictsort` is Django's own `sorted()`, which asks Python directly, and the
+    #: method is gone. A second way into Python comparison must not come back
+    #: without a test here.
+    EXPECTED_PYTHON_ORDER_CALLERS: dict[str, int] = {}
 
     def test_python_order_has_exactly_the_dictsort_callers(self) -> None:
         found: dict[str, int] = {}
