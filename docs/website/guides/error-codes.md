@@ -889,6 +889,14 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Fix**: Remove `persist=False`: the field is then saved with the rest of the view's state. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V029"]}`.
 
+### V030: a view attribute replaces one of djust's view methods
+
+**Severity**: Warning
+
+**What causes it**: A view or one of its mixins defines `skip_render`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, or assigns `self.<name>`. These are djust's view methods; the attribute replaces the method of that name, and an `@event_handler` of that name can be called by the client. Message: "<view> defines skip_render, which replaces djust's skip_render() method on the view."
+
+**Fix**: Rename the attribute or handler. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V030"]}`.
+
 <!-- END GENERATED check-sections:V -->
 
 ---

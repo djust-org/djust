@@ -3007,6 +3007,19 @@ def _derive_missing_principal(request: Any) -> None:
     setattr(request, USER_READ_FROM_SESSION, True)
 
 
+def _take_form_reset(view: Any, frame: Dict[str, Any]) -> None:
+    """Put a pending form reset on a ``noop`` frame and clear it (#4129).
+
+    ``reset_submitted_form()`` (``_should_reset_form``) asks the browser to
+    reset the submitted form after THIS turn. A rendering turn sends it on its
+    render frame; a turn that renders nothing sends it here, so the reset is
+    not lost and does not wait for a later, unrelated render.
+    """
+    if view is not None and getattr(view, "_should_reset_form", False):
+        view._should_reset_form = False
+        frame["reset_form"] = True
+
+
 class ViewRuntime(RuntimeTurnPort):
     """Wire-blind runtime for a single mounted LiveView session.
 
@@ -4469,6 +4482,7 @@ class ViewRuntime(RuntimeTurnPort):
                 noop_msg["ref"] = event_ref
             if has_async:
                 noop_msg["async_pending"] = True
+            _take_form_reset(view, noop_msg)
             noop_msg.update(async_batch.fields())
             noop_msg.update(snapshot_fields)
             await self.transport.send(noop_msg)
@@ -4744,6 +4758,7 @@ class ViewRuntime(RuntimeTurnPort):
                 noop_msg["ref"] = event_ref
             if has_async:
                 noop_msg["async_pending"] = True
+            _take_form_reset(view, noop_msg)
             noop_msg.update(async_batch.fields())
             noop_msg.update(snapshot_fields)
             await self.transport.send(noop_msg)
@@ -5350,6 +5365,7 @@ class ViewRuntime(RuntimeTurnPort):
         }
         if event_ref is not None:
             noop_msg["ref"] = event_ref
+        _take_form_reset(self.view_instance, noop_msg)
         noop_msg.update(async_batch.fields())
         if snapshot_fields:
             noop_msg.update(snapshot_fields)

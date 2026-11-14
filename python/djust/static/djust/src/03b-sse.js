@@ -372,6 +372,7 @@ class LiveViewSSE {
 
             case 'noop': {
                 const event = acknowledgeEventRequest(this, data);
+                if (data.reset_form) applyFormReset(data, event?.trigger || null);
                 if (event?.eventName) {
                     if (!data.async_pending) {
                         globalLoadingManager.stopLoading(event.eventName, event.trigger);

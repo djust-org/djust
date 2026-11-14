@@ -533,10 +533,12 @@ These replace private flags some applications set directly. The private names ke
 | `skip_render()` | `self._skip_render = True` | No render this turn. Works in an event handler, a push handler / `handle_info`, and `handle_tick()`. Push events and navigation are still sent. |
 | `set_changed_keys()` (no arguments) / `request_full_render()` | `self._force_full_html = True` | Render this turn as full HTML, even though no public attribute changed. |
 | `cancel_full_render()` | `self._force_full_html = False` | Withdraw a full render requested earlier in this turn. A full render the framework itself requires (after a restore, after a failed save) stays. |
-| `reset_submitted_form()` | `self._should_reset_form = True` | The browser resets the form whose submit (or button) sent the event. Rides on this turn's render frame. For a view without `FormMixin`; `FormMixin.reset_form()` does it for you. |
+| `reset_submitted_form()` | `self._should_reset_form = True` | The browser resets the form whose submit (or button) sent the event. Rides on this turn's answer, a render or (when the turn renders nothing) a `noop`, on the socket, SSE and the HTTP fallback. For a view without `FormMixin`; `FormMixin.reset_form()` does it for you. |
 | `clear_push_events()` | `self._pending_push_events = []` | Drop the push events queued so far this turn; returns them. |
 
 A full render requested in the same turn wins over `skip_render()`.
+
+These names, and `ThemeMixin.get_theme_state()`, belong to djust: a view or mixin that defines one (an `@event_handler` named `skip_render`, say) replaces the method, and a client could call it. `manage.py check` reports it as `djust.V030`.
 
 #### Re-render after a change djust cannot see
 

@@ -539,6 +539,21 @@ function applyHttpSideChannels(data) {
  * @param {Element|null} root the view's root (a view slot), else `[dj-root]`
  * @returns {HTMLFormElement|null}
  */
+/**
+ * Reset the event's form when the frame asks for it (`reset_form`). Every
+ * frame that answers an event may carry it, a `noop` included: a handler that
+ * resets a form without changing rendered state still resets it (#4129).
+ *
+ * @param {Object} data the frame
+ * @param {Element|null} triggerElement element that sent the event
+ */
+function applyFormReset(data, triggerElement) {
+    if (!data || !data.reset_form) return;
+    const form = formToReset(triggerElement, _activeSlot ? _activeSlot.root : null);
+    if (globalThis.djustDebug) console.log('[LiveView] Resetting form', form);
+    if (form) form.reset();
+}
+
 function formToReset(triggerElement, root) {
     if (triggerElement && triggerElement.isConnected && triggerElement.closest) {
         const own = triggerElement.closest('form');
@@ -799,11 +814,7 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
         }
 
         // Handle form reset
-        if (data.reset_form) {
-            const form = formToReset(triggerElement, _activeSlot ? _activeSlot.root : null);
-            if (globalThis.djustDebug) console.log('[LiveView] Resetting form', form);
-            if (form) form.reset();
-        }
+        applyFormReset(data, triggerElement);
 
         applyHttpSideChannels(data);
 
@@ -2445,6 +2456,7 @@ class LiveViewWebSocket {
                 const event = acknowledgeEventRequest(this, data);
                 const noopEvName = event?.eventName;
                 const noopTrigger = event?.trigger;
+                if (data.reset_form) applyFormReset(data, noopTrigger || null);
 
                 if (noopEvName) {
                     if (!data.async_pending) {
@@ -3408,6 +3420,7 @@ class LiveViewSSE {
 
             case 'noop': {
                 const event = acknowledgeEventRequest(this, data);
+                if (data.reset_form) applyFormReset(data, event?.trigger || null);
                 if (event?.eventName) {
                     if (!data.async_pending) {
                         globalLoadingManager.stopLoading(event.eventName, event.trigger);
