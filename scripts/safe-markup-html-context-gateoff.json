@@ -202,8 +202,8 @@
     {
       "label": "an inner f-string's own text is not counted",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "part.value, asc, self._after(text, ast.JoinedStr(values=alt.values[:i]), asc), d",
-      "new": "part.value, asc, text, d"
+      "old": "                        self._after(text, ast.JoinedStr(values=alt.values[:i]), asc),\n",
+      "new": "                        text,\n"
     },
     {
       "label": "a + chain written as the part is not read",
