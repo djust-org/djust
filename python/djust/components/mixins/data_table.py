@@ -370,8 +370,8 @@ class DataTableMixin:
        default; subsequent calls (after ``mount()``) return real state.
 
        **All ``on_table_*`` event handlers below are decorated with
-       ``@event_handler()``** so they work under the default
-       ``event_security="strict"`` mode without per-view boilerplate.
+       ``@event_handler()``** so they are client events without per-view
+       boilerplate.
 
        For LiveView use cases that need FK traversal or large datasets,
        prefer passing the queryset directly via ``get_context_data()`` and

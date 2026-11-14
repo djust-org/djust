@@ -319,7 +319,7 @@ class TableComponent(LiveComponent):
         """Sort table by column.
 
         The handler every framework branch's sortable header targets. Decorated
-        because ``event_security`` defaults to strict (#2776); the parameter is
+        because only @event_handler methods are client events (#2776); the parameter is
         named ``column`` because the header sends ``data-column``.
         """
         column_key = column

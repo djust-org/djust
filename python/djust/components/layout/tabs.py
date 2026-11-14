@@ -119,7 +119,7 @@ class TabsComponent(LiveComponent):
     def activate_tab(self, tab: str = "", **kwargs: Any) -> None:
         """Switch to a different tab.
 
-        Decorated because ``event_security`` defaults to strict (#2776); the
+        Decorated because only @event_handler methods are client events (#2776); the
         parameter is ``tab`` because the button sends ``data-tab``.
         """
         self.active = tab

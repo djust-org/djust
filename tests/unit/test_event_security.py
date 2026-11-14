@@ -88,7 +88,7 @@ class TestEventGuard:
         from djust.security.event_guard import is_safe_event_name
 
         # These pass the pattern check (valid format), but will be blocked
-        # by event_security strict mode if not decorated with @event_handler
+        # by _check_event_security if not decorated with @event_handler
         assert is_safe_event_name("mount") is True
         assert is_safe_event_name("dispatch") is True
         assert is_safe_event_name("render") is True
@@ -248,8 +248,6 @@ class TestEventSecurityHelper:
     """Tests for _check_event_security helper."""
 
     def test_strict_mode_blocks_undecorated(self):
-        from unittest.mock import patch
-
         from djust.websocket import _check_event_security
 
         class FakeView:
@@ -260,15 +258,11 @@ class TestEventSecurityHelper:
 
         view = FakeView()
 
-        with patch("djust.websocket_utils.djust_config") as mock_config:
-            mock_config.get.return_value = "strict"
-            result = _check_event_security(plain_handler, view, "plain_handler")
-            assert result is not None
-            assert "not decorated" in result
+        result = _check_event_security(plain_handler, view, "plain_handler")
+        assert result is not None
+        assert "not decorated" in result
 
     def test_strict_mode_allows_decorated(self):
-        from unittest.mock import patch
-
         from djust.decorators import event_handler
         from djust.websocket import _check_event_security
 
@@ -281,14 +275,10 @@ class TestEventSecurityHelper:
 
         view = FakeView()
 
-        with patch("djust.websocket_utils.djust_config") as mock_config:
-            mock_config.get.return_value = "strict"
-            result = _check_event_security(my_handler, view, "my_handler")
-            assert result is None
+        result = _check_event_security(my_handler, view, "my_handler")
+        assert result is None
 
     def test_strict_mode_blocks_undecorated_even_with_allowed_events(self):
-        from unittest.mock import patch
-
         from djust.websocket import _check_event_security
 
         class FakeView:
@@ -299,14 +289,14 @@ class TestEventSecurityHelper:
 
         view = FakeView()
 
-        with patch("djust.websocket_utils.djust_config") as mock_config:
-            mock_config.get.return_value = "strict"
-            result = _check_event_security(bulk_update, view, "bulk_update")
-            assert result is not None  # Blocked — _allowed_events no longer bypasses
+        result = _check_event_security(bulk_update, view, "bulk_update")
+        assert result is not None  # Blocked — _allowed_events no longer bypasses
 
-    def test_open_mode_allows_everything(self):
-        from unittest.mock import patch
-
+    @pytest.mark.parametrize("leftover", ["open", "warn"])
+    def test_a_removed_mode_in_the_live_config_does_not_open_it(self, leftover):
+        """#4101: the check reads no setting; "open"/"warn" fail startup, and a
+        value set on the live config at runtime changes nothing."""
+        from djust.config import config
         from djust.websocket import _check_event_security
 
         class FakeView:
@@ -315,30 +305,13 @@ class TestEventSecurityHelper:
         def plain_handler(self):
             pass
 
-        view = FakeView()
-
-        with patch("djust.websocket_utils.djust_config") as mock_config:
-            mock_config.get.return_value = "open"
-            result = _check_event_security(plain_handler, view, "plain_handler")
-            assert result is None
-
-    def test_warn_mode_allows_but_logs(self):
-        from unittest.mock import patch
-
-        from djust.websocket import _check_event_security
-
-        class FakeView:
-            pass
-
-        def plain_handler(self):
-            pass
-
-        view = FakeView()
-
-        with patch("djust.websocket_utils.djust_config") as mock_config:
-            mock_config.get.return_value = "warn"
-            result = _check_event_security(plain_handler, view, "plain_handler")
-            assert result is None  # warn mode doesn't block
+        previous = config.get("event_security")
+        config.set("event_security", leftover)
+        try:
+            result = _check_event_security(plain_handler, FakeView(), "plain_handler")
+        finally:
+            config.set("event_security", previous)
+        assert result is not None and "@event_handler" in result
 
 
 class TestConfigDefaults:
@@ -360,11 +333,11 @@ class TestConfigDefaults:
         assert rl["burst"] == 20
         assert rl["max_warnings"] == 3
 
-    def test_event_security_default_is_strict(self):
+    def test_event_security_has_no_default(self):
+        """#4101: the setting no longer selects anything."""
         from djust.config import LiveViewConfig
 
-        cfg = LiveViewConfig()
-        assert cfg.get("event_security") == "strict"
+        assert "event_security" not in LiveViewConfig._defaults
 
 
 class TestRateLimitIntegration:
@@ -436,7 +409,7 @@ class TestGlobalRateLimit:
 
 
 class TestConfigValidation:
-    """Validate event_security and rate_limit config on startup (Issue #110)."""
+    """Validate rate_limit config on startup (Issue #110)."""
 
     def _make_config(self, overrides):
         """Create a LiveViewConfig with given overrides, bypassing Django settings."""
@@ -447,13 +420,6 @@ class TestConfigValidation:
         cfg._config.update(overrides)
         cfg._validate_config()
         return cfg
-
-    def test_invalid_event_security_resets_to_strict(self):
-        cfg = self._make_config({"event_security": "STRICT"})
-        assert cfg._config["event_security"] == "strict"
-
-        cfg = self._make_config({"event_security": "invalid"})
-        assert cfg._config["event_security"] == "strict"
 
     def test_negative_rate_limit_values_reset_to_defaults(self):
         from djust.config import LiveViewConfig
@@ -470,19 +436,10 @@ class TestConfigValidation:
         with caplog.at_level(logging.WARNING, logger="djust.config"):
             self._make_config(
                 {
-                    "event_security": "warn",
                     "rate_limit": {"rate": 50, "burst": 10, "max_warnings": 5},
                 }
             )
         assert caplog.text == ""
-
-    def test_open_mode_warns_in_production(self, caplog, settings):
-        import logging
-
-        settings.DEBUG = False
-        with caplog.at_level(logging.WARNING, logger="djust.config"):
-            self._make_config({"event_security": "open"})
-        assert "event_security is 'open'" in caplog.text
 
     def test_zero_message_size_warns_in_production(self, caplog, settings):
         import logging
@@ -535,9 +492,7 @@ class TestSharedEventSecurityChecks:
         assert is_safe_event_name("_private") is False
 
     def test_blocks_undecorated_handler(self):
-        """_check_event_security blocks undecorated handlers in strict mode."""
-        from unittest.mock import patch
-
+        """_check_event_security blocks undecorated handlers."""
         from djust.websocket import _check_event_security
 
         class FakeView:
@@ -547,16 +502,12 @@ class TestSharedEventSecurityChecks:
             pass
 
         view = FakeView()
-        with patch("djust.websocket_utils.djust_config") as mock_config:
-            mock_config.get.return_value = "strict"
-            result = _check_event_security(undecorated, view, "undecorated")
-            assert result is not None
-            assert "not decorated" in result
+        result = _check_event_security(undecorated, view, "undecorated")
+        assert result is not None
+        assert "not decorated" in result
 
     def test_allows_decorated_handler(self):
         """Decorated handlers pass the security checks."""
-        from unittest.mock import patch
-
         from djust.decorators import event_handler
         from djust.websocket import _check_event_security
 
@@ -568,10 +519,8 @@ class TestSharedEventSecurityChecks:
             pass
 
         view = FakeView()
-        with patch("djust.websocket_utils.djust_config") as mock_config:
-            mock_config.get.return_value = "strict"
-            result = _check_event_security(my_event, view, "my_event")
-            assert result is None
+        result = _check_event_security(my_event, view, "my_event")
+        assert result is None
 
 
 class TestIPConnectionTracker:

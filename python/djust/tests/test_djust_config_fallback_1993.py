@@ -1,7 +1,7 @@
 """#1993 — LiveView runtime keys set in ``DJUST_CONFIG`` are honored as a fallback.
 
 ``LiveViewConfig._load_from_settings()`` only read ``LIVEVIEW_CONFIG``, so a
-``max_message_size`` / ``rate_limit`` / ``event_security`` set in the
+``max_message_size`` / ``rate_limit`` set in the
 similarly-named ``DJUST_CONFIG`` dict (which already backs tenancy / presence /
 state-backend) was a SILENT no-op — the default kept applying with no error or
 warning. It now falls back to ``DJUST_CONFIG`` for keys that are genuine
@@ -49,7 +49,6 @@ class TestDjustConfigFallback1993:
     def test_djust_config_other_liveview_keys_too(self):
         # Not just max_message_size — any LiveView config key works as a fallback.
         # css_framework has an unambiguous non-default ("bootstrap5"), so this
-        # stays gate-off-sensitive (event_security defaults to "strict" via
-        # validation and would be tautological here).
+        # stays gate-off-sensitive.
         cfg = LiveViewConfig()
         assert cfg.get("css_framework") == "tailwind"

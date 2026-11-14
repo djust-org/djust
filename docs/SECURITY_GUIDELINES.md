@@ -122,7 +122,7 @@ is_safe_event_name("_private")     # False
 
 #### Layer 2: `@event_handler` Decorator Allowlist
 
-Only methods explicitly marked as event handlers are callable via WebSocket. This is controlled by the `event_security` setting (default: `"strict"`):
+Only methods explicitly marked as event handlers are callable by a client event, on every transport. There is no setting to relax this (the `event_security` `"warn"` and `"open"` modes were removed in 2.0, #4101):
 
 ```python
 from djust import LiveView, state
@@ -383,7 +383,6 @@ When reviewing PRs, check for these security issues:
 ### WebSocket Event Security
 - [ ] All event handlers decorated with `@event_handler`
 - [ ] No `getattr()` on user-controlled names without `is_safe_event_name()` guard
-- [ ] `event_security` setting is `"strict"` (default) in production
 - [ ] Expensive handlers have `@rate_limit` decorator
 - [ ] All event handlers use `@event_handler` decorator
 
@@ -487,7 +486,7 @@ logger.info("Query: %s", sanitize_for_log(user_query))
 
 **Prevention:**
 ```python
-# All three layers are automatic when event_security = "strict" (default):
+# All three layers are automatic, on every transport:
 # 1. Regex guard blocks _private, __dunder__, malformed names
 # 2. @event_handler decorator allowlist blocks unmarked methods
 # 3. Rate limiter prevents flooding
@@ -827,7 +826,7 @@ All tests must pass with zero failures.
 
 Verify production-safe defaults:
 
-- [ ] `event_security` defaults to `"strict"`
+- [ ] New client-event paths call `websocket_utils._check_event_security` (pinned by `test_event_security_always_strict_4101.py`)
 - [ ] `DEBUG` is not hardcoded to `True` anywhere
 - [ ] Rate limit defaults are reasonable (100 req/s sustained, 20 burst)
 - [ ] `max_message_size` is set (default: 64KB)

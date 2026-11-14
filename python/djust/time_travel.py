@@ -576,30 +576,18 @@ def replay_event(
     # property getters, inherited utilities), not just registered
     # ``@event_handler`` methods. A hand-edited or malicious snapshot
     # could name e.g. ``delete_all_records`` and replay would happily
-    # invoke it. Validate that the resolved attribute is decorated
-    # with ``@event_handler`` (matching the dispatcher's own
-    # acceptance criteria — see ``websocket.py`` server_push handler
-    # validation around line 4389).
-    try:
-        from djust.decorators import is_event_handler, is_push_only
-    except ImportError:  # pragma: no cover — decorators is in-tree
-        is_event_handler = None  # type: ignore[assignment]
-        is_push_only = None  # type: ignore[assignment]
-    # A push-only name is never a browser event, even when an override of it
-    # carries @event_handler (#3002).
-    if is_push_only is not None and is_push_only(view, snapshot.event_name, handler):
+    # invoke it. Run the check every event transport runs
+    # (``websocket_utils._check_event_security``, #4101): only what a
+    # browser event may call is replayed.
+    from djust.websocket_utils import _check_event_security
+
+    security_error = _check_event_security(handler, view, snapshot.event_name)
+    if security_error:
         logger.warning(
-            "time_travel: replay_event refused push-only method %r on %s",
+            "time_travel: replay_event refused %r on %s: %s",
             snapshot.event_name,
             type(view).__name__,
-        )
-        return None
-    if is_event_handler is not None and not is_event_handler(handler):
-        logger.warning(
-            "time_travel: replay_event refused unregistered method %r on %s "
-            "(not decorated with @event_handler)",
-            snapshot.event_name,
-            type(view).__name__,
+            security_error.splitlines()[0],
         )
         return None
 

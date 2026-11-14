@@ -1,17 +1,17 @@
 """#3002: ``@push_handler`` marks a method only server push may call.
 
 ``server_push`` calls a ``handle_*`` method without ``@event_handler`` by
-design. That is a push-only handler under ``event_security = "strict"``, but
-``"warn"`` and ``"open"`` let a browser call any public method, and V004 used
-to suggest ``@event_handler``, which makes it a browser event target. The
-marker is explicit and holds in EVERY mode on EVERY transport:
+design, and V004 used to suggest ``@event_handler``, which makes it a browser
+event target. The marker is explicit and holds on EVERY transport, even for an
+override that carries ``@event_handler``. (The ``event_security`` "warn" and
+"open" modes these tests also covered were removed in 2.0, #4101.)
 
 * a browser event naming a marked method is refused exactly as if the method
   did not exist (WebSocket, SSE, HTTP POST fallback, HTTP API), with no hint
   that it exists;
 * server push reaches it under any name;
 * unmarked ``handle_*`` methods and ``@event_handler`` methods are unchanged;
-* V004 does not flag it; T019 reports a template binding to it in every mode.
+* V004 does not flag it; T019 reports a template binding to it.
 """
 
 import gc
@@ -58,7 +58,6 @@ from ._ws_frames import drain_extra, has_type, receive_until, wait_until
 RAN: list = []
 SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None)
 MARKED = ("refresh_room", "handle_marked", "called_form")
-MODES = ["strict", "warn", "open"]
 
 
 class RoomView(LiveView):
@@ -158,10 +157,10 @@ def _reset():
     config.reset()
 
 
-def _mode(mode, **extra):
+def _settings(**extra):
     return override_settings(
         LIVEVIEW_ALLOWED_MODULES=[__name__],
-        LIVEVIEW_CONFIG={"event_security": mode},
+        LIVEVIEW_CONFIG={},
         DJUST_CONFIG={},
         **{**SETTINGS, **extra},
     )
@@ -305,9 +304,8 @@ def test_action_over_a_push_handler_is_refused():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", MODES)
-async def test_ws_browser_event_naming_a_marked_handler_is_refused_in_every_mode(mode):
-    with _mode(mode):
+async def test_ws_browser_event_naming_a_marked_handler_is_refused():
+    with _settings():
         socket = await _mounted()
         try:
             missing = _errors(await _event(socket, "no_such_event"))
@@ -315,7 +313,7 @@ async def test_ws_browser_event_naming_a_marked_handler_is_refused_in_every_mode
             for name in MARKED:
                 frames = await _event(socket, name)
                 # Same refusal as a method that does not exist: same frame.
-                assert _errors(frames) == missing, (mode, name, frames)
+                assert _errors(frames) == missing, (name, frames)
             assert RAN == [], "a browser event must never run a push handler"
             # The socket is still usable afterwards.
             assert not _errors(await _event(socket, "ping"))
@@ -327,7 +325,7 @@ async def test_ws_browser_event_naming_a_marked_handler_is_refused_in_every_mode
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_ws_debug_refusal_does_not_reveal_that_the_handler_exists():
-    with _mode("open", DEBUG=True):
+    with _settings(DEBUG=True):
         socket = await _mounted()
         try:
             frames = _errors(await _event(socket, "refresh_room"))
@@ -365,34 +363,23 @@ def test_debug_hints_never_suggest_a_push_handler():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_unmarked_handle_methods_behave_exactly_as_before():
-    # strict: refused; warn/open: a browser can still call it. The marker is
-    # opt-in, so none of this moves.
-    with _mode("strict"):
+async def test_unmarked_handle_methods_are_refused_to_a_browser():
+    # An undecorated handle_* method is not a client event (#4101); the marker
+    # only adds that server push alone may call it.
+    with _settings():
         socket = await _mounted()
         try:
             assert _errors(await _event(socket, "handle_plain"))
         finally:
             await socket.disconnect()
     assert RAN == []
-    for mode in ("warn", "open"):
-        with _mode(mode):
-            socket = await _mounted()
-            try:
-                assert not _errors(await _event(socket, "handle_plain")), mode
-            finally:
-                await socket.disconnect()
-    assert RAN == [("handle_plain",), ("handle_plain",)]
 
 
-def test_check_event_security_refuses_a_marked_handler_in_every_mode():
+def test_check_event_security_refuses_a_marked_handler():
     view = RoomView()
-    for mode in MODES:
-        with override_settings(LIVEVIEW_CONFIG={"event_security": mode}):
-            config.reset()
-            assert "push" in _check_event_security(view.refresh_room, view, "refresh_room")
-            # ...and the gate still lets an @event_handler through.
-            assert _check_event_security(view.ping, view, "ping") is None
+    assert "push" in _check_event_security(view.refresh_room, view, "refresh_room")
+    # ...and the gate still lets an @event_handler through.
+    assert _check_event_security(view.ping, view, "ping") is None
 
 
 # --- WebSocket: server push ---------------------------------------------------
@@ -400,9 +387,8 @@ def test_check_event_security_refuses_a_marked_handler_in_every_mode():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", MODES)
-async def test_server_push_reaches_marked_handlers_under_any_name(mode):
-    with _mode(mode):
+async def test_server_push_reaches_marked_handlers_under_any_name():
+    with _settings():
         socket = await _mounted()
         try:
             layer = get_channel_layer()
@@ -444,15 +430,14 @@ def test_is_push_only_follows_the_mro_not_just_the_resolved_function():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", MODES)
-async def test_ws_unmarked_override_of_a_marked_method_is_still_refused(mode):
-    with _mode(mode):
+async def test_ws_unmarked_override_of_a_marked_method_is_still_refused():
+    with _settings():
         socket = await _mounted(OVERRIDE_VIEW)
         try:
             missing = _errors(await _event(socket, "no_such_event"))
             assert [e["error"] for e in missing] == ["Event rejected"]
             for name in OVERRIDES:
-                assert _errors(await _event(socket, name)) == missing, (mode, name)
+                assert _errors(await _event(socket, name)) == missing, name
             assert RAN == []
         finally:
             await socket.disconnect()
@@ -461,7 +446,7 @@ async def test_ws_unmarked_override_of_a_marked_method_is_still_refused(mode):
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_server_push_reaches_unmarked_overrides_under_any_name():
-    with _mode("open"):
+    with _settings():
         socket = await _mounted(OVERRIDE_VIEW)
         try:
             layer = get_channel_layer()
@@ -478,9 +463,8 @@ async def test_server_push_reaches_unmarked_overrides_under_any_name():
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("mode", MODES)
-def test_http_fallback_refuses_an_unmarked_override_like_a_missing_method(mode):
-    with _mode(mode):
+def test_http_fallback_refuses_an_unmarked_override_like_a_missing_method():
+    with _settings():
         config.reset()
         missing = _post(OverrideView, "no_such_event")
         for name in OVERRIDES:
@@ -488,7 +472,7 @@ def test_http_fallback_refuses_an_unmarked_override_like_a_missing_method(mode):
             assert (response.status_code, response.content) == (
                 missing.status_code,
                 missing.content,
-            ), (mode, name)
+            ), name
         assert RAN == []
 
 
@@ -559,8 +543,7 @@ def test_v004_does_not_flag_an_unmarked_override_of_a_marked_method():
 @override_settings(ALLOWED_HOSTS=["example.com"])
 @pytest.mark.django_db
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", MODES)
-async def test_sse_event_naming_a_marked_handler_is_refused_in_every_mode(mode):
+async def test_sse_event_naming_a_marked_handler_is_refused():
     from .test_sse_runtime_convergence_1887 import (
         _allowlist,
         _drain,
@@ -570,7 +553,7 @@ async def test_sse_event_naming_a_marked_handler_is_refused_in_every_mode(mode):
     )
 
     path = _register(RoomView)
-    with _allowlist(), override_settings(LIVEVIEW_CONFIG={"event_security": mode}):
+    with _allowlist(), override_settings(LIVEVIEW_CONFIG={}):
         config.reset()
         _resp, session, sid = await _mount_stream(path)
         _drain(session)
@@ -580,7 +563,7 @@ async def test_sse_event_naming_a_marked_handler_is_refused_in_every_mode(mode):
         for name in MARKED:
             await _post_event(session, sid, name)
             refused = [m for m in _drain(session) if m.get("type") == "error"]
-            assert refused == missing, (mode, name, refused)
+            assert refused == missing, (name, refused)
         assert RAN == []
         await _post_event(session, sid, "ping")
         assert RAN == [("ping",)]
@@ -604,9 +587,8 @@ def _post(view_cls, event):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("mode", MODES)
-def test_http_fallback_treats_a_marked_handler_as_missing_in_every_mode(mode):
-    with _mode(mode):
+def test_http_fallback_treats_a_marked_handler_as_missing():
+    with _settings():
         config.reset()
         missing = _post(RoomView, "no_such_event")
         for name in MARKED:
@@ -614,7 +596,7 @@ def test_http_fallback_treats_a_marked_handler_as_missing_in_every_mode(mode):
             assert (response.status_code, response.content) == (
                 missing.status_code,
                 missing.content,
-            ), (mode, name)
+            ), name
         assert RAN == []
         assert _post(RoomView, "ping").status_code == 200
         assert RAN == [("ping",)]
@@ -750,18 +732,17 @@ def binding_module(tmp_path):
         gc.collect()
 
 
-@pytest.mark.parametrize("mode", MODES)
-def test_t019_reports_a_binding_to_a_push_handler_in_every_mode(binding_module, mode):
+def test_t019_reports_a_binding_to_a_push_handler(binding_module):
     from djust.checks.bindings import _messages, binding_reports
 
-    with override_settings(LIVEVIEW_CONFIG={"event_security": mode}):
+    with override_settings(LIVEVIEW_CONFIG={}):
         config.reset()
         reports = [r for r in binding_reports() if r.owner.__module__ == BINDING_MODULE]
         found = {m.msg.split(": ", 1)[1] for m in _messages(reports)}
     pushed = [m for m in found if m.startswith("'refresh_room'")]
     assert pushed and "server push handler" in pushed[0], found
-    # The undecorated helper is reported only under strict, as before.
-    assert bool([m for m in found if m.startswith("'helper'")]) == (mode == "strict"), found
+    # The undecorated helper is reported too: it is not a client event (#4101).
+    assert [m for m in found if m.startswith("'helper'")], found
     assert not [m for m in found if m.startswith("'ping'")], found
 
 
@@ -798,20 +779,6 @@ def test_test_client_send_push_reaches_push_handlers_and_the_consumer_allowlist(
     assert blocked["success"] is False and "not callable by server push" in blocked["error"]
     assert client.send_push(state={"n": 5})["state_after"]["n"] == 5
     assert RAN == [("refresh_room", "a"), ("handle_marked",), ("handle_plain",)]
-
-
-def test_smoke_test_does_not_report_a_push_handler_as_reachable_but_unfuzzed(monkeypatch):
-    from djust.testing import _unfuzzed_reachable_methods
-
-    real = config.get
-    monkeypatch.setattr(
-        config,
-        "get",
-        lambda key, default=None: "warn" if key == "event_security" else real(key, default),
-    )
-    # ``handle_plain`` and ``plain_helper`` really are reachable under warn.
-    assert _unfuzzed_reachable_methods(RoomView) == ["handle_plain", "plain_helper"]
-    assert _unfuzzed_reachable_methods(OverrideView) == ["handle_plain", "plain_helper"]
 
 
 def test_eval_handler_answers_a_marked_handler_like_a_missing_one():
@@ -862,9 +829,8 @@ def _t019(owner):
 
 
 @pytest.mark.parametrize("owner", ["BoundChild", "BoundEventHandler"])
-@pytest.mark.parametrize("mode", MODES)
-def test_t019_follows_the_marker_through_overrides(binding_module, mode, owner):
-    with override_settings(LIVEVIEW_CONFIG={"event_security": mode}):
+def test_t019_follows_the_marker_through_overrides(binding_module, owner):
+    with override_settings(LIVEVIEW_CONFIG={}):
         config.reset()
         found = _t019(owner)
     assert len(found) == 1 and "server push handler" in found[0], found
@@ -882,13 +848,10 @@ def test_declared_handlers_and_client_metadata_drop_push_only_names():
     assert "ping" in methods and not set(methods) & set(OVERRIDES), set(methods)
 
 
-def test_check_event_security_refuses_an_override_in_every_mode():
+def test_check_event_security_refuses_an_override():
     view = OverrideView()
-    for mode in MODES:
-        with override_settings(LIVEVIEW_CONFIG={"event_security": mode}):
-            config.reset()
-            for name in OVERRIDES:
-                assert "push" in _check_event_security(getattr(view, name), view, name), name
+    for name in OVERRIDES:
+        assert "push" in _check_event_security(getattr(view, name), view, name), name
 
 
 @pytest.mark.django_db(transaction=True)
@@ -898,7 +861,7 @@ async def test_ws_override_is_refused_as_not_found_not_as_a_security_failure(cap
     # the DEBUG text and the log line tell them apart.
     import logging
 
-    with _mode("open", DEBUG=True), caplog.at_level(logging.WARNING):
+    with _settings(DEBUG=True), caplog.at_level(logging.WARNING):
         socket = await _mounted(OVERRIDE_VIEW)
         try:
             frames = _errors(await _event(socket, "refresh_room"))

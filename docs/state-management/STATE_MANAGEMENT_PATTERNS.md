@@ -6,7 +6,7 @@
 
 **Last Updated:** 2026-09-22
 
-> **Every handler needs `@event_handler`.** The default `event_security = "strict"` policy rejects any event whose handler lacks it. `@debounce`, `@throttle` and `@cache` do not count. Every example below stacks `@event_handler` outermost.
+> **Every handler needs `@event_handler`.** Every transport rejects an event whose handler lacks it. `@debounce`, `@throttle` and `@cache` do not count. Every example below stacks `@event_handler` outermost.
 
 ---
 

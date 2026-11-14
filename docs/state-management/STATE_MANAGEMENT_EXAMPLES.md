@@ -8,7 +8,7 @@ This document provides complete examples of the state management tools (`@deboun
 
 Three rules apply to every example on this page:
 
-- **Every handler needs `@event_handler`.** The default `event_security` policy is `"strict"`, which rejects any event whose method is not decorated with `@event_handler`. `@debounce`, `@throttle` and `@cache` only configure the client; they do not register the method as an event.
+- **Every handler needs `@event_handler`.** Every transport rejects an event whose method is not decorated with `@event_handler`. `@debounce`, `@throttle` and `@cache` only configure the client; they do not register the method as an event.
 - **`dj-input` and `dj-change` send `value` and `field`,** not a keyword named after the input. The typed value arrives as `value`, and the input's `name` arrives as `field`. Static context goes in `dj-value-*` attributes (for example `dj-value-item-id:int="{{ item.id }}"`).
 - **The live region is a literal `<div dj-root>`.** The server stamps `dj-view` onto that exact string. Put classes and other attributes on an inner element, or write `dj-view="app.views.MyView"` yourself.
 

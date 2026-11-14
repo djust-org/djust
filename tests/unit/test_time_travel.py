@@ -1117,10 +1117,11 @@ class TestReplayHandlerValidation:
         assert result is None
         assert view.count != -999  # helper body never ran
         assert any(
-            "refused unregistered method" in record.getMessage()
+            "replay_event refused" in record.getMessage()
             and "some_helper" in record.getMessage()
+            and "@event_handler" in record.getMessage()
             for record in caplog.records
-        ), "expected a 'refused unregistered method' warning; got: " + repr(
+        ), "expected a 'replay_event refused' warning; got: " + repr(
             [r.getMessage() for r in caplog.records]
         )
 

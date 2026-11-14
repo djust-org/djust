@@ -157,6 +157,10 @@ Version 0.2.1 defaults `event_security` to `"strict"`: only methods decorated wi
 
 ### Step 1: Enable warn mode (optional)
 
+> **djust 2.0:** the `"warn"` and `"open"` modes were removed (#4101) and startup
+> refuses them. On 2.0, run `python manage.py check` instead: system check
+> `djust.T019` names every template binding to a method without `@event_handler`.
+
 To identify which handlers need decorators without breaking anything, temporarily use warn mode:
 
 ```python

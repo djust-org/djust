@@ -244,8 +244,7 @@ class _OwnerContext:
         from djust.decorators import is_push_only
 
         if callable(function) and is_push_only(self.cls, name, function):
-            # Refused in every event_security mode, so unlike the undecorated
-            # case below this is reported under "warn" and "open" too (#3002).
+            # Refused even when an override carries @event_handler (#3002).
             return Finding(
                 "T019",
                 "%r on %s is a server push handler, which the browser cannot call." % (name, where),
@@ -253,10 +252,6 @@ class _OwnerContext:
                 "to an @event_handler method instead.",
             )
         if callable(function):
-            from djust.config import config as djust_config
-
-            if djust_config.get("event_security", "strict") != "strict":
-                return None
             return Finding(
                 "T019",
                 "%r on %s is not an @event_handler, so the server refuses the event."

@@ -83,7 +83,7 @@ result = client.send_event("delete_item", item_id=5)
 **Parameters:**
 
 - `event_name` (`str`) — The handler method name
-- `raise_on_missing` (`bool`) — If `True` (default), raise `NoHandlerFoundError` when no handler exists for `event_name`, and `EventRejectedError` (a subclass) when the transports refuse the event before any handler runs: a method without `@event_handler` under the default strict `event_security`, a server-push or server-only method, a private name. Pass `False` to get a `{"success": False, ...}` result instead (`code="event_rejected"` for a refusal, with the transports' answer in `error` and the reason in `detail`).
+- `raise_on_missing` (`bool`) — If `True` (default), raise `NoHandlerFoundError` when no handler exists for `event_name`, and `EventRejectedError` (a subclass) when the transports refuse the event before any handler runs: a method without `@event_handler`, a server-push or server-only method, a private name. Pass `False` to get a `{"success": False, ...}` result instead (`code="event_rejected"` for a refusal, with the transports' answer in `error` and the reason in `detail`).
 - `**params` — Event parameters passed to the handler
 
 **Returns:** a dict with the keys `success`, `error`, `state_before`, `state_after` and `duration_ms`. The handler's own return value is discarded.
@@ -266,10 +266,8 @@ This auto-discovers all `LiveView` subclasses in `myapp` and:
 3. Checks DB query counts stay under each view's budget: `view_config[View]["max_queries"]`, else the view's [`query_budget`](liveview.md#class-attributes), else `max_queries`; `test_smoke_event_queries` checks the event budgets (`query_budget["event"]` / `["events"]`) of the handlers that declare one
 4. If `fuzz=True`, sends malformed payloads and asserts no uncaught exceptions
 
-The fuzzer sends events only to `@event_handler` handlers, the ones dispatch
-resolves in every `event_security` mode. Under `"warn"` or `"open"` a client can
-still call an undecorated public method, so the smoke test emits one
-`UserWarning` per view naming those methods: decorate them, or test them directly.
+The fuzzer sends events to every `@event_handler` handler, which is everything a
+client event can call.
 
 ---
 

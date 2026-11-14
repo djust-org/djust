@@ -534,7 +534,7 @@ def mount(self, request, **kwargs):
 
 **Severity**: Info
 
-**What causes it**: A public method name matches event handler naming patterns (e.g., `on_*`, `toggle_*`, `select_*`, `update_*`, `delete_*`, `create_*`, `add_*`, `remove_*`, `save_*`, `cancel_*`, `submit_*`, `close_*`, `open_*`) but is not decorated with `@event_handler`. `handle_*` methods and methods marked `@push_handler` are not flagged: an undecorated `handle_*` method is a push target that browsers cannot call under the default `strict` mode, and `@push_handler` marks a method that only server push may call in every `event_security` mode.
+**What causes it**: A public method name matches event handler naming patterns (e.g., `on_*`, `toggle_*`, `select_*`, `update_*`, `delete_*`, `create_*`, `add_*`, `remove_*`, `save_*`, `cancel_*`, `submit_*`, `close_*`, `open_*`) but is not decorated with `@event_handler`. `handle_*` methods and methods marked `@push_handler` are not flagged: an undecorated `handle_*` method is a push target that browsers cannot call, and `@push_handler` marks a method that only server push may call.
 
 Without the decorator, the method cannot be called from templates via `dj-click` or other directives.
 
@@ -783,7 +783,7 @@ never reused. Existing suppressions of V020 have no effect and can be removed.
 
 **Severity**: Info; Warning when the override carries `@event_handler`
 
-**What causes it**: A subclass (or a class that shadows a mixin's method) defines a method whose name a base defines with `@push_handler`, without re-applying the marker. The marker is inherited by method name, so the override is still refused to browsers in every `event_security` mode and server push still reaches it. Message: "<view>.<name>() overrides a @push_handler method without the marker; it is still push-only (the marker is inherited by name)." If the override has `@event_handler` the message says browsers are still refused: the decorator cannot make the name browser-callable.
+**What causes it**: A subclass (or a class that shadows a mixin's method) defines a method whose name a base defines with `@push_handler`, without re-applying the marker. The marker is inherited by method name, so the override is still refused to browsers and server push still reaches it. Message: "<view>.<name>() overrides a @push_handler method without the marker; it is still push-only (the marker is inherited by name)." If the override has `@event_handler` the message says browsers are still refused: the decorator cannot make the name browser-callable.
 
 **Fix**: Add `@push_handler` to the override. For the `@event_handler` case, remove the decorator, or rename the method if a browser should be able to call it.
 

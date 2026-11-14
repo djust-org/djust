@@ -53,6 +53,19 @@ REMOVED_CONFIG_KEYS: dict[str, str] = {
     ),
 }
 
+#: ``LIVEVIEW_CONFIG`` / ``DJUST_CONFIG`` keys 2.0 kept only for one value. Any
+#: other value is refused; the kept value is accepted and does nothing.
+REMOVED_CONFIG_VALUES: dict[str, tuple[Any, str]] = {
+    "event_security": (
+        "strict",
+        # #4101: the "warn" and "open" modes let an undecorated public method
+        # run as a client event; 2.0 refuses it on every transport.
+        "only methods decorated with @event_handler are client events, on every transport. Decorate each "
+        "method a template binds (dj-click, dj-submit, ...) with @event_handler, "
+        "then delete the key",
+    ),
+}
+
 #: View attributes 2.0 removed. A truthy value is refused when the class is
 #: created, so the module fails to import instead of the view quietly running
 #: without the behaviour it asked for. The mount path checks the instance again
@@ -240,6 +253,12 @@ def removed_settings_in_use(settings: Any) -> list[str]:
             "%s[%r] was removed in djust 2.0 (%s); delete the key." % (setting, key, behaviour)
             for key, behaviour in REMOVED_CONFIG_KEYS.items()
             if key in cfg
+        )
+        problems.extend(
+            "%s[%r] = %r was removed in djust 2.0: %s. See %s"
+            % (setting, key, cfg[key], replacement, MIGRATION_GUIDE_URL)
+            for key, (kept, replacement) in REMOVED_CONFIG_VALUES.items()
+            if key in cfg and cfg[key] != kept
         )
     return problems
 
