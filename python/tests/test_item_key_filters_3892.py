@@ -570,23 +570,44 @@ class TestCombiningMarkKeys:
     each part up), so a key spelled with a combining mark (``cafe`` + U+0301) is a key."""
 
     def test_a_combining_mark_continues_a_key(self) -> None:
-        key = "café"
+        key = "cafe\u0301"
         source = "{% for u in users|dictsort:'" + key + "' %}{{ u.pk }}{% endfor %}"
         assert sorted(_paths(source)["users"]) == sorted(["pk", key])
 
     def test_a_dotted_key_with_a_combining_mark_in_its_second_segment(self) -> None:
-        key = "profile.naño"
+        key = "profile.nan\u0303o"
         source = "{% for u in users|dictsort:'" + key + "' %}{{ u.pk }}{% endfor %}"
         assert sorted(_paths(source)["users"]) == sorted(["pk", key])
 
-    @pytest.mark.parametrize("key", ["́cafe", "_café", "café.́x"])
+    @pytest.mark.parametrize("key", ["\u0301cafe", "_cafe\u0301", "cafe\u0301.\u0301x"])
     def test_a_segment_cannot_start_with_a_combining_mark_or_an_underscore(self, key) -> None:
         source = "{% for u in users|dictsort:'" + key + "' %}{{ u.pk }}{% endfor %}"
         assert _paths(source)["users"] == ["pk"]
 
+    def test_the_keys_here_really_hold_a_combining_mark(self) -> None:
+        """The keys above are written with ``\\uXXXX`` escapes, so an editor that normalises the
+        file cannot turn them precomposed (``caf\\u00e9``) and leave the tests green untested."""
+        import unicodedata
+
+        assert unicodedata.combining("cafe\u0301"[-1]) and unicodedata.combining("nan\u0303o"[3])
+        assert unicodedata.normalize("NFC", "cafe\u0301") != "cafe\u0301"
+
+    def test_an_other_alphabetic_mark_may_start_a_segment_as_before(self) -> None:
+        """Unchanged behaviour, recorded: a spacing mark with the Unicode ``Other_Alphabetic``
+        property (U+0903 DEVANAGARI SIGN VISARGA) is ``char::is_alphanumeric`` in Rust, so it was
+        accepted anywhere in a segment before #3920, including first, and still is. Only a
+        mark that is NOT alphabetic (U+0301) is new, and only after the first character."""
+        import unicodedata
+
+        mark = "\u0903"
+        assert unicodedata.category(mark) == "Mc"
+        for key in (mark + "x", "x." + mark + "y"):
+            source = "{% for u in users|dictsort:'" + key + "' %}{{ u.pk }}{% endfor %}"
+            assert sorted(_paths(source)["users"]) == sorted(["pk", key])
+
     def test_django_reads_the_combining_mark_key_as_given(self) -> None:
         """The premise: Django sorts dict rows by the decomposed key, it does not drop it."""
-        key = "café"
+        key = "cafe\u0301"
         rows = [{key: 2, "n": "b"}, {key: 1, "n": "a"}]
         source = "{% for r in rows|dictsort:'" + key + "' %}{{ r.n }}{% endfor %}"
         assert _django_render(source, {"rows": rows}) == "ab"
