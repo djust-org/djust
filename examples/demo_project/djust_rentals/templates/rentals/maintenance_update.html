@@ -22,6 +22,7 @@
     </div>
     {% endif %}
 
+    {% if maintenance_request %}
     <div class="bg-card border border-border rounded-lg p-6 space-y-6">
       <!-- Update Status -->
       <div>
@@ -35,7 +36,7 @@
             dj-click="update_status"
             data-status="{{ val }}"
             class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors border
-            {% if request.status == val %}
+            {% if maintenance_request.status == val %}
               {% if val == 'completed' %}
                 bg-green-500 text-white border-green-500
               {% elif val == 'in_progress' %}
@@ -76,7 +77,7 @@
             dj-click="update_priority"
             data-priority="{{ val }}"
             class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors border
-            {% if request.priority == val %}
+            {% if maintenance_request.priority == val %}
               {% if val == 'urgent' %}
                 bg-red-500 text-white border-red-500
               {% elif val == 'high' %}
@@ -114,7 +115,7 @@
               type="text"
               name="assigned_to"
               class="w-full bg-background border border-input rounded-md pl-10 pr-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-              value="{{ request.assigned_to }}"
+              value="{{ maintenance_request.assigned_to }}"
               placeholder="Contractor name..."
             />
           </div>
@@ -134,7 +135,7 @@
                 step="0.01"
                 name="estimated_cost"
                 class="w-full bg-background border border-input rounded-md pl-7 pr-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                value="{% if request.estimated_cost %}{{ request.estimated_cost }}{% endif %}"
+                value="{% if maintenance_request.estimated_cost %}{{ maintenance_request.estimated_cost }}{% endif %}"
                 min="0"
               />
             </div>
@@ -152,7 +153,7 @@
                 step="0.01"
                 name="actual_cost"
                 class="w-full bg-background border border-input rounded-md pl-7 pr-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                value="{% if request.actual_cost %}{{ request.actual_cost }}{% endif %}"
+                value="{% if maintenance_request.actual_cost %}{{ maintenance_request.actual_cost }}{% endif %}"
                 min="0"
               />
             </div>
@@ -179,13 +180,19 @@
             <i data-lucide="save" class="w-4 h-4"></i>
             Save Details
           </button>
-          <a href="{% url 'rentals:maintenance-detail' request.pk %}" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-muted text-muted-foreground hover:bg-accent border border-border">
+          <a href="{% url 'rentals:maintenance-detail' maintenance_request.pk %}" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-muted text-muted-foreground hover:bg-accent border border-border">
             <i data-lucide="x" class="w-4 h-4"></i>
             Cancel
           </a>
         </div>
       </form>
     </div>
+    {% else %}
+    <a href="{% url 'rentals:maintenance-list' %}" class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors bg-primary text-primary-foreground hover:bg-primary/90">
+      <i data-lucide="arrow-left" class="w-4 h-4"></i>
+      Back to Maintenance
+    </a>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

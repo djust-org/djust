@@ -153,7 +153,7 @@ class NavbarBadgeDemo(LiveView):
     exposure_policy = "explicit"
     notification_count = state(0, persist="server")
     template = """
-    <div class="p-4 bg-white rounded-lg border border-gray-200">
+    <div dj-root class="p-4 bg-white rounded-lg border border-gray-200">
         <!-- Navbar with badge -->
         {{ navbar.render }}
 

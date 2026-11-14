@@ -25,7 +25,7 @@ class HomeCounterDemo(LiveView):
     exposure_policy = "explicit"
     count = state(0, persist="server")
     template = """
-    <div class="text-center">
+    <div dj-root class="text-center">
         <div class="display-1 fw-bold mb-3" style="color: #667eea;">{{ count }}</div>
         <div class="d-flex gap-2 justify-content-center">
             <button dj-click="decrement" class="btn btn-outline-primary btn-lg">
@@ -76,7 +76,7 @@ class HomeSearchDemo(LiveView):
         ])
     filtered_items = state()
     template = """
-    <div>
+    <div dj-root>
         <input
             dj-input="filter_items"
             type="text"
@@ -135,7 +135,7 @@ class HomeLiveDataDemo(LiveView):
     metrics = state()
     last_update = state()
     template = """
-    <div>
+    <div dj-root>
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h5 class="mb-0">Live Performance Metrics</h5>
             <button dj-click="refresh_data" class="btn btn-sm btn-primary">
@@ -229,7 +229,7 @@ class HomeTodoDemo(LiveView):
         ], persist="server")
     next_id = state(3, persist="server")
     template = """
-    <div>
+    <div dj-root>
         <form dj-submit="add_todo" class="mb-3">
             <div class="input-group input-group-lg">
                 <input

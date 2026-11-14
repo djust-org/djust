@@ -29,10 +29,11 @@ class TenantDashboardView(BaseViewWithNavbar):
         """Initialize tenant dashboard"""
         # In real app, get tenant from request.user
         # For demo, we'll load first tenant
-        try:
-            self.tenant = Tenant.objects.select_related('user').first()
-        except:
-            self.tenant = None
+        # .first() returns None on an empty table rather than raising, so test
+        # for it: a bare except here never ran and the page 500'd (#3994).
+        self.tenant = Tenant.objects.select_related('user').first()
+        self.error_message = ""
+        if self.tenant is None:
             self.error_message = "No tenant profile found"
             return
 
@@ -86,11 +87,14 @@ class TenantDashboardView(BaseViewWithNavbar):
             icon="home"
         )
 
-        # Count maintenance by status
+        # Count maintenance by status over all of the tenant's requests:
+        # self.maintenance_requests is the sliced "recent 5", and a sliced
+        # queryset cannot be filtered again (#3994).
+        all_requests = MaintenanceRequest.objects.filter(tenant=self.tenant)
         maintenance_stats = {
-            'open': self.maintenance_requests.filter(status='open').count() if self.maintenance_requests else 0,
-            'in_progress': self.maintenance_requests.filter(status='in_progress').count() if self.maintenance_requests else 0,
-            'completed': self.maintenance_requests.filter(status='completed').count() if self.maintenance_requests else 0,
+            'open': all_requests.filter(status='open').count(),
+            'in_progress': all_requests.filter(status='in_progress').count(),
+            'completed': all_requests.filter(status='completed').count(),
         }
 
         context.update({
@@ -122,10 +126,11 @@ class TenantMaintenanceListView(BaseViewWithNavbar):
     def mount(self, request, **kwargs):
         """Initialize tenant maintenance list"""
         # Get tenant from request.user (for demo, use first tenant)
-        try:
-            self.tenant = Tenant.objects.select_related('user').first()
-        except:
-            self.tenant = None
+        # .first() returns None on an empty table rather than raising, so test
+        # for it: a bare except here never ran and the page 500'd (#3994).
+        self.tenant = Tenant.objects.select_related('user').first()
+        self.error_message = ""
+        if self.tenant is None:
             self.error_message = "No tenant profile found"
             return
 
@@ -197,10 +202,11 @@ class TenantMaintenanceCreateView(BaseViewWithNavbar):
     def mount(self, request, **kwargs):
         """Initialize maintenance creation form"""
         # Get tenant from request.user (for demo, use first tenant)
-        try:
-            self.tenant = Tenant.objects.select_related('user').first()
-        except:
-            self.tenant = None
+        # .first() returns None on an empty table rather than raising, so test
+        # for it: a bare except here never ran and the page 500'd (#3994).
+        self.tenant = Tenant.objects.select_related('user').first()
+        self.error_message = ""
+        if self.tenant is None:
             self.error_message = "No tenant profile found"
             return
 
@@ -280,10 +286,11 @@ class TenantPaymentsView(BaseViewWithNavbar):
     def mount(self, request, **kwargs):
         """Initialize tenant payments view"""
         # Get tenant from request.user (for demo, use first tenant)
-        try:
-            self.tenant = Tenant.objects.select_related('user').first()
-        except:
-            self.tenant = None
+        # .first() returns None on an empty table rather than raising, so test
+        # for it: a bare except here never ran and the page 500'd (#3994).
+        self.tenant = Tenant.objects.select_related('user').first()
+        self.error_message = ""
+        if self.tenant is None:
             self.error_message = "No tenant profile found"
             return
 
@@ -325,7 +332,6 @@ class TenantPaymentsView(BaseViewWithNavbar):
         # Calculate expected payments
         if self.current_lease:
             from datetime import date
-            from dateutil.relativedelta import relativedelta
 
             start_date = self.current_lease.start_date
             end_date = min(self.current_lease.end_date, date.today())

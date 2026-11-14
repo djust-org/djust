@@ -78,7 +78,7 @@ class ComponentsDemoView(LiveView):
         </style>
     </head>
     <body>
-        <div class="container">
+        <div dj-root class="container">
             <h1>djust Unified Component System</h1>
             <p class="lead">Demonstrating automatic performance optimization: Rust → Hybrid → Python</p>
 
