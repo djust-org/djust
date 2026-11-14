@@ -850,16 +850,28 @@ class TestAbandonedThreadsAreCapped:
     def test_a_worker_is_not_started_while_the_cap_of_abandoned_ones_are_alive(
         self, monkeypatch, caplog
     ):
+        """#4077: what the test asserts is that the third POST asks for no
+        worker, counted where workers are started. It used to read the shared
+        ``STARTED`` event, which a late start of an earlier, already abandoned
+        worker could set on a loaded runner: a timing window, not the cap."""
         monkeypatch.setattr(request_mixin, "_HTTP_BACKGROUND_MAX_ABANDONED", 2)
+        started_runs: list = []
+        start_run = request_mixin._start_background_run
+
+        def counted_start(*args, **kwargs):
+            started_runs.append(args[1])  # the task name
+            return start_run(*args, **kwargs)
+
+        monkeypatch.setattr(request_mixin, "_start_background_run", counted_start)
         with SHORT, caplog.at_level(logging.WARNING, logger="djust.mixins.request"):
             _post(Watching, "kick_sync")
             _post(Watching, "kick_sync")
+            assert started_runs == ["hang", "hang"]
             assert len(_workers()) == 2
-            STARTED.clear()
             LOG.clear()
             view, response, body = _post(Watching, "kick_sync")
             assert response.status_code == 200, body
-            assert not STARTED.is_set(), "a third hanging worker was started past the cap"
+            assert started_runs == ["hang", "hang"], "a third worker was started past the cap"
             assert len(_workers()) == 2
         results = [e for e in LOG if e[0] == "result"]
         assert [(e[1], e[3]) for e in results] == [("hang", "TimeoutError")]
