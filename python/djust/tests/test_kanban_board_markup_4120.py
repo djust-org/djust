@@ -173,11 +173,17 @@ def test_every_card_takes_focus_for_the_keyboard_move():
         (("doing", "done"), "doing done"),
         ({"done", "doing"}, "doing done"),
         (iter(["a", "b"]), "a b"),
+        # A lazy string is one id, not its characters.
+        ("lazy:done", "done"),
     ],
 )
 def test_card_targets_accept_a_string_or_any_iterable(targets, expected):
+    from django.utils.functional import lazy
+
     from djust.components.templatetags.djust_components import kanban_board
 
+    if targets == "lazy:done":
+        targets = lazy(lambda: "done", str)()
     cols = [{"id": "t", "title": "T", "cards": [{"id": "c", "title": "C", "targets": targets}]}]
     assert 'data-targets="%s"' % expected in str(kanban_board(columns=cols))
 

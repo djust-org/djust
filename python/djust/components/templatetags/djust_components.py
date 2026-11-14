@@ -21,7 +21,8 @@ import logging
 import re as _re
 import uuid
 from urllib.parse import urlencode
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from typing import Any, Iterator, Optional
 
 from django import template
@@ -3859,7 +3860,7 @@ _KANBAN_SPACED_IDS: set = set()
 def _warn_spaced_column_id(column_id: Any) -> None:
     """A card's ``data-targets`` is a space-separated list of column ids, so an
     id with whitespace in it cannot be listed: warn once per id (#4120)."""
-    text = str(column_id)
+    text = _exact_str(column_id)
     if text.split() == [text] or not text.strip() or text in _KANBAN_SPACED_IDS:
         return
     _KANBAN_SPACED_IDS.add(text)
@@ -3873,19 +3874,20 @@ def _warn_spaced_column_id(column_id: Any) -> None:
 def _kanban_targets(targets: Any) -> Optional[list]:
     """A card's ``targets`` as a list of column ids, or None for "any column".
 
-    A single string is one id; any other iterable of strings (list, tuple, set,
-    generator) is a list of ids, a set sorted so the markup is stable."""
+    A collection or iterator (list, tuple, set, generator, ...) is a list of
+    ids, a set sorted so the markup is stable; anything else, a string
+    included, is one id. Each id is read as its exact text (``_exact_str``),
+    so a marked-safe, lazy or other text-like value renders like the plain
+    string (and a lazy string is not split into its characters)."""
     if targets is None:
         return None
-    if isinstance(targets, str):
-        ids = [targets]
-    elif isinstance(targets, (set, frozenset)):
-        ids = sorted(str(t) for t in targets)
+    if isinstance(targets, (AbstractSet, Iterator)) or (
+        isinstance(targets, Sequence) and not isinstance(targets, (str, bytes))
+    ):
+        items = sorted(targets, key=_exact_str) if isinstance(targets, AbstractSet) else targets
+        ids = [_exact_str(t) for t in items]
     else:
-        try:
-            ids = [str(t) for t in targets]
-        except TypeError:
-            return None
+        ids = [_exact_str(targets)]
     for target in ids:
         _warn_spaced_column_id(target)
     return ids
