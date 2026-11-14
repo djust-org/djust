@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 119 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 122 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -44,6 +44,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C031 | Config | Warning | The session store is a cache only one process can see (`LocMemCache`, `DummyCache`) |
 | C032 | Config | Warning | The channel layer is in-memory, so messages never reach another process's sockets |
 | C033 | Config | Warning | A view uses presence and the presence backend counts only one process's sockets |
+| C034 | Config | Warning | View state is to be saved and `SESSION_ENGINE` cannot hold it, so nothing is saved |
+| C035 | Config | Error | `DJUST_AUTOMATIC_STATE` or a view's `automatic_state` is not `True` or `False` |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -80,6 +82,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V027 | LiveView | Warning | An explicit view declares a `state()` field named `user` or `perms` (without `render=False`): it replaces `request.user` / the permission proxy in every template the view renders |
 | V028 | LiveView | Warning | An application class states `exposure_policy = "legacy"`, which is deprecated and removed before 2.0.0 |
 | V029 | LiveView | Warning | An explicit view's event handler reads and then changes a `state()` field declared `persist=False`, so the change is not saved between requests |
+| V030 | LiveView | Warning | A view or mixin defines or assigns `skip_render`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, replacing djust's method of that name |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -304,14 +307,14 @@ console.log("debug info"); // noqa: Q003
 ### C030 — Server state with an unsupported session engine
 - **Severity**: Error
 - **Method**: Settings inspection and declared `state()` fields
-- **What it detects**: A LiveView declares `state(..., persist="server")` and `SESSION_ENGINE` is not one of `django.contrib.sessions.backends.db`, `cached_db`, `cache` or `file` (for example `signed_cookies`, or a custom engine). Server state is kept in a server-side session, so every request of such a view fails; at runtime it is refused with `UnsupportedSessionEngine`, which names the supported engines (#4092).
+- **What it detects**: A LiveView declares `state(..., persist="server")` and `SESSION_ENGINE` is neither one of `django.contrib.sessions.backends.db`, `cached_db`, `cache` or `file` nor an engine whose `SessionStore` subclasses one of theirs (for example `signed_cookies`, or a store built on none of them). Server state is kept in a server-side session, so every request of such a view fails; at runtime it is refused with `UnsupportedSessionEngine`, which names the supported engines (#4092).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C030"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C030"]`
-- **False positives**: None. The engine is judged by the `SessionStore` class it resolves to, as the runtime judges the request's session, so a module that re-exports a supported store is accepted. A subclass of a supported store is reported because the runtime refuses it too (only the exact audited stores are accepted).
+- **False positives**: None. The engine is judged by the `SessionStore` class it resolves to, as the runtime judges the request's session, so a module that re-exports a supported store, or subclasses one, is accepted (#4128).
 
 ### C031 — Session store local to one process
 - **Severity**: Warning
 - **Method**: Settings inspection (`SESSION_ENGINE`, `SESSION_CACHE_ALIAS`, `CACHES`)
-- **What it detects**: `SESSION_ENGINE` is `django.contrib.sessions.backends.cache` or `cached_db` and the cache it uses is `LocMemCache` (or `DummyCache`). djust keeps view state in the session, so with more than one process a request or socket served by another process does not find the session (`cache`) or reads a stale copy (`cached_db`), and the view mounts fresh. Reported only with `DEBUG = False` for `LocMemCache`: a development server is one process, where the local cache works. A `DummyCache` stores nothing, so the `cache` engine loses every session even with one process; it is reported in development too (#4103).
+- **What it detects**: `SESSION_ENGINE` is `django.contrib.sessions.backends.cache` or `cached_db` (or an engine whose `SessionStore` subclasses one of theirs) and the cache it uses is `LocMemCache` (or `DummyCache`). djust keeps view state in the session, so with more than one process a request or socket served by another process does not find the session (`cache`) or reads a stale copy (`cached_db`), and the view mounts fresh. Reported only with `DEBUG = False` for `LocMemCache`: a development server is one process, where the local cache works. A `DummyCache` stores nothing, so the `cache` engine loses every session even with one process; it is reported in development too (#4103).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C031"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C031"]` (for a site that runs as one process)
 - **False positives**: A deployment that runs exactly one process. The `file` engine is not reported: whether its directory is shared cannot be seen from settings.
 
@@ -328,6 +331,20 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: A LiveView uses `PresenceMixin` while the presence backend is `memory` (the default) or `tenant_memory`. Each process then counts only the sockets it holds, so with several processes every process shows its own users online. Reported only with `DEBUG = False` (#4104).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C033"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C033"]` (for a site that runs as one process)
 - **False positives**: A deployment that runs exactly one process.
+
+### C034 — Saved view state with an unsupported session engine
+- **Severity**: Warning
+- **Method**: Settings inspection (`SESSION_ENGINE`, `DJUST_AUTOMATIC_STATE`) and each LiveView's `automatic_state`
+- **What it detects**: At least one LiveView's state is to be saved between requests (the default) while `SESSION_ENGINE` is neither `django.contrib.sessions.backends.db`, `cached_db`, `cache` or `file` nor an engine whose `SessionStore` subclasses one of theirs. Nothing is saved then: every page-POST fallback request runs `mount()` again and a reconnect starts from `mount()` (#4128).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C034"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C034"]`
+- **False positives**: None. A project that wants nothing saved says so with `DJUST_AUTOMATIC_STATE = False`, which also silences the check.
+
+### C035 — Saved-state switch is not a bool
+- **Severity**: Error
+- **Method**: Settings inspection (`DJUST_AUTOMATIC_STATE`) and each LiveView's `automatic_state`
+- **What it detects**: `DJUST_AUTOMATIC_STATE` is set to something other than `True` or `False`, or a LiveView's `automatic_state` is something other than `True`, `False` or `None`. Any such value is read as off: the state of the views it covers is not saved between requests (#4128).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C035"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C035"]`
+- **False positives**: None.
 
 <!-- END GENERATED check-sections:C -->
 
@@ -580,6 +597,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: an `@event_handler` or `@action` of an explicit view that reads the old value of a `state()` field declared `persist=False` and then changes it (`self.count += 1`, `self.x = f(self.x)`, `self.items.append(...)`). A view's state is saved server-side between requests: its public attributes, the `_private` attributes `mount()` creates, and its `state()` fields. A field declared `persist=False` is the one thing the author kept out, so on the HTTP fallback and after a reconnect it starts from its default again and the change is lost, with no error; within one WebSocket connection it is kept. Not reported: every attribute and field that is saved, a `persist=False` field a handler only replaces, keys of `temporary_assigns`, djust's own attributes, and legacy views. A value that is not saved because it cannot be (a queryset, the request's user, an arbitrary object) is not found by this check: the `djust.automatic_state` logger names it at run time, and `mount()` runs again on the next request to re-create it. Only the handlers' own bodies are read. Reported once per class and field, on the class whose handler changes it.
 - **Fix**: remove `persist=False` from the field, or stop reading its old value in a later event.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V029"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V029"]`
+
+### V030 — a view attribute replaces one of djust's view methods
+- **Severity**: Warning
+- **Method**: Runtime (class inspection and the source of the classes' methods).
+- **What it detects**: a LiveView, or a mixin of one, that defines one of `skip_render`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state` (#4129) in its class body, or assigns `self.<name>` in one of its methods. The attribute replaces djust's method with no error: if it is an `@event_handler`, a client can call it, and the view's own `self.skip_render()` runs the handler instead of skipping the render. Reported once per class and name, on the class that defines it. djust's own classes are not checked.
+- **Fix**: rename the attribute.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V030"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V030"]`
 
 <!-- END GENERATED check-sections:V -->
 
@@ -884,6 +908,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   - a partial another template `{% include %}`s: the includer is checked with it inlined. An include inside `{# #}` or `{% comment %}`, or a template including itself, does not count;
   - the template of a view a `{% live_render "dotted.View" %}` embeds, which renders inside the tag's `dj-view` wrapper. The path must be a string literal that imports when the check runs; `{% live_render view_path %}` with a variable is not followed, so its child template is checked on its own;
   - component templates: an element with a real `dj-component` or `data-component-id` attribute;
+  - the template a registered function component names, `@component(template_name="...")` (#4121). The component's module must be imported when the check runs;
   - templates marked `{# djust:partial #}`
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T012"]` or `DJUST_CONFIG = {"suppress_checks": ["T012"]}`
 - **False positives**: Partial templates that intentionally omit `dj-root` / `dj-view` because the parent/wrapper template provides it (mark them with `{# djust:partial #}`)

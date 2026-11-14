@@ -7,12 +7,20 @@ from typing import Any, Optional
 
 
 class KanbanBoard(Component):
-    """Kanban board component.
+    """Kanban board component: a static board, without drag and drop.
+
+    Its cards are not ``draggable`` and carry no ``data-card-id``, and the
+    board has no ``data-move-event``, so the client's drag and drop does not
+    act on it and ``move_event`` is never sent (#4120). Columns do carry
+    ``data-col-id``. For a board whose cards drag between columns, use the
+    ``{% kanban_board %}`` tag, or write the markup the components guide
+    documents ("Kanban board markup").
 
     Args:
-        columns: list of dicts with keys: id, title, color, cards (list of dicts)
-        move_event: dj-click event for drag-drop
-        add_card_event: dj-click event for adding cards"""
+        columns: list of dicts with keys: id, title, cards (list of dicts)
+        move_event: stored, but not sent: this component does not drag
+        add_card_event: dj-click event for adding cards. ``None`` (or ``""``)
+            leaves the "+ Add card" button out, as on the tag."""
 
     #: ADR-033 D3: the walked state keys; ``columns`` (the data) compares by
     #: identity, so reassign it to re-render — never a per-node walk per click.
@@ -22,7 +30,7 @@ class KanbanBoard(Component):
         self,
         columns: Optional[list] = None,
         move_event: str = "kanban_move",
-        add_card_event: str = "kanban_add_card",
+        add_card_event: Optional[str] = "kanban_add_card",
         custom_class: str = "",
         **kwargs: Any,
     ) -> None:
@@ -54,6 +62,12 @@ class KanbanBoard(Component):
             col_id = html.escape(str(col_id_raw))
             col_title = html.escape(str(col.get("title", "")))
             cards = col.get("cards", [])
+            add_btn = (
+                f'<button class="kanban-add-card" '
+                f"{self.event_attrs(self.add_card_event, value=col_id_raw)}>+ Add card</button>"
+                if self.add_card_event
+                else ""
+            )
             cards_html = ""
             for card in cards:
                 if not isinstance(card, dict):
@@ -64,8 +78,7 @@ class KanbanBoard(Component):
                 f'<div class="kanban-col" data-col-id="{col_id}">'
                 f'<div class="kanban-col-header"><span class="kanban-col-title">{col_title}</span></div>'
                 f'<div class="kanban-cards">{cards_html}</div>'
-                f'<button class="kanban-add-card" '
-                f"{self.event_attrs(self.add_card_event, value=col_id_raw)}>+ Add card</button>"
+                f"{add_btn}"
                 f"</div>"
             )
         return f'<div class="{cls}">{cols_html}</div>'

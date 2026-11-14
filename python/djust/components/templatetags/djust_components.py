@@ -3844,6 +3844,11 @@ def virtual_list(
 # ---------------------------------------------------------------------------
 
 
+#: Theme colour names a kanban column's ``color`` may give, each a
+#: ``kanban-col--<name>`` class in ``components.css`` (#4120).
+KANBAN_COLUMN_COLORS = ("primary", "success", "warning", "destructive", "info", "muted")
+
+
 @register.simple_tag
 def kanban_board(
     columns: Any = None,
@@ -3855,10 +3860,23 @@ def kanban_board(
 
     Args:
         columns: list of dicts:
-            {"id": "todo", "title": "To Do", "color": "#6366F1",
-             "cards": [{"id": "c1", "title": "Task A", "label": "bug"}]}
+            {"id": "todo", "title": "To Do", "color": "success",
+             "cards": [{"id": "c1", "title": "Task A", "label": "bug", "href": "/tasks/1/"}]}
+            A column's ``color`` is a theme name (``primary``, ``success``,
+            ``warning``, ``destructive``, ``info``, ``muted``), written as the
+            class ``kanban-col--<name>`` (no ``style`` attribute, so a strict
+            CSP ``style-src-attr 'none'`` keeps it), or any CSS colour, written
+            as an inline ``style`` (refused by such a CSP). No ``color`` means
+            no colour of the column's own (#4120). A card's ``href`` makes its
+            title a link.
         move_event: event fired on drag-drop with JSON payload {card_id, from_col, to_col}
-        add_card_event: event fired when adding a card, passes column id
+        add_card_event: event fired when adding a card, passes column id.
+            ``None`` (or ``""``) leaves the "+ Add card" button out.
+        add_col_event: accepted for compatibility and not used.
+
+    The markup is the contract the client's drag and drop reads, documented
+    in the components guide ("Kanban board markup"), so an application can
+    write a compatible board by hand.
     """
     # Dragging and dropping is the client bundle's delegated ``.kanban``
     # behaviour (no inline handler): a drop sends ``data-move-event`` with
@@ -3867,7 +3885,7 @@ def kanban_board(
     if not columns:
         return mark_safe(f'<div class="kanban" data-move-event="{e_move}"></div>')
 
-    e_add_card = conditional_escape(add_card_event)
+    e_add_card = conditional_escape(add_card_event) if add_card_event else ""
 
     cols_html = ""
     for col in columns:
@@ -3875,7 +3893,17 @@ def kanban_board(
             continue
         col_id = attr_text(col.get("id", ""))  # only in dj-key= / data-* (#3904)
         col_title = conditional_escape(str(col.get("title", "")))
-        col_color = conditional_escape(safe_css_color(col.get("color", "#6366F1"), "#6366F1"))
+        # No style attribute unless the column asks for a custom CSS colour:
+        # a theme name is a class (#4120).
+        color = col.get("color")
+        header_class = "kanban-col-header"
+        header_style = ""
+        if isinstance(color, str) and color in KANBAN_COLUMN_COLORS:
+            header_class += " kanban-col--" + attr_text(color)
+        elif color not in (None, ""):
+            custom = safe_css_color(color, "")
+            if custom:
+                header_style = f' style="border-top-color:{conditional_escape(custom)}"'
         cards = col.get("cards", [])
 
         cards_html = ""
@@ -3884,6 +3912,14 @@ def kanban_board(
                 continue
             card_id = attr_text(card.get("id", ""))  # only in dj-key= / data-* (#3904)
             card_title = conditional_escape(str(card.get("title", "")))
+            card_href = card.get("href")
+            if card_href:
+                # draggable="false": a drag that starts on the link drags the
+                # card, not the URL.
+                card_title = (
+                    f'<a class="kanban-card-link" href="{safe_url(card_href)}" '
+                    f'draggable="false">{card_title}</a>'
+                )
             card_label = card.get("label", "")
             card_sub = card.get("sub", "")
             label_html = (
@@ -3915,6 +3951,8 @@ def kanban_board(
         add_btn = (
             f'<button class="kanban-add-card" dj-click="{e_add_card}" '
             f'data-value="{col_id}">+ Add card</button>'
+            if e_add_card
+            else ""
         )
 
         cols_html += (
@@ -3925,7 +3963,7 @@ def kanban_board(
             # (#1678).
             f'<div class="kanban-col" dj-key="{col_id}" '
             f'data-col-id="{col_id}">'
-            f'<div class="kanban-col-header" style="border-top-color:{col_color}">'
+            f'<div class="{header_class}"{header_style}>'
             f'<span class="kanban-col-title">{col_title}</span>'
             f'<span class="kanban-col-count">{len(cards)}</span>'
             f"</div>"
@@ -6616,10 +6654,13 @@ class NavItemNode(template.Node):
 
         # Truthiness first, as the native item: no ``id`` and no menu ``active`` is not a match.
         is_active = bool(item_id and item_id == active_path) or bool(href and href == active_path)
-        top = depth == 0
-        li_cls = "dj-nav__item" if top else "dj-nav__dropdown-item"
-        link_cls = "dj-nav__link" if top else "dj-nav__dropdown-link"
-        active_cls = f" {li_cls}--active" if is_active else ""
+        # The same classes at every depth, as the native handler draws them (#4127): a nested
+        # item is styled by where it sits (``.dj-nav__dropdown-list .dj-nav__item``), not by a
+        # second class family. ``dj-nav__dropdown-item`` / ``-link`` stay styled in
+        # components.css for markup that still names them.
+        li_cls = "dj-nav__item"
+        link_cls = "dj-nav__link"
+        active_cls = " dj-nav__item--active" if is_active else ""
 
         if own["items"]:
             mega_cls = " dj-nav__dropdown--mega" if mega else ""

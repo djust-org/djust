@@ -2124,6 +2124,11 @@ class RequestMixin:
                 _inject_side_channels(redirect_response)
                 return JsonResponse(redirect_response)
 
+            # A form reset this turn asked for (``reset_submitted_form()``,
+            # ``FormMixin.reset_form()``) rides on every answer below (#4129).
+            # The flag is not saved state: this request's view is discarded.
+            reset_form = bool(getattr(self, "_should_reset_form", False))
+
             # Explicit and legacy views alike (#4107).
             from .._exposure_sessions import StateLimitExceeded, save_server_state
 
@@ -2144,6 +2149,8 @@ class RequestMixin:
 
             # Fields every response of this turn carries besides its payload.
             response_fields: Dict[str, Any] = {}
+            if reset_form:
+                response_fields["reset_form"] = True
 
             if (
                 observation_before is not None

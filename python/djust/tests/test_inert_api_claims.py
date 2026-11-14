@@ -470,10 +470,23 @@ def test_the_client_does_not_reset_a_form_on_submit_itself() -> None:
         "description (and docs/website/guides/forms.md) to say so."
     )
 
+    # Since #4129 the reset lives in one helper, applyFormReset, called for every
+    # answer to an event (a noop included) on the socket, SSE and fallback paths.
     response = (CLIENT_SRC / "02-response-handler.js").read_text(encoding="utf-8")
-    assert "if (data.reset_form)" in response and "form.reset()" in response, (
+    start = response.index("function applyFormReset(")
+    helper = response[start : response.index("\n}\n", start)]
+    assert "if (!data || !data.reset_form) return;" in helper and "form.reset()" in helper, (
         "the server-requested reset path moved; re-check dj-submit's schema.py description"
     )
+    for transport in ("03-websocket.js", "03b-sse.js"):
+        source = (CLIENT_SRC / transport).read_text(encoding="utf-8")
+        assert "applyFormReset(" in source, (
+            "%s no longer resets through applyFormReset; re-check dj-submit's schema.py "
+            "description" % transport
+        )
+    # The description names the form the client actually resets (#4129 review).
+    description = _dj_submit_description()
+    assert "first <form>" not in description and "reset_submitted_form()" in description
 
 
 def test_dj_target_is_documented_as_inert_where_agents_read_it() -> None:

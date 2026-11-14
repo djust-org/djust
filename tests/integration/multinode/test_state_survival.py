@@ -17,6 +17,8 @@ in-memory rows run.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tests.integration.multinode.harness import Browser, Cluster, kinds, probe_from, probe_of
@@ -133,6 +135,65 @@ def test_http_fallback_alternating_processes(db_cluster, survival):
     )
     full = all("html" in payload and not payload.get("patches") for payload, _ in answers)
     survival.observe("state", "render", "http", "full HTML on every request" if full else "?")
+
+
+def test_saving_switched_off(db_cluster, survival):
+    """#4128: a view with ``automatic_state = False`` saves nothing of its own
+    state; only its declared ``persist="server"`` field crosses a request."""
+    view = V + "SwitchedOffView"
+    rest = ("plain_state", "plain_attr", "private_attr")
+    browser = Browser(db_cluster)
+
+    # One process, one socket: the view object is alive, so everything is kept.
+    socket_a, _ = _open(browser, "A", "/off/", view)
+    socket_a.event("increment")
+    probe = probe_from(socket_a.event("increment"))
+    survival.observe(
+        "state",
+        "switched_off",
+        "same",
+        _kept([probe[name] for name in ("count",) + rest], [2, 2, 2, 2]),
+    )
+    socket_a.close()
+
+    # A reconnect on another process: mount() again; the declared field is back.
+    socket_b = browser.socket("B")
+    probe = probe_from(socket_b.mount(view, "/off/", reconnect_from=socket_a))
+    fresh = [probe[name] for name in rest] == [0, 0, 0]
+    survival.observe(
+        "state",
+        "switched_off",
+        "ws",
+        'not kept: starts from `mount()` (a `persist="server"` field is restored)'
+        if fresh and probe["count"] == 2 and probe["mounted_pid"] == db_cluster["B"].pid
+        else "? %r" % (probe,),
+    )
+    socket_b.close()
+
+    # The page-POST fallback across processes: each request mounts again.
+    other = Browser(db_cluster)
+    status, _body, _ = other.get("A", "/off/")
+    assert status == 200
+    probes = [_post(other, node, "/off/", "increment")[1] for node in ("B", "A", "B")]
+    mounted_here = [p["mounted_pid"] for p in probes] == [
+        db_cluster[node].pid for node in ("B", "A", "B")
+    ]
+    reset = all([p[name] for name in rest] == [1, 1, 1] for p in probes)
+    survival.observe(
+        "state",
+        "switched_off",
+        "http",
+        'not kept: every request runs `mount()` again (a `persist="server"` field is kept)'
+        if mounted_here and reset and [p["count"] for p in probes] == [1, 2, 3]
+        else "? %r" % (probes,),
+    )
+    # Nothing of the view is in either browser's session.
+    for one in (browser, other):
+        status, body, _ = one.get("A", "/_mn/session-keys/")
+        assert status == 200, body[:300]
+        keys = json.loads(body)["keys"]
+        assert any(key.startswith("_djust_explicit_") for key in keys), keys
+        assert not [key for key in keys if key.startswith("_djust_auto_")], keys
 
 
 def _render_after_reconnect(mount_frames, first, second) -> str:

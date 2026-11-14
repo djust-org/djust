@@ -104,6 +104,7 @@ a channel layer every process shares. See
 | `state()` without `persist` | kept<br><sub>`test_ws_events_on_one_process`</sub> | kept (1, 2, 3 across A, B, A)<br><sub>`test_http_fallback_alternating_processes`</sub> | restored<br><sub>`test_ws_reconnect_to_another_process`</sub> | restored (last completed save)<br><sub>`test_kill_after_save`</sub> | Nothing: it is saved automatically. Use a session engine every process shares. |
 | Ordinary attribute set in `mount()` or a handler, public or `_private` | kept<br><sub>`test_ws_events_on_one_process`</sub> | kept (1, 2, 3 across A, B, A)<br><sub>`test_http_fallback_alternating_processes`</sub> | restored<br><sub>`test_ws_reconnect_to_another_process`</sub> | restored (last completed save)<br><sub>`test_kill_after_save`</sub> | Nothing: it is saved automatically, and is not rendered unless declared. |
 | `state(..., persist=False)` field | kept<br><sub>`test_ws_events_on_one_process`</sub> | lost: every request starts from the default<br><sub>`test_http_fallback_alternating_processes`</sub> | lost: the default<br><sub>`test_ws_reconnect_to_another_process`</sub> | lost: the default<br><sub>`test_kill_after_save`</sub> | Nothing: you asked for it not to be kept. |
+| `state()` without `persist`, or an ordinary attribute, on a view with saving switched off (`automatic_state = False`, or `DJUST_AUTOMATIC_STATE = False` for the project) | kept<br><sub>`test_saving_switched_off`</sub> | not kept: every request runs `mount()` again (a `persist="server"` field is kept)<br><sub>`test_saving_switched_off`</sub> | not kept: starts from `mount()` (a `persist="server"` field is restored)<br><sub>`test_saving_switched_off`</sub> | n/a (same mount path as the reconnect to another process) | Nothing is saved, by your choice: `mount()` builds the view again. Declare a field `persist="server"` to keep it anyway. |
 | `mount()` | n/a (runs once, when the page's view is built) | not run again: the view is rebuilt from its saved state<br><sub>`test_http_fallback_alternating_processes`</sub> | runs on the new process, then the saved state is put back over it<br><sub>`test_ws_reconnect_to_another_process`</sub> | n/a (same mount path as the reconnect to another process) | Put what must be read again on every request in `handle_restore()` or `get_context_data()`, not only in `mount()`. |
 | `handle_restore()` hook | n/a (no remount, so nothing to restore) | called on every request<br><sub>`test_http_fallback_alternating_processes`</sub> | called after the restore<br><sub>`test_ws_reconnect_to_another_process`</sub> | called after the restore<br><sub>`test_kill_after_save`</sub> | Use it to reload what the persisted fields point at. |
 | Render baseline (what the next update sends) | patches<br><sub>`test_ws_events_on_one_process`</sub> | full HTML on every request<br><sub>`test_http_fallback_alternating_processes`</sub> | full HTML in the mount, full HTML for the first event, then patches<br><sub>`test_ws_reconnect_to_another_process`</sub> | full HTML in the mount, full HTML for the first event, then patches<br><sub>`test_kill_after_save`</sub> | Nothing: the framework re-sends the page. |
@@ -160,6 +161,75 @@ With `DEBUG = False`, system checks [`djust.C032`](error-codes.md#c032-in-memory
 (memory presence used by a view) warn about the two rows above that cover only
 one process.
 
+## Switching saving off
+
+Saving is on by default. Two switches turn it off without changing what a view
+exposes:
+
+```python
+# settings.py: nothing of any view is saved between requests
+DJUST_AUTOMATIC_STATE = False
+```
+
+```python
+class ReportView(LiveView):
+    automatic_state = False  # this view saves nothing, whatever the project says
+```
+
+A view may also say `automatic_state = True` in a project that set
+`DJUST_AUTOMATIC_STATE = False`: the view's own value wins in both directions,
+and a subclass takes its base class's value unless it states its own. The
+switch is coarse on purpose: it covers the whole view, so no attribute has to
+be found and excluded one at a time.
+
+With saving off, nothing of the view is written to the session on any
+transport: not its public or `_private` attributes, not its plain `state()`
+fields, not its components' state, not the record of what a handler changed,
+and no empty entry at the page load. What follows:
+
+- over the page-POST fallback every request runs `mount()` again, then
+  `handle_params()` and `handle_restore()`, then the event;
+- a socket reconnect starts from `mount()`; while the socket is open the view
+  object lives on and keeps everything, as always;
+- no size limit applies and nothing is reported as unsaveable;
+- state saved before the switch was turned off is not read. The first request
+  or reconnect of a tab removes that tab's saved state from the session; what
+  other tabs left stays until its session expires, or until
+  `djust clear --all` (on the `db` and `cached_db` engines).
+
+The switch covers every road by which a view's content reaches the session:
+
+- the page's own state (above);
+- a **lazy legacy child** (`dj-lazy` under a legacy page), whose state the
+  fallback kept in the session: it is saved only while saving is on for the
+  page AND for the child. A child cannot switch saving on under a page that
+  switched it off;
+- an **embedded child** (`{% live_render %}`, sticky or not) never has its own
+  state saved automatically, whatever its `automatic_state` says. Its declared
+  `persist="server"` fields are kept, as the page's are;
+- form input and validation errors (`FormMixin`) are part of the page's state:
+  with saving off they are in the answer and not in the session.
+
+What djust still writes with saving off: fields declared `persist="server"`
+and their index (`_djust_explicit_...`), and one random token that binds lazy
+children to the session (`_djust_lazy_binding`). Neither holds view content
+you did not declare.
+
+**A field declared `state(..., persist="server")` is still kept.** The
+developer asked for exactly that field, by name, so the switch does not
+override it. To have no view content in the session at all, set the switch and
+declare no field `persist="server"`.
+
+Only `True` and `False` are accepted (`None` on a view means the project's
+value). Any other value is read as off, so a mistake never saves state nobody
+asked for, and system check `djust.C035` reports it. The setting is read on
+each request and the view's attribute from its class, never from the instance:
+`self.automatic_state = False` in `mount()` does nothing, and a WARNING on the
+`djust.automatic_state` logger says so once per view class.
+`DJUST_AUTOMATIC_STATE` is a top-level Django setting. Inside `LIVEVIEW_CONFIG`
+or `DJUST_CONFIG` (as `automatic_state` or `DJUST_AUTOMATIC_STATE`) it is
+refused at startup instead of being ignored.
+
 ## Every page load creates a session
 
 A LiveView page GET saves the view's state, so it creates a session when the
@@ -174,6 +244,13 @@ visitor has none and the response sets the session cookie, as in 1.x. Two things
   you operate is for you to decide.
 
 ## Session engines
+
+Saved state needs one of Django's server-side engines (`db`, `cached_db`,
+`cache`, `file`) or an engine whose `SessionStore` subclasses one of theirs (a
+project's own db store with another expiry or an extra column). With the
+signed-cookies engine, or a store built on none of them, nothing is saved and
+system check `djust.C034` says so at startup; a field declared
+`persist="server"` is refused there (`djust.C030`).
 
 Each engine below was run with two processes. The persisted-state machinery
 accepts every server-side engine, including ones that are local to a process.

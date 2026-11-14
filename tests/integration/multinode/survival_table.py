@@ -98,6 +98,14 @@ STATE_ROWS = (
         "Nothing: you asked for it not to be kept.",
     ),
     Row(
+        "switched_off",
+        "`state()` without `persist`, or an ordinary attribute, on a view with saving "
+        "switched off (`automatic_state = False`, or `DJUST_AUTOMATIC_STATE = False` for "
+        "the project)",
+        "Nothing is saved, by your choice: `mount()` builds the view again. Declare a "
+        'field `persist="server"` to keep it anyway.',
+    ),
+    Row(
         "mount",
         "`mount()`",
         "Put what must be read again on every request in `handle_restore()` or "
@@ -217,6 +225,16 @@ STATE_CELLS: Dict[Tuple[str, str], Entry] = {
     ),
     ("not_saved", WS): Cell("lost: the default", _T + "ws_reconnect_to_another_process"),
     ("not_saved", RESTART): Cell("lost: the default", _T + "kill_after_save"),
+    ("switched_off", SAME): Cell("kept", _T + "saving_switched_off"),
+    ("switched_off", HTTP): Cell(
+        'not kept: every request runs `mount()` again (a `persist="server"` field is kept)',
+        _T + "saving_switched_off",
+    ),
+    ("switched_off", WS): Cell(
+        'not kept: starts from `mount()` (a `persist="server"` field is restored)',
+        _T + "saving_switched_off",
+    ),
+    ("switched_off", RESTART): NA("same mount path as the reconnect to another process"),
     ("mount", SAME): NA("runs once, when the page's view is built"),
     ("mount", HTTP): Cell(
         "not run again: the view is rebuilt from its saved state",

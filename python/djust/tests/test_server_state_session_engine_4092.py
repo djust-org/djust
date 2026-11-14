@@ -119,7 +119,10 @@ def test_a_subclass_of_the_cookie_store_is_reported(monkeypatch):
     assert _c030(engine)
 
 
-def test_a_subclass_of_a_supported_store_is_reported_as_the_runtime_refuses_it(monkeypatch):
+def test_a_subclass_of_a_supported_store_is_supported_as_the_runtime_accepts_it(monkeypatch):
+    """#4128: a project's own db store (another expiry, an audit column) holds
+    server state. Until then only the exact classes counted, so such a project
+    had its declared state refused and nothing else saved."""
     from django.contrib.sessions.backends.db import SessionStore as DBStore
 
     from djust._exposure_sessions import session_store_supported
@@ -127,8 +130,28 @@ def test_a_subclass_of_a_supported_store_is_reported_as_the_runtime_refuses_it(m
     class Custom(DBStore):
         pass
 
-    assert not session_store_supported(Custom)
-    assert _c030(_engine_module(monkeypatch, "project_sessions_custom_4092", Custom))
+    assert session_store_supported(Custom)
+    assert _c030(_engine_module(monkeypatch, "project_sessions_custom_4092", Custom)) == []
+
+
+def test_only_classes_built_on_a_server_side_store_count():
+    from django.contrib.sessions.backends.base import SessionBase
+    from django.contrib.sessions.backends.signed_cookies import SessionStore as CookieStore
+
+    from djust._exposure_sessions import session_store_supported
+
+    class Own(SessionBase):
+        pass
+
+    for refused in (
+        CookieStore,
+        Own,
+        SessionBase,
+        object,
+        None,
+        "django.contrib.sessions.backends.db",
+    ):
+        assert not session_store_supported(refused), refused
 
 
 def test_an_engine_that_does_not_import_is_left_to_django():

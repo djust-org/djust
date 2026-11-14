@@ -14,7 +14,7 @@ from asgiref.sync import sync_to_async
 from django.contrib.sessions.backends.base import SessionBase
 
 from ._exposure import ExposureError, clone_json_state
-from ._exposure_sessions import _SERVER_SESSION_TYPES
+from ._exposure_sessions import session_store_supported
 from ._session_merge import asave_merged, save_merged
 
 
@@ -126,7 +126,7 @@ def prepare_child_batch(
     from ._exposure_children import child_state_key
 
     session = getattr(request, "session", None)
-    if type(session) not in _SERVER_SESSION_TYPES or not session.session_key:
+    if not session_store_supported(type(session)) or not session.session_key:
         if captured:
             raise ExposureError("Child state session unavailable")
         return None

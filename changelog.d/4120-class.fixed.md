@@ -1,0 +1,1 @@
+- **`KanbanBoard` (the class component) leaves "+ Add card" out when `add_card_event` is `None` or `""`, as the `{% kanban_board %}` tag does (#4120),** and its docstring now says what it renders: its columns carry `data-col-id`, its cards do not drag.

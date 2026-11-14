@@ -2061,7 +2061,8 @@ ITEM_PARAMETERS: dict[str, tuple[tuple[str, ...], bool]] = {
     "djust_components/gantt_chart/tasks": (("fill",), True),
     "djust_components/import_wizard/model_fields": (("name",), True),
     "djust_components/kanban_board/columns": (
-        ("class", "data-card-id", "data-col-id", "data-value", "dj-key"),
+        # ``href``: a card's link (#4120), written through ``safe_url``.
+        ("class", "data-card-id", "data-col-id", "data-value", "dj-key", "href"),
         True,
     ),
     "djust_components/line_chart/series": (("fill", "stroke"), True),

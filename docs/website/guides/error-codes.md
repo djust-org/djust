@@ -380,7 +380,7 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 **What causes it**: A view declares `state(..., persist="server")` while `SESSION_ENGINE` names a store that cannot hold server state, such as `django.contrib.sessions.backends.signed_cookies`. Every request of that view fails.
 
-**Fix**: Set `SESSION_ENGINE` to `django.contrib.sessions.backends.db`, `cached_db`, `cache` or `file`, or declare the state without `persist="server"`.
+**Fix**: Set `SESSION_ENGINE` to `django.contrib.sessions.backends.db`, `cached_db`, `cache` or `file` (or an engine whose store subclasses one of theirs), or declare the state without `persist="server"`.
 
 ---
 
@@ -411,6 +411,26 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 **What causes it**: A view uses `PresenceMixin` with the in-memory presence backend and `DEBUG = False`. With more than one process, each counts only its own users.
 
 **Fix**: Set `DJUST_CONFIG['PRESENCE_BACKEND'] = 'redis'` (or `'tenant_redis'`) together with a shared channel layer.
+
+---
+
+### C034: Saved view state with an unsupported session engine
+
+**Severity**: Warning
+
+**What causes it**: Views save their state in the server-side session, and `SESSION_ENGINE` names a store that cannot hold it, such as `django.contrib.sessions.backends.signed_cookies` or a store built on none of Django's server-side stores. Nothing is saved, so each fallback request starts from `mount()`.
+
+**Fix**: Set `SESSION_ENGINE` to a server-side engine (`db`, `cached_db`, `cache`, `file`, or one whose store subclasses theirs). Or say that nothing is to be saved: `DJUST_AUTOMATIC_STATE = False` in settings, or `automatic_state = False` on a view.
+
+---
+
+### C035: Saved-state switch is not a bool
+
+**Severity**: Error
+
+**What causes it**: The switch holds a string, a number or another object, for example `DJUST_AUTOMATIC_STATE = "False"` or `automatic_state = 0`. djust reads anything but `True` as off, so a mistake never saves state nobody asked for.
+
+**Fix**: Set `DJUST_AUTOMATIC_STATE` to `True` or `False`, and a view's `automatic_state` to `True`, `False` or `None` (the project's value).
 
 ---
 
@@ -889,6 +909,14 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Fix**: Remove `persist=False`: the field is then saved with the rest of the view's state. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V029"]}`.
 
+### V030: a view attribute replaces one of djust's view methods
+
+**Severity**: Warning
+
+**What causes it**: A view or one of its mixins defines `skip_render`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, or assigns `self.<name>`. These are djust's view methods; the attribute replaces the method of that name, and an `@event_handler` of that name can be called by the client. Message: "<view> defines skip_render, which replaces djust's skip_render() method on the view."
+
+**Fix**: Rename the attribute or handler. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V030"]}`.
+
 <!-- END GENERATED check-sections:V -->
 
 ---
@@ -1280,9 +1308,9 @@ class MyView(LiveView):
 
 **What you see**: The page renders as static HTML. djust stamps `dj-view` only onto a `dj-root` element and the client mounts only `[dj-view]`, so no event fires and nothing updates.
 
-The directives covered are every server-event directive the client binds (`dj-click`, `dj-input`, `dj-submit`, `dj-keydown`, `dj-poll`, `dj-mounted`, `dj-viewport-top`, `dj-viewport-bottom`, `dj-window-*`, `dj-document-*` and the rest) plus `dj-model`, `dj-upload` and `dj-upload-drop` (#3225). Only real attributes count, not text in `<code>` or a `<script>`. Not flagged: a child whose root is in the base it `{% extends %}`, a partial another template `{% include %}`s, the template of a view a `{% live_render %}` embeds, component templates (a real `dj-component` or `data-component-id` attribute), and `dj-hook`, `dj-update` and `dj-stream-mode`, which work without a connection.
+The directives covered are every server-event directive the client binds (`dj-click`, `dj-input`, `dj-submit`, `dj-keydown`, `dj-poll`, `dj-mounted`, `dj-viewport-top`, `dj-viewport-bottom`, `dj-window-*`, `dj-document-*` and the rest) plus `dj-model`, `dj-upload` and `dj-upload-drop` (#3225). Only real attributes count, not text in `<code>` or a `<script>`. Not flagged: a child whose root is in the base it `{% extends %}`, a partial another template `{% include %}`s, the template of a view a `{% live_render %}` embeds, component templates (a real `dj-component` or `data-component-id` attribute, or the template a function component names with `@component(template_name=...)`), and `dj-hook`, `dj-update` and `dj-stream-mode`, which work without a connection.
 
-**Fix**: Add `dj-root` to the root element (e.g. `<div dj-root>`), or explicitly add `dj-view="yourapp.views.YourView"`. If the template is an intentional fragment included from a parent LiveView root, add a `{# djust:partial #}` comment, or suppress with `DJUST_CONFIG = {"suppress_checks": ["T012"]}`.
+**Fix**: Add `dj-root` to the root element (e.g. `<div dj-root>`), or explicitly add `dj-view="yourapp.views.YourView"`. If the template is an intentional fragment included from a parent LiveView root, add a `{# djust:partial #}` comment; if it is a function component's template, name it with `@component(template_name="...")`; or suppress with `DJUST_CONFIG = {"suppress_checks": ["T012"]}`.
 
 ---
 

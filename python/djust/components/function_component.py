@@ -83,6 +83,7 @@ def component(
     name: Optional[str] = None,
     assigns: Optional[list[Assign]] = None,
     slots: Optional[list[Slot]] = None,
+    template_name: Optional[str] = None,
 ) -> Callable[..., Any]:
     """Register a function as a template-invokable component.
 
@@ -94,12 +95,25 @@ def component(
         @component(name="fancy_card", assigns=[Assign("title", str, required=True)])
         def card_impl(assigns): ...
 
+    A component that draws its markup from a template names it, and returns
+    the template's context (or ``None`` to render it with the assigns)::
+
+        @component(name="status_moves", template_name="myapp/components/status_moves.html")
+        def status_moves(assigns):
+            return {"block": assigns["block"]}
+
+    The template renders inside the page's ``dj-root``, so ``dj-*`` attributes
+    in it work, and ``manage.py check`` knows it is a component template
+    (no ``djust.T012`` warning, #4121). A function that returns a string is
+    still used as-is.
+
     Args:
         fn: Function being decorated (supplied automatically in bare form).
         name: Optional registry name override. Defaults to the function's
             ``__name__``.
         assigns: Optional list of :class:`~djust.Assign` declarations.
         slots: Optional list of :class:`~djust.Slot` declarations.
+        template_name: Optional template the component renders (see above).
 
     Returns:
         The original function, unmodified aside from attached metadata.
@@ -113,6 +127,7 @@ def component(
         target._djust_assigns = assigns or []  # type: ignore[attr-defined]
         target._djust_slots = slots or []  # type: ignore[attr-defined]
         target._djust_component_name = component_name  # type: ignore[attr-defined]
+        target._djust_template_name = template_name  # type: ignore[attr-defined]
         _COMPONENT_REGISTRY[component_name] = target
         return target
 
@@ -368,9 +383,33 @@ class CallTagHandler:
         except TypeError:
             # Support legacy function components that take **kwargs.
             result = target(**assigns)
+        template_name = getattr(target, "_djust_template_name", None)
+        if template_name and not isinstance(result, str):
+            from django.template.loader import render_to_string
+
+            from .._include_guard import include_guard_scope
+
+            template_context = assigns if result is None else result
+            # Django's engine renders this file, so its {% include %} goes
+            # through the guard, as a LiveComponent's template_name does (#3880).
+            with include_guard_scope():
+                return render_to_string(template_name, template_context)
         if result is None:
             return ""
         return str(result)
+
+
+def component_template_names() -> set[str]:
+    """The ``template_name`` of every registered function component.
+
+    For ``manage.py check`` (#4121): such a template renders inside the page's
+    root, as an ``{% include %}``d partial does.
+    """
+    return {
+        name
+        for target in _COMPONENT_REGISTRY.values()
+        if isinstance(name := getattr(target, "_djust_template_name", None), str) and name
+    }
 
 
 class SlotTagHandler:

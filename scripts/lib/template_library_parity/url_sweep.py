@@ -410,16 +410,19 @@ def is_dangerous(attr: Attr) -> bool:
     ``javascript:`` / ``vbscript:`` and every other scheme outside
     :data:`NAVIGATION_SCHEMES` (#3677) anywhere; ``data:`` unless it is an image
     URI on an attribute that only ever loads an image (``<img src>``,
-    ``poster``, ``srcset``) or the resource a ``<link>`` loads (a stylesheet,
+    ``poster``, ``srcset`` on any element) or the resource a ``<link>`` loads (a stylesheet,
     manifest or icon) — there ``data:`` is legitimate and runs no script.
     """
     if attr.name == "srcset":
         # A candidate's URL ends at whitespace, so ``java<TAB>script:`` is the
         # URL ``java`` and a descriptor here, unlike in an ``href``. Split by the
         # INDEPENDENT port of the spec (``spec_srcset``), never by production's parser.
-        return any(
-            is_dangerous(Attr(attr.element, "src", url)) for url, _desc in spec_srcset(attr.value)
-        )
+        # A ``srcset`` is only ever fetched AS AN IMAGE (on ``<img>`` / ``<source>``; on any
+        # other element no browser fetches it at all), so each candidate is judged as an image
+        # source whatever the element: ``data:image/...`` passes, ``data:text/html`` and the
+        # script schemes do not. That is production's decision too (``url_allowed(url,
+        # image=True)`` for every ``srcset`` in ``djust/_attr_policy.py``), recorded in #4130.
+        return any(is_dangerous(Attr("img", "src", url)) for url, _desc in spec_srcset(attr.value))
     scheme = scheme_of(attr.value)
     if not scheme or not is_url_attr(attr.name):
         return False
@@ -636,13 +639,17 @@ PLANT = '<a href="javascript:alert(%s)" data-url-sweep-plant>x</a>' % MARK
 
 
 @contextlib.contextmanager
-def planted_hole(key: str) -> Iterator[None]:
+def planted_hole(key: str, when: Optional[str] = None, markup: str = PLANT) -> Iterator[None]:
     """Make the PYTHON tag ``"<label>:<name>"`` emit :data:`PLANT` (gate-off).
 
     Wraps the library's compile function the way ``harness.planted_difference``
     does. The sweep must report a Python hole for the tag, which proves a hole
     that exists is found end to end (payload -> engine -> scan -> report).
-    Restored on exit."""
+    Restored on exit.
+
+    ``when`` plants only in calls that pass that parameter (``cite`` -> a call with ``cite=``)
+    and ``markup`` replaces :data:`PLANT`: together they put a hole on ONE parameter, which is
+    how the decided-hole baseline is checked to excuse its decision and nothing else (#4130)."""
     from django.template.library import import_library
 
     label, name = key.split(":", 1)
@@ -651,8 +658,12 @@ def planted_hole(key: str) -> Iterator[None]:
 
     def planted(parser: Any, token: Any) -> Any:
         node = original(parser, token)
+        if when is not None and not any(
+            bit.startswith(when + "=") for bit in token.split_contents()[1:]
+        ):
+            return node
         inner = node.render
-        node.render = lambda context: inner(context) + PLANT
+        node.render = lambda context: inner(context) + markup
         return node
 
     library.tags[name] = planted
@@ -722,6 +733,8 @@ def run_sweep(
     on_tag: Optional[Callable[[str], None]] = None,
     plant: Optional[str] = None,
     exhaustive: bool = False,
+    plant_when: Optional[str] = None,
+    plant_markup: str = PLANT,
 ) -> Sweep:
     """Drive every parameter of every tag in both engines. Fresh process only.
 
@@ -808,7 +821,11 @@ def run_sweep(
                     reads = tuple(dict.fromkeys((*reads, "bound_form")))
                 call_ctx = ctx if exhaustive else {n: ctx[n] for n in reads if n in ctx}
                 sweep.context_names += len(call_ctx)
-                with planted_hole(plant) if plant == key else contextlib.nullcontext():
+                with (
+                    planted_hole(plant, plant_when, plant_markup)
+                    if plant == key
+                    else contextlib.nullcontext()
+                ):
                     py_out = _render(python_engine, src, call_ctx)
                 rs_out = _render(rust_engine, src, call_ctx)
                 any_rendered |= py_out is not None or rs_out is not None
@@ -1034,8 +1051,13 @@ def run_component_sweep(
     payloads: Iterable[tuple[str, str]] = PAYLOADS,
     only: Optional[set[str]] = None,
     shapes: Iterable[str] = SHAPES,
+    plant: Optional[tuple[str, str]] = None,
+    plant_markup: str = PLANT,
 ) -> tuple[list[ComponentCell], dict[str, list[str]], list[str]]:
-    """``(cells, {class: parameters driven}, classes that never rendered)``."""
+    """``(cells, {class: parameters driven}, classes that never rendered)``.
+
+    ``plant`` is ``(class key, parameter)``: the output of every call driving that parameter
+    gets ``plant_markup`` appended (gate-off for the decided-hole baseline, #4130)."""
     from django.utils.safestring import mark_safe
 
     cells: list[ComponentCell] = []
@@ -1087,6 +1109,8 @@ def run_component_sweep(
                         out = str(cls(**given).render())  # type: ignore[call-arg]
                     except Exception:  # noqa: BLE001 - a call the component rejects tells us nothing
                         continue
+                    if plant == (key, name):
+                        out += plant_markup
                     any_rendered = True
                     cells.append(ComponentCell(key, name, shape, label, findings(out)))
         if not any_rendered:
@@ -1106,3 +1130,93 @@ def component_holes(cells: Iterable[ComponentCell]) -> dict[tuple[str, str, str,
                 cell.label
             )
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Decided holes: the one baseline the tests and the script share (#4130)
+#
+# A "hole" is a dangerous payload that reached an attribute the scanner NAMES as a URL. Some of
+# those were judged and decided to be printed as written; they are recorded here, with the
+# reason, so ``python/tests/test_url_scheme_sweep_3665.py`` and
+# ``scripts/template-library-url-sweep.py`` excuse exactly the same set. Exit 1 from the script
+# means an UNDECIDED hole. Each entry is pinned by a test that fails once it stops occurring.
+
+#: The theming tags whose ``**attrs`` reach the element as ``name="value"`` pairs (pinned against
+#: the templates that print ``{{ extra_attrs }}`` by ``test_theming_url_hardening_3749.py``).
+PASSTHROUGH_TAGS = frozenset({"theme_button", "theme_input", "theme_select", "theme_progress"})
+
+#: Names the scanner reads as URL attributes that theming deliberately does NOT judge, with the
+#: decision (#3765). HTML URL attributes that no browser follows on the elements these tags print
+#: (a citation, an obsolete object attribute, an icon NAME, a microdata identifier), and
+#: ``data-url``, one author-defined name of the ``data-*`` family: all printed as written.
+UNJUDGED_PASSTHROUGH = {
+    "cite": "a citation URL no browser follows; also used as text (`Smith: 2020`)",
+    "longdesc": "obsolete; modern browsers do not follow it",
+    "manifest": "obsolete AppCache attribute of <html>",
+    "codebase": "obsolete <object>/<applet> attribute",
+    "usemap": "a fragment reference to a <map>, not a fetch",
+    "icon": "an icon NAME in design systems (`mdi:home`); obsolete <menuitem> attribute in HTML",
+    "profile": "obsolete <head> attribute",
+    "archive": "obsolete <object>/<applet> attribute",
+    "classid": "obsolete <object> attribute",
+    "itemid": "a microdata identifier, not fetched",
+    "itemtype": "a microdata vocabulary identifier, not fetched",
+    "data_url": "author-defined `data-*`: the page author's own script reads it",
+}
+
+#: Class components whose ``data=`` mapping becomes ``data-<key>`` attributes: the CALLER names
+#: the attribute, and djust prints the value it was given (escaped). The sweep's dict has
+#: URL-worded keys, so ``data-href`` / ``data-url`` appear; there is no framework URL parameter
+#: here, and no djust script navigates on them (a page script that does must validate the value).
+KNOWN_AUTHOR_NAMED = frozenset(
+    {
+        ("djust.components.components.button.Button", "data"),
+        ("djust.components.components.card.Card", "data"),
+    }
+)
+
+#: Gaps in a RUST mirror of ``url_attr``: ``(class, parameter, payload label)`` for a payload one
+#: Rust component still lets through where the Python rule refuses it. Empty since #3748.
+KNOWN_RUST_MIRROR_GAPS: frozenset[tuple[str, str, str]] = frozenset()
+
+
+#: The danger classes a decision can excuse. ``exec`` (a browser follows the URL itself) is never
+#: decided: a listed parameter that starts landing in ``<a href>`` is a new hole, not the old one.
+_DECIDABLE_CLASSES = frozenset({"js", "inert"})
+
+
+def _attr_and_class(cell: str) -> tuple[str, str]:
+    """``"data-url:js"`` -> ``("data-url", "js")`` (the attribute name may hold a colon)."""
+    attr, _, cls = cell.rpartition(":")
+    return attr, cls
+
+
+def decided_tag_hole(hole: tuple[str, ...]) -> bool:
+    """Whether a tag hole ``(engine, "<library>:<tag>", param, element, "attr:class")`` is a
+    pass-through name theming DECIDED not to judge (:data:`UNJUDGED_PASSTHROUGH`).
+
+    Only the decision itself is excused: the payload printed in the parameter's OWN attribute
+    (``cite=`` -> ``cite``, ``data_url=`` -> ``data-url``), with the class that attribute has
+    (``js`` for a ``data-*``, ``inert`` otherwise). The same parameter reaching any other
+    attribute, and any ``exec`` class, is a hole (#4130 review)."""
+    tag = hole[1].split(":", 1)[1] if ":" in hole[1] else hole[1]
+    param = hole[2]
+    if tag not in PASSTHROUGH_TAGS or param not in UNJUDGED_PASSTHROUGH:
+        return False
+    attr, cls = _attr_and_class(hole[4])
+    own = param.replace("_", "-")
+    return attr == own and cls == ("js" if own.startswith("data-") else "inert")
+
+
+def decided_component_hole(hole: tuple[str, ...], labels: Iterable[str]) -> bool:
+    """Whether a component hole ``(class, param, element, "attr:class")`` reached by ``labels``
+    is decided: an author-named ``data-*`` (:data:`KNOWN_AUTHOR_NAMED`: a ``data-`` attribute
+    of a non-executing class, never ``exec``) or a recorded Rust mirror gap for every one of
+    its payloads."""
+    attr, cls = _attr_and_class(hole[3])
+    if (hole[0], hole[1]) in KNOWN_AUTHOR_NAMED:
+        return attr.startswith("data-") and cls in _DECIDABLE_CLASSES
+    labels = list(labels)
+    return bool(labels) and all(
+        (hole[0], hole[1], label) in KNOWN_RUST_MIRROR_GAPS for label in labels
+    )

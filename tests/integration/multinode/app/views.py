@@ -94,6 +94,38 @@ class CounterView(_Probed, LiveView):
         self.set_changed_keys(["probe"])
 
 
+class SwitchedOffView(_Probed, LiveView):
+    """The counter's kinds of state on a view that saves nothing (#4128)."""
+
+    exposure_policy = "explicit"
+    automatic_state = False
+    template = "<div dj-root>" + PROBE + "</div>"
+
+    count = state(0, persist="server")
+    plain_state = state(0)
+
+    def mount(self, request, **kwargs):
+        self.plain_attr = 0
+        self._private_attr = 0
+        self._mounted_pid = os.getpid()
+
+    def snapshot(self):
+        return {
+            "count": self.count,
+            "plain_state": self.plain_state,
+            "plain_attr": self.plain_attr,
+            "private_attr": self._private_attr,
+            "mounted_pid": self._mounted_pid,
+        }
+
+    @event_handler()
+    def increment(self, **kwargs):
+        self.count += 1
+        self.plain_state += 1
+        self.plain_attr += 1
+        self._private_attr += 1
+
+
 class LegacyCounterView(_Probed, LiveView):
     """A view still on the 1.x policy (``exposure_policy = "legacy"``)."""
 
@@ -390,6 +422,11 @@ def stats_view(request):
     if request.GET.get("reset"):
         serve.reset_stats()
     return JsonResponse(counts)
+
+
+def session_keys_view(request):
+    """The names of the keys in the caller's own session (never the values)."""
+    return JsonResponse({"keys": sorted(str(key) for key in request.session.keys())})
 
 
 def gate_view(request):

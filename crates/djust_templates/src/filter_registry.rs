@@ -81,6 +81,11 @@ pub struct FilterMeta {
     /// ``autoescape=True`` as a kwarg so the filter can branch on the
     /// surrounding autoescape policy.
     pub needs_autoescape: bool,
+    /// ``filter.djust_item_key`` — the project's opt-in that the filter's
+    /// QUOTED argument names a field read off each ITEM of the value, the way
+    /// ``dictsort:'name'`` does, so the extractor files that field on the list
+    /// and a JIT row carries it (#3920). See [`is_item_key_filter`].
+    pub item_key: bool,
 }
 
 struct FilterEntry {
@@ -127,12 +132,13 @@ static ANY_CUSTOM_FILTERS_REGISTERED: AtomicBool = AtomicBool::new(false);
 /// Re-registering an existing name overwrites — matching Django's behaviour
 /// when a Library is re-imported.
 #[pyfunction]
-#[pyo3(signature = (name, callable, is_safe=false, needs_autoescape=false))]
+#[pyo3(signature = (name, callable, is_safe=false, needs_autoescape=false, item_key=false))]
 pub fn register_custom_filter(
     name: String,
     callable: Py<PyAny>,
     is_safe: bool,
     needs_autoescape: bool,
+    item_key: bool,
 ) -> PyResult<()> {
     // Parse validation consults this registry (`is_known_filter`), so it is
     // part of the generation the template cache is keyed on (#2668 review).
@@ -147,6 +153,7 @@ pub fn register_custom_filter(
             meta: FilterMeta {
                 is_safe,
                 needs_autoescape,
+                item_key,
             },
         },
     );
@@ -238,6 +245,21 @@ pub fn is_registered_custom_filter(name: &str) -> bool {
     FILTER_REGISTRY
         .read()
         .map(|reg| reg.contains_key(name))
+        .unwrap_or(false)
+}
+
+/// Whether the registered custom filter ``name`` declared ``djust_item_key``
+/// (#3920): its QUOTED argument names a field read off each item of the value
+/// it filters, like the built-in ``dictsort``. Same `AtomicBool` short-circuit
+/// as [`is_custom_filter_safe`], so a project without custom filters pays one
+/// atomic load per filter the extractor sees.
+pub fn is_item_key_filter(name: &str) -> bool {
+    if !ANY_CUSTOM_FILTERS_REGISTERED.load(Ordering::Acquire) {
+        return false;
+    }
+    FILTER_REGISTRY
+        .read()
+        .map(|reg| reg.get(name).map(|e| e.meta.item_key).unwrap_or(false))
         .unwrap_or(false)
 }
 

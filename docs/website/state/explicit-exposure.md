@@ -135,6 +135,12 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   landed, the refusal is the reload error instead, so that turn's change is not
   dropped silently. Bound what a field can hold in your handler (a count cap
   does not bound bytes: one long text value is enough).
+- **`DJUST_AUTOMATIC_STATE`.** `True` (the default) or `False`. `False` saves
+  nothing of any view between requests; a view's `automatic_state = True` or
+  `False` overrides it for that view. Fields declared `persist="server"` are
+  kept either way. See
+  [Switching saving off](../guides/state-survival.md#switching-saving-off).
+  System check `djust.C035` reports a value that is not a bool.
 - **`DJUST_SERVER_STATE_MAX_AGE`.** The lifetime of a server envelope in
   seconds, from 1 to 86400. The default is 3600. System check `djust.C020`
   validates it.

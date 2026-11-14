@@ -1951,6 +1951,84 @@ def create_test_view(view_class: Type, user: Optional[Any] = None, **mount_param
     return client.view_instance
 
 
+def render_template_string(source: str, context: Optional[Dict[str, Any]] = None) -> str:
+    """Render a template string through djust's Rust template engine.
+
+    The engine a LiveView's template renders through, without a view: no
+    ``dj-id`` attributes, no VDOM. Component tags (``{% call %}``,
+    ``{% slot %}``) and the ``djust_components`` tags are available. For a
+    test that a template fragment renders the same as under Django's engine,
+    or that a filter behaves as expected::
+
+        from djust.testing import render_template_string
+
+        assert render_template_string("{{ n|floatformat:2 }}", {"n": 1.5}) == "1.50"
+
+    Args:
+        source: The template source.
+        context: The variables the template reads.
+
+    Returns:
+        The rendered string.
+    """
+    from djust._rust import render_template
+
+    _ensure_component_tags_registered()
+    return render_template(source, dict(context or {}))
+
+
+def render_component(name: str, content: str = "", **assigns: Any) -> str:
+    """Render a registered function component through the Rust engine.
+
+    Renders ``{% call "<name>" key=value ... %}<content>{% endcall %}`` —
+    what a LiveView template that calls the component renders — and returns
+    its output. The assigns are validated as the template tag validates them,
+    so a missing required assign fails here as it would on the page::
+
+        from djust.testing import render_component
+
+        html = render_component("status_badge", status="done")
+        assert 'class="badge badge-done"' in html
+
+    Args:
+        name: The name the component was registered under
+            (``@component(name=...)`` or ``register_component``).
+        content: The body between ``{% call %}`` and ``{% endcall %}``
+            (template source; ``{% slot %}`` blocks are allowed).
+        **assigns: The component's assigns.
+
+    Returns:
+        The rendered HTML.
+
+    Raises:
+        LookupError: if no component is registered under ``name``.
+    """
+    from djust.components.function_component import get_component
+
+    if get_component(name) is None:
+        raise LookupError(f"No component is registered under {name!r}.")
+    for key in assigns:
+        if not key.isidentifier():
+            raise ValueError(f"Assign name {key!r} is not a valid identifier.")
+    args = "".join(f" {key}={key}" for key in assigns)
+    # The name is passed through the context, never interpolated into the source.
+    source = "{% call __djust_component_name" + args + " %}" + content + "{% endcall %}"
+    return render_template_string(source, {"__djust_component_name": name, **assigns})
+
+
+@functools.cache
+def _ensure_component_tags_registered() -> None:
+    """Register the component tags with the Rust engine once per process.
+
+    ``djust.components``' app config does this at startup; a test settings
+    module that does not install that app still gets the tags here.
+    """
+    # functools.cache makes the body run once per process: no module-level flag.
+    from djust.components.rust_handlers import register_with_rust_engine
+
+    register_with_rust_engine()
+
+
 def assert_all_routed_liveviews_allowlisted() -> None:
     """Assert EVERY URL-routed LiveView's module is permitted by the allowlist.
 

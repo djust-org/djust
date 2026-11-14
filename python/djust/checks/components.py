@@ -1855,6 +1855,99 @@ def check_reserved_view_attributes(app_configs: Any, **kwargs: Any) -> list[Chec
     return messages
 
 
+#: The render-control and theme methods ``LiveView`` / ``ThemeMixin`` added as
+#: public API in #4129. A view that defines (or assigns) one of these names
+#: replaces the framework method without any error.
+_PUBLIC_VIEW_METHODS = (
+    "skip_render",
+    "request_full_render",
+    "cancel_full_render",
+    "reset_submitted_form",
+    "clear_push_events",
+    "get_theme_state",
+)
+
+
+@register("djust")
+def check_shadowed_view_methods(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V030 (Warning): view code defines or assigns a name of a djust view method.
+
+    ``skip_render()``, ``reset_submitted_form()`` and the other #4129 methods
+    are called by the view's own code; a view or mixin attribute of the same
+    name replaces them silently. When the replacement is an
+    ``@event_handler``, a client can call it, and ``self.skip_render()`` in the
+    view runs the handler instead of skipping the render.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V030"):
+        return messages
+    try:
+        from djust.live_view import LiveView
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    seen: set[tuple[type, str]] = set()
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if _is_framework_internal_class(cls):
+            continue
+        label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        for klass in cls.__mro__:
+            module = getattr(klass, "__module__", "") or ""
+            if klass is object or module == "builtins" or _is_framework_internal_class(klass):
+                continue
+            # A LiveView base that is itself checked reports its own code.
+            if klass is not cls and klass in candidates:
+                continue
+            where = "" if klass is cls else " (in %s)" % klass.__qualname__
+            found: list[tuple[str, str, Any, Optional[int]]] = []
+            for name in _PUBLIC_VIEW_METHODS:
+                if name in klass.__dict__:
+                    member = klass.__dict__[name]
+                    function = getattr(member, "__func__", member)
+                    line = None
+                    if inspect.isfunction(function):
+                        try:
+                            line = inspect.getsourcelines(function)[1]
+                        except (OSError, TypeError):
+                            line = None
+                    found.append((name, "defines %s" % name, function, line))
+            for member_name, member in klass.__dict__.copy().items():
+                function = getattr(member, "__func__", member)
+                if not inspect.isfunction(function):
+                    continue
+                for attr, line in _self_assignments(function):
+                    if attr in _PUBLIC_VIEW_METHODS:
+                        found.append(
+                            (attr, "%s() assigns self.%s" % (member_name, attr), function, line)
+                        )
+            for name, what, function, line in found:
+                if (klass, name) in seen:
+                    continue
+                seen.add((klass, name))
+                file_path = ""
+                if inspect.isfunction(function):
+                    file_path = inspect.getsourcefile(function) or ""
+                messages.append(
+                    DjustWarning(
+                        "%s%s %s, which replaces djust's %s() method on the view."
+                        % (label, where, what, name),
+                        hint=(
+                            "djust's views call self.%s() as part of the public API; "
+                            "an attribute of that name replaces it, and an "
+                            "@event_handler of that name can be called by the client. "
+                            "Rename it. Suppress with DJUST_CONFIG = "
+                            "{'suppress_checks': ['V030']}." % name
+                        ),
+                        id="djust.V030",
+                        fix_hint="Rename `%s` on `%s`." % (name, klass.__qualname__),
+                        file_path=file_path,
+                        line_number=line,
+                    )
+                )
+    return messages
+
+
 @register("djust")
 def check_params_form_declarations(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """V023 (Error): a ``params_form`` the request path cannot use (#3706, #3874).
