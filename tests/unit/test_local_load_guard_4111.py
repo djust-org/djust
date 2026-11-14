@@ -51,11 +51,16 @@ def test_a_run_over_the_limit_without_approval_is_refused_with_the_ways_out(home
     assert guard.APPROVAL_NAME in message and "no longer bypasses" in message
 
 
-@pytest.mark.parametrize(
-    "content",
-    ["", "not a time", str(time.time() - 60), str(time.time() + guard.MAX_APPROVAL_SECONDS + 600)],
-)
-def test_an_expired_malformed_or_unbounded_approval_does_not_count(home, content):
+@pytest.mark.parametrize("kind", ["empty", "malformed", "expired", "too-far-ahead"])
+def test_an_expired_malformed_or_unbounded_approval_does_not_count(home, kind):
+    # Times are taken here, not in the parametrize list: values computed at
+    # collection differ between xdist workers, which then refuse the whole run.
+    content = {
+        "empty": "",
+        "malformed": "not a time",
+        "expired": str(time.time() - 60),
+        "too-far-ahead": str(time.time() + guard.MAX_APPROVAL_SECONDS + 600),
+    }[kind]
     directory = home / ".djust"
     directory.mkdir()
     (directory / guard.APPROVAL_NAME).write_text(content)
