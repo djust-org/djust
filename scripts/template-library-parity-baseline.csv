@@ -81,7 +81,7 @@ djust_components:field_error,IDENTICAL,0,,,14,2/2,1
 djust_components:fieldset,IDENTICAL,0,,,11,3/3,11
 djust_components:file_dropzone,IDENTICAL,0,,,21,7/7,21
 djust_components:file_tree,IDENTICAL,0,,,21,10/10,21
-djust_components:filter_bar,DIFFERENT,33,escaping:3+ids:23+tags:33+text:33,,34,15/15,34
+djust_components:filter_bar,DIFFERENT,25,escaping:3+ids:23,,34,15/15,34
 djust_components:filter_date_range,DIFFERENT-escape-policy-only,5,escaping:5+tags:3+text:3,,33,15/15,33
 djust_components:filter_search,DIFFERENT,4,escaping:3,,33,15/15,33
 djust_components:filter_select,DIFFERENT-escape-policy-only,3,escaping:3+tags:3+text:3,,33,15/15,33
@@ -123,8 +123,8 @@ djust_components:model_selector,IDENTICAL,0,,,25,11/11,25
 djust_components:model_table,IDENTICAL,0,,,51,27/27,9
 djust_components:multi_select,IDENTICAL,0,,,21,7/7,21
 djust_components:multimodal_input,IDENTICAL,0,,,21,8/8,21
-djust_components:nav_item,DIFFERENT,26,classes:25+escaping:3+other-attrs:1+tags:7+text:7,,28,12/12,28
-djust_components:nav_menu,DIFFERENT,29,classes:2+escaping:5+tags:29+text:29,,29,12/12,29
+djust_components:nav_item,DIFFERENT,5,escaping:4+other-attrs:1+tags:3+text:3,,30,14/14,30
+djust_components:nav_menu,DIFFERENT,6,classes:1+escaping:5+tags:2+text:2,,20,7/7,20
 djust_components:notification_badge,IDENTICAL,0,,,13,6/6,7
 djust_components:notification_center,IDENTICAL,0,,,17,6/6,17
 djust_components:notification_popover,IDENTICAL,0,,,27,12/12,27

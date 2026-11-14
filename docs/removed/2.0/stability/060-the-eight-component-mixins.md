@@ -28,12 +28,14 @@ class SettingsView(LiveView):
     nav = Tabs(active="general")  # template: {{ nav.active }}
 ```
 
-A descriptor handles one event, so it does not replace every handler a mixin
-defined. The handlers with no descriptor equivalent are now the application's
-to define, or to route to the descriptor's event through the tag's `*_event`
-argument:
+Each descriptor answers the events its mixin handled, including the defaults
+its tag emits (#4037): one through `Meta.event`, the rest as `@event_handler`
+methods named in `Meta.events`. Each event is registered on the view as well,
+so a tag's event reaches the single instance of its component without
+`component_id`; with two instances of one type, the tag's `component_id=`
+names the target.
 
-| Mixin handlers | Descriptor event | Not handled by the descriptor |
+| Mixin handlers | Descriptor `Meta.event` | Descriptor `Meta.events` |
 | --- | --- | --- |
 | `accordion_toggle` | `accordion_toggle` | none |
 | `set_tab` | `set_tab` | none |

@@ -214,3 +214,73 @@ class TestHandlerContractsLinter:
             cwd=str(_SELF.parents[1]),
         )
         assert result.returncode == 0, f"real codebase must pass: {result.stdout}{result.stderr}"
+
+
+class TestKwGetDefaultsAndDescriptorMeta:
+    """#4037: block tags read defaults with ``kw.get``; descriptors answer
+    events through ``class Meta`` (``event`` / ``events``) and methods."""
+
+    def test_kw_get_default_is_scanned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            tag = _write_file(
+                d,
+                "tags.py",
+                """
+                def render(kw):
+                    close_event = kw.get("close_event", "close_thing")
+            """,
+            )
+            other = _write_file(d, "other.py", "def unrelated(self): pass\n")
+            exit_code, stdout = _run(tag_files=[tag], handler_files=[other])
+            assert exit_code == 1, stdout
+            assert "close_thing" in stdout
+
+    def test_meta_event_and_events_answer_a_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            tag = _write_file(
+                d,
+                "tags.py",
+                """
+                def render(kw):
+                    a = kw.get("close_event", "close_thing")
+                    b = kw.get("event", "toggle_thing")
+            """,
+            )
+            descriptor = _write_file(
+                d,
+                "thing.py",
+                """
+                class Thing:
+                    class Meta:
+                        event = "toggle_thing"
+                        events = ("close_thing",)
+            """,
+            )
+            exit_code, stdout = _run(tag_files=[tag], handler_files=[descriptor])
+            assert exit_code == 0, stdout
+
+    def test_real_modal_and_sheet_defaults_are_framework_answered(self):
+        """The real scan sees the modal / sheet / carousel defaults and they
+        are answered by the descriptors, not the app-level list."""
+        sys.path.insert(0, str(_LINTER.parent))
+        try:
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location("_chc", _LINTER)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        finally:
+            sys.path.pop(0)
+        root = _SELF.parents[1]
+        defaults = mod.extract_event_defaults(
+            root / "python/djust/components/templatetags/djust_components.py"
+        )
+        handlers = set()
+        for f in sorted((root / "python/djust/components/descriptors").glob("*.py")):
+            handlers |= mod.extract_handler_names(f)
+        for name in ("close_modal", "close_sheet", "carousel_prev", "carousel_next", "carousel_go"):
+            assert name in defaults, name
+            assert name in handlers, name
+            assert name not in mod._APP_LEVEL_EVENTS, name

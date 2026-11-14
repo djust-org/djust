@@ -624,6 +624,16 @@ def _row_href(row: dict[str, object], key: object) -> str:
     return str(url_attr(_row_text(row, key), honor_safe=False))
 
 
+def _has_row_href(row: dict[str, object], key: object) -> bool:
+    """Whether ``row[key]`` is a URL at all (#3895): not for a key the row lacks (or cannot
+    have), ``None`` or blank text. The Python tag's ``table_has_href``: a link column draws plain
+    text and a ``row_url`` row is not clickable, instead of ``href="None"`` / ``href=""``."""
+    if isinstance(key, (list, dict, set)):
+        return False
+    value = row.get(key if isinstance(key, str) else str(key))
+    return value is not None and str(value).strip() != ""
+
+
 class DataTableHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
@@ -1287,8 +1297,9 @@ class DataTableHandler:
                     f' data-value="{conditional_escape(str(row.get(row_click_value_key, "")))}"'
                     f" {_ROW_NAV_A11Y}"
                 )
-            elif row_url:
+            elif row_url and _has_row_href(row, row_url):
                 # The row's URL (#3887). ``data-href`` is read by ``data-table-row-click.js``.
+                # A row with no URL under the key is not clickable (#3895).
                 row_classes.append("data-table-row-clickable")
                 row_attrs += f' data-href="{_row_href(row, row_url)}" {_ROW_NAV_A11Y}'
 
@@ -1465,7 +1476,8 @@ class DataTableHandler:
                 # ``col.link_class`` is an optional class on the ``<a>``. Decided on the value:
                 # a falsy ``link`` is plain text, as ``{% if col.link %}`` in the Python template.
                 link_key = col.get("link") if isinstance(col, dict) else None
-                if link_key:
+                # A row with no URL under ``link`` keeps the plain cell (#3895).
+                if link_key and _has_row_href(row, link_key):
                     link_class = col.get("link_class") if isinstance(col, dict) else None
                     link_cls_attr = f' class="{escape(str(link_class))}"' if link_class else ""
                     cell_val = f'<a href="{_row_href(row, link_key)}"{link_cls_attr}>{cell_val}</a>'
@@ -2022,6 +2034,8 @@ class NavMenuHandler:
             f'aria-label="Toggle navigation">&#9776;</button>'
         )
 
+        content = _apply_menu_active(content, kw.get("active", ""))
+
         return _safe(
             f'<nav class="{cls}" id="{nav_id}" role="navigation">'
             f'<div class="dj-nav__container">'
@@ -2033,6 +2047,38 @@ class NavMenuHandler:
 
 #: What ``NavItemHandler`` opens every item with, which is how a parent finds its child items.
 _NAV_ITEM_MARKUP = '<li class="dj-nav__item'
+
+#: How an item with no ``active=`` of its own asks the ``{% nav_menu %}`` that holds it whether
+#: the menu's ``active`` names it. The item is rendered before the menu, so it leaves its ``id``
+#: and ``href`` (hex of a JSON pair: only ``0-9a-f``, so no value can end the comment, open
+#: another, or read as markup) in a comment right after its ``<li ...>``; the menu reads and
+#: removes every one, adding the active class to the matches. Outside a menu the comment is
+#: invisible. The Django node is handed the menu's ``active`` directly.
+_NAV_ACTIVE_MARK = _re_filters.compile(
+    r'(<li class="dj-nav__item[^"]*)(">)<!--djust-nav-key:([0-9a-f]*)-->'
+)
+
+
+def _nav_active_mark(item_id: object, href: object) -> str:
+    payload = _json.dumps([item_id, href], default=str, separators=(",", ":"))
+    return "<!--djust-nav-key:" + payload.encode("utf-8").hex() + "-->"
+
+
+def _apply_menu_active(content: str, active: object) -> str:
+    """Add ``dj-nav__item--active`` to the items that match the menu's ``active`` (the Django
+    rule: a non-empty ``id`` or ``href`` equal to it) and remove every marker."""
+
+    def resolve(match: "_re_filters.Match[str]") -> str:
+        try:
+            item_id, href = _json.loads(bytes.fromhex(match.group(3)).decode("utf-8"))
+        except (ValueError, TypeError):
+            return match.group(1) + match.group(2)
+        hit = bool(active) and (
+            bool(item_id and item_id == active) or bool(href and href == active)
+        )
+        return match.group(1) + (" dj-nav__item--active" if hit else "") + match.group(2)
+
+    return _NAV_ACTIVE_MARK.sub(resolve, content)
 
 
 class NavItemHandler:
@@ -2053,21 +2099,23 @@ class NavItemHandler:
 
         is_active = (item_id and item_id == active) or (href and href == active)
         active_cls = " dj-nav__item--active" if is_active else ""
+        # No ``active=`` of its own: the enclosing menu's ``active`` decides (#3873 follow-up).
+        mark = "" if "active" in kw else _nav_active_mark(kw.get("id", ""), kw.get("href", "#"))
 
         # A dropdown parent only when the body holds nav ITEMS (this handler's own ``<li>``).
         # The Python tag counts child ``{% nav_item %}`` nodes and ignores any other body, so
         # an item with an ``event`` and a text body stays a clickable button there; "any
         # non-blank body" dropped that ``dj-click`` (#3669).
-        # KNOWN LIMIT (#3873, pinned by a test): a block handler is handed rendered HTML, so a
-        # child is recognised by the markup this handler draws. A literal
-        # ``<li class="dj-nav__item">`` in the body matches too, and a sub-item inside
-        # ``{% if %}`` / ``{% for %}`` counts here where Django counts only direct child nodes.
+        # A block handler is handed rendered HTML, so a child is recognised by the markup this
+        # handler draws (a literal ``<li class="dj-nav__item">`` in the body matches too). A
+        # sub-item at any depth, or inside ``{% if %}`` / ``{% for %}``, counts; the Django node
+        # renders its body the same way since #3873 / #3878.
         has_children = _NAV_ITEM_MARKUP in content
 
         if has_children:
             mega_cls = " dj-nav__dropdown--mega" if mega else ""
             return _safe(
-                f'<li class="dj-nav__item dj-nav__item--has-dropdown{active_cls}">'
+                f'<li class="dj-nav__item dj-nav__item--has-dropdown{active_cls}">{mark}'
                 f'<button class="dj-nav__link">{label}'
                 f'<span class="dj-nav__caret">&#9662;</span></button>'
                 f'<div class="dj-nav__dropdown{mega_cls}">'
@@ -2082,13 +2130,13 @@ class NavItemHandler:
 
         if event:
             return _safe(
-                f'<li class="dj-nav__item{active_cls}">'
+                f'<li class="dj-nav__item{active_cls}">{mark}'
                 f'<button class="dj-nav__link" dj-click="{conditional_escape(event)}">'
                 f"{label}{desc_html}</button></li>"
             )
 
         return _safe(
-            f'<li class="dj-nav__item{active_cls}">'
+            f'<li class="dj-nav__item{active_cls}">{mark}'
             f'<a class="dj-nav__link" href="{data_url_attr(kw.get("href", "#"))}">'
             f"{label}{desc_html}</a></li>"
         )
