@@ -1269,6 +1269,7 @@ class LiveViewWebSocket {
                 const event = acknowledgeEventRequest(this, data);
                 const noopEvName = event?.eventName;
                 const noopTrigger = event?.trigger;
+                if (data.reset_form) applyFormReset(data, noopTrigger || null);
 
                 if (noopEvName) {
                     if (!data.async_pending) {

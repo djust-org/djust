@@ -363,7 +363,8 @@ COLOUR_CASES = [
         ['style="background:{v}"'],
         'style="background:transparent"',
     ),
-    ("kanban", _kanban_paths, ['style="border-top-color:{v}"'], 'style="border-top-color:#6366F1"'),
+    # A refused colour gives the header no colour of its own, and no style (#4120).
+    ("kanban", _kanban_paths, ['style="border-top-color:{v}"'], '<div class="kanban-col-header">'),
 ]
 
 

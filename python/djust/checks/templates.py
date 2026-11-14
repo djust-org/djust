@@ -697,6 +697,12 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         if "include" in source or "live_render" in source:
             for name in set(_INCLUDE_NAME_RE.findall(source)) | _embedded_view_templates(source):
                 included_by.setdefault(name, set()).add(os.path.realpath(filepath))
+    # A function component's template (``@component(template_name=...)``)
+    # renders inside the page that ``{% call %}``s it (#4121).
+    from djust.components.function_component import component_template_names
+
+    for name in component_template_names():
+        included_by.setdefault(name, set()).add("<component %s>" % name)
     from djust._template_bindings import django_engine
 
     try:
@@ -900,7 +906,8 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                         "or this template won't be connected to a LiveView. "
                         "If this template is an intentional fragment included from "
                         "a parent LiveView root, add a `{# djust:partial #}` "
-                        "comment to silence this check, or suppress globally "
+                        "comment to silence this check. For a @component's own "
+                        "template, name it: @component(template_name=...). Or suppress globally "
                         "with DJUST_CONFIG = {'suppress_checks': ['T012']}."
                     ),
                     id="djust.T012",

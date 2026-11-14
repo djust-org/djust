@@ -1590,6 +1590,14 @@ when they were attributes. This holds for a view that skipped `mount()` as well
 (a reconnect that restores state, a restored sticky child): the values resolve
 their manager from the request.
 
+An application that overrode `_setup_theme_context()` to keep the rendered
+HTML out of the context no longer needs to: unread values are never rendered.
+To read the current theme in Python, call `self.get_theme_state()`. It returns
+the `ThemeState` (`.mode` is `light`, `dark` or `system`; `.resolved_mode` is
+`light` or `dark`; `.preset`, `.theme`, `.pack`, `.layout`), and works on a
+restored view that did not run `mount()`. It replaces reading
+`self._theme_state`.
+
 What changed for code that reached the old attributes through the context:
 
 - `get_context_data()` no longer returns `theme_head`, `theme_css`,
@@ -1779,6 +1787,74 @@ def card(assigns):
 ```
 
 yields `assigns["slots"]["col"]` as a 3-element list. The inline tag `{% render_slot slots.col.0 %}` emits the content of a slot at a given path — useful when you need to reference a slot inside a rendered loop. `{% render_slot slots.col.0.content %}` names the body directly and emits the same markup; both are the parent's already-rendered output, so both are emitted live rather than escaped a second time. Any OTHER path — a plain context variable, or a `content` key on a dict that is not a slot entry — is escaped, because nothing has vouched for it.
+
+### A function component with its own template
+
+A component whose markup is a template names it with `template_name=` and returns the template's context (or `None` to render it with the assigns):
+
+```python
+from djust import Assign, component
+
+@component(
+    name="status_moves",
+    assigns=[Assign("block", dict, required=True)],
+    template_name="myapp/components/status_moves.html",
+)
+def status_moves(assigns):
+    return {"block": assigns["block"]}
+```
+
+```django
+{# myapp/components/status_moves.html #}
+<section class="moves">
+  {% for move in block.moves %}<button type="button" dj-click="move" data-to="{{ move.key }}">{{ move.label }}</button>{% endfor %}
+</section>
+```
+
+The template renders inside the page's `dj-root`, so its `dj-click` reaches the page's view. `manage.py check` knows it is a component template and does not report `djust.T012` for it. A function that returns a string is used as-is, as before.
+
+The template is rendered with Django's `render_to_string(template_name, context)` and no request: autoescaping is on, context processors do not run (no `request`, `user` or `messages` unless you return them), and `{% csrf_token %}` renders nothing.
+
+## Kanban board
+
+`{% kanban_board columns=columns move_event="move_card" %}` draws a board whose cards drag between columns:
+
+```python
+columns = [
+    {"id": "todo", "title": "To do", "color": "warning",
+     "cards": [{"id": "c1", "title": "Write docs", "href": "/tasks/1/", "label": "docs"}]},
+    {"id": "done", "title": "Done", "color": "success", "cards": []},
+]
+```
+
+- `move_event` is sent when a card is dropped on another column, with `card_id`, `from_col` and `to_col`. The server decides whether the move is allowed.
+- `add_card_event` (default `kanban_add_card`) is sent by each column's "+ Add card" button with the column id as `value`. `add_card_event=None` leaves the button out, for a board whose cards are created elsewhere.
+- A card's `href` makes its title a link (`javascript:` and other unsafe schemes are refused).
+- A column's `color` is a theme name, `primary`, `success`, `warning`, `destructive`, `info` or `muted`, rendered as the class `kanban-col--<name>`. No `color` gives the stylesheet's default. Any other CSS colour (`"#6366F1"`) still works, but as an inline `style` attribute, which a CSP with `style-src-attr 'none'` refuses; use a theme name under a strict policy.
+- `add_col_event` is accepted and not used.
+
+The `KanbanBoard` class component draws a static board: its cards do not drag. It also takes `add_card_event=None` to leave the button out.
+
+### Kanban board markup
+
+The drag and drop is the client bundle's delegated behaviour, with no script of the board's own. It reads this markup, so a board you write by hand (to add per-card links, buttons, or your own layout) drags the same way:
+
+```html
+<div class="kanban" data-move-event="move_card">
+  <div class="kanban-col" data-col-id="todo">
+    <div class="kanban-card" draggable="true" data-card-id="c1" data-col-id="todo">...</div>
+  </div>
+  <div class="kanban-col" data-col-id="done">...</div>
+</div>
+```
+
+| Element | Required | Read for |
+|---|---|---|
+| `.kanban[data-move-event]` | yes | the board; `data-move-event` names the event a drop sends |
+| `.kanban-col[data-col-id]` | yes | a drop target; `data-col-id` is sent as `to_col` |
+| `.kanban-card[draggable="true"][data-card-id][data-col-id]` | yes | a draggable card; `data-card-id` is sent as `card_id`, its `data-col-id` as `from_col` |
+
+The client adds `dragging` to the card while it is dragged (removed when the drag ends) and `kanban-col-over` to the column under it (removed when the pointer leaves it or the card drops). A drop on the card's own column sends nothing. Cards and columns may hold any other markup. Give each card and column a stable `dj-key` (the tag uses their ids) so a re-render after a move matches them by identity.
 
 ## Markdown editor
 

@@ -701,6 +701,12 @@ class RustBridgeMixin:
             — this Python-level method is the user-facing "force a re-render"
             hatch and does not talk to the Rust view directly.
         """
+        # Remember whether a full render was already pending before this
+        # turn's first public request, so ``cancel_full_render()`` can undo
+        # exactly what the request added (#4129) and never a full render the
+        # framework itself required (a restore, a dropped save).
+        if "_djust_full_render_prior" not in self.__dict__:
+            self._djust_full_render_prior = bool(getattr(self, "_force_full_html", False))
         if keys is None:
             # Zero-arg form (#1992): the handler changed only EXTERNAL state (a
             # DB row, a cache) with no public ``self.*`` change, but
@@ -721,6 +727,82 @@ class RustBridgeMixin:
         # on every skip path (runtime event spine, WS deferred-activity, WS tick)
         # and consumed (reset) after the render it forces.
         self._force_full_html = True
+
+    # --- public render controls (#4129) ------------------------------------
+
+    def skip_render(self) -> None:
+        """Do not render this turn.
+
+        Call from an event handler, a ``@push_handler`` / ``handle_info``, a
+        ``handle_tick()`` or any other hook that ends in a render: the turn
+        sends its push events and frames but no HTML or patches. The request
+        lasts one turn — the framework consumes it whether or not the turn
+        would have rendered.
+
+        A full render requested in the same turn (``set_changed_keys()``,
+        :meth:`request_full_render`) wins over this: the forced render is
+        never dropped silently (#2834).
+
+        Example::
+
+            @event_handler
+            def ping(self, **kwargs):
+                self.push_event("pong", {})
+                self.skip_render()   # nothing on the page changed
+
+        Replaces assigning ``self._skip_render = True``, which keeps working.
+        """
+        self._skip_render = True
+
+    def request_full_render(self) -> None:
+        """Send this turn's render as full HTML rather than as a diff.
+
+        The same as the zero-argument ``set_changed_keys()``: use it after a
+        change djust cannot see, such as a database-only write that
+        ``get_context_data()`` will read back. Undo it in the same turn with
+        :meth:`cancel_full_render`.
+
+        Replaces assigning ``self._force_full_html = True``, which keeps working.
+        """
+        self.set_changed_keys()
+
+    def cancel_full_render(self) -> None:
+        """Undo a full render requested earlier in this turn.
+
+        Reverts what ``set_changed_keys()`` / :meth:`request_full_render`
+        asked for since the turn began, and nothing else: a full render the
+        framework itself requires (after a restore whose state differs from
+        the page, or after a save that failed) stays, because the page and
+        the server's diff baseline would otherwise disagree. Keys named in
+        ``set_changed_keys(keys)`` stay marked changed; only the full-HTML
+        request is withdrawn. A no-op when nothing was requested.
+
+        Replaces assigning ``self._force_full_html = False``, which keeps
+        working (and, unlike this method, also clears a framework request).
+        """
+        prior = self.__dict__.pop("_djust_full_render_prior", None)
+        if prior is not None:
+            self._force_full_html = prior
+
+    def reset_submitted_form(self) -> None:
+        """Clear the submitted form in the browser after this turn.
+
+        The client resets the form whose submit started the event, so its
+        inputs show their initial values instead of what was typed. For a
+        view that does not use ``FormMixin`` (whose ``reset_form()`` also
+        resets its server-side form state and calls this flag for you).
+
+        Example::
+
+            @event_handler
+            def add_comment(self, text: str = "", **kwargs):
+                Comment.objects.create(text=text)
+                self.reset_submitted_form()
+
+        Replaces assigning ``self._should_reset_form = True``, which keeps
+        working.
+        """
+        self._should_reset_form = True
 
     def _apply_render_env(self) -> None:
         """Wire per-render Django settings → Rust for THIS render (#2209, #2221).

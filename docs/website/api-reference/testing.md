@@ -307,6 +307,46 @@ Fails if the whole test method — including client setup and `mount()`, not jus
 
 ---
 
+## Rendering through the Rust engine
+
+### `render_template_string(source, context=None) -> str`
+
+Renders a template string through the engine a LiveView renders through (no `dj-id` attributes, no VDOM). Component tags (`{% call %}`, `{% slot %}`) are available:
+
+```python
+from djust.testing import render_template_string
+
+assert render_template_string("{{ n|floatformat:2 }}", {"n": 1.5}) == "1.50"
+```
+
+### `render_component(name, content="", **assigns) -> str`
+
+Renders a registered function component the way `{% call "name" ... %}{% endcall %}` does on a page, with its assigns validated. Raises `LookupError` when no component has that name:
+
+```python
+from djust.testing import render_component
+
+html = render_component("status_badge", status="done")
+```
+
+To look up the registered function itself, use `djust.get_function_component(name)` (returns `None` when missing).
+
+## View inventory: `djust.introspection`
+
+Lists the project's views and the authorization each declares, as `manage.py djust_audit` reads them:
+
+```python
+from djust.introspection import live_views, view_auth_info
+
+def test_every_view_declares_access():
+    for view in live_views(app_label="crm"):
+        assert view_auth_info(view), view.__qualname__
+```
+
+- `live_views(app_label=None)` / `live_components(app_label=None)`: the project's `LiveView` / `LiveComponent` subclasses (framework classes left out), sorted by dotted path. A view's module must already be imported.
+- `view_auth_info(cls)`: a dict with `login_required`, `permission_required`, `permission_required_any` (one list per `any_of` group), `custom_check` (a `check_permissions` override) or `dispatch_mixin`, each present only when it applies. `{}` means the class declares nothing. Authorization added outside the class (URL decorators, middleware) is not seen.
+- `walk_subclasses(cls)`, `is_user_class(cls)`, `app_label_for_class(cls)`: the building blocks.
+
 ## See Also
 
 - [Testing guide](../testing/index.md) — patterns and best practices

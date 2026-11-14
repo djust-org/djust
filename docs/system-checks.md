@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 121 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 122 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -82,6 +82,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V027 | LiveView | Warning | An explicit view declares a `state()` field named `user` or `perms` (without `render=False`): it replaces `request.user` / the permission proxy in every template the view renders |
 | V028 | LiveView | Warning | An application class states `exposure_policy = "legacy"`, which is deprecated and removed before 2.0.0 |
 | V029 | LiveView | Warning | An explicit view's event handler reads and then changes a `state()` field declared `persist=False`, so the change is not saved between requests |
+| V030 | LiveView | Warning | A view or mixin defines or assigns `skip_render`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, replacing djust's method of that name |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -597,6 +598,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Fix**: remove `persist=False` from the field, or stop reading its old value in a later event.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V029"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V029"]`
 
+### V030 — a view attribute replaces one of djust's view methods
+- **Severity**: Warning
+- **Method**: Runtime (class inspection and the source of the classes' methods).
+- **What it detects**: a LiveView, or a mixin of one, that defines one of `skip_render`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state` (#4129) in its class body, or assigns `self.<name>` in one of its methods. The attribute replaces djust's method with no error: if it is an `@event_handler`, a client can call it, and the view's own `self.skip_render()` runs the handler instead of skipping the render. Reported once per class and name, on the class that defines it. djust's own classes are not checked.
+- **Fix**: rename the attribute.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V030"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V030"]`
+
 <!-- END GENERATED check-sections:V -->
 
 ---
@@ -900,6 +908,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   - a partial another template `{% include %}`s: the includer is checked with it inlined. An include inside `{# #}` or `{% comment %}`, or a template including itself, does not count;
   - the template of a view a `{% live_render "dotted.View" %}` embeds, which renders inside the tag's `dj-view` wrapper. The path must be a string literal that imports when the check runs; `{% live_render view_path %}` with a variable is not followed, so its child template is checked on its own;
   - component templates: an element with a real `dj-component` or `data-component-id` attribute;
+  - the template a registered function component names, `@component(template_name="...")` (#4121). The component's module must be imported when the check runs;
   - templates marked `{# djust:partial #}`
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T012"]` or `DJUST_CONFIG = {"suppress_checks": ["T012"]}`
 - **False positives**: Partial templates that intentionally omit `dj-root` / `dj-view` because the parent/wrapper template provides it (mark them with `{# djust:partial #}`)

@@ -164,6 +164,21 @@ function applyHttpSideChannels(data) {
  * @param {Element|null} root the view's root (a view slot), else `[dj-root]`
  * @returns {HTMLFormElement|null}
  */
+/**
+ * Reset the event's form when the frame asks for it (`reset_form`). Every
+ * frame that answers an event may carry it, a `noop` included: a handler that
+ * resets a form without changing rendered state still resets it (#4129).
+ *
+ * @param {Object} data the frame
+ * @param {Element|null} triggerElement element that sent the event
+ */
+function applyFormReset(data, triggerElement) {
+    if (!data || !data.reset_form) return;
+    const form = formToReset(triggerElement, _activeSlot ? _activeSlot.root : null);
+    if (globalThis.djustDebug) console.log('[LiveView] Resetting form', form);
+    if (form) form.reset();
+}
+
 function formToReset(triggerElement, root) {
     if (triggerElement && triggerElement.isConnected && triggerElement.closest) {
         const own = triggerElement.closest('form');
@@ -424,11 +439,7 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
         }
 
         // Handle form reset
-        if (data.reset_form) {
-            const form = formToReset(triggerElement, _activeSlot ? _activeSlot.root : null);
-            if (globalThis.djustDebug) console.log('[LiveView] Resetting form', form);
-            if (form) form.reset();
-        }
+        applyFormReset(data, triggerElement);
 
         applyHttpSideChannels(data);
 
