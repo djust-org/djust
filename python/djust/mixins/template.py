@@ -509,6 +509,49 @@ def _root_tag_name(html: str, match: "re.Match[str]") -> str:
     return str(html)[match.start(1) : match.end(1)].lower()
 
 
+#: ``{% if %}`` / ``{% elif %}`` / ``{% else %}`` / ``{% endif %}`` (with ``-`` trim marks).
+_FLOW_TAG_RE = re.compile(r"\{%-?\s*(if|elif|else|endif)\b.*?-?%\}", re.DOTALL)
+
+
+def _template_flow_tags(template: str) -> "list[tuple[int, int, str]]":
+    """Each branching tag's ``(start, end, kind)`` in ``template``.
+
+    Tags inside ``{% verbatim %}`` (output as literal text) and inside
+    ``{% comment %}`` / ``{# #}`` (output nothing) are left out (#4122).
+    """
+    if "{%" not in template:
+        return []
+    skipped: "list[tuple[int, int]]" = []
+    end_name: Optional[str] = None
+    block_start = 0
+    for m in _DJANGO_TOKEN_RE.finditer(template):
+        token = m.group(0)
+        if token.startswith("{#"):
+            if end_name is None:
+                skipped.append(m.span())
+            continue
+        if not token.startswith("{%"):
+            continue
+        content = token[2:-2].strip("- \t\r\n")
+        if end_name is not None:
+            if content == end_name:
+                skipped.append((block_start, m.end()))
+                end_name = None
+            continue
+        name = content.split(None, 1)[0] if content else ""
+        if name == "verbatim":
+            end_name = "end" + content  # ``{% verbatim x %}`` ends at ``{% endverbatim x %}``
+            block_start = m.start()
+        elif name == "comment":
+            end_name = "endcomment"
+            block_start = m.start()
+    tags = []
+    for m in _FLOW_TAG_RE.finditer(template):
+        if not any(a <= m.start() < b for a, b in skipped):
+            tags.append((m.start(), m.end(), m.group(1)))
+    return tags
+
+
 def _find_root_close(html: str, match: "re.Match[str]") -> "tuple[int, int] | tuple[None, None]":
     """``(close_start, close_end)`` of the element whose open tag is ``match``."""
     return TemplateMixin._find_closing_tag_pos(html, match.end(), _root_tag_name(html, match))
@@ -1722,13 +1765,12 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         template = _mask_for_root_search(template)
 
         # Pre-scan for if/elif/else/endif tags in the region being searched.
+        # A tag inside ``{% verbatim %}`` (literal text) or ``{% comment %}`` /
+        # ``{# #}`` (renders nothing) is not a branch (#4122).
         flow_tags = [
-            (inner_start + m.start(), inner_start + m.end(), m.group(1))
-            for m in re.finditer(
-                r"\{%-?\s*(if|elif|else|endif)\b.*?-?%\}",
-                template[inner_start:],
-                re.DOTALL,
-            )
+            (start, end, kind)
+            for start, end, kind in _template_flow_tags(template)
+            if start >= inner_start
         ]
 
         # The name must end at a tag boundary: ``<section-x>`` (a custom
@@ -1737,9 +1779,14 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         # ``<div{% if x %} ...>`` in template SOURCE still count as opens.
         open_re, close_re = _open_close_res(tag)
 
-        branch_stack: list[int] = []
+        # One frame per open ``{% if %}``: the depth at the ``if`` (restored at
+        # each ``elif``/``else``), whether the block has an ``else``, and for
+        # each branch so far whether it closed the root.
+        branch_stack: list[list[Any]] = []
         depth = 1
         pos = inner_start
+        # The first close skipped because it sat inside a branch (#4122).
+        first_skipped: "tuple[int, int] | None" = None
 
         while depth > 0 and pos < len(template):
             open_match = open_re.search(template, pos)
@@ -1749,11 +1796,7 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             # under-count. ``close_match.end()`` consumes the full tag incl.
             # trailing whitespace, so splice points stay correct. (#1751)
             close_match = close_re.search(template, pos)
-
-            if close_match is None:
-                break
-
-            close_pos = close_match.start()
+            close_pos = close_match.start() if close_match else len(template)
             open_pos = open_match.start() if open_match else float("inf")
             next_pos = min(open_pos, close_pos)  # type: ignore[type-var]
 
@@ -1762,15 +1805,33 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             if pending:
                 ts, te, tag_type = pending[0]
                 if tag_type == "if":
-                    branch_stack.append(depth)
+                    branch_stack.append([depth, False, [False], ts])
                 elif tag_type in ("else", "elif"):
                     if branch_stack:
-                        depth = branch_stack[-1]  # undo this branch's depth changes
+                        frame = branch_stack[-1]
+                        depth = frame[0]  # undo this branch's depth changes
+                        frame[1] = frame[1] or tag_type == "else"
+                        frame[2].append(False)
                 elif tag_type == "endif":
                     if branch_stack:
-                        branch_stack.pop()
+                        frame = branch_stack.pop()
+                        if frame[1] and all(frame[2]):
+                            # Every branch closes the root, so no single close
+                            # tag ends it: the root would be the whole
+                            # if-block, which the extraction cannot slice.
+                            from django.template import TemplateSyntaxError
+
+                            raise TemplateSyntaxError(
+                                "The LiveView root <%s> is closed inside every branch of an "
+                                "{%% if %%} (line %d) instead of once after the {%% endif %%}. "
+                                "Close the root element once, outside the {%% if %%}."
+                                % (tag, template.count("\n", 0, frame[3]) + 1)
+                            )
                 pos = te
                 continue
+
+            if close_match is None:
+                break
 
             if open_pos < close_pos:
                 depth += 1
@@ -1779,11 +1840,15 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
                 pos = int(open_pos) + 1 + len(tag)
             else:
                 if depth == 1 and branch_stack:
-                    # The root opened outside every ``{% if %}`` this scan is
-                    # in, so its close cannot be inside one: this ``</tag>``
+                    # The root opened outside every ``{% if %}`` the scan is
+                    # in, so its close is not inside one: this ``</tag>``
                     # closes an element an earlier branch opened and a
-                    # sibling ``{% else %}`` reset (#4122 — a wrapper opened in
-                    # one if/else and closed in another).
+                    # sibling ``{% else %}`` reset (#4122, a wrapper opened in
+                    # one if/else and closed in another). Remembered, so a
+                    # root that only ever closes in a branch still ends there.
+                    branch_stack[-1][2][-1] = True
+                    if first_skipped is None:
+                        first_skipped = (close_pos, close_match.end())
                     pos = close_match.end()
                     continue
                 depth -= 1
@@ -1791,6 +1856,8 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
                     return close_pos, close_match.end()
                 pos = close_match.end()
 
+        if first_skipped is not None:
+            return first_skipped
         return None, None
 
     def _strip_liveview_root_in_html(self, html: str) -> str:
