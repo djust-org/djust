@@ -646,6 +646,8 @@ def _toggle_internal_flag(self):
 
 **What causes it**: You have set `LIVEVIEW_ALLOWED_MODULES` in settings and a LiveView's module is not in the list. WebSocket mount will silently fail for this view.
 
+The check asks the WebSocket mount gate itself, so an entry admits a module on a dotted-segment boundary: `"myapp"` admits `myapp.views`, and does not admit `myapp_docs.views`. A string prefix that is not a package of the module does not count (#3994).
+
 **Fix**:
 
 ```python
