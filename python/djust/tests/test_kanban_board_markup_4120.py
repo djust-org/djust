@@ -85,3 +85,36 @@ def test_a_card_href_makes_its_title_a_safe_link():
     ]
     out = _render("{% kanban_board columns=cols %}", {"cols": bad})
     assert "javascript:" not in out
+
+
+# --- the KanbanBoard class component (#4120 review) ---------------------------
+
+CLASS_COLS = [{"id": "todo", "title": "To do", "cards": [{"id": "c1", "title": "A"}]}]
+
+
+def _class_paths(board) -> dict:
+    """The class component's markup: ``render()`` and in a template on both engines."""
+    paths = {"render": str(board.render())}
+    paths.update(
+        {
+            engine: _DJ_ID.sub("", html)
+            for engine, html in _both("{{ board }}", {"board": board}).items()
+        }
+    )
+    return paths
+
+
+def test_class_component_shows_add_card_by_default():
+    from djust.components.components.kanban_board import KanbanBoard
+
+    for path, out in _class_paths(KanbanBoard(columns=CLASS_COLS)).items():
+        assert "+ Add card" in out, (path, out)
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_class_component_without_add_card_event_has_no_button(value):
+    from djust.components.components.kanban_board import KanbanBoard
+
+    for path, out in _class_paths(KanbanBoard(columns=CLASS_COLS, add_card_event=value)).items():
+        assert "kanban-add-card" not in out and "+ Add card" not in out, (path, out)
+        assert 'data-col-id="todo"' in out, (path, out)

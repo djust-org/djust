@@ -1829,7 +1829,7 @@ columns = [
 - A column's `color` is a theme name, `primary`, `success`, `warning`, `destructive`, `info` or `muted`, rendered as the class `kanban-col--<name>`. No `color` gives the stylesheet's default. Any other CSS colour (`"#6366F1"`) still works, but as an inline `style` attribute, which a CSP with `style-src-attr 'none'` refuses; use a theme name under a strict policy.
 - `add_col_event` is accepted and not used.
 
-The `KanbanBoard` class component draws a static board: its cards do not drag.
+The `KanbanBoard` class component draws a static board: its cards do not drag. It also takes `add_card_event=None` to leave the button out.
 
 ### Kanban board markup
 
