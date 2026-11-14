@@ -43,7 +43,8 @@ that must keep all view content out of the session declares no
 One more kind of state has its own road into the session: a lazy child view
 (`dj-lazy`) on the deprecated `exposure_policy = "legacy"`, over the page-POST
 fallback. It does not go through the store either, so with a store named it is
-not saved at all: each fallback request mounts that child again.
+not saved at all: each fallback request mounts that child again, and one
+WARNING per child class says so.
 
 ## The built-in sealed store
 
@@ -66,8 +67,16 @@ python -c "from djust.state_store import generate_key; print(generate_key())"
   route or tab does not open.
 - **Every process needs the same keys**, as every process needs the same
   session store.
-- Sealed text is about a third larger than the state; the size budgets count
-  the sealed size.
+- **How often to rotate.** Each save seals with a fresh random 96-bit nonce.
+  With random nonces one AES-GCM key should seal well under 2^32 (about four
+  billion) messages. At 100 saves a second that is over a year; rotate at
+  least yearly, and sooner the busier the site (at 1,000 saves a second,
+  every month).
+- **Sizes.** The per-view limit, the tab cap and the session budget all count
+  the encoded state, exactly as without a store, so a view evicts its other
+  tabs at the same state sizes. The sealed text in the session is about 1.4
+  times that size. On a session store with a small item limit (Memcached:
+  1 MB) lower `DJUST_AUTOMATIC_STATE_MAX_KB` accordingly.
 
 System check `djust.C037` reports the sealed store without the `cryptography`
 package or without usable keys. Until that is fixed nothing is saved: djust
@@ -79,6 +88,8 @@ Subclass `ViewStateStore` and name it in `DJUST_STATE_STORE`. djust builds one
 instance per process.
 
 ```python
+import time
+
 from djust.state_store import ViewStateStore
 
 class TableStateStore(ViewStateStore):
@@ -99,6 +110,15 @@ class TableStateStore(ViewStateStore):
 
     def delete(self, keys):
         ViewState.objects.filter(pk__in=[key.id for key in keys]).delete()
+
+    def clear(self, *, expired_only):
+        # The sweep: djust deletes a state when it evicts it or `djust clear`
+        # removes it, but never on logout or when a session ends. Run
+        # `djust clear` on a schedule (or this query) to drop expired rows.
+        rows = ViewState.objects.all()
+        if expired_only:
+            rows = rows.filter(expires__lte=int(time.time()))
+        return rows.delete()[0]
 ```
 
 - `key` is a `StateKey`: `session`, `binding`, `page`, `tab`, `user_id`,
@@ -117,14 +137,30 @@ The three calls are sync and run on the Django thread. Each is a
 `"state_store"` step of [`sync_turn_wrapper`](../guides/turn-middleware.md),
 so a wrapper that opens a caller-scoped transaction is open around your query.
 A wrapper that raises on a step name it does not know must let this one
-through.
+through. `djust clear` and `djust stats` call the store inside the wrapper as
+well, with `view=None` and `turn=None`: a wrapper that scopes a transaction to
+the caller must handle that case (an administrative scope, or no scope).
+
+`load()` may return `bytes`, a `bytearray` or a `memoryview` (what a database
+driver hands back for a binary column), or `None`.
 
 A save writes the store first and the session's index entry second. If the
-process dies between the two, the store holds bytes no index entry vouches
-for: they are never read and expire.
+process dies between the two, or the session write fails after the store write
+succeeded, the store holds the new bytes while the session still vouches for
+the previous write. Those bytes are refused (their stamp is not the one the
+session holds), so **that tab starts from `mount()` once** on its next request;
+its next save puts both back in step. Nothing is left behind: the next save
+overwrites the same row.
+
+djust deletes a state from the store when it evicts it (the tab cap, the size
+budgets, expiry seen at a write) and when `djust clear` removes it. It never
+deletes on logout or when a session ends (`session.flush()`, an expired
+session): such rows can no longer be read, and stay until your store's own
+`expires` sweep removes them (`clear()` above, run by `djust clear`).
 
 System check `djust.C036` reports a `DJUST_STATE_STORE` that does not import
-or does not name a `ViewStateStore` subclass.
+(whatever importing it raises) or does not name a `ViewStateStore` subclass,
+with the dotted path and the error.
 
 ## When the store is unreachable
 
@@ -139,6 +175,8 @@ or does not name a `ViewStateStore` subclass.
 unsaved: nothing is written, the last saved state stays, and the client gets
 the "State unavailable. Please reload the page." error (`code="state_error"`;
 HTTP status 503 on the page-POST fallback). Page loads are served either way.
+Only `True` is strict; any other value that is not `False` is a startup error
+(system check `djust.C038`).
 
 A log line about a store failure names the view class and the exception's
 type. The exception's message is included only where the view allows
@@ -148,7 +186,13 @@ exception details in logs.
 
 After `DJUST_STATE_STORE` changes, entries written for the previous store (or
 for the session layout) read as nothing saved: each open page runs `mount()`
-once. `djust clear --all` removes what is left.
+once. They do not stay at rest either: the first request, reconnect or page
+load of any tab of a session removes every such entry from that session,
+including state saved in the clear before the store was named. A lazy legacy
+child's entry goes when that child is next reached. Sessions that are never
+used again keep theirs until the session expires; `djust clear --all` removes
+them now (for the `db` and `cached_db` session engines), and what a previous
+store of your own holds is that store's to clear.
 
 ## `djust stats` and `djust clear`
 
