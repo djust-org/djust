@@ -63,13 +63,14 @@ from djust.components.utils import (
 )
 from djust.components.utils import attr_text, component_id_attr
 from djust.template_tags import TYPED_ARGS_KEY
-from djust.components._operands import (  # noqa: F401 - TupleValue/NamedTupleValue re-exported
-    STANDIN_TYPES,
-    NamedTupleValue,
-    TupleValue,
-    _from_typed,
-    plain_operand,
-)
+from djust.components._operands import STANDIN_TYPES, plain_operand
+
+# Defined here before #3883 moved them to `_operands`: re-exported so code that
+# imports them from this module (tests included) keeps working. The `X as X`
+# form marks each as a deliberate re-export.
+from djust.components._operands import NamedTupleValue as NamedTupleValue
+from djust.components._operands import TupleValue as TupleValue
+from djust.components._operands import _from_typed as _from_typed
 
 
 # ---------------------------------------------------------------------------
