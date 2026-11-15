@@ -25,8 +25,9 @@ DOCS = {1: "ACME private (yours)", 2: "GLOBEX private (NOT yours)"}
 class _DocView(LiveView):
     """Object-scoped view (ADR-017): only doc 1 is permitted."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = None
+    template = "<main>{{ doc }}</main>"  # the live mount renders it
     doc_id = 1
 
     def get_object(self):
@@ -52,7 +53,7 @@ class _DocView(LiveView):
 class _PublicView(LiveView):
     """No custom get_object → object-perm lifecycle inactive (must stay no-op)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = None
 
     def get_context_data(self, **kwargs):
@@ -119,17 +120,23 @@ class _FakeTransport:
         return rust_version
 
 
-@pytest.mark.django_db
-def test_url_change_denies_forbidden_object():
+async def _mounted_runtime(view):
+    """A runtime that mounted ``view`` (doc 1, permitted) on a live session: an
+    explicit view's url_change is authorized against its mount binding."""
     from djust.runtime import ViewRuntime
-
-    view = _DocView()
-    view.doc_id = 1
-    view.request = _req()  # set at mount on the live path
+    from djust.tests._live_session import amount_on_runtime
 
     rt = ViewRuntime(transport=_FakeTransport(), scope={})
-    rt.view_instance = view
-    asyncio.run(rt.dispatch_url_change({"params": {"id": "2"}, "uri": "/doc/?id=2"}))
+    await amount_on_runtime(rt, view, url="/doc/")
+    return rt
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_url_change_denies_forbidden_object():
+    view = _DocView()
+    view.doc_id = 1
+    rt = await _mounted_runtime(view)
+    await rt.dispatch_url_change({"params": {"id": "2"}, "uri": "/doc/?id=2"})
 
     errors = [m for m in rt.transport.sent if "error" in m]
     rendered = [m for m in rt.transport.sent if "html" in m or "patches" in m]
@@ -137,16 +144,12 @@ def test_url_change_denies_forbidden_object():
     assert not any("GLOBEX" in str(m) for m in rendered), "denied object was rendered"
 
 
-@pytest.mark.django_db
-def test_url_change_allows_permitted_object():
-    from djust.runtime import ViewRuntime
-
+@pytest.mark.django_db(transaction=True)
+async def test_url_change_allows_permitted_object():
     view = _DocView()
     view.doc_id = 1
-    view.request = _req()
-    rt = ViewRuntime(transport=_FakeTransport(), scope={})
-    rt.view_instance = view
-    asyncio.run(rt.dispatch_url_change({"params": {"id": "1"}, "uri": "/doc/?id=1"}))
+    rt = await _mounted_runtime(view)
+    await rt.dispatch_url_change({"params": {"id": "1"}, "uri": "/doc/?id=1"})
     assert not [m for m in rt.transport.sent if "error" in m], "permitted object wrongly denied"
 
 
