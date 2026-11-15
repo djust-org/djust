@@ -3,18 +3,21 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from asgiref.sync import sync_to_async
 
 from djust import LiveView
+from djust.tests._live_session import amount_on_consumer
 from djust.websocket import LiveViewConsumer
 
 
 class BackgroundView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>Count: {{ count }}</div>"
 
     def mount(self, request, **kwargs):
         self.count = 0
+
+    def get_context_data(self, **kwargs):
+        return {"count": self.count}
 
     def handle_tick(self):
         self.count += 1
@@ -24,17 +27,18 @@ class BackgroundView(LiveView):
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("producer", ["tick", "push", "notify"])
 async def test_lost_background_baseline_delivers_html_and_arms_recovery(producer):
-    view = BackgroundView()
-    view.mount(None)
-    await sync_to_async(view.render_with_diff)()
+    consumer = LiveViewConsumer()
+    consumer.send_json = AsyncMock()
+    # Mounted for real (the mount render primes the diff baseline): an explicit
+    # view's background turns are authorized by the runtime that mounted it.
+    view = await amount_on_consumer(consumer, f"{__name__}.BackgroundView")
     # Actual baseline loss, not _force_full_html (which only forces context sync).
     view._rust_view.reset()
-    consumer = LiveViewConsumer()
-    consumer.view_instance = view
     consumer._last_sent_version = 7
-    consumer.send_json = AsyncMock()
+    consumer.send_json.reset_mock()
     consumer._flush_all_pending = AsyncMock()
     consumer._send_update = AsyncMock(wraps=consumer._send_update)
 
