@@ -129,6 +129,7 @@ RESERVED_STATE_NAMES: frozenset[str] = frozenset(
         "static_assigns",
         "static_assigns_count",
         "static_render",
+        "state_save_interval",
         "sticky",
         "sticky_id",
         "sync_safe",
