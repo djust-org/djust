@@ -213,6 +213,10 @@ async def amount_on_consumer(
         consumer._rate_limiter = ConnectionRateLimiter(rate=1000, burst=1000)
     if not getattr(consumer, "channel_name", None):
         consumer.channel_name = "test.channel"
+    if not hasattr(consumer, "channel_layer"):
+        from channels.layers import get_channel_layer
+
+        consumer.channel_layer = get_channel_layer()
     frame = {"type": "mount", "view": view_path, "url": url}
     if params:
         frame["params"] = params
