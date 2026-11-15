@@ -238,7 +238,7 @@ async def test_consumer_cancel_path_sends_the_settle_frame_only_for_an_event():
         view = MagicMock()
         # A bare MagicMock has no readable exposure policy, which ADR-038
         # treats as nonlegacy (fail closed). This pins the legacy path.
-        view.exposure_policy = "legacy"
+        view.exposure_policy = "legacy"  # legacy subject: the legacy cancelled-task path
         view._async_cancelled = {"job"}
         view.render_with_diff = MagicMock(return_value=("<div dj-root>x</div>", "[]", 2))
         for drain in ("push_events", "navigation", "accessibility", "flash"):
