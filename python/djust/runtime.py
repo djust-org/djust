@@ -646,10 +646,11 @@ async def apply_restored_state(
     transport runs it at (#4088). Exceptions propagate; each caller answers
     them its own way.
     """
-    from .security import safe_setattr
+    from ._component_state import apply_declared_state
 
-    for key, value in restored.items():
-        safe_setattr(view, key, value, allow_private=False, raise_on_blocked=True)
+    # Fields, then interactive components' records (#4046), as the HTTP
+    # fallback applies them.
+    apply_declared_state(view, restored)
     if run_hook:
         handle_restore = getattr(view, "handle_restore", None)
         if callable(handle_restore):
@@ -3925,7 +3926,6 @@ class ViewRuntime(RuntimeTurnPort):
                     )
                     await self._fail_mount(view_instance, exc, response)
                     return
-
         # ---- connected() view hook (#3007) ----
         # The live mount only: the view is admitted, set up (mount() or a
         # restore) and its URL state applied, and has not rendered yet, so
@@ -5371,28 +5371,20 @@ class ViewRuntime(RuntimeTurnPort):
         if not component_id:
             return False
 
-        component = view._components.get(component_id) if hasattr(view, "_components") else None
-        if not component:
-            # A descriptor's `BoundComponent` is registered in
-            # `view._components` by `LiveComponent.__get__` (ADR-031 D2), so
-            # the lookup above finds it and this branch is normally not
-            # reached — descriptor events now take the validated
-            # component-dispatch path below, as events on an instance-assigned
-            # component always have.
-            #
-            # It remains the right fall-through for a descriptor nothing has
-            # materialised yet: the name is in `_component_descriptors`, but
-            # `__get__` has not run, so `_components` has no entry. Such a
-            # descriptor still takes a `component_id` — `__set_name__` wires
-            # its `Meta.event` onto the view, and `_make_event_handler`'s
-            # view-level alias resolves the instance from that parameter
-            # itself. Erroring here would make it unreachable.
-            if component_id in getattr(type(view), "_component_descriptors", {}):
-                return False
+        # The lookup every transport shares (#4046, ``_component_state``): an
+        # explicit view's interactive component only by its tagged wire id;
+        # an ADR-031 descriptor nothing has materialised yet falls through to
+        # the view-level alias that `__set_name__` wired (it resolves the
+        # instance from `component_id` itself), as the HTTP fallback does.
+        from ._component_state import PASS_THROUGH, STALE, resolve_component_target
 
-            # Verbatim WS shape (websocket.py:3358-3362): the component_id is
-            # server-assigned (not free-form client text), so echoing it in the
-            # error is the existing behavior.
+        component = resolve_component_target(view, component_id)
+        if component is PASS_THROUGH:
+            return False
+        if component is None or component is STALE:
+            # A stale id (its row removed) is refused here like an unknown one:
+            # this connection's page was re-rendered when the row went.
+            # Verbatim WS shape (websocket.py:3358-3362).
             error_msg = f"Component not found: {component_id}"
             logger.error("Runtime: %s", sanitize_for_log(error_msg))
             await self.transport.send_error(error_msg)
@@ -5485,7 +5477,9 @@ class ViewRuntime(RuntimeTurnPort):
         # Before the save, as the view route notifies before it commits: a
         # failed or deferred save must not hide the event from its waiters.
         notify_kwargs = dict(coerced_event_data or {})
-        notify_kwargs.setdefault("component_id", component_id)
+        # The component's own id: for an explicit view's interactive component
+        # the wire id carries a per-session tag (#4046), the id does not.
+        notify_kwargs.setdefault("component_id", component.component_id)
         self._notify_waiters_safely(
             view,
             event_name,

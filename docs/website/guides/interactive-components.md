@@ -254,6 +254,10 @@ class ProjectListView(LiveView):
         self.projects = [{"id": 42, "name": "Alpha"}, {"id": 87, "name": "Beta"}]
         self._sync_menus()
 
+    def handle_restore(self, request):
+        # self.projects came back after mount(): rebuild the rows from it.
+        self._sync_menus()
+
     def _sync_menus(self):
         self.row_menus.sync(
             [

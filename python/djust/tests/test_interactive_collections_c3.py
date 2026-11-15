@@ -28,6 +28,7 @@ from django.test import RequestFactory
 
 from djust import LiveView
 from djust.components.interactive import DropdownMenu
+from djust._component_state import wire_id
 
 CALLS: list = []
 ROWS: dict = {}
@@ -341,7 +342,7 @@ def test_members_render_in_both_engines(view_class, engine):
         )
         output = backend.from_string(source).render(context)
     for member in view.rows:
-        assert 'data-component-id="%s"' % member.component_id in output
+        assert 'data-component-id="%s"' % wire_id(member) in output
         assert member.label in output
     assert output.index("Project 42") < output.index("Project 87")
     assert "&lt;div" not in output

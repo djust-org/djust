@@ -412,8 +412,15 @@ def parameter_contract_manifest(root: Any) -> dict[str, Any] | None:
 
     add(root, None, None)
     storage = _instance_dict(root)
+    from ._component_state import wire_id
+
     for key, component in storage.get("_components", {}).items():
-        add(component, None, key)
+        # Keyed by the id the page carries (``data-component-id``), which the
+        # client looks up: for an explicit view's interactive component that is
+        # its tagged wire id, not the registry key (#4046).
+        add(
+            component, None, wire_id(component) if getattr(component, "_derived_id", False) else key
+        )
     for key, child in storage.get("_child_views", {}).items():
         if _instance_dict(child).get("_djust_child_disposed", False):
             continue

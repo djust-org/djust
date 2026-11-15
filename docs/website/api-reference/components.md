@@ -170,6 +170,7 @@ same drift check. For the interactive reference above, use
 | `label` | `str` | required |
 | `items` | `list[ActionItem \| SeparatorItem]` | required |
 | `visibility` | `Literal['server', 'client']` | 'server' |
+| `persist` | `Literal['server', False]` | 'server' |
 
 | Item type | Keys |
 | --- | --- |
