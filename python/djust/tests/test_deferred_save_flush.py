@@ -67,6 +67,10 @@ class Deferred(LiveView):
         self.count += 1
         self.live_patch(params={"page": 2})
 
+    def handle_push(self, n: int = 0, **kwargs):
+        """A server-push hook (``push_to_view``)."""
+        self.count = n
+
     def disconnected(self):
         key = self.__dict__.get("_djust_tab_session_key")
         if key is not None:
@@ -669,3 +673,51 @@ async def test_sse_turns_defer_the_same_way(monkeypatch):
 
 def test_the_switch_is_on_by_default():
     assert _per_turn.on("deferred_save")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interval", [0, INTERVAL], ids=["immediate", "interval"])
+@pytest.mark.parametrize("pool", [None, 2], ids=["stock", "pool"])
+async def test_a_push_turn_saves_like_any_turn_on_both_push_paths(
+    monkeypatch, runtimes, interval, pool
+):
+    """A server push to an explicit view, on the stock turn and on the worker
+    pool's one-hop turn (#4152). With no interval its state is stored before
+    its frame. With one, the frame goes out first, the state stays unsaved on
+    the view, and the close flushes it."""
+    import djust.worker_pool as worker_pool
+    from djust.push import apush_to_view
+    from djust.tests._ws_frames import drain_extra, has_type, receive_until
+    from djust.websocket import LiveViewConsumer
+
+    if pool:
+        monkeypatch.setattr(worker_pool, "configured_pool_size", lambda: pool)
+    monkeypatch.setattr(worker_pool, "_pool", [])
+    offloaded = []
+    real = LiveViewConsumer._run_server_push_turn_offloaded
+
+    async def one_hop(self, *args, **kwargs):
+        offloaded.append(1)
+        return await real(self, *args, **kwargs)
+
+    monkeypatch.setattr(LiveViewConsumer, "_run_server_push_turn_offloaded", one_hop)
+    with _settings(DJUST_STATE_SAVE_INTERVAL=interval):
+        key = await _page()
+        comm, _ = await harness.mount_view(Deferred, key)
+        rt = runtimes[-1]
+        try:
+            await apush_to_view(MODULE + ".Deferred", handler="handle_push", payload={"n": 7})
+            frames = await receive_until(comm, has_type("patch", "html_update", "error"))
+            frames += await drain_extra(comm)
+            stored_at_frame = await _stored(key)
+            unsaved = rt.state_unsaved
+        finally:
+            await comm.disconnect()
+        stored_at_close = await _stored(key)
+    assert len(offloaded) == (1 if pool else 0), offloaded
+    assert [f["type"] for f in frames] == ["patch"], frames
+    if interval:
+        assert (stored_at_frame, unsaved) == (0, True)
+    else:
+        assert (stored_at_frame, unsaved) == (7, False)
+    assert stored_at_close == 7
