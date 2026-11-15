@@ -755,6 +755,32 @@ class RustBridgeMixin:
         """
         self._skip_render = True
 
+    def rows_changed(self, *tables: Any) -> None:
+        """Read the rows this view holds again at its next render (#4112).
+
+        djust does this by itself after a step of the view writes to the
+        database. Call it for a write it cannot see: one made in a thread or an
+        ``on_commit`` callback the handler started, by another process (call it
+        from the ``handle_info`` / push handler that tells the view), through
+        ``cursor.callproc()``, or by a ``SELECT`` with side effects
+        (``nextval()``, a function that writes). The QuerySets and cached
+        properties the view holds are emptied before its next render, and a turn
+        that calls it renders even if nothing else on the view changed.
+
+        ``tables`` narrows it, as djust narrows its own writes: model classes or
+        table names. Only what reads one of them is read again. With none, it
+        is everything the view holds.
+
+        Example::
+
+            @push_handler
+            def order_shipped(self, **payload):
+                self.rows_changed(Order)   # another process wrote the orders
+        """
+        from .._held_rows import mark_tree, named_tables
+
+        mark_tree(self, named_tables(tables))
+
     def request_full_render(self) -> None:
         """Send this turn's render as full HTML rather than as a diff.
 

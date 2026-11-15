@@ -2091,11 +2091,7 @@ class RequestMixin:
                 if inspect.iscoroutinefunction(handler):
                     from asgiref.sync import async_to_sync
 
-                    from .._held_rows import writes_by
-
-                    # Its writes mark the view as a sync handler's do (#4112).
-                    with writes_by(owner):
-                        async_to_sync(handler)(*call_args, **call_kwargs)
+                    async_to_sync(handler)(*call_args, **call_kwargs)
                 else:
                     from ..sync_turn import run_sync_step
 

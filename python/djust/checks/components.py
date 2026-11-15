@@ -1860,6 +1860,7 @@ def check_reserved_view_attributes(app_configs: Any, **kwargs: Any) -> list[Chec
 #: replaces the framework method without any error.
 _PUBLIC_VIEW_METHODS = (
     "skip_render",
+    "rows_changed",
     "request_full_render",
     "cancel_full_render",
     "reset_submitted_form",

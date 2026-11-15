@@ -56,7 +56,7 @@ import functools
 import logging
 from typing import Any, Callable, ContextManager, Optional, Tuple, TypeVar
 
-from ._held_rows import RECORDED_STEPS, attributed, refresh_if_written, writes_by
+from ._held_rows import RECORDED_STEPS, attributed, is_marked, refresh_for_render, unmark, writes_by
 from ._query_budget import budgeted, hop
 
 logger = logging.getLogger(__name__)
@@ -170,12 +170,18 @@ def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **
     here (``djust._query_budget``), inside the wrapper so a transaction the
     wrapper opens is not charged to the step.
 
-    A step that writes to the database marks the view, and the view's next
-    ``"render"`` step first drops the rows it holds, so they are read again
+    A step that writes to the database marks the view with the tables it
+    wrote, and the view's next ``"render"`` step first empties the QuerySets and
+    cached properties it holds that read those tables, so they are read again;
+    the mark is cleared when that render returns, and kept when it raises
     (``djust._held_rows``, #4112).
     """
     if step == "render":
-        refresh_if_written(view)
+        if is_marked(view):
+            refresh_for_render(view)
+            result = _run_step(view, step, fn, *args, **kwargs)
+            unmark(view)
+            return result
     elif step in RECORDED_STEPS and view is not None and not _is_async(fn):
         with writes_by(view):
             return _run_step(view, step, fn, *args, **kwargs)
@@ -214,9 +220,14 @@ def sync_step(view: Any, step: str, fn: Callable[..., _T]) -> Callable[..., _T]:
     """
     if _is_async(fn):
         return fn
-    if step == "render":
-        # Created immediately before the render runs, after the turn's handler.
-        refresh_if_written(view)
+    if step == "render" and is_marked(view):
+        # A view with a write it has not rendered: the reset (and the mark's
+        # clearing once the render returns) happen in ``run_sync_step``.
+        @functools.wraps(fn)
+        def rendering(*args: Any, **kwargs: Any) -> _T:
+            return run_sync_step(view, step, fn, *args, **kwargs)
+
+        return rendering
     if _wrapper() is None and not budgeted(view):
         if step in RECORDED_STEPS:
             return attributed(view, fn)
