@@ -150,16 +150,16 @@ def child_can_reuse(
     return recorded.matches(current)
 
 
-def carry_preserved_child(
+def carried_reuse_identity(
     child: Any, child_cls: type, parent: Any, request: Any, slot: str, mount_inputs: dict[str, Any]
-) -> bool:
-    """Whether a preserved sticky child may move under ``parent`` (#4149).
+) -> ChildReuseIdentity | None:
+    """The reuse identity a preserved sticky child would take under ``parent`` (#4149).
 
     Compares the carry identity recorded at the child's mount with the one the
-    destination's ``{% live_render %}`` compiles now. On a match the child's
-    reuse identity is re-recorded for its new route and parent, so the event,
-    persistence and re-render paths that check it accept the child there. The
-    caller still re-runs the authorization a fresh mount runs.
+    destination's ``{% live_render %}`` compiles now. On a match, returns the
+    child's full reuse identity for its new route and parent; otherwise
+    ``None``. Pure: the caller records it only after the destination's
+    authorization passed (commit-or-rollback).
     """
     current = child_reuse_identity(child_cls, parent, request, slot, mount_inputs, carry=True)
     recorded = getattr(child, "_explicit_child_carry_identity", None)
@@ -171,8 +171,5 @@ def carry_preserved_child(
         or policy != "explicit"
         or not recorded.matches(current)
     ):
-        return False
-    child._explicit_child_reuse_identity = child_reuse_identity(
-        child_cls, parent, request, slot, mount_inputs
-    )
-    return True
+        return None
+    return child_reuse_identity(child_cls, parent, request, slot, mount_inputs)
