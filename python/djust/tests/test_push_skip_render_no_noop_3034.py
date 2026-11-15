@@ -39,13 +39,6 @@ class QuietPushView(LiveView):
         self._skip_render = True
 
 
-class QuietPushLegacyView(QuietPushView):
-    exposure_policy = "legacy"  # legacy subject: push turns are offloaded for legacy views only
-    template = (
-        f'<div dj-root dj-view="{_ALLOWED}.QuietPushLegacyView" dj-id="0">c={{{{ c }}}}</div>'
-    )
-
-
 def _types(sent):
     return [f.get("type") for f in sent]
 
@@ -75,7 +68,7 @@ class TestPushSkipRenderSendsNoNoop:
         from djust import worker_pool
 
         monkeypatch.setattr(worker_pool, "offload_enabled", lambda: True)
-        consumer = await _mounted_consumer(QuietPushLegacyView)
+        consumer = await _mounted_consumer(QuietPushView)
         taken = []
         offloaded = consumer._run_server_push_turn_offloaded
 

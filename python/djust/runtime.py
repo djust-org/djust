@@ -6229,26 +6229,44 @@ class ViewRuntime(RuntimeTurnPort):
         deny with :meth:`deny_explicit_turn` and never stringify the exception.
         """
         from ._exposure import ExposureError
-        from ._exposure_auth import aauthorize_event, authorize_event, fresh_socket_request
+        from ._exposure_auth import aauthorize_event, fresh_socket_request
         from .auth.core import enforce_object_permission, has_async_check_permissions
+
+        if not has_async_check_permissions(view):
+            return await sync_to_async(self.authorize_explicit_turn_sync)(view)
+        binding = self._explicit_mount_binding
+        if view is None or view is not self.view_instance or binding is None:
+            raise ExposureError("Explicit turn has no mounted owner")
+        # ``async def check_permissions``: awaited on the loop, not the sync thread.
+        request = await aauthorize_event(
+            view, await sync_to_async(fresh_socket_request)(view), binding
+        )
+        await sync_to_async(enforce_object_permission)(view, request)
+        # Authorization hooks are application code; their success does not
+        # prove the owner was left in place.
+        if view is not self.view_instance:
+            raise ExposureError("Explicit turn owner replaced during authorization")
+        view._djust_event_request = request
+        return request
+
+    def authorize_explicit_turn_sync(self, view: Any) -> Any:
+        """The synchronous body of :meth:`authorize_explicit_turn`.
+
+        For a view whose ``check_permissions`` is not ``async def``: the whole
+        check (owner, fresh session and Django auth, object permission, owner
+        again, stash) in one call on a Django thread. The worker-pool push turn
+        (#4152) runs it inside the same hop as the push hooks, before them.
+        Raises on any failure, like the async form.
+        """
+        from ._exposure import ExposureError
+        from ._exposure_auth import authorize_event, fresh_socket_request
+        from .auth.core import enforce_object_permission
 
         binding = self._explicit_mount_binding
         if view is None or view is not self.view_instance or binding is None:
             raise ExposureError("Explicit turn has no mounted owner")
-
-        def _authorize() -> Any:
-            request = authorize_event(view, fresh_socket_request(view), binding)
-            enforce_object_permission(view, request)
-            return request
-
-        if has_async_check_permissions(view):
-            # ``async def check_permissions``: awaited on the loop, not the sync thread.
-            request = await aauthorize_event(
-                view, await sync_to_async(fresh_socket_request)(view), binding
-            )
-            await sync_to_async(enforce_object_permission)(view, request)
-        else:
-            request = await sync_to_async(_authorize)()
+        request = authorize_event(view, fresh_socket_request(view), binding)
+        enforce_object_permission(view, request)
         # Authorization hooks are application code; their success does not
         # prove the owner was left in place.
         if view is not self.view_instance:

@@ -634,9 +634,11 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         "self.view_instance.render_with_diff",
     ): plumbing(_RENDER, _GET_TEMPLATE),
     ("runtime.py", "ViewRuntime.authorize_explicit_turn", "enforce_object_permission"): leaf(),
-    ("runtime.py", "ViewRuntime.authorize_explicit_turn", "_authorize"): plumbing(
-        _AUTH_OF_CHILD, _TENANT
-    ),
+    (
+        "runtime.py",
+        "ViewRuntime.authorize_explicit_turn",
+        "self.authorize_explicit_turn_sync",
+    ): plumbing(_AUTH_OF_CHILD, _TENANT),
     ("runtime.py", "ViewRuntime._flush_pending_layout", "render_pending_layout"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._render_async_result", "view._sync_state_to_rust"): plumbing(
         _RENDER, _GET_TEMPLATE

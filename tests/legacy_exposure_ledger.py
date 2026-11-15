@@ -38,6 +38,7 @@ MIGRATED_4082: tuple[str, ...] = (
     "python/djust/tests/test_object_perm_api_sse_paths.py",
     "python/djust/tests/test_object_perm_render_paths.py",
     "python/djust/tests/test_pool_shared_session_view.py",
+    "python/djust/tests/test_push_skip_render_no_noop_3034.py",
     "python/djust/tests/test_ratelimit_per_caller_f27_f28.py",
     "python/djust/tests/test_recovery_handler_policy.py",
     "python/djust/tests/test_run_async_work_teardown_1940.py",
@@ -76,7 +77,7 @@ REMAINING_4082: dict[str, str] = {
         "migrated; one case stays legacy: an unhandled async failure ends loading with a named source=async frame on legacy views only"
     ),
     "python/djust/tests/test_event_loop_offload_3074.py": (
-        "migrated; the one-hop offloaded push case stays legacy: product gap #4152, the offloaded push turn runs for legacy views only"
+        "migrated; the one-hop push case also runs a legacy view: legacy subject, the one-hop push turn serves both policies (#4152)"
     ),
     "python/djust/tests/test_event_reauth_1777.py": (
         "legacy subject: reauth_on_event re-checks legacy views only (turns.reauth)"
@@ -92,9 +93,6 @@ REMAINING_4082: dict[str, str] = {
     ),
     "python/djust/tests/test_push_handler_marker_3002.py": (
         "migrated; the debug eval and time-travel replay cases stay legacy: both refuse explicit views by design"
-    ),
-    "python/djust/tests/test_push_skip_render_no_noop_3034.py": (
-        "migrated; one case stays legacy: push turns are offloaded for legacy views only"
     ),
     "python/djust/tests/test_reauth_reads_stored_session.py": (
         "legacy subject: reauth_on_event re-checks legacy views only (turns.reauth)"
@@ -422,7 +420,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
 REASONED_INLINE: tuple[str, ...] = (
     "python/djust/tests/test_event_reauth_1777.py",
     "python/djust/tests/test_reauth_reads_stored_session.py",
-    "python/djust/tests/test_push_skip_render_no_noop_3034.py",
     "python/djust/tests/test_ws_mount_flip_parity_1911.py",
     "python/djust/tests/test_runtime_reauth_async_1905.py",
     "python/djust/tests/test_server_turn_reauth.py",
