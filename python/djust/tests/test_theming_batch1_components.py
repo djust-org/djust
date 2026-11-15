@@ -28,6 +28,7 @@ if not settings.configured:
     )
     django.setup()
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -152,14 +153,21 @@ class TestModalComponent(ComponentTestCase):
         """`is_open` drives visibility, and it must beat the author cascade.
 
         `.modal-backdrop` is `display: flex` in both `theming/css/components.css`
-        and `scaffold.css`, so the `hidden` attribute cannot close this dialog —
-        the inline style is load-bearing, not a shortcut.
+        and `scaffold.css`, so the `hidden` attribute (#4139: a strict CSP refuses an
+        inline style) closes the dialog only because both carry a `[hidden]` guard.
         """
         closed = self.render_component("modal", id="mc", title="Closed")
-        self.assert_contains(closed, 'style="display:none;"')
+        self.assertRegex(closed, r'data-theme-modal="mc"\s+hidden>')
+        self.assertNotIn("style=", closed)
 
         opened = self.render_component("modal", id="mo", title="Open", is_open=True)
-        self.assertNotIn('style="display:none;"', opened)
+        self.assertNotRegex(opened, r"\bhidden\b")
+        self.assertNotIn("style=", opened)
+
+        css = Path(__file__).resolve().parents[1] / "theming" / "static" / "djust_theming" / "css"
+        guard = r"\[hidden\][^{]*\{\s*display:\s*none\s*!important"
+        self.assertRegex((css / "components.css").read_text(), guard)
+        self.assertRegex((css / "scaffold.css").read_text(), r"\.modal-backdrop" + guard)
 
     def test_contract(self):
         html = self.render_component("modal", id="m1", title="Title")
@@ -305,13 +313,15 @@ class TestDropdownComponent(ComponentTestCase):
         """
         closed = self.render_component("dropdown", id="dd1c", label="Menu")
         self.assert_contains(closed, 'aria-expanded="false"')
-        self.assert_contains(closed, 'style="display:none;"')
+        self.assertRegex(closed, r'role="menu"\s+hidden>')
+        self.assertNotIn("style=", closed)
         self.assertNotIn("data-open", closed)
 
         opened = self.render_component("dropdown", id="dd1d", label="Menu", is_open=True)
         self.assert_contains(opened, 'aria-expanded="true"')
         self.assert_contains(opened, 'data-open="true"')
-        self.assertNotIn('style="display:none;"', opened)
+        self.assertNotRegex(opened, r'role="menu"[^>]*\bhidden\b')
+        self.assertNotIn("style=", opened)
 
     def test_contract(self):
         html = self.render_component("dropdown", id="dd2", label="Actions")

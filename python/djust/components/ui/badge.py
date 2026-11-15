@@ -10,6 +10,8 @@ from ...decorators import event_handler
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 
+from ..utils import strict_styles
+
 
 class BadgeComponent(LiveComponent):
     """
@@ -131,7 +133,15 @@ class BadgeComponent(LiveComponent):
 
         if self.dismissible:
             dismiss_attr = self._dismiss_attr()
-            html += f' <button type="button" class="btn-close btn-close-white" {dismiss_attr} aria-label="Close" style="font-size: 0.65em; padding: 0.1em 0.25em;"></button>'
+            # Bootstrap has no utility for this size: the inline style by default (a Bootstrap
+            # page may load no djust stylesheet), the `dj-badge-close` class of the components
+            # stylesheets under a strict CSP, which refuses the inline style (#4139).
+            if strict_styles():
+                close_class, close_style = "btn-close btn-close-white dj-badge-close", ""
+            else:
+                close_class = "btn-close btn-close-white"
+                close_style = ' style="font-size: 0.65em; padding: 0.1em 0.25em;"'
+            html += f' <button type="button" class="{close_class}" {dismiss_attr} aria-label="Close"{close_style}></button>'
 
         html += "</span>"
         return html

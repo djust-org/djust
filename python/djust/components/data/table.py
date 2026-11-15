@@ -7,7 +7,7 @@ Provides data tables with sorting, selection, and actions.
 from typing import Any, Dict, List
 
 from django.utils.html import conditional_escape, escape
-from djust.components.utils import attr_text
+from djust.components.utils import attr_text, strict_styles
 from django.utils.safestring import SafeString
 
 from ...decorators import event_handler
@@ -427,8 +427,11 @@ class TableComponent(LiveComponent):
 
             if sortable:
                 sort_icon = self._sort_icon(key, "bootstrap5")
+                # Bootstrap has no cursor utility: the inline style by default, the
+                # `dj-sortable-th` class under a strict CSP, which refuses it (#4139).
+                pointer = 'class="dj-sortable-th"' if strict_styles() else 'style="cursor: pointer"'
                 html += (
-                    f'<th style="cursor: pointer" aria-sort="{self._aria_sort(key)}" '
+                    f'<th {pointer} aria-sort="{self._aria_sort(key)}" '
                     f"{self._sort_attr(key)}>{label}{sort_icon}</th>"
                 )
             else:

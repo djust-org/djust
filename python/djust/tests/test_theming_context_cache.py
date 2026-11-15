@@ -55,8 +55,10 @@ class TestThemeContextCache:
                 return_value=":root { --color: blue; }",
             ) as mock_css,
         ):
-            ctx1 = theme_context(MagicMock())
-            ctx2 = theme_context(MagicMock())
+            # No CSP nonce: the switcher's <style> carries the request's own (#4139), which
+            # differs per request by design; a MagicMock would invent one.
+            ctx1 = theme_context(MagicMock(csp_nonce="", request=None))
+            ctx2 = theme_context(MagicMock(csp_nonce="", request=None))
         assert mock_css.call_count == 1, (
             f"expected CSS generation to be called once (cache hit on 2nd), "
             f"got {mock_css.call_count}"
@@ -364,10 +366,11 @@ class TestThemeContextCache:
             patch("djust.theming.context_processors.get_theme_manager", return_value=mgr),
             patch("djust.theming.context_processors.generate_css_for_state", return_value="x"),
         ):
-            req1 = MagicMock()
+            # No CSP nonce: that one is per request by design (#4139).
+            req1 = MagicMock(csp_nonce="", request=None)
             req1.user.id = 1
             req1.path = "/a"
-            req2 = MagicMock()
+            req2 = MagicMock(csp_nonce="", request=None)
             req2.user.id = 999
             req2.path = "/b/different"
             ctx1 = theme_context(req1)

@@ -96,3 +96,11 @@ export const TtydTerminalHook = {
     this._term?.dispose();
   },
 };
+
+// The template loads this module itself, with <script type="module" src="{% static %}">: one
+// hashed URL, no inline script for a strict CSP to refuse (#4139). It registers the hook here.
+if (typeof window !== "undefined") {
+  window.djust = window.djust || {};
+  window.djust.hooks = window.djust.hooks || {};
+  window.djust.hooks.TtydTerminal = TtydTerminalHook;
+}

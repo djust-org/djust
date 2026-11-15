@@ -190,7 +190,7 @@ def theme_context(request: HttpRequest) -> dict:
     # to `djust_theming/css/components.css` was missing. Pin
     # `{{ theme_head }}` == `{% theme_head %}` for the default args.
     def _render_switcher() -> str:
-        return _render_theme_outputs(
+        switcher = _render_theme_outputs(
             state.theme,
             state.preset,
             state.pack,
@@ -199,6 +199,12 @@ def theme_context(request: HttpRequest) -> dict:
             state.layout,
             presets_key,
         )[1]
+        # The cached markup is shared across requests, so the request's CSP nonce goes on its
+        # `<style>` here, per request (#4139), as the theme tags carry theirs (#655).
+        from .templatetags.theme_tags import _nonce_attr
+
+        nonce_attr = _nonce_attr(request)
+        return switcher.replace("<style>", "<style%s>" % nonce_attr, 1) if nonce_attr else switcher
 
     # Each tag body is rendered by calling the existing simple_tag, once per
     # request instead of once per `{% theme_X %}` invocation in the template
@@ -314,7 +320,13 @@ def _option_text(value: object) -> SafeString:
 
 
 def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
-    """Render the theme switcher HTML inline."""
+    """Render the theme switcher HTML inline.
+
+    No inline event handler (a strict Content-Security-Policy refuses ``onclick``): the
+    buttons carry ``data-theme-mode`` and the select ``data-theme-preset-select``, which
+    ``theme.js`` handles by delegation, as it does for ``theme_switcher.html`` (#4139). The
+    ``<style>`` gets the request's nonce in ``theme_context``.
+    """
     # Mode buttons
     mode_buttons = ""
     for mode, icon, label in [
@@ -326,7 +338,7 @@ def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
         mode_buttons += f"""
         <button type="button"
                 class="theme-mode-btn {active}"
-                onclick="window.djustTheme && window.djustTheme.setMode('{mode}')"
+                data-theme-mode="{mode}"
                 aria-label="{label} mode"
                 title="{label} mode">
             {icon}
@@ -350,7 +362,7 @@ def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
         {mode_buttons}
     </div>
     <select class="theme-preset-select"
-            onchange="window.djustTheme && window.djustTheme.setPreset(this.value)"
+            data-theme-preset-select
             aria-label="Select theme">
         {preset_options}
     </select>

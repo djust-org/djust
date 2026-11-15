@@ -248,7 +248,7 @@ class TestSlotsReachTheTemplate:
         html = _preview("dropdown")
         assert "dropdown-item" in html
         assert len(re.findall(r'class="dropdown-item"', html)) >= 3
-        assert 'style="display:none;"' not in html
+        assert not re.search(r'role="menu"[^>]*\bhidden\b', html)
         assert 'aria-expanded="true"' in html
         assert re.search(
             r'class="dropdown-menu dropdown-left"[\s\S]*role="menu"[\s\S]*data-open="true"',
@@ -270,7 +270,7 @@ class TestSlotsReachTheTemplate:
         view.mount(RequestFactory().get("/"), component_name="dropdown")
         assert view.preview.state.demo_values["is_open"] is True
         html = "".join(example["html"] for example in view._render_examples())
-        assert 'style="display:none;"' not in html
+        assert not re.search(r'role="menu"[^>]*\bhidden\b', html)
         assert "Edit" in html and "Archive" in html
 
     def test_live_sheet_preview_preserves_open_example_state(self):

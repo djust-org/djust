@@ -4,6 +4,9 @@
  * Thin behavior layer for interactive components (modals, dropdowns, tabs).
  * Uses data-attribute hooks. No dependencies. ~4KB unminified.
  *
+ * Open and closed are the ``hidden`` attribute the templates render, not an
+ * inline style (a strict Content-Security-Policy refuses one, #4139).
+ *
  * Auto-initializes on DOMContentLoaded.
  * Re-initializes on djust:dom-update for LiveView compatibility.
  */
@@ -28,7 +31,7 @@
                 var modalId = this.getAttribute('data-theme-modal-open');
                 var backdrop = document.querySelector('[data-theme-modal="' + modalId + '"]');
                 if (backdrop) {
-                    backdrop.style.display = '';
+                    backdrop.hidden = false;
                     // Focus the dialog for accessibility
                     var dialog = backdrop.querySelector('[role="dialog"]');
                     if (dialog) dialog.focus();
@@ -46,7 +49,7 @@
                 e.preventDefault();
                 var backdrop = this.closest('[data-theme-modal]');
                 if (backdrop) {
-                    backdrop.style.display = 'none';
+                    backdrop.hidden = true;
                     document.body.style.overflow = '';
                 }
             });
@@ -60,7 +63,7 @@
             backdrop.addEventListener('click', function(e) {
                 // Only close if clicking the backdrop itself, not the dialog content
                 if (e.target === this) {
-                    this.style.display = 'none';
+                    this.hidden = true;
                     document.body.style.overflow = '';
                 }
             });
@@ -72,8 +75,8 @@
         if (e.key === 'Escape') {
             var modals = document.querySelectorAll('[data-theme-modal]');
             for (var i = modals.length - 1; i >= 0; i--) {
-                if (modals[i].style.display !== 'none') {
-                    modals[i].style.display = 'none';
+                if (!modals[i].hidden) {
+                    modals[i].hidden = true;
                     document.body.style.overflow = '';
                     break;
                 }
@@ -99,10 +102,10 @@
             trigger.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
-                var isOpen = menu.style.display !== 'none';
+                var isOpen = !menu.hidden;
                 closeAllDropdowns();
                 if (!isOpen) {
-                    menu.style.display = '';
+                    menu.hidden = false;
                     trigger.setAttribute('aria-expanded', 'true');
                     dropdown.setAttribute('data-open', '');
                     // Focus first menu item
@@ -113,7 +116,7 @@
 
             // Keyboard navigation inside dropdown
             dropdown.addEventListener('keydown', function(e) {
-                if (menu.style.display === 'none') return;
+                if (menu.hidden) return;
 
                 var items = Array.from(menu.querySelectorAll('[role="menuitem"], .dropdown-item'));
                 if (!items.length) return;
@@ -141,7 +144,7 @@
     }
 
     function closeDropdown(dropdown, trigger, menu) {
-        menu.style.display = 'none';
+        menu.hidden = true;
         trigger.setAttribute('aria-expanded', 'false');
         dropdown.removeAttribute('data-open');
     }

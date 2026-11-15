@@ -120,8 +120,10 @@ class TestTheStructureTheScriptsRead:
         for path, html in _tree_paths().items():
             assert 'dj-hook="FileTree"' in html and 'role="tree"' in html, path
             assert 'class="dj-file-tree__toggle" role="button"' in html, path
-            # a collapsed folder: its children block is hidden by an inline style
-            assert 'class="dj-file-tree__children" style="display:none"' in html, path
+            # a collapsed folder: its children block is hidden by the attribute, not an
+            # inline style a strict CSP refuses (#4139)
+            assert 'class="dj-file-tree__children" hidden>' in html, path
+            assert 'style="display' not in html, path
             # an expanded one is not
             assert re.search(r'class="dj-file-tree__children">', html), path
             assert "dj-file-tree__node--expanded" in html, path

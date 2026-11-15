@@ -848,4 +848,15 @@
 .dj-progress-w-90 { width: 90%; } .dj-progress-w-91 { width: 91%; } .dj-progress-w-92 { width: 92%; } .dj-progress-w-93 { width: 93%; } .dj-progress-w-94 { width: 94%; } .dj-progress-w-95 { width: 95%; } .dj-progress-w-96 { width: 96%; } .dj-progress-w-97 { width: 97%; } .dj-progress-w-98 { width: 98%; } .dj-progress-w-99 { width: 99%; }
 .dj-progress-w-100 { width: 100%; }
 
+/* ============================================================================
+   Constants of the Bootstrap UI classes under a strict CSP (#4139)
+   ============================================================================
+   ``Badge`` / ``Navbar`` / ``Table`` / ``DataTable`` (``djust.components.ui``,
+   ``layout``, ``data``) keep their inline style by default; under
+   LIVEVIEW_CONFIG["csp_strict_styles"] they write these classes, as strong as
+   the inline style was (also in components.css). */
+.dj-badge-close { font-size: 0.65em !important; padding: 0.1em 0.25em !important; }
+.dj-navbar-link--external { color: #667eea !important; font-weight: 600 !important; }
+.dj-sortable-th { cursor: pointer; font-family: inherit; }
+
 } /* end @layer djust-components */

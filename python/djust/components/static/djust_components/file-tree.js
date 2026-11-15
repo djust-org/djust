@@ -12,10 +12,14 @@
  *   by its position, so a re-render that inserts, removes or reorders rows
  *   leaves each folder as the reader set it. The server's own open/closed
  *   markup applies to every folder the reader has not touched (and again once
- *   the reader's choice matches it): the hook remembers the server's
- *   ``display:none`` per children block, writes the reader's choice as an
- *   inline display itself (so no stylesheet is needed), and marks a block the
- *   reader changed with ``data-dj-open``. The same keys keep the roving tab
+ *   the reader's choice matches it): the server marks a collapsed children
+ *   block with the ``hidden`` attribute (not an inline style, which a strict
+ *   Content-Security-Policy refuses, #4139), and the hook never writes that
+ *   attribute, so it always says what the server wants. The hook writes the
+ *   reader's choice as an inline ``display`` through the CSSOM (which a strict
+ *   CSP allows, and no stylesheet is needed), important so it also beats a
+ *   stylesheet's ``[hidden]`` guard, and marks a block the reader changed with
+ *   ``data-dj-open``. The same keys keep the roving tab
  *   stop and keyboard focus on the same row across a re-render;
  * - one tab stop (roving tabindex). Up/Down move through the visible rows,
  *   Right expands a folder or steps into it, Left collapses it or steps out to
@@ -108,22 +112,20 @@
   }
 
   // What the server last rendered for a children block (open or not): a
-  // collapsed folder carries an inline ``display:none``. The hook writes the
-  // inline display itself, so it remembers the server's value per element (in
-  // JavaScript, not on the page) and learns a new one when a server patch
-  // changes the block's style.
-  var SERVER_OPEN = new WeakMap();
-
+  // collapsed folder's block carries the ``hidden`` attribute. Only the server
+  // writes it (the hook's choice is an inline display), so it is read from the
+  // element every time.
   function serverOpen(group) {
-    if (!SERVER_OPEN.has(group)) SERVER_OPEN.set(group, group.style.display !== "none");
-    return SERVER_OPEN.get(group);
+    return !group.hasAttribute("hidden");
   }
 
   // What is shown: the inline display (the reader's choice where there is one,
-  // the server's otherwise).
+  // the server's ``hidden`` otherwise).
   function isExpanded(node) {
     var group = groupOf(node);
-    return !!group && group.style.display !== "none";
+    if (!group) return false;
+    var chosen = group.style.getPropertyValue("display");
+    return chosen ? chosen !== "none" : serverOpen(group);
   }
 
   function rowName(node) {
@@ -269,10 +271,7 @@
       // else costs a walk, however many patches the page receives.
       if (this._observer) {
         var pending = this._observer.takeRecords();
-        if (pending.length) {
-          this._noteRecords(pending);
-          this._dirty = true;
-        }
+        if (pending.length) this._dirty = true;
       }
       if (this._dirty) this._sync();
       this._refocus();
@@ -361,32 +360,20 @@
         this._open.delete(key);
         chosen = undefined;
       }
-      var open = chosen === undefined ? server : chosen;
-      var want = open ? "" : "none";
-      // The style attribute is left in place even when empty: a server patch
-      // that removes it must still reach the observer (removing an attribute
-      // that is not there leaves no record), and that is how the hook learns
-      // the server's new value.
-      if (group.style.display !== want) group.style.display = want;
+      // Following the server: no inline display, the ``hidden`` attribute
+      // decides. The reader's own choice: an important inline display, which
+      // beats the ``hidden`` attribute and a stylesheet's ``[hidden]`` guard.
+      var want = chosen === undefined ? "" : chosen ? "block" : "none";
+      if (group.style.getPropertyValue("display") !== want) {
+        if (want) group.style.setProperty("display", want, "important");
+        else group.style.removeProperty("display");
+      }
       if (chosen === undefined) {
         if (group.hasAttribute(OPEN_ATTR)) group.removeAttribute(OPEN_ATTR);
       } else {
         setAttr(group, OPEN_ATTR, chosen ? "true" : "false");
       }
       this._reflect(node);
-    },
-
-    // A server patch that rewrote a children block's style tells us what the
-    // server now wants for it. (Records of the hook's own writes are always
-    // discarded with takeRecords(), so what is left is the server's.)
-    _noteRecords: function (records) {
-      for (var i = 0; i < records.length; i++) {
-        var r = records[i];
-        if (r.type === "attributes" && r.attributeName === "style" && r.target.classList &&
-            r.target.classList.contains(GROUP)) {
-          SERVER_OPEN.set(r.target, r.target.style.display !== "none");
-        }
-      }
     },
 
     // The ARIA state, arrow and icon of a folder row for what is shown.
@@ -522,8 +509,7 @@
       });
 
       if (window.MutationObserver) {
-        this._observer = new MutationObserver(function (records) {
-          self._noteRecords(records);
+        this._observer = new MutationObserver(function () {
           self._dirty = true;
         });
         this._observer.observe(root, {
@@ -533,10 +519,10 @@
           // moves a folder's name path without changing the tree's shape.
           characterData: true,
           attributes: true,
-          // The state the hook reads (class, style, data-name) and what it
-          // writes (a morph that restores the server's markup resets these,
+          // The state the hook reads (class, hidden, style, data-name) and what
+          // it writes (a morph that restores the server's markup resets these,
           // and then the next patch must apply them again).
-          attributeFilter: ["class", "style", "data-name", "tabindex", "role", "aria-level", "aria-selected", "aria-expanded", OPEN_ATTR],
+          attributeFilter: ["class", "hidden", "style", "data-name", "tabindex", "role", "aria-level", "aria-selected", "aria-expanded", OPEN_ATTR],
         });
       }
     },

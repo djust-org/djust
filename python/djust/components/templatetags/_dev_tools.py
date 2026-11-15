@@ -569,7 +569,8 @@ class FileTreeNode(template.Node):
                 children_html.append(
                     self._render_tree_node(child, depth + 1, event, show_icons, selected)
                 )
-            child_display = ' style="display:none"' if not expanded else ""
+            # Collapsed: the `hidden` attribute, not an inline style a strict CSP refuses (#4139).
+            child_display = " hidden" if not expanded else ""
             return (
                 f'<div class="dj-file-tree__node{type_cls}{selected_cls}{expand_cls}"'
                 f'{indent_style} data-name="{a_name}" data-type="{e_type}">'
