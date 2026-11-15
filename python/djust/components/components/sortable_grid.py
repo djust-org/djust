@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from djust import Component
 from djust.components.utils import safe_css_length
+from djust.components.utils import style_attrs
 
 
 class SortableGrid(Component):
@@ -125,10 +126,14 @@ class SortableGrid(Component):
             )
 
         disabled_attr = ' data-disabled="true"' if self.disabled else ""
-        style = f'style="grid-template-columns:repeat({int(self.columns)},1fr);gap:{e_gap}"'
+        style = style_attrs(
+            grid_template_columns=f"repeat({int(self.columns)},1fr)",
+            gap=e_gap,
+            css="grid-template-columns:{};gap:{}",
+        )
 
         return (
             f'<div class="{class_str}" dj-hook="SortableGrid" '
-            f'data-move-event="{e_event}" data-columns="{int(self.columns)}" '
+            f'data-move-event="{e_event}" data-columns="{int(self.columns)}"'
             f'{style} role="grid"{disabled_attr}>{"".join(items_html)}</div>'
         )

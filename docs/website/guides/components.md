@@ -1039,7 +1039,10 @@ engine (every socket render).
   The track is `role="progressbar"` with `aria-valuenow`, `aria-valuemin`, `aria-valuemax` and an
   `aria-label` (the `label=`; an unlabelled bar has no name, so give one). `value` is clamped to 0-100; the `Progress` class
   draws to the whole percent and keeps the exact value in `aria-valuenow`. The Bootstrap/Tailwind
-  `djust.components.ui.Progress` still writes inline styles.
+  `djust.components.ui.Progress` (and `Progress` / `RustProgress`) carry the same width class, and
+  by default also their inline width; with `LIVEVIEW_CONFIG["csp_strict_styles"]` only the class,
+  and their height as a `data-dj-style-height` the client applies (see "Free-form style values
+  under a strict CSP" in the security guide).
 - **`{% stepper %}`** is an `<ol class="stepper">` of `<li class="stepper-step">`, each holding a
   `<button type="button">` (focusable, Enter and Space activate it, never submits a form). The
   current step is `aria-current="step"`; a completed step that is not the current one adds a
@@ -1141,9 +1144,26 @@ the text it is handed (#3882, #3883).
 
 A column given as a bare name is the column with that key and label: `columns=["claim_number",
 "status"]` draws the same table as `[{"key": "claim_number", "label": "claim_number"}, {"key":
-"status", "label": "status"}]`, on both engines (#3895). Any column that is not a dict is read
-the same way, as its text; that text is plain even when marked safe, so a header with markup uses
-the dict form's `label`.
+"status", "label": "status"}]`, on both engines (#3895). Any scalar column (text, a number,
+`None`) is read the same way, as its text; that text is plain even when marked safe, so a header
+with markup uses the dict form's `label`. A column given as an object or a namedtuple is read for
+its `key`, `label`, `width` (and the other column keys) on both engines. A function inside a column
+is not supported: both engines ignore it, as if that key were absent, and log one warning naming
+the column; compute the value into the row instead.
+
+Rows are dicts, model instances or other objects, the same on both engines (#3895). A model
+instance is read as djust serialises it, so the exposure floor applies: a field the model excludes
+(`password`, `djust_exclude_fields`, a field outside `djust_serializable_fields`) is an empty
+cell. A model's `@property` values are part of what djust serialises, so a property column shows
+its value; a model's methods are not called. Another object is read for the column keys as
+attributes, and a zero-argument method is called as Django's templates call it (one marked
+`alters_data` is not); a name starting with `_` is never read. A cell value you marked safe
+(`mark_safe`, `format_html`) keeps its markup in the cell, before and after an event, and a plain
+string or a lazy translation string is escaped. Two other values are honoured only by the first
+render, under Django's engine, and escaped after an event: a lazy value that resolves to a
+marked-safe string, and a `str` subclass with an `__html__` method (`markupsafe.Markup`); call
+`mark_safe` on markup that must survive an event. A URL (`row_url`, `link`) is checked and
+escaped whatever it is marked. `NaN` and the infinities are written as `nan` / `inf` and are never a link.
 
 **Accessibility**: row-clickable `<tr>`s are focusable (`tabindex="0"`),
 announce as buttons (`role="button"`), and activate on Enter or Space.
@@ -1948,7 +1968,7 @@ columns = [
 - A card's `href` makes its title a link (`javascript:` and other unsafe schemes are refused).
 - A card's `targets` lists the column ids it may move to, for a board whose cards follow a state machine: `{"id": "c1", "title": "A", "targets": ["doing", "done"]}`. While the card drags, only those columns take a drop and are marked `kanban-col-target`; elsewhere the browser shows no drop. Without `targets` every column is offered. `targets` (a list, any iterable of strings, or one string) is guidance for the reader, not authorization: your `move_event` handler must still check the move. Column ids may not contain whitespace (the list is space-separated; such an id logs a warning).
 - A card moves by keyboard too: Tab to it, Space picks it up, the arrow keys choose a column (only the allowed ones), Enter or Space drops it there and sends the same `move_event`, and Escape (or moving focus away) cancels. Each step is announced to screen readers.
-- A column's `color` is a theme name, `primary`, `success`, `warning`, `destructive`, `info` or `muted`, rendered as the class `kanban-col--<name>`. No `color` gives the stylesheet's default. Any other CSS colour (`"#6366F1"`) still works, but as an inline `style` attribute, which a CSP with `style-src-attr 'none'` refuses; use a theme name under a strict policy.
+- A column's `color` is a theme name, `primary`, `success`, `warning`, `destructive`, `info` or `muted`, rendered as the class `kanban-col--<name>`. No `color` gives the stylesheet's default. Any other CSS colour (`"#6366F1"`) still works: an inline `style` by default; with `LIVEVIEW_CONFIG["csp_strict_styles"]` a `data-dj-style-border-top-color` the client applies, so a strict CSP allows it too (it needs JavaScript; a theme name does not).
 - `add_col_event` is deprecated (since 2.0, removed no earlier than 3.0.0): it has never drawn a control, and passing it warns once. Leave it out, and draw your own "Add column" control that sends your view's event.
 
 The `KanbanBoard` class component draws a static board: its cards do not drag. It also takes `add_card_event=None` to leave the button out.

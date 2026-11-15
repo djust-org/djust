@@ -22,6 +22,8 @@ A block is counted as passing when it has no inline template too: it is mounted 
 
 > **Update 2026-11-14 (#3994).** The two `docs/components` navbar examples now execute: `test_doc_snippet_executes` runs every block under `TEMPLATES` without `demo_app.context_processors.navbar`, a context processor the demo project has and a reader's project does not. `KNOWN_FAILURES` holds the deliberate `error-overlay.md` example and the `docs/state-management` blocks that teach `@optimistic` / `@client_state`, which #4006 removed.
 
+> **Update 2026-11-14 (#3994, follow-up).** The `docs/state-management` pages are rewritten for 2.0 (instant feedback through `dj-loading.*` or JS Commands, two values set by one handler) and `IMPLEMENTATION_PHASE3.md`, which described only `@optimistic`, is deleted. Their eleven blocks run, and `KNOWN_FAILURES` holds only the deliberate `error-overlay.md` example.
+
 ### 1a. Failures
 
 > **Update 2026-11-11 (#3994).** Seven of the eight rows below are fixed in the guides and removed from `KNOWN_FAILURES`. The one that remains is the deliberate `error-overlay.md` example. The table is kept as the record of what the first run found.

@@ -25,9 +25,8 @@ What is NOT compared, and why (each measured, none guessed):
   of it is its own finding (#3894).
 * A row that is not a dict: the Python tag draws an empty row, the native handler omits it
   (``test_a_row_that_is_not_a_dict_is_dropped_natively``). That is the row set, not navigation.
-* A callable nested inside a column dict (``{"link": fn}``): Django calls it while reading
-  ``col.link``; the native handler is handed the column serialised, so the callable is the text
-  ``<function ...>`` (``test_a_callable_inside_a_column_dict_is_not_reachable_natively``).
+* A callable nested inside a column dict (``{"link": fn}``) is ignored by both engines (#3895,
+  ``test_a_callable_inside_a_column_dict_is_ignored_by_both_engines``).
 * A link whose row value is ``None``, missing or blank is no longer a link on either engine
   (#3895 item 1): ``test_data_table_no_url_3895.py``.
 
@@ -522,16 +521,14 @@ def test_a_callable_row_url_agrees_between_the_engines(member: str) -> None:
     assert nav(py)["scripts"] == nav(rs)["scripts"]
 
 
-def test_a_callable_inside_a_column_dict_is_not_reachable_natively() -> None:
-    """Declined, pinned: Django calls ``col.link`` (a callable in a column dict) while reading it;
-    the native handler gets the column serialised. A link that is computed belongs in the row."""
+def test_a_callable_inside_a_column_dict_is_ignored_by_both_engines() -> None:
+    """A function in a column dict is not supported (#3895): Django used to call ``col.link``
+    while the native handler got its text. Both now draw the column as if ``link`` were absent
+    (``table_column``), so neither draws a link."""
     cols = [{"key": "name", "label": "N", "link": lambda: "u"}, COLS[1]]
     py = view(_django("{% data_table rows=rows columns=cols %}", ctx(cols=cols)))
     rs = view(_rust("{% data_table rows=rows columns=cols %}", ctx(cols=cols)))
-    assert [a["href"] for a in py.rows[0]["anchors"]] == ["/claims/1"]
-    # The serialised callable is the text ``<function ...>``: a key no row has, so no URL and
-    # no link (#3895).
-    assert rs.rows[0]["anchors"] == []
+    assert py.rows[0]["anchors"] == rs.rows[0]["anchors"] == []
 
 
 # --- the declined parts, pinned so they cannot silently widen ------------------------------------------

@@ -44,7 +44,7 @@ from typing import Any
 import pytest
 from django.template import Context, Engine
 
-from djust.components import rust_handlers
+from djust.components import _operands, rust_handlers
 from djust.template_tags import TYPED_ARGS_KEY
 
 COMPONENTS = "djust.components.templatetags.djust_components"
@@ -305,7 +305,7 @@ class TestADeeplyNestedTupleIsNotAnError:
 
     def test_the_two_walks_have_no_depth_limit_but_memory(self):
         deep = nested(5000)
-        value = rust_handlers._from_typed(deep)
+        value = _operands._from_typed(deep)
         assert isinstance(value, rust_handlers.TupleValue)
         text = str(value)
         assert text.startswith("((((") and text.endswith(",),),),)")
@@ -326,10 +326,10 @@ class TestADeeplyNestedTupleIsNotAnError:
         assert rust == render(engines, "django", src, {"v": nested(depth)})
 
     def test_the_conversion_keeps_order_and_shape(self):
-        value = rust_handlers._from_typed((1, (2, (3, 4)), "x", ((5,),), ()))
+        value = _operands._from_typed((1, (2, (3, 4)), "x", ((5,),), ()))
         assert value == [1, [2, [3, 4]], "x", [[5]], []]
         assert str(value) == "(1, (2, (3, 4)), 'x', ((5,),), ())"
-        assert str(rust_handlers._from_typed(())) == "()"
+        assert str(_operands._from_typed(())) == "()"
 
 
 class TestTheNarrowAsk:

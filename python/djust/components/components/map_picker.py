@@ -8,6 +8,7 @@ import re
 from djust import Component
 from typing import Any, ClassVar, Optional, Tuple
 from djust.components.utils import safe_css_length, url_is_protocol_relative
+from djust.components.utils import style_attrs
 
 logger = logging.getLogger(__name__)
 
@@ -220,8 +221,8 @@ class MapPicker(Component):
     Content-Security-Policy: scripts and the stylesheet come from your own
     origin and nothing uses ``eval`` or ``<style>`` elements; allow the tile
     host in ``img-src`` (a tile server on another origin needs nothing else).
-    The map's height is rendered as an inline ``style`` attribute, which a
-    policy without ``style-src-attr 'unsafe-inline'`` blocks.
+    The map's height is a ``data-dj-style-height`` attribute the client applies
+    through the CSSOM, so a policy without ``'unsafe-inline'`` allows it (#3979).
 
     CSS Custom Properties::
 
@@ -321,8 +322,8 @@ class MapPicker(Component):
         return (
             f'<div class="{cls}" dj-hook="MapPicker" '
             f'data-lat="{lat}" data-lng="{lng}" '
-            f'data-zoom="{zoom}" data-pick-event="{e_event}"{extra} '
-            f'style="height:{e_height}" '
+            f'data-zoom="{zoom}" data-pick-event="{e_event}"{extra}'
+            f"{style_attrs(height=e_height, css='height:{}')} "
             f'role="application" aria-label="{e_label}">'
             f'<div class="dj-map-picker__map"></div>'
             f"</div>"

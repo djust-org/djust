@@ -8,7 +8,7 @@ from typing import Dict, Any
 from ..base import LiveComponent
 from django.utils.html import conditional_escape
 
-from djust.components.utils import safe_css_length
+from djust.components.utils import progress_fill, safe_css_length, strict_styles, style_attrs
 from django.utils.safestring import SafeString, mark_safe
 
 
@@ -55,7 +55,7 @@ class ProgressComponent(LiveComponent):
         self.custom_label = kwargs.get("custom_label", None)  # Custom label text
         self.striped = kwargs.get("striped", False)
         self.animated = kwargs.get("animated", False)  # Animated stripes
-        # Custom height; written into a style attribute, so only a CSS length.
+        # Custom height; written into a data-dj-style-height attribute, so only a CSS length.
         self.height = safe_css_length(kwargs.get("height"), "") or None
 
     def get_context(self) -> Dict[str, Any]:
@@ -114,11 +114,14 @@ class ProgressComponent(LiveComponent):
         size_map = {"sm": "0.5rem", "md": "1rem", "lg": "1.5rem"}
         height = self.height or size_map.get(self.size, "1rem")
 
-        # Progress container
-        html = f'<div class="progress" id="{conditional_escape(self.component_id)}" style="height: {conditional_escape(height)};">'
+        # Progress container. The height through ``style_attrs`` and the fill as a
+        # ``dj-progress-w-N`` class (plus, by default, its inline width): a strict CSP
+        # refuses a ``style=`` (#3979).
+        html = f'<div class="progress" id="{conditional_escape(self.component_id)}"{style_attrs(height=height, css="height: {};")}>'
+        fill_class, fill_style = progress_fill(percentage)
 
         # Progress bar classes
-        classes = f"progress-bar bg-{conditional_escape(self.variant)}"
+        classes = f"progress-bar bg-{conditional_escape(self.variant)} {fill_class}"
         if self.striped:
             classes += " progress-bar-striped"
         if self.animated:
@@ -131,7 +134,7 @@ class ProgressComponent(LiveComponent):
         elif self.show_label:
             label = f"{percentage}%"
 
-        html += f'<div class="{classes}" role="progressbar" style="width: {percentage}%" '
+        html += f'<div class="{classes}" role="progressbar"{fill_style} '
         html += f'aria-valuenow="{conditional_escape(self.value)}" aria-valuemin="{conditional_escape(self.min_value)}" aria-valuemax="{conditional_escape(self.max_value)}">'
         html += label
         html += "</div></div>"
@@ -158,19 +161,27 @@ class ProgressComponent(LiveComponent):
         color_class = variant_map.get(self.variant, "bg-blue-600")
 
         # Custom height
-        style = f' style="height: {conditional_escape(self.height)}"' if self.height else ""
+        style = style_attrs(height=self.height, css="height: {}")
+        fill_class, fill_style = progress_fill(percentage)
 
         # Progress container
         html = f'<div class="w-full bg-gray-200 rounded-full {height_class}" id="{conditional_escape(self.component_id)}"{style}>'
 
         # Progress bar
-        bar_classes = f"{color_class} {height_class} rounded-full transition-all duration-300"
+        bar_classes = (
+            f"{color_class} {height_class} rounded-full transition-all duration-300 {fill_class}"
+        )
         if self.striped or self.animated:
             bar_classes += " bg-gradient-to-r from-transparent via-white/20 to-transparent bg-[length:20px_100%]"
         if self.animated:
             bar_classes += " animate-[shimmer_1s_linear_infinite]"
 
-        html += f'<div class="{bar_classes}" style="width: {percentage}%"'
+        # An animated bar names the `shimmer` keyframes: an inline `<style>` block by default;
+        # under a strict CSP (which refuses it) the client adds them through the CSSOM when the
+        # bar carries `data-dj-css` (#3979).
+        strict = strict_styles()
+        shimmer = ' data-dj-style data-dj-css="shimmer"' if self.animated and strict else ""
+        html += f'<div class="{bar_classes}"{fill_style}{shimmer}'
         html += f' role="progressbar" aria-valuenow="{conditional_escape(self.value)}" aria-valuemin="{conditional_escape(self.min_value)}" aria-valuemax="{conditional_escape(self.max_value)}">'
 
         # Label
@@ -180,8 +191,7 @@ class ProgressComponent(LiveComponent):
 
         html += "</div></div>"
 
-        # Add shimmer animation style if needed
-        if self.animated:
+        if self.animated and not strict:
             html = (
                 "<style>@keyframes shimmer {0% {background-position: -100% 0;} 100% {background-position: 100% 0;}}</style>"
                 + html
@@ -197,10 +207,11 @@ class ProgressComponent(LiveComponent):
         size_map = {"sm": "10px", "md": "20px", "lg": "30px"}
         height = self.height or size_map.get(self.size, "20px")
 
-        html = f'<div class="progress" id="{conditional_escape(self.component_id)}" style="height: {conditional_escape(height)};">'
+        html = f'<div class="progress" id="{conditional_escape(self.component_id)}"{style_attrs(height=height, css="height: {};")}>'
+        fill_class, fill_style = progress_fill(percentage)
 
         # Progress bar
-        bar_class = f"progress-bar progress-bar-{conditional_escape(self.variant)}"
+        bar_class = f"progress-bar progress-bar-{conditional_escape(self.variant)} {fill_class}"
         if self.striped:
             bar_class += " progress-bar-striped"
 
@@ -211,7 +222,7 @@ class ProgressComponent(LiveComponent):
         elif self.show_label:
             label = f"{percentage}%"
 
-        html += f'<div class="{bar_class}" style="width: {percentage}%" '
+        html += f'<div class="{bar_class}"{fill_style} '
         html += f'role="progressbar" aria-valuenow="{conditional_escape(self.value)}" aria-valuemin="{conditional_escape(self.min_value)}" aria-valuemax="{conditional_escape(self.max_value)}">'
         html += label
         html += "</div></div>"

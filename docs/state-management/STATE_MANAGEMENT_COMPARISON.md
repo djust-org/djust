@@ -1,6 +1,6 @@
 # State Management Framework Comparison
 
-> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2680), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
+> **`@optimistic` and `@client_state` were removed in djust 2.0 (#4006).** Neither was read by the shipped client. This comparison now shows the supported 2.0 way: JS Commands and `dj-loading.*` attributes for instant feedback, and one handler for values that must agree. See the [2.0 migration guide](../website/guides/migrating-to-2.0.md#python-names).
 
 **Date**: January 2025
 **Version**: djust 0.4.0 vs Phoenix LiveView 0.20 vs Laravel Livewire 3.0
@@ -35,8 +35,8 @@ This document compares state management patterns across three leading server-sid
 | **Client Bundle** | 7.1 KB | ~30 KB | ~50 KB |
 | **Debouncing** | `@debounce()` | `phx-debounce` | `wire:model.debounce` |
 | **Throttling** | `@throttle()` | `phx-throttle` | `wire:poll` |
-| **Optimistic UI** | `@optimistic` | Manual JS | `wire:dirty` |
-| **Client State** | `@client_state()` | JS Hooks | AlpineJS |
+| **Optimistic UI** | JS Commands (`JS.add_class(...).push(...)`) | Manual JS | `wire:dirty` |
+| **Client State** | One handler, one render | JS Hooks | AlpineJS |
 | **Response Caching** | `@cache()` | Manual | Manual |
 | **Form Drafts** | `DraftModeMixin` | Manual JS | Manual |
 | **Zero JS Required** | ✅ Yes | ✅ Yes | ⚠️ AlpineJS recommended |
@@ -64,11 +64,11 @@ This document compares state management patterns across three leading server-sid
 |---------|-------|------------------|------------------|
 | **Debouncing** | `@debounce()` | `phx-debounce="500"` | `wire:model.debounce.500ms` |
 | **Throttling** | `@throttle()` | `phx-throttle="1000"` | `wire:poll.1000ms` |
-| **Optimistic updates** | `@optimistic` | Manual JS hooks | `wire:dirty` classes |
-| **Client-side state** | `@client_state()` | JS Hooks | AlpineJS `x-data` |
+| **Optimistic updates** | JS Command chains | Manual JS hooks | `wire:dirty` classes |
+| **Client-side state** | Server state, one handler | JS Hooks | AlpineJS `x-data` |
 | **Response caching** | `@cache()` | Manual | Manual |
 | **Form drafts** | `DraftModeMixin` | Manual | Manual |
-| **Loading states** | `@loading` | `phx-loading` | `wire:loading` |
+| **Loading states** | `dj-loading.*` | `phx-loading` | `wire:loading` |
 
 ### Developer Experience
 
@@ -164,15 +164,38 @@ class Search extends Component
 **djust:**
 
 ```python
-from djust import LiveView
-from djust.decorators import optimistic
+from djust import LiveView, state
+from djust.decorators import event_handler
+from djust.js import JS
+
 
 class TodoView(LiveView):
-    @optimistic
-    def toggle_todo(self, todo_id: int = 0, **kwargs):
-        todo = Todo.objects.get(id=todo_id)
-        todo.completed = not todo.completed
-        todo.save()
+    template_name = "myapp/todo_toggle.html"
+
+    done = state(False)
+    toggle = state("")
+
+    def mount(self, request, **kwargs):
+        self._set_toggle()
+
+    def _set_toggle(self):
+        # Flip the class in the browser now, then tell the server.
+        flip = JS.remove_class if self.done else JS.add_class
+        self.toggle = str(flip("is-done", to="#todo").push("toggle_todo"))
+
+    @event_handler
+    def toggle_todo(self, **kwargs):
+        self.done = not self.done  # the server's re-render confirms the flip
+        self._set_toggle()
+```
+
+```html
+<!-- myapp/todo_toggle.html -->
+<div dj-root>
+    <div id="todo" class="todo {% if done %}is-done{% endif %}">
+        <button dj-click="{{ toggle }}">Write the report</button>
+    </div>
+</div>
 ```
 
 **Phoenix LiveView:**
@@ -228,11 +251,11 @@ class TodoList extends Component
 
 **Analysis:**
 
-- **djust**: Decorator handles everything (no JS)
+- **djust**: A JS Command chain built in Python runs in the browser, then `push()` sends the event (no hand-written JS). See [Tutorial: Optimistic UI updates with JS Commands](../website/guides/tutorial-optimistic-updates.md)
 - **LiveView**: Requires manual JavaScript hook
 - **Livewire**: Uses `wire:dirty` class (limited)
 
-**Winner**: djust - No JavaScript required for true optimistic updates
+**Winner**: djust - No hand-written JavaScript for optimistic updates
 
 ---
 
@@ -241,18 +264,37 @@ class TodoList extends Component
 **djust:**
 
 ```python
-from djust import LiveView
-from djust.decorators import client_state
+from djust import LiveView, state
+from djust.decorators import event_handler
+
+PRODUCTS = [
+    {"name": "Laptop", "category": "electronics"},
+    {"name": "Desk", "category": "furniture"},
+]
+
 
 class FilterView(LiveView):
-    @client_state(keys=["category"])
-    def update_category(self, category: str = "", **kwargs):
-        self.category = category
+    template = """
+    <div dj-root>
+        <select dj-change="update_category">
+            <option value="">All</option>
+            <option value="electronics">Electronics</option>
+            <option value="furniture">Furniture</option>
+        </select>
+        <ul>{% for p in products %}<li>{{ p.name }}</li>{% endfor %}</ul>
+    </div>
+    """
+    category = state("")
+    products = state(default_factory=list)
 
-    @client_state(keys=["category"])  # Auto-subscribes
-    def on_category_change(self, category: str = "", **kwargs):
-        # Automatically called when category changes
-        self.filter_products()
+    def mount(self, request, **kwargs):
+        self.products = list(PRODUCTS)
+
+    @event_handler
+    def update_category(self, value: str = "", **kwargs):
+        # One handler sets both values; one render sends both.
+        self.category = value
+        self.products = [p for p in PRODUCTS if not value or p["category"] == value]
 ```
 
 **Phoenix LiveView:**
@@ -292,8 +334,7 @@ window.addEventListener("phx:category-changed", e => {
 **Analysis:**
 
 - **djust**: coordinate in the view — one handler updates both pieces of state,
-  and the single server render sends both. `@client_state` is NOT this
-  mechanism: it is an inert marker (#2680).
+  and the single server render sends both.
 - **LiveView**: Manual JS or server PubSub
 - **Livewire**: Requires AlpineJS
 
@@ -530,19 +571,18 @@ function draftForm() {
 
 ### Code Verbosity
 
-**Task**: Debounced search with optimistic updates and caching
+**Task**: Debounced search with caching
 
-**djust: 8 lines**
+**djust: 4 lines**
 
 ```python
 @debounce(wait=0.5)
-@optimistic
 @cache(ttl=60, key_params=["query"])
 def search(self, query: str = "", **kwargs):
     self.results = Product.objects.filter(name__icontains=query)
 ```
 
-**Phoenix LiveView: ~25 lines (including JS hook)**
+**Phoenix LiveView: ~11 lines**
 
 ```elixir
 # Elixir
@@ -558,18 +598,7 @@ def handle_event("search", %{"query" => query}, socket) do
 end
 ```
 
-```javascript
-// JavaScript hook for optimistic updates
-Hooks.Search = {
-  mounted() {
-    this.el.addEventListener("input", e => {
-      // Optimistic update + debounce logic
-    })
-  }
-}
-```
-
-**Laravel Livewire: ~20 lines (with AlpineJS)**
+**Laravel Livewire: ~7 lines**
 
 ```php
 public function updatedQuery()
@@ -581,23 +610,7 @@ public function updatedQuery()
 ```
 
 ```html
-<div x-data="search()">
-    <input
-        wire:model.debounce.500ms="query"
-        x-model="query"
-        x-on:input="optimisticUpdate"
-    />
-</div>
-
-<script>
-function search() {
-    return {
-        optimisticUpdate() {
-            // Optimistic logic
-        }
-    }
-}
-</script>
+<input wire:model.debounce.500ms="query" />
 ```
 
 **Winner**: djust (Most concise)
@@ -745,7 +758,7 @@ function search() {
 
 ### Best State Management: djust
 
-- Most decorators (`@debounce`, `@optimistic`, `@cache`, etc.)
+- Most decorators (`@debounce`, `@throttle`, `@cache`, etc.)
 - Least JavaScript required (0 lines)
 - Most concise code (87% reduction)
 
@@ -757,8 +770,8 @@ function search() {
 |---------|-------|------------------|------------------|
 | **Debouncing** | ✅ 0.4.0 (planned) | ✅ Since 0.1 | ✅ Since 1.0 |
 | **Throttling** | ✅ 0.4.0 (planned) | ✅ Since 0.1 | ✅ Since 2.0 |
-| **Optimistic UI** | ✅ 0.4.0 (planned) | ⚠️ Manual JS | ⚠️ Limited (`wire:dirty`) |
-| **Client State** | ✅ 0.4.0 (planned) | ⚠️ Manual JS | ⚠️ Requires AlpineJS |
+| **Optimistic UI** | ✅ JS Commands | ⚠️ Manual JS | ⚠️ Limited (`wire:dirty`) |
+| **Client State** | ✅ Server state, one handler | ⚠️ Manual JS | ⚠️ Requires AlpineJS |
 | **Response Caching** | ✅ 0.4.0 (planned) | ⚠️ Manual | ⚠️ Manual |
 | **Form Drafts** | ✅ 0.4.0 (planned) | ⚠️ Manual JS | ⚠️ Manual |
 

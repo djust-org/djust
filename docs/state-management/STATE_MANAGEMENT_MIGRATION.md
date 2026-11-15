@@ -1,6 +1,6 @@
 # State Management Migration Guide
 
-> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2680), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
+> **`@optimistic` and `@client_state` were removed in djust 2.0 (#4006).** Neither was read by the shipped client. The patterns below use the supported 2.0 replacements: `dj-loading.*` attributes or JS Commands for instant feedback, and one handler for values that must agree. See the [2.0 migration guide](../website/guides/migrating-to-2.0.md#python-names).
 
 **Status:** 🚧 Migration guide for proposed API - Not Yet Implemented
 
@@ -15,8 +15,8 @@
 - [Decision Tree: Should You Migrate?](#decision-tree-should-you-migrate)
 - [Migration Patterns](#migration-patterns)
   - [Pattern 1: Debounced Search](#pattern-1-debounced-search)
-  - [Pattern 2: Optimistic Updates](#pattern-2-optimistic-updates)
-  - [Pattern 3: Client-Side State Bus](#pattern-3-client-side-state-bus)
+  - [Pattern 2: Instant Feedback](#pattern-2-instant-feedback)
+  - [Pattern 3: Shared State](#pattern-3-shared-state)
   - [Pattern 4: Form Drafts](#pattern-4-form-drafts)
   - [Pattern 5: Response Caching](#pattern-5-response-caching)
   - [Pattern 6: Loading States](#pattern-6-loading-states)
@@ -87,7 +87,7 @@ function updateMetrics() {
 
 ```python
 from djust import LiveView, state
-from djust.decorators import optimistic, debounce, event_handler
+from djust.decorators import debounce, event_handler
 
 class SliderView(LiveView):
     template = """
@@ -101,7 +101,6 @@ class SliderView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)
-    @optimistic
     def update_value(self, value: int = 0, **kwargs):
         self.value = max(0, min(100, value))
 ```
@@ -129,7 +128,7 @@ Should I migrate this JavaScript to Python decorators?
 │     Example: Scroll handlers, resize handlers, mousemove
 │
 ├─ Is it optimistic UI updates?
-│  └─ ✅ YES → Use @optimistic
+│  └─ ✅ YES → Use dj-loading.* attributes or a JS Command chain
 │     Example: Counter, toggle, checkbox, instant feedback
 │
 ├─ Is it client-side response caching?
@@ -137,7 +136,7 @@ Should I migrate this JavaScript to Python decorators?
 │     Example: Search results, autocomplete, API responses
 │
 ├─ Is it coordinating state between components?
-│  └─ ✅ YES → Use @client_state(keys=["filter", "sort"])
+│  └─ ✅ YES → Set every value in one handler (one re-render)
 │     Example: Dashboard filters, multi-component views
 │
 ├─ Is it auto-saving form drafts?
@@ -145,7 +144,7 @@ Should I migrate this JavaScript to Python decorators?
 │     Example: Long forms, comment boxes, email composer
 │
 ├─ Is it loading indicators?
-│  └─ ✅ YES → Use @loading HTML attribute
+│  └─ ✅ YES → Use dj-loading.* HTML attributes
 │     Example: Button states, spinner visibility
 │
 ├─ Is it complex animations or canvas?
@@ -171,11 +170,11 @@ Should I migrate this JavaScript to Python decorators?
 |-------------------|-----------------|-------------------|
 | setTimeout with clearTimeout | `@debounce(wait)` | 🔥 High |
 | setInterval with limits | `@throttle(interval)` | 🔥 High |
-| Update DOM before server response | `@optimistic` | 🔥 High |
+| Update DOM before server response | `dj-loading.*` / JS Commands | 🔥 High |
 | localStorage caching | `@cache(ttl)` | 🟡 Medium |
-| Event bus / PubSub | `@client_state(keys)` | 🟡 Medium |
+| Event bus / PubSub | One handler sets every value | 🟡 Medium |
 | Auto-save to localStorage | `DraftModeMixin` | 🟡 Medium |
-| Show/hide loading spinners | `@loading` attribute | 🟢 Low |
+| Show/hide loading spinners | `dj-loading.*` attributes | 🟢 Low |
 | Complex animations | Keep JavaScript | ⛔ Don't migrate |
 | Third-party integrations | Keep JavaScript | ⛔ Don't migrate |
 
@@ -304,7 +303,7 @@ class SearchView(LiveView):
 
 ---
 
-### Pattern 2: Optimistic Updates
+### Pattern 2: Instant Feedback
 
 #### Before: Manual JavaScript (45+ lines)
 
@@ -357,38 +356,43 @@ document.addEventListener('liveview:error', (e) => {
 </script>
 ```
 
-#### After: Python Decorator (0 lines of JS)
+#### After: HTML Attributes (0 lines of JS)
 
 ```python
 from djust import LiveView, state
-from djust.decorators import optimistic, event_handler
+from djust.decorators import event_handler
 
 class CounterView(LiveView):
     template = """
     <div dj-root>
         <span>{{ count }}</span>
-        <button dj-click="increment">+1</button>
+        <button dj-click="increment" dj-loading.disable>+1</button>
+        <span dj-loading.show dj-loading.for="increment" style="display:none">Updating...</span>
     </div>
     """
     count = state(0)
 
     @event_handler
-    @optimistic  # Automatic optimistic updates!
     def increment(self, **kwargs):
         self.count += 1
 ```
 
+The button is disabled and "Updating..." shows the moment the click is sent;
+both revert when the server's re-render arrives with the new count. To change
+the page itself before the server answers (flip a class, show an element),
+use a JS Command chain ending in `push(...)`; see
+[Tutorial: Optimistic UI updates with JS Commands](../website/guides/tutorial-optimistic-updates.md).
+
 #### Benefits
 
 - ✅ **45 lines of JS → 0 lines**
-- ✅ Automatic UI updates
-- ✅ Automatic error handling
-- ✅ Automatic rollback on failure
+- ✅ Immediate pending state on click
+- ✅ Errors leave the server's state unchanged
 - ✅ No manual state tracking
 
 ---
 
-### Pattern 3: Client-Side State Bus
+### Pattern 3: Shared State
 
 #### Before: Manual ComponentStateBus (85+ lines)
 
@@ -466,45 +470,42 @@ function updateChart(temp) { /* ... */ }
 </script>
 ```
 
-#### After: Python Decorator (0 lines for state bus)
+#### After: One Handler, One Re-render (0 lines for a state bus)
 
 ```python
 from djust import LiveView, state
-from djust.decorators import client_state, debounce, optimistic, event_handler
+from djust.decorators import debounce, event_handler
 
 class DashboardView(LiveView):
     template = """
     <div dj-root>
-        <input type="range" dj-input="update_temperature" value="{{ temperature }}" />
+        <input type="range" min="0" max="120"
+               dj-input="update_temperature" value="{{ temperature }}" />
 
-        <!-- Components auto-subscribe to 'temperature' -->
-        <div data-subscribe="temperature">{{ temperature }}°F</div>
-        <div id="gauge" data-subscribe="temperature"></div>
-        <canvas id="chart" data-subscribe="temperature"></canvas>
-
-        <!-- NOTE: this block used to call subscribe(...) on a StateBus global.
-             That class had zero consumers and was deleted in #2680, and no
-             shipped bundle ever assigned the global. Drive a chart from the
-             value the server already re-rendered into the DOM instead (a
-             dj-hook on that element, or a MutationObserver). -->
+        <div id="display">{{ temperature }}°F</div>
+        <div id="gauge" style="width: {{ gauge_pct }}%"></div>
     </div>
     """
     temperature = state(72)
+    gauge_pct = state(60)
 
     @event_handler
-    @client_state(keys=["temperature"])  # Auto-publishes to state bus
     @debounce(wait=0.5)
-    @optimistic
-    def update_temperature(self, temperature: int = 0, **kwargs):
-        self.temperature = max(0, min(120, temperature))
+    def update_temperature(self, value: int = 72, **kwargs):
+        # Every value that depends on the temperature is set here, so one
+        # re-render updates the display and the gauge together.
+        self.temperature = max(0, min(120, int(value)))
+        self.gauge_pct = round(self.temperature * 100 / 120)
 ```
+
+A canvas chart still needs JavaScript to draw; drive it from the value the
+server re-rendered into the DOM, with a `dj-hook` on that element.
 
 #### Benefits
 
 - ✅ **85 lines of JS → ~10 lines** (only custom rendering)
-- ✅ Built-in state bus (no custom class)
-- ✅ Automatic pub/sub
-- ✅ Declarative subscriptions (`data-subscribe`)
+- ✅ No client-side bus to keep in sync: the server holds the one value
+- ✅ Every element that shows it updates in the same re-render
 
 ---
 
@@ -834,8 +835,8 @@ const categoryFilter = document.getElementById('category');
 const priceFilter = document.getElementById('min-price');
 // ... localStorage draft management
 
-// Optimistic updates (25 lines)
-// ... optimistic UI updates
+// Instant feedback (25 lines)
+// ... manual pending states
 
 // Error handling (20 lines)
 // ... error handling and rollback
@@ -845,7 +846,7 @@ const priceFilter = document.getElementById('min-price');
 
 ```python
 from djust import LiveView, state
-from djust.decorators import cache, debounce, optimistic, event_handler
+from djust.decorators import cache, debounce, event_handler
 from djust.drafts import DraftModeMixin
 
 class ProductSearchView(DraftModeMixin, LiveView):
@@ -865,7 +866,7 @@ class ProductSearchView(DraftModeMixin, LiveView):
         <input type="number" dj-change="apply_filters"
                name="min_price" value="{{ min_price }}" />
 
-        <div @loading>Searching...</div>
+        <div dj-loading.show dj-loading.for="search" style="display:none">Searching...</div>
 
         <div>
             {% for product in results %}
@@ -882,14 +883,12 @@ class ProductSearchView(DraftModeMixin, LiveView):
     @event_handler
     @cache(ttl=300)
     @debounce(wait=0.5)
-    @optimistic
     def search(self, query: str = "", **kwargs):
         self.query = query
         self.results = self._do_search()
 
     @event_handler
     @cache(ttl=300)
-    @optimistic
     def apply_filters(self, category: str = "", min_price: int = 0, **kwargs):
         self.category = category
         self.min_price = min_price
@@ -935,10 +934,10 @@ def test_search_is_debounced():
     assert view.server_call_count == 1  # Not 6
 ```
 
-**2. Optimistic Updates:**
+**2. Instant Feedback:**
 ```python
-def test_counter_updates_optimistically():
-    """UI should update before server responds"""
+def test_counter_increments():
+    """The handler updates state; dj-loading.* covers the wait"""
     view = CounterView()
     view.mount(Mock(session={}))
 
@@ -1003,18 +1002,18 @@ def search(self, query: str = "", **kwargs):
     ...
 ```
 
-**Issue 2: Wrong decorator order**
+**Issue 2: Expecting a decorator to update the page before the server**
 
 ```python
-# ❌ Wrong: Debounce delays optimistic update
-@optimistic
+# ❌ Wrong: no decorator changes the DOM before the server answers
+# (@optimistic, which claimed to, was removed in djust 2.0, #4006)
 @debounce(wait=0.5)
 def update(self, value: int = 0, **kwargs):
     ...
 
-# ✅ Correct: Optimistic first, then debounce
+# ✅ Correct: keep the handler, add dj-loading.* attributes (or a JS
+# Command chain) to the element in the template
 @debounce(wait=0.5)
-@optimistic
 def update(self, value: int = 0, **kwargs):
     ...
 ```
@@ -1069,7 +1068,7 @@ navigator.geolocation.getCurrentPosition((pos) => {
 });
 ```
 
-**Rule of thumb:** If it's **state management** (debouncing, caching, optimistic), use Python decorators. If it's **custom rendering** or **third-party integration**, use JavaScript.
+**Rule of thumb:** If it's **state management** (debouncing, caching), use Python decorators; for instant feedback use `dj-loading.*` attributes or JS Commands. If it's **custom rendering** or **third-party integration**, use JavaScript.
 
 ---
 

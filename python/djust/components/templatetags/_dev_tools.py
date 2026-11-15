@@ -16,7 +16,7 @@ from django import template
 # guard trusts an escaper by its origin, and a re-export is a different origin (#3774, #3820).
 from django.utils.html import conditional_escape
 
-from djust.components.utils import attr_text
+from djust.components.utils import attr_text, style_attrs
 
 from ._registry import register, _resolve, _parse_kv_args, mark_safe
 
@@ -86,11 +86,11 @@ class TerminalNode(template.Node):
                     # of nested spans is unbounded nesting in the page.
                     continue
                 elif code == "1":
-                    result.append('<span style="font-weight:bold">')
+                    result.append(f"<span{style_attrs(font_weight='bold', css='font-weight:{}')}>")
                     open_spans += 1
                 elif code in cls.ANSI_COLORS:
                     color = cls.ANSI_COLORS[code]
-                    result.append(f'<span style="color:{color}">')
+                    result.append(f"<span{style_attrs(color=color, css='color:{}')}>")
                     open_spans += 1
         result.append(conditional_escape(text[last_end:]))
         result.append("</span>" * open_spans)
@@ -554,7 +554,7 @@ class FileTreeNode(template.Node):
                 icon = self.DEFAULT_FILE_ICON
             icon_html = f'<span class="dj-file-tree__icon" aria-hidden="true">{icon}</span>'
 
-        indent_style = f' style="padding-left:{int(depth) * 1.25}rem"'
+        indent_style = style_attrs(padding_left=f"{int(depth) * 1.25}rem", css="padding-left:{}")
         e_event = conditional_escape(str(event))
 
         if node_type == "folder" and isinstance(children, list) and children:

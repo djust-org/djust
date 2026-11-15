@@ -5,6 +5,7 @@ from typing import Any, List, Optional, Union
 
 from djust import Component
 from djust.components.utils import safe_css_color
+from djust.components.utils import style_attrs
 
 
 class CollabSelection(Component):
@@ -113,12 +114,12 @@ class CollabSelection(Component):
                 e = 0
 
             parts.append(
-                f'<span class="dj-collab-sel__range" '
-                f'style="--dj-collab-sel-color:{e_color}" '
+                f'<span class="dj-collab-sel__range"'
+                f"{style_attrs({'--dj-collab-sel-color': e_color}, css='--dj-collab-sel-color:{}')} "
                 f'data-user="{e_name}" data-start="{s}" data-end="{e}">'
                 f'<span class="dj-collab-sel__highlight">{e_text}</span>'
-                f'<span class="dj-collab-sel__label" '
-                f'style="background:{e_color}">{e_name}</span>'
+                f'<span class="dj-collab-sel__label"'
+                f"{style_attrs(background_color=e_color, css='background:{}')}>{e_name}</span>"
                 f"</span>"
             )
 

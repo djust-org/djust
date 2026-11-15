@@ -7,6 +7,7 @@ from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 from djust.components.utils import safe_css_length
+from djust.components.utils import style_attrs
 
 
 class ResizablePanel(Component):
@@ -116,11 +117,10 @@ class ResizablePanel(Component):
         e_initial = html.escape(safe_css_length(self.initial_size, "50%"))
 
         size_prop = "width" if direction == "horizontal" else "height"
-        style = f'style="{size_prop}:{e_initial};min-{size_prop}:{e_min}"'
+        sizes = {size_prop: e_initial, f"min-{size_prop}": e_min}
         if e_max != "none":
-            style = (
-                f'style="{size_prop}:{e_initial};min-{size_prop}:{e_min};max-{size_prop}:{e_max}"'
-            )
+            sizes[f"max-{size_prop}"] = e_max
+        style = style_attrs(sizes)
 
         disabled_attr = ' data-disabled="true"' if self.disabled else ""
         event_attr = (
@@ -132,7 +132,7 @@ class ResizablePanel(Component):
         return (
             f'<div class="{class_str}" dj-hook="ResizablePanel" '
             f'data-direction="{direction}" '
-            f'data-min-size="{e_min}" data-max-size="{e_max}"{event_attr} '
+            f'data-min-size="{e_min}" data-max-size="{e_max}"{event_attr}'
             f"{style}{disabled_attr}>"
             f'<div class="dj-resizable-panel__content">{conditional_escape(self.content)}</div>'
             f'<div class="dj-resizable-panel__handle" role="separator" '

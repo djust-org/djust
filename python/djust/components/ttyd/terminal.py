@@ -40,6 +40,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlsplit
 
 from djust import LiveView
+from djust.components.utils import strict_styles
 from djust.decorators import event_handler
 
 logger = logging.getLogger(__name__)
@@ -262,6 +263,8 @@ class TtydTerminalView(LiveView):
         ctx["rows"] = self.rows
         ctx["cols"] = self.cols
         ctx["theme_json"] = json.dumps(self.theme or {})
+        # An inline style, or under a strict CSP data-dj-style-* the client applies (#3979).
+        ctx["strict_styles"] = strict_styles()
         return ctx
 
     @event_handler

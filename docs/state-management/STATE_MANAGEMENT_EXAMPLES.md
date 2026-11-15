@@ -1,6 +1,6 @@
 # State Management Examples
 
-> **Inert.** `@optimistic` (#2699) and `@client_state` (#2680) are both INERT: they record metadata that no shipped client code reads, so a decorated handler behaves exactly like an undecorated one. The `StateBus` that `@client_state` named was deleted in #2680. Neither decorator is used in the examples below.
+> **`@optimistic` and `@client_state` were removed in djust 2.0 (#4006).** Neither was read by the shipped client. For instant feedback use `dj-loading.*` attributes or JS Commands; to keep two values in step, set both in one handler. See the [2.0 migration guide](../website/guides/migrating-to-2.0.md#python-names).
 
 **Status**: Illustrative. Adapt the models, forms and helpers to your project.
 
@@ -1282,7 +1282,7 @@ These examples demonstrate:
 6. **DraftModeMixin**: Forms, email composer, chat
 7. **WizardMixin**: Multi-step forms
 
-`@optimistic` and `@client_state` are inert and are not used here. For multi-user sync, use server push or presence.
+For multi-user sync, use server push or presence.
 
 **Key Takeaways:**
 

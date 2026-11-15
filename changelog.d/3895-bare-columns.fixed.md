@@ -7,6 +7,6 @@
   dict form's `label`). The components guide no
   longer says a `None` or missing URL value still draws a link, and three
   remaining differences (NaN, a `mark_safe` cell, a model-instance row) are
-  pinned for a decision. New cases in
+  fixed below. New cases in
   `python/djust/tests/test_data_table_bare_columns_3895.py` and
   `python/djust/tests/test_data_table_residuals_3895.py`.

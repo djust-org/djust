@@ -415,14 +415,16 @@ Use inside a conditional so the VDOM replaces the skeleton with real content onc
 | Argument | Default | Notes |
 |---|---|---|
 | `shape` | `"line"` | One of `line`, `circle`, `rect`. Invalid values fall back to `line`. |
-| `width` | `"100%"` (line/rect) / `"40px"` (circle) | Must match `^[\d.]+(px|em|rem|%|vh|vw|ch)?$`. Invalid values fall back to the shape default. |
-| `height` | `"1em"` (line) / `"40px"` (circle) / `"120px"` (rect) | Same regex as `width`. |
+| `width` | `"100%"` (line/rect) / `"40px"` (circle) | A CSS length (a number with a unit or `%`, `calc()`, `var()`). Invalid values fall back to the shape default. |
+| `height` | `"1em"` (line) / `"40px"` (circle) / `"120px"` (rect) | Same check as `width`. |
 | `count` | `1` | Repeated skeleton blocks (line shape only). Clamped to `[1, 100]`. |
 | `class_` | `None` | Extra CSS classes appended to `djust-skeleton djust-skeleton-{shape}`. |
 
 ### Shimmer CSS
 
 The tag emits a minimal `<style>` block on first use per render (via `context.render_context`) — no separate CSS file to include, no npm dependency. The default shimmer is a linear-gradient animation with `animation-duration: 1.5s`. Respects `prefers-reduced-motion: reduce` — in that case, the placeholder is a static block with no shimmer.
+
+Under a strict Content-Security-Policy (`LIVEVIEW_CONFIG["csp_strict_styles"] = True`, see the security guide) the tag writes no `<style>` block and no `style=`: the first block per render carries `data-dj-css="skeleton"`, the client bundle adds the same rules through a constructed stylesheet, and the width and height are `data-dj-style-*` attributes it applies. There the built-in rules have zero specificity (`:where(...)`).
 
 Override the default look by writing your own `.djust-skeleton` rules in your site's stylesheet — later rules win.
 

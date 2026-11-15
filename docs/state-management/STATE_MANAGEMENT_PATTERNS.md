@@ -1,8 +1,8 @@
 # State Management Patterns Guide
 
-> **Inert.** `@optimistic` and `@client_state` are INERT at 1.2.0rc10. `@optimistic` stamps metadata the shipped client never applies, so no optimistic update or revert happens (#2699). `@client_state` stamps metadata nothing in the shipped client reads (#2680), and the `StateBus` it named was deleted in #2680. A handler carrying either decorator behaves exactly like an undecorated one. The patterns below do not rely on them.
+> **`@optimistic` and `@client_state` were removed in djust 2.0 (#4006).** Neither was read by the shipped client. For instant feedback use `dj-loading.*` attributes or JS Commands; to keep two values in step, set both in one handler. See the [2.0 migration guide](../website/guides/migrating-to-2.0.md#python-names).
 
-**Status:** `@debounce`, `@throttle`, `@cache`, the `dj-loading.*` attributes and `DraftModeMixin` are implemented (1.2.0rc10). `@optimistic` and `@client_state` are inert markers (see above).
+**Status:** `@debounce`, `@throttle`, `@cache`, the `dj-loading.*` attributes and `DraftModeMixin` are implemented.
 
 **Last Updated:** 2026-09-22
 
@@ -16,7 +16,7 @@
 - [Decision Matrix](#decision-matrix)
 - [Pattern Catalog](#pattern-catalog)
   - [Pattern 1: Debounced Search](#pattern-1-debounced-search)
-  - [Pattern 2: Optimistic Counter](#pattern-2-optimistic-counter)
+  - [Pattern 2: Counter with Instant Feedback](#pattern-2-counter-with-instant-feedback)
   - [Pattern 3: Form Drafts](#pattern-3-form-drafts)
   - [Pattern 4: Multi-Component Dashboard](#pattern-4-multi-component-dashboard)
   - [Pattern 5: Cached Autocomplete](#pattern-5-cached-autocomplete)
@@ -50,10 +50,10 @@ Use this guide when:
 |---------------|----------|-----|
 | Search input that queries server | `@debounce(0.5)` | Wait until user stops typing |
 | Scroll position tracking | `@throttle(0.1)` | Limit update frequency |
-| Counter +/- buttons | plain `@event_handler` | One round-trip per click; `@optimistic` is inert (#2699) |
+| Counter +/- buttons | plain `@event_handler` + `dj-loading.*` | One round-trip per click; the button shows it is pending |
 | Range slider | `@debounce(0.3)` or `@throttle(0.1)` | Range inputs are already throttled to 150ms by default; tune it per handler |
 | Dropdown with many options | `@cache(ttl=600)` | Avoid re-fetching static data |
-| Multi-widget dashboard | One handler updates all derived state | One server render updates every widget; `@client_state` is inert (#2680) |
+| Multi-widget dashboard | One handler updates all derived state | One server render updates every widget |
 | Long form (comment, article) | `DraftModeMixin` | Prevent data loss |
 | Submit button | `dj-loading.disable + dj-loading.class` | Disable button + visual feedback |
 | AJAX loading spinner | `dj-loading.show` | Show/hide spinner during requests |
@@ -165,13 +165,13 @@ Text inputs bound with `dj-input` are already debounced by 300ms at the element 
 
 ---
 
-### Pattern 2: Optimistic Counter
+### Pattern 2: Counter with Instant Feedback
 
 **Use Case:** +1/-1 counter buttons
 
 **Problem:** User clicks +1 → waits for server → counter updates
 
-> **Inert at 1.2.0rc10.** This pattern used to rely on `@optimistic` to update the count before the server replied. `@optimistic` has no runtime effect (#2699): the count changes only after the server round-trip, with or without it. Use a plain handler, shown below.
+**Solution:** A plain handler updates the count; `dj-loading.class` marks the button as pending from the click until the server's re-render arrives. To change the page itself before the reply, use a JS Command chain ([tutorial](../website/guides/tutorial-optimistic-updates.md)).
 
 #### Implementation
 
@@ -182,9 +182,9 @@ from djust.decorators import event_handler
 class CounterView(LiveView):
     template = """
     <div dj-root class="counter">
-        <button dj-click="decrement">-</button>
+        <button dj-click="decrement" dj-loading.class="pending">-</button>
         <span class="count">{{ count }}</span>
-        <button dj-click="increment">+</button>
+        <button dj-click="increment" dj-loading.class="pending">+</button>
     </div>
     """
     count = state(0)
@@ -312,7 +312,7 @@ class BlogPostEditor(DraftModeMixin, LiveView):
 
 **Solution:** One handler updates all derived state. The server re-renders once and a single response patches every widget.
 
-> This pattern previously used `@client_state` and `data-subscribe` to fan updates out on the client. `@client_state` is inert (#2680), the StateBus is gone, and `data-subscribe` was never implemented. None of them are needed: every `{{ temperature }}`, `{{ celsius }}` and `{{ kelvin }}` below is updated by the same render.
+> No client-side bus is needed: every `{{ temperature }}`, `{{ celsius }}` and `{{ kelvin }}` below is updated by the same render.
 
 #### Implementation
 
@@ -457,7 +457,7 @@ class LanguageAutocomplete(LiveView):
 
 **Solution:** Rate-limit the handler. The slider thumb itself moves natively in the browser; only the server-rendered preview waits for the round-trip.
 
-> This pattern previously combined `@optimistic` with `@debounce` for "instant" previews. `@optimistic` is inert (#2699), so the preview updates only when the server responds.
+> The preview updates when the server responds. For feedback during the wait, add `dj-loading.*` attributes to the preview.
 
 #### Implementation
 
@@ -581,8 +581,6 @@ class FormSubmitView(LiveView):
 | @cache(ttl=300) | ~50-90% | ~50-90% | Autocomplete |
 | DraftModeMixin | 0% | 0% | Data protection |
 
-`@optimistic` and `@client_state` are inert at 1.2.0rc10 (#2699, #2680) and change neither requests nor rendering.
-
 ### Memory Usage
 
 - **@cache:** ~1-5MB depending on response sizes and TTL
@@ -668,7 +666,7 @@ def delete_item(self, item_id: int = 0, **kwargs):
     Item.objects.filter(id=item_id).delete()  # Missing permission check!
 ```
 
-`@optimistic` is inert at 1.2.0rc10 (#2699), so it neither helps nor hurts here. If it is implemented later, the server check stays mandatory, and critical operations such as payments should still wait for server confirmation.
+A JS Command chain that changes the page before the server answers does not change this: the server check stays mandatory, and critical operations such as payments should wait for server confirmation.
 
 ---
 
@@ -682,4 +680,4 @@ def delete_item(self, item_id: int = 0, **kwargs):
 ---
 
 **Last Updated:** 2026-09-22
-**Status:** Implemented at 1.2.0rc10, except the inert `@optimistic` and `@client_state` markers
+**Status:** Implemented

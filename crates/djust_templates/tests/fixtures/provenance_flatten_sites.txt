@@ -479,6 +479,16 @@ nodes: vec![Node::Text("[item]".to_string())],
 empty_nodes: vec![Node::Text("[empty]".to_string())],
 map.insert("key".into(), Value::String("val".to_string()));
 assert_eq!(value_to_arg_string(&Value::String("hi".to_string())), "hi");
+map.insert("id".into(), Value::Integer(1));
+map.insert("name".into(), cell);
+"<i>N</i>".into()
+name: "Col".into(),
+fields: vec!["key".into()],
+items: vec![Value::String("name".into())],
+Value::SafeString("x".into())
+"<b>plain</b>".into()
+int_keyed.insert(djust_core::ObjectKey::Int(1), Value::String("a".into()));
+assert!(!text_loses_a_member(&Value::SafeString("x".into())));
 let s = Value::String("<b>".to_string());
 Value::List(vec![Value::String("<b>".to_string())]),
 ctx.set("marked".to_string(), Value::String("<b>".to_string()));

@@ -17,6 +17,7 @@ from typing import Literal, NoReturn, Protocol, TypeVar, TypedDict
 from uuid import uuid4
 
 from django.utils.html import format_html, format_html_join
+from django.utils.safestring import mark_safe
 
 from djust._component_subscriptions import (
     SOURCE_PARAMETER,
@@ -27,6 +28,13 @@ from djust._component_subscriptions import (
 from djust.decorators import event_handler
 from djust.live_view import LiveView
 from .base import LiveComponent
+from .utils import strict_styles
+
+#: The native dropdown's popover placement, as it has always been written (#3979: the
+#: default, inline mode; ``.dj-dropdown-menu__content--popover`` is the strict-CSP twin).
+_POPOVER_PLACEMENT = (
+    ' style="position:fixed;inset:0;margin:auto;width:max-content;height:max-content"'
+)
 
 
 class _ActionRequired(TypedDict):
@@ -418,9 +426,22 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
                         self._observation_lifetime,
                         self._observation_sequence,
                     )
+                # The popover's placement: an inline style by default; under a strict CSP
+                # (which refuses it) the `dj-dropdown-menu__content--popover` class of
+                # components.css (#3979). A constant, never a caller's value.
+                if strict_styles():
+                    content_class, placement = (
+                        "dj-dropdown-menu__content dj-dropdown-menu__content--popover",
+                        "",
+                    )
+                else:
+                    content_class = "dj-dropdown-menu__content"
+                    placement = mark_safe(_POPOVER_PLACEMENT)
                 content = format_html(
-                    '<div id="{}" popover="auto" class="dj-dropdown-menu__content" data-dj-native-dropdown="" style="position:fixed;inset:0;margin:auto;width:max-content;height:max-content"{}>{}</div>',
+                    '<div id="{}" popover="auto" class="{}" data-dj-native-dropdown=""{}{}>{}</div>',
                     popover_id,
+                    content_class,
+                    placement,
                     observation_attrs,
                     contents,
                 )

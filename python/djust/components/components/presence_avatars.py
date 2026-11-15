@@ -6,6 +6,7 @@ from typing import Any, List, Optional, Union
 
 from djust import Component
 from djust._template_guards import call_method_for_template
+from djust.components.utils import style_attrs
 
 
 class PresenceAvatars(Component):
@@ -97,8 +98,8 @@ class PresenceAvatars(Component):
             dot = f'<span class="dj-presence__dot dj-presence__dot--{safe_status}"></span>'
 
             parts.append(
-                f'<span class="dj-presence__item" title="{e_name}" '
-                f'style="z-index:{z}">'
+                f'<span class="dj-presence__item" title="{e_name}"'
+                f"{style_attrs(z_index=z, css='z-index:{}')}>"
                 f"{avatar_inner}{dot}"
                 f"</span>"
             )

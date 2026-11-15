@@ -5,6 +5,7 @@ from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any
 from djust.components.utils import safe_css_ratio
+from djust.components.utils import style_attrs
 
 
 class AspectRatio(Component):
@@ -37,4 +38,4 @@ class AspectRatio(Component):
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
         e_ratio = html.escape(safe_css_ratio(self.ratio, "16/9"))
-        return f'<div class="{cls}" style="aspect-ratio: {e_ratio};">{conditional_escape(self.content)}</div>'
+        return f'<div class="{cls}"{style_attrs(aspect_ratio=e_ratio, css="aspect-ratio: {};")}>{conditional_escape(self.content)}</div>'

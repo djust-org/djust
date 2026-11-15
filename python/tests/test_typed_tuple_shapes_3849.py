@@ -320,21 +320,19 @@ class TestACostIsCountedNotTimed:
         and for 20,000, because a flat tuple is one C-level copy (``list(value)``). A per-element
         Python loop would make this grow with ``size``."""
         value = tuple(range(size))
-        lines = _line_events_in(_operands.__file__, lambda: rust_handlers._from_typed(value))
+        lines = _line_events_in(_operands.__file__, lambda: _operands._from_typed(value))
         assert lines <= 12, f"{lines} source lines executed for {size} elements"
 
     def test_the_count_does_not_depend_on_the_size(self):
-        small = _line_events_in(
-            _operands.__file__, lambda: rust_handlers._from_typed(tuple(range(10)))
-        )
+        small = _line_events_in(_operands.__file__, lambda: _operands._from_typed(tuple(range(10))))
         large = _line_events_in(
-            _operands.__file__, lambda: rust_handlers._from_typed(tuple(range(20_000)))
+            _operands.__file__, lambda: _operands._from_typed(tuple(range(20_000)))
         )
         assert 0 < small == large, "no line of the module ran: the tracer watches the wrong file"
 
     def test_a_tuple_with_a_nested_tuple_is_still_converted_all_the_way_down(self):
         """The fast path must not skip a nested tuple: the slow path is for exactly this."""
-        got = rust_handlers._from_typed((1, (2, (3, P(4, 5))), 6))
+        got = _operands._from_typed((1, (2, (3, P(4, 5))), 6))
         assert str(got) == repr((1, (2, (3, P(4, 5))), 6))
         inner = got[1][1]
         assert isinstance(got[1], list) and isinstance(inner, list)

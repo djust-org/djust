@@ -93,7 +93,16 @@ def test_the_ci_job_requires_the_rows_and_runs_the_harness():
     # The packaged systemd service is stopped: the harness starts its own servers.
     install = [step for step in steps if "apt-get install" in step["run"]]
     assert install and "systemctl stop redis-server" in install[0]["run"], install
-    # Non-gating until it has been green on a runner once (#4136), then promoted.
-    assert job.get("continue-on-error") is True
+    # Gating since it was green on a runner (#4136): no continue-on-error, and test-summary
+    # needs it, judges it in its AND-chain (skipped is accepted on a pull request or in the
+    # merge queue only, where the job does not run without `full-tests`), and expects it
+    # skipped on a docs-only change. tests/test_ci_change_scope.py runs that logic.
+    assert "continue-on-error" not in job, job.get("continue-on-error")
     summary = workflow["jobs"]["test-summary"]
-    assert "multinode-redis-rows" not in summary["needs"]
+    assert "multinode-redis-rows" in summary["needs"]
+    chain = next(s["run"] for s in summary["steps"] if s.get("name") == "Check test results")
+    assert '"${{ needs.multinode-redis-rows.result }}" == "success"' in chain
+    docs = next(
+        s for s in summary["steps"] if str(s.get("name", "")).startswith("Docs/changelog-only")
+    )
+    assert "multinode-redis-rows=${{ needs.multinode-redis-rows.result }}" in docs["env"]["RESULTS"]

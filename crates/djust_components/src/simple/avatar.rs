@@ -8,12 +8,13 @@ pub struct RustAvatar {
     size: String,
     shape: String,
     status: Option<String>,
+    strict_styles: bool,
 }
 
 #[pymethods]
 impl RustAvatar {
     #[new]
-    #[pyo3(signature = (src=None, alt="", initials=None, size="md", shape="circle", status=None))]
+    #[pyo3(signature = (src=None, alt="", initials=None, size="md", shape="circle", status=None, strict_styles=false))]
     pub fn new(
         src: Option<String>,
         alt: &str,
@@ -21,6 +22,7 @@ impl RustAvatar {
         size: &str,
         shape: &str,
         status: Option<String>,
+        strict_styles: bool,
     ) -> Self {
         // Limit initials to 2 characters and uppercase
         let initials = initials.map(|s| s.chars().take(2).collect::<String>().to_uppercase());
@@ -32,19 +34,19 @@ impl RustAvatar {
             size: size.to_string(),
             shape: shape.to_string(),
             status,
+            strict_styles,
         }
     }
 
     /// Render avatar to HTML string (Bootstrap 5)
     pub fn render(&self) -> String {
         // Size mapping
-        let size_style = match self.size.as_str() {
-            "xs" => "width: 1.5rem; height: 1.5rem;",
-            "sm" => "width: 2rem; height: 2rem;",
-            "md" => "width: 3rem; height: 3rem;",
-            "lg" => "width: 4rem; height: 4rem;",
-            "xl" => "width: 6rem; height: 6rem;",
-            _ => "width: 3rem; height: 3rem;",
+        let size = match self.size.as_str() {
+            "xs" => "1.5rem",
+            "sm" => "2rem",
+            "lg" => "4rem",
+            "xl" => "6rem",
+            _ => "3rem",
         };
 
         // Shape class
@@ -54,8 +56,15 @@ impl RustAvatar {
             "rounded"
         };
 
-        let mut html =
-            format!(r#"<div class="position-relative d-inline-block" style="{size_style}">"#);
+        // By default the size is the inline style it has always been; with `strict_styles`
+        // (LIVEVIEW_CONFIG["csp_strict_styles"], for a `style-src` without 'unsafe-inline')
+        // it is `data-dj-style-*` the client applies (#3979).
+        let size_attrs = if self.strict_styles {
+            format!(r#" data-dj-style data-dj-style-width="{size}" data-dj-style-height="{size}""#)
+        } else {
+            format!(r#" style="width: {size}; height: {size};""#)
+        };
+        let mut html = format!(r#"<div class="position-relative d-inline-block"{size_attrs}>"#);
 
         // Image or initials
         if let Some(ref src) = self.src {
@@ -194,7 +203,7 @@ mod escaping_tests {
     use super::*;
 
     fn img(src: &str) -> String {
-        RustAvatar::new(Some(src.to_string()), "", None, "md", "circle", None).render()
+        RustAvatar::new(Some(src.to_string()), "", None, "md", "circle", None, false).render()
     }
 
     #[test]
@@ -269,7 +278,16 @@ mod escaping_tests {
 
     #[test]
     fn initials_and_alt_are_html_escaped() {
-        let html = RustAvatar::new(None, "", Some("<i".to_string()), "md", "circle", None).render();
+        let html = RustAvatar::new(
+            None,
+            "",
+            Some("<i".to_string()),
+            "md",
+            "circle",
+            None,
+            false,
+        )
+        .render();
         assert!(html.contains("<span class=\"fw-bold\">&lt;I</span>"));
         let html = RustAvatar::new(
             Some("a.png".to_string()),
@@ -278,6 +296,7 @@ mod escaping_tests {
             "md",
             "circle",
             None,
+            false,
         )
         .render();
         assert!(html.contains("alt=\"x&quot; onerror=&quot;y\""));
@@ -292,6 +311,7 @@ mod escaping_tests {
             "sm",
             "circle",
             Some("online".to_string()),
+            false,
         )
         .render();
         assert!(html.contains("<span class=\"fw-bold\">JD</span>"));

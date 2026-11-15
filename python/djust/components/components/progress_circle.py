@@ -5,6 +5,7 @@ from django.utils.html import conditional_escape
 
 from djust import Component
 from typing import Any
+from djust.components.utils import style_attrs
 
 
 class ProgressCircle(Component):
@@ -85,8 +86,8 @@ class ProgressCircle(Component):
             value_html = (
                 f'<text x="{dim / 2}" y="{dim / 2}" '
                 f'class="dj-progress-circle__value" '
-                f'text-anchor="middle" dominant-baseline="central" '
-                f'style="font-size:{fs}">'
+                f'text-anchor="middle" dominant-baseline="central"'
+                f"{style_attrs(font_size=fs, css='font-size:{}')}>"
                 f"{self.value}%</text>"
             )
 

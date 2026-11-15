@@ -5,6 +5,7 @@ import re
 from typing import Any, Optional
 
 from djust import Component
+from djust.components.utils import style_attrs
 
 
 class Terminal(Component):
@@ -146,11 +147,11 @@ class Terminal(Component):
                     # of nested spans is unbounded nesting in the page.
                     continue
                 elif code == "1":
-                    result.append('<span style="font-weight:bold">')
+                    result.append(f"<span{style_attrs(font_weight='bold', css='font-weight:{}')}>")
                     open_spans += 1
                 elif code in cls.ANSI_COLORS:
                     color = cls.ANSI_COLORS[code]
-                    result.append(f'<span style="color:{color}">')
+                    result.append(f"<span{style_attrs(color=color, css='color:{}')}>")
                     open_spans += 1
 
         # Remaining text

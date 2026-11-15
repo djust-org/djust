@@ -1,6 +1,6 @@
 # State Management Tutorial
 
-> **Inert.** `@optimistic` and `@client_state` are INERT at 1.2.0rc10. `@optimistic` stamps metadata the shipped client never applies, so no optimistic update or revert happens (#2699). `@client_state` stamps metadata nothing in the shipped client reads (#2680), and the `StateBus` it named was deleted in #2680. A handler carrying either decorator behaves exactly like an undecorated one, so this tutorial does not use them.
+> **`@optimistic` and `@client_state` were removed in djust 2.0 (#4006).** Neither was read by the shipped client. For instant feedback use `dj-loading.*` attributes or JS Commands; to keep two values in step, set both in one handler. See the [2.0 migration guide](../website/guides/migrating-to-2.0.md#python-names).
 
 **Level**: Intermediate
 **Duration**: 30-45 minutes
@@ -280,9 +280,7 @@ User types "laptop" → Client resets timer
 
 **Problem**: Results don't update until the server responds.
 
-Earlier versions of this tutorial added `@optimistic` here. At 1.2.0rc10 `@optimistic` is **inert**: it records metadata, but the shipped client never applies an optimistic update or a revert (#2699). Adding it changes nothing, so this tutorial leaves it out.
-
-You don't need it for this page anyway:
+You don't need an optimistic update for this page:
 
 - The input already shows what the user typed, natively, with no server round-trip.
 - The results can only come from the server, so there is nothing to guess client-side. Part 5 adds a loading indicator so the wait is visible.
@@ -834,7 +832,7 @@ class ProductSearchView(LiveView):
 **Performance:**
 
 - **Server requests**: 1 per query (after 500ms silence)
-- **Bundle size**: ~86 KB gzipped (`client.min.js`, served automatically)
+- **Bundle size**: ~87 KB gzipped (`client.min.js`, served automatically)
 
 ## Next Steps
 
@@ -878,7 +876,7 @@ You've built a fully-featured Product Search with:
    @event_handler
    def toggle_favorite(self, product_id: int = 0, **kwargs):
        # Send the id from the template: dj-click="toggle_favorite" dj-value-product_id="{{ product.id }}"
-       # (@optimistic would be inert here, #2699)
+       # For an instant heart flip, use a JS Command chain ending in push()
        pass
    ```
 

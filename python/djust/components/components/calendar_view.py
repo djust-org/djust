@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from djust import Component
 from djust.components.utils import safe_css_color
+from djust.components.utils import style_attrs
 
 
 class CalendarView(Component):
@@ -138,8 +139,8 @@ class CalendarView(Component):
                         )
                     )
                     ev_html += (
-                        f'<div class="dj-calendar__event" '
-                        f'style="--dj-calendar-event-color: {color}">'
+                        f'<div class="dj-calendar__event"'
+                        f"{style_attrs({'--dj-calendar-event-color': color}, css='--dj-calendar-event-color: {}')}>"
                         f"{title}</div>"
                     )
                 if len(day_events) > 3:

@@ -5,14 +5,20 @@ Centralises functions and constants that were previously duplicated across
 templatetags, rust_handlers, mixins, and component classes.
 """
 
+import logging
+import math
 import re
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
+from django.utils.functional import Promise
 from django.utils.html import conditional_escape, escape
 from django.utils.safestring import SafeData
 
 from djust.security.urls import url_as_parsed, url_is_protocol_relative
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "CURRENCY_SYMBOLS",
@@ -23,7 +29,15 @@ __all__ = [
     "safe_css_length",
     "safe_css_number",
     "safe_css_ratio",
+    "progress_fill",
     "safe_url",
+    "strict_styles",
+    "style_attrs",
+    "style_value",
+    "table_column",
+    "table_row",
+    "table_rows",
+    "table_value_is_url",
     "unique_ids",
     "url_allowed",
     "url_as_parsed",
@@ -368,6 +382,294 @@ def safe_css_number(value: Any, default: str = "", *, integer: bool = False) -> 
 
 
 # ---------------------------------------------------------------------------
+# Free-form style values under a strict CSP (#3979)
+# ---------------------------------------------------------------------------
+#
+# A component that must set a value no class can stand for (a column width, a colour, an
+# item height) writes it through ``style_attrs``. The value is validated HERE, by the kind of
+# the property; a value that fails is dropped. By default it is an inline ``style``. A
+# ``style-src`` without 'unsafe-inline' refuses every ``style="..."`` attribute, so with
+# ``LIVEVIEW_CONFIG["csp_strict_styles"]`` on it is ``data-dj-style-<property>="<value>"``
+# instead, and the client module ``54-dj-style.js`` applies it with
+# ``element.style.setProperty`` (the CSSOM, which a strict CSP allows).
+
+_STYLE_ATTR_PREFIX = "data-dj-style-"
+_CSS_TIME_RE = re.compile(rf"{_CSS_NUM}(?:ms|s)", re.IGNORECASE)
+_CSS_GRID_LINE_RE = re.compile(r"\d{1,4}(?:\s*/\s*span\s+\d{1,4})?|span\s+\d{1,4}|auto")
+
+
+def _style_keyword(*words: str) -> Any:
+    allowed = frozenset(words)
+
+    def check(value: Any) -> str:
+        text = _exact_str(value).strip()
+        return text if text.lower() in allowed else ""
+
+    return check
+
+
+def _style_length(value: Any) -> str:
+    return safe_css_length(value, "").strip()
+
+
+def _style_color(value: Any) -> str:
+    return safe_css_color(value, "").strip()
+
+
+def _style_integer(value: Any) -> str:
+    return safe_css_number(value, "", integer=True).strip()
+
+
+def _style_number(value: Any) -> str:
+    return safe_css_number(value, "").strip()
+
+
+def _style_ratio(value: Any) -> str:
+    return safe_css_ratio(value, "").strip()
+
+
+def _style_time(value: Any) -> str:
+    text = _exact_str(value).strip()
+    return text if _CSS_TIME_RE.fullmatch(text) else ""
+
+
+def _style_grid_line(value: Any) -> str:
+    text = _exact_str(value).strip()
+    return text if _CSS_GRID_LINE_RE.fullmatch(text) else ""
+
+
+def _split_top(text: str, sep: str) -> list[str]:
+    """``text`` split at each ``sep`` outside parentheses (``sep=" "``: any whitespace)."""
+    parts, depth, cur = [], 0, ""
+    for ch in text:
+        depth += ch == "("
+        depth -= ch == ")"
+        if depth == 0 and (ch.isspace() if sep == " " else ch == sep):
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    return [p.strip() for p in parts + [cur] if p.strip()]
+
+
+def _style_track(text: str) -> bool:
+    """One grid track: what :func:`safe_css_length` accepts, or ``minmax(<that>, <that>)``."""
+    if text.lower().startswith("minmax(") and text.endswith(")"):
+        args = _split_top(text[7:-1], ",")
+        return len(args) == 2 and all(_style_track(a) for a in args)
+    return bool(safe_css_length(text, ""))
+
+
+def _style_grid_tracks(value: Any) -> str:
+    """``repeat(<n>, <track>)``, or tracks separated by spaces (``grid-template-columns``,
+    ``grid-auto-rows``)."""
+    text = _exact_str(value).strip()
+    if not text or len(text) > _CSS_MAX_VALUE_LEN:
+        return ""
+    if text.lower().startswith("repeat(") and text.endswith(")"):
+        args = _split_top(text[7:-1], ",")
+        ok = len(args) == 2 and args[0].isdigit() and _style_track(args[1])
+        return text if ok else ""
+    tracks = _split_top(text, " ")
+    return text if tracks and all(_style_track(t) for t in tracks) else ""
+
+
+def _style_z_index(value: Any) -> str:
+    """An integer stacking order within +/-9999 (nothing can be lifted above everything)."""
+    text = safe_css_number(value, "", integer=True).strip()
+    return text if text and text.lower() != "auto" and abs(int(text)) <= 9999 else ""
+
+
+#: Every CSS property ``style_attrs`` writes, in one list: the client's own copy
+#: (``54-dj-style.js``) is pinned equal to it, both ways, by
+#: ``python/djust/tests/test_csp_free_form_styles_3979.py`` and ``tests/js/dj_style.test.js``.
+STYLE_PROPERTY_NAMES = (
+    "width",
+    "min-width",
+    "max-width",
+    "height",
+    "min-height",
+    "max-height",
+    "top",
+    "left",
+    "margin-right",
+    "padding-left",
+    "gap",
+    "font-size",
+    "--dj-masonry-gap",
+    "background-color",
+    "color",
+    "border-top-color",
+    "--dj-calendar-event-color",
+    "--dj-collab-sel-color",
+    "z-index",
+    "-webkit-line-clamp",
+    "--dj-masonry-columns",
+    "--dj-data-card-grid-cols",
+    "flex",
+    "aspect-ratio",
+    "animation-delay",
+    "grid-column",
+    "grid-row",
+    "grid-template-columns",
+    "grid-auto-rows",
+    "position",
+    "display",
+    "overflow",
+    "overflow-y",
+    "-webkit-box-orient",
+    "font-weight",
+)
+
+_STYLE_KINDS: dict[str, Any] = {
+    "background-color": _style_color,
+    "color": _style_color,
+    "border-top-color": _style_color,
+    "--dj-calendar-event-color": _style_color,
+    "--dj-collab-sel-color": _style_color,
+    "z-index": _style_z_index,
+    "-webkit-line-clamp": _style_integer,
+    "--dj-masonry-columns": _style_integer,
+    "--dj-data-card-grid-cols": _style_integer,
+    "flex": _style_number,
+    "aspect-ratio": _style_ratio,
+    "animation-delay": _style_time,
+    "grid-column": _style_grid_line,
+    "grid-row": _style_grid_line,
+    "grid-template-columns": _style_grid_tracks,
+    "grid-auto-rows": _style_grid_tracks,
+    # Only what the call sites use: never ``fixed`` / ``absolute`` (an element that covers
+    # the page).
+    "position": _style_keyword("sticky", "relative"),
+    "display": _style_keyword("grid", "-webkit-box"),
+    "overflow": _style_keyword("auto", "hidden", "scroll", "visible", "clip"),
+    "overflow-y": _style_keyword("auto", "hidden", "scroll", "visible", "clip"),
+    "-webkit-box-orient": _style_keyword("vertical", "horizontal"),
+    "font-weight": _style_keyword("bold", "normal"),
+}
+
+#: The check each property's value passes (a length unless listed in ``_STYLE_KINDS``).
+STYLE_PROPERTIES: dict[str, Any] = {
+    name: _STYLE_KINDS.get(name, _style_length) for name in STYLE_PROPERTY_NAMES
+}
+
+_STYLE_WARNED: set[str] = set()
+
+#: The page-level marker of strict-CSP style mode, written into the head of a LiveView page
+#: (and by ``{% djust_client_config %}``). ``54-dj-style.js`` applies nothing without it, so
+#: ``data-dj-style-*`` on a page that did not opt in stays inert (#3979).
+STYLES_META = '<meta name="djust-styles" content="attrs">'
+
+
+def strict_styles() -> bool:
+    """Whether free-form style values are written for a strict CSP (#3979).
+
+    ``LIVEVIEW_CONFIG["csp_strict_styles"]``, off by default. The one switch
+    :func:`style_attrs` (and the Rust components' ``strict_styles`` argument) follow.
+    """
+    from djust.config import config
+
+    return bool(config.get("csp_strict_styles", False))
+
+
+def style_attrs(props: Any = None, /, *, css: str | None = None, **kwargs: Any) -> str:
+    """Free-form style values as attributes, in the mode the project chose (#3979).
+
+    ``style_attrs({"min-width": w})`` or ``style_attrs(width=w, min_height=h)`` (an underscore
+    in a keyword is a hyphen). Each value is first checked by its property's kind
+    (:data:`STYLE_PROPERTIES`): a length (:func:`safe_css_length`: a number with a unit or
+    ``%``, a keyword, ``var()``, ``calc()`` ...), a colour (:func:`safe_css_color`), an integer, a
+    ratio, a time, a grid line or track list, or a keyword from a fixed set. ``None`` and ``""``
+    write nothing. A value that fails is dropped, never written, with one warning per property.
+    A marked-safe value is judged as the plain text it prints. A property outside the table is a
+    programming error and raises ``ValueError``.
+
+    The values that pass are then written
+
+    * by default, as an inline ``style`` attribute: ``' style="width:240px"'``. ``css`` is the
+      declaration text with one ``{}`` per property in order (a site keeps its exact markup:
+      ``css="height: {};"``); without it, ``prop:value`` pairs joined by ``;``. When a value
+      was dropped the pairs are written instead.
+    * with ``LIVEVIEW_CONFIG["csp_strict_styles"]`` on (a ``style-src`` without
+      'unsafe-inline'), as ``' data-dj-style data-dj-style-width="240px"'``, which the client
+      module ``54-dj-style.js`` applies with ``element.style.setProperty`` (the CSSOM, which a
+      strict CSP allows). The bare ``data-dj-style`` marks the element for the client.
+
+    Returns ``""`` when nothing passes. The text has a leading space, ready to follow a tag name
+    or another attribute.
+    """
+    items: list[tuple[str, Any]] = list(dict(props or {}).items())
+    items += [(key.replace("_", "-"), value) for key, value in kwargs.items()]
+    pairs = [(prop, style_value(prop, value)) for prop, value in items]
+    kept = [(prop, text) for prop, text in pairs if text]
+    if not kept:
+        return ""
+    if strict_styles():
+        return " data-dj-style" + "".join(
+            f' {_STYLE_ATTR_PREFIX}{prop}="{escape(text)}"' for prop, text in kept
+        )
+    if css is not None and len(kept) == len(pairs):
+        declarations = css.format(*(text for _, text in kept))
+    else:
+        declarations = ";".join(f"{prop}:{text}" for prop, text in kept)
+    return f' style="{escape(declarations)}"'
+
+
+def progress_fill(percent: Any, *, css: str = "width: {}%") -> tuple[str, str]:
+    """``(class, style)`` for a percent fill (a progress bar), in both modes (#3979).
+
+    The class is ``dj-progress-w-N`` (``N`` the whole percent, clamped to 0..100), defined in
+    the components stylesheets: no JavaScript and no first-paint jump. By default the style is
+    also the inline width the bar has always carried (``css`` with the percent as written), so a
+    page without those stylesheets draws it as before; with
+    ``LIVEVIEW_CONFIG["csp_strict_styles"]`` on there is no style, only the class.
+    """
+    try:
+        number = float(percent)
+    except (TypeError, ValueError):
+        number = 0.0
+    finite = math.isfinite(number)
+    clamped = max(0.0, min(100.0, number)) if finite else 0.0
+    # Half up, as the Rust components round (``f64::round``): one bar, one class.
+    whole = int(clamped + 0.5)
+    if strict_styles():
+        return f"dj-progress-w-{whole}", ""
+    # A number already in range is written as given (the bar's old markup); anything else
+    # (out of range, not a number, text) as the clamped number.
+    if type(percent) in (int, float) and finite and number == clamped:
+        shown = str(percent)
+    else:
+        shown = f"{clamped:g}"
+    return f"dj-progress-w-{whole}", f' style="{escape(css.format(shown))}"'
+
+
+def style_value(prop: str, value: Any) -> str:
+    """The check :func:`style_attrs` makes, for one property: ``value`` as the plain text to
+    write, or ``""`` (nothing to write).
+
+    For a caller that needs the checked value itself (a template that writes the attribute,
+    a fallback default: ``style_value("height", h) or "400px"``). ``None`` and ``""`` return
+    ``""``; a value that fails is dropped with one warning per property; a property outside
+    :data:`STYLE_PROPERTIES` raises ``ValueError``.
+    """
+    check = STYLE_PROPERTIES.get(prop)
+    if check is None:
+        raise ValueError(f"style_attrs: {prop!r} is not in STYLE_PROPERTIES")
+    if value is None or isinstance(value, bool) or _exact_str(value).strip() == "":
+        return ""
+    text: str = check(value)
+    if not text and prop not in _STYLE_WARNED:
+        _STYLE_WARNED.add(prop)
+        logger.warning(
+            "Dropped a %s value that is not a plain CSS value (#3979); "
+            "further invalid %s values are dropped silently",
+            prop,
+            prop,
+        )
+    return text
+
+
+# ---------------------------------------------------------------------------
 # URL attributes
 # ---------------------------------------------------------------------------
 
@@ -701,3 +1003,199 @@ def rich_html(value: Any) -> str:
     from .components.markdown import _sanitize
 
     return _sanitize(str(value))
+
+
+# ---------------------------------------------------------------------------
+# data_table rows and columns, as both engines read them (#3895)
+# ---------------------------------------------------------------------------
+
+#: Every attribute either ``data_table`` implementation reads off a column: ``table.html`` reads
+#: ``key``, ``label``, ``sortable``, ``width``, ``link`` and ``link_class``; the native handler
+#: also reads the rest (and ``format_cell`` the type options). A column given as an object or a
+#: namedtuple is read through these names into the dict form.
+TABLE_COLUMN_ATTRS: tuple[str, ...] = (
+    "key",
+    "label",
+    "sortable",
+    "filterable",
+    "filter_type",
+    "filter_options",
+    "width",
+    "pinned",
+    "link",
+    "link_class",
+    "type",
+    "cell_class",
+    "cell_template",
+    "stats",
+    "decimals",
+    "currency_symbol",
+    "true_label",
+    "false_label",
+    "date_format",
+)
+
+#: ``(column key, attribute)`` pairs already warned about, so a table re-rendered on every event
+#: logs a callable once per process, not once per render.
+_WARNED_CALLABLE_COLUMNS: set[tuple[str, str]] = set()
+
+
+def _warn_callable_column(column: Any, names: list[str]) -> None:
+    key = _exact_str(column)
+    for name in names:
+        if (key, name) in _WARNED_CALLABLE_COLUMNS:
+            continue
+        _WARNED_CALLABLE_COLUMNS.add((key, name))
+        logger.warning(
+            "data_table column %r: %r is a function, which a column cannot hold; it is ignored, "
+            "as if the column had no %r. Compute the value into the row instead.",
+            key,
+            name,
+            name,
+        )
+
+
+def _column_fields(col: Any) -> Any:
+    """``col``'s fields as a mapping when it is a namedtuple (a real one, or the native handler's
+    ``NamedTupleValue``, which is a list), else ``None``."""
+    fields = getattr(col, "_fields", None)
+    if isinstance(col, (list, tuple)) and isinstance(fields, tuple) and len(fields) == len(col):
+        return dict(zip(fields, col))
+    return None
+
+
+def table_column(col: Any) -> Any:
+    """A ``data_table`` column as both engines read it (#3895).
+
+    * A dict is returned as it is, except that a value which is a function is dropped (a warning
+      names the column once): Django would call it while reading ``col.link``, the native handler
+      could only ever be handed its text, so neither does anything with it. A link that is
+      computed belongs in the row.
+    * A namedtuple or any other object (not a scalar, not a list) becomes the dict of the
+      :data:`TABLE_COLUMN_ATTRS` it has, read as ``table.html`` reads ``col.key``, so the native
+      handler, which is handed the column after a JSON round trip, draws what the Python tag draws.
+      A function there is dropped the same way.
+    * Anything else (a bare name, a number, ``None``, a list) is returned unchanged: the bare-name
+      rule decides it.
+    """
+    if isinstance(col, dict):
+        dropped = [name for name, value in col.items() if callable(value)]
+        if not dropped:
+            return col
+        _warn_callable_column(col.get("key", ""), [str(name) for name in dropped])
+        return {name: value for name, value in col.items() if name not in dropped}
+    fields = _column_fields(col)
+    if fields is None and (
+        col is None
+        or isinstance(col, (str, bytes, int, float, list, tuple, set, frozenset, Promise))
+    ):
+        return col
+    out: dict[str, Any] = {}
+    dropped = []
+    for name in TABLE_COLUMN_ATTRS:
+        if fields is not None:
+            if name not in fields:
+                continue
+            value = fields[name]
+        else:
+            try:
+                value = getattr(col, name)
+            except AttributeError:
+                continue
+        if callable(value):
+            dropped.append(name)
+            continue
+        out[name] = value
+    if dropped:
+        _warn_callable_column(out.get("key", ""), dropped)
+    return out
+
+
+def _row_attribute(row: Any, name: str) -> Any:
+    """``row.<name>`` of a plain object, as a template reads it, or ``_MISSING``.
+
+    A name starting with ``_`` is never read (Django's rule). A method is called with no argument,
+    unless it is marked ``alters_data`` or ``do_not_call_in_templates`` (then nothing is read), and
+    a call that needs an argument reads nothing.
+    """
+    if not name or name.startswith("_"):
+        return _MISSING
+    try:
+        value = getattr(row, name)
+    except AttributeError:
+        return _MISSING
+    if callable(value):
+        if getattr(value, "alters_data", False) or getattr(
+            value, "do_not_call_in_templates", False
+        ):
+            return _MISSING
+        try:
+            value = value()
+        except TypeError:
+            return _MISSING
+    return value
+
+
+_MISSING = object()
+
+
+def table_row(row: Any, keys: Any) -> Any:
+    """A ``data_table`` row as the mapping both engines read (#3895).
+
+    * A mapping is returned as it is.
+    * A model instance is the dict the serializer makes of it, the one the native handler is
+      handed (``normalize_django_value``): the exposure floor applies, so a field that is
+      excluded (``password``, ``djust_exclude_fields``, a field outside
+      ``djust_serializable_fields``) is not in it and its cell is empty on both engines. A floor
+      proxy (what the engine hands a native handler for a model) is read through its own hook.
+    * Any other object is the dict of the ``keys`` it has as attributes (:func:`_row_attribute`).
+    * A scalar, a list or ``None`` is returned unchanged: not a row (the Python tag draws an empty
+      row, the native handler omits it).
+    """
+    if isinstance(row, Mapping):
+        return row
+    if row is None or isinstance(row, (str, bytes, int, float, list, tuple, set, frozenset)):
+        return row
+    from django.db import models
+
+    if isinstance(row, models.Model):
+        from djust.serialization import normalize_django_value
+
+        floored = normalize_django_value(row)
+        return floored if isinstance(floored, Mapping) else {}
+    hook = getattr(row, "__djust_serialize__", None)
+    if callable(hook):
+        floored = hook()
+        if isinstance(floored, Mapping):
+            return floored
+    out = {}
+    for key in keys:
+        if not isinstance(key, str) or key in out:
+            continue
+        value = _row_attribute(row, key)
+        if value is not _MISSING:
+            out[key] = value
+    return out
+
+
+def table_rows(rows: Any, keys: Any) -> Any:
+    """``rows`` with each row as :func:`table_row` reads it; ``rows`` itself (the same object)
+    when every row is already a mapping, so a table of dicts is untouched."""
+    if isinstance(rows, (list, tuple)) and all(isinstance(row, Mapping) for row in rows):
+        return rows
+    try:
+        items = list(rows)
+    except TypeError:
+        return rows
+    key_list = [key for key in keys if isinstance(key, str)]
+    return [table_row(row, key_list) for row in items]
+
+
+def table_value_is_url(value: Any) -> bool:
+    """Whether a row's value can be a URL at all (#3895): not ``None``, not blank text, and not a
+    number that is not one (``NaN``, an infinity), whose text ``nan`` would be a relative link."""
+    if value is None:
+        return False
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+    return str(value).strip() != ""

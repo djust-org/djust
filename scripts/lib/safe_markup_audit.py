@@ -176,9 +176,9 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (LT, "djust_skeleton"): S(
         1,
-        "shape is checked against _SKELETON_VALID_SHAPES; width/height pass _SKELETON_SIZE_RE; class_ goes through build_tag (escaped); count is int()-clamped",
+        "shape is checked against _SKELETON_VALID_SHAPES; width/height pass style_value (the data-dj-style-* check, #3979) and every attribute goes through build_tag (escaped); class_ goes through build_tag (escaped); count is int()-clamped",
         (LT, "if shape not in _SKELETON_VALID_SHAPES:"),
-        (LT, "_SKELETON_SIZE_RE = re.compile(", "<module>"),
+        (LT, "text = style_value(prop, value)", "_validate_skeleton_size"),
         (LT, "count_int = max(1, min(100, count_int))"),
     ),
     (LT, "_render_sticky_child_html"): S(
