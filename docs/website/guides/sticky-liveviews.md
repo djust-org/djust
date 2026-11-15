@@ -132,6 +132,30 @@ genuinely has no survivor — first navigation, HTTP GET / hard reload,
 or after an intermediate page that omitted the slot AND the inline tag
 (see "What happens when a slot is missing" below).
 
+### Explicit exposure: the destination renders the child
+
+A sticky child with `exposure_policy = "explicit"` is carried only by the
+destination's own `{% live_render ... sticky=True %}`. A bare
+`<div dj-sticky-slot>` does not re-attach it: slot markup carries no
+class or inputs, so it cannot show which child it is asking for, and the
+child is dropped.
+
+The destination may be on another route and have another parent class.
+The preserved instance is re-attached when all of these match the page it
+left:
+
+- the child class and its `state()` declarations, and the `sticky_id`;
+- the `{% live_render %}` keyword arguments (its mount inputs);
+- the session, the user and the tenant.
+
+Anything else mounts a fresh child: different inputs, a session that
+expired or was replaced, another user or tenant. A child mounted on a
+page without a session, or under a legacy-exposure parent, is never
+carried to another page. The destination re-runs the child's
+authorization, as for any preserved child (see "Auth re-check semantics"
+below). The child's `state(..., persist="server")` fields are then
+stored under the destination page.
+
 ## The `sticky` class attribute
 
 Two class attributes control sticky behavior:
