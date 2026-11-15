@@ -3247,6 +3247,9 @@ class ViewRuntime(RuntimeTurnPort):
         self._state_timer: Optional[asyncio.TimerHandle] = None
         self._state_flush_task: Optional["asyncio.Future[Any]"] = None
         self._state_flush_failures = 0
+        # The (field, limit) the page was last told was over its limit at a
+        # flush; cleared by a save that lands.
+        self._state_too_large_noticed: Any = None
         # #3201: vanished session key -> the replacement session this
         # connection created, so repeated mounts reuse one replacement.
         self._replacement_sessions: Dict[str, str] = {}
@@ -6590,6 +6593,7 @@ class ViewRuntime(RuntimeTurnPort):
 
     def _state_saved(self, view: Any) -> None:
         """A save wrote ``view``'s whole current state: nothing is owed."""
+        self._state_too_large_noticed = None
         if self._state_dirty_view is view:
             self._state_dirty_view = None
             self._state_flush_failures = 0
@@ -6712,13 +6716,24 @@ class ViewRuntime(RuntimeTurnPort):
             self._forget_state_flush()  # the session was logged out meanwhile
             return False
         except StateLimitExceeded as refused:
-            logger.warning(
-                "djust: view state not saved: field %s over its %s limit; the last state "
-                "that fit stays stored and the view keeps its values",
-                sanitize_for_log(refused.field),
-                refused.limit,
-            )
-            self._state_flush_failed(view, interactive)
+            # Option A of the design: the store keeps the last state that fit,
+            # the view keeps its values (the page already shows them), and the
+            # page is told once per field and limit until a save succeeds.
+            # Later flushes try again, so a state that shrinks is saved.
+            notice = (refused.field, refused.limit)
+            if notice != self._state_too_large_noticed:
+                self._state_too_large_noticed = notice
+                logger.warning(
+                    "djust: view state not saved: field %s over its %s limit; the last "
+                    "state that fit stays stored and the view keeps its values",
+                    sanitize_for_log(refused.field),
+                    refused.limit,
+                )
+                if interactive:
+                    await self.transport.send_error(
+                        refused.user_message, code="state_too_large", source="async"
+                    )
+            self._state_flush_failed(view, interactive, counted=False)
             return False
         except ExplicitSaveDeferred:
             # Still running: it lands in order; the next flush writes after it.
@@ -6738,10 +6753,15 @@ class ViewRuntime(RuntimeTurnPort):
         self._state_saved(view)
         return True
 
-    def _state_flush_failed(self, view: Any, interactive: bool) -> None:
-        """Keep the change owed; retry with backoff while the connection is up."""
+    def _state_flush_failed(self, view: Any, interactive: bool, *, counted: bool = True) -> None:
+        """Keep the change owed; retry with backoff while the connection is up.
+        ``counted``: a storage failure (a refusal over the size limit is not)."""
         from ._save_policy import MAX_INTERVAL_S, interval_for
 
+        if not counted:
+            if interactive and self._state_dirty_view is view:
+                self._arm_state_timer(view)
+            return
         self._state_flush_failures += 1
         count = self._state_flush_failures
         if count == 3 or (count > 3 and count & (count - 1) == 0):

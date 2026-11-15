@@ -1329,6 +1329,14 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         return f"{self.__class__.__name__.lower()}_{uuid.uuid4().hex[:8]}"
 
     @alters_data
+    def save_state(self) -> None:
+        """Save the view this component belongs to before the current turn's
+        reply (:meth:`djust.LiveView.save_state`): a component's state is
+        saved with its view's."""
+        from .._save_policy import request_save
+
+        request_save(self)
+
     def mount(self, **kwargs: Any) -> None:
         """
         Initialize component state.

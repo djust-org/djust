@@ -448,6 +448,11 @@ CHANGE_DETECTION_IGNORED: frozenset = frozenset(
         "static_assigns_count",
         "static_render",
         "query_budget",
+        # Save frequency (design: save frequency): the view option, and the
+        # per-turn request ``save_state()`` / ``@event_handler(save=True)``
+        # leaves for the commit (a framework signal, not state).
+        "state_save_interval",
+        "_djust_save_requested",
         # View options of the page-status / declared-URL-params work (#3688,
         # #3689). Class attributes like ``query_budget``; an instance that
         # assigns one (``self.state_attribute = ...``) must not publish it as

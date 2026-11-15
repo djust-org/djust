@@ -472,6 +472,22 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 **Fix**: Keep only `LIVEVIEW_CONFIG["csp_strict"]` and remove `csp_strict_styles`.
 
+### C040: State save interval cannot be used
+
+**Severity**: Error
+
+**What causes it**: `DJUST_STATE_SAVE_INTERVAL = "5"` read from an environment variable, `True`, `0.1`, `120`, or a value above half of `DJUST_SERVER_STATE_MAX_AGE`; the same values on a view's `state_save_interval`.
+
+**Fix**: Set it to `0` or a number of seconds from 0.5 to 60, at most half of `DJUST_SERVER_STATE_MAX_AGE`. A view's `state_save_interval` may also be `None` (the project's value).
+
+### C041: State save interval has no effect under a strict store
+
+**Severity**: Info
+
+**What causes it**: `DJUST_STATE_STORE_STRICT = True` together with `DJUST_STATE_SAVE_INTERVAL = 5`, or a view with `state_save_interval = 5`.
+
+**Fix**: Informational. Remove the interval, or turn `DJUST_STATE_STORE_STRICT` off to let turns be saved after their reply.
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error

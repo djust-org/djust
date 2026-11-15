@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 126 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 128 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -50,6 +50,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C037 | Config | Error | The sealed state store has no usable `DJUST_STATE_STORE_KEYS` or `cryptography` is not installed |
 | C038 | Config | Error | `DJUST_STATE_STORE_STRICT` is not `True` or `False` |
 | C039 | Config | Error | `csp_strict` and `csp_strict_styles` set to different values |
+| C040 | Config | Error | `DJUST_STATE_SAVE_INTERVAL` or a view's `state_save_interval` cannot be used |
+| C041 | Config | Info | A state save interval is set while `DJUST_STATE_STORE_STRICT` is on |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -377,6 +379,20 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: `csp_strict` and `csp_strict_styles` are both set, one on and the other off, each read from `LIVEVIEW_CONFIG` or, when it does not have the key, `DJUST_CONFIG`. `csp_strict_styles` is the earlier name of `csp_strict`, the one switch for output a strict Content-Security-Policy accepts (#4146); either one on turns it on, so the project has said two different things.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C039"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C039"]`
 - **False positives**: None.
+
+### C040 — State save interval cannot be used
+- **Severity**: Error
+- **Method**: Settings inspection (`DJUST_STATE_SAVE_INTERVAL`) and the `state_save_interval` class attribute of every project LiveView
+- **What it detects**: The interval is not `0` or a number of seconds from 0.5 to 60, or it exceeds half of `DJUST_SERVER_STATE_MAX_AGE` (a live page's saved state is rewritten at half its lifetime, which a longer interval would skip). At run time such a value is read as `0`: every turn's state is saved before its reply.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C040"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C040"]`
+- **False positives**: None.
+
+### C041 — State save interval has no effect under a strict store
+- **Severity**: Info
+- **Method**: Settings inspection (`DJUST_STATE_STORE_STRICT`, `DJUST_STATE_SAVE_INTERVAL`) and the `state_save_interval` class attribute of every project LiveView
+- **What it detects**: `DJUST_STATE_STORE_STRICT` is `True` and a non-zero interval is set. Strict refuses a turn whose state cannot be stored, a promise about every turn, so every turn is saved before its reply and the interval has no effect.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C041"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C041"]`
+- **False positives**: None: the interval is ignored as reported.
 
 <!-- END GENERATED check-sections:C -->
 

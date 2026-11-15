@@ -67,7 +67,9 @@ _VERSION = 9
 _KEY_PREFIX = "_djust_auto_"
 _MISSING: Any = object()
 #: Public names a transport sets per connection, and this module's own settings.
-_NOT_STATE = frozenset({"client_timezone", "automatic_state_max_kb", "automatic_state"})
+_NOT_STATE = frozenset(
+    {"client_timezone", "automatic_state_max_kb", "automatic_state", "state_save_interval"}
+)
 #: The switch (#4128). Project: ``DJUST_AUTOMATIC_STATE`` (default on). View:
 #: the class attribute ``automatic_state`` (None: the project's value).
 SETTING = "DJUST_AUTOMATIC_STATE"

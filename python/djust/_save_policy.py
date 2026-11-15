@@ -20,11 +20,13 @@ A turn is deferred only when ALL of these hold; otherwise it is immediate:
 2. the view declares no ``persist="server"`` / ``persist="client"`` field;
 3. ``DJUST_STATE_STORE_STRICT`` is off;
 4. the interval is not 0;
-5. the turn is not a URL change, queued no navigation, and its handler wrote
-   nothing to ``request.session`` itself.
+5. the turn is not a URL change, queued no navigation, its handler wrote
+   nothing to ``request.session`` itself, and nothing asked for the save
+   (``@event_handler(save=True)``, ``self.save_state()``).
 
 ``DJUST_STATE_SAVE_INTERVAL`` defaults to ``0``: every turn is immediate, as
-before. The HTTP fallback never asks: it rebuilds the view from storage on
+before. A view's ``state_save_interval`` (seconds, ``0``, or ``None`` for the
+project's value) overrides it for that view. The HTTP fallback never asks: it rebuilds the view from storage on
 every request, so it always saves before it answers.
 """
 
@@ -43,6 +45,10 @@ MODES = frozenset({IMMEDIATE, DEFERRED})
 
 #: The project setting: seconds; 0 saves before every reply.
 SETTING = "DJUST_STATE_SAVE_INTERVAL"
+#: The view class attribute: the same, for one view (None: the project's).
+VIEW_ATTRIBUTE = "state_save_interval"
+#: Where a turn's request for an immediate save waits for the commit.
+SAVE_FLAG = "_djust_save_requested"
 #: What the setting may be, besides 0.
 MIN_INTERVAL_S = 0.5
 MAX_INTERVAL_S = 60.0
@@ -54,6 +60,36 @@ def _valid(value: Any) -> bool:
     if type(value) not in (int, float):
         return False
     return value == 0 or MIN_INTERVAL_S <= value <= MAX_INTERVAL_S
+
+
+def within_lifetime(value: float) -> bool:
+    """Whether an interval leaves the stored state's half-life refresh room:
+    at most half of ``DJUST_SERVER_STATE_MAX_AGE`` (an unreadable lifetime
+    leaves no room)."""
+    from ._exposure import ExposureError
+    from ._exposure_sessions import server_state_max_age
+
+    try:
+        return value <= server_state_max_age() / 2
+    except ExposureError:
+        return False
+
+
+def _usable(value: Any, where: str) -> float:
+    """``value`` as an interval, or 0 with one WARNING per ``where``."""
+    if _valid(value) and (value == 0 or within_lifetime(float(value))):
+        return float(value)
+    if where not in _WARNED:
+        _WARNED.add(where)
+        logger.warning(
+            "djust: %s must be 0 or a number of seconds from %s to %s and at most half of "
+            "DJUST_SERVER_STATE_MAX_AGE; it is read as 0, and every turn's state is saved "
+            "before its reply (system check djust.C040).",
+            where,
+            MIN_INTERVAL_S,
+            MAX_INTERVAL_S,
+        )
+    return 0.0
 
 
 def state_save_interval() -> float:
@@ -68,23 +104,42 @@ def state_save_interval() -> float:
         value = getattr(settings, SETTING, 0)
     except Exception:  # noqa: BLE001 — settings unavailable: the default
         return 0.0
-    if _valid(value):
-        return float(value)
-    if SETTING not in _WARNED:
-        _WARNED.add(SETTING)
-        logger.warning(
-            "djust: %s must be 0 or a number of seconds from %s to %s; it is read as 0, "
-            "and every turn's state is saved before its reply (system check djust.C040).",
-            SETTING,
-            MIN_INTERVAL_S,
-            MAX_INTERVAL_S,
-        )
-    return 0.0
+    if type(value) is int and value == 0:
+        return 0.0
+    return _usable(value, SETTING)
 
 
 def interval_for(view: Any) -> float:
-    """The interval that applies to ``view``: the project's setting."""
-    return state_save_interval()
+    """The interval that applies to ``view``: its class's
+    ``state_save_interval`` when that is not None, else the project's."""
+    from inspect import getattr_static
+
+    value = getattr_static(type(view), VIEW_ATTRIBUTE, None)
+    if value is None:
+        return state_save_interval()
+    owner = type(view)
+    return _usable(value, "%s.%s.%s" % (owner.__module__, owner.__qualname__, VIEW_ATTRIBUTE))
+
+
+def request_save(owner: Any) -> None:
+    """Have the current turn of ``owner``'s view saved before its reply.
+
+    ``owner`` is the view, or a component (its view is found through the
+    component's parents). Read once, by the turn's commit
+    (:func:`take_save_request`)."""
+    target = owner
+    for _ in range(32):
+        parent = vars(target).get("_parent") if hasattr(target, "__dict__") else None
+        if parent is None:
+            break
+        target = parent
+    vars(target)[SAVE_FLAG] = True
+
+
+def take_save_request(view: Any) -> bool:
+    """Whether something asked for this turn to be saved now; forgets it."""
+    storage = getattr(view, "__dict__", None)
+    return bool(storage.pop(SAVE_FLAG, False)) if storage is not None else False
 
 
 def transport_holds_view(transport: Any) -> bool:
@@ -147,7 +202,8 @@ def save_mode(view: Any, transport: Any, *, source: str) -> str:
     ``"async"``). :data:`IMMEDIATE` unless every condition of the module
     docstring holds.
     """
-    if not transport_holds_view(transport) or not deferrable(view):
+    asked = take_save_request(view)  # one turn's request, read once whatever the answer
+    if asked or not transport_holds_view(transport) or not deferrable(view):
         return IMMEDIATE
     if source == "url_change" or _navigates(view) or _wrote_the_session(view):
         return IMMEDIATE
@@ -173,12 +229,17 @@ __all__ = [
     "MAX_INTERVAL_S",
     "MIN_INTERVAL_S",
     "MODES",
+    "SAVE_FLAG",
     "SETTING",
+    "VIEW_ATTRIBUTE",
     "deferrable",
     "declares_persistence",
     "holder_claims",
     "interval_for",
+    "request_save",
     "save_mode",
     "state_save_interval",
+    "take_save_request",
     "transport_holds_view",
+    "within_lifetime",
 ]
