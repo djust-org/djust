@@ -1,6 +1,6 @@
 # State Management Quick Start
 
-> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2680), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
+> **`@optimistic` and `@client_state` were removed in djust 2.0 (#4006).** For instant feedback this guide uses `dj-loading.*` attributes; to keep two values in step, set both in one handler. See the [2.0 migration guide](../website/guides/migrating-to-2.0.md#python-names).
 
 **Get productive with djust state management in 5 minutes**
 
@@ -69,28 +69,30 @@ urlpatterns = [
 
 ## ⚡ Add Instant Feedback (1 minute)
 
-Make the UI update **instantly** while the server validates:
+Show the user that a search is running the moment it is sent. This is a
+template change, not a decorator; the view stays as it is:
 
-```python
-from djust.decorators import debounce, event_handler, optimistic
-
-class ProductSearchView(LiveView):
-    # ... same template, imports and results field ...
-
-    @event_handler
-    @debounce(wait=0.5)
-    @optimistic  # ← Add this line
-    def search(self, value: str = "", **kwargs):
-        self.results = Product.objects.filter(name__icontains=value)[:10]
+```html
+<div dj-root>
+    <input dj-input="search" placeholder="Search products..." />
+    <span dj-loading.show dj-loading.for="search" style="display:none">Searching...</span>
+    <div dj-loading.class="opacity-50" dj-loading.for="search">
+        {% for product in results %}
+            <div>{{ product.name }} - ${{ product.price }}</div>
+        {% endfor %}
+    </div>
+</div>
 ```
 
 **What changed?**
 - User types "laptop"
-- UI updates **instantly** (optimistic)
-- After 500ms, server validates
-- Server sends corrections (if any)
+- After 500ms the event is sent, and "Searching..." shows **instantly**
+- The old results dim while the server queries
+- The server's re-render replaces them and clears both
 
-**Result**: Feels native, like a desktop app!
+**Result**: The page never looks stuck. To change the page itself before the
+server answers (flip a class, show an element), use a
+[JS Command](../website/guides/js-commands.md) chain.
 
 ---
 
@@ -99,14 +101,16 @@ class ProductSearchView(LiveView):
 Avoid redundant server queries by caching responses:
 
 ```python
-from djust.decorators import debounce, event_handler, optimistic, cache
+from djust import LiveView, state
+from djust.decorators import debounce, event_handler, cache
+from myapp.models import Product
 
 class ProductSearchView(LiveView):
-    # ... same template, imports and results field ...
+    # ... same template as above ...
+    results = state(default_factory=list)
 
     @event_handler
     @debounce(wait=0.5)
-    @optimistic
     @cache(ttl=300, key_params=["value"])  # ← Add this line (5 min cache)
     def search(self, value: str = "", **kwargs):
         self.results = Product.objects.filter(name__icontains=value)[:10]
@@ -128,7 +132,7 @@ class ProductSearchView(LiveView):
 In **3 minutes** and **12 lines of Python**, you built a production-ready search with:
 
 ✅ **Debouncing** - Only queries after user stops typing
-✅ **Optimistic updates** - Instant UI feedback
+✅ **Loading feedback** - Instant `dj-loading.*` indicators
 ✅ **Client-side caching** - Zero redundant queries
 ✅ **Automatic DOM diffing** - Minimal network payload
 ✅ **Zero JavaScript** - No manual event handling
@@ -145,18 +149,16 @@ In **3 minutes** and **12 lines of Python**, you built a production-ready search
 |-----------|----------|---------|
 | `@debounce(wait)` | User is typing | Search, autosave |
 | `@throttle(interval)` | Rapid events | Scroll, resize |
-| `@optimistic` | Instant feedback needed | Counter, toggle |
 | `@cache(ttl, key_params)` | Same query repeated | Autocomplete, search |
-| `@client_state(keys)` | Multi-component coordination | Dashboard filters |
 | `DraftModeMixin` | Auto-save forms | Contact form, email |
 
 **Quick Decision Matrix**:
 ```
 Typing in input? → @debounce(0.5)
 Scrolling/resizing? → @throttle(0.1)
-Need instant UI update? → @optimistic
+Need instant UI update? → dj-loading.* attributes or JS Commands
 Same query multiple times? → @cache(ttl)
-Multiple components? → @client_state([keys])
+Multiple components? → set every value in one handler
 Auto-save forms? → DraftModeMixin
 ```
 
@@ -185,11 +187,12 @@ def on_scroll(self, scroll_y: int = 0, **kwargs):
     self.scroll_position = scroll_y
 ```
 
-**Client State (coordinate components)**:
+**Shared State (coordinate components)**:
 ```python
-@client_state(keys=["filter"])
-def update_filter(self, filter: str = "", **kwargs):
-    self.filter = filter  # Automatically notifies other components
+@event_handler
+def update_filter(self, value: str = "", **kwargs):
+    self.filter = value
+    self.results = self.apply_filter(value)  # one re-render updates both
 ```
 
 **Draft Mode (auto-save forms)**:
@@ -206,7 +209,7 @@ class ContactFormView(DraftModeMixin, LiveView):
 Explore complete working examples in the repository:
 - **[Product Search](../examples/demo_project/demo_app/views/)** - Debouncing + caching
 - **[Dashboard](../examples/demo_project/demo_app/views/)** - Multi-component coordination
-- **[Forms](../examples/demo_project/demo_app/views/)** - Draft mode + optimistic updates
+- **[Forms](../examples/demo_project/demo_app/views/)** - Draft mode + loading states
 
 ### 💬 Get Help
 
@@ -223,9 +226,9 @@ Explore complete working examples in the repository:
 **No!** All state management patterns work with zero JavaScript:
 - Debouncing
 - Throttling
-- Optimistic updates
+- Loading indicators (`dj-loading.*`)
 - Response caching
-- Client-side state coordination
+- Coordinating values in one handler
 - Form draft saving
 
 JavaScript is only needed for:
@@ -248,13 +251,12 @@ JavaScript is only needed for:
 ```python
 @event_handler           # Callable from the browser
 @debounce(wait=0.5)      # Wait for typing to stop
-@optimistic               # Update UI instantly
 @cache(ttl=60)           # Cache for 1 minute
 def search(self, value: str = "", **kwargs):
     self.results = expensive_query(value)
 ```
 
-**Execution order**: Top to bottom (debounce → optimistic → cache → handler)
+**Execution order**: Top to bottom (debounce → cache → handler)
 
 ### "How do I debug decorator behavior?"
 
@@ -275,7 +277,6 @@ window.djustDebug = true;  // Enable client-side logging
 You'll see logs like:
 - `[djust:cache] Cache hit for search(query=laptop) - age: 45s / TTL: 300s`
 - `[djust:debounce] Waiting 500ms for search(query=laptop)`
-- `[djust:state] Published to bus: filter=electronics`
 
 ---
 
@@ -284,7 +285,7 @@ You'll see logs like:
 You've mastered the basics of djust state management. You now know how to:
 
 ✅ Debounce user input
-✅ Add optimistic UI updates
+✅ Add instant loading feedback
 ✅ Cache responses client-side
 ✅ Compose multiple decorators
 ✅ Build production-ready reactive UIs with zero JavaScript

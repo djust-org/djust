@@ -63,7 +63,7 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[Forms Implementation](website/guides/forms.md)** - Django Forms integration
 
 ### 🔄 State Management
-- **[State Management API](state-management/STATE_MANAGEMENT_API.md)** - Complete decorator reference (@debounce, @throttle, @cache, @loading, DraftModeMixin, and the inert @optimistic / @client_state — see #2699)
+- **[State Management API](state-management/STATE_MANAGEMENT_API.md)** - Complete decorator reference (@debounce, @throttle, @cache, @loading, DraftModeMixin; `@optimistic` / `@client_state` were removed in 2.0, #4006)
 - **[Quick Start](state-management/STATE_MANAGEMENT_QUICKSTART.md)** - 5-minute guide to state management
 - **[Tutorial](state-management/STATE_MANAGEMENT_TUTORIAL.md)** - Step-by-step product search example
 - **[Patterns & Best Practices](state-management/STATE_MANAGEMENT_PATTERNS.md)** - Common patterns and anti-patterns
@@ -75,9 +75,8 @@ This directory contains comprehensive documentation for djust organized by topic
 **Implementation History**:
 - [Phase 1: Debounce & Throttle](state-management/IMPLEMENTATION_PHASE1.md)
 - [Phase 2: @loading Attribute](state-management/IMPLEMENTATION_PHASE2.md)
-- [Phase 3: @client_state](state-management/IMPLEMENTATION_PHASE3.md)
 - [Phase 4: @cache Decorator](state-management/IMPLEMENTATION_PHASE4.md)
-- [Phase 5: @optimistic & DraftMode](state-management/IMPLEMENTATION_PHASE5.md)
+- [Phase 5: @cache, DraftModeMixin & Loading States](state-management/IMPLEMENTATION_PHASE5.md)
 - [Loading Attribute Improvements](state-management/LOADING_ATTRIBUTE_IMPROVEMENTS.md)
 
 ### 🌳 Virtual DOM

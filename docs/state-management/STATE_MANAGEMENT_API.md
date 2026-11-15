@@ -4,16 +4,14 @@
 > gate for the first two is `static/djust/src/05-handler-rate-limit.js`,
 > configured from the mount frame's `handler_config` (#2656).
 >
-> **`@optimistic` is INERT (#2699)** — it stamps metadata nothing in the
-> shipped client reads, and a bare `@optimistic` declares no DOM change to
-> apply, so the UI does not update before the server responds.
->
-> **`@client_state` is INERT too (#2680)** — every example below that
-> uses it works because the server re-renders, not because anything is
-> published. The `StateBus` these examples credit was deleted in #2680.
+> **`@optimistic` and `@client_state` were removed in djust 2.0 (#4006).**
+> They recorded metadata nothing in the shipped client read. For instant
+> feedback use `dj-loading.*` attributes or JS Commands; to keep two values in
+> step, set both in one handler. See the
+> [2.0 migration guide](../website/guides/migrating-to-2.0.md#python-names).
 
 
-**Status:** ✅ Implemented (Phase 5 Complete: @cache, @client_state, DraftModeMixin, @loading)
+**Status:** ✅ Implemented (@debounce, @throttle, @cache, DraftModeMixin, `dj-loading.*`)
 
 **Last Updated:** 2025-11-14
 
@@ -26,8 +24,6 @@
 - [Decorators](#decorators)
   - [@debounce](#debounce)
   - [@throttle](#throttle)
-  - [@optimistic](#optimistic)
-  - [@client_state](#client_state)
   - [@cache](#cache)
 - [Mixins](#mixins)
   - [DraftModeMixin](#draftmodemixin)
@@ -47,7 +43,7 @@
 
 ## Overview
 
-djust's State Management API provides Python-only abstractions for common client-side patterns. These decorators, mixins, and HTML attributes eliminate the need for custom JavaScript in most use cases, allowing developers to write pure Python while achieving responsive, optimistic UIs.
+djust's State Management API provides Python-only abstractions for common client-side patterns. These decorators, mixins, and HTML attributes eliminate the need for custom JavaScript in most use cases, allowing developers to write pure Python while achieving responsive UIs.
 
 ### Philosophy
 
@@ -75,9 +71,7 @@ djust's State Management API provides Python-only abstractions for common client
 |-----------|-------------|----------------------|---------------|
 | `@debounce(wait)` | User is typing | 0.3-0.5s | +0.6 KB |
 | `@throttle(interval)` | Rapid scroll/resize | 0.1-1.0s | *(shared)* |
-| `@optimistic` | *(inert — no client impl, #2699)* | — | 0 KB |
 | `@cache(ttl)` | Same query repeated | 60-300s | +0.7 KB |
-| `@client_state(keys)` | *(inert — no client impl, #2680)* | — | 0 KB |
 | `@permission_required(perm)` | Restrict handler to permitted users | Delete, admin | +0 KB |
 | `@background` | Long-running operations | API calls, AI, file processing | +0 KB |
 | `DraftModeMixin` | Long forms, text editors | Auto-save | +0.9 KB |
@@ -94,13 +88,13 @@ djust's State Management API provides Python-only abstractions for common client
    → @throttle(interval=0.1)
 
 ❓ Need instant UI update before server responds?
-   → JS Commands (`show`/`hide`/`add_class`) — `@optimistic` is a marker only today
+   → dj-loading.* attributes, or JS Commands (`show`/`hide`/`add_class`)
 
 ❓ Same query gets called multiple times?
    → @cache(ttl=60, key_params=["query"])
 
 ❓ Multiple components need to share state?
-   → one handler setting both (@client_state is INERT, #2680)
+   → set both values in one handler (one re-render updates both)
 
 ❓ Auto-save form drafts to localStorage?
    → DraftModeMixin
@@ -136,27 +130,20 @@ def update_value(self, value: int = 0, **kwargs):
 ```
 **Result**: the 500ms wait IS applied in the browser (#2656) — a burst of
 keystrokes reaches the server as ONE event carrying the last value, which the
-server then validates/corrects. (adding `@optimistic` does
-not change this today — the client-side instant update is not implemented)
+server then validates/corrects. For feedback while the event is in flight,
+add `dj-loading.*` attributes to the input.
 
 ---
 
 **Pattern 3: Multi-Component Dashboard**
 ```python
-# Component A: Filter selector
-@client_state(keys=["filter"])
-def update_filter(self, filter: str = "", **kwargs):
-    self.filter = filter  # Published to StateBus
-
-# Component B: Results list (auto-subscribes)
-@client_state(keys=["filter"])
 @debounce(wait=0.3)
-def on_filter_change(self, filter: str = "", **kwargs):
-    self.results = self.apply_filter(filter)
+def update_filter(self, filter: str = "", **kwargs):
+    self.filter = filter                         # the selector's value
+    self.results = self.apply_filter(filter)     # the results list
 ```
-**Result**: nothing of the sort. `@client_state` is INERT (#2680) and the
-state bus was deleted (#2680) — Component B is never called. What actually
-coordinates these is the server re-render, so put both updates in ONE handler.
+**Result**: one handler sets both values, so one re-render updates the filter
+selector and the results list together.
 
 ---
 
@@ -183,9 +170,7 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
 |-----------|----------------|---------------|----------------|
 | `@debounce` | ~0.6 KB gz — one gate module (`05-handler-rate-limit.js`) shared with `@throttle`, plus one timer per pending handler | ⬇️ Reduces calls | ⬇️ Fewer requests |
 | `@throttle` | ~0.6 KB gz — the same shared gate module, plus one timer per open window | ⬇️ Reduces calls | ⬇️ Fewer requests |
-| `@optimistic` | 0 (no-op today) | ➡️ Same calls | ➡️ Same requests |
 | `@cache` | ~1ms lookup | ⬇️⬇️ Eliminates repeat calls | ⬇️⬇️ Zero for cache hits |
-| `@client_state` | ~2ms | ➡️ Same calls | ➡️ Same requests |
 | `DraftModeMixin` | ~3ms | ⬆️ Adds save calls (optional) | ➡️ Small localStorage writes |
 
 **Legend:**
@@ -202,10 +187,10 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
 |---------|----------|--------|------|
 | **Debouncing** | Search input, text fields | `@debounce(0.5)` | - |
 | **Throttling** | Scroll, resize, mouse move | `@throttle(0.1)` | - |
-| **Optimistic Updates** | Counters, toggles, sliders | `@optimistic` (marker only — not client-implemented yet) | - |
+| **Instant Feedback** | Counters, toggles, sliders | - | `dj-loading.*`, JS Commands |
 | **Loading States** | Button disable, spinners, overlays | - | `dj-loading.disable`, `dj-loading.show`, `dj-loading.hide`, `dj-loading.class` |
 | **Loading Text** | Button text replacement | - | `@loading-text="Saving..."` (deprecated) |
-| **Client State** | Multi-component coordination | `@client_state(keys=["temp"])` | - |
+| **Shared State** | Multi-component coordination | One handler sets both values | - |
 | **Caching** | Autocomplete, API calls | `@cache(ttl=300)` | - |
 | **Permission Guard** | Handler access control | `@permission_required("perm")` | - |
 | **Draft Mode** | Forms, text editors | `DraftModeMixin` | - |
@@ -378,190 +363,68 @@ class ScrollTrackerView(LiveView):
 
 ---
 
-### @optimistic
+### Instant feedback
 
-**Status:** ⚠️ Server-side marker only — the client-side optimistic application is **NOT implemented** in the shipped client bundle
+djust 1.x shipped an `@optimistic` decorator; it recorded metadata nothing in
+the client read and was removed in djust 2.0 (#4006). Two supported tools give
+feedback before the server answers:
 
-`@optimistic` stamps `_djust_decorators["optimistic"] = True` on the handler
-(`python/djust/decorators.py`). The client reads `window.djust.optimistic`
-exactly once (`static/djust/src/09-event-binding.js`) — and nothing ever
-assigns it — so **no optimistic DOM update is applied and no revert happens**.
-Handlers behave identically with or without the decorator today.
+- **[`dj-loading.*` attributes](#dj-loading-attributes-not-a-decorator)** put an element into a pending
+  state (disabled, hidden, shown, extra class) the moment the event is sent,
+  and take it out when the server's response arrives.
+- **[JS Commands](../website/guides/js-commands.md)** (`show`, `hide`,
+  `add_class`, `remove_class`, ...) run in the browser immediately, and a
+  final `push(...)` sends the event; the server's re-render then confirms or
+  corrects the change. The worked example is
+  [Tutorial: Optimistic UI updates with JS Commands](../website/guides/tutorial-optimistic-updates.md).
 
-Do not use this decorator expecting instant UI feedback. For perceived
-snappiness today, use [`dj-loading.*` attributes](#loading) (immediate pending
-state) or the JS Commands (`show`/`hide`/`add_class`) bound alongside the
-event attribute, which run client-side before the server round-trip.
-
-#### Signature
-
-```python
-def optimistic(func: F) -> F:
-    """Metadata marker (no runtime effect in the shipped client)."""
+```html
+<!-- Disabled while the server handles the click -->
+<button dj-click="save" dj-loading.disable>Save</button>
 ```
 
-#### Parameters
-
-None - this is a marker decorator.
-
-#### Planned behavior (not yet implemented)
-
-1. **User clicks button** → Client applies the DOM change instantly
-2. **Event sent to server** → Server executes the handler
-3. **Server sends patch** → Client reconciles; on error, reverts the change
-
-Implementing this requires a client-side `window.djust.optimistic` module
-(the read site in `09-event-binding.js` is the natural hook) and an
-error-revert path (currently a `TODO` in that file).
-
-#### See Also
-
-- [STATE_MANAGEMENT_PATTERNS.md](STATE_MANAGEMENT_PATTERNS.md) - Patterns that work today
-
+For work that takes seconds, return quickly and finish in the background with
+`self.start_async(...)` or `@background` (see
+[Loading States & Background Work](../website/guides/loading-states.md)).
 
 ---
 
-### @client_state
+### Keeping values in step
 
-**Status:** ✅ Implemented (PR #81)
-
-Enables client-side state sharing between multiple components without server round trips. Perfect for dashboards, coordinated UI updates, and multi-component communication.
-
-#### Signature
-
-```python
-def client_state(keys: list[str]) -> Callable:
-    """
-    Enable client-side state bus for component coordination.
-
-    Args:
-        keys: State keys this handler publishes to
-
-    Returns:
-        Decorated handler function
-    """
-```
-
-#### Parameters
-
-- **keys** (`list[str]`): List of state keys to publish. Other components can subscribe to these keys.
-
-#### Example
+djust 1.x also shipped `@client_state(keys=[...])`, documented as a client
+state bus; it was removed in djust 2.0 (#4006) and nothing ever published to
+a bus. Values that must agree are kept in step by the server: set them all in
+one handler, and one re-render updates every element that shows them.
 
 ```python
 from djust import LiveView, state
-from djust.decorators import client_state, debounce, event_handler
+from djust.decorators import debounce, event_handler
 
 class DashboardView(LiveView):
     template = """
     <div dj-root>
-        <!-- Slider controls temperature -->
         <input type="range"
                min="0" max="120"
                value="{{ temperature }}"
                dj-input="update_temperature" />
 
-        <!-- Display listens to 'temperature' state -->
         <div id="temp-display">{{ temperature }}°F</div>
-
-        <!-- Gauge listens to 'temperature' state -->
-        <div id="gauge" data-subscribe="temperature"></div>
-
-        <!-- Chart listens to 'temperature' state -->
-        <canvas id="chart" data-subscribe="temperature"></canvas>
+        <div id="temp-celsius">{{ celsius }}°C</div>
     </div>
     """
     temperature = state(72)
+    celsius = state(22)
 
     @event_handler
-    @client_state(keys=["temperature"])  # Publish to state bus
     @debounce(wait=0.5)
-    def update_temperature(self, temperature: int = 0, **kwargs):
-        """
-        When slider changes:
-        1. Client publishes 'temperature' to state bus (instant)
-        2. All components listening to 'temperature' update (instant)
-        3. Server receives debounced request after 500ms
-        4. Server validates and persists
-
-        Result: Smooth 60 FPS updates, minimal server requests!
-        """
-        self.temperature = max(0, min(120, temperature))
+    def update_temperature(self, value: int = 72, **kwargs):
+        """One handler sets both values; one re-render shows both."""
+        self.temperature = max(0, min(120, int(value)))
+        self.celsius = round((self.temperature - 32) * 5 / 9)
 ```
 
-#### Behavior
-
-1. **User drags slider** → `update_temperature` called
-2. **Client publishes** → `StateBus.publish("temperature", 72)` **instantly**
-3. **Subscribers update** → Display, gauge, chart all update **instantly**
-4. **Server request** → Sent after 500ms debounce (validation/persistence)
-
-#### Subscribing to State
-
-Components subscribe to state keys using HTML data attributes:
-
-```html
-<!-- Auto-subscribe via data attribute -->
-<div data-subscribe="temperature">
-    Will receive updates when 'temperature' changes
-</div>
-
-<!-- Multiple subscriptions -->
-<div data-subscribe="temperature,humidity,pressure">
-    Updates when any key changes
-</div>
-```
-
-There is no JavaScript subscription API. This section used to show a
-`subscribe(...)` call on a `StateBus` global; that class had zero consumers
-and was deleted in #2680, and no shipped bundle ever assigned the global, so
-the snippet could only ever have thrown `TypeError`.
-
-To drive a canvas chart from server state, read the value out of the DOM
-the server already re-rendered — e.g. a `MutationObserver` on the element
-holding it, or a `dj-hook` on that element.
-
-#### Multi-Component Coordination
-
-```python
-class WeatherDashboard(LiveView):
-    @client_state(keys=["temperature", "humidity"])
-    def update_weather(self, temp: int = 0, humidity: int = 0, **kwargs):
-        """
-        Publishes multiple state keys.
-        Different components subscribe to different keys.
-        """
-        self.temperature = temp
-        self.humidity = humidity
-```
-
-Template:
-
-```html
-<!-- Display subscribes to temperature -->
-<div data-subscribe="temperature">{{ temperature }}°F</div>
-
-<!-- Gauge subscribes to humidity -->
-<div data-subscribe="humidity">{{ humidity }}%</div>
-
-<!-- Chart subscribes to both -->
-<canvas data-subscribe="temperature,humidity"></canvas>
-```
-
-#### Benefits
-
-- **Instant updates:** All components update at 60 FPS
-- **No cascading requests:** One server request updates all components
-- **Decoupled:** Components don't know about each other
-- **No custom JavaScript:** Built-in state bus handles everything
-
-#### Common Use Cases
-
-- Dashboards with multiple widgets
-- Filter panels updating multiple lists
-- Synchronized controls (linked inputs)
-- Real-time data visualization
-- Multi-step forms with previews
+To drive a canvas chart from server state, read the value out of the DOM the
+server re-rendered, e.g. with a `dj-hook` on the element holding it.
 
 #### See Also
 
@@ -1420,23 +1283,19 @@ Decorators can be combined for powerful effects. Order matters!
 #### Recommended Order
 
 ```python
-from djust.decorators import optimistic, debounce, cache, client_state, throttle
+from djust.decorators import debounce, cache
 
 # Correct order (inner to outer):
-@client_state(keys=["search_results"])  # 4. Publish to state bus
-@cache(ttl=300)                          # 3. Cache responses
-@debounce(wait=0.5)                      # 2. Debounce requests
-@optimistic                              # 1. Update UI immediately
+@cache(ttl=300)                          # 2. Cache responses
+@debounce(wait=0.5)                      # 1. Debounce requests
 def search(self, query: str = "", **kwargs):
     """
     Execution order:
-    1. Client updates UI optimistically (instant)
-    2. Client debounces server request (500ms delay)
-    3. Client checks cache (maybe instant return)
-    4. Server processes (if cache miss)
-    5. Result published to state bus (other components update)
+    1. Client debounces server request (500ms delay)
+    2. Client checks cache (maybe instant return)
+    3. Server processes (if cache miss)
     """
-    return {"results": search_database(query)}
+    self.results = search_database(query)
 ```
 
 #### Invalid Combinations
@@ -1465,19 +1324,6 @@ def search(self, query: str = "", **kwargs):
 
 #### Common Combinations
 
-**Optimistic + Debounce** (smooth sliders):
-
-```python
-@debounce(wait=0.5)
-@optimistic
-def update_slider(self, value: int = 0, **kwargs):
-    """
-    UI updates instantly as slider moves.
-    Server receives one request after user stops.
-    """
-    ...
-```
-
 **Cache + Debounce** (autocomplete):
 
 ```python
@@ -1490,18 +1336,9 @@ def autocomplete(self, query: str = "", **kwargs):
     ...
 ```
 
-**Client State + Optimistic** (multi-component dashboards):
-
-```python
-@client_state(keys=["temperature"])
-@optimistic
-def update_temperature(self, temp: int = 0, **kwargs):
-    """
-    All components update instantly.
-    Server validates in background.
-    """
-    ...
-```
+For instant feedback, pair a debounced handler with `dj-loading.*` attributes
+or a JS Command chain in the template; see [Instant feedback](#instant-feedback).
+(`@optimistic` and `@client_state` were removed in djust 2.0, #4006.)
 
 ---
 
@@ -1512,56 +1349,24 @@ When combining multiple decorators, **order matters**. Decorators are applied fr
 #### Recommended Order (Outer to Inner)
 
 ```python
-from djust.decorators import client_state, cache, debounce, optimistic
+from djust.decorators import cache, debounce
 
 # ✅ CORRECT ORDER:
-@client_state(keys=["results"])  # 4. Publish to state bus (outermost)
-@cache(ttl=300)                   # 3. Cache responses
-@debounce(wait=0.5)               # 2. Debounce requests
-@optimistic                       # 1. Update UI immediately (innermost)
+@cache(ttl=300)                   # 2. Cache responses (outermost)
+@debounce(wait=0.5)               # 1. Debounce requests (innermost)
 def search(self, query: str = "", **kwargs):
     """
     Execution flow:
-    1. Client updates UI optimistically (instant)
-    2. Client debounces server request (500ms delay)
-    3. Client checks cache (maybe instant return)
-    4. Server processes (if cache miss)
-    5. Result published to state bus (other components update)
+    1. Client debounces server request (500ms delay)
+    2. Client checks cache (maybe instant return)
+    3. Server processes (if cache miss)
     """
-    return {"results": search_database(query)}
+    self.results = search_database(query)
 ```
 
 #### Why Order Matters
 
-**Example 1: Optimistic + Debounce**
-
-```python
-# ✅ CORRECT: UI updates instantly, server receives debounced requests
-@debounce(wait=0.5)  # Outer: delays server call
-@optimistic          # Inner: immediate UI update
-def update_slider(self, value: int = 0, **kwargs):
-    """
-    User drags slider:
-    - UI updates at 60 FPS (optimistic)
-    - Server receives ~1 request after 500ms (debounced)
-    → Best UX!
-    """
-    self.value = value
-
-# ❌ WRONG: Debounce delays optimistic update
-@optimistic          # Outer: tries to update after debounce
-@debounce(wait=0.5)  # Inner: delays everything
-def update_slider(self, value: int = 0, **kwargs):
-    """
-    User drags slider:
-    - UI updates delayed by 500ms (bad UX!)
-    - Defeats purpose of optimistic updates
-    → Feels sluggish
-    """
-    self.value = value
-```
-
-**Example 2: Cache + Debounce**
+**Example: Cache + Debounce**
 
 ```python
 # ✅ CORRECT: Debounce first, then check cache
@@ -1592,19 +1397,15 @@ def search(self, query: str = "", **kwargs):
 
 #### General Rules
 
-1. **@optimistic** → Always innermost (immediate UI update)
-2. **@debounce / @throttle** → Middle layer (rate limiting)
-3. **@cache** → After rate limiting (check cache for debounced requests)
-4. **@client_state** → Outermost (publish results to other components)
+1. **@debounce / @throttle** → Inner layer (rate limiting)
+2. **@cache** → After rate limiting (check cache for debounced requests)
 
 #### Quick Reference Table
 
 | Decorator | Position | Why |
 |-----------|----------|-----|
-| `@optimistic` | Innermost (1st) | UI must update immediately |
-| `@debounce` / `@throttle` | Middle (2nd) | Rate limit before server/cache |
-| `@cache` | Middle (3rd) | Check cache for rate-limited requests |
-| `@client_state` | Outermost (4th) | Publish final results |
+| `@debounce` / `@throttle` | Inner (1st) | Rate limit before server/cache |
+| `@cache` | Outer (2nd) | Check cache for rate-limited requests |
 
 #### Invalid Combinations
 
@@ -1620,16 +1421,6 @@ def handler(self, **kwargs):
     Choose one: debounce (wait for silence) or throttle (periodic).
     """
     ...
-
-# ❌ Don't use @cache with @optimistic (cache won't work)
-@cache(ttl=300)
-@optimistic
-def handler(self, **kwargs):
-    """
-    Optimistic updates bypass cache.
-    Use cache for read operations, not optimistic writes.
-    """
-    ...
 ```
 
 ---
@@ -1641,7 +1432,7 @@ All decorators support full type hints for IDE autocomplete and type checking.
 ```python
 from typing import Any
 from djust import LiveView
-from djust.decorators import debounce, optimistic
+from djust.decorators import debounce
 
 class TypedView(LiveView):
     @debounce(wait=0.5)
@@ -1681,34 +1472,32 @@ def search(self, query: str = "") -> list[SearchResult]:
 #### Server-Side Errors
 
 ```python
-@optimistic
+@event_handler()
 def delete_item(self, item_id: int = 0, **kwargs):
     """
-    Client removes item optimistically.
-    If server raises error, client receives error response.
+    If the server raises, the client receives an error frame and the
+    view's state is unchanged.
     """
     item = get_object_or_404(Item, id=item_id)
 
-    if not request.user.can_delete(item):
-        # Client reverts optimistic update
+    if not self.request.user.has_perm("myapp.delete_item"):
         raise PermissionError("Cannot delete this item")
 
     item.delete()
 ```
 
-#### Client-Side Error Handling
+#### Undoing Client-Side Changes
 
-Errors are automatically handled by the framework:
-
-1. **Optimistic update applied** → Item removed from list
-2. **Server returns error** → Error response received
-3. **Client reverts** → Item restored to list
-4. **Error displayed** → Toast/alert shown to user (configurable)
+If the template changed the page before the server answered (a JS Command
+chain), the server's re-render corrects any element whose state it changed.
+A class a JS Command set stays set until something changes it, so when the
+handler rejects the event it must send the inverse command with
+`self.push_commands(...)`; see
+[Tutorial: Optimistic UI updates with JS Commands](../website/guides/tutorial-optimistic-updates.md).
 
 #### Custom Error Messages
 
-There is no `djust.exceptions.LiveViewError` (and no `revert_optimistic` /
-`show_toast` mechanism — see the `@optimistic` status above). Raise any
+There is no `djust.exceptions.LiveViewError`. Raise any
 exception from a handler; djust catches it and sends an error frame to the
 client:
 
@@ -1737,8 +1526,6 @@ This section estimates the implementation complexity for each feature to help pr
 | **@throttle** | Low | 1-2 days | None | client.js decorator metadata support |
 | **@loading** | Low | 2-3 days | None | CSS class management |
 | **@loading-text** | Low | 1 day | None | Button text replacement |
-| **@optimistic** | High | 1-2 weeks | VDOM reconciliation, rollback logic | Stable VDOM implementation |
-| **@client_state** | Medium | 3-5 days | State bus implementation | Pub/sub pattern in client.js |
 | **@cache** | Medium | 3-5 days | LRU cache, TTL management | Map() with expiration logic |
 | **DraftModeMixin** | Medium | 3-5 days | localStorage integration | Form field detection |
 
@@ -1749,12 +1536,8 @@ This section estimates the implementation complexity for each feature to help pr
 - **@loading / @loading-text:** CSS class toggling, straightforward implementation
 
 **Medium Complexity (3-5 days each):**
-- **@client_state:** Requires pub/sub system, event coordination
 - **@cache:** Need LRU eviction, TTL expiration, cache key generation
 - **DraftModeMixin:** localStorage API, field detection, restore logic
-
-**High Complexity (1-2 weeks):**
-- **@optimistic:** Requires VDOM state tracking, rollback on error, reconciliation with server patches
 
 #### Implementation Phases (Recommended)
 
@@ -1769,17 +1552,9 @@ This section estimates the implementation complexity for each feature to help pr
 - @loading
 - @loading-text
 
-**Phase 3: Client State (1 week)**
-- @client_state
-- Built-in state bus
-
 **Phase 4: Caching (1 week)**
 - @cache
 - LRU cache implementation
-
-**Phase 5: Optimistic UI (2 weeks)**
-- @optimistic
-- VDOM tracking and rollback
 
 **Phase 6: Draft Mode (1 week)**
 - DraftModeMixin
@@ -1806,8 +1581,6 @@ client.js (current): ~5.0 KB (gzipped)
 | **Decorator infrastructure** | ~300 bytes | ~150 bytes | Metadata registry |
 | **@debounce implementation** | ~200 bytes | ~100 bytes | Timer management |
 | **@throttle implementation** | ~200 bytes | ~100 bytes | Rate limiting |
-| **@optimistic tracking** | ~800 bytes | ~400 bytes | VDOM state management |
-| **@client_state (state bus)** | ~1000 bytes | ~500 bytes | Pub/sub system |
 | **@cache (LRU cache)** | ~800 bytes | ~400 bytes | Map with TTL/LRU |
 | **@loading CSS management** | ~300 bytes | ~150 bytes | Class toggling |
 | **DraftModeMixin** | ~600 bytes | ~300 bytes | localStorage API |
@@ -1845,11 +1618,11 @@ After:    7.1 KB gzipped (+42%)
        ...
    ```
 
-2. **Lazy Loading:** Load complex features (optimistic, cache) on demand
+2. **Lazy Loading:** Load complex features (cache) on demand
    ```javascript
-   // Load @optimistic code only when first used
-   if (handler.isOptimistic && !optimisticModule) {
-       optimisticModule = await import('./optimistic.js');
+   // Load @cache code only when first used
+   if (handler.isCached && !cacheModule) {
+       cacheModule = await import('./cache.js');
    }
    ```
 
@@ -1857,7 +1630,6 @@ After:    7.1 KB gzipped (+42%)
    ```
    client-core.js:       3 KB (always loaded)
    client-debounce.js:   0.5 KB (on demand)
-   client-optimistic.js: 1 KB (on demand)
    client-cache.js:      1 KB (on demand)
    ```
 
@@ -1914,5 +1686,5 @@ class SearchView(LiveView):
 ---
 
 **Last Updated:** 2025-11-14
-**Status:** 🚧 Partially Implemented (@cache, @client_state ✅)
+**Status:** ✅ Implemented (@debounce, @throttle, @cache, DraftModeMixin)
 **Feedback:** https://github.com/johnrtipton/djust/discussions

@@ -1,6 +1,6 @@
 # Phase 1 Implementation: Core Infrastructure
 
-> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2680), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
+> **Dated record.** Phase 1 also added `@optimistic` and `@client_state`. Both were removed in djust 2.0 (#4006) because nothing in the shipped client read them; their specifications and tests have been taken out of this record, and the progress tables below mark them as removed. See the [2.0 migration guide](../website/guides/migrating-to-2.0.md#python-names).
 
 **Status**: 🚧 In Progress
 **Start Date**: 2025-01-12
@@ -52,51 +52,6 @@ wrapper._djust_decorators = {
 - [ ] Add docstring updates
 
 **Estimated Time**: 30 minutes
-**Actual Time**: TBD
-**Status**: ⏳ Not Started
-
----
-
-### 2. Add @optimistic Decorator ⏳ Pending
-
-**File**: `python/djust/decorators.py`
-
-**Implementation**:
-```python
-def optimistic(func: F) -> F:
-    """
-    Apply optimistic updates before server validation.
-
-    The client will update the UI instantly based on the event data,
-    then apply server corrections if needed.
-
-    Usage:
-        class MyView(LiveView):
-            @optimistic
-            def increment(self, **kwargs):
-                self.count += 1
-
-    Returns:
-        Decorated function with optimistic metadata
-    """
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        return func(*args, **kwargs)
-
-    if not hasattr(wrapper, '_djust_decorators'):
-        wrapper._djust_decorators = {}
-
-    wrapper._djust_decorators['optimistic'] = True
-
-    return cast(F, wrapper)
-```
-
-**Tasks**:
-- [ ] Implement `@optimistic` decorator
-- [ ] Add comprehensive docstring
-- [ ] Add to `__all__` exports
-
-**Estimated Time**: 15 minutes
 **Actual Time**: TBD
 **Status**: ⏳ Not Started
 
@@ -159,67 +114,6 @@ def cache(ttl: int = 60, key_params: Optional[List[str]] = None):
 
 ---
 
-### 4. Add @client_state Decorator ⏳ Pending
-
-**File**: `python/djust/decorators.py`
-
-**Implementation**:
-```python
-from typing import List
-
-def client_state(keys: List[str]):
-    """
-    Share state via client-side StateBus.
-
-    When this handler executes, the specified keys are published to
-    the StateBus. Other handlers decorated with @client_state will
-    be notified of changes.
-
-    Usage:
-        class MyView(LiveView):
-            @client_state(keys=["filter"])
-            def update_filter(self, filter: str = "", **kwargs):
-                self.filter = filter
-
-            @client_state(keys=["filter"])
-            def on_filter_change(self, filter: str = "", **kwargs):
-                # Automatically called when filter changes
-                self.apply_filter()
-
-    Args:
-        keys: List of state keys to publish/subscribe
-
-    Returns:
-        Decorator function
-    """
-    def decorator(func: F) -> F:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        if not hasattr(wrapper, '_djust_decorators'):
-            wrapper._djust_decorators = {}
-
-        wrapper._djust_decorators['client_state'] = {
-            'keys': keys
-        }
-
-        return cast(F, wrapper)
-
-    return decorator
-```
-
-**Tasks**:
-- [ ] Implement `@client_state(keys)` decorator
-- [ ] Add comprehensive docstring with pub/sub example
-- [ ] Add to `__all__` exports
-
-**Estimated Time**: 20 minutes
-**Actual Time**: TBD
-**Status**: ⏳ Not Started
-
----
-
 ### 5. Implement Metadata Extraction ⏳ Pending
 
 **File**: `python/djust/live_view.py`
@@ -233,8 +127,7 @@ def _extract_handler_metadata(self) -> dict:
     Returns:
         {
             "search": {
-                "debounce": {"wait": 0.5, "max_wait": null},
-                "optimistic": true
+                "debounce": {"wait": 0.5, "max_wait": null}
             },
             "update_slider": {
                 "throttle": {"interval": 0.1, "leading": true, "trailing": true}
@@ -378,7 +271,7 @@ def handle_event(self, event: str, data: dict) -> dict:
 ```python
 import pytest
 from djust import LiveView
-from djust.decorators import debounce, throttle, optimistic, cache, client_state
+from djust.decorators import debounce, throttle, cache
 
 
 class TestDecoratorMetadata:
@@ -411,15 +304,6 @@ class TestDecoratorMetadata:
             'trailing': False
         }
 
-    def test_optimistic_metadata(self):
-        """Test @optimistic attaches correct metadata."""
-        @optimistic
-        def handler(self, **kwargs):
-            pass
-
-        assert hasattr(handler, '_djust_decorators')
-        assert handler._djust_decorators['optimistic'] is True
-
     def test_cache_metadata(self):
         """Test @cache attaches correct metadata."""
         @cache(ttl=60, key_params=["query"])
@@ -433,29 +317,15 @@ class TestDecoratorMetadata:
             'key_params': ['query']
         }
 
-    def test_client_state_metadata(self):
-        """Test @client_state attaches correct metadata."""
-        @client_state(keys=["filter", "sort"])
-        def handler(self, **kwargs):
-            pass
-
-        assert hasattr(handler, '_djust_decorators')
-        assert 'client_state' in handler._djust_decorators
-        assert handler._djust_decorators['client_state'] == {
-            'keys': ['filter', 'sort']
-        }
-
     def test_multiple_decorators(self):
         """Test multiple decorators on same handler."""
         @debounce(wait=0.5)
-        @optimistic
         @cache(ttl=60)
         def handler(self, **kwargs):
             pass
 
         assert hasattr(handler, '_djust_decorators')
         assert 'debounce' in handler._djust_decorators
-        assert 'optimistic' in handler._djust_decorators
         assert 'cache' in handler._djust_decorators
 
 
@@ -469,8 +339,8 @@ class TestMetadataExtraction:
             def search(self, query: str = "", **kwargs):
                 pass
 
-            @optimistic
-            def increment(self, **kwargs):
+            @cache(ttl=60)
+            def lookup(self, query: str = "", **kwargs):
                 pass
 
         view = TestView()
@@ -479,8 +349,8 @@ class TestMetadataExtraction:
         assert 'search' in metadata
         assert metadata['search']['debounce'] == {'wait': 0.5, 'max_wait': None}
 
-        assert 'increment' in metadata
-        assert metadata['increment']['optimistic'] is True
+        assert 'lookup' in metadata
+        assert metadata['lookup']['cache']['ttl'] == 60
 
     def test_extract_no_decorators(self):
         """Test extraction when no decorators present."""
@@ -560,9 +430,9 @@ class TestMetadataInjection:
 ### Overall Progress: 0% Complete
 
 - [ ] Task 1: Update @debounce and @throttle (0%)
-- [ ] Task 2: Add @optimistic (0%)
+- [ ] Task 2: Add @optimistic (0%) (removed in 2.0, #4006)
 - [ ] Task 3: Add @cache (0%)
-- [ ] Task 4: Add @client_state (0%)
+- [ ] Task 4: Add @client_state (0%) (removed in 2.0, #4006)
 - [ ] Task 5: Implement metadata extraction (0%)
 - [ ] Task 6: Update render() (0%)
 - [ ] Task 7: Update WebSocket response (0%)
@@ -573,9 +443,9 @@ class TestMetadataInjection:
 | Task | Estimated | Actual | Status |
 |------|-----------|--------|--------|
 | 1. Update decorators | 30 min | - | ⏳ Not Started |
-| 2. Add @optimistic | 15 min | - | ⏳ Not Started |
+| 2. Add @optimistic (removed in 2.0, #4006) | 15 min | - | ⏳ Not Started |
 | 3. Add @cache | 20 min | - | ⏳ Not Started |
-| 4. Add @client_state | 20 min | - | ⏳ Not Started |
+| 4. Add @client_state (removed in 2.0, #4006) | 20 min | - | ⏳ Not Started |
 | 5. Metadata extraction | 30 min | - | ⏳ Not Started |
 | 6. Update render() | 45 min | - | ⏳ Not Started |
 | 7. Update WebSocket | 30 min | - | ⏳ Not Started |
@@ -664,9 +534,9 @@ After Phase 1 completion:
 All Phase 1 tasks completed successfully:
 
 1. ✅ Update @debounce and @throttle (30 min estimated / 20 min actual)
-2. ✅ Add @optimistic (15 min estimated / 10 min actual)
+2. ✅ Add @optimistic (15 min estimated / 10 min actual) (removed in 2.0, #4006)
 3. ✅ Add @cache (20 min estimated / 15 min actual)
-4. ✅ Add @client_state (20 min estimated / 15 min actual)
+4. ✅ Add @client_state (20 min estimated / 15 min actual) (removed in 2.0, #4006)
 5. ✅ Implement metadata extraction (30 min estimated / 20 min actual)
 6. ✅ Update render() (45 min estimated / 30 min actual)
 7. ✅ Add tests (1.5 hrs estimated / 30 min actual)
@@ -674,7 +544,7 @@ All Phase 1 tasks completed successfully:
 
 ### Deliverables
 
-- ✅ 5 decorators implemented (@debounce, @throttle, @optimistic, @cache, @client_state)
+- ✅ 5 decorators implemented (@debounce, @throttle, @optimistic, @cache, @client_state; @optimistic and @client_state were removed in 2.0, #4006)
 - ✅ Metadata extraction from LiveView handlers
 - ✅ Metadata injection in rendered HTML
 - ✅ 24 comprehensive tests (100% passing)
@@ -706,7 +576,6 @@ Added three "nice-to-have" improvements based on PR review feedback:
      - `debounce(wait: float, max_wait: Optional[float]) -> Callable[[F], F]`
      - `throttle(interval: float, leading: bool, trailing: bool) -> Callable[[F], F]`
      - `cache(ttl: int, key_params: Optional[List[str]]) -> Callable[[F], F]`
-     - `client_state(keys: List[str]) -> Callable[[F], F]`
    - Added return type to `_extract_handler_metadata() -> Dict[str, Dict[str, Any]]`
    - Better IDE support and type checking
 
