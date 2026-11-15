@@ -406,7 +406,7 @@ class TableComponent(LiveComponent):
 
         table_class = " ".join(classes)
 
-        html = f'<div class="table-responsive" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="table-responsive" id="{attr_text(self.component_id)}">'
         if self.filterable:
             html += (
                 f'<div class="dj-table-filter mb-2"><input type="text" class="form-control" '
@@ -470,7 +470,7 @@ class TableComponent(LiveComponent):
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS table"""
-        html = f'<div class="overflow-x-auto" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="overflow-x-auto" id="{attr_text(self.component_id)}">'
         if self.filterable:
             html += (
                 f'<div class="dj-table-filter mb-2"><input type="text" '
@@ -564,7 +564,7 @@ class TableComponent(LiveComponent):
 
         table_class = " ".join(classes)
 
-        html = f'<div class="dj-table" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="dj-table" id="{attr_text(self.component_id)}">'
         if self.filterable:
             html += f'<div class="dj-table-filter"><input type="text" {self._global_filter_attr()}></div>'
         html += self._table_open(table_class)

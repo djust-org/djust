@@ -966,7 +966,15 @@ class TemplateMixin:
         """
         self._initialize_rust_view(request)
         self._sync_state_to_rust()
-        with library_render_scope():
+        # #4151: register self as the view being rendered, as
+        # ``render_with_diff`` and ``render_full_template`` do (#1784), so the
+        # form tags (``{% live_field view ... %}``) and ``{% live_render %}``
+        # resolve ``view`` here too. An explicit view cannot put ``view`` in its
+        # context (it is a reserved name), and the Rust engine's JSON context
+        # cannot carry the view under either policy.
+        from ..templatetags.live_tags import active_parent_view
+
+        with active_parent_view(self), library_render_scope():
             from .._render_provenance import render_html
 
             html = render_html(self._rust_view, self.get_template())

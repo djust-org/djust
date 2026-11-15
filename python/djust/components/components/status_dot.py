@@ -1,7 +1,8 @@
 """StatusDot component for animated status indicators."""
 
 import html
-from django.utils.html import conditional_escape
+
+from djust.components.utils import attr_text
 
 from typing import Any, Dict, Optional
 
@@ -146,15 +147,15 @@ class StatusDot(Component):
         classes = ["dj-status-dot"]
 
         # Add variant class
-        classes.append(f"dj-status-dot-{conditional_escape(self.variant)}")
+        classes.append(f"dj-status-dot-{attr_text(self.variant)}")
 
         # Add size class
         if self.size != "md":
-            classes.append(f"dj-status-dot-{conditional_escape(self.size)}")
+            classes.append(f"dj-status-dot-{attr_text(self.size)}")
 
         # Add animation class
         if self.animate:
-            classes.append(f"dj-status-dot-{conditional_escape(self.animate)}")
+            classes.append(f"dj-status-dot-{attr_text(self.animate)}")
 
         # Add custom classes
         if self.custom_class:
@@ -163,6 +164,6 @@ class StatusDot(Component):
         class_str = " ".join(classes)
 
         # Add tooltip if provided
-        title_attr = f' title="{conditional_escape(self.tooltip)}"' if self.tooltip else ""
+        title_attr = f' title="{attr_text(self.tooltip)}"' if self.tooltip else ""
 
         return f'<span class="{class_str}"{title_attr}></span>'

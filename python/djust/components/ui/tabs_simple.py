@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 
 class Tabs(Component):
@@ -69,7 +70,7 @@ class Tabs(Component):
 
     def _render_custom(self) -> str:
         """Pure Python fallback (f-string rendering)."""
-        nav_class = f"nav nav-{conditional_escape(self.style)}"
+        nav_class = f"nav nav-{attr_text(self.style)}"
 
         # Build tab buttons
         buttons = []
@@ -78,12 +79,12 @@ class Tabs(Component):
             aria_selected = "true" if i == self.active_index else "false"
 
             button = f"""        <button class="nav-link{active}"
-                id="{conditional_escape(self.id)}-tab-{i}"
+                id="{attr_text(self.id)}-tab-{i}"
                 data-bs-toggle="tab"
-                data-bs-target="#{conditional_escape(self.id)}-pane-{i}"
+                data-bs-target="#{attr_text(self.id)}-pane-{i}"
                 type="button"
                 role="tab"
-                aria-controls="{conditional_escape(self.id)}-pane-{i}"
+                aria-controls="{attr_text(self.id)}-pane-{i}"
                 aria-selected="{aria_selected}">
             {conditional_escape(tab["title"])}
         </button>"""
@@ -95,19 +96,19 @@ class Tabs(Component):
             active_class = " show active" if i == self.active_index else ""
 
             pane = f"""    <div class="tab-pane fade{active_class}"
-         id="{conditional_escape(self.id)}-pane-{i}"
+         id="{attr_text(self.id)}-pane-{i}"
          role="tabpanel"
-         aria-labelledby="{conditional_escape(self.id)}-tab-{i}"
+         aria-labelledby="{attr_text(self.id)}-tab-{i}"
          tabindex="0">
         {conditional_escape(tab["content"])}
     </div>"""
             panes.append(pane)
 
         return f"""<nav>
-    <div class="{nav_class}" id="{conditional_escape(self.id)}" role="tablist">
+    <div class="{nav_class}" id="{attr_text(self.id)}" role="tablist">
 {chr(10).join(buttons)}
     </div>
 </nav>
-<div class="tab-content" id="{conditional_escape(self.id)}-content">
+<div class="tab-content" id="{attr_text(self.id)}-content">
 {chr(10).join(panes)}
 </div>"""

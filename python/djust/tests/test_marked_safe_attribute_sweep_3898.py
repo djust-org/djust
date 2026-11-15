@@ -11,8 +11,9 @@ quoted attribute". So, in ``djust.components``:
   whatever it is marked as;
 * a text slot keeps its markup, except the text of ``<textarea>`` / ``<title>`` (RCDATA) and of an
   HTML comment in a hybrid template, where markup can end the element (#3914); ``<script>``,
-  ``<style>`` ... keep the author's markup (HTML escaping is the wrong encoding there); a scalar
-  argument in a non-URL attribute is the developer's own.
+  ``<style>`` ... keep the author's markup (HTML escaping is the wrong encoding there). A scalar
+  argument in a non-URL attribute is escaped too since #4009 (swept per argument by
+  ``python/tests/test_marked_safe_attribute_sweep_4009.py``, not here).
 
 What each class here proves, and what it does NOT:
 
@@ -2766,22 +2767,15 @@ HUNTED_SOURCES = (
 )
 
 CONST = "iterates a constant table written in this module, not an item handed to the tag"
-PLAIN = "a plain str built in the function (a split of the value, a regex over the template text)"
-CHILD_SCALAR = "the id= keyword of a child tag: a scalar argument, the developer's own"
+CHILD_SCALAR = "the id= keyword of a child tag: a scalar argument (always escaped since #4009)"
 #: ``module:function: expression`` the hunt reports and a person has judged not to be an item
 #: written to an attribute, with the reason. Exactly these: a new finding fails, and so does an
 #: entry the hunt no longer reports.
 STATIC_SINK_ALLOWED: dict[str, str] = {
-    "components/templatetags/_advanced.py:render: conditional_escape(label)": CONST,
-    "components/templatetags/_advanced.py:render: conditional_escape(v)": PLAIN,
-    "components/templatetags/_advanced.py:render: conditional_escape(val)": PLAIN,
-    "components/templatetags/_charts.py:render: conditional_escape(str(self.COLORS[idx % len(self.COLORS)]))": CONST,
-    "components/templatetags/_dev_tools.py:render: conditional_escape(prefix)": CONST,
-    "components/templatetags/_dev_tools.py:render: conditional_escape(suffix)": CONST,
-    "components/templatetags/djust_components.py:_render_emoji: conditional_escape(val)": CONST,
-    "components/templatetags/djust_components.py:render: conditional_escape(tid)": CHILD_SCALAR,
-    "components/templatetags/djust_components.py:rich_text_editor: conditional_escape(arg)": CONST,
-    "components/templatetags/djust_components.py:rich_text_editor: conditional_escape(cmd)": CONST,
+    "components/templatetags/_charts.py:render: escape(str(self.COLORS[idx % len(self.COLORS)]))": CONST,
+    "components/templatetags/_dev_tools.py:render: escape(prefix)": CONST,
+    "components/templatetags/_dev_tools.py:render: escape(suffix)": CONST,
+    "components/templatetags/djust_components.py:render: escape(tid)": CHILD_SCALAR,
 }
 
 

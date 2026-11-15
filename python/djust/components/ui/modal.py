@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from ..base import LiveComponent
 from ...decorators import event_handler
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from django.utils.safestring import SafeString, mark_safe
 
 
@@ -140,12 +141,12 @@ class ModalComponent(LiveComponent):
         size_class = size_map.get(self.size, "")
 
         html = f"""
-        <div class="modal fade show d-block" id="{conditional_escape(self.component_id)}" tabindex="-1">
+        <div class="modal fade show d-block" id="{attr_text(self.component_id)}" tabindex="-1">
             <div class="modal-dialog {size_class}">
                 <div class="modal-content">
                     <div class="modal-header">
                         <h5 class="modal-title">{conditional_escape(self.title)}</h5>
-                        <button type="button" class="btn-close" dj-click="dismiss" data-component-id="{conditional_escape(self.component_id)}" aria-label="Close"></button>
+                        <button type="button" class="btn-close" dj-click="dismiss" data-component-id="{attr_text(self.component_id)}" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
                         {conditional_escape(self.body)}
@@ -171,9 +172,9 @@ class ModalComponent(LiveComponent):
         size_class = size_map.get(self.size, "max-w-md")
 
         html = f"""
-        <div class="fixed inset-0 z-10 overflow-y-auto" id="{conditional_escape(self.component_id)}">
+        <div class="fixed inset-0 z-10 overflow-y-auto" id="{attr_text(self.component_id)}">
             <div class="flex min-h-screen items-end justify-center px-4 pt-4 pb-20 text-center sm:block sm:p-0">
-                <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" dj-click="dismiss" data-component-id="{conditional_escape(self.component_id)}"></div>
+                <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" dj-click="dismiss" data-component-id="{attr_text(self.component_id)}"></div>
                 <span class="hidden sm:inline-block sm:h-screen sm:align-middle">&#8203;</span>
                 <div class="inline-block {size_class} w-full transform overflow-hidden rounded-lg bg-white text-left align-bottom shadow-xl transition-all sm:align-middle">
                     <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
@@ -198,12 +199,12 @@ class ModalComponent(LiveComponent):
     def _render_plain(self) -> str:
         """Render plain HTML modal"""
         html = f"""
-        <div class="modal d-block" id="{conditional_escape(self.component_id)}">
+        <div class="modal d-block" id="{attr_text(self.component_id)}">
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
                         <h3>{conditional_escape(self.title)}</h3>
-                        <button type="button" dj-click="dismiss" data-component-id="{conditional_escape(self.component_id)}">×</button>
+                        <button type="button" dj-click="dismiss" data-component-id="{attr_text(self.component_id)}">×</button>
                     </div>
                     <div class="modal-body">
                         {conditional_escape(self.body)}

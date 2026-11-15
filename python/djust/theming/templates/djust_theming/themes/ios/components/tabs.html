@@ -9,15 +9,15 @@ index as `data-value`, and a stringified `active` comparison (the DEP-002 `Tabs`
 descriptor stores the client's string, while `{% theme_tabs %}` is called with
 an int index — `0 == "0"` is False, and the tab set would never move).
 {% endcomment %}
-<div class="{{ css_prefix }}segmented-control {% if attrs.class %}{{ attrs.class }}{% endif %}"
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+<div class="{{ css_prefix }}segmented-control {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
     <div class="{{ css_prefix }}segmented-control-track" role="tablist">
         {% for tab in tabs %}
         <button class="{{ css_prefix }}segment{% if forloop.counter0|stringformat:'s' == active|stringformat:'s' %} {{ css_prefix }}segment-active{% endif %}"
                 role="tab"
-                id="{{ id }}-tab-{{ forloop.counter0 }}"
+                id="{{ id|force_escape }}-tab-{{ forloop.counter0 }}"
                 aria-selected="{% if forloop.counter0|stringformat:'s' == active|stringformat:'s' %}true{% else %}false{% endif %}"
-                aria-controls="{{ id }}-panel-{{ forloop.counter0 }}"
+                aria-controls="{{ id|force_escape }}-panel-{{ forloop.counter0 }}"
                 dj-click="set_tab"
                 data-value="{{ forloop.counter0 }}"
                 {% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %}tabindex="-1"{% endif %}>
@@ -28,8 +28,8 @@ an int index — `0 == "0"` is False, and the tab set would never move).
     {% for tab in tabs %}
     <div class="{{ css_prefix }}tab-panel{% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %} {{ css_prefix }}tab-panel-hidden{% endif %}"
          role="tabpanel"
-         id="{{ id }}-panel-{{ forloop.counter0 }}"
-         aria-labelledby="{{ id }}-tab-{{ forloop.counter0 }}"
+         id="{{ id|force_escape }}-panel-{{ forloop.counter0 }}"
+         aria-labelledby="{{ id|force_escape }}-tab-{{ forloop.counter0 }}"
          {% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %}hidden{% endif %}>
         {{ tab.content }}
     </div>

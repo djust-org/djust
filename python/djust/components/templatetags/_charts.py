@@ -10,7 +10,7 @@ import math as _math
 from typing import Any
 
 from django import template
-from django.utils.html import conditional_escape
+from django.utils.html import conditional_escape, escape
 from django.utils.safestring import SafeString
 
 from ._registry import (
@@ -42,7 +42,7 @@ class BarChartNode(template.Node):
         show_values = kw.get("show_values", True)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-bar-chart"]
         if e_class:
             classes.append(e_class)
@@ -88,7 +88,7 @@ class BarChartNode(template.Node):
         bar_gap = 4
         bar_w = max(1, (chart_w - (n - 1) * bar_gap) / n)
 
-        e_title = conditional_escape(str(title)) if title else "Bar chart"
+        e_title = escape(str(title)) if title else "Bar chart"
         parts = [
             f'<svg class="dj-bar-chart__svg" viewBox="0 0 {w} {h}" '
             f'width="{w}" height="{h}" xmlns="http://www.w3.org/2000/svg" '
@@ -102,7 +102,7 @@ class BarChartNode(template.Node):
                 f"{conditional_escape(str(title))}</text>"
             )
 
-        e_color = conditional_escape(str(color)) if color else ""
+        e_color = escape(str(color)) if color else ""
         color_attr = f' fill="{e_color}"' if e_color else ""
 
         for i, val in enumerate(vals):
@@ -165,7 +165,7 @@ class LineChartNode(template.Node):
         show_legend = kw.get("show_legend", True)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-line-chart"]
         if e_class:
             classes.append(e_class)
@@ -209,7 +209,7 @@ class LineChartNode(template.Node):
         min_val = min(all_vals) if all_vals else 0
         val_range = max_val - min_val if max_val != min_val else 1
 
-        e_title = conditional_escape(str(title)) if title else "Line chart"
+        e_title = escape(str(title)) if title else "Line chart"
         parts = [
             f'<svg class="dj-line-chart__svg" viewBox="0 0 {w} {h}" '
             f'width="{w}" height="{h}" xmlns="http://www.w3.org/2000/svg" '
@@ -341,7 +341,7 @@ class PieChartNode(template.Node):
         show_legend = kw.get("show_legend", True)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-pie-chart"]
         if e_class:
             classes.append(e_class)
@@ -386,7 +386,7 @@ class PieChartNode(template.Node):
         if total <= 0:
             return mark_safe(f'<div class="{class_str}"><svg></svg></div>')
 
-        e_title = conditional_escape(str(title)) if title else "Pie chart"
+        e_title = escape(str(title)) if title else "Pie chart"
         parts = [
             f'<svg class="dj-pie-chart__svg" viewBox="0 0 {w} {h}" '
             f'width="{w}" height="{h}" xmlns="http://www.w3.org/2000/svg" '
@@ -499,7 +499,7 @@ class SparklineNode(template.Node):
         stroke_width = kw.get("stroke_width", 1.5)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-sparkline"]
         if e_class:
             classes.append(e_class)
@@ -540,7 +540,7 @@ class SparklineNode(template.Node):
         min_val = min(vals) if vals else 0
         val_range = max_val - min_val if max_val != min_val else 1
 
-        e_color = conditional_escape(str(color)) if color else ""
+        e_color = escape(str(color)) if color else ""
 
         parts = [
             f'<svg class="dj-sparkline__svg" viewBox="0 0 {w} {h}" '
@@ -624,7 +624,7 @@ class HeatmapNode(template.Node):
         show_values = kw.get("show_values", True)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-heatmap"]
         if e_class:
             classes.append(e_class)
@@ -671,7 +671,7 @@ class HeatmapNode(template.Node):
         max_v = max(all_vals) if all_vals else 1
         val_range = max_v - min_v if max_v != min_v else 1
 
-        e_title = conditional_escape(str(title)) if title else "Heatmap"
+        e_title = escape(str(title)) if title else "Heatmap"
         parts = [
             f'<svg class="dj-heatmap__svg" viewBox="0 0 {w} {h}" '
             f'width="{w}" height="{h}" xmlns="http://www.w3.org/2000/svg" '
@@ -798,7 +798,7 @@ class TreemapNode(template.Node):
         height = kw.get("height", 250)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-treemap"]
         if e_class:
             classes.append(e_class)
@@ -838,7 +838,7 @@ class TreemapNode(template.Node):
         items.sort(key=lambda x: x[1], reverse=True)
         rects = self._squarify(items, 0, title_h, w, chart_h)
 
-        e_title = conditional_escape(str(title)) if title else "Treemap"
+        e_title = escape(str(title)) if title else "Treemap"
         parts = [
             f'<svg class="dj-treemap__svg" viewBox="0 0 {w} {h}" '
             f'width="{w}" height="{h}" xmlns="http://www.w3.org/2000/svg" '
@@ -853,7 +853,7 @@ class TreemapNode(template.Node):
             )
 
         for rx, ry, rw, rh, label, val, idx in rects:
-            color = conditional_escape(str(self.COLORS[idx % len(self.COLORS)]))
+            color = escape(str(self.COLORS[idx % len(self.COLORS)]))
             e_label = conditional_escape(label)
             parts.append(
                 f'<rect class="dj-treemap__cell" x="{rx:.1f}" y="{ry:.1f}" '
@@ -920,7 +920,7 @@ class CalendarHeatmapNode(template.Node):
         show_day_labels = kw.get("show_day_labels", True)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-calendar-heatmap"]
         if e_class:
             classes.append(e_class)
@@ -969,7 +969,7 @@ class CalendarHeatmapNode(template.Node):
         w = label_left + num_weeks * step + 4
         h = title_h + label_top + 7 * step + 4
 
-        e_title = conditional_escape(str(title)) if title else f"{year} activity"
+        e_title = escape(str(title)) if title else f"{year} activity"
         parts = [
             f'<svg class="dj-calendar-heatmap__svg" viewBox="0 0 {w} {h}" '
             f'width="{w}" height="{h}" xmlns="http://www.w3.org/2000/svg" '

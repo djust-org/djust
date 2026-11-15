@@ -1,5 +1,5 @@
-<div class="{{ css_prefix }}skeleton {{ css_prefix }}skeleton-{{ variant }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
+<div class="{{ css_prefix }}skeleton {{ css_prefix }}skeleton-{{ variant|force_escape }} {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
      aria-hidden="true"
     {{ size_attrs }}
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
 </div>

@@ -1,6 +1,6 @@
 {# Theme mode toggle button — single button, toggles light/dark #}
 <button type="button"
-        class="theme-mode-toggle {{ button_class }}"
+        class="theme-mode-toggle {{ button_class|force_escape }}"
         data-theme-toggle
         aria-label="Toggle theme mode"
         title="Toggle theme mode">

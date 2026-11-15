@@ -23,21 +23,21 @@ called with an int index. Comparing `forloop.counter0 == active` directly would
 be False for `0 == "0"` — a live tab set that renders tab 1 active and never
 moves.
 {% endcomment %}
-<div class="{{ css_prefix }}tabs {% if attrs.class %}{{ attrs.class }}{% endif %}"
-     data-theme-tabs="{{ id }}"
+<div class="{{ css_prefix }}tabs {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
+     data-theme-tabs="{{ id|force_escape }}"
      data-active-class="{{ css_prefix }}tab-active"
      data-hidden-class="{{ css_prefix }}tab-panel-hidden"
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
     <div class="{{ css_prefix }}tab-list" role="tablist">
         {% for tab in tabs %}
         <button class="{{ css_prefix }}tab{% if forloop.counter0|stringformat:'s' == active|stringformat:'s' %} {{ css_prefix }}tab-active{% endif %}"
                 role="tab"
-                id="{{ id }}-tab-{{ forloop.counter0 }}"
+                id="{{ id|force_escape }}-tab-{{ forloop.counter0 }}"
                 aria-selected="{% if forloop.counter0|stringformat:'s' == active|stringformat:'s' %}true{% else %}false{% endif %}"
-                aria-controls="{{ id }}-panel-{{ forloop.counter0 }}"
+                aria-controls="{{ id|force_escape }}-panel-{{ forloop.counter0 }}"
                 dj-click="set_tab"
                 data-value="{{ forloop.counter0 }}"
-                {% if component_id %}data-component-id="{{ component_id }}"{% endif %}
+                {% if component_id %}data-component-id="{{ component_id|force_escape }}"{% endif %}
                 {% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %}tabindex="-1"{% endif %}>
             {{ tab.label }}
         </button>
@@ -46,8 +46,8 @@ moves.
     {% for tab in tabs %}
     <div class="{{ css_prefix }}tab-panel{% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %} {{ css_prefix }}tab-panel-hidden{% endif %}"
          role="tabpanel"
-         id="{{ id }}-panel-{{ forloop.counter0 }}"
-         aria-labelledby="{{ id }}-tab-{{ forloop.counter0 }}"
+         id="{{ id|force_escape }}-panel-{{ forloop.counter0 }}"
+         aria-labelledby="{{ id|force_escape }}-tab-{{ forloop.counter0 }}"
          {% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %}hidden{% endif %}>
         {{ tab.content }}
     </div>

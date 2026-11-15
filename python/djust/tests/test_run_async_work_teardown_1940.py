@@ -222,3 +222,99 @@ class TestRunAsyncWorkTeardown:
             view.writes,
         )
         assert consumer.sent_frames == []
+
+
+# --------------------------------------------------------------------------- #
+# #4155: the two identity guards each catch a case the other cannot.
+#
+# * After the callback, before the result turn (``_run_async_work_body``, the
+#   guard right after ``run_async_callback`` / in the ``except`` arm): a view torn
+#   down during the callback gets no ``async``/``result`` turn at all, so no turn
+#   middleware (an app's, or the built-in ``reauth``, which can close the socket)
+#   runs for a view that is gone.
+# * First thing inside the result turn (``complete`` / ``complete_error``, under
+#   the render lock): a view replaced while the result WAITED FOR THE LOCK, after
+#   the first guard passed, gets no ``handle_async_result``.
+# --------------------------------------------------------------------------- #
+
+TURNS = []
+
+
+async def record_turns(turn, next):
+    """``LIVEVIEW_MIDDLEWARE`` entry: records every turn and the view it is for."""
+    TURNS.append((turn.kind, turn.source, turn.view))
+    return await next(turn)
+
+
+class _ObservedLock(asyncio.Lock):
+    """The consumer's render lock, telling the test when someone waits for it."""
+
+    def __init__(self):
+        super().__init__()
+        self.contended = asyncio.Event()
+
+    async def acquire(self):
+        if self.locked():
+            self.contended.set()
+        return await super().acquire()
+
+
+async def _callback_for(outcome, started, release):
+    async def callback():
+        started.set()
+        await release.wait()
+        if outcome == "error":
+            raise ValueError("boom")
+        return "done"
+
+    return callback
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("outcome", ["result", "error"])
+@pytest.mark.parametrize("teardown", ["disconnect", "remount"])
+async def test_a_view_torn_down_during_the_callback_gets_no_result_turn(outcome, teardown):
+    from django.test import override_settings
+
+    old_view = _SpyView("old")
+    consumer = await _make_consumer(old_view)
+    started, release = asyncio.Event(), asyncio.Event()
+    callback = await _callback_for(outcome, started, release)
+    TURNS.clear()
+    with override_settings(LIVEVIEW_MIDDLEWARE=[f"{__name__}.record_turns"]):
+        task = asyncio.ensure_future(consumer._run_async_work("work", callback, (), {}))
+        await asyncio.wait_for(started.wait(), timeout=30)
+        consumer.view_instance = None if teardown == "disconnect" else _SpyView("new")
+        release.set()
+        await asyncio.wait_for(task, timeout=30)
+    # The start turn ran while the view was mounted; no result turn follows it.
+    assert [(kind, source) for kind, source, _ in TURNS] == [("async", "start")], TURNS
+    assert old_view.writes == [] and consumer.sent_frames == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("outcome", ["result", "error"])
+async def test_a_view_replaced_while_the_result_waits_for_the_lock_gets_no_handler(outcome):
+    old_view, new_view = _SpyView("old"), _SpyView("new")
+    consumer = await _make_consumer(old_view)
+    lock = consumer._render_lock = _ObservedLock()
+    started, release = asyncio.Event(), asyncio.Event()
+    callback = await _callback_for(outcome, started, release)
+    task = asyncio.ensure_future(consumer._run_async_work("work", callback, (), {}))
+    await asyncio.wait_for(started.wait(), timeout=30)
+    # Another turn holds the render lock when the callback finishes: the result
+    # passes the after-callback guard (the view is still mounted) and waits.
+    await lock.acquire()
+    try:
+        release.set()
+        await asyncio.wait_for(lock.contended.wait(), timeout=30)
+        assert consumer.view_instance is old_view
+        consumer.view_instance = new_view  # replaced while the result waits
+    finally:
+        lock.release()
+    await asyncio.wait_for(task, timeout=30)
+    assert old_view.writes == [], old_view.writes
+    assert new_view.writes == [], new_view.writes
+    assert consumer.sent_frames == []

@@ -229,8 +229,8 @@ class RichSelect(Component):
         listbox_id = f"rs-{e_name}-listbox"
         from djust.components.templatetags.djust_components import field_aria_attrs
 
-        aria_field = field_aria_attrs(
-            f"rs-{e_name}", describedby=self.describedby, invalid=self.invalid
+        aria_field = field_aria_attrs(  # the text of the prefix: escaped once there (#4009)
+            f"rs-{self.name}", describedby=self.describedby, invalid=self.invalid
         )
 
         return (

@@ -1,7 +1,7 @@
-<nav class="{{ css_prefix }}navbar {% if attrs.class %}{{ attrs.class }}{% endif %}"
+<nav class="{{ css_prefix }}navbar {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
      role="navigation"
      aria-label="Main"
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
     <div class="{{ css_prefix }}navbar-inner">
         {% if slot_brand %}
         <div class="{{ css_prefix }}navbar-brand">{{ slot_brand }}</div>

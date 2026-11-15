@@ -8,6 +8,7 @@ from typing import Any, Optional
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 from djust._rust import RustRange
 
@@ -129,7 +130,7 @@ class Range(Component):
         # Label
         if self.label:
             parts.append(
-                f'    <label for="{conditional_escape(self.range_id)}" class="form-label">{conditional_escape(self.label)}'
+                f'    <label for="{attr_text(self.range_id)}" class="form-label">{conditional_escape(self.label)}'
             )
             if self.show_value:
                 parts[-1] += (
@@ -141,12 +142,12 @@ class Range(Component):
         attrs = [
             'type="range"',
             'class="form-range"',
-            f'id="{conditional_escape(self.range_id)}"',
-            f'name="{conditional_escape(self.name)}"',
-            f'value="{conditional_escape(self.value)}"',
-            f'min="{conditional_escape(self.min_value)}"',
-            f'max="{conditional_escape(self.max_value)}"',
-            f'step="{conditional_escape(self.step)}"',
+            f'id="{attr_text(self.range_id)}"',
+            f'name="{attr_text(self.name)}"',
+            f'value="{attr_text(self.value)}"',
+            f'min="{attr_text(self.min_value)}"',
+            f'max="{attr_text(self.max_value)}"',
+            f'step="{attr_text(self.step)}"',
         ]
         if self.disabled:
             attrs.append("disabled")

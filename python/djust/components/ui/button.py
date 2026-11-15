@@ -7,6 +7,7 @@ Provides buttons with multiple variants, sizes, and states.
 from typing import Dict, Any
 from ..base import LiveComponent
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from django.utils.safestring import SafeString, mark_safe
 
 
@@ -126,7 +127,7 @@ class ButtonComponent(LiveComponent):
         disabled_attr = " disabled" if self.disabled else ""
 
         # Click handler
-        click_attr = f' dj-click="{conditional_escape(self.on_click)}"' if self.on_click else ""
+        click_attr = f' dj-click="{attr_text(self.on_click)}"' if self.on_click else ""
 
         # Icon and label
         if self.icon:
@@ -137,7 +138,7 @@ class ButtonComponent(LiveComponent):
         else:
             content = conditional_escape(self.label)
 
-        return f'<button type="{conditional_escape(self.button_type)}" class="{classes}" id="{conditional_escape(self.component_id)}"{disabled_attr}{click_attr}>{content}</button>'
+        return f'<button type="{attr_text(self.button_type)}" class="{classes}" id="{attr_text(self.component_id)}"{disabled_attr}{click_attr}>{content}</button>'
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS button"""
@@ -192,7 +193,7 @@ class ButtonComponent(LiveComponent):
         disabled_attr = " disabled" if self.disabled else ""
 
         # Click handler
-        click_attr = f' dj-click="{conditional_escape(self.on_click)}"' if self.on_click else ""
+        click_attr = f' dj-click="{attr_text(self.on_click)}"' if self.on_click else ""
 
         # Icon and label
         if self.icon:
@@ -204,7 +205,7 @@ class ButtonComponent(LiveComponent):
         else:
             content = conditional_escape(self.label)
 
-        return f'<button type="{conditional_escape(self.button_type)}" class="{classes}" id="{conditional_escape(self.component_id)}"{disabled_attr}{click_attr}>{content}</button>'
+        return f'<button type="{attr_text(self.button_type)}" class="{classes}" id="{attr_text(self.component_id)}"{disabled_attr}{click_attr}>{content}</button>'
 
     def _render_plain(self) -> str:
         """Render plain HTML button"""
@@ -212,10 +213,10 @@ class ButtonComponent(LiveComponent):
         disabled_attr = " disabled" if self.disabled else ""
 
         # Click handler
-        click_attr = f' dj-click="{conditional_escape(self.on_click)}"' if self.on_click else ""
+        click_attr = f' dj-click="{attr_text(self.on_click)}"' if self.on_click else ""
 
         # Classes
-        classes = f"button button-{conditional_escape(self.variant)} button-{conditional_escape(self.size)}"
+        classes = f"button button-{attr_text(self.variant)} button-{attr_text(self.size)}"
 
         # Icon and label
         if self.icon:
@@ -226,4 +227,4 @@ class ButtonComponent(LiveComponent):
         else:
             content = conditional_escape(self.label)
 
-        return f'<button type="{conditional_escape(self.button_type)}" class="{classes}" id="{conditional_escape(self.component_id)}"{disabled_attr}{click_attr}>{content}</button>'
+        return f'<button type="{attr_text(self.button_type)}" class="{classes}" id="{attr_text(self.component_id)}"{disabled_attr}{click_attr}>{content}</button>'

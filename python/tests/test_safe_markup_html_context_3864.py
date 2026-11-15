@@ -162,7 +162,7 @@ HTML_ONLY = ("escape", "cond_escape", "attr_text")
 #: attribute (CSS: eleven sites of the tree put an escaped value there; ``safe_css_*`` is the rule).
 REMAINING = {
     *((s, p) for s in ("escape", "cond_escape") for p in ("between", "attr_name", "tag_name")),
-    *((s, "style_attr") for s in (*HTML_ONLY, "url")),
+    *((s, "style_attr") for s in ("escape", "attr_text", "url")),
 }
 #: Flagged although no payload of the fuzz gets through: an escaped value inside a quoted JS string
 #: of a script body (a trailing backslash still eats the closing quote), and a context-sensitive
@@ -171,6 +171,11 @@ CONSERVATIVE = {
     *((s, "script") for s in (*HTML_ONLY, "url")),
     ("attr_text", "comment"),
     ("url", "comment"),
+    # ``conditional_escape`` in a quoted value: the fuzz's payloads are plain strings, which it
+    # escapes; a MARKED-SAFE value it writes as it is and that closes the attribute (#4009,
+    # ``TestMarkedSafeInAnAttribute`` runs that payload)
+    ("cond_escape", "quoted"),
+    ("cond_escape", "single_quoted"),
 }
 MATRIX = [(s, p) for s in (*HTML_ONLY, "url", "digits", "literal") for p in fuzz.PLACEMENTS]
 
@@ -198,6 +203,8 @@ class TestEveryPlacement:
         code = {"event", "script", "script_unquoted", "style", "srcdoc"}
         expected = {(s, p) for s in HTML_ONLY for p in urls | code}
         expected |= {(s, "unquoted") for s in ("escape", "cond_escape")}
+        # ``conditional_escape`` in any quoted value (#4009)
+        expected |= {("cond_escape", p) for p in ("quoted", "single_quoted", "style_attr")}
         expected |= {("url", p) for p in code}
         assert new == expected
 
@@ -394,3 +401,62 @@ class TestTheGateOffListApplies:
         for mutation in spec["mutations"]:
             text = (root / mutation["file"]).read_text()
             assert text.count(mutation["old"]) == 1, mutation["label"]
+
+
+# ---------------------------------------------------------------------------
+# A marked-safe value in an attribute (#4009)
+# ---------------------------------------------------------------------------
+
+
+class TestMarkedSafeInAnAttribute:
+    """``conditional_escape`` leaves a marked-safe value as it is: right as element text, wrong in
+    any attribute value, where the value closes the attribute. ``escape`` / ``attr_text`` always
+    escape. Each row is RUN with a marked-safe value that breaks out of a double- AND a
+    single-quoted value, and the guard's verdict must be the run's (the call fuzz's payloads are
+    plain strings, so its matrix cannot show this)."""
+
+    #: ``body`` -> (a marked-safe value gets out when it runs, the guard flags it)
+    ROWS = {
+        "mark_safe(f'<b title=\"{conditional_escape(x)}\">b</b>')": (True, True),
+        "mark_safe(f\"<b title='{conditional_escape(x)}'>b</b>\")": (True, True),
+        "mark_safe('<b class=\"' + conditional_escape(x) + '\">b</b>')": (True, True),
+        "mark_safe(f'<b title=\"{escape(x)}\">b</b>')": (False, False),
+        "mark_safe(f'<b title=\"{attr_text(x)}\">b</b>')": (False, False),
+        "mark_safe(f'<b>{conditional_escape(x)}</b>')": (False, False),
+    }
+
+    @staticmethod
+    def _gets_out(markup: str) -> bool:
+        from html.parser import HTMLParser
+
+        class _P(HTMLParser):
+            hit = False
+
+            def handle_starttag(self, tag, attrs):
+                self.hit = self.hit or any(n == "onmouseover" for n, _v in attrs)
+
+        parser = _P(convert_charrefs=True)
+        parser.feed(markup)
+        parser.close()
+        return parser.hit
+
+    @pytest.mark.parametrize("body", sorted(ROWS))
+    def test_the_verdict_is_the_one_a_run_reaches(self, body):
+        from django.utils.safestring import mark_safe
+
+        source = fuzz.HEADER + "def f(x):\n    return " + body + "\n"
+        namespace: dict = {"__name__": "marked_safe_case"}
+        exec(compile(source, "<case>", "exec"), namespace)  # noqa: S102 - written here
+        out = str(namespace["f"](mark_safe("x\" onmouseover=\"a' onmouseover='a")))
+        gets_out, is_flagged = self.ROWS[body]
+        assert self._gets_out(out) is gets_out, out
+        assert flagged(source) is is_flagged, body
+
+    def test_the_position_reader_names_a_quoted_value_only_when_asked(self):
+        assert "django.utils.html.conditional_escape" in taint.MARK_HONOURING_ORIGINS
+        assert "djust.components.utils.attr_text" not in taint.MARK_HONOURING_ORIGINS
+        assert context('<b title="', quoted=True) == "value"
+        assert context("<b title='", quoted=True) == "value"
+        assert context('<b title="') is None
+        assert context("<b>", quoted=True) is None
+        assert context('<a href="', quoted=True) == "url"

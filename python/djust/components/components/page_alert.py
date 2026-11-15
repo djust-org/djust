@@ -1,7 +1,8 @@
 """Page alert / banner component for full-width content-area alerts."""
 
 import html
-from django.utils.html import conditional_escape
+
+from djust.components.utils import attr_text
 
 from djust import Component
 from typing import Any
@@ -61,7 +62,7 @@ class PageAlert(Component):
         self.custom_class = custom_class
 
     def _render_custom(self) -> str:
-        classes = ["dj-page-alert", f"dj-page-alert--{conditional_escape(self.type)}"]
+        classes = ["dj-page-alert", f"dj-page-alert--{attr_text(self.type)}"]
         if self.dismissible:
             classes.append("dj-page-alert--dismissible")
         if self.custom_class:

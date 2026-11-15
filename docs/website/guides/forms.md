@@ -464,8 +464,8 @@ shows the person more than the record they were already allowed to see).
 **Every other event is a write and is checked in full**: `submit_form`,
 `reset_form` and every handler of yours, whatever it does. The record is
 reused only while it is unchanged since it was authorized (a saved or edited
-record is looked up again), the route and lookup are the same, and the user is
-the same. Listed handlers are matched by function, where they were listed: a subclass that redefines `validate_field` (or a listed handler) without listing it again gets the full check for it, since the new body may write. The unchanged test covers the record's field values, so a `JSONField` list or dict edited in place counts as a change.
+record is looked up again), the route and lookup are the same, and the user,
+session and tenant are the same. Listed handlers are matched by function, where they were listed: a subclass that redefines `validate_field` (or a listed handler) without listing it again gets the full check for it, since the new body may write. The unchanged test covers the record's field values, so a `JSONField` list or dict edited in place counts as a change.
 
 The trade: if access is revoked while the page is open, `validate_field` keeps
 working until the next event that is not read-only, which is denied. The
@@ -484,6 +484,11 @@ is lost):
   part of the record and do not compare equal to a copy of themselves, so every
   read-only event takes the full check. Load the record without `prefetch_related` in
   `get_queryset()` (prefetch in `get_context_data()` instead) if you want the reuse.
+- **Under `exposure_policy = "explicit"`, a record loaded with deferred fields is never
+  reused.** The render serializes `object` and so loads every deferred field, and a field
+  loaded since the record was authorized counts as a change. Load the record without
+  `defer()` / `only()` if you want the reuse. (What the render caches on the record for its
+  `@property` values is not a change, [#4153](https://github.com/djust-org/djust/issues/4153).)
 
 ### Selecting the record from the page, not the route
 

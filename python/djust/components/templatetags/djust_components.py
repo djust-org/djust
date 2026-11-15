@@ -27,7 +27,7 @@ from collections.abc import Set as AbstractSet
 from typing import Any, Iterator, Optional
 
 from django import template
-from django.utils.html import conditional_escape, format_html, format_html_join
+from django.utils.html import conditional_escape, escape, format_html, format_html_join
 from django.utils.functional import Promise
 from django.utils.safestring import SafeString
 
@@ -195,14 +195,17 @@ def render_modal(kw: Any, content: Any) -> SafeString:
         "lg": "dj-modal--lg",
         "xl": "dj-modal--xl",
     }.get(str(size), "dj-modal--md")
-    e_close_event = conditional_escape(close_event)
+    e_close_event = attr_text(close_event)
     e_title = conditional_escape(title)
     component_id = kw.get("component_id", "")
-    cid_attr = f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
+    cid_attr = f' data-component-id="{attr_text(component_id)}"' if component_id else ""
     # ARIA: derive a stable id for the title so aria-labelledby can
     # point at it. Derived deterministically from the existing `id`
     # kwarg (or "modal" default) → VDOM dj-id stable, no randomness.
-    modal_id = conditional_escape(kw.get("id", "modal"))
+    # The ids are kept as TEXT and escaped once, where each is written (#4009): the description's
+    # ``id`` and the ``aria-describedby`` that names it must be the same value.
+    raw_id = str(kw.get("id", "modal"))
+    modal_id = attr_text(raw_id)
     title_id = f"{modal_id}-title"
     labelledby = f' aria-labelledby="{title_id}"' if title else ""
     role = "alertdialog" if str(kw.get("role", "")) == "alertdialog" else "dialog"
@@ -213,7 +216,8 @@ def render_modal(kw: Any, content: Any) -> SafeString:
     if not 2 <= level <= 6:
         level = 3
     description = kw.get("description", "")
-    desc_id = f"{modal_id}-desc"
+    raw_desc_id = f"{raw_id}-desc"
+    desc_id = attr_text(raw_desc_id)
     marked = f"{_MODAL_DESCRIPTION_MARKER}{_MODAL_DESCRIPTION_OPEN}"
     has_slot = not description and marked in str(content)
     if has_slot:
@@ -224,13 +228,11 @@ def render_modal(kw: Any, content: Any) -> SafeString:
     # No marker may reach the page: a second block, a block beside a description=, or a block
     # outside any modal leaves it behind otherwise.
     content = str(content).replace(_MODAL_DESCRIPTION_MARKER, "")
-    described_ids = ([desc_id] if description or has_slot else []) + str(
+    described_ids = ([raw_desc_id] if description or has_slot else []) + str(
         kw.get("describedby", "") or ""
     ).split()
     describedby = (
-        f' aria-describedby="{conditional_escape(" ".join(described_ids))}"'
-        if described_ids
-        else ""
+        f' aria-describedby="{attr_text(" ".join(described_ids))}"' if described_ids else ""
     )
     description_html = (
         f'<p class="dj-modal__description" id="{desc_id}">{conditional_escape(description)}</p>'
@@ -362,14 +364,12 @@ class TabsNode(template.Node):
             active = _resolve(tabs[0].tab_id, context)
 
         component_id = kw.get("component_id", "")
-        cid_attr = (
-            f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
-        )
+        cid_attr = f' data-component-id="{escape(component_id)}"' if component_id else ""
 
         # ARIA: derive stable per-tab ids for the tab/tabpanel
         # aria-controls / aria-labelledby pairing. Derived deterministically
         # from the existing `id` kwarg + the tab id → VDOM dj-id stable.
-        e_tabs_id = conditional_escape(tabs_id)
+        e_tabs_id = escape(tabs_id)
 
         tab_ids = [_resolve(tab.tab_id, context) for tab in tabs]
         # WAI-ARIA tabs: one Tab stop, the selected tab (roving tabindex; the
@@ -389,14 +389,14 @@ class TabsNode(template.Node):
                 if icon
                 else ""
             )
-            e_tid = conditional_escape(tid)
+            e_tid = escape(tid)
             tab_el_id = f"{e_tabs_id}-tab-{e_tid}"
             panel_el_id = f"{e_tabs_id}-panel-{e_tid}"
             if param:
                 query = urlencode({str(param): str(tid)})
-                action = f'dj-patch="?{conditional_escape(query)}"'
+                action = f'dj-patch="?{escape(query)}"'
             else:
-                action = f'dj-click="{conditional_escape(event)}" data-value="{e_tid}"'
+                action = f'dj-click="{escape(event)}" data-value="{e_tid}"'
             nav_items.append(
                 f'<button class="dj-tab {active_cls}" role="tab" '
                 f'id="{tab_el_id}" aria-controls="{panel_el_id}" '
@@ -408,16 +408,16 @@ class TabsNode(template.Node):
 
         name_attrs = ""
         if label:
-            name_attrs += f' aria-label="{conditional_escape(label)}"'
+            name_attrs += f' aria-label="{escape(label)}"'
         if labelledby:
-            name_attrs += f' aria-labelledby="{conditional_escape(labelledby)}"'
+            name_attrs += f' aria-labelledby="{escape(labelledby)}"'
         nav = f'<nav class="dj-tabs__nav" role="tablist"{name_attrs}>{"".join(nav_items)}</nav>'
 
         # Build active pane
         pane = ""
         for tab, tid in zip(tabs, tab_ids):
             if tid == active:
-                e_tid = conditional_escape(tid)
+                e_tid = escape(tid)
                 tab_el_id = f"{e_tabs_id}-tab-{e_tid}"
                 panel_el_id = f"{e_tabs_id}-panel-{e_tid}"
                 pane = (
@@ -478,14 +478,12 @@ class AccordionNode(template.Node):
         event = kw.get("event", "accordion_toggle")
 
         component_id = kw.get("component_id", "")
-        cid_attr = (
-            f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
-        )
+        cid_attr = f' data-component-id="{attr_text(component_id)}"' if component_id else ""
 
         # ARIA: derive stable per-item ids so the trigger's aria-controls
         # and the content panel's id/aria-labelledby can be paired.
         # Deterministic from the existing `id` kwarg + item id.
-        e_accordion_id = conditional_escape(accordion_id)
+        e_accordion_id = attr_text(accordion_id)
 
         items = [n for n in self.nodelist if isinstance(n, AccordionItemNode)]
         parts = []
@@ -495,7 +493,7 @@ class AccordionNode(template.Node):
             is_open = iid == active
             open_cls = "dj-accordion-item--open" if is_open else ""
             chevron_cls = "dj-accordion__chevron--open" if is_open else ""
-            e_iid = conditional_escape(iid)
+            e_iid = attr_text(iid)
             trigger_id = f"{e_accordion_id}-trigger-{e_iid}"
             panel_id = f"{e_accordion_id}-panel-{e_iid}"
             content_html = ""
@@ -510,7 +508,7 @@ class AccordionNode(template.Node):
                 f'<button class="dj-accordion__trigger" id="{trigger_id}" '
                 f'aria-expanded="{"true" if is_open else "false"}" '
                 f'aria-controls="{panel_id}" '
-                f'dj-click="{conditional_escape(event)}" data-value="{e_iid}"{cid_attr}>'
+                f'dj-click="{attr_text(event)}" data-value="{e_iid}"{cid_attr}>'
                 f"<span>{conditional_escape(title)}</span>"
                 f'<span class="dj-accordion__chevron {chevron_cls}" aria-hidden="true">&#9662;</span>'
                 f"</button>"
@@ -560,16 +558,14 @@ class DropdownNode(template.Node):
 
         content = self.nodelist.render(context)
         open_attr = " data-open" if is_open else ""
-        variant_cls = f"dj-dropdown--{conditional_escape(variant)}"
+        variant_cls = f"dj-dropdown--{attr_text(variant)}"
         component_id = kw.get("component_id", "")
-        cid_attr = (
-            f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
-        )
+        cid_attr = f' data-component-id="{attr_text(component_id)}"' if component_id else ""
 
         # ARIA: pair the trigger with the menu via aria-controls; the
         # menu id is derived deterministically from the existing `id`
         # kwarg so VDOM dj-id stays stable.
-        e_dropdown_id = conditional_escape(dropdown_id)
+        e_dropdown_id = attr_text(dropdown_id)
         menu_id = f"{e_dropdown_id}-menu"
 
         menu_html = ""
@@ -581,7 +577,7 @@ class DropdownNode(template.Node):
             f'<button class="dj-dropdown__trigger" aria-haspopup="menu" '
             f'aria-expanded="{"true" if is_open else "false"}" '
             f'aria-controls="{menu_id}" '
-            f'dj-click="{conditional_escape(toggle_event)}"{cid_attr}>{conditional_escape(label)}</button>'
+            f'dj-click="{attr_text(toggle_event)}"{cid_attr}>{conditional_escape(label)}</button>'
             f"{menu_html}</div>"
         )
 
@@ -683,21 +679,19 @@ class TooltipNode(template.Node):
         position = kw.get("position", "top")  # top, bottom, left, right
         content = self.nodelist.render(context)
         component_id = kw.get("component_id", "")
-        cid_attr = (
-            f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
-        )
+        cid_attr = f' data-component-id="{attr_text(component_id)}"' if component_id else ""
 
         # Derive a stable, escaped tip id. When the caller supplies a
         # component_id, anchor on it; otherwise derive it from the tooltip's
         # text, position and content, so a re-render keeps it (identical
         # tooltips in one render get -2, -3, ...: ``_render_id``).
         if component_id:
-            tip_id = f"{conditional_escape(component_id)}-tip"
+            tip_id = f"{attr_text(component_id)}-tip"
         else:
             tip_id = _render_id("dj-tooltip-tip", text, position, str(content), context=context)
 
         return mark_safe(
-            f'<span class="dj-tooltip dj-tooltip--{conditional_escape(position)}"{cid_attr}'
+            f'<span class="dj-tooltip dj-tooltip--{attr_text(position)}"{cid_attr}'
             f' aria-describedby="{tip_id}">'
             f"{content}"
             f'<span class="dj-tooltip__text" id="{tip_id}" role="tooltip">'
@@ -799,7 +793,7 @@ class CardNode(template.Node):
             header = f'<div class="dj-card__header"><h3 class="dj-card__title">{conditional_escape(title)}</h3>{sub}</div>'
 
         return mark_safe(
-            f'<div class="dj-card dj-card--{conditional_escape(variant)} {conditional_escape(extra_class)}">'
+            f'<div class="dj-card dj-card--{attr_text(variant)} {attr_text(extra_class)}">'
             f"{header}"
             f'<div class="dj-card__body">{content}</div>'
             f"</div>"
@@ -1394,7 +1388,7 @@ class AlertNode(template.Node):
         content = self.nodelist.render(context)
 
         # Normalise error/danger to the same CSS class
-        css_type = "error" if alert_type == "danger" else conditional_escape(alert_type)
+        css_type = "error" if alert_type == "danger" else attr_text(alert_type)
         icon_char = _ALERT_ICONS.get(alert_type, "&#8505;")
         dismissible_cls = " alert-dismissible" if dismissible else ""
 
@@ -1407,7 +1401,7 @@ class AlertNode(template.Node):
         # ``component_id=`` names which ``Alert`` it drives.
         close_html = (
             f'<button class="alert-close" aria-label="Dismiss" '
-            f'dj-click="{conditional_escape(event)}"{_cid(kw.get("component_id"))}>&times;</button>'
+            f'dj-click="{attr_text(event)}"{_cid(kw.get("component_id"))}>&times;</button>'
             if dismissible and not _off(event)
             else ""
         )
@@ -1548,23 +1542,23 @@ def dj_button(
 
     # Map well-known variants to their canonical CSS class names; for
     # everything else, pass through with conditional_escape (#1619).
-    variant_class = _DJ_BUTTON_VARIANT_CLASS_MAP.get(variant, f"btn-{conditional_escape(variant)}")
+    variant_class = _DJ_BUTTON_VARIANT_CLASS_MAP.get(variant, f"btn-{attr_text(variant)}")
     classes = f"btn {variant_class}"
     if size and size != "md":
-        classes += f" btn-{conditional_escape(size)}"
+        classes += f" btn-{attr_text(size)}"
     if loading:
         classes += " btn-loading"
 
     attrs = f'class="{classes}"'
     if event:
-        attrs += f' dj-click="{conditional_escape(event)}"'
+        attrs += f' dj-click="{attr_text(event)}"'
     if confirm:
         # #1621: emit djust's standard dj-confirm attribute so client.js
         # shows a JS confirm() dialog before firing the event. Independent
         # of `event` — client.js handles dj-confirm across multiple
         # directives (dj-click, dj-submit, etc.), so the attr is useful
         # on event-less buttons users have wired up via other directives.
-        attrs += f' dj-confirm="{conditional_escape(confirm)}"'
+        attrs += f' dj-confirm="{attr_text(confirm)}"'
     if disabled or loading:
         attrs += " disabled"
 
@@ -1604,14 +1598,14 @@ def dj_input(
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
-    e_value = conditional_escape(value)
-    e_placeholder = conditional_escape(placeholder)
-    e_type = conditional_escape(input_type)
+    e_value = attr_text(value)
+    e_placeholder = attr_text(placeholder)
+    e_type = attr_text(input_type)
     e_error = conditional_escape(error)
     e_helper = conditional_escape(helper)
-    dj_event = conditional_escape(event or name)
+    dj_event = attr_text(event or name)
 
     required_attr = " required" if required else ""
     disabled_attr = " disabled" if disabled else ""
@@ -1668,11 +1662,11 @@ def dj_select(
     if options is None:
         options = []
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
     e_error = conditional_escape(error)
     e_helper = conditional_escape(helper)
-    dj_event = conditional_escape(event or name)
+    dj_event = attr_text(event or name)
 
     required_attr = " required" if required else ""
     disabled_attr = " disabled" if disabled else ""
@@ -1736,10 +1730,10 @@ def dj_checkbox(
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
-    e_value = conditional_escape(value)
-    dj_event = conditional_escape(event or name)
+    e_value = attr_text(value)
+    dj_event = attr_text(event or name)
 
     checked_attr = " checked" if checked else ""
     disabled_attr = " disabled" if disabled else ""
@@ -1779,11 +1773,11 @@ def dj_radio(
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
-    e_value = conditional_escape(value)
-    radio_id = conditional_escape(id or _re.sub(r"[^A-Za-z0-9_-]", "-", f"{name}_{value}"))
-    dj_event = conditional_escape(event or name)
+    e_value = attr_text(value)
+    radio_id = attr_text(id or _re.sub(r"[^A-Za-z0-9_-]", "-", f"{name}_{value}"))
+    dj_event = attr_text(event or name)
 
     checked_attr = " checked" if str(value) == str(current_value) else ""
     disabled_attr = " disabled" if disabled else ""
@@ -1826,13 +1820,13 @@ def dj_textarea(
     except (ValueError, TypeError):
         rows = 4
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
     e_value = conditional_escape(value)
-    e_placeholder = conditional_escape(placeholder)
+    e_placeholder = attr_text(placeholder)
     e_error = conditional_escape(error)
     e_helper = conditional_escape(helper)
-    dj_event = conditional_escape(event or name)
+    dj_event = attr_text(event or name)
 
     required_attr = " required" if required else ""
     disabled_attr = " disabled" if disabled else ""
@@ -2029,7 +2023,7 @@ class FormGroupNode(template.Node):
 
         content = self.nodelist.render(context)
 
-        for_attr = f' for="{conditional_escape(for_input)}"' if for_input else ""
+        for_attr = f' for="{attr_text(for_input)}"' if for_input else ""
         required_html = '<span class="form-required"> *</span>' if required else ""
         label_html = (
             f'<label class="form-label"{for_attr}>{conditional_escape(label)}{required_html}</label>'
@@ -2065,8 +2059,8 @@ def do_form_group(parser: Any, token: Any) -> template.Node:
 @register.simple_tag
 def spinner(size: Any = "md", color: Any = "primary") -> SafeString:
     """Render an animated spinner."""
-    e_size = conditional_escape(size)
-    e_color = conditional_escape(color)
+    e_size = attr_text(size)
+    e_color = attr_text(color)
     return mark_safe(
         f'<span class="spinner spinner-{e_size} spinner-{e_color}" '
         f'aria-label="Loading" role="status"></span>'
@@ -2174,7 +2168,7 @@ def empty_state(
     e_description = conditional_escape(description)
     e_icon = conditional_escape(icon)
     e_action_label = conditional_escape(action_label)
-    e_action_event = conditional_escape(action_event)
+    e_action_event = attr_text(action_event)
 
     icon_html = f'<div class="empty-state-icon">{e_icon}</div>' if icon else ""
     title_html = f'<h3 class="empty-state-title">{e_title}</h3>' if title else ""
@@ -2231,10 +2225,10 @@ def switch(
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
-    e_event = conditional_escape(event)
-    e_size = conditional_escape(size)
+    e_event = attr_text(event)
+    e_size = attr_text(size)
 
     checked_attr = " checked" if checked else ""
     disabled_attr = " disabled" if disabled else ""
@@ -2273,7 +2267,7 @@ def stat_card(
     e_value = conditional_escape(value)
     e_trend = conditional_escape(trend)
     e_description = conditional_escape(description)
-    e_dir = conditional_escape(trend_direction)
+    e_dir = attr_text(trend_direction)
 
     trend_html = ""
     if trend:
@@ -2311,9 +2305,9 @@ def dj_tag(
         dismissible = dismissible.lower() not in ("false", "0", "")
 
     e_label = conditional_escape(label)
-    e_variant = conditional_escape(variant)
-    e_event = conditional_escape(event)
-    size_cls = f" tag-{conditional_escape(size)}" if size else ""
+    e_variant = attr_text(variant)
+    e_event = attr_text(event)
+    size_cls = f" tag-{attr_text(size)}" if size else ""
 
     close_html = (
         f'<button class="tag-close" dj-click="{e_event}">&times;</button>' if dismissible else ""
@@ -2521,12 +2515,13 @@ def code_block(
         highlight = highlight.lower() not in ("false", "0", "")
 
     e_language = conditional_escape(language or "text")
+    a_language = attr_text(language or "text")
     e_filename = conditional_escape(filename)
     e_code = conditional_escape(code)
     # Theme is interpolated inside a <script> — HTML escaping is insufficient.
     # Restrict to alphanumeric, hyphens, and underscores to prevent injection.
     safe_theme = theme if _re.match(r"^[a-zA-Z0-9_-]+$", str(theme)) else "github-dark"
-    e_theme = conditional_escape(safe_theme)
+    e_theme = attr_text(safe_theme)
 
     filename_html = f'<span class="code-block-filename">{e_filename}</span>' if filename else ""
     lang_html = f'<span class="code-block-lang">{e_language}</span>'
@@ -2562,8 +2557,8 @@ def code_block(
             }
         )
         highlight_html = (
-            f'<script src="{conditional_escape(static("djust_components/code-block-highlight.js"))}" '
-            f'data-hljs="{conditional_escape(hljs_json)}" defer></script>'
+            f'<script src="{attr_text(static("djust_components/code-block-highlight.js"))}" '
+            f'data-hljs="{attr_text(hljs_json)}" defer></script>'
         )
 
     # `loader` is format_html output from asset_tags (djust.assets.tags), so
@@ -2575,7 +2570,7 @@ def code_block(
         f'<div class="code-block-header">'
         f"{filename_html}{lang_html}{copy_html}"
         f"</div>"
-        f'{loader}<pre class="code-block-pre"><code class="language-{e_language}">{e_code}</code></pre>'
+        f'{loader}<pre class="code-block-pre"><code class="language-{a_language}">{e_code}</code></pre>'
         f"{highlight_html}"
         f"</div>"
     )
@@ -2704,16 +2699,16 @@ def combobox(
     if isinstance(multiple, str):
         multiple = multiple.lower() not in ("false", "0", "")
 
-    e_name = conditional_escape(name)
+    a_name = escape(name)
     e_label = conditional_escape(label)
-    e_value = conditional_escape(value)
-    e_placeholder = conditional_escape(placeholder)
-    e_event = conditional_escape(event or name)
+    e_value = escape(value)
+    e_placeholder = escape(placeholder)
+    e_event = escape(event or name)
     # Picking an option sends the field name as ``field`` (what
     # ``validate_field`` and other inputs' events carry) when this is a form
     # field or validates through ``validate_field``.
     field_attr = (
-        f' data-field="{e_name}"' if field is not None or str(event) == "validate_field" else ""
+        f' data-field="{a_name}"' if field is not None or str(event) == "validate_field" else ""
     )
     e_error = conditional_escape(error)
     e_helper = conditional_escape(helper)
@@ -2732,11 +2727,11 @@ def combobox(
     # Ids: from ``id`` / the bound field's auto_id, else the legacy
     # name-derived ones.
     if id:
-        input_id = conditional_escape(id)
+        input_id = escape(id)
         id_prefix = input_id
     else:
-        input_id = f"{e_name}-input"
-        id_prefix = e_name
+        input_id = f"{a_name}-input"
+        id_prefix = a_name
 
     if multiple:
         # Multi-select mode
@@ -2754,7 +2749,7 @@ def combobox(
                 f'data-value="{e_sv}" type="button">&times;</button>'
                 f"</span>"
             )
-            hidden_inputs_html += f'<input type="hidden" name="{e_name}[]" value="{e_sv}">'
+            hidden_inputs_html += f'<input type="hidden" name="{a_name}[]" value="{e_sv}">'
 
         tags_container = f'<div class="combobox-tags">{tags_html}</div>' if selected else ""
 
@@ -2806,11 +2801,12 @@ def combobox(
     helper_html = (
         f'<span class="form-helper" id="{id_prefix}-helper">{e_helper}</span>' if helper else ""
     )
-    aria = field_aria_attrs(str(id_prefix), error, helper, describedby, invalid)
+    # the text of the prefix: field_aria_attrs escapes the ids it joins, once (#4009)
+    aria = field_aria_attrs(str(id or name), error, helper, describedby, invalid)
     req = " required" if required else ""
     free_text_attr = " data-allow-free-text" if _truthy_flag(allow_free_text) else ""
     if search_event:
-        search_attr = f' dj-input="{conditional_escape(search_event)}"'
+        search_attr = f' dj-input="{escape(search_event)}"'
         filter_attr = ""
     else:
         search_attr = ""
@@ -2818,7 +2814,7 @@ def combobox(
     if not multiple:
         hidden_inputs_html = (
             f'<input type="hidden" class="combobox-value" id="{id_prefix}-value" '
-            f'name="{e_name}" value="{e_value}">'
+            f'name="{a_name}" value="{e_value}">'
         )
 
     if not multiple:
@@ -2880,10 +2876,10 @@ def render_popover(kw: Any, content: Any) -> SafeString:
     uid = kw.get("id", "")
 
     e_trigger = conditional_escape(trigger)
-    e_placement = conditional_escape(placement)
+    e_placement = attr_text(placement)
     id_attr = controls = content_id = ""
     if uid:
-        e_uid = conditional_escape(uid)
+        e_uid = attr_text(uid)
         id_attr = f' id="{e_uid}"'
         controls = f' aria-controls="{e_uid}-content"'
         content_id = f' id="{e_uid}-content"'
@@ -2940,8 +2936,8 @@ def rating(
     if isinstance(readonly, str):
         readonly = readonly.lower() not in ("false", "0", "")
 
-    e_event = conditional_escape(event)
-    size_cls = f" rating-{conditional_escape(size)}" if size != "md" else ""
+    e_event = attr_text(event)
+    size_cls = f" rating-{attr_text(size)}" if size != "md" else ""
     parts = []
 
     for i in range(1, max_stars + 1):
@@ -2963,10 +2959,7 @@ def rating(
     hidden = ""
     if name:
         shown = int(value) if value == int(value) else value
-        hidden = (
-            f'<input type="hidden" name="{attr_text(name)}" '
-            f'value="{conditional_escape(str(shown))}">'
-        )
+        hidden = f'<input type="hidden" name="{attr_text(name)}" value="{attr_text(str(shown))}">'
     return mark_safe(f'<div class="rating{size_cls}">{hidden}{"".join(parts)}</div>')
 
 
@@ -2984,11 +2977,11 @@ def copy_button(
     size: Any = "sm",
 ) -> SafeString:
     """Render a copy-to-clipboard button."""
-    e_text = conditional_escape(text)
+    e_text = attr_text(text)
     e_label = conditional_escape(label)
-    e_copied = conditional_escape(copied_label)
-    e_variant = conditional_escape(variant)
-    e_size = conditional_escape(size)
+    e_copied = attr_text(copied_label)
+    e_variant = attr_text(variant)
+    e_size = attr_text(size)
 
     # dj-copy is the client bundle's delegated clipboard directive: no inline
     # handler, so a strict CSP does not block it.
@@ -3044,15 +3037,15 @@ def render_collapsible(kw: Any, content: Any) -> SafeString:
         open_ = open_.lower() not in ("false", "0", "")
     event = kw.get("event", "toggle_collapsible")
     uid = kw.get("id", "")
-    id_attr = f' id="{conditional_escape(uid)}"' if uid else ""
+    id_attr = f' id="{attr_text(uid)}"' if uid else ""
     component_id = kw.get("component_id", "")
-    cid_attr = f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
+    cid_attr = f' data-component-id="{attr_text(component_id)}"' if component_id else ""
     open_cls = " collapsible-open" if open_ else ""
     return mark_safe(
         f'<div class="collapsible{open_cls}"{id_attr}>'
         f'<button type="button" class="collapsible-trigger" '
         f'aria-expanded="{"true" if open_ else "false"}" '
-        f'dj-click="{conditional_escape(event)}"{cid_attr}>'
+        f'dj-click="{attr_text(event)}"{cid_attr}>'
         f'<span class="collapsible-label">{conditional_escape(trigger)}</span>'
         f'<span class="collapsible-icon" aria-hidden="true">▾</span>'
         f"</button>"
@@ -3099,15 +3092,13 @@ class SheetNode(template.Node):
         title = kw.get("title", "")
         close_event = kw.get("close_event", "close_sheet")
 
-        e_side = conditional_escape(side)
+        e_side = escape(side)
         e_title = conditional_escape(title)
-        e_close = conditional_escape(close_event)
+        e_close = escape(close_event)
         open_attr = ' data-open="true"' if open_ else ""
         content = self.nodelist.render(context)
         component_id = kw.get("component_id", "")
-        cid_attr = (
-            f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
-        )
+        cid_attr = f' data-component-id="{escape(component_id)}"' if component_id else ""
 
         # ``close_event=None`` (or ``False``, ``""``) is the off state (#4134): no × and no
         # overlay click.
@@ -3162,9 +3153,9 @@ def notification_center(
     except (ValueError, TypeError):
         unread_count = 0
 
-    e_open = conditional_escape(open_event)
-    e_clear = conditional_escape(clear_event)
-    e_read = conditional_escape(mark_read_event)
+    e_open = attr_text(open_event)
+    e_clear = attr_text(clear_event)
+    e_read = attr_text(mark_read_event)
 
     badge_html = f'<span class="notif-badge">{unread_count}</span>' if unread_count > 0 else ""
 
@@ -3246,7 +3237,7 @@ def gauge(
     gap = circ - dash
     cx = cy = px / 2
 
-    e_color = conditional_escape(color)
+    e_color = attr_text(color)
     e_label = conditional_escape(label)
     display_val = f"{int(pct * 100)}%"
     val_html = (
@@ -3300,10 +3291,10 @@ def carousel(
     if not images:
         return mark_safe('<div class="carousel carousel-empty"></div>')
 
-    e_prev = conditional_escape(prev_event)
-    e_next = conditional_escape(next_event)
-    e_go = conditional_escape(go_event)
-    cid_attr = f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
+    e_prev = attr_text(prev_event)
+    e_next = attr_text(next_event)
+    e_go = attr_text(go_event)
+    cid_attr = f' data-component-id="{attr_text(component_id)}"' if component_id else ""
 
     slides = ""
     dots = ""
@@ -3381,8 +3372,8 @@ def tree_view(
     if nodes is None:
         return mark_safe('<div class="tree"></div>')
 
-    e_expand = conditional_escape(expand_event)
-    e_select = conditional_escape(select_event)
+    e_expand = attr_text(expand_event)
+    e_select = attr_text(select_event)
     # Only the expand toggles carry it: the labels send the application's ``select_event``.
     cid_attr = _cid(component_id)
     open_ids = (
@@ -3459,16 +3450,16 @@ def color_picker(
             "#EC4899",
             "#6B7280",
         ]
-    e_name = conditional_escape(name)
-    e_value = conditional_escape(value)
-    e_event = conditional_escape(event or name)
+    e_name = attr_text(name)
+    e_value = attr_text(value)
+    e_event = attr_text(event or name)
     e_label = conditional_escape(label)
 
     label_html = f'<label class="form-label">{e_label}</label>' if label else ""
 
     swatch_html = ""
     for sw in swatches:
-        e_sw = conditional_escape(safe_css_color(sw, "transparent"))
+        e_sw = attr_text(safe_css_color(sw, "transparent"))
         active_cls = " color-swatch-active" if sw == value else ""
         swatch_html += (
             f'<button class="color-swatch{active_cls}"'
@@ -3519,9 +3510,9 @@ class CommandPaletteNode(template.Node):
         close_event = kw.get("close_event", "close_palette")
         placeholder = kw.get("placeholder", "Search commands…")
 
-        e_search = conditional_escape(search_event)
-        e_close = conditional_escape(close_event)
-        e_placeholder = conditional_escape(placeholder)
+        e_search = escape(search_event)
+        e_close = escape(close_event)
+        e_placeholder = escape(placeholder)
         open_attr = ' data-open="true"' if open_ else ""
         content = self.nodelist.render(context)
         # ``component_id=`` names which ``CommandPalette`` the close controls drive
@@ -3556,7 +3547,7 @@ def palette_item(
 ) -> SafeString:
     """Render a single command palette result item."""
     e_label = conditional_escape(label)
-    e_event = conditional_escape(event)
+    e_event = attr_text(event)
     e_desc = conditional_escape(description)
     e_icon = conditional_escape(icon)
 
@@ -3598,7 +3589,7 @@ def render_context_menu(kw: Any, content: Any) -> SafeString:
     """
     label = kw.get("label", "Right-click area")
     uid = kw.get("id", "")
-    id_attr = f' id="{conditional_escape(uid)}"' if uid else ""
+    id_attr = f' id="{attr_text(uid)}"' if uid else ""
     return mark_safe(
         f'<div class="ctx-wrapper"{id_attr}>'
         f'<div class="ctx-trigger">{conditional_escape(label)}</div>'
@@ -3626,7 +3617,7 @@ def context_menu_item(
         return mark_safe('<div class="ctx-divider"></div>')
 
     e_label = conditional_escape(label)
-    e_event = conditional_escape(event)
+    e_event = attr_text(event)
     e_icon = conditional_escape(icon)
     danger_cls = " ctx-item-danger" if danger else ""
     icon_html = f'<span class="ctx-item-icon">{e_icon}</span>' if icon else ""
@@ -3694,16 +3685,19 @@ def date_picker(
     year, month = calendar_month(year, month, today)
     today_str = today.strftime("%Y-%m-%d")
 
-    e_prev = conditional_escape(prev_event)
-    e_next = conditional_escape(next_event)
-    e_select = conditional_escape(select_event)
-    e_name = conditional_escape(name)
+    e_prev = attr_text(prev_event)
+    e_next = attr_text(next_event)
+    e_select = attr_text(select_event)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
     e_selected = conditional_escape(selected)
+    a_selected = attr_text(selected)
     e_error = conditional_escape(error)
     e_helper = conditional_escape(helper)
     e_range_start = conditional_escape(range_start)
+    a_range_start = attr_text(range_start)
     e_range_end = conditional_escape(range_end)
+    a_range_end = attr_text(range_end)
 
     if isinstance(required, str):
         required = required.lower() not in ("false", "0", "")
@@ -3755,12 +3749,12 @@ def date_picker(
         else:
             selected_html = ""
         hidden_html = (
-            f'<input type="hidden" name="{e_name}_start" value="{e_range_start}">'
-            f'<input type="hidden" name="{e_name}_end" value="{e_range_end}">'
+            f'<input type="hidden" name="{e_name}_start" value="{a_range_start}">'
+            f'<input type="hidden" name="{e_name}_end" value="{a_range_end}">'
         )
     else:
         selected_html = f'<div class="dp-selected-value">{e_selected}</div>' if selected else ""
-        hidden_html = f'<input type="hidden" name="{e_name}" value="{e_selected}">'
+        hidden_html = f'<input type="hidden" name="{e_name}" value="{a_selected}">'
 
     return mark_safe(
         f'<div class="form-group">'
@@ -3804,14 +3798,15 @@ def file_dropzone(
     if isinstance(multiple, str):
         multiple = multiple.lower() not in ("false", "0", "")
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
     e_accept = conditional_escape(accept)
+    a_accept = attr_text(accept)
     e_helper = conditional_escape(helper)
     e_max = conditional_escape(str(max_size_mb))
 
     multiple_attr = " multiple" if multiple else ""
-    accept_attr = f' accept="{e_accept}"' if accept else ""
+    accept_attr = f' accept="{a_accept}"' if accept else ""
     label_html = f'<label class="form-label">{e_label}</label>' if label else ""
     helper_html = f'<span class="form-helper">{e_helper}</span>' if helper else ""
 
@@ -3860,9 +3855,9 @@ class SplitPaneNode(template.Node):
         direction = kw.get("direction", "horizontal")
         initial = kw.get("initial", "50")
         uid = kw.get("id", "")
-        id_attr = f' id="{conditional_escape(uid)}"' if uid else ""
+        id_attr = f' id="{attr_text(uid)}"' if uid else ""
 
-        e_dir = conditional_escape(direction)
+        e_dir = attr_text(direction)
 
         content1 = self.pane1.render(context)
         content2 = self.pane2.render(context)
@@ -3905,7 +3900,7 @@ def table_of_contents(
         return mark_safe("")
 
     e_title = conditional_escape(title)
-    e_event = conditional_escape(event) if event else ""
+    e_event = attr_text(event) if event else ""
 
     def render_item(item: Any) -> Any:
         if not isinstance(item, dict):
@@ -3959,7 +3954,7 @@ def virtual_list(
         page_size = 20
         item_height = 48
 
-    e_load = conditional_escape(load_more_event)
+    e_load = attr_text(load_more_event)
     has_more = (page * page_size) < total
 
     rows = ""
@@ -4127,11 +4122,11 @@ def kanban_board(
     # {card_id, from_col, to_col}.
     if add_col_event is not None:
         _warn_add_col_event()
-    e_move = conditional_escape(move_event)
+    e_move = attr_text(move_event)
     if not columns:
         return mark_safe(f'<div class="kanban" data-move-event="{e_move}"></div>')
 
-    e_add_card = conditional_escape(add_card_event) if add_card_event else ""
+    e_add_card = attr_text(add_card_event) if add_card_event else ""
 
     # One visually hidden instruction per board, read before a card is picked
     # up; its id comes from the first column so two boards rarely share it.
@@ -4264,15 +4259,15 @@ def rich_text_editor(
     if isinstance(required, str):
         required = required.lower() not in ("false", "0", "")
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     # Editor HTML keeps its formatting: values marked safe pass through, and
     # anything else is cleaned to the Markdown allowlist (utils.rich_html).
     e_value = rich_html(value)
-    e_event = conditional_escape(event)
-    e_placeholder = conditional_escape(placeholder)
+    e_event = attr_text(event)
+    e_placeholder = attr_text(placeholder)
     e_label = conditional_escape(label)
 
-    e_uid = conditional_escape(f"rte-{name}")
+    e_uid = attr_text(f"rte-{name}")
 
     label_html = f'<label class="form-label">{e_label}</label>' if label else ""
     req_html = ' <span class="form-required">*</span>' if required else ""
@@ -4298,14 +4293,14 @@ def rich_text_editor(
         if cmd == "|":
             toolbar_html += '<div class="rte-sep"></div>'
         else:
-            e_cmd = conditional_escape(cmd)
+            e_cmd = attr_text(cmd)
             e_lbl = conditional_escape(lbl)
             # The client bundle runs the command on mousedown (keeping the
             # editor's selection); no inline handler.
             toolbar_html += (
                 f'<button class="rte-btn" type="button" title="{e_cmd}" '
                 f'aria-label="{e_cmd}" data-command="{e_cmd}" '
-                f'data-command-arg="{conditional_escape(arg)}">'
+                f'data-command-arg="{attr_text(arg)}">'
                 f"{e_lbl}</button>"
             )
 
@@ -4363,13 +4358,13 @@ def multi_select(
     # Normalise selected to list of strings
     selected = [str(s) for s in selected]
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
-    e_placeholder = conditional_escape(placeholder)
-    dj_event = conditional_escape(event or name)
+    e_placeholder = attr_text(placeholder)
+    dj_event = attr_text(event or name)
     disabled_attr = " disabled" if disabled else ""
 
-    uid = conditional_escape(f"ms-{name}")
+    uid = attr_text(f"ms-{name}")
 
     def _opt_pair(opt: Any) -> Any:
         if isinstance(opt, dict):
@@ -4450,9 +4445,9 @@ def otp_input(
         digits = 6
     digits = max(1, min(12, digits))
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
-    dj_event = conditional_escape(event or name)
+    dj_event = attr_text(event or name)
     disabled_attr = " disabled" if disabled else ""
 
     uid = _render_id("otp", name, digits, event, label, disabled)
@@ -4516,9 +4511,9 @@ def number_stepper(
     except (ValueError, TypeError):
         step = 1
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
-    dj_event = conditional_escape(event or name)
+    dj_event = attr_text(event or name)
     disabled_attr = " disabled" if disabled else ""
 
     min_attr = f' min="{int(min_val)}"' if min_val is not None else ""
@@ -4574,10 +4569,10 @@ def tag_input(
     if suggestions is None:
         suggestions = []
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
-    e_placeholder = conditional_escape(placeholder)
-    dj_event = conditional_escape(event or name)
+    e_placeholder = attr_text(placeholder)
+    dj_event = attr_text(event or name)
     disabled_attr = " disabled" if disabled else ""
 
     uid = _render_id("ti", name, event, placeholder, label, disabled)
@@ -4673,7 +4668,7 @@ class InputGroupNode(template.Node):
         size = kw.get("size", "md")
         error = kw.get("error", "")
         content = self.nodelist.render(context)
-        size_cls = f" input-group-{conditional_escape(size)}" if size != "md" else ""
+        size_cls = f" input-group-{attr_text(size)}" if size != "md" else ""
         error_cls = " input-group-error" if error else ""
         error_html = (
             f'<span class="form-error-message">{conditional_escape(error)}</span>' if error else ""
@@ -4695,7 +4690,7 @@ class InputAddonNode(template.Node):
         position = kw.get("position", "prefix")
         content = self.nodelist.render(context)
         return mark_safe(
-            f'<span class="input-addon input-addon-{conditional_escape(position)}">{content}</span>'
+            f'<span class="input-addon input-addon-{attr_text(position)}">{content}</span>'
         )
 
 
@@ -4738,9 +4733,9 @@ class DjLabelNode(template.Node):
         extra_class = kw.get("class", "")
 
         content = self.nodelist.render(context)
-        for_attr = f' for="{conditional_escape(for_input)}"' if for_input else ""
+        for_attr = f' for="{attr_text(for_input)}"' if for_input else ""
         required_span = ' <span class="form-required">*</span>' if required else ""
-        cls = f"form-label {conditional_escape(extra_class)}".strip()
+        cls = f"form-label {attr_text(extra_class)}".strip()
 
         return mark_safe(f'<label class="{cls}"{for_attr}>{content}{required_span}</label>')
 
@@ -4781,7 +4776,7 @@ class FieldsetNode(template.Node):
             if legend
             else ""
         )
-        cls = f"fieldset {conditional_escape(extra_class)}".strip()
+        cls = f"fieldset {attr_text(extra_class)}".strip()
 
         return mark_safe(
             f'<fieldset class="{cls}"{disabled_attr}>'
@@ -4936,17 +4931,17 @@ def fab(
         disabled = disabled.lower() not in ("false", "0", "")
 
     e_icon = conditional_escape(icon)
-    e_event = conditional_escape(event)
-    e_label = conditional_escape(label)
+    e_event = attr_text(event)
+    e_label = attr_text(label)
 
     valid_positions = ("bottom-right", "bottom-left", "top-right", "top-left")
     pos_cls = position if position in valid_positions else "bottom-right"
-    pos_cls = conditional_escape(pos_cls)
+    pos_cls = attr_text(pos_cls)
 
     size_cls = ""
     if size and size != "md":
-        size_cls = f" fab-{conditional_escape(size)}"
-    variant_cls = f" fab-{conditional_escape(variant)}"
+        size_cls = f" fab-{attr_text(size)}"
+    variant_cls = f" fab-{attr_text(variant)}"
     disabled_attr = " disabled" if disabled else ""
     click_attr = "" if disabled or not event else f' dj-click="{e_event}"'
     aria_label = f' aria-label="{e_label}"' if label else ""
@@ -5031,13 +5026,13 @@ def split_button(
         is_open = is_open.lower() not in ("false", "0", "")
 
     e_label = conditional_escape(label)
-    e_event = conditional_escape(event)
-    e_toggle = conditional_escape(toggle_event)
+    e_event = escape(event)
+    e_toggle = escape(toggle_event)
 
-    variant_cls = f" split-btn-{conditional_escape(variant)}"
+    variant_cls = f" split-btn-{escape(variant)}"
     size_cls = ""
     if size and size != "md":
-        size_cls = f" split-btn-{conditional_escape(size)}"
+        size_cls = f" split-btn-{escape(size)}"
     loading_cls = " split-btn-loading" if loading else ""
     disabled_attr = " disabled" if disabled or loading else ""
     click_attr = "" if disabled or loading or not event else f' dj-click="{e_event}"'
@@ -5100,8 +5095,8 @@ class ScrollAreaNode(template.Node):
         custom_class = kw.get("custom_class", "")
         label = kw.get("label", "Scrollable content")
 
-        e_custom_class = conditional_escape(str(custom_class))
-        e_label = conditional_escape(str(label))
+        e_custom_class = attr_text(str(custom_class))
+        e_label = attr_text(str(label))
 
         content = self.nodelist.render(context)
 
@@ -5155,10 +5150,10 @@ class CalloutNode(template.Node):
         icon = kw.get("icon", "")
         custom_class = kw.get("custom_class", "")
 
-        e_type = conditional_escape(str(callout_type))
+        e_type = attr_text(str(callout_type))
         e_title = conditional_escape(str(title))
         e_icon = conditional_escape(str(icon))
-        e_custom_class = conditional_escape(str(custom_class))
+        e_custom_class = attr_text(str(custom_class))
 
         content = self.nodelist.render(context)
 
@@ -5213,7 +5208,7 @@ class AspectRatioNode(template.Node):
         ratio = kw.get("ratio", "16/9")
         custom_class = kw.get("custom_class", "")
 
-        e_custom_class = conditional_escape(str(custom_class))
+        e_custom_class = attr_text(str(custom_class))
 
         content = self.nodelist.render(context)
 
@@ -5250,7 +5245,7 @@ class DescriptionListNode(template.Node):
         layout = kw.get("layout", "vertical")
         custom_class = kw.get("custom_class", "")
 
-        e_custom_class = conditional_escape(str(custom_class))
+        e_custom_class = attr_text(str(custom_class))
 
         cls = "dj-dl"
         if layout == "horizontal":
@@ -5297,7 +5292,7 @@ class StickyHeaderNode(template.Node):
         z_index = kw.get("z_index", "10")
         custom_class = kw.get("custom_class", "")
 
-        e_custom_class = conditional_escape(str(custom_class))
+        e_custom_class = attr_text(str(custom_class))
 
         content = self.nodelist.render(context)
 
@@ -5347,8 +5342,8 @@ class NotificationBadgeNode(template.Node):
         size = kw.get("size", "md")
         custom_class = kw.get("custom_class", "")
 
-        e_size = conditional_escape(str(size))
-        e_custom_class = conditional_escape(str(custom_class))
+        e_size = attr_text(str(size))
+        e_custom_class = attr_text(str(custom_class))
 
         cls = f"dj-notification-badge dj-notification-badge--{e_size}"
         if pulse:
@@ -5394,8 +5389,8 @@ class SegmentedProgressNode(template.Node):
         size = kw.get("size", "md")
         custom_class = kw.get("custom_class", "")
 
-        e_size = conditional_escape(str(size))
-        e_custom_class = conditional_escape(str(custom_class))
+        e_size = attr_text(str(size))
+        e_custom_class = attr_text(str(custom_class))
 
         cls = f"dj-segmented-progress dj-segmented-progress--{e_size}"
         if e_custom_class:
@@ -5465,9 +5460,9 @@ class ProgressCircleNode(template.Node):
         show_value = kw.get("show_value", True)
         custom_class = kw.get("custom_class", "")
 
-        e_size = conditional_escape(str(size))
-        e_color = conditional_escape(str(color))
-        e_custom_class = conditional_escape(str(custom_class))
+        e_size = attr_text(str(size))
+        e_color = attr_text(str(color))
+        e_custom_class = attr_text(str(custom_class))
 
         sizes = {"sm": 48, "md": 80, "lg": 120}
         dim = sizes.get(str(size), 80)
@@ -5539,8 +5534,8 @@ class StatusIndicatorNode(template.Node):
         live = _truthy_flag(kw.get("live", False))
 
         e_label = conditional_escape(str(label))
-        e_size = conditional_escape(str(size))
-        e_custom_class = conditional_escape(str(custom_class))
+        e_size = attr_text(str(size))
+        e_custom_class = attr_text(str(custom_class))
 
         # Map statuses to colors
         status_colors = {
@@ -5593,8 +5588,8 @@ class LoadingOverlayNode(template.Node):
 
         content = self.nodelist.render(context)
 
-        e_spinner_size = conditional_escape(str(spinner_size))
-        e_custom_class = conditional_escape(str(custom_class))
+        e_spinner_size = attr_text(str(spinner_size))
+        e_custom_class = attr_text(str(custom_class))
         e_text = conditional_escape(str(text))
 
         cls = "dj-loading-overlay-wrap"
@@ -5642,9 +5637,9 @@ class AnnouncementBarNode(template.Node):
 
         content = self.nodelist.render(context)
 
-        e_bar_type = conditional_escape(str(bar_type))
-        e_dismiss_event = conditional_escape(str(dismiss_event))
-        e_custom_class = conditional_escape(str(custom_class))
+        e_bar_type = attr_text(str(bar_type))
+        e_dismiss_event = attr_text(str(dismiss_event))
+        e_custom_class = attr_text(str(custom_class))
 
         cls = f"dj-announcement-bar dj-announcement-bar--{e_bar_type}"
         if e_custom_class:
@@ -5769,14 +5764,14 @@ def rich_select(
 
     value = str(value) if value else ""
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_placeholder = conditional_escape(placeholder)
     e_label = conditional_escape(label)
-    dj_event = conditional_escape(event or name)
+    dj_event = attr_text(event or name)
     disabled_attr = " disabled" if disabled else ""
     disabled_cls = " rich-select--disabled" if disabled else ""
 
-    uid = conditional_escape(id or f"rs-{name}")
+    uid = attr_text(id or f"rs-{name}")
     field_attr = (
         f' data-field="{e_name}"' if field is not None or str(event) == "validate_field" else ""
     )
@@ -5837,7 +5832,8 @@ def rich_select(
     # triggers inside ``.rich-select--disabled``.
     tabindex = "-1" if disabled else "0"
     aria_disabled = ' aria-disabled="true"' if disabled else ""
-    aria_field = field_aria_attrs(str(uid), error, helper, describedby, invalid)
+    # the text of the prefix: field_aria_attrs escapes the ids it joins, once (#4009)
+    aria_field = field_aria_attrs(str(id or f"rs-{name}"), error, helper, describedby, invalid)
     helper_html = (
         f'<span class="form-helper" id="{uid}-helper">{conditional_escape(helper)}</span>'
         if helper
@@ -5852,7 +5848,7 @@ def rich_select(
     return mark_safe(
         f'<div class="rich-select{disabled_cls}" id="{uid}">'
         f"{label_html}"
-        f'<input type="hidden" name="{e_name}" value="{conditional_escape(value)}">'
+        f'<input type="hidden" name="{e_name}" value="{attr_text(value)}">'
         f'<div class="rich-select-trigger{trigger_variant_cls}" '
         f'tabindex="{tabindex}" role="combobox" aria-controls="{listbox_id}" '
         f'aria-expanded="false" aria-haspopup="listbox"{aria_field}{aria_disabled}{disabled_attr}>'
@@ -5958,10 +5954,10 @@ def data_grid(
     if isinstance(keyboard_nav, str):
         keyboard_nav = keyboard_nav.lower() not in ("false", "0", "")
 
-    e_edit_event = conditional_escape(edit_event)
-    e_custom_class = conditional_escape(custom_class)
-    e_new_row_event = conditional_escape(new_row_event)
-    e_delete_row_event = conditional_escape(delete_row_event)
+    e_edit_event = escape(edit_event)
+    e_custom_class = escape(custom_class)
+    e_new_row_event = escape(new_row_event)
+    e_delete_row_event = escape(delete_row_event)
 
     wrapper_cls = "data-grid-wrapper"
     if striped:
@@ -6095,8 +6091,8 @@ class StreamingTextNode(template.Node):
         cursor = kw.get("cursor", True)
         custom_class = kw.get("custom_class", "")
 
-        e_stream_event = conditional_escape(str(stream_event))
-        e_custom_class = conditional_escape(str(custom_class))
+        e_stream_event = escape(str(stream_event))
+        e_custom_class = escape(str(custom_class))
 
         cls = "dj-streaming-text"
         if cursor:
@@ -6142,9 +6138,10 @@ class ConnectionStatusNode(template.Node):
         reconnecting_text = kw.get("reconnecting_text", "Reconnecting...")
         connected_text = kw.get("connected_text", "Reconnected")
 
-        e_custom_class = conditional_escape(str(custom_class))
+        e_custom_class = attr_text(str(custom_class))
         e_reconnecting_text = conditional_escape(str(reconnecting_text))
-        e_connected_text = conditional_escape(str(connected_text))
+        a_reconnecting_text = attr_text(str(reconnecting_text))
+        e_connected_text = attr_text(str(connected_text))
 
         cls = "dj-connection-status"
         if e_custom_class:
@@ -6152,7 +6149,7 @@ class ConnectionStatusNode(template.Node):
 
         return mark_safe(
             f'<div class="{cls}" '
-            f'data-reconnecting-text="{e_reconnecting_text}" '
+            f'data-reconnecting-text="{a_reconnecting_text}" '
             f'data-connected-text="{e_connected_text}" '
             f'role="status" aria-live="polite" hidden>'
             f'<span class="dj-connection-status__text">{e_reconnecting_text}</span>'
@@ -6187,10 +6184,10 @@ class LiveCounterNode(template.Node):
         custom_class = kw.get("custom_class", "")
         size = kw.get("size", "md")
 
-        e_stream_event = conditional_escape(str(stream_event))
+        e_stream_event = attr_text(str(stream_event))
         e_label = conditional_escape(str(label))
-        e_custom_class = conditional_escape(str(custom_class))
-        e_size = conditional_escape(str(size))
+        e_custom_class = attr_text(str(custom_class))
+        e_size = attr_text(str(size))
 
         cls = f"dj-live-counter dj-live-counter--{e_size}"
         if e_custom_class:
@@ -6241,7 +6238,7 @@ class ToastContainerNode(template.Node):
         custom_class = kw.get("custom_class", "")
         max_toasts = kw.get("max_toasts", 5)
 
-        e_custom_class = conditional_escape(str(custom_class))
+        e_custom_class = attr_text(str(custom_class))
 
         try:
             max_toasts = int(max_toasts)
@@ -6283,9 +6280,9 @@ def scroll_to_top(
         label: accessible button label
         custom_class: additional CSS classes
     """
-    e_threshold = conditional_escape(threshold)
-    e_label = conditional_escape(label)
-    e_cls = conditional_escape(custom_class)
+    e_threshold = attr_text(threshold)
+    e_label = attr_text(label)
+    e_cls = attr_text(custom_class)
 
     cls = "dj-scroll-to-top"
     if e_cls:
@@ -6322,7 +6319,7 @@ def code_snippet(code: Any = "", language: Any = "", custom_class: Any = "") -> 
     """
     e_code = conditional_escape(code)
     e_lang = conditional_escape(language)
-    e_cls = conditional_escape(custom_class)
+    e_cls = attr_text(custom_class)
 
     cls = "dj-code-snippet"
     if e_cls:
@@ -6378,8 +6375,8 @@ def responsive_image(
         lazy = lazy.lower() not in ("false", "0", "")
 
     e_src = data_url_attr(src, image=True)
-    e_alt = conditional_escape(alt)
-    e_cls = conditional_escape(custom_class)
+    e_alt = attr_text(alt)
+    e_cls = attr_text(custom_class)
 
     cls = "dj-responsive-image"
     if placeholder:
@@ -6398,7 +6395,7 @@ def responsive_image(
     if e_srcset:
         img_attrs.append(f'srcset="{e_srcset}"')
     if sizes:
-        img_attrs.append(f'sizes="{conditional_escape(sizes)}"')
+        img_attrs.append(f'sizes="{attr_text(sizes)}"')
 
     img_tag = f'<img {" ".join(img_attrs)} class="dj-responsive-image__img">'
 
@@ -6432,7 +6429,7 @@ def relative_time(
     if isinstance(auto_update, str):
         auto_update = auto_update.lower() not in ("false", "0", "")
 
-    e_cls = conditional_escape(custom_class)
+    e_cls = attr_text(custom_class)
     cls = "dj-relative-time"
     if e_cls:
         cls += f" {e_cls}"
@@ -6445,6 +6442,7 @@ def relative_time(
             iso_val = str(datetime)
 
     e_iso = conditional_escape(iso_val)
+    a_iso = attr_text(iso_val)
     auto_str = "true" if auto_update else "false"
 
     try:
@@ -6454,7 +6452,7 @@ def relative_time(
 
     return mark_safe(
         f'<time class="{cls}" '
-        f'datetime="{e_iso}" '
+        f'datetime="{a_iso}" '
         f'data-auto-update="{auto_str}" '
         f'data-interval="{interval_val}">'
         f"{e_iso}"
@@ -6480,8 +6478,10 @@ class CopyableTextNode(template.Node):
         content = self.nodelist.render(context).strip()
 
         e_content = conditional_escape(content)
+        a_content = attr_text(content)
         e_label = conditional_escape(copied_label)
-        e_cls = conditional_escape(custom_class)
+        a_label = attr_text(copied_label)
+        e_cls = attr_text(custom_class)
 
         cls = "dj-copyable-text"
         if e_cls:
@@ -6489,8 +6489,8 @@ class CopyableTextNode(template.Node):
 
         return mark_safe(
             f'<span class="{cls}" '
-            f'data-copy-text="{e_content}" '
-            f'data-copied-label="{e_label}" '
+            f'data-copy-text="{a_content}" '
+            f'data-copied-label="{a_label}" '
             f'role="button" tabindex="0" '
             f'aria-label="Click to copy">'
             f'<span class="dj-copyable-text__value">{e_content}</span>'
@@ -6568,12 +6568,12 @@ def render_theme_toggle(
     from djust.components.icons import render_icon
 
     current = str(current or "system")
-    e_current = conditional_escape(current)
-    e_event = conditional_escape(event) if event else ""
+    e_current = attr_text(current)
+    e_event = attr_text(event) if event else ""
     cls = "dj-theme-toggle"
     if custom_class:
-        cls += f" {conditional_escape(custom_class)}"
-    id_attr = f' id="{conditional_escape(toggle_id)}"' if toggle_id else ""
+        cls += f" {attr_text(custom_class)}"
+    id_attr = f' id="{attr_text(toggle_id)}"' if toggle_id else ""
 
     buttons = []
     for mode, icon, label in _THEME_TOGGLE_MODES:
@@ -6651,7 +6651,7 @@ class PageHeaderNode(template.Node):
         e_title = conditional_escape(str(title))
         e_subtitle = conditional_escape(str(subtitle))
         e_description = conditional_escape(str(description))
-        e_custom_class = conditional_escape(str(custom_class))
+        e_custom_class = attr_text(str(custom_class))
 
         # Render child nodelist — this may include page_header_actions which
         # stashes its content in the context.
@@ -6776,7 +6776,7 @@ class SidebarNode(template.Node):
         if event:
             trigger = (
                 f'<button class="dj-sidebar__link{active_cls}{level_cls}" '
-                f'dj-click="{conditional_escape(event)}">'
+                f'dj-click="{attr_text(event)}">'
                 f'{icon_html}<span class="dj-sidebar__label">'
                 f"{conditional_escape(label)}</span></button>"
             )
@@ -6814,14 +6814,14 @@ class SidebarNode(template.Node):
         collapsed_cls = " dj-sidebar--collapsed" if collapsed else ""
         cls = f"dj-sidebar{collapsed_cls}"
         if custom_class:
-            cls += f" {conditional_escape(custom_class)}"
+            cls += f" {attr_text(custom_class)}"
 
         header_html = ""
         if title:
             header_html = (
                 f'<div class="dj-sidebar__header">'
                 f'<span class="dj-sidebar__title">{conditional_escape(title)}</span>'
-                f'<button class="dj-sidebar__toggle" dj-click="{conditional_escape(toggle_event)}"'
+                f'<button class="dj-sidebar__toggle" dj-click="{attr_text(toggle_event)}"'
                 f"{cid_attr}>&#9776;</button></div>"
             )
 
@@ -6843,12 +6843,12 @@ class SidebarNode(template.Node):
 
         # Mobile overlay backdrop
         backdrop = (
-            f'<div class="dj-sidebar__backdrop" dj-click="{conditional_escape(toggle_event)}"'
+            f'<div class="dj-sidebar__backdrop" dj-click="{attr_text(toggle_event)}"'
             f"{cid_attr}></div>"
         )
 
         return mark_safe(
-            f'<nav class="{cls}" id="{conditional_escape(sidebar_id)}" role="navigation">'
+            f'<nav class="{cls}" id="{attr_text(sidebar_id)}" role="navigation">'
             f"{header_html}{menu_html}{backdrop}</nav>"
         )
 
@@ -6951,7 +6951,7 @@ class NavItemNode(template.Node):
         if event:
             return mark_safe(
                 f'<li class="{li_cls}{active_cls}">'
-                f'<button class="{link_cls}" dj-click="{conditional_escape(event)}">'
+                f'<button class="{link_cls}" dj-click="{attr_text(event)}">'
                 f"{conditional_escape(label)}{desc_html}</button></li>"
             )
 
@@ -6979,7 +6979,7 @@ class NavMenuNode(template.Node):
 
         cls = "dj-nav"
         if custom_class:
-            cls += f" {conditional_escape(custom_class)}"
+            cls += f" {attr_text(custom_class)}"
 
         mobile_cls = " dj-nav__list--open" if mobile_open else ""
 
@@ -6991,7 +6991,7 @@ class NavMenuNode(template.Node):
             )
 
         hamburger = (
-            f'<button class="dj-nav__hamburger" dj-click="{conditional_escape(toggle_event)}"'
+            f'<button class="dj-nav__hamburger" dj-click="{attr_text(toggle_event)}"'
             f'{_cid(kw.get("component_id"))} aria-label="Toggle navigation">&#9776;</button>'
         )
 
@@ -7001,7 +7001,7 @@ class NavMenuNode(template.Node):
             items_html = self.nodelist.render(context)
 
         return mark_safe(
-            f'<nav class="{cls}" id="{conditional_escape(nav_id)}" role="navigation">'
+            f'<nav class="{cls}" id="{attr_text(nav_id)}" role="navigation">'
             f'<div class="dj-nav__container">'
             f"{brand_html}{hamburger}"
             f'<ul class="dj-nav__list{mobile_cls}">{items_html}</ul>'
@@ -7169,9 +7169,9 @@ class ToolbarNode(template.Node):
         size = kw.get("size", "md")
         variant = kw.get("variant", "default")
 
-        cls = f"dj-toolbar dj-toolbar--{conditional_escape(size)} dj-toolbar--{conditional_escape(variant)}"
+        cls = f"dj-toolbar dj-toolbar--{attr_text(size)} dj-toolbar--{attr_text(variant)}"
         if custom_class:
-            cls += f" {conditional_escape(custom_class)}"
+            cls += f" {attr_text(custom_class)}"
 
         parts = []
         for node in self.nodelist:
@@ -7192,8 +7192,7 @@ class ToolbarNode(template.Node):
                     parts.append(f'<div class="dj-toolbar__group">{rendered}</div>')
 
         return mark_safe(
-            f'<div class="{cls}" id="{conditional_escape(toolbar_id)}" role="toolbar">'
-            f"{''.join(parts)}</div>"
+            f'<div class="{cls}" id="{attr_text(toolbar_id)}" role="toolbar">{"".join(parts)}</div>'
         )
 
 
@@ -7238,22 +7237,23 @@ class InlineEditNode(template.Node):
         editing = kw.get("editing", False)
 
         e_value = conditional_escape(str(value))
-        e_event = conditional_escape(event)
-        e_field = conditional_escape(field)
-        e_placeholder = conditional_escape(placeholder)
-        e_input_type = conditional_escape(input_type)
+        a_value = attr_text(str(value))
+        e_event = attr_text(event)
+        e_field = attr_text(field)
+        e_placeholder = attr_text(placeholder)
+        e_input_type = attr_text(input_type)
 
         cls = "dj-inline-edit"
         if editing:
             cls += " dj-inline-edit--editing"
         if custom_class:
-            cls += f" {conditional_escape(custom_class)}"
+            cls += f" {attr_text(custom_class)}"
 
         if editing:
             return mark_safe(
                 f'<span class="{cls}">'
                 f'<input class="dj-inline-edit__input" type="{e_input_type}" '
-                f'value="{e_value}" placeholder="{e_placeholder}" '
+                f'value="{a_value}" placeholder="{e_placeholder}" '
                 f'data-field="{e_field}" '
                 f'dj-keydown.enter="{e_event}" '
                 f'dj-blur="{e_event}" '
@@ -7340,17 +7340,18 @@ def render_filter_bar(
 
     cls = "dj-filter-bar"
     if custom_class:
-        cls += f" {conditional_escape(custom_class)}"
+        cls += f" {attr_text(custom_class)}"
 
-    e_event = conditional_escape(event)
-    e_clear = conditional_escape(clear_event)
+    e_event = attr_text(event)
+    e_clear = attr_text(clear_event)
 
     parts = []
     has_values = False
     for kind, nkw in controls:
         if kind == "select":
-            name = conditional_escape(nkw.get("name", ""))
-            label = conditional_escape(nkw.get("label", name))
+            raw_name = nkw.get("name", "")
+            name = attr_text(raw_name)
+            label = conditional_escape(nkw.get("label", raw_name))
             options = nkw.get("options", [])
             value = nkw.get("value", "")
             if value:
@@ -7379,10 +7380,11 @@ def render_filter_bar(
                 f'dj-change="{e_event}">{opt_html}</select></div>'
             )
         elif kind == "date_range":
-            name = conditional_escape(nkw.get("name", ""))
-            label = conditional_escape(nkw.get("label", name))
-            value_start = conditional_escape(str(nkw.get("start", "")))
-            value_end = conditional_escape(str(nkw.get("end", "")))
+            raw_name = nkw.get("name", "")
+            name = attr_text(raw_name)
+            label = conditional_escape(nkw.get("label", raw_name))
+            value_start = attr_text(str(nkw.get("start", "")))
+            value_end = attr_text(str(nkw.get("end", "")))
             if value_start or value_end:
                 has_values = True
             parts.append(
@@ -7395,9 +7397,9 @@ def render_filter_bar(
                 f'value="{value_end}" dj-change="{e_event}"></div>'
             )
         elif kind == "search":
-            name = conditional_escape(nkw.get("name", ""))
-            placeholder = conditional_escape(nkw.get("placeholder", "Search\u2026"))
-            value = conditional_escape(str(nkw.get("value", "")))
+            name = attr_text(nkw.get("name", ""))
+            placeholder = attr_text(nkw.get("placeholder", "Search\u2026"))
+            value = attr_text(str(nkw.get("value", "")))
             debounce = nkw.get("debounce", 300)
             if value:
                 has_values = True
@@ -7416,7 +7418,7 @@ def render_filter_bar(
         )
 
     return mark_safe(
-        f'<div class="{cls}" id="{conditional_escape(bar_id)}" role="search">'
+        f'<div class="{cls}" id="{attr_text(bar_id)}" role="search">'
         f'<div class="dj-filter-bar__controls">{"".join(parts)}{extra_html}</div>'
         f"{clear_html}</div>"
     )
@@ -7486,8 +7488,8 @@ class AvatarGroupNode(template.Node):
         size = kw.get("size", "md")
         custom_class = kw.get("class", "")
 
-        e_size = conditional_escape(str(size))
-        e_class = conditional_escape(str(custom_class))
+        e_size = attr_text(str(size))
+        e_class = attr_text(str(custom_class))
 
         visible = users[:max_display]
         overflow = len(users) - max_display
@@ -7559,8 +7561,8 @@ class HoverCardNode(template.Node):
         custom_class = kw.get("class", "")
 
         e_trigger = conditional_escape(str(trigger))
-        e_position = conditional_escape(str(position))
-        e_class = conditional_escape(str(custom_class))
+        e_position = attr_text(str(position))
+        e_class = attr_text(str(custom_class))
 
         content = self.nodelist.render(context)
 
@@ -7604,9 +7606,9 @@ class NotificationPopoverNode(template.Node):
         custom_class = kw.get("class", "")
         title = kw.get("title", "Notifications")
 
-        e_mark_read = conditional_escape(str(mark_read_event))
-        e_toggle = conditional_escape(str(toggle_event))
-        e_class = conditional_escape(str(custom_class))
+        e_mark_read = attr_text(str(mark_read_event))
+        e_toggle = attr_text(str(toggle_event))
+        e_class = attr_text(str(custom_class))
         e_title = conditional_escape(str(title))
 
         badge_html = ""
@@ -7648,7 +7650,7 @@ class NotificationPopoverNode(template.Node):
                 n_body = _item_attr(notif, "body", _item_attr(notif, "message"))
                 n_time = _item_attr(notif, "time")
                 n_read = _item_attr(notif, "read", False)
-            e_n_id = conditional_escape(str(n_id))
+            e_n_id = attr_text(str(n_id))
             e_n_title = conditional_escape(str(n_title))
             e_n_body = conditional_escape(str(n_body))
             e_n_time = conditional_escape(str(n_time))
@@ -7702,8 +7704,8 @@ class ConversationThreadNode(template.Node):
         streaming = kw.get("streaming", False)
         custom_class = kw.get("class", "")
 
-        e_stream = conditional_escape(str(stream_event))
-        e_class = conditional_escape(str(custom_class))
+        e_stream = attr_text(str(stream_event))
+        e_class = attr_text(str(custom_class))
 
         cls = "dj-chat-thread"
         if e_class:
@@ -7806,7 +7808,8 @@ class ThinkingIndicatorNode(template.Node):
             return ""
 
         e_label = conditional_escape(str(label)) if label else ""
-        e_class = conditional_escape(str(custom_class))
+        a_label = attr_text(label) if label else ""
+        e_class = attr_text(str(custom_class))
 
         cls = f"dj-thinking dj-thinking--{safe_status}"
         if e_class:
@@ -7830,7 +7833,7 @@ class ThinkingIndicatorNode(template.Node):
         label_html = f'<span class="dj-thinking__label">{e_label}</span>' if e_label else ""
 
         return mark_safe(
-            f'<div class="{cls}" role="status" aria-label="{e_label or safe_status}">'
+            f'<div class="{cls}" role="status" aria-label="{a_label or safe_status}">'
             f"{anim}{label_html}"
             f"</div>"
         )
@@ -7863,11 +7866,11 @@ class MultimodalInputNode(template.Node):
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
-        e_name = conditional_escape(str(name))
-        e_event = conditional_escape(str(event))
-        e_placeholder = conditional_escape(str(placeholder))
-        e_accept = conditional_escape(str(file_accept))
-        e_class = conditional_escape(str(custom_class))
+        e_name = attr_text(str(name))
+        e_event = attr_text(str(event))
+        e_placeholder = attr_text(str(placeholder))
+        e_accept = attr_text(str(file_accept))
+        e_class = attr_text(str(custom_class))
         disabled_attr = " disabled" if disabled else ""
 
         cls = "dj-mminput"
@@ -7947,7 +7950,7 @@ class FeedbackWidgetNode(template.Node):
         if mode not in self.VALID_MODES:
             mode = "thumbs"
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
 
         cls = f"dj-feedback dj-feedback--{mode}"
         if e_class:
@@ -7963,7 +7966,7 @@ class FeedbackWidgetNode(template.Node):
         return mark_safe(f'<div class="{cls}" role="group" aria-label="Feedback">{buttons}</div>')
 
     def _render_thumbs(self, event: Any, value: Any) -> Any:
-        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)
+        e_event = attr_text(str(event))  # escaped where it is written (#3845)
         up_cls = "dj-feedback__btn--active" if value == "up" else ""
         down_cls = "dj-feedback__btn--active" if value == "down" else ""
         return (
@@ -7984,7 +7987,7 @@ class FeedbackWidgetNode(template.Node):
         )
 
     def _render_stars(self, event: Any, value: Any) -> Any:
-        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)
+        e_event = attr_text(str(event))  # escaped where it is written (#3845)
         parts = []
         current = int(value) if value and str(value).isdigit() else 0
         for i in range(1, 6):
@@ -8001,7 +8004,7 @@ class FeedbackWidgetNode(template.Node):
         return "".join(parts)
 
     def _render_emoji(self, event: Any, value: Any) -> Any:
-        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)
+        e_event = attr_text(str(event))  # escaped where it is written (#3845)
         emojis = [
             ("\U0001f44d", "thumbs_up"),
             ("\u2764\ufe0f", "heart"),
@@ -8012,7 +8015,7 @@ class FeedbackWidgetNode(template.Node):
         parts = []
         for emoji, val in emojis:
             active = "dj-feedback__btn--active" if value == val else ""
-            e_val = conditional_escape(val)
+            e_val = attr_text(val)
             parts.append(
                 f'<button class="dj-feedback__btn {active}" '
                 f'dj-click="{e_event}" data-value="{e_val}" aria-label="{e_val}">'
@@ -8053,11 +8056,11 @@ class ApprovalGateNode(template.Node):
             risk = "medium"
 
         e_msg = conditional_escape(str(message))
-        e_approve_evt = conditional_escape(str(approve_event))
-        e_reject_evt = conditional_escape(str(reject_event))
+        e_approve_evt = attr_text(str(approve_event))
+        e_reject_evt = attr_text(str(reject_event))
         e_approve_lbl = conditional_escape(str(approve_label))
         e_reject_lbl = conditional_escape(str(reject_label))
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
 
         cls = f"dj-approval dj-approval--{risk}"
         if e_class:
@@ -8128,7 +8131,7 @@ class SourceCitationNode(template.Node):
 
         e_title = conditional_escape(str(title)) if title else ""
         e_url = safe_url(str(url)) if url else ""
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
 
         cls = "dj-citation"
         if e_class:
@@ -8196,10 +8199,10 @@ class ModelSelectorNode(template.Node):
         label = kw.get("label", "")
         custom_class = kw.get("class", "")
 
-        e_name = conditional_escape(str(name))
-        e_event = conditional_escape(str(event or name))
+        e_name = attr_text(str(name))
+        e_event = attr_text(str(event or name))
         e_placeholder = conditional_escape(str(placeholder))
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
         disabled_attr = " disabled" if disabled else ""
         disabled_cls = " dj-model-sel--disabled" if disabled else ""
 
@@ -8245,7 +8248,7 @@ class ModelSelectorNode(template.Node):
         return mark_safe(
             f'<div class="{cls}">'
             f"{label_html}"
-            f'<input type="hidden" name="{e_name}" value="{conditional_escape(value)}">'
+            f'<input type="hidden" name="{e_name}" value="{attr_text(value)}">'
             f'<div class="dj-model-sel__trigger" tabindex="0" role="combobox" '
             f'aria-expanded="false" aria-haspopup="listbox"{disabled_attr}>'
             f"{selected_html}"
@@ -8277,7 +8280,7 @@ class ModelSelectorNode(template.Node):
         if ctx_win:
             meta.append(f'<span class="dj-model-sel__ctx">{ctx_win}</span>')
         if tier_label:
-            safe_tier = conditional_escape(tier)
+            safe_tier = attr_text(tier)
             meta.append(
                 f'<span class="dj-model-sel__tier dj-model-sel__tier--{safe_tier}">'
                 f"{tier_label}</span>"
@@ -8319,7 +8322,7 @@ class TokenCounterNode(template.Node):
         show_label = kw.get("show_label", True)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
 
         if max_tokens <= 0:
             pct = 0.0
@@ -8396,7 +8399,7 @@ class ChatBubbleNode(template.Node):
         e_text = conditional_escape(str(text))
         e_time = conditional_escape(str(time_str))
         e_avatar = data_url_attr(avatar_src, image=True)
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
 
         side = "dj-bubble--user" if sender == "user" else "dj-bubble--other"
         cls = f"dj-bubble {side}"
@@ -8421,7 +8424,7 @@ class ChatBubbleNode(template.Node):
         # Status
         status_html = ""
         if status and status in self.VALID_STATUSES:
-            e_status = conditional_escape(str(status))
+            e_status = attr_text(str(status))
             status_icons = {
                 "sending": "&#8987;",
                 "sent": "&#10003;",
@@ -8486,7 +8489,7 @@ class PresenceAvatarsNode(template.Node):
         if not isinstance(users, list):
             users = []
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
 
         visible = users[:max_display]
         overflow = len(users) - max_display
@@ -8569,10 +8572,10 @@ class MentionsInputNode(template.Node):
         if not isinstance(users, list):
             users = []
 
-        e_name = conditional_escape(str(name))
-        e_event = conditional_escape(str(event))
-        e_placeholder = conditional_escape(str(placeholder))
-        e_class = conditional_escape(str(custom_class))
+        e_name = attr_text(str(name))
+        e_event = attr_text(str(event))
+        e_placeholder = attr_text(str(placeholder))
+        e_class = attr_text(str(custom_class))
         disabled_attr = " disabled" if disabled else ""
 
         cls = "dj-mentions"
@@ -8613,7 +8616,7 @@ class MentionsInputNode(template.Node):
                 f"</li>"
             )
 
-        users_json = conditional_escape(_json.dumps(users, default=str))
+        users_json = attr_text(_json.dumps(users, default=str))
 
         return mark_safe(
             f'<div class="{cls}" dj-hook="MentionsInput" '
@@ -8655,10 +8658,10 @@ class ExpandableTextNode(template.Node):
         custom_class = kw.get("class", "")
 
         content = self.nodelist.render(context)
-        e_event = conditional_escape(str(toggle_event))
+        e_event = attr_text(str(toggle_event))
         e_more = conditional_escape(str(more_label))
         e_less = conditional_escape(str(less_label))
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
 
         cls = "dj-expandable-text"
         if expanded:
@@ -8720,7 +8723,7 @@ class TruncatedListNode(template.Node):
         if not isinstance(items, (list, tuple)):
             items = []
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
         cls = "dj-truncated-list"
         if expanded:
             cls += " dj-truncated-list--expanded"
@@ -8741,7 +8744,7 @@ class TruncatedListNode(template.Node):
 
         overflow_html = ""
         if hidden_count > 0:
-            e_event = conditional_escape(str(toggle_event))
+            e_event = attr_text(str(toggle_event))
             if expanded:
                 overflow_text = conditional_escape("Show less")
             else:
@@ -8786,11 +8789,12 @@ class MarkdownTextareaNode(template.Node):
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
-        e_name = conditional_escape(str(name))
+        e_name = attr_text(str(name))
         e_value = conditional_escape(str(value))
-        e_event = conditional_escape(str(toggle_event))
-        e_placeholder = conditional_escape(str(placeholder))
-        e_class = conditional_escape(str(custom_class))
+        a_value = attr_text(str(value))
+        e_event = attr_text(str(toggle_event))
+        e_placeholder = attr_text(str(placeholder))
+        e_class = attr_text(str(custom_class))
         disabled_attr = " disabled" if disabled else ""
 
         cls = "dj-md-textarea"
@@ -8814,9 +8818,9 @@ class MarkdownTextareaNode(template.Node):
 
         if preview:
             body = (
-                f'<div class="dj-md-textarea__preview" data-raw="{e_value}">'
+                f'<div class="dj-md-textarea__preview" data-raw="{a_value}">'
                 f"{e_value}</div>"
-                f'<input type="hidden" name="{e_name}" value="{e_value}">'
+                f'<input type="hidden" name="{e_name}" value="{a_value}">'
             )
         else:
             body = (
@@ -8851,7 +8855,7 @@ class SkeletonForNode(template.Node):
         rows = int(kw.get("rows", 5))
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
         cls = "dj-skeleton"
         if e_class:
             cls += f" {e_class}"
@@ -8963,8 +8967,8 @@ class AwaitNode(template.Node):
         error_event = kw.get("error_event", "")
         custom_class = kw.get("class", "")
 
-        e_event = conditional_escape(str(loading_event))
-        e_class = conditional_escape(str(custom_class))
+        e_event = attr_text(str(loading_event))
+        e_class = attr_text(str(custom_class))
 
         cls = "dj-content-loader"
         if loaded:
@@ -8978,7 +8982,7 @@ class AwaitNode(template.Node):
             e_error = conditional_escape(str(error))
             retry_html = ""
             if error_event:
-                e_retry = conditional_escape(str(error_event))
+                e_retry = attr_text(str(error_event))
                 retry_html = (
                     f'<button class="dj-content-loader__retry" dj-click="{e_retry}">Retry</button>'
                 )
@@ -9037,11 +9041,11 @@ class TimePickerNode(template.Node):
         label = kw.get("label", "")
         custom_class = kw.get("class", "")
 
-        e_name = conditional_escape(str(name))
-        e_value = conditional_escape(str(value))
-        e_event = conditional_escape(str(event)) if event else ""
+        e_name = escape(str(name))
+        e_value = escape(str(value))
+        e_event = escape(str(event)) if event else ""
         e_label = conditional_escape(str(label)) if label else ""
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-time-picker"]
         if disabled:
@@ -9146,8 +9150,8 @@ class WizardNode(template.Node):
         show_numbers = kw.get("show_numbers", True)
         custom_class = kw.get("class", "")
 
-        e_event = conditional_escape(str(event))
-        e_class = conditional_escape(str(custom_class))
+        e_event = escape(str(event))
+        e_class = escape(str(custom_class))
         cid_attr = _cid(kw.get("component_id"))
 
         classes = ["dj-wizard"]
@@ -9237,8 +9241,8 @@ class BottomSheetNode(template.Node):
             return ""
 
         e_title = conditional_escape(str(title))
-        e_close = conditional_escape(str(close_event))
-        e_class = conditional_escape(str(custom_class))
+        e_close = escape(str(close_event))
+        e_class = escape(str(custom_class))
         # ``component_id=`` names which ``Sheet`` the close controls drive; ``close_event=None``
         # (or ``False``, ``""``) is the off state: no scrim click and no × (#4134).
         cid_attr = _cid(kw.get("component_id"))
@@ -9302,9 +9306,9 @@ class InfiniteScrollNode(template.Node):
         finished = kw.get("finished", False)
         custom_class = kw.get("class", "")
 
-        e_event = conditional_escape(str(load_event))
-        e_threshold = conditional_escape(str(threshold))
-        e_class = conditional_escape(str(custom_class))
+        e_event = escape(str(load_event))
+        e_threshold = escape(str(threshold))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-infinite-scroll"]
         if loading:
@@ -9360,9 +9364,9 @@ class CountdownNode(template.Node):
         labels = kw.get("labels", {})
         custom_class = kw.get("class", "")
 
-        e_target = conditional_escape(str(target))
-        e_event = conditional_escape(str(event)) if event else ""
-        e_class = conditional_escape(str(custom_class))
+        e_target = escape(str(target))
+        e_event = escape(str(event)) if event else ""
+        e_class = escape(str(custom_class))
 
         classes = ["dj-countdown"]
         if e_class:
@@ -9449,11 +9453,11 @@ class CookieConsentNode(template.Node):
         custom_class = kw.get("class", "")
 
         e_msg = conditional_escape(str(message))
-        e_accept = conditional_escape(str(accept_event))
+        e_accept = escape(str(accept_event))
         e_accept_label = conditional_escape(str(accept_label))
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
 
-        classes = ["dj-cookie-consent", f"dj-cookie-consent--{conditional_escape(str(position))}"]
+        classes = ["dj-cookie-consent", f"dj-cookie-consent--{escape(str(position))}"]
         if e_class:
             classes.append(e_class)
         class_str = " ".join(classes)
@@ -9473,7 +9477,7 @@ class CookieConsentNode(template.Node):
         ]
 
         if show_reject and reject_event:
-            e_reject = conditional_escape(str(reject_event))
+            e_reject = escape(str(reject_event))
             e_reject_label = conditional_escape(str(reject_label))
             buttons.append(
                 f'<button class="dj-cookie-consent__reject" '
@@ -9518,11 +9522,11 @@ class FormArrayNode(template.Node):
         add_label = kw.get("add_label", "Add row")
         custom_class = kw.get("class", "")
 
-        e_name = conditional_escape(str(name))
-        e_add_event = conditional_escape(str(add_event))
-        e_remove_event = conditional_escape(str(remove_event))
+        e_name = escape(str(name))
+        e_add_event = escape(str(add_event))
+        e_remove_event = escape(str(remove_event))
         e_add_label = conditional_escape(str(add_label))
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
 
         try:
             min_rows = int(min_rows)
@@ -9640,14 +9644,14 @@ class ScrollSpyNode(template.Node):
         offset = kw.get("offset", "0px")
         custom_class = kw.get("class", "")
 
-        e_event = conditional_escape(str(active_event))
-        e_offset = conditional_escape(str(offset))
-        e_class = conditional_escape(str(custom_class))
+        e_event = escape(str(active_event))
+        e_offset = escape(str(offset))
+        e_class = escape(str(custom_class))
 
         if not isinstance(sections, list):
             sections = []
 
-        sections_json = conditional_escape(_json.dumps(sections))
+        sections_json = escape(_json.dumps(sections))
 
         classes = ["dj-scroll-spy"]
         if e_class:
@@ -9705,8 +9709,8 @@ class PageAlertNode(template.Node):
         icon = kw.get("icon", "")
         custom_class = kw.get("class", "")
 
-        e_type = conditional_escape(str(alert_type))
-        e_class = conditional_escape(str(custom_class))
+        e_type = escape(str(alert_type))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-page-alert", f"dj-page-alert--{e_type}"]
         if dismissible:
@@ -9725,7 +9729,7 @@ class PageAlertNode(template.Node):
         # ``dismiss_event=None`` (or ``False``, ``""``) is the off state (#4134);
         # ``component_id=`` names which ``Alert`` the button drives.
         if dismissible and not _off(dismiss_event):
-            e_dismiss = conditional_escape(str(dismiss_event))
+            e_dismiss = escape(str(dismiss_event))
             dismiss_html = (
                 f'<button class="dj-page-alert__dismiss" '
                 f'dj-click="{e_dismiss}"{_cid(kw.get("component_id"))} '
@@ -9834,9 +9838,9 @@ def render_menu_item(item: Any, event_attrs: Any = None) -> str:
         ea = event_attrs(event, value) if event else ""
         event_attr = f" {ea}" if ea else ""
     else:
-        event_attr = f' dj-click="{conditional_escape(event)}"' if event else ""
+        event_attr = f' dj-click="{escape(event)}"' if event else ""
         if event and value is not None and value != "":
-            event_attr += f' data-value="{conditional_escape(str(value))}"'
+            event_attr += f' data-value="{escape(str(value))}"'
     disabled_attr = ' aria-disabled="true" disabled' if disabled else ""
     return (
         f'<button type="button" class="{item_cls}" role="{role}"{checked_attr}'
@@ -9859,13 +9863,13 @@ def render_dropdown_menu(kw: Any, content: Any = "") -> SafeString:
     custom_class = kw.get("class", "")
 
     e_label = conditional_escape(str(label))
-    e_toggle = conditional_escape(str(toggle_event))
+    e_toggle = escape(str(toggle_event))
 
     classes = ["dj-dropdown-menu"]
     if is_open:
         classes.append("dj-dropdown-menu--open")
     if custom_class:
-        classes.append(conditional_escape(str(custom_class)))
+        classes.append(escape(str(custom_class)))
     class_str = " ".join(classes)
     open_attr = " data-open" if is_open else ""
 
@@ -9886,7 +9890,7 @@ def render_dropdown_menu(kw: Any, content: Any = "") -> SafeString:
             render_menu_item(item) for item in (items if isinstance(items, list) else [])
         )
     menu = (
-        f'<div class="dj-dropdown-menu__content dj-dropdown-menu--{conditional_escape(str(align))}" '
+        f'<div class="dj-dropdown-menu__content dj-dropdown-menu--{escape(str(align))}" '
         f'role="menu">{body}</div>'
     )
     return mark_safe(f'<div class="{class_str}"{open_attr}>{trigger}{menu}</div>')
@@ -9955,7 +9959,7 @@ class MeterNode(template.Node):
         show_legend = kw.get("show_legend", True)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-meter"]
         if e_class:
@@ -10053,9 +10057,9 @@ class ExportDialogNode(template.Node):
             return ""
 
         e_title = conditional_escape(str(title))
-        e_event = conditional_escape(str(event))
-        e_close = conditional_escape(str(close_event))
-        e_class = conditional_escape(str(custom_class))
+        e_event = escape(str(event))
+        e_close = escape(str(close_event))
+        e_class = escape(str(custom_class))
         # ``component_id=`` names which ``ExportDialog`` the close controls drive (#4134);
         # the Export button sends the application's own event, so it has none.
         cid_attr = _cid(kw.get("component_id"))
@@ -10161,9 +10165,10 @@ class ImportWizardNode(template.Node):
         upload_event = kw.get("upload_event", "upload_file")
         custom_class = kw.get("class", "")
 
-        e_event = conditional_escape(str(event))
+        e_event = escape(str(event))
         e_formats = conditional_escape(str(accepted_formats))
-        e_class = conditional_escape(str(custom_class))
+        a_formats = escape(str(accepted_formats))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-import-wizard"]
         if e_class:
@@ -10193,12 +10198,12 @@ class ImportWizardNode(template.Node):
         nav = f'<div class="dj-import-wizard__nav">{"".join(step_items)}</div>'
 
         if step == "upload":
-            e_upload = conditional_escape(str(upload_event))
+            e_upload = escape(str(upload_event))
             body = (
                 f'<div class="dj-import-wizard__upload">'
                 f'<div class="dj-import-wizard__dropzone">'
                 f"<p>Drag &amp; drop or click to upload</p>"
-                f'<input type="file" accept="{e_formats}" '
+                f'<input type="file" accept="{a_formats}" '
                 f'class="dj-import-wizard__file-input" dj-change="{e_upload}">'
                 f'<p class="dj-import-wizard__formats">Accepted: {e_formats}</p>'
                 f"</div></div>"
@@ -10251,7 +10256,7 @@ class AuditLogNode(template.Node):
         columns = kw.get("columns", ["timestamp", "user", "action", "resource", "detail"])
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-audit-log"]
         if e_class:
@@ -10265,7 +10270,7 @@ class AuditLogNode(template.Node):
 
         stream_attr = ""
         if stream_event:
-            e_stream = conditional_escape(str(stream_event))
+            e_stream = escape(str(stream_event))
             stream_attr = f' data-stream-event="{e_stream}"'
 
         col_labels = {
@@ -10335,7 +10340,7 @@ class ErrorBoundaryNode(template.Node):
         custom_class = kw.get("class", "")
 
         e_fallback = conditional_escape(str(fallback))
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-error-boundary"]
         if e_class:
@@ -10349,7 +10354,7 @@ class ErrorBoundaryNode(template.Node):
             class_str = " ".join(classes)
             retry_html = ""
             if retry_event:
-                e_retry = conditional_escape(str(retry_event))
+                e_retry = escape(str(retry_event))
                 retry_html = (
                     f'<button class="dj-error-boundary__retry" dj-click="{e_retry}">Retry</button>'
                 )
@@ -10389,8 +10394,8 @@ class SortableListNode(template.Node):
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
-        e_event = conditional_escape(str(move_event))
-        e_class = conditional_escape(str(custom_class))
+        e_event = escape(str(move_event))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-sortable-list"]
         if disabled:
@@ -10457,8 +10462,8 @@ class SortableGridNode(template.Node):
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
-        e_event = conditional_escape(str(move_event))
-        e_class = conditional_escape(str(custom_class))
+        e_event = escape(str(move_event))
+        e_class = escape(str(custom_class))
         e_gap = conditional_escape(str(gap))
 
         classes = ["dj-sortable-grid"]
@@ -10539,8 +10544,8 @@ class ImageCropperNode(template.Node):
         custom_class = kw.get("class", "")
 
         e_src = data_url_attr(src, image=True)
-        e_event = conditional_escape(str(crop_event))
-        e_class = conditional_escape(str(custom_class))
+        e_event = escape(str(crop_event))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-image-cropper"]
         if disabled:
@@ -10551,7 +10556,7 @@ class ImageCropperNode(template.Node):
 
         ratio_attr = ""
         if aspect_ratio:
-            e_ratio = conditional_escape(str(aspect_ratio))
+            e_ratio = escape(str(aspect_ratio))
             ratio_attr = f' data-aspect-ratio="{e_ratio}"'
 
         try:
@@ -10566,7 +10571,7 @@ class ImageCropperNode(template.Node):
         from djust.components.components.image_cropper import cropper_extras
 
         extras = cropper_extras()
-        e_alt = conditional_escape(str(kw.get("alt", "Image to crop")))
+        e_alt = escape(str(kw.get("alt", "Image to crop")))
 
         return mark_safe(
             f'<div class="{class_str}" dj-hook="ImageCropper" '
@@ -10614,10 +10619,10 @@ class SignaturePadNode(template.Node):
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
-        e_name = conditional_escape(str(name))
-        e_event = conditional_escape(str(save_event))
-        e_color = conditional_escape(str(pen_color))
-        e_class = conditional_escape(str(custom_class))
+        e_name = escape(str(name))
+        e_event = escape(str(save_event))
+        e_color = escape(str(pen_color))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-signature-pad"]
         if disabled:
@@ -10695,7 +10700,7 @@ class ResizablePanelNode(template.Node):
         custom_class = kw.get("class", "")
         resize_event = kw.get("resize_event", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
 
         if direction not in ("horizontal", "vertical"):
             direction = "horizontal"
@@ -10707,8 +10712,8 @@ class ResizablePanelNode(template.Node):
             classes.append(e_class)
         class_str = " ".join(classes)
 
-        e_min = conditional_escape(safe_css_length(min_size, "100px"))
-        e_max = conditional_escape(safe_css_length(max_size, "none"))
+        e_min = escape(safe_css_length(min_size, "100px"))
+        e_max = escape(safe_css_length(max_size, "none"))
 
         content = self.nodelist.render(context)
 
@@ -10722,9 +10727,7 @@ class ResizablePanelNode(template.Node):
         style = style_attrs(extent)
 
         disabled_attr = ' data-disabled="true"' if disabled else ""
-        event_attr = (
-            f' data-resize-event="{conditional_escape(str(resize_event))}"' if resize_event else ""
-        )
+        event_attr = f' data-resize-event="{escape(str(resize_event))}"' if resize_event else ""
 
         return mark_safe(
             f'<div class="{class_str}" dj-hook="ResizablePanel" '
@@ -10771,9 +10774,9 @@ class LightboxNode(template.Node):
         if not is_open:
             return ""
 
-        e_close = conditional_escape(str(close_event))
-        e_nav = conditional_escape(str(navigate_event))
-        e_class = conditional_escape(str(custom_class))
+        e_close = escape(str(close_event))
+        e_nav = escape(str(navigate_event))
+        e_class = escape(str(custom_class))
         # ``component_id=`` names which ``Lightbox`` the controls drive (#4134).
         cid_attr = _cid(kw.get("component_id"))
         # ``close_event=None`` (or ``False``, ``""``) is the off state (#4134).
@@ -10883,10 +10886,10 @@ class DashboardGridNode(template.Node):
         resize_event = kw.get("resize_event", "dashboard_resize")
         custom_class = kw.get("class", "")
 
-        e_move = conditional_escape(str(move_event))
-        e_resize = conditional_escape(str(resize_event))
+        e_move = escape(str(move_event))
+        e_resize = escape(str(resize_event))
         e_gap = conditional_escape(str(gap))
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-dashboard-grid"]
         if e_class:

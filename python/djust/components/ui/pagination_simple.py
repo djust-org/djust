@@ -6,7 +6,8 @@ Simple stateless pagination component.
 
 from ..base import Component
 
-from django.utils.html import conditional_escape
+
+from djust.components.utils import attr_text
 from typing import Any
 
 
@@ -136,7 +137,7 @@ class Pagination(Component):
         # Build pagination classes
         pagination_classes = ["pagination"]
         if self.size != "md":
-            pagination_classes.append(f"pagination-{conditional_escape(self.size)}")
+            pagination_classes.append(f"pagination-{attr_text(self.size)}")
 
         parts.append(f'  <ul class="{" ".join(pagination_classes)}">')
 

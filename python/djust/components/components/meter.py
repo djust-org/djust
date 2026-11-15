@@ -2,6 +2,7 @@
 
 import html
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 from djust import Component
 from typing import Any, Optional
@@ -85,8 +86,8 @@ class Meter(Component):
             style_attr = style_attrs(background_color=color, css="background:{}")
             bar_parts.append(
                 f'<div class="dj-meter__segment dj-progress-w-{round(pct)}"{style_attr} '
-                f'role="meter" aria-valuenow="{conditional_escape(val)}" '
-                f'aria-valuemin="0" aria-valuemax="{conditional_escape(self.total)}" '
+                f'role="meter" aria-valuenow="{attr_text(val)}" '
+                f'aria-valuemin="0" aria-valuemax="{attr_text(self.total)}" '
                 f'aria-label="{seg_label}"></div>'
             )
 

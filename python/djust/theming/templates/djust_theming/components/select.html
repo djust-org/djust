@@ -1,15 +1,15 @@
-<div class="{{ css_prefix }}select-group {% if attrs.class %}{{ attrs.class }}{% endif %}">
+<div class="{{ css_prefix }}select-group {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}">
     {% if slot_label %}
     {{ slot_label }}
     {% elif label %}
-    <label for="{{ field_id|default:name }}" class="{{ css_prefix }}select-label">{{ label }}</label>
+    <label for="{{ field_id|default:name|force_escape }}" class="{{ css_prefix }}select-label">{{ label }}</label>
     {% endif %}
     {% if slot_select %}
     {{ slot_select }}
     {% else %}
     <select
-        name="{{ name }}"
-        id="{{ field_id|default:name }}"
+        name="{{ name|force_escape }}"
+        id="{{ field_id|default:name|force_escape }}"
         class="{{ css_prefix }}select"
         {% if attrs.required %}required{% endif %}
         {% if attrs.disabled %}disabled{% endif %}

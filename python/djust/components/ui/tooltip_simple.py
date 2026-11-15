@@ -8,6 +8,7 @@ This is a stateless Component optimized for performance.
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from typing import Any
 
 
@@ -194,8 +195,8 @@ class Tooltip(Component):
         escaped_text = self._escape_html_attr(self.text)
 
         return (
-            f'<span class="tooltip-wrapper" data-placement="{conditional_escape(self.placement)}" '
-            f'data-trigger="{conditional_escape(self.trigger)}" title="{escaped_text}">'
+            f'<span class="tooltip-wrapper" data-placement="{attr_text(self.placement)}" '
+            f'data-trigger="{attr_text(self.trigger)}" title="{escaped_text}">'
             f"{conditional_escape(self.content)}"
             f"</span>"
         )

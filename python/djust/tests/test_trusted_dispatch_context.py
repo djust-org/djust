@@ -325,6 +325,29 @@ async def test_real_sse():
             _sse_sessions.pop(sid, None)
 
 
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_shared_runtime_route_reads_the_cache_id_before_any_handler_sees_it():
+    """#4155: the WebSocket/SSE route takes ``_cacheRequestId`` out of the params
+    (``ViewRuntime`` dispatch, ``params.pop``) to echo it on an update, so no
+    handler there receives it. Strict validation drops it as well, but only for a
+    strict handler: a legacy one with ``**kwargs`` is kept from it by the route
+    alone. (The HTTP fallback and the test client hand it to a legacy handler,
+    pinned below as before.)"""
+    from djust.runtime import ViewRuntime
+    from djust.tests._live_session import amount_on_runtime
+    from djust.tests.test_runtime_child_routing_1892 import MockTransport
+
+    view = DispatchView()
+    transport = MockTransport()
+    runtime = ViewRuntime(transport)
+    await amount_on_runtime(runtime, view)
+    await runtime.dispatch_event(
+        {"type": "event", "event": "legacy", "params": dict(METADATA["cache"])}
+    )
+    assert CALLS == [("legacy", "1", {})], transport.sent
+
+
 # --- legacy handlers keep their keyword mapping ------------------------------
 
 
