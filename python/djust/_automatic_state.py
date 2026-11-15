@@ -321,11 +321,12 @@ def eligible_name(view: Any, name: Any) -> bool:
     return _Names(view).eligible(name)
 
 
-def _candidates(view: Any) -> Dict[str, Any]:
+def _candidates(view: Any, names: Optional[_Names] = None) -> Dict[str, Any]:
     """Live values of the attributes the name rule admits (not yet encoded)."""
     from ._state import StateProperty
 
-    names = _Names(view)
+    if names is None:
+        names = _Names(view)
     found: Dict[str, Any] = {}
 
     def take(name: str, value: Any) -> None:
@@ -420,6 +421,15 @@ def _digest(text: str) -> bytes:
 def _digests(values: Dict[str, Any]) -> Dict[str, bytes]:
     """Per name, the digest of its encoded value."""
     return {name: _digest(_encode(value)) for name, value in values.items()}
+
+
+def _object_text(texts: Dict[str, str]) -> str:
+    """``_encode(values)`` for a dict of names, built from each value's own
+    encoding (``texts``: name -> ``_encode(value)``), so a save encodes each
+    value once (#3997). ``json.dumps(sort_keys=True)`` sorts the items by key
+    and writes ``key:value`` joined by ``,``; with every key a ``str`` this is
+    the same text, character for character."""
+    return "{" + ",".join(_encode(name) + ":" + texts[name] for name in sorted(texts)) + "}"
 
 
 def project_saving_enabled() -> bool:
@@ -562,7 +572,19 @@ class Projection:
     encoding of all four.
     """
 
-    __slots__ = ("public", "private", "remount", "components", "text")
+    __slots__ = (
+        "public",
+        "private",
+        "remount",
+        "components",
+        "text",
+        "public_texts",
+        "private_texts",
+        "public_text",
+        "private_text",
+        "components_text",
+        "names",
+    )
 
     def __init__(
         self,
@@ -570,12 +592,50 @@ class Projection:
         private: Dict[str, Any],
         remount: bool,
         components: Optional[Dict[str, Any]] = None,
+        names: Optional["_Names"] = None,
     ) -> None:
         self.public = public
         self.private = private
         self.remount = remount
         self.components = components or {}
-        self.text = _encode([public, private, remount, self.components])
+        #: The name rule this projection was taken with, for the rest of the
+        #: same save (``_present``): built once per save, not three times.
+        self.names = names
+        # Each value is encoded ONCE (#3997). The per-name digests, the whole
+        # text and the envelope's size are all built from these encodings;
+        # they used to be three more ``json.dumps`` of the whole state.
+        self.public_texts = _texts(public)
+        self.private_texts = _texts(private)
+        self.public_text = _section_text(public, self.public_texts)
+        self.private_text = _section_text(private, self.private_texts)
+        self.components_text = _encode(self.components)
+        self.text = (
+            "["
+            + ",".join(
+                (self.public_text, self.private_text, _encode(remount), self.components_text)
+            )
+            + "]"
+        )
+
+    def public_digests(self) -> Dict[str, bytes]:
+        """``_digests(self.public)``, from the encodings already made."""
+        return {name: _digest(text) for name, text in self.public_texts.items()}
+
+    def private_digests(self) -> Dict[str, bytes]:
+        """``_digests(self.private)``, from the encodings already made."""
+        return {name: _digest(text) for name, text in self.private_texts.items()}
+
+
+def _texts(values: Dict[str, Any]) -> Dict[str, str]:
+    return {name: _encode(value) for name, value in values.items()}
+
+
+def _section_text(values: Dict[str, Any], texts: Dict[str, str]) -> str:
+    """``_encode(values)``: assembled from ``texts`` when every key is a
+    ``str`` (always, for a view's names), else encoded whole."""
+    if all(type(name) is str for name in values):
+        return _object_text(texts)
+    return _encode(values)
 
 
 # ---------------------------------------------------------------------------
@@ -688,7 +748,7 @@ def _private_candidates(view: Any, names: _Names) -> Dict[str, Any]:
     }
 
 
-def project(view: Any) -> Projection:
+def project(view: Any, names: Optional[_Names] = None) -> Projection:
     """The view's saveable state: whole, or refused.
 
     Raises :class:`~djust._exposure_sessions.StateLimitExceeded` when the state
@@ -700,7 +760,8 @@ def project(view: Any) -> Projection:
     from .serialization import StateValueError, encode_state_value
 
     maximum, warn = limits_for(view)
-    names = _Names(view)
+    if names is None:
+        names = _Names(view)
     enums = enum_classes(type(view))
     remount = False
 
@@ -727,7 +788,7 @@ def project(view: Any) -> Projection:
             return _MISSING
 
     public: Dict[str, Any] = {}
-    for name, value in _candidates(view).items():
+    for name, value in _candidates(view, names).items():
         encoded = encode(name, value, False)
         if encoded is not _MISSING:
             public[name] = encoded
@@ -746,7 +807,7 @@ def project(view: Any) -> Projection:
         # Framework mixins blank what must not be stored (FormMixin: secret
         # form controls). Runs on the encoded copy, never on the live values.
         public = hook(public)
-    result = Projection(public, private, remount, components)
+    result = Projection(public, private, remount, components, names)
     size = len(result.text.encode("utf-8"))
     if size > warn or size > maximum:
         both = [*public.items(), *private.items()]
@@ -1525,10 +1586,11 @@ def _rollback(text: str) -> Any:
     return zlib.compress(text.encode("utf-8"), 1)
 
 
-def _present(view: Any) -> frozenset:
+def _present(view: Any, names: Optional[_Names] = None) -> frozenset:
     """The application attributes a view has now, public and private, whatever
-    their values."""
-    names = _Names(view)
+    their values. ``names``: the save's own name rule, when it has one."""
+    if names is None:
+        names = _Names(view)
     return frozenset(
         name for name in list(vars(view)) if names.application(name) or names.private(name)
     )
@@ -1885,12 +1947,12 @@ def settle(view: Any) -> None:
         # written; the per-name digests and the rollback are the view's.
         now_digest if basis is None or basis.created is None else basis.stored,
         None if basis is None else basis.created,
-        _digests(state.public),
-        _digests(state.private),
+        state.public_digests(),
+        state.private_digests(),
         frozenset() if basis is None else basis.changed,
         frozenset() if basis is None else basis.deleted,
         _rollback(state.text),
-        _present(view),
+        _present(view, state.names),
     )
     view.__dict__["_djust_auto_settled"] = now_digest
 
@@ -1956,7 +2018,7 @@ def stage(
     # basis. With no basis (the page GET's save, a mount with nothing stored)
     # the record starts empty.
     changed: frozenset = frozenset()
-    now_public, now_private = _digests(state.public), _digests(state.private)
+    now_public, now_private = state.public_digests(), state.private_digests()
     if basis is not None:
         changed = basis.changed | frozenset(
             name
@@ -2034,10 +2096,10 @@ def stage(
         changed,
         deleted,
         _rollback(state.text),
-        _present(view),
+        _present(view, state.names),
     )
     view.__dict__["_djust_auto_settled"] = None
-    view.__dict__["_djust_auto_bytes"] = len(_encode(envelope))
+    view.__dict__["_djust_auto_bytes"] = _envelope_length(envelope, state)
 
     def undo() -> None:
         if previous is _MISSING:
@@ -2055,6 +2117,22 @@ def stage(
             undo, _Pending(state_store, store, payload, envelope["expires"], removed or [])
         )
     return undo
+
+
+def _envelope_length(envelope: Dict[str, Any], state: Projection) -> int:
+    """``len(_encode(envelope))``, without encoding the state a second time
+    (#3997). The envelope is encoded with a one-character stand-in for each of
+    its three state sections, and each stand-in is replaced, in length, by the
+    section's text, which ``_encode`` would have written in its place."""
+    sections = {
+        "values": state.public_text,
+        "private": state.private_text,
+        "components": state.components_text,
+    }
+    skeleton = dict(envelope)
+    for key in sections:
+        skeleton[key] = 0
+    return len(_encode(skeleton)) + sum(len(text) - 1 for text in sections.values())
 
 
 #: What every saved view state of one session may add up to: twice the default
