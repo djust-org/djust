@@ -57,7 +57,7 @@ impl RustAvatar {
         };
 
         // By default the size is the inline style it has always been; with `strict_styles`
-        // (LIVEVIEW_CONFIG["csp_strict_styles"], for a `style-src` without 'unsafe-inline')
+        // (LIVEVIEW_CONFIG["csp_strict"], for a `style-src` without 'unsafe-inline')
         // it is `data-dj-style-*` the client applies (#3979).
         let size_attrs = if self.strict_styles {
             format!(r#" data-dj-style data-dj-style-width="{size}" data-dj-style-height="{size}""#)

@@ -73,7 +73,11 @@ class Button(Component):
         variant: Style variant (primary, secondary, danger, success, ghost, link, text)
         action: djust event handler name (for dj-click)
         data: Data attributes dictionary
-        onclick: JavaScript onclick handler (use sparingly)
+        onclick: The caller's own inline JavaScript handler, written as given
+            (escaped for the attribute). A Content-Security-Policy whose
+            script-src lacks 'unsafe-inline' refuses it; under one, use
+            ``action`` (a server event, ``dj-click``) or a JS command instead
+            (security guide, "Inline event handlers", #4146).
         icon: Icon text (emoji or HTML)
         icon_position: Icon placement (left, right)
         size: Size variant (sm, md, lg)

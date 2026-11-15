@@ -486,6 +486,22 @@ class PostProcessingMixin:
                 ext_url = f"/static/{ext_path}"
             script += f'\n        <script src="{ext_url}" defer data-turbo-track="reload"{nonce_attr}></script>'
 
+        # #4146: under a strict CSP NavBar's menu toggle is a marker that
+        # navbar-toggle.js handles. The navbar renders its own <script> for it,
+        # but a <script> a later patch inserts never runs, so a strict page loads
+        # the listener up front, with the client; it registers once per page.
+        from ..components.utils import csp_strict as _csp_strict
+
+        if _csp_strict():
+            from django.apps import apps as _apps
+
+            if _apps.is_installed("djust.components"):
+                try:
+                    toggle_url = static("djust_components/navbar-toggle.js")
+                except (ValueError, AttributeError):
+                    toggle_url = "/static/djust_components/navbar-toggle.js"
+                script += f'\n        <script src="{toggle_url}" defer data-turbo-track="reload"{nonce_attr}></script>'
+
         if settings.DEBUG:
             # debug-panel.js MUST load before client-dev.js so that
             # DjustDebugPanel is defined when client-dev.js calls
@@ -552,10 +568,10 @@ class PostProcessingMixin:
                 full_script = digest_meta + full_script
         # #3979: free-form style values are data-dj-style-* attributes under a strict CSP;
         # the client applies them only on a page that says so.
-        from ..components.utils import STYLES_META, strict_styles
+        from ..components.utils import STYLES_META, csp_strict
 
         styles_meta_first = False
-        if strict_styles():
+        if csp_strict():
             if head_close >= 0:
                 head_inject += STYLES_META
             else:

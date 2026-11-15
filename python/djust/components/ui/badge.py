@@ -10,7 +10,7 @@ from ...decorators import event_handler
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 
-from ..utils import strict_styles
+from ..utils import csp_strict
 
 
 class BadgeComponent(LiveComponent):
@@ -136,7 +136,7 @@ class BadgeComponent(LiveComponent):
             # Bootstrap has no utility for this size: the inline style by default (a Bootstrap
             # page may load no djust stylesheet), the `dj-badge-close` class of the components
             # stylesheets under a strict CSP, which refuses the inline style (#4139).
-            if strict_styles():
+            if csp_strict():
                 close_class, close_style = "btn-close btn-close-white dj-badge-close", ""
             else:
                 close_class = "btn-close btn-close-white"

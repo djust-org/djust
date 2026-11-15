@@ -8,7 +8,7 @@ For interactive tables with event handlers, use them in LiveView event handlers.
 
 from typing import List, Dict, Any
 from ..base import Component
-from ..utils import strict_styles
+from ..utils import csp_strict
 
 from django.utils.html import conditional_escape
 
@@ -192,7 +192,7 @@ class Table(Component):
                 # `dj-sortable-th` class under a strict CSP, which refuses it (#4139).
                 sortable_attrs = (
                     'class="sortable dj-sortable-th"'
-                    if strict_styles()
+                    if csp_strict()
                     else 'class="sortable" style="cursor: pointer;"'
                 )
                 parts.append(f'            <th scope="col" {sortable_attrs}>{label}</th>')

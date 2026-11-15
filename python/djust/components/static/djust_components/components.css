@@ -2933,7 +2933,7 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .dj-sortable-th { cursor: pointer; font-family: inherit; }
 /* The Bootstrap variants of the Python UI classes keep their inline style by default (a Bootstrap
    page may load no djust stylesheet, and Bootstrap has no utility for these); under
-   LIVEVIEW_CONFIG["csp_strict_styles"] they are these classes, as strong as the inline style. */
+   LIVEVIEW_CONFIG["csp_strict"] they are these classes, as strong as the inline style. */
 .dj-badge-close { font-size: 0.65em !important; padding: 0.1em 0.25em !important; }
 .dj-navbar-link--external { color: #667eea !important; font-weight: 600 !important; }
 .dj-scroll-to-top:where([hidden]),

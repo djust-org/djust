@@ -40,7 +40,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlsplit
 
 from djust import LiveView
-from djust.components.utils import strict_styles
+from djust.components.utils import csp_strict
 from djust.utils import get_csp_nonce
 from djust.decorators import event_handler
 
@@ -265,7 +265,7 @@ class TtydTerminalView(LiveView):
         ctx["cols"] = self.cols
         ctx["theme_json"] = json.dumps(self.theme or {})
         # An inline style, or under a strict CSP data-dj-style-* the client applies (#3979).
-        ctx["strict_styles"] = strict_styles()
+        ctx["strict_styles"] = csp_strict()
         # The request's CSP nonce for the hook module's <script> (a 'strict-dynamic' policy, #4139).
         ctx["csp_nonce"] = get_csp_nonce(getattr(self, "request", None))
         return ctx
