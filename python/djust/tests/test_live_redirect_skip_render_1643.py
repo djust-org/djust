@@ -32,7 +32,6 @@ from __future__ import annotations
 import inspect
 
 import pytest
-from asgiref.sync import sync_to_async
 from unittest.mock import MagicMock
 
 from djust import LiveView
@@ -52,7 +51,7 @@ class _RedirectSkipView(LiveView):
     """Sync handler that changes NO public state, only redirects — hits the
     auto-skip-render branch."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-view="djust.tests.x._RedirectSkipView" dj-id="0">confirm</div>'
 
     def mount(self, request, **kwargs):
@@ -70,11 +69,14 @@ class _RedirectAndChangeView(LiveView):
     """Control: handler changes public state AND redirects — takes the
     render/_send_update path, which already flushes navigation."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-view="djust.tests.x._RedirectAndChangeView" dj-id="0">{{ label }}</div>'
 
     def mount(self, request, **kwargs):
         self.label = "confirm"
+
+    def get_context_data(self, **kwargs):
+        return {"label": self.label}
 
     @event_handler()
     def change_and_redirect(self, **kwargs):
@@ -87,27 +89,23 @@ async def _drive_event(view_cls, event_name):
     ``LiveViewConsumer.handle_event``; return the list of frames the consumer
     sent. Only ``send_json`` (frame capture) and ``_rate_limiter`` (infra) are
     stubbed — the skip-render branch and ``_flush_navigation`` run for real."""
+    from djust.tests._live_session import amount_on_consumer
     from djust.websocket import LiveViewConsumer
 
-    view = view_cls()
-    await sync_to_async(view.mount)(request=None)
-    await sync_to_async(view.render_with_diff)()  # establish baseline VDOM
-
     consumer = LiveViewConsumer()
-    consumer.scope = {"session": None}
-    consumer.session_id = "s1"
-    consumer.view_instance = view
-    consumer._view_path = f"djust.tests.x.{view_cls.__name__}"
-    rl = MagicMock()
-    rl.check.return_value = True
-    consumer._rate_limiter = rl
-
     sent = []
 
     async def _send_json(msg):
         sent.append(msg)
 
     consumer.send_json = _send_json
+    # Mounted for real (its render is the baseline VDOM): an explicit view's
+    # events are authorized against the session it was mounted on.
+    view = await amount_on_consumer(consumer, f"{__name__}.{view_cls.__name__}")
+    sent.clear()
+    rl = MagicMock()
+    rl.check.return_value = True
+    consumer._rate_limiter = rl
     await consumer.handle_event({"type": "event", "event": event_name, "params": {}})
     return view, sent
 
@@ -118,7 +116,7 @@ def _nav_frames(frames):
     ]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_live_redirect_from_state_unchanging_handler_emits_navigation_frame():
     """The reporter's case: a sync handler that changes no public state and
@@ -140,7 +138,7 @@ async def test_live_redirect_from_state_unchanging_handler_emits_navigation_fram
     )
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_state_changing_handler_with_live_redirect_still_navigates():
     """Control: a handler that ALSO changes public state still navigates (the
