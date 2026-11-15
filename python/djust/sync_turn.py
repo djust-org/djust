@@ -56,6 +56,7 @@ import functools
 import logging
 from typing import Any, Callable, ContextManager, Optional, Tuple, TypeVar
 
+from ._held_rows import RECORDED_STEPS, attributed, refresh_if_written, writes_by
 from ._query_budget import budgeted, hop
 
 logger = logging.getLogger(__name__)
@@ -168,7 +169,20 @@ def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **
     A view that declares a ``query_budget`` also has the hop's queries counted
     here (``djust._query_budget``), inside the wrapper so a transaction the
     wrapper opens is not charged to the step.
+
+    A step that writes to the database marks the view, and the view's next
+    ``"render"`` step first drops the rows it holds, so they are read again
+    (``djust._held_rows``, #4112).
     """
+    if step == "render":
+        refresh_if_written(view)
+    elif step in RECORDED_STEPS and view is not None and not _is_async(fn):
+        with writes_by(view):
+            return _run_step(view, step, fn, *args, **kwargs)
+    return _run_step(view, step, fn, *args, **kwargs)
+
+
+def _run_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
     wrapper = _wrapper()
     meter = _meter(view, step, fn)
     if (wrapper is None and meter is None) or _active_step.get() is not None or _is_async(fn):
@@ -193,10 +207,19 @@ def sync_step(view: Any, step: str, fn: Callable[..., _T]) -> Callable[..., _T]:
     """``fn`` as a callable that runs inside the wrapper (for ``sync_to_async``).
 
     Returns ``fn`` itself when no wrapper is configured and ``view`` declares no
-    ``query_budget``, and when ``fn`` is an ``async def`` (not a sync step;
-    ``sync_to_async`` then refuses it exactly as it does with no wrapper).
+    ``query_budget`` (for a step that may write, ``fn`` with its statements
+    attributed to ``view``, ``djust._held_rows``), and when ``fn`` is an
+    ``async def`` (not a sync step; ``sync_to_async`` then refuses it exactly as
+    it does with no wrapper).
     """
-    if (_wrapper() is None and not budgeted(view)) or _is_async(fn):
+    if _is_async(fn):
+        return fn
+    if step == "render":
+        # Created immediately before the render runs, after the turn's handler.
+        refresh_if_written(view)
+    if _wrapper() is None and not budgeted(view):
+        if step in RECORDED_STEPS:
+            return attributed(view, fn)
         return fn
 
     @functools.wraps(fn)

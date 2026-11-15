@@ -50,6 +50,12 @@ def _queries(n):
         User.objects.count()
 
 
+def _not_the_write_recorder(wrappers):
+    from djust._held_rows import _recorder
+
+    return [wrapper for wrapper in wrappers if wrapper is not _recorder]
+
+
 class Base(LiveView):
     """Each phase spends the number of queries its ``spend_*`` attribute says."""
 
@@ -545,7 +551,8 @@ class TestZeroCostWhenUnused:
     def test_no_execute_wrapper_is_left_on_the_connection(self):
         client = LiveViewTestClient(view({"mount": 9, "event": 9}, spend_mount=1)).mount()
         client.send_event("cheap")
-        assert connection.execute_wrappers == []
+        # The one permanent wrapper is the #4112 write recorder (djust._held_rows).
+        assert _not_the_write_recorder(connection.execute_wrappers) == []
 
     def test_every_scope_entered_is_exited_explicitly(self):
         """Not left to the garbage collector: CPython closing the generator hides a leak."""
@@ -617,7 +624,7 @@ class TestZeroCostWhenUnused:
 
         with pytest.raises(RuntimeError):
             LiveViewTestClient(Boom).mount()
-        assert connection.execute_wrappers == []
+        assert _not_the_write_recorder(connection.execute_wrappers) == []
 
     def test_sync_step_returns_the_function_itself_for_an_unbudgeted_view(self):
         from djust.sync_turn import guarded_step, sync_step
@@ -626,8 +633,11 @@ class TestZeroCostWhenUnused:
             return 1
 
         plain = view(None)()
-        assert sync_step(plain, "event", fn) is fn
+        assert sync_step(plain, "render", fn) is fn
         assert guarded_step(plain, "handle_params", fn) is fn
+        # An event step only attributes its statements to the view (#4112), no meter.
+        attributed = sync_step(plain, "event", fn)
+        assert attributed.__wrapped__ is fn and attributed() == 1
         assert sync_step(view({"event": 1})(), "event", fn) is not fn
 
     def test_an_async_hop_is_never_metered(self):
