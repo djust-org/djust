@@ -86,7 +86,7 @@ REMAINING_4082: dict[str, str] = {
         "migrated; the upload-resume case stays legacy: an explicit view does not resume an upload across a reconnect (ADR-038 D-g)"
     ),
     "python/djust/tests/test_model_form_object_recheck_3967.py": (
-        "migrated; the record-reuse cases stay legacy: gap, the explicit render leaves _djust_prop_cache on the record and ModelFormMixin._fingerprint never matches"
+        "migrated; the record-reuse cases stay legacy: product gap #4153, the explicit render leaves _djust_prop_cache on the record and ModelFormMixin._fingerprint never matches"
     ),
     "python/djust/tests/test_multi_view_refusal_3252.py": (
         "migrated; the revocation cases stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
@@ -119,7 +119,7 @@ REMAINING_4082: dict[str, str] = {
         "migrated; the test-client case stays legacy: product gap #4151, LiveView.render() cannot resolve view for form tags under explicit"
     ),
     "python/tests/test_render_call_guard_3815.py": (
-        "migrated; the lazy live_render children stay legacy: gap, {% live_render lazy %} refuses explicit children (ADR-038 D-m)"
+        "migrated; the lazy live_render children stay legacy: product gap #4154, {% live_render lazy %} refuses explicit children (ADR-038 D-m)"
     ),
     "tests/unit/test_layout_switching.py": (
         "migrated; one case stays legacy: a production failure log names the error for legacy views only (D-a)"

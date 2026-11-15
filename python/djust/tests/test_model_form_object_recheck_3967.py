@@ -147,11 +147,11 @@ class QueueMountSelects(Queue):
 
 
 class LegacyWrites(Writes):
-    exposure_policy = "legacy"  # gap #4082: explicit render adds _djust_prop_cache, defeating reuse
+    exposure_policy = "legacy"  # gap #4153: explicit render adds _djust_prop_cache, defeating reuse
 
 
 class LegacyQueue(Queue):
-    exposure_policy = "legacy"  # gap #4082: explicit render adds _djust_prop_cache, defeating reuse
+    exposure_policy = "legacy"  # gap #4153: explicit render adds _djust_prop_cache, defeating reuse
 
 
 urlpatterns = [
