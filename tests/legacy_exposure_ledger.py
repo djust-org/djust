@@ -28,6 +28,7 @@ MIGRATED_4082: tuple[str, ...] = (
     "python/djust/tests/test_failed_mount_leaves_no_view.py",
     "python/djust/tests/test_live_auth_outside_declarations.py",
     "python/djust/tests/test_live_redirect_skip_render_1643.py",
+    "python/djust/tests/test_login_required_middleware_live.py",
     "python/djust/tests/test_metadata_decorators_async.py",
     "python/djust/tests/test_mount_group_membership.py",
     "python/djust/tests/test_mount_object_permission_after_params.py",
@@ -83,9 +84,6 @@ REMAINING_4082: dict[str, str] = {
         "migrated; the post()-only event refusal cases stay legacy: a legacy view refuses the event and stays mounted"
     ),
     "python/djust/tests/test_live_auth_event_holders_and_user_checks.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
-    ),
-    "python/djust/tests/test_login_required_middleware_live.py": (
         "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
     ),
     "python/djust/tests/test_model_form_object_recheck_3967.py": (
