@@ -59,6 +59,9 @@ def _context(count: int) -> dict:
 
 
 class _Columns(LiveView):
+    # A shared base, never routed: each subclass below states the policy it tests. Stated here
+    # too so the module-level exposure guard (tests/unit/test_exposure_policy_pin_guard.py) holds.
+    exposure_policy = "explicit"
     template = "<div dj-root>" + BODY + "</div>"
 
     def mount(self, request, **kwargs):
