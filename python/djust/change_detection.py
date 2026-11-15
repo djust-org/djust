@@ -418,6 +418,7 @@ CHANGE_DETECTION_IGNORED: frozenset = frozenset(
         "_explicit_child_mount_binding",
         "_explicit_child_schema",
         "_explicit_child_reuse_identity",
+        "_explicit_child_carry_identity",
         "_explicit_child_render_regions",
         "_explicit_child_vdom_bindings",
         "_explicit_child_vdom_tracking",

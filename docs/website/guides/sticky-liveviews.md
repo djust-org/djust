@@ -132,6 +132,56 @@ genuinely has no survivor — first navigation, HTTP GET / hard reload,
 or after an intermediate page that omitted the slot AND the inline tag
 (see "What happens when a slot is missing" below).
 
+### Explicit exposure: the destination renders the child
+
+A sticky child with `exposure_policy = "explicit"` is carried only by the
+destination's own `{% live_render ... sticky=True %}`. A bare
+`<div dj-sticky-slot>` does not re-attach it: slot markup carries no
+class or inputs, so it cannot show which child it is asking for, and the
+child is dropped.
+
+The destination may be on another route and have another parent class.
+The preserved instance is re-attached when all of these match the page it
+left:
+
+- the child class and its `state()` declarations, and the `sticky_id`;
+- the `{% live_render %}` keyword arguments (its mount inputs);
+- the nesting depth: a child the destination renders at a different depth
+  (inside another embedded view instead of directly in the page, or the
+  other way round) is not carried;
+- the session, the user and the tenant.
+
+Anything else mounts a fresh child: different inputs, a session that
+expired or was replaced, another user or tenant. A child mounted on a
+page without a session, or under a legacy-exposure parent, is never
+carried to another page.
+
+The destination re-runs the child's authorization, as for any preserved
+child (see "Auth re-check semantics" below). The views the child embeds
+move with it, each re-authorized against the destination request as a
+fresh embed would be; if any of them is refused, or is a legacy-exposure
+view, the child is not carried and the destination renders a fresh one.
+Then the `state(..., persist="server")` fields of the child and of the
+views it embeds are stored under the destination page, all in one session
+write: either every one of them is stored there, or none is.
+
+What the user sees when it goes wrong:
+
+- **A nested view is refused:** the child is not carried, and the
+  destination renders a fresh one (which runs the same checks as any new
+  embed).
+- **The child itself is refused, or its state cannot be stored:** the
+  destination does not render. The client receives an error frame
+  ("Failed to display content. Please refresh the page."), as for any
+  page whose render fails. The child is discarded with its
+  `_on_sticky_unmount()` hook.
+- **The destination fails to mount for any reason** (its `mount()`
+  raises, its auth refuses, its template fails): every sticky child staged
+  for it is discarded.
+
+A discarded child is never picked up by a later page, mount,
+`mount_batch` or `url_change` on the same connection.
+
 ## The `sticky` class attribute
 
 Two class attributes control sticky behavior:

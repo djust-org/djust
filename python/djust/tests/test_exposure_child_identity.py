@@ -108,9 +108,16 @@ def test_matching_identity_retains_state(rf, cls, reuse):
 
 
 @pytest.mark.parametrize("cls", [IdentityChild, StoredChild])
-@pytest.mark.parametrize("reuse", ["registered", "preserved"])
 @pytest.mark.parametrize(
-    "change", ["inputs", "user", "tenant", "route", "session", "class", "parent"]
+    "reuse,change",
+    [
+        (reuse, change)
+        for reuse in ("registered", "preserved")
+        for change in ("inputs", "user", "tenant", "route", "session", "class", "parent")
+        # A child preserved across live_redirect carries to another route and
+        # parent class (#4149): test_preserved_child_carries_across_route_and_parent.
+        if not (reuse == "preserved" and change in ("route", "parent"))
+    ],
 )
 def test_changed_identity_remounts_in_same_slot(rf, cls, reuse, change):
     from djust.tenants.resolvers import TenantInfo
@@ -121,6 +128,7 @@ def test_changed_identity_remounts_in_same_slot(rf, cls, reuse, change):
     request = request_for(rf, session)
     render(parent, request, cls, {"object_id": 1})
     child = parent._get_child_view("identity")
+    assert child._explicit_child_carry_identity is not None
     child.count = 8
     old_parent = parent
     parent = stage(parent, child, reuse)
@@ -148,11 +156,90 @@ def test_changed_identity_remounts_in_same_slot(rf, cls, reuse, change):
     assert list(parent._get_all_child_views()) == ["identity"]
     assert child._unmounts == 1
     assert child._parent_view is None
+    # A disposed child keeps no identity it could be carried by (#4149).
+    assert child._explicit_child_carry_identity is None
     assert "dj-sticky-slot" not in html
     if reuse == "preserved":
         assert old_parent._get_all_child_views() == {}
         assert not parent._ws_consumer._sticky_preserved
         assert not getattr(parent._ws_consumer, "_sticky_auto_reattached", set())
+
+
+@pytest.mark.parametrize("cls", [IdentityChild, StoredChild])
+@pytest.mark.parametrize("change", ["route", "parent", "both"])
+def test_preserved_child_carries_across_route_and_parent(rf, cls, change):
+    """#4149: a sticky child preserved across ``live_redirect`` reattaches under
+    a destination with another route or parent class when its class, slot,
+    inputs, session, user and tenant match; its reuse identity is re-recorded
+    for the destination so later reuse there matches."""
+    session = SessionStore()
+    session.create()
+    parent = IdentityParent()
+    render(parent, request_for(rf, session), cls, {"object_id": 1})
+    child = parent._get_child_view("identity")
+    child.count = 8
+    parent = stage(parent, child, "preserved")
+    current = request_for(rf, SessionStore(session.session_key))
+    if change in ("route", "both"):
+        current.path = "/other/"
+    if change in ("parent", "both"):
+        parent.__class__ = OtherParent
+    html = render(parent, current, cls, {"object_id": 1})
+    assert parent._get_child_view("identity") is child
+    assert child.count == 8
+    assert child._unmounts == 0
+    assert "dj-sticky-slot" in html
+    # Re-rendered on the destination, the child is reused as an ordinary
+    # registered child: its identity now names the destination.
+    parent._ws_consumer._sticky_preserved = {}
+    html = render(parent, current, cls, {"object_id": 1})
+    assert "dj-sticky-slot" not in html
+    assert parent._get_child_view("identity") is child
+    assert child._unmounts == 0
+
+
+@pytest.mark.parametrize("failure", ["refused", "state_move"])
+def test_failed_carry_disposes_the_child_and_forgets_it(rf, monkeypatch, failure):
+    """#4149 review: commit-or-rollback at the tag. A carried child the
+    destination refuses, or whose state cannot be moved, is disposed and
+    dropped from the preserved map (and from the new parent), without the
+    socket's own clean-up after a failed redirect."""
+    from django.core.exceptions import PermissionDenied
+
+    from djust import _exposure_children
+
+    session = SessionStore()
+    session.create()
+    parent = IdentityParent()
+    render(parent, request_for(rf, session), StoredChild, {"a": 1})
+    child = parent._get_child_view("identity")
+    child.count = 8
+    before = child._explicit_child_reuse_identity
+    parent = stage(parent, child, "preserved")
+    current = request_for(rf, SessionStore(session.session_key), path="/other/")
+    if failure == "refused":
+        monkeypatch.setattr(
+            StoredChild,
+            "has_object_permission",
+            lambda self, request, obj: False,
+            raising=False,
+        )
+        monkeypatch.setattr(StoredChild, "get_object", lambda self: object(), raising=False)
+        expected = (PermissionDenied, TemplateSyntaxError)
+    else:
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("store down")
+
+        monkeypatch.setattr(_exposure_children, "rebind_child_state", broken)
+        expected = (RuntimeError,)
+    with pytest.raises(expected):
+        render(parent, current, StoredChild, {"a": 1})
+    assert child._explicit_child_reuse_identity is not before
+    assert child._djust_child_disposed is True
+    assert child._parent_view is None
+    assert parent._get_all_child_views() == {}
+    assert parent._ws_consumer._sticky_preserved == {}
 
 
 def test_transient_without_session_reuses_only_in_same_root(rf):

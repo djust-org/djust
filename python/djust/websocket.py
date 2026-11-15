@@ -4860,6 +4860,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 )
             finally:
                 self._live_redirect_mounting = False
+            if self.view_instance is None and self._sticky_preserved:
+                # The destination did not mount (refused, or its render
+                # failed and was answered with an error frame): no page owns
+                # the staged children, so no later mount may pick them up.
+                for child in list(self._sticky_preserved.values()):
+                    discard_sticky_child(child)
+                self._sticky_preserved = {}
             self._queue_destination_title(
                 getattr(getattr(self, "_runtime", None), "mount_document_title", None)
             )

@@ -85,6 +85,7 @@ def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
         # Sessionless reuse identities hold the root by identity. A disposed
         # child must not retain that hidden ownership reference or be reusable.
         current._explicit_child_reuse_identity = None
+        current._explicit_child_carry_identity = None
         current._explicit_child_render_regions = {}
         current._explicit_child_vdom_bindings = {}
         current._deferred_callbacks = []
