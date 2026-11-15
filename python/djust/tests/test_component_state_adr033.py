@@ -51,7 +51,7 @@ from djust.change_detection import (  # noqa: E402
 )
 from djust.components.components.rating import Rating  # noqa: E402
 from djust.components.descriptors.base import LiveComponent, TypedState  # noqa: E402
-from djust.decorators import event_handler  # noqa: E402
+from djust.decorators import event_handler, state  # noqa: E402
 from djust.runtime import ViewRuntime  # noqa: E402
 from djust.websocket import _snapshot_assigns  # noqa: E402
 
@@ -64,13 +64,16 @@ _ALLOWED = "djust.tests.test_component_state_adr033"
 
 
 class RatingView(LiveView):
-    """The code a Django developer writes (ADR-033, summary)."""
+    """The code a Django developer writes (ADR-033, summary).
 
-    exposure_policy = "legacy"
+    In its explicit form: a plain component is a declared field built per view
+    (an explicit view does not render one assigned in ``mount()``), and the
+    handler writes to it in place exactly as in the ADR.
+    """
+
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">{{ rating }}</div>'
-
-    def mount(self, request: Any, **kwargs: Any) -> None:
-        self.rating = Rating(value=4, max_stars=5)
+    rating = state(default_factory=lambda: Rating(value=4, max_stars=5))
 
     @event_handler()
     def set_rating(self, value: Any, **kwargs: Any) -> None:
@@ -83,7 +86,7 @@ class Toggle(LiveComponent):
 
 
 class ToggleView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">{{ toggle.on }}</div>'
     toggle = Toggle()
 
@@ -321,19 +324,22 @@ class MockTransport:
         yield
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestRuntimeFrame:
     @pytest.mark.asyncio
     async def test_m3_the_in_place_write_patches(self):
         """ADR-033 M3, flipped: the handler writes ``self.rating.value`` and
         the runtime answers with a render, not ``noop``; a fresh full render
         shows the new value."""
+        from djust.tests._live_session import amount_on_runtime
+
         view = RatingView()
-        view.mount(None)
-        assert _full_stars(view.render_with_diff()[0]) == 4
         transport = MockTransport()
         runtime = ViewRuntime(transport)
-        runtime.view_instance = view
+        # Mounted for real: an explicit view's events are authorized against
+        # its mount binding. The mount render is the four-star baseline.
+        await amount_on_runtime(runtime, view)
+        assert _full_stars(view.render_with_diff()[0]) == 4
         await runtime.dispatch_event(
             {"type": "event", "event": "set_rating", "params": {"value": "2"}, "ref": 1}
         )
