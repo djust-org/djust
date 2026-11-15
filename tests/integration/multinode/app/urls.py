@@ -7,6 +7,7 @@ urlpatterns = [
     path("djust/", include(sse_urlpatterns)),
     path("counter/", views.CounterView.as_view()),
     path("counter2/", views.CounterView.as_view()),
+    path("plain/", views.PlainCounterView.as_view()),
     path("legacy/", views.LegacyCounterView.as_view()),
     path("off/", views.SwitchedOffView.as_view()),
     path("held/", views.HeldView.as_view()),

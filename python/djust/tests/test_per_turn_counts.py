@@ -376,6 +376,31 @@ async def test_one_fingerprint_tree_is_held_where_two_were(monkeypatch):
     assert apart["sent_keys"] == now["sent_keys"]
 
 
+async def test_a_deferred_turn_saves_nothing_before_its_frame(monkeypatch):
+    """With an interval set, an event turn's save leaves the turn (design:
+    save frequency): no save, no session write, no save hop. The close's
+    flush, which writes it, is held off here so only the turn is counted;
+    turned off, the turn saves as before."""
+    from django.test import override_settings
+
+    from djust import runtime
+
+    async def no_flush(self, *, reason="interval"):
+        return True
+
+    monkeypatch.setattr(runtime.ViewRuntime, "flush_state", no_flush)
+    with override_settings(DJUST_STATE_SAVE_INTERVAL=60):
+        now = await turn(monkeypatch, BareCounter, "inc")
+        off = await turn(monkeypatch, BareCounter, "inc", "deferred_save")
+    assert now["reply"] == off["reply"]
+    assert now.get("save_server_state.calls", 0) == 0
+    assert now.get("explicit_save.hops.calls", 0) == 0
+    assert now.get("session.save.calls", 0) == 0
+    assert off["save_server_state.calls"] == 1
+    assert off["explicit_save.hops.calls"] == 1
+    assert off["session.save.calls"] == 1
+
+
 def test_every_shortcut_has_a_gate_off_in_this_file():
     """Derived from the source: each name in ``_per_turn.ALL`` is turned off, by
     name, in a ``turn(...)`` call above, so a shortcut added without a gate-off

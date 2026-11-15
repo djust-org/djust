@@ -308,6 +308,19 @@ class Node:
         assert self.lines is not None
         return self.lines.wait_for(prefix, "node %s" % self.name)
 
+    def terminate(self, timeout: float = 30.0) -> None:
+        """SIGTERM, then wait: the graceful stop of a deploy. uvicorn closes
+        its sockets (the application sees each disconnect) and exits."""
+        if self.process is not None and self.process.poll() is None:
+            os.kill(self.process.pid, signal.SIGTERM)
+            try:
+                self.process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self.kill()
+                raise
+        if self.process is not None and self.process.stdin is not None:
+            self.process.stdin.close()
+
     def kill(self) -> None:
         """SIGKILL: no shutdown code runs, as in an OOM kill or a lost host."""
         if self.process is not None and self.process.poll() is None:
@@ -341,6 +354,7 @@ class Cluster:
         n: int = 2,
         node_env: Optional[Dict[str, Dict[str, str]]] = None,
         store: Optional[str] = None,
+        save_interval: float = 0,
     ) -> None:
         self.node_env = node_env or {}
         self.dir = _short_tempdir("mnc")
@@ -352,6 +366,8 @@ class Cluster:
             "redis": redis,
             # The state store every node names (#4132): None, "sealed" or "file".
             "store": store,
+            # DJUST_STATE_SAVE_INTERVAL of every node (0: save every turn).
+            "save_interval": save_interval,
         }
         os.makedirs(self.config["cache_dir"])
         self.names = [chr(ord("A") + i) for i in range(n)]

@@ -930,6 +930,105 @@ def _check_automatic_state_switch(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_state_save_interval(errors: list[CheckMessage]) -> None:
+    """C040 / C041 — the save interval (design: save frequency).
+
+    C040: ``DJUST_STATE_SAVE_INTERVAL`` or a view's ``state_save_interval`` is
+    not ``0`` or a number of seconds from 0.5 to 60, or exceeds half of
+    ``DJUST_SERVER_STATE_MAX_AGE``. At run time such a value is read as 0
+    (every turn saved before its reply), so this says so at startup.
+
+    C041 (info): ``DJUST_STATE_STORE_STRICT`` is on and an interval is set:
+    strict means a turn whose state cannot be stored is refused, a per-turn
+    promise, so every turn is saved before its reply and the interval has no
+    effect.
+    """
+    from django.conf import settings
+
+    try:
+        from djust import _save_policy
+        from djust.live_view import LiveView
+    except ImportError:
+        return
+
+    def problem(value: Any) -> Optional[str]:
+        if value == 0 and type(value) is int:
+            return None
+        if not _save_policy._valid(value):
+            return "%r is not 0 or a number of seconds from %s to %s" % (
+                value,
+                _save_policy.MIN_INTERVAL_S,
+                _save_policy.MAX_INTERVAL_S,
+            )
+        if value != 0 and not _save_policy.within_lifetime(float(value)):
+            return "%r exceeds half of DJUST_SERVER_STATE_MAX_AGE" % (value,)
+        return None
+
+    problems = []
+    configured = []
+    value = getattr(settings, _save_policy.SETTING, 0)
+    found = problem(value)
+    if found is not None:
+        problems.append("%s: %s" % (_save_policy.SETTING, found))
+    elif value:
+        configured.append(_save_policy.SETTING)
+    for cls in _walk_subclasses(LiveView):
+        if _is_framework_internal_class(cls):
+            continue
+        own = inspect.getattr_static(cls, _save_policy.VIEW_ATTRIBUTE, None)
+        if own is None:
+            continue
+        name = "%s.%s" % (cls.__module__, cls.__qualname__)
+        found = problem(own)
+        if found is not None:
+            problems.append("%s.%s: %s" % (name, _save_policy.VIEW_ATTRIBUTE, found))
+        elif own:
+            configured.append(name)
+    if problems and not _is_check_suppressed("djust.C040"):
+        errors.append(
+            DjustError(
+                "The state save interval cannot be used: %s." % "; ".join(sorted(problems)[:5]),
+                hint=(
+                    "Such a value is read as 0: every turn's state is saved before its "
+                    "reply, as with no interval set."
+                ),
+                id="djust.C040",
+                fix_hint=(
+                    "Set `%s` (or a view's `%s`) to 0 or a number of seconds from %s to %s, "
+                    "at most half of `DJUST_SERVER_STATE_MAX_AGE`."
+                    % (
+                        _save_policy.SETTING,
+                        _save_policy.VIEW_ATTRIBUTE,
+                        _save_policy.MIN_INTERVAL_S,
+                        _save_policy.MAX_INTERVAL_S,
+                    )
+                ),
+            )
+        )
+    from djust import state_store
+
+    if (
+        configured
+        and getattr(settings, state_store.STRICT_SETTING, False) is True
+        and not _is_check_suppressed("djust.C041")
+    ):
+        errors.append(
+            DjustInfo(
+                "DJUST_STATE_STORE_STRICT is on, so the state save interval set on %s has "
+                "no effect." % _shown(sorted(configured)),
+                hint=(
+                    "Strict refuses a turn whose state cannot be stored, which needs every "
+                    "turn saved before its reply."
+                ),
+                id="djust.C041",
+                fix_hint=(
+                    "Remove the interval, or turn `DJUST_STATE_STORE_STRICT` off to let "
+                    "turns be saved after their reply."
+                ),
+            )
+        )
+
+
 def _check_csp_strict_alias(errors: list[CheckMessage]) -> None:
     """C039: ``csp_strict`` and ``csp_strict_styles`` resolve to different values.
 
@@ -1895,6 +1994,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C039 -- csp_strict and its alias csp_strict_styles set to different values (#4146)
     _check_csp_strict_alias(errors)
+
+    # C040 / C041 -- the state save interval (design: save frequency)
+    _check_state_save_interval(errors)
 
     # C031 -- the session store is a cache local to one process (#4103)
     _check_process_local_session_cache(errors)
