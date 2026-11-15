@@ -474,7 +474,6 @@ object for every event, rebuilt from its saved state as in 1.3.
   reason above. On a legacy view it is not refused, but `manage.py check`
   warns about it (`djust.V026`), because a legacy view renders it to every
   user.
-- **`{% live_render %}` with `lazy=`**, when the child view is explicit.
 - **Actors** (`use_actors = True`). See [What does not survive](#5-what-does-not-survive).
 - **A `state()` grant on a legacy view.** `state(0, persist="server")` on a
   view that is still `"legacy"` raises when the view is created, so a grant
@@ -954,4 +953,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 7c2c874f4a1d -->
+<!-- generated-doc prose-sha256: efa3a1b5c7b6 -->

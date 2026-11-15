@@ -88,12 +88,27 @@ def establish_mount_session(
 
 def fresh_socket_request(view: Any) -> Any:
     """Reload server session/auth instead of reusing socket-scope caches."""
-    from django.contrib.auth import get_user
-
     mounted = view._djust_mount_request
     session = mounted.session
     if not session_store_supported(type(session)) or not session.session_key:
         raise ExposureError("Explicit events require a supported live server session")
+    return reload_request_session(mounted)
+
+
+def reload_request_session(mounted: Any) -> Any:
+    """A copy of ``mounted`` whose session and user are read from storage now.
+
+    The session store must hold server state (``session_store_supported``) and
+    the session must have a key; callers check that first. A session that was
+    deleted, flushed or expired since ``mounted`` read it raises: the store
+    clears the key, and a missing session may not silently become a new
+    anonymous identity. Shared by the socket's server-originated turns
+    (:func:`fresh_socket_request`) and the lazy fill of an explicit
+    ``{% live_render %}`` child (#4154).
+    """
+    from django.contrib.auth import get_user
+
+    session = mounted.session
     request = copy(mounted)
     request.session = type(session)(session.session_key)
     # Force a storage read even for anonymous users. Missing/expired sessions
