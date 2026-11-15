@@ -162,11 +162,25 @@ move with it, each re-authorized against the destination request as a
 fresh embed would be; if any of them is refused, or is a legacy-exposure
 view, the child is not carried and the destination renders a fresh one.
 Then the `state(..., persist="server")` fields of the child and of the
-views it embeds are stored under the destination page.
+views it embeds are stored under the destination page, all in one session
+write: either every one of them is stored there, or none is.
 
-A child the destination refuses, or whose state cannot be stored there,
-is discarded with its `_on_sticky_unmount()` hook; a later page or mount
-on the same connection never picks it up.
+What the user sees when it goes wrong:
+
+- **A nested view is refused:** the child is not carried, and the
+  destination renders a fresh one (which runs the same checks as any new
+  embed).
+- **The child itself is refused, or its state cannot be stored:** the
+  destination does not render. The client receives an error frame
+  ("Failed to display content. Please refresh the page."), as for any
+  page whose render fails. The child is discarded with its
+  `_on_sticky_unmount()` hook.
+- **The destination fails to mount for any reason** (its `mount()`
+  raises, its auth refuses, its template fails): every sticky child staged
+  for it is discarded.
+
+A discarded child is never picked up by a later page, mount,
+`mount_batch` or `url_change` on the same connection.
 
 ## The `sticky` class attribute
 
