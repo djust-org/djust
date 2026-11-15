@@ -1,9 +1,9 @@
-<div class="{{ css_prefix }}avatar {{ css_prefix }}avatar-{{ size }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+<div class="{{ css_prefix }}avatar {{ css_prefix }}avatar-{{ size|force_escape }} {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
     {% if slot_image %}
     {{ slot_image }}
     {% elif src %}
-    <img src="{{ src }}" alt="{{ alt }}" class="{{ css_prefix }}avatar-image" />
+    <img src="{{ src }}" alt="{{ alt|force_escape }}" class="{{ css_prefix }}avatar-image" />
     {% elif slot_fallback %}
     {{ slot_fallback }}
     {% else %}

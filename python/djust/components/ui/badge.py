@@ -8,6 +8,7 @@ from typing import Dict, Any
 from ..base import LiveComponent
 from ...decorators import event_handler
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from django.utils.safestring import SafeString, mark_safe
 
 from ..utils import csp_strict
@@ -129,7 +130,7 @@ class BadgeComponent(LiveComponent):
         if self.pill:
             classes += " rounded-pill"
 
-        html = f'<span class="{classes}" id="{conditional_escape(self.component_id)}">{conditional_escape(self.text)}'
+        html = f'<span class="{classes}" id="{attr_text(self.component_id)}">{conditional_escape(self.text)}'
 
         if self.dismissible:
             dismiss_attr = self._dismiss_attr()
@@ -165,7 +166,7 @@ class BadgeComponent(LiveComponent):
 
         classes = f"{base_classes}{pill_classes} {variant_classes}"
 
-        html = f'<span class="{classes}" id="{conditional_escape(self.component_id)}">{conditional_escape(self.text)}'
+        html = f'<span class="{classes}" id="{attr_text(self.component_id)}">{conditional_escape(self.text)}'
 
         if self.dismissible:
             dismiss_attr = self._dismiss_attr()
@@ -180,11 +181,11 @@ class BadgeComponent(LiveComponent):
 
     def _render_plain(self) -> str:
         """Render plain HTML badge"""
-        classes = f"badge badge-{conditional_escape(self.variant)}"
+        classes = f"badge badge-{attr_text(self.variant)}"
         if self.pill:
             classes += " badge-pill"
 
-        html = f'<span class="{classes}" id="{conditional_escape(self.component_id)}">{conditional_escape(self.text)}'
+        html = f'<span class="{classes}" id="{attr_text(self.component_id)}">{conditional_escape(self.text)}'
 
         if self.dismissible:
             dismiss_attr = self._dismiss_attr()

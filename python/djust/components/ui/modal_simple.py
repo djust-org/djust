@@ -8,6 +8,7 @@ from typing import Any, Optional
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 from djust._rust import RustModal
 
@@ -120,12 +121,12 @@ class Modal(Component):
         # Build dialog classes
         dialog_classes = ["modal-dialog"]
         if self.size != "md":
-            dialog_classes.append(f"modal-{conditional_escape(self.size)}")
+            dialog_classes.append(f"modal-{attr_text(self.size)}")
         if self.centered:
             dialog_classes.append("modal-dialog-centered")
 
         parts = [
-            f'<div class="{" ".join(modal_classes)}" id="{conditional_escape(self.id)}" tabindex="-1" aria-labelledby="{conditional_escape(self.id)}Label" aria-hidden="true">',
+            f'<div class="{" ".join(modal_classes)}" id="{attr_text(self.id)}" tabindex="-1" aria-labelledby="{attr_text(self.id)}Label" aria-hidden="true">',
             f'    <div class="{" ".join(dialog_classes)}">',
             '        <div class="modal-content">',
         ]
@@ -134,7 +135,7 @@ class Modal(Component):
         if self.title:
             parts.append('            <div class="modal-header">')
             parts.append(
-                f'                <h5 class="modal-title" id="{conditional_escape(self.id)}Label">{conditional_escape(self.title)}</h5>'
+                f'                <h5 class="modal-title" id="{attr_text(self.id)}Label">{conditional_escape(self.title)}</h5>'
             )
             if self.dismissable:
                 parts.append(

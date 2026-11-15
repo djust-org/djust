@@ -4,7 +4,8 @@ import html
 from datetime import date, timedelta
 from typing import Any, Optional
 
-from django.utils.html import conditional_escape
+
+from djust.components.utils import attr_text
 from djust import Component
 
 
@@ -194,7 +195,7 @@ class CalendarHeatmap(Component):
 
             parts.append(
                 f'<rect class="dj-calendar-heatmap__cell" x="{x}" y="{y}" '
-                f'width="{cs}" height="{cs}" rx="2" fill="{conditional_escape(color)}">'
+                f'width="{cs}" height="{cs}" rx="2" fill="{attr_text(color)}">'
                 f"<title>{date_str}: {val:g}</title></rect>"
             )
 

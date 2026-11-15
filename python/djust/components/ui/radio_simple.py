@@ -132,7 +132,7 @@ class Radio(Component):
             opt_disabled = option.get("disabled", False)
 
             # Generate unique ID for each radio button
-            radio_id = f"{conditional_escape(self.name)}_{i}"
+            radio_id = f"{attr_text(self.name)}_{i}"
 
             # Build form-check classes
             check_classes = ["form-check"]
@@ -146,7 +146,7 @@ class Radio(Component):
                 'class="form-check-input"',
                 'type="radio"',
                 f'id="{radio_id}"',
-                f'name="{conditional_escape(self.name)}"',
+                f'name="{attr_text(self.name)}"',
                 f'value="{attr_text(opt_value)}"',
             ]
 

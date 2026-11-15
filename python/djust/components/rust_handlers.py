@@ -401,7 +401,7 @@ def _accordion_trigger_ends(content: str) -> list[int]:
 class AccordionHandler:
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
-        accordion_id = conditional_escape(kw.get("id", "accordion"))
+        accordion_id = attr_text(kw.get("id", "accordion"))
         # The triggers carry ``component_id=`` as the Django tag's do (#4134): only
         # component_id_attr's output is inserted, every other byte of ``content`` is kept.
         cid_attr = component_id_attr(kw.get("component_id"))
@@ -415,8 +415,8 @@ class AccordionItemHandler:
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         title = conditional_escape(kw.get("title", ""))
-        item_id = conditional_escape(kw.get("id", ""))
-        event = conditional_escape(kw.get("event", "accordion_toggle"))
+        item_id = attr_text(kw.get("id", ""))
+        event = attr_text(kw.get("event", "accordion_toggle"))
         is_open = kw.get("open", False)
         open_cls = "accordion-item--open" if is_open else ""
         expanded = "true" if is_open else "false"
@@ -444,8 +444,8 @@ class ProgressHandler:
         # tag's context this is: the clamped number, not one of the raw ones beside it (#3847).
         value = int(_progress(value=_number(kw.get("value", 0), "progress", "value"))["value"])
         label = conditional_escape(kw.get("label", ""))
-        size = conditional_escape(kw.get("size", "md"))
-        color = conditional_escape(kw.get("color", "primary"))
+        size = attr_text(kw.get("size", "md"))
+        color = attr_text(kw.get("color", "primary"))
         show_label = kw.get("show_label", True)
         label_row = ""
         if label or show_label:
@@ -476,7 +476,7 @@ class BadgeHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         label = conditional_escape(kw.get("label", ""))
-        status = conditional_escape(kw.get("status", "default"))
+        status = attr_text(kw.get("status", "default"))
         pulse = kw.get("pulse", False)
         pulse_cls = " badge-pulse" if pulse else ""
         return _safe(
@@ -503,8 +503,8 @@ class PaginationHandler:
             total_pages = int(cast("str | int | float", _number(kw.get("total_pages", 1))))
         except (ValueError, TypeError):
             page, total_pages = 1, 1
-        prev_event = conditional_escape(kw.get("prev_event", "page_prev"))
-        next_event = conditional_escape(kw.get("next_event", "page_next"))
+        prev_event = attr_text(kw.get("prev_event", "page_prev"))
+        next_event = attr_text(kw.get("next_event", "page_next"))
         prev_disabled = " disabled" if page <= 1 else ""
         next_disabled = " disabled" if page >= total_pages else ""
         # One button per page number, wired like the Python tag's: ``next_event`` carrying the
@@ -518,9 +518,10 @@ class PaginationHandler:
             active = " active" if p == page else ""
             current = ' aria-current="page"' if p == page else ""
             number = conditional_escape(p)
+            a_number = attr_text(p)
             numbered += (
                 f'<button class="pagination-btn{active}"{current} '
-                f'dj-click="{next_event}" data-value="{number}">{number}</button>'
+                f'dj-click="{next_event}" data-value="{a_number}">{number}</button>'
             )
         return _safe(
             f'<div class="pagination">'
@@ -537,14 +538,14 @@ class AvatarHandler:
         kw = _parse_args(args, context)
         src = kw.get("src", "")
         raw_alt = kw.get("alt", "")
-        alt = conditional_escape(raw_alt)
+        alt = attr_text(raw_alt)
         # The initials are taken from the text, then escaped: slicing the ESCAPED text cut an
         # entity in half (``O'Brien`` -> ``O&``), and a string arrives with its quotes now (#3883).
         initials = conditional_escape(
             kw.get("initials", "") or (str(raw_alt)[:2].upper() if raw_alt else "")
         )
-        size = conditional_escape(kw.get("size", "md"))
-        status = conditional_escape(kw.get("status", ""))
+        size = attr_text(kw.get("size", "md"))
+        status = attr_text(kw.get("status", ""))
         img_html = (
             f'<img class="avatar-image" src="{data_url_attr(src, image=True)}" alt="{alt}">'
             if src
@@ -684,16 +685,16 @@ class DataTableHandler:
         columns = _passed_or_context(kw, "columns", context, default=[])
         sort_by = conditional_escape(str(kw.get("sort_by", "")))
         sort_desc = kw.get("sort_desc", False)
-        sort_event = conditional_escape(kw.get("sort_event", "on_table_sort"))
+        sort_event = escape(kw.get("sort_event", "on_table_sort"))
 
         # Phase 1 parameters (all opt-in)
         selectable = kw.get("selectable", False)
         selected_rows = kw.get("selected_rows") or []
-        select_event = conditional_escape(kw.get("select_event", "on_table_select"))
+        select_event = escape(kw.get("select_event", "on_table_select"))
         row_key = str(kw.get("row_key", "id"))
         search = kw.get("search", False)
-        search_query = conditional_escape(str(kw.get("search_query", "")))
-        search_event = conditional_escape(kw.get("search_event", "on_table_search"))
+        search_query = escape(str(kw.get("search_query", "")))
+        search_event = escape(kw.get("search_event", "on_table_search"))
         try:
             search_debounce = int(
                 cast("str | int | float", _number(kw.get("search_debounce", 300)))
@@ -701,7 +702,7 @@ class DataTableHandler:
         except (ValueError, TypeError):
             search_debounce = 300
         filters = kw.get("filters") or {}
-        filter_event = conditional_escape(kw.get("filter_event", "on_table_filter"))
+        filter_event = escape(kw.get("filter_event", "on_table_filter"))
         loading = kw.get("loading", False)
         empty_title = conditional_escape(str(kw.get("empty_title", "No data")))
         empty_description = conditional_escape(str(kw.get("empty_description", "")))
@@ -712,7 +713,7 @@ class DataTableHandler:
             total_pages = int(cast("str | int | float", _number(kw.get("total_pages", 1))))
         except (ValueError, TypeError):
             page, total_pages = 1, 1
-        page_event = conditional_escape(kw.get("page_event", "on_table_page"))
+        page_event = escape(kw.get("page_event", "on_table_page"))
         striped = kw.get("striped", False)
         compact = kw.get("compact", False)
         # Row navigation: a clickable row fires ``row_click_event`` (#1111). The Python
@@ -720,7 +721,7 @@ class DataTableHandler:
         # Decided on the value, not on its escaped text: ``row_click_event=None`` wires nothing
         # in the Python template, and "None" is truthy.
         _rce = kw.get("row_click_event", "")
-        row_click_event = conditional_escape(_rce) if _rce else ""
+        row_click_event = escape(_rce) if _rce else ""
         row_click_value_key = str(kw.get("row_click_value_key", "id"))
         # ``row_url`` names the row key that holds the row's URL (``data-href``, which the script
         # below navigates to). A row click wins over it, as in the Python template's ``elif``, and
@@ -730,15 +731,15 @@ class DataTableHandler:
         row_nav_script = _ROW_CLICK_SCRIPT if (row_click_event or row_url) else ""
         # Backward-compatible pager (``total_pages > 1`` without ``paginate``), as the Python
         # template draws it (#3669).
-        prev_event = conditional_escape(kw.get("prev_event", "on_table_prev"))
-        next_event = conditional_escape(kw.get("next_event", "on_table_next"))
+        prev_event = escape(kw.get("prev_event", "on_table_prev"))
+        next_event = escape(kw.get("next_event", "on_table_next"))
 
         # Phase 2 parameters (all opt-in)
         editable_columns = kw.get("editable_columns") or []
-        edit_event = conditional_escape(kw.get("edit_event", "on_table_cell_edit"))
+        edit_event = escape(kw.get("edit_event", "on_table_cell_edit"))
         resizable = kw.get("resizable", False)
         reorderable = kw.get("reorderable", False)
-        reorder_event = conditional_escape(kw.get("reorder_event", "on_table_reorder"))
+        reorder_event = escape(kw.get("reorder_event", "on_table_reorder"))
         try:
             frozen_left = int(cast("str | int | float", _number(kw.get("frozen_left", 0))))
         except (ValueError, TypeError):
@@ -748,30 +749,28 @@ class DataTableHandler:
         except (ValueError, TypeError):
             frozen_right = 0
         column_visibility = kw.get("column_visibility", False)
-        visibility_event = conditional_escape(kw.get("visibility_event", "on_table_visibility"))
+        visibility_event = escape(kw.get("visibility_event", "on_table_visibility"))
         density = conditional_escape(str(kw.get("density", "comfortable")))
         density_toggle = kw.get("density_toggle", False)
-        density_event = conditional_escape(kw.get("density_event", "on_table_density"))
+        density_event = escape(kw.get("density_event", "on_table_density"))
         responsive_cards = kw.get("responsive_cards", False)
         editable_rows = kw.get("editable_rows", False)
-        edit_row_event = conditional_escape(kw.get("edit_row_event", "on_table_row_edit"))
-        save_row_event = conditional_escape(kw.get("save_row_event", "on_table_row_save"))
-        cancel_row_event = conditional_escape(kw.get("cancel_row_event", "on_table_row_cancel"))
+        edit_row_event = escape(kw.get("edit_row_event", "on_table_row_edit"))
+        save_row_event = escape(kw.get("save_row_event", "on_table_row_save"))
+        cancel_row_event = escape(kw.get("cancel_row_event", "on_table_row_cancel"))
         editing_rows = kw.get("editing_rows") or []
 
         # Phase 3 parameters (all opt-in)
         expandable = kw.get("expandable", False)
-        expand_event = conditional_escape(kw.get("expand_event", "on_table_expand"))
+        expand_event = escape(kw.get("expand_event", "on_table_expand"))
         expanded_rows = kw.get("expanded_rows") or []
         bulk_actions = kw.get("bulk_actions") or []
-        bulk_action_event = conditional_escape(kw.get("bulk_action_event", "on_table_bulk_action"))
+        bulk_action_event = escape(kw.get("bulk_action_event", "on_table_bulk_action"))
         exportable = kw.get("exportable", False)
-        export_event = conditional_escape(kw.get("export_event", "on_table_export"))
+        export_event = escape(kw.get("export_event", "on_table_export"))
         export_formats = kw.get("export_formats") or ["csv", "json"]
         group_by = str(kw.get("group_by", ""))
-        group_toggle_event = conditional_escape(
-            kw.get("group_toggle_event", "on_table_group_toggle")
-        )
+        group_toggle_event = escape(kw.get("group_toggle_event", "on_table_group_toggle"))
         collapsible_groups = kw.get("collapsible_groups", True)
         collapsed_groups = kw.get("collapsed_groups") or []
         keyboard_nav = kw.get("keyboard_nav", False)
@@ -789,7 +788,7 @@ class DataTableHandler:
         server_mode = kw.get("server_mode", False)
         facets = kw.get("facets", False)
         facet_counts = kw.get("facet_counts") or {}
-        persist_key = conditional_escape(str(kw.get("persist_key", "")))
+        persist_key = escape(str(kw.get("persist_key", "")))
         printable = kw.get("printable", False)
         column_stats = kw.get("column_stats") or {}
 
@@ -798,14 +797,14 @@ class DataTableHandler:
         row_class_map = kw.get("row_class_map") or {}
         column_groups = kw.get("column_groups") or []
         row_drag = kw.get("row_drag", False)
-        row_drag_event = conditional_escape(kw.get("row_drag_event", "on_table_row_drag"))
+        row_drag_event = escape(kw.get("row_drag_event", "on_table_row_drag"))
         copyable = kw.get("copyable", False)
-        copy_event = conditional_escape(kw.get("copy_event", "on_table_copy"))
-        copy_format = conditional_escape(str(kw.get("copy_format", "csv")))
+        copy_event = escape(kw.get("copy_event", "on_table_copy"))
+        copy_format = escape(str(kw.get("copy_format", "csv")))
 
         # Phase 5 parameters (all opt-in)
         importable = kw.get("importable", False)
-        import_event = conditional_escape(kw.get("import_event", "on_table_import"))
+        import_event = escape(kw.get("import_event", "on_table_import"))
         import_formats = kw.get("import_formats") or ["csv", "json"]
         import_preview_data = kw.get("import_preview_data") or []
         import_errors = kw.get("import_errors") or []
@@ -813,7 +812,7 @@ class DataTableHandler:
         computed_columns = kw.get("computed_columns") or []
         cell_merge_key = str(kw.get("cell_merge_key", "_merge"))
         column_expressions = kw.get("column_expressions") or {}
-        expression_event = conditional_escape(kw.get("expression_event", "on_table_expression"))
+        expression_event = escape(kw.get("expression_event", "on_table_expression"))
         active_expressions = kw.get("active_expressions") or {}
         conditional_formatting = kw.get("conditional_formatting") or []
 
@@ -1899,7 +1898,7 @@ class DataTableHandler:
         # Facets are shown as counts next to filter options — handled via facet_counts data attr
         facet_attr = ""
         if facets and facet_counts:
-            facet_attr = f" data-facet-counts='{conditional_escape(_json.dumps(facet_counts))}'"
+            facet_attr = f" data-facet-counts='{escape(_json.dumps(facet_counts))}'"
 
         return _safe(
             f'<div class="{" ".join(wrapper_classes)}" role="grid"'
@@ -1943,7 +1942,7 @@ class PageHeaderHandler:
         e_title = conditional_escape(str(title))
         e_subtitle = conditional_escape(str(subtitle))
         e_description = conditional_escape(str(description))
-        e_custom_class = conditional_escape(str(custom_class))
+        e_custom_class = attr_text(str(custom_class))
 
         cls = "dj-page-header"
         if e_custom_class:
@@ -2002,11 +2001,11 @@ class SidebarHandler:
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
-        sidebar_id = conditional_escape(kw.get("id", "sidebar"))
+        sidebar_id = attr_text(kw.get("id", "sidebar"))
         collapsed = kw.get("collapsed", False)
         title = kw.get("title", "")
-        toggle_event = conditional_escape(kw.get("toggle_event", "toggle_sidebar"))
-        custom_class = conditional_escape(kw.get("class", ""))
+        toggle_event = attr_text(kw.get("toggle_event", "toggle_sidebar"))
+        custom_class = attr_text(kw.get("class", ""))
         # ``component_id=`` names which ``Sidebar`` the toggle drives (#4134).
         cid_attr = component_id_attr(kw.get("component_id"))
 
@@ -2058,7 +2057,7 @@ class SidebarItemHandler:
         if event:
             trigger = (
                 f'<button class="dj-sidebar__link{active_cls}" '
-                f'dj-click="{conditional_escape(event)}">'
+                f'dj-click="{attr_text(event)}">'
                 f'{icon_html}<span class="dj-sidebar__label">{label}</span></button>'
             )
         else:
@@ -2098,15 +2097,15 @@ class NavMenuHandler:
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
-        nav_id = conditional_escape(kw.get("id", "nav-menu"))
+        nav_id = attr_text(kw.get("id", "nav-menu"))
         brand = kw.get("brand", "")
         brand_href = data_url_attr(kw.get("brand_href", "/"))
-        toggle_event = conditional_escape(kw.get("toggle_event", "toggle_nav"))
+        toggle_event = attr_text(kw.get("toggle_event", "toggle_nav"))
         mobile_open = kw.get("mobile_open", False)
         # A falsy ``class`` (``None``, ``False``) adds nothing, as in the Django tag (#4127);
         # escaping it first would turn ``None`` into the class ``None``.
         raw_class = kw.get("class", "")
-        custom_class = conditional_escape(raw_class) if raw_class else ""
+        custom_class = attr_text(raw_class) if raw_class else ""
 
         cls = "dj-nav"
         if custom_class:
@@ -2237,7 +2236,7 @@ class NavItemHandler:
         if event:
             return _safe(
                 f'<li class="dj-nav__item{active_cls}">{mark}'
-                f'<button class="dj-nav__link" dj-click="{conditional_escape(event)}">'
+                f'<button class="dj-nav__link" dj-click="{attr_text(event)}">'
                 f"{label}{desc_html}</button></li>"
             )
 
@@ -2432,10 +2431,10 @@ class ToolbarHandler:
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
-        toolbar_id = conditional_escape(kw.get("id", "toolbar"))
-        custom_class = conditional_escape(kw.get("class", ""))
-        size = conditional_escape(kw.get("size", "md"))
-        variant = conditional_escape(kw.get("variant", "default"))
+        toolbar_id = attr_text(kw.get("id", "toolbar"))
+        custom_class = attr_text(kw.get("class", ""))
+        size = attr_text(kw.get("size", "md"))
+        variant = attr_text(kw.get("variant", "default"))
 
         cls = f"dj-toolbar dj-toolbar--{size} dj-toolbar--{variant}"
         if custom_class:
@@ -2560,11 +2559,11 @@ class FormArrayHandler:
         add_label = kw.get("add_label", "Add row")
         custom_class = kw.get("class", "")
 
-        e_name = conditional_escape(str(name))
-        e_add_event = conditional_escape(str(add_event))
-        e_remove_event = conditional_escape(str(remove_event))
+        e_name = escape(str(name))
+        e_add_event = escape(str(add_event))
+        e_remove_event = escape(str(remove_event))
         e_add_label = conditional_escape(str(add_label))
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
 
         try:
             min_rows = int(cast("str | int | float", _number(min_rows)))

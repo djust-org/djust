@@ -1,18 +1,18 @@
-<div class="{{ css_prefix }}checkbox-group {% if attrs.class %}{{ attrs.class }}{% endif %}">
+<div class="{{ css_prefix }}checkbox-group {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}">
     <input
         type="checkbox"
-        name="{{ name }}"
-        id="{{ name }}"
+        name="{{ name|force_escape }}"
+        id="{{ name|force_escape }}"
         class="{{ css_prefix }}checkbox"
         {% if attrs.checked %}checked{% endif %}
         {% if attrs.required %}required{% endif %}
         {% if attrs.disabled %}disabled{% endif %}
-        {% if attrs.value %}value="{{ attrs.value }}"{% endif %}
+        {% if attrs.value %}value="{{ attrs.value|force_escape }}"{% endif %}
     />
     {% if slot_label %}
     {{ slot_label }}
     {% elif label %}
-    <label for="{{ name }}" class="{{ css_prefix }}checkbox-label">{{ label }}</label>
+    <label for="{{ name|force_escape }}" class="{{ css_prefix }}checkbox-label">{{ label }}</label>
     {% endif %}
     {% if slot_description %}
     <div class="{{ css_prefix }}checkbox-description">{{ slot_description }}</div>

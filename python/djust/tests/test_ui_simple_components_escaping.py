@@ -19,6 +19,8 @@ import contextlib
 from typing import Any, Callable, Dict, Iterator, List, Tuple
 from unittest.mock import patch
 
+from html.parser import HTMLParser
+
 import pytest
 from django.utils.safestring import mark_safe
 
@@ -245,43 +247,46 @@ def test_quoted_value_cannot_leave_its_attribute(name: str, framework: str) -> N
 ALWAYS_ESCAPED = {"divider", "tooltip"}
 
 
-#: These components put the value in an ATTRIBUTE as well as (``avatar``: only) in text. A
-#: marked-safe ITEM value (an option, a button, a nav item, a dropdown entry) or a URL is checked
-#: and escaped in an attribute (#3898): ``mark_safe`` keeps markup in a TEXT slot, it never meant
-#: "write this into a quoted attribute". A SCALAR constructor argument in a non-URL attribute
-#: (``role=``, ``aria-label=``, a ``for=`` id) is the developer's own and still passes through:
-#: these cases hand the same value to every slot, so they assert only that SOME attribute
-#: escaped it and that the text slots kept the markup.
-ATTRIBUTE_SLOTS_ESCAPE = {
-    "avatar", "dropdown", "navbar", "button_group", "radio", "select", "list_group",
-}  # fmt: skip
-#: the tailwind renderers of these map a variant to fixed classes, so no attribute carries the value
-MAPS_VARIANT_TO_CLASSES = {("button_group", "tailwind"), ("list_group", "tailwind")}
+#: A marked-safe value keeps its markup in a TEXT slot and is escaped in every ATTRIBUTE: an item,
+#: a URL (#3898) and, since #4009, a scalar constructor argument too (``role=``, ``aria-label=``, a
+#: ``for=`` id, a class suffix). ``mark_safe`` means "this is markup", never "write this into a
+#: quoted attribute". These cases hand the same value to every slot.
+#: Components whose value lands ONLY in attributes (no text slot draws it), per framework.
+ATTRIBUTE_ONLY: set[tuple[str, str]] = {
+    *(("avatar", fw) for fw in ALL_FRAMEWORKS),
+    *(("icon", fw) for fw in ALL_FRAMEWORKS),
+    ("pagination", "bootstrap5"),  # the size suffix of the class
+}
 
 
-@pytest.mark.parametrize(
-    "name,framework",
-    [(n, fw) for n, fw in PARAMS if n not in ALWAYS_ESCAPED | ATTRIBUTE_SLOTS_ESCAPE],
-)
-def test_marked_safe_value_passes_through(name: str, framework: str) -> None:
-    factory, _ = CASES[name]
-    html = _python_render(factory(mark_safe(SAFE)), framework)
-    assert SAFE in html
-    assert "&lt;b&gt;" not in html
+class _Attrs(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.values: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        self.values += [v for _n, v in attrs if v]
+
+    handle_startendtag = handle_starttag
 
 
-@pytest.mark.parametrize(
-    "name,framework", [(n, fw) for n, fw in PARAMS if n in ATTRIBUTE_SLOTS_ESCAPE]
-)
-def test_marked_safe_value_passes_through_a_text_slot_and_is_escaped_in_an_attribute(
+def _attribute_values(html: str) -> list[str]:
+    parser = _Attrs()
+    parser.feed(html)
+    parser.close()
+    return parser.values
+
+
+@pytest.mark.parametrize("name,framework", [(n, fw) for n, fw in PARAMS if n not in ALWAYS_ESCAPED])
+def test_marked_safe_value_keeps_its_markup_in_text_and_is_escaped_in_attributes(
     name: str, framework: str
 ) -> None:
     factory, _ = CASES[name]
     html = _python_render(factory(mark_safe(SAFE)), framework)
-    if (name, framework) not in MAPS_VARIANT_TO_CLASSES:
-        assert "&lt;b&gt;ok&lt;/b&gt;" in html  # an attribute escaped it
-    if name != "avatar":  # the avatar's only slots are attributes
-        assert SAFE in html  # a text slot (a label) kept the markup
+    # an attribute that holds the value holds it escaped: decoded, it is the markup as text
+    assert not any(SAFE in v for v in _attribute_values(html.replace("&lt;b&gt;", "\x00"))), html
+    if (name, framework) not in ATTRIBUTE_ONLY:
+        assert SAFE in html  # a text slot kept the markup
 
 
 @pytest.mark.parametrize("framework", ALL_FRAMEWORKS)

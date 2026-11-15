@@ -1,6 +1,6 @@
-<nav class="{{ css_prefix }}breadcrumb {% if attrs.class %}{{ attrs.class }}{% endif %}"
+<nav class="{{ css_prefix }}breadcrumb {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
      aria-label="Breadcrumb"
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
     <ol class="{{ css_prefix }}breadcrumb-list">
         {% for item in items %}
         <li class="{{ css_prefix }}breadcrumb-item">

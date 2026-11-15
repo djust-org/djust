@@ -33,6 +33,7 @@ SWEEP_FILES = {
     ),
     "python/tests/test_safe_markup_audit_3774.py": "test_safe_markup_audit_3774",
     "python/tests/test_safe_markup_guard_3820.py": "test_safe_markup_guard_3820",
+    "python/tests/test_marked_safe_attribute_sweep_4009.py": "test_marked_safe_attribute_sweep_4009",
 }
 
 #: The ratchet: each full population is at least this big. Raise a number when a sweep grows;
@@ -41,6 +42,9 @@ POPULATION_FLOORS = {
     "marked-safe/classes": 212,
     "marked-safe/tags": 18,
     "marked-safe/item-parameters": 43,
+    # #4009: every tag of the seven libraries, every component class, one argument at a time
+    "marked-safe-attr/tags": 279,
+    "marked-safe-attr/classes": 212,
     # 434 before 2.0 removed the Rust-native handlers that had a Python twin (train/2.0)
     "payload-sweep/units": 275,
     "guard-fuzz/seeds": 3,

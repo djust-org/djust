@@ -144,7 +144,7 @@ class TabsComponent(LiveComponent):
         nav_class = "nav-pills" if self.variant == "pills" else "nav-tabs"
         flex_class = " flex-column" if self.vertical else ""
 
-        html = f'<div id="{conditional_escape(self.component_id)}">'
+        html = f'<div id="{attr_text(self.component_id)}">'
 
         # Nav tabs
         html += f'<ul class="nav {nav_class}{flex_class}" role="tablist">'
@@ -186,7 +186,7 @@ class TabsComponent(LiveComponent):
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS tabs"""
-        html = f'<div id="{conditional_escape(self.component_id)}">'
+        html = f'<div id="{attr_text(self.component_id)}">'
 
         # Nav tabs
         border_class = (
@@ -251,7 +251,7 @@ class TabsComponent(LiveComponent):
 
     def _render_plain(self) -> str:
         """Render plain HTML tabs"""
-        html = f'<div class="tabs" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="tabs" id="{attr_text(self.component_id)}">'
 
         # Nav tabs
         html += '<div class="tabs-nav">'

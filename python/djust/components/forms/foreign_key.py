@@ -10,6 +10,7 @@ from django.db.models import QuerySet
 from ..base import LiveComponent
 from ...decorators import event_handler
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from django.utils.safestring import SafeString
 
 from ..utils import style_attrs
@@ -198,19 +199,19 @@ class ForeignKeySelect(LiveComponent):
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 select."""
         options = self.get_options()
-        select_id = f"id_{conditional_escape(self.name)}"
+        select_id = f"id_{self.name}"  # text; escaped once where written (#4009)
 
-        html = f'<div class="mb-3" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="mb-3" id="{attr_text(self.component_id)}">'
 
         # Label
         if self.label:
             required_mark = ' <span class="text-danger">*</span>' if self.required else ""
-            html += f'<label for="{conditional_escape(select_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
+            html += f'<label for="{attr_text(select_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
 
         # Build select classes
         select_classes = ["form-select"]
         if self.size != "md":
-            select_classes.append(f"form-select-{conditional_escape(self.size)}")
+            select_classes.append(f"form-select-{attr_text(self.size)}")
         if self.validation_state == "valid":
             select_classes.append("is-valid")
         elif self.validation_state == "invalid":
@@ -219,9 +220,9 @@ class ForeignKeySelect(LiveComponent):
         # Select attributes
         attrs = [
             f'class="{" ".join(select_classes)}"',
-            f'id="{conditional_escape(select_id)}"',
-            f'name="{conditional_escape(self.name)}"',
-            f'dj-change="select(value)" data-component-id="{conditional_escape(self.component_id)}"',
+            f'id="{attr_text(select_id)}"',
+            f'name="{attr_text(self.name)}"',
+            f'dj-change="select(value)" data-component-id="{attr_text(self.component_id)}"',
         ]
         if self.required:
             attrs.append("required")
@@ -231,7 +232,7 @@ class ForeignKeySelect(LiveComponent):
         # Searchable wrapper
         if self.searchable:
             html += '<div class="position-relative">'
-            html += f'<input type="text" class="form-control mb-1" placeholder="Search..." value="{conditional_escape(self.search_query)}" dj-input="search(value)" data-component-id="{conditional_escape(self.component_id)}">'
+            html += f'<input type="text" class="form-control mb-1" placeholder="Search..." value="{attr_text(self.search_query)}" dj-input="search(value)" data-component-id="{attr_text(self.component_id)}">'
 
         html += f"<select {' '.join(attrs)}>"
 
@@ -245,7 +246,7 @@ class ForeignKeySelect(LiveComponent):
             opt_value = opt["value"]
             opt_label = opt["label"]
             selected = " selected" if str(opt_value) == str(self.value) else ""
-            html += f'<option value="{conditional_escape(opt_value)}"{selected}>{conditional_escape(opt_label)}</option>'
+            html += f'<option value="{attr_text(opt_value)}"{selected}>{conditional_escape(opt_label)}</option>'
 
         html += "</select>"
 
@@ -271,14 +272,14 @@ class ForeignKeySelect(LiveComponent):
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS select."""
         options = self.get_options()
-        select_id = f"id_{conditional_escape(self.name)}"
+        select_id = f"id_{self.name}"  # text; escaped once where written (#4009)
 
-        html = f'<div class="mb-4" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="mb-4" id="{attr_text(self.component_id)}">'
 
         # Label
         if self.label:
             required_mark = ' <span class="text-red-500">*</span>' if self.required else ""
-            html += f'<label for="{conditional_escape(select_id)}" class="block text-sm font-medium text-gray-700 mb-1">{conditional_escape(self.label)}{required_mark}</label>'
+            html += f'<label for="{attr_text(select_id)}" class="block text-sm font-medium text-gray-700 mb-1">{conditional_escape(self.label)}{required_mark}</label>'
 
         # Build select classes
         select_classes = [
@@ -305,9 +306,9 @@ class ForeignKeySelect(LiveComponent):
         # Select attributes
         attrs = [
             f'class="{" ".join(select_classes)}"',
-            f'id="{conditional_escape(select_id)}"',
-            f'name="{conditional_escape(self.name)}"',
-            f'dj-change="select(value)" data-component-id="{conditional_escape(self.component_id)}"',
+            f'id="{attr_text(select_id)}"',
+            f'name="{attr_text(self.name)}"',
+            f'dj-change="select(value)" data-component-id="{attr_text(self.component_id)}"',
         ]
         if self.required:
             attrs.append("required")
@@ -317,7 +318,7 @@ class ForeignKeySelect(LiveComponent):
         # Searchable input
         if self.searchable:
             html += '<div class="relative">'
-            html += f'<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm mb-1" placeholder="Search..." value="{conditional_escape(self.search_query)}" dj-input="search(value)" data-component-id="{conditional_escape(self.component_id)}">'
+            html += f'<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm mb-1" placeholder="Search..." value="{attr_text(self.search_query)}" dj-input="search(value)" data-component-id="{attr_text(self.component_id)}">'
 
         html += f"<select {' '.join(attrs)}>"
 
@@ -331,7 +332,7 @@ class ForeignKeySelect(LiveComponent):
             opt_value = opt["value"]
             opt_label = opt["label"]
             selected = " selected" if str(opt_value) == str(self.value) else ""
-            html += f'<option value="{conditional_escape(opt_value)}"{selected}>{conditional_escape(opt_label)}</option>'
+            html += f'<option value="{attr_text(opt_value)}"{selected}>{conditional_escape(opt_label)}</option>'
 
         html += "</select>"
 
@@ -527,7 +528,7 @@ class ManyToManySelect(LiveComponent):
         """Render as Bootstrap 5 checkboxes."""
         options = self.get_options()
 
-        html = f'<div class="mb-3" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="mb-3" id="{attr_text(self.component_id)}">'
 
         if self.label:
             required_mark = ' <span class="text-danger">*</span>' if self.required else ""
@@ -537,7 +538,7 @@ class ManyToManySelect(LiveComponent):
 
         # Search input
         if self.searchable:
-            html += f'<input type="text" class="form-control form-control-sm mb-2" placeholder="Search..." value="{conditional_escape(self.search_query)}" dj-input="search(value)" data-component-id="{conditional_escape(self.component_id)}">'
+            html += f'<input type="text" class="form-control form-control-sm mb-2" placeholder="Search..." value="{attr_text(self.search_query)}" dj-input="search(value)" data-component-id="{attr_text(self.component_id)}">'
 
         # Applied by the client, not a `style=` a strict CSP refuses (#3979).
         html += f'<div class="border rounded p-2"{style_attrs(max_height="200px", overflow_y="auto", css="max-height: {}; overflow-y: {};")}>'
@@ -547,9 +548,9 @@ class ManyToManySelect(LiveComponent):
             disabled = "disabled" if self.disabled else ""
             html += f"""
             <div class="form-check">
-                <input type="checkbox" class="form-check-input" id="{conditional_escape(self.name)}_{conditional_escape(opt["value"])}"
-                       {checked} {disabled} dj-click="toggle({conditional_escape(opt["value"])})" data-component-id="{conditional_escape(self.component_id)}">
-                <label class="form-check-label" for="{conditional_escape(self.name)}_{conditional_escape(opt["value"])}">{conditional_escape(opt["label"])}</label>
+                <input type="checkbox" class="form-check-input" id="{attr_text(self.name)}_{attr_text(opt["value"])}"
+                       {checked} {disabled} dj-click="toggle({attr_text(opt["value"])})" data-component-id="{attr_text(self.component_id)}">
+                <label class="form-check-label" for="{attr_text(self.name)}_{attr_text(opt["value"])}">{conditional_escape(opt["label"])}</label>
             </div>
             """
 
@@ -575,14 +576,14 @@ class ManyToManySelect(LiveComponent):
         """Render as Tailwind checkboxes."""
         options = self.get_options()
 
-        html = f'<div class="mb-4" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="mb-4" id="{attr_text(self.component_id)}">'
 
         if self.label:
             required_mark = ' <span class="text-red-500">*</span>' if self.required else ""
             html += f'<label class="block text-sm font-medium text-gray-700 mb-1">{conditional_escape(self.label)}{required_mark}</label>'
 
         if self.searchable:
-            html += f'<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm text-sm mb-2" placeholder="Search..." value="{conditional_escape(self.search_query)}" dj-input="search(value)" data-component-id="{conditional_escape(self.component_id)}">'
+            html += f'<input type="text" class="block w-full rounded-md border-gray-300 shadow-sm text-sm mb-2" placeholder="Search..." value="{attr_text(self.search_query)}" dj-input="search(value)" data-component-id="{attr_text(self.component_id)}">'
 
         html += '<div class="border border-gray-300 rounded-md p-2 max-h-48 overflow-y-auto">'
 
@@ -592,8 +593,8 @@ class ManyToManySelect(LiveComponent):
             html += f"""
             <div class="flex items-center mb-1">
                 <input type="checkbox" class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                       id="{conditional_escape(self.name)}_{conditional_escape(opt["value"])}" {checked} {disabled} dj-click="toggle({conditional_escape(opt["value"])})" data-component-id="{conditional_escape(self.component_id)}">
-                <label class="ml-2 text-sm text-gray-700" for="{conditional_escape(self.name)}_{conditional_escape(opt["value"])}">{conditional_escape(opt["label"])}</label>
+                       id="{attr_text(self.name)}_{attr_text(opt["value"])}" {checked} {disabled} dj-click="toggle({attr_text(opt["value"])})" data-component-id="{attr_text(self.component_id)}">
+                <label class="ml-2 text-sm text-gray-700" for="{attr_text(self.name)}_{attr_text(opt["value"])}">{conditional_escape(opt["label"])}</label>
             </div>
             """
 
@@ -616,13 +617,13 @@ class ManyToManySelect(LiveComponent):
     def _render_select_bootstrap(self) -> str:
         """Render as Bootstrap 5 multi-select."""
         options = self.get_options()
-        select_id = f"id_{conditional_escape(self.name)}"
+        select_id = f"id_{self.name}"  # text; escaped once where written (#4009)
 
-        html = f'<div class="mb-3" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="mb-3" id="{attr_text(self.component_id)}">'
 
         if self.label:
             required_mark = ' <span class="text-danger">*</span>' if self.required else ""
-            html += f'<label for="{conditional_escape(select_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
+            html += f'<label for="{attr_text(select_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
 
         select_classes = ["form-select"]
         if self.validation_state == "invalid":
@@ -632,11 +633,11 @@ class ManyToManySelect(LiveComponent):
 
         disabled = "disabled" if self.disabled else ""
 
-        html += f'<select class="{" ".join(select_classes)}" id="{conditional_escape(select_id)}" name="{conditional_escape(self.name)}" multiple size="5" {disabled}>'
+        html += f'<select class="{" ".join(select_classes)}" id="{attr_text(select_id)}" name="{attr_text(self.name)}" multiple size="5" {disabled}>'
 
         for opt in options:
             selected = "selected" if opt["selected"] else ""
-            html += f'<option value="{conditional_escape(opt["value"])}" {selected} dj-click="toggle({conditional_escape(opt["value"])})" data-component-id="{conditional_escape(self.component_id)}">{conditional_escape(opt["label"])}</option>'
+            html += f'<option value="{attr_text(opt["value"])}" {selected} dj-click="toggle({attr_text(opt["value"])})" data-component-id="{attr_text(self.component_id)}">{conditional_escape(opt["label"])}</option>'
 
         html += "</select>"
 
@@ -657,13 +658,13 @@ class ManyToManySelect(LiveComponent):
     def _render_select_tailwind(self) -> str:
         """Render as Tailwind multi-select."""
         options = self.get_options()
-        select_id = f"id_{conditional_escape(self.name)}"
+        select_id = f"id_{self.name}"  # text; escaped once where written (#4009)
 
-        html = f'<div class="mb-4" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="mb-4" id="{attr_text(self.component_id)}">'
 
         if self.label:
             required_mark = ' <span class="text-red-500">*</span>' if self.required else ""
-            html += f'<label for="{conditional_escape(select_id)}" class="block text-sm font-medium text-gray-700 mb-1">{conditional_escape(self.label)}{required_mark}</label>'
+            html += f'<label for="{attr_text(select_id)}" class="block text-sm font-medium text-gray-700 mb-1">{conditional_escape(self.label)}{required_mark}</label>'
 
         select_classes = ["block", "w-full", "rounded-md", "border-gray-300", "shadow-sm"]
         if self.validation_state == "invalid":
@@ -673,11 +674,11 @@ class ManyToManySelect(LiveComponent):
 
         disabled = "disabled" if self.disabled else ""
 
-        html += f'<select class="{" ".join(select_classes)}" id="{conditional_escape(select_id)}" name="{conditional_escape(self.name)}" multiple size="5" {disabled}>'
+        html += f'<select class="{" ".join(select_classes)}" id="{attr_text(select_id)}" name="{attr_text(self.name)}" multiple size="5" {disabled}>'
 
         for opt in options:
             selected = "selected" if opt["selected"] else ""
-            html += f'<option value="{conditional_escape(opt["value"])}" {selected} dj-click="toggle({conditional_escape(opt["value"])})" data-component-id="{conditional_escape(self.component_id)}">{conditional_escape(opt["label"])}</option>'
+            html += f'<option value="{attr_text(opt["value"])}" {selected} dj-click="toggle({attr_text(opt["value"])})" data-component-id="{attr_text(self.component_id)}">{conditional_escape(opt["label"])}</option>'
 
         html += "</select>"
 

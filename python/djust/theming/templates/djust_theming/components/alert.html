@@ -1,6 +1,6 @@
-<div class="{{ css_prefix }}alert {{ css_prefix }}alert-{{ variant }} {% if attrs.class %}{{ attrs.class }}{% endif %}"{% if csp_strict and dismissible %} data-theme-dismiss-root{% endif %}
+<div class="{{ css_prefix }}alert {{ css_prefix }}alert-{{ variant|force_escape }} {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"{% if csp_strict and dismissible %} data-theme-dismiss-root{% endif %}
      {% if role == "status" %}role="status"{% elif role == "log" %}role="log"{% else %}role="alert"{% endif %}
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
     {% if slot_icon %}
     <div class="{{ css_prefix }}alert-icon">
         {{ slot_icon }}

@@ -1,5 +1,5 @@
-<div class="{{ css_prefix }}card {{ css_prefix }}card-decorated {% if attrs.class %}{{ attrs.class }}{% endif %}"
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+<div class="{{ css_prefix }}card {{ css_prefix }}card-decorated {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
     <svg class="{{ css_prefix }}card-corner {{ css_prefix }}card-corner-tl" aria-hidden="true" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="currentColor" opacity="0.3"/></svg>
     <svg class="{{ css_prefix }}card-corner {{ css_prefix }}card-corner-tr" aria-hidden="true" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="currentColor" opacity="0.3"/></svg>
     <svg class="{{ css_prefix }}card-corner {{ css_prefix }}card-corner-bl" aria-hidden="true" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="currentColor" opacity="0.3"/></svg>

@@ -201,21 +201,21 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (CH, "HeatmapNode.render"): S(
         1,
-        "cell_size int(); cell colours come from interpolate_color (a #rrggbb string built from ints); axis labels and title conditional_escape'd",
+        "cell_size int(); cell colours come from interpolate_color (a #rrggbb string built from ints); axis labels and title escaped (attr_text / escape in an attribute, conditional_escape in text: #4009)",
         (UT, 'return f"#{r:02x}{g:02x}{b:02x}"'),
         (CH, "cell_size = int(cell_size)"),
         (CH, "conditional_escape(str(lbl))"),
     ),
     (FM, "slider"): S(
         1,
-        "min/max/step/value/value_end are int()'d; name, label, event and class conditional_escape'd",
+        "min/max/step/value/value_end are int()'d; name, label, event and class escaped (attr_text / escape in an attribute, conditional_escape in text: #4009)",
         (FM, "value = int(value)"),
-        (FM, "e_name = conditional_escape(name)"),
+        (FM, "e_name = attr_text(name)"),
     ),
     (FM, "render_confirm_dialog"): S(
         1,
-        "every kwarg is conditional_escape'd; `body` is the already-rendered tag body (Django nodelist.render, Rust block handler's rendered children), autoescaped by the engine",
-        (FM, "e_confirm_event = conditional_escape(confirm_event)"),
+        "every kwarg is escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); `body` is the already-rendered tag body (Django nodelist.render, Rust block handler's rendered children), autoescaped by the engine",
+        (FM, "e_confirm_event = attr_text(confirm_event)"),
         (
             FM,
             'body = self.nodelist.render(context) if self.nodelist is not None else ""',
@@ -224,9 +224,9 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (DC, "render_filter_bar"): S(
         1,
-        "bar id, class, event and clear_event, every control's name, label, option value and label, date and search value and placeholder are conditional_escape'd; debounce is int(); `extra_html` is whatever else the template put in the bar, the Rust block handler's already-rendered children (autoescaped by the engine) with the filter comments removed, and empty for the Django tag",
-        (DC, "e_event = conditional_escape(event)"),
-        (DC, "e_clear = conditional_escape(clear_event)"),
+        "bar id, class, event and clear_event, every control's name, label, option value and label, date and search value and placeholder are escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); debounce is int(); `extra_html` is whatever else the template put in the bar, the Rust block handler's already-rendered children (autoescaped by the engine) with the filter comments removed, and empty for the Django tag",
+        (DC, "e_event = attr_text(event)"),
+        (DC, "e_clear = attr_text(clear_event)"),
         (DC, 'dj-debounce="{int(debounce)}"'),
         (
             PKG + "components/rust_handlers.py",
@@ -236,8 +236,8 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (FM, "render_popconfirm"): S(
         1,
-        "every kwarg is conditional_escape'd; `content` is the rendered tag body (nodelist.render / the Rust block handler's children)",
-        (FM, "e_cancel_event = conditional_escape(cancel_event)"),
+        "every kwarg is escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); `content` is the rendered tag body (nodelist.render / the Rust block handler's children)",
+        (FM, "e_cancel_event = attr_text(cancel_event)"),
         (
             FM,
             "return render_popconfirm(kw, self.nodelist.render(context))",
@@ -246,13 +246,13 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (FM, "model_table"): S(
         1,
-        "every row value is conditional_escape(str(v))'d before the table is built; page and total_pages int(); event names and labels conditional_escape'd",
+        "every row value is conditional_escape(str(v))'d before the table is built; page and total_pages int(); event names and labels escaped (attr_text / escape in an attribute, conditional_escape in text: #4009)",
         (FM, 'safe_row[k] = conditional_escape(str(v)) if v is not None else ""'),
         (FM, "total_pages = int(total_pages)"),
     ),
     (ADV, "PromptEditorNode.render"): S(
         1,
-        "the template text is conditional_escape'd FIRST; {{var}} tokens are \\w+ and are replaced by conditional_escape'd values inside <mark>; rows int()",
+        "the template text is escaped (attr_text / escape in an attribute, conditional_escape in text: #4009) FIRST; {{var}} tokens are \\w+ and are replaced by escaped values inside <mark>; rows int()",
         (ADV, "preview_text = conditional_escape(str(tmpl))"),
         (ADV, "e_v = conditional_escape(v)"),
     ),
@@ -268,7 +268,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (DC, "otp_input"): S(
         1,
-        "uid is _render_id(...): a constant prefix, a hex digest of the arguments and an integer occurrence suffix; name, label and event conditional_escape'd; digits int() in 1..12",
+        "uid is _render_id(...): a constant prefix, a hex digest of the arguments and an integer occurrence suffix; name, label and event escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); digits int() in 1..12",
         (DC, 'uid = _render_id("otp", name, digits, event, label, disabled)'),
         (DC, 'return base if n == 1 else f"{base}-{n}"', "_render_id"),
         (DC, 'return f"{prefix}-{digest[:6]}"', "_stable_id"),
@@ -276,40 +276,40 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (DC, "tag_input"): S(
         1,
-        "uid is _render_id(...): a constant prefix, a hex digest of the arguments and an integer occurrence suffix; name, label, placeholder, event and each tag conditional_escape'd / attr_text'd",
+        "uid is _render_id(...): a constant prefix, a hex digest of the arguments and an integer occurrence suffix; name, label, placeholder, event and each tag escaped (attr_text / escape in an attribute, conditional_escape in text: #4009) / attr_text'd",
         (DC, 'uid = _render_id("ti", name, event, placeholder, label, disabled)'),
         (DC, 'return base if n == 1 else f"{base}-{n}"', "_render_id"),
         (DC, 'return f"{prefix}-{digest[:6]}"', "_stable_id"),
     ),
     (DC, "render_modal"): S(
         2,
-        "title, close event and ids conditional_escape'd; size from a four-key dict, role from a two-way test, heading level int() in 2..6; `content` is the rendered tag body",
-        (DC, 'modal_id = conditional_escape(kw.get("id", "modal"))'),
+        "title, close event and ids escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); size from a four-key dict, role from a two-way test, heading level int() in 2..6; `content` is the rendered tag body",
+        (DC, 'modal_id = attr_text(raw_id)'),
         (DC, "if not 2 <= level <= 6:"),
         (DC, 'content = str(content).replace(_MODAL_DESCRIPTION_MARKER, "")'),
         (DC, "return render_modal(kw, self.nodelist.render(context))", "ModalNode.render"),
     ),
     (DC, "TooltipNode.render"): S(
         1,
-        "text, position and component_id conditional_escape'd; tip_id is the escaped component id or a counter; content is the rendered body",
-        (DC, 'tip_id = f"{conditional_escape(component_id)}-tip"'),
+        "text, position and component_id escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); tip_id is the escaped component id or a counter; content is the rendered body",
+        (DC, 'tip_id = f"{attr_text(component_id)}-tip"'),
         (DC, "_tooltip_id_counter = itertools.count(1)", "<module>"),
     ),
     (DC, "code_block"): S(
         1,
-        "theme must match [A-Za-z0-9_-]+ and is escaped; language, filename and code conditional_escape'd; the stylesheet tag is asset_tags (format_html); the hljs JSON is conditional_escape'd into data-hljs",
+        "theme must match [A-Za-z0-9_-]+ and is escaped; language, filename and code escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); the stylesheet tag is asset_tags (format_html); the hljs JSON is escaped into data-hljs",
         (DC, "safe_theme = theme if _re.match("),
-        (DC, 'data-hljs="{conditional_escape(hljs_json)}"'),
+        (DC, 'data-hljs="{attr_text(hljs_json)}"'),
     ),
     (DC, "render_popover"): S(
         1,
-        "trigger, placement, title and ids conditional_escape'd; `content` is the rendered tag body",
-        (DC, "e_placement = conditional_escape(placement)"),
+        "trigger, placement, title and ids escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); `content` is the rendered tag body",
+        (DC, "e_placement = attr_text(placement)"),
         (DC, "return render_popover(kw, self.nodelist.render(context))", "PopoverNode.render"),
     ),
     (DC, "render_collapsible"): S(
         1,
-        "trigger, event and ids conditional_escape'd; `content` is the rendered tag body",
+        "trigger, event and ids escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); `content` is the rendered tag body",
         (
             DC,
             "return render_collapsible(kw, self.nodelist.render(context))",
@@ -319,7 +319,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (DC, "render_context_menu"): S(
         1,
-        "label and id conditional_escape'd; `content` is the rendered tag body",
+        "label and id escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); `content` is the rendered tag body",
         (
             DC,
             "return render_context_menu(kw, self.nodelist.render(context))",
@@ -329,7 +329,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (DC, "date_picker"): S(
         1,
-        "year and month are ints from calendar_month (int() of each, bounded, else today's; month_name is calendar's, #4134); the selected, range, label, error and event values conditional_escape'd; date_str is built from ints",
+        "year and month are ints from calendar_month (int() of each, bounded, else today's; month_name is calendar's, #4134); the selected, range, label, error and event values escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); date_str is built from ints",
         (DC, "year, month = calendar_month(year, month, today)"),
         (PKG + "components/utils.py", "number = int(value)", "calendar_month.whole"),
         (DC, "e_selected = conditional_escape(selected)"),
@@ -346,23 +346,23 @@ AUDITED: dict[tuple[str, str], Audit] = {
             "def _rich_select_option_html(opt: Any, is_display: Any = False) -> Any:",
             "_rich_select_option_html",
         ),
-        (DC, 'uid = conditional_escape(id or f"rs-{name}")'),
+        (DC, 'uid = attr_text(id or f"rs-{name}")'),
     ),
     (DC, "render_theme_toggle"): S(
         1,
-        "mode, icon and label come from the constant _THEME_TOGGLE_MODES; current, event, class and id conditional_escape'd; the icons are render_icon output",
+        "mode, icon and label come from the constant _THEME_TOGGLE_MODES; current, event, class and id escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); the icons are render_icon output",
         (DC, "_THEME_TOGGLE_MODES = (", "<module>"),
-        (DC, "e_current = conditional_escape(current)"),
+        (DC, "e_current = attr_text(current)"),
     ),
     (DC, "PageHeaderNode.render"): S(
         1,
-        "title, subtitle, description and class conditional_escape'd; the breadcrumb and actions slots are rendered nodelists",
+        "title, subtitle, description and class escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); the breadcrumb and actions slots are rendered nodelists",
         (DC, "e_title = conditional_escape(str(title))"),
         (DC, "breadcrumb_content = self.nodelist.render(context)"),
     ),
     (DC, "SidebarNode.render"): S(
         1,
-        "title, class, ids and events conditional_escape'd; items come from _render_item (labels escaped, hrefs through safe_url)",
+        "title, class, ids and events escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); items come from _render_item (labels escaped, hrefs through safe_url)",
         (DC, 'menu_html = f\'<ul class="dj-sidebar__menu">{"".join(parts)}</ul>\''),
         (
             DC,
@@ -373,7 +373,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (DC, "render_dropdown_menu"): S(
         1,
-        "label, event, class and align conditional_escape'd; items come from render_menu_item (labels escaped, href through url_attr); a block body is the rendered tag body",
+        "label, event, class and align escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); items come from render_menu_item (labels escaped, href through url_attr); a block body is the rendered tag body",
         (DC, "e_label = conditional_escape(str(label))"),
         (
             DC,
@@ -403,7 +403,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (RH, "DataTableHandler.render"): S(
         1,
-        "everything the guard cannot see through is the row URL: _row_href(row, key) is str(url_attr(_row_text(row, key), honor_safe=False)) (the one URL rule every component uses, #3887/#3894), placed only inside the quoted data-href / href of a row or a link cell; the guard judges an escaper's output returned through a helper again where it lands and does not follow str() of it. The nested _dbtn(val, label) (density toggle) is proved since #3845 (its only call sites pass literals); the rest of the table (cells, toolbar, search, pagination, footer) is proved by the guard: every kw value is conditional_escape'd or int()-coerced where it is read, the footer aggregates are sum/min/max/round/len of float() values",
+        "everything the guard cannot see through is the row URL: _row_href(row, key) is str(url_attr(_row_text(row, key), honor_safe=False)) (the one URL rule every component uses, #3887/#3894), placed only inside the quoted data-href / href of a row or a link cell; the guard judges an escaper's output returned through a helper again where it lands and does not follow str() of it. The nested _dbtn(val, label) (density toggle) is proved since #3845 (its only call sites pass literals); the rest of the table (cells, toolbar, search, pagination, footer) is proved by the guard: every kw value is escaped (attr_text / escape in an attribute, conditional_escape in text: #4009) or int()-coerced where it is read, the footer aggregates are sum/min/max/round/len of float() values",
         (RH, "return str(url_attr(_row_text(row, key), honor_safe=False))", "_row_href"),
         (
             RH,
