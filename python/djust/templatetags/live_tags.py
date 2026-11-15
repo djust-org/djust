@@ -2896,3 +2896,30 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     return mark_safe(
         '<div dj-view data-djust-embedded="' + escaped_id + '">' + rendered_stamped + "</div>"
     )
+
+
+#: ``{% djust_markdown %}`` written with no operand (a source that resolves to ``None`` is not:
+#: it is the empty document, as natively).
+_NO_SOURCE = object()
+
+
+@register.simple_tag
+def djust_markdown(source: Any = _NO_SOURCE, *args: Any, **options: Any) -> Any:
+    """``{% djust_markdown <expr> [provisional=… tables=… strikethrough=… task_lists=…] %}``
+    under Django's template engine (#3994).
+
+    The tag was registered for djust's own engine only, so a template rendered through Django's
+    backend (``{% load live_tags %}``) could not parse it. Both registrations call
+    :func:`djust.template_tags.markdown.djust_markdown_html`, the one sanitising renderer with the
+    one set of options, so the two engines write the same bytes for the same Markdown.
+    """
+    from ..template_tags.markdown import djust_markdown_html, warn_no_source
+
+    if source is _NO_SOURCE:
+        return warn_no_source()
+    # The source as the native handler is handed it, so the bytes are the same: the engine passes
+    # the operand as text (``None`` is ``"None"``, as ``{{ }}`` writes it), and the handler's
+    # ``_resolve_arg`` strips that text unless it is marked safe.
+    if not hasattr(source, "__html__"):
+        source = str(source).strip()
+    return djust_markdown_html(source, options, args)
