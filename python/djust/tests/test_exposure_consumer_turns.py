@@ -114,6 +114,8 @@ class _PushPaths:
             }
         }
         self.offloaded = 0
+        #: For each server push the socket received: was the session on the pool?
+        self.pushes_on_pool: list = []
 
 
 @pytest.fixture(params=[None, 2], ids=["stock", "pool"])
@@ -131,6 +133,15 @@ def pool(request, monkeypatch):
         return await real(self, *args, **kwargs)
 
     monkeypatch.setattr(LiveViewConsumer, "_run_server_push_turn_offloaded", offloaded)
+    real_push = LiveViewConsumer.server_push
+
+    async def server_push(self, *args, **kwargs):
+        from djust.worker_pool import offload_enabled
+
+        paths.pushes_on_pool.append(offload_enabled())
+        return await real_push(self, *args, **kwargs)
+
+    monkeypatch.setattr(LiveViewConsumer, "server_push", server_push)
     return paths
 
 
@@ -308,7 +319,9 @@ async def test_push_to_a_view_with_async_check_permissions(pool, allowed):
         finally:
             AsyncCheckTurnView.allowed = True
             await socket.disconnect()
-    assert pool.offloaded == (0 if pool.size else 0), pool.offloaded
+    # The pool was on for the pool case, and still no push took the one-hop turn.
+    assert pool.pushes_on_pool == [bool(pool.size)], pool.pushes_on_pool
+    assert pool.offloaded == 0, pool.offloaded
 
 
 class LabelTurnView(TurnView):
