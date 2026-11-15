@@ -145,3 +145,19 @@ def test_reset_404_when_debug_off():
     rf = observability_request_factory()
     resp = reset_view_state(rf.post("/?session_id=s"))
     assert resp.status_code == 404
+
+
+@override_settings(DEBUG=True)
+def test_reset_skips_a_dict_key_that_is_not_a_string():
+    """#4143: a non-string ``__dict__`` key is not an attribute; reset and the
+    assigns it reports both leave it alone instead of raising."""
+    view = _FakeView()
+    view.counter = 7
+    vars(view)[1] = "one"
+    register_view("s", view)
+
+    rf = observability_request_factory()
+    resp = reset_view_state(rf.post("/?session_id=s"))
+    assert resp.status_code == 200, resp.content
+    assert json.loads(resp.content)["assigns_after_reset"]["counter"] == 0
+    assert vars(view)[1] == "one"

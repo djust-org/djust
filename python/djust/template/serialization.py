@@ -60,6 +60,49 @@ def _namedtuple_shape_is_buildable(name: Any, fields: Any) -> bool:
     return _namedtuple_shape_is_buildable_cached(name, tuple(fields))
 
 
+def rebuild_namedtuple(value: Any, items: List[Any]) -> Any:
+    """``value``'s namedtuple class rebuilt over ``items`` (its members, already converted), or
+    ``None`` when ``value`` is not a namedtuple the engine can hold (#3849, #4141).
+
+    Shared by :func:`serialize_value` (``for_render=True``) and
+    ``djust.serialization.normalize_django_value``, the two render-path converters, so a
+    namedtuple keeps its field names on both.
+    """
+    fields = getattr(value, "_fields", None)
+    if fields is None or not _namedtuple_shape_is_buildable(type(value).__name__, fields):
+        return None
+    # A namedtuple keeps its type (#3849): the engine holds it as ``Value::NamedTuple``
+    # (name + fields + items) and prints ``P(x=1, y=2)`` as Django does, where a plain
+    # ``tuple(items)`` printed ``(1, 2)``. Rebuilt POSITIONALLY: ``type(value)(items)``
+    # would wrap the list in the first field.
+    #
+    # This runs the class's own ``__new__`` at render time, on values that are already
+    # serialized (a lazy string is a ``str`` by now), so ANY exception it raises means
+    # "this value cannot be rebuilt here": it degrades to the plain container it was before
+    # #3849, never to a failed render. (``_protect_sidecar_tree`` in
+    # ``python/djust/serialization.py`` rebuilds the same way and catches only
+    # ``TypeError``; not changed here.)
+    try:
+        return type(value)(*items)
+    except Exception as exc:  # noqa: BLE001 - see above: the user's __new__ is arbitrary
+        # Through ``log_failure`` (ADR-038): the user's ``__new__`` is arbitrary code, so
+        # its exception text may carry undeclared state and is logged only where
+        # diagnostics are allowed (``test_log_exposure_pin`` pins this). Imported here,
+        # not at module level: the template backend must not load the exposure modules
+        # at import time (``test_lazy_package_init_2559`` pins the allowlist).
+        from djust._exposure_diagnostics import log_failure
+
+        log_failure(
+            logger,
+            exc,
+            "namedtuple %s could not be rebuilt for rendering, using a plain tuple",
+            type(value).__name__,
+            level="debug",
+            traceback=True,
+        )
+        return None
+
+
 def _spells_itself(value: Any) -> bool:
     """Is ``value`` a ``dict`` / ``list`` subclass that renders itself as markup? (#3755)
 
@@ -228,38 +271,8 @@ def serialize_value(
         items = [serialize_value(item, for_render=for_render) for item in value]
         if not (for_render and isinstance(value, tuple)):
             return items
-        fields = getattr(value, "_fields", None)
-        if fields is not None and _namedtuple_shape_is_buildable(type(value).__name__, fields):
-            # A namedtuple keeps its type (#3849): the engine holds it as ``Value::NamedTuple``
-            # (name + fields + items) and prints ``P(x=1, y=2)`` as Django does, where a plain
-            # ``tuple(items)`` printed ``(1, 2)``. Rebuilt POSITIONALLY: ``type(value)(items)``
-            # would wrap the list in the first field.
-            #
-            # This runs the class's own ``__new__`` at render time, on values that are already
-            # serialized (a lazy string is a ``str`` by now), so ANY exception it raises means
-            # "this value cannot be rebuilt here": it degrades to the plain tuple it was before
-            # #3849, never to a failed render. (``_protect_sidecar_tree`` in
-            # ``python/djust/serialization.py`` rebuilds the same way and catches only
-            # ``TypeError``; not changed here.)
-            try:
-                return type(value)(*items)
-            except Exception as exc:  # noqa: BLE001 - see above: the user's __new__ is arbitrary
-                # Through ``log_failure`` (ADR-038): the user's ``__new__`` is arbitrary code, so
-                # its exception text may carry undeclared state and is logged only where
-                # diagnostics are allowed (``test_log_exposure_pin`` pins this). Imported here,
-                # not at module level: the template backend must not load the exposure modules
-                # at import time (``test_lazy_package_init_2559`` pins the allowlist).
-                from djust._exposure_diagnostics import log_failure
-
-                log_failure(
-                    logger,
-                    exc,
-                    "namedtuple %s could not be rebuilt for rendering, using a plain tuple",
-                    type(value).__name__,
-                    level="debug",
-                    traceback=True,
-                )
-        return tuple(items)
+        rebuilt = rebuild_namedtuple(value, items)
+        return rebuilt if rebuilt is not None else tuple(items)
 
     # Pass through other types (str, int, float, bool, etc.)
     return cast(JSONValue, value)

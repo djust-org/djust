@@ -802,6 +802,7 @@ def _explicit_self_json_assignments(tree):
     }
 
 
+@pytest.mark.pr_tier
 class TestTheDecodeSiteInventory:
     def test_the_decode_sites_are_exactly_the_expected_set(self) -> None:
         """A SET, not a floor (#1125). A new restore path that forgets the

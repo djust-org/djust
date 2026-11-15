@@ -873,6 +873,7 @@ def _hook_references() -> Dict[Tuple[str, str, str], Optional[Tuple[set, bool]]]
     return found
 
 
+@pytest.mark.pr_tier
 def test_the_set_of_hook_references_is_exactly_the_audited_one():
     found = set(_hook_references())
     expected = set(EXPECTED_HOOK_REFERENCES)

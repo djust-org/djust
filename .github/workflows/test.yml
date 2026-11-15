@@ -1487,6 +1487,14 @@ jobs:
           # these thresholds came to be unenforced everywhere.
           uv run --no-sync python -m pytest tests/benchmarks/ --benchmark-only -q
 
+      # `--benchmark-only` skips every test that does not use the benchmark
+      # fixture, so the #3997 turn-cost table never ran here, and with it its
+      # check that each exposure setting answers with legacy's frames. Its
+      # smoke form (3 interleaved rounds, about a second) runs that check (#4143).
+      - name: Explicit turn-cost smoke (frame equivalence)
+        run: |
+          uv run --no-sync python -m pytest tests/benchmarks/test_explicit_turn_cost_3997.py -q
+
   # Django's own template_tests against DjustTemplateBackend — the v1.2.0
   # conformance scoreboard (#2517). Clones django/django at the installed
   # tag, routes every Engine the suite builds through djust's Rust engine,

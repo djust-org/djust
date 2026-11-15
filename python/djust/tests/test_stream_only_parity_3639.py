@@ -402,6 +402,7 @@ class TestSnapshotContract:
         assert "_stream_epoch" not in view.get_state()
 
 
+@pytest.mark.pr_tier
 class TestCallSiteInventory:
     """A new "did the handler change anything" decision has to use
     ``_snapshot_assigns`` to see streams. This is the exact list of call sites,

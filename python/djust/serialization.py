@@ -4674,9 +4674,25 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
         }
 
     if isinstance(value, (list, tuple)):
-        return [
+        items = [
             normalize_django_value(item, _depth, state_roundtrip=state_roundtrip) for item in value
         ]
+        kind = type(value)
+        if kind is list or kind is tuple or state_roundtrip:
+            return items
+        # A namedtuple keeps its type, so its members keep their field names on
+        # the render path (``{{ cols.0.key }}``, a ``{% data_table %}`` column):
+        # the engine reads it as Django does, by field and by index (#4141). Its
+        # members are normalized like a list's. The one rebuild the template
+        # serializer also uses (#3849); the session boundary
+        # (``state_roundtrip``) cannot take it and keeps the list.
+        if isinstance(value, tuple):
+            from .template.serialization import rebuild_namedtuple
+
+            rebuilt = rebuild_namedtuple(value, items)
+            if rebuilt is not None:
+                return rebuilt
+        return items
 
     # set / frozenset -> the value ITSELF (#2477), except at the state-roundtrip
     # boundary, where it takes the sorted list #626 gave it.

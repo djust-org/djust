@@ -414,6 +414,43 @@ class TestTemplatePathMatchesRealDjango:
 # ---------------------------------------------------------------------------
 
 
+class TestDataTableDecimalCell:
+    """A ``Decimal`` in a ``data_table`` cell is its exact text on both engines (#3895).
+
+    ``components/utils.table_row`` reads a model-instance row through ``normalize_django_value``
+    WITHOUT ``state_roundtrip`` (it is in ``EXPECTED_TEMPLATE_BOUND_MODULES``): the dict it makes
+    is what both engines draw the cells from. With the flag, a ``DecimalField`` would arrive as
+    ``{"__djust_decimal__": "1500.00"}`` and the Django-engine cell would print that dict. A
+    dict row never reaches the normalizer and is pinned alongside, as the reference.
+    """
+
+    SRC = "{% data_table rows=rows columns=cols %}"
+
+    @staticmethod
+    def _cells(html: str) -> list[str]:
+        import re
+
+        return re.findall(r"<td[^>]*>\s*([^<]*?)\s*</td>", html)
+
+    def _both(self, rows: Any, cols: Any) -> tuple[list[str], list[str]]:
+        from djust.tests.test_component_dj_attr_parity_3669 import _django, _rust as _native
+
+        ctx = {"rows": rows, "cols": cols}
+        return self._cells(_django(self.SRC, ctx)), self._cells(_native(self.SRC, ctx))
+
+    @pytest.mark.parametrize("value", ["1500.00", "0.10", "1E+2", "-3.250"])
+    def test_a_dict_row_cell(self, value: str) -> None:
+        cols = [{"key": "rent", "label": "Rent"}]
+        assert self._both([{"id": 1, "rent": Decimal(value)}], cols) == ([value], [value])
+
+    def test_a_model_row_cell(self) -> None:
+        from djust_rentals.models import Property
+
+        row = Property(id=7, monthly_rent=Decimal("1500.00"), bathrooms=Decimal("1.5"))
+        cols = [{"key": "monthly_rent", "label": "Rent"}, {"key": "bathrooms", "label": "Baths"}]
+        assert self._both([row], cols) == (["1500.00", "1.5"], ["1500.00", "1.5"])
+
+
 class TestJitFallbackCarriesTheDecimal:
     """`mixins/jit.py` calls `normalize_django_value` at seven sites. Its
     fallbacks are ordinary — and a model with a `@property` in the template is
@@ -561,6 +598,9 @@ EXPECTED_TEMPLATE_BOUND_MODULES = {
     # #2530: a template_name LiveComponent rendered on its own RustLiveView —
     # the value feeds the template context, so no state_roundtrip flag.
     "components/base.py",
+    # #3895: ``table_row`` reads a model-instance ``data_table`` row as the dict both engines
+    # draw its cells from — template-bound, so the Decimal stays exact (no flag).
+    "components/utils.py",
     "mixins/context.py",
     "mixins/jit.py",
     "mixins/request.py",
@@ -620,6 +660,7 @@ def _normalizer_calls() -> list[tuple[str, str, str]]:
     return found
 
 
+@pytest.mark.pr_tier
 class TestBoundaryInventory:
     """Grep the SINK, not the callers you expect."""
 
