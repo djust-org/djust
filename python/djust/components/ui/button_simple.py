@@ -9,6 +9,7 @@ For interactive buttons with event handlers, use them in LiveView event handlers
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from typing import Any
 
 
@@ -140,9 +141,9 @@ class Button(Component):
         size_class = size_map.get(self.size, "")
 
         if self.outline:
-            variant_class = f"btn-outline-{conditional_escape(self.variant)}"
+            variant_class = f"btn-outline-{attr_text(self.variant)}"
         else:
-            variant_class = f"btn-{conditional_escape(self.variant)}"
+            variant_class = f"btn-{attr_text(self.variant)}"
 
         disabled_attr = " disabled" if self.disabled else ""
 
@@ -190,8 +191,8 @@ class Button(Component):
 
     def _render_plain(self) -> str:
         """Render plain HTML button"""
-        size_class = f" button-{conditional_escape(self.size)}" if self.size != "md" else ""
+        size_class = f" button-{attr_text(self.size)}" if self.size != "md" else ""
         style_prefix = "button-outline-" if self.outline else "button-"
         disabled_attr = " disabled" if self.disabled else ""
 
-        return f'<button type="button" class="button {style_prefix}{conditional_escape(self.variant)}{size_class}"{disabled_attr}>{conditional_escape(self.text)}</button>'
+        return f'<button type="button" class="button {style_prefix}{attr_text(self.variant)}{size_class}"{disabled_attr}>{conditional_escape(self.text)}</button>'

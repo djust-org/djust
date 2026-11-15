@@ -31,6 +31,7 @@ Performance:
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from typing import Any
 
 from djust._rust import RustSpinner
@@ -101,11 +102,9 @@ class Spinner(Component):
 
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 spinner"""
-        size_class = (
-            f" spinner-{conditional_escape(self.animation)}-sm" if self.size == "sm" else ""
-        )
+        size_class = f" spinner-{attr_text(self.animation)}-sm" if self.size == "sm" else ""
 
-        return f"""<div class="spinner-{conditional_escape(self.animation)} text-{conditional_escape(self.variant)}{size_class}" role="status">
+        return f"""<div class="spinner-{attr_text(self.animation)} text-{attr_text(self.variant)}{size_class}" role="status">
     <span class="visually-hidden">{conditional_escape(self.sr_text)}</span>
 </div>"""
 
@@ -145,6 +144,6 @@ class Spinner(Component):
 
     def _render_plain(self) -> str:
         """Render plain HTML spinner"""
-        return f"""<div class="spinner spinner-{conditional_escape(self.animation)} spinner-{conditional_escape(self.size)} spinner-{conditional_escape(self.variant)}" role="status">
+        return f"""<div class="spinner spinner-{attr_text(self.animation)} spinner-{attr_text(self.size)} spinner-{attr_text(self.variant)}" role="status">
     <span class="sr-only">{conditional_escape(self.sr_text)}</span>
 </div>"""

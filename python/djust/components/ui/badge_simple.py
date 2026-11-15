@@ -9,6 +9,7 @@ Use BadgeComponent for interactive badges with state.
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from typing import Any
 
 
@@ -172,7 +173,7 @@ class Badge(Component):
 
     def _render_plain(self) -> str:
         """Render plain HTML badge"""
-        size_class = f" badge-{conditional_escape(self.size)}" if self.size != "md" else ""
+        size_class = f" badge-{attr_text(self.size)}" if self.size != "md" else ""
         pill_class = " badge-pill" if self.pill else ""
 
-        return f'<span class="badge badge-{conditional_escape(self.variant)}{size_class}{pill_class}">{conditional_escape(self.text)}</span>'
+        return f'<span class="badge badge-{attr_text(self.variant)}{size_class}{pill_class}">{conditional_escape(self.text)}</span>'

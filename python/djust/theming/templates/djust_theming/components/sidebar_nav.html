@@ -1,8 +1,8 @@
-<nav class="{{ css_prefix }}sidebar {% if attrs.class %}{{ attrs.class }}{% endif %}"
+<nav class="{{ css_prefix }}sidebar {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
      role="navigation"
      aria-label="Sidebar"
      data-theme-sidebar-collapse
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
     {% if slot_header %}
     <div class="{{ css_prefix }}sidebar-header">{{ slot_header }}</div>
     {% endif %}

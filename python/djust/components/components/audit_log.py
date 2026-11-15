@@ -2,7 +2,8 @@
 
 import html
 
-from django.utils.html import conditional_escape
+
+from djust.components.utils import attr_text
 from djust import Component
 from typing import Any, Optional
 
@@ -108,7 +109,7 @@ class AuditLog(Component):
             cells = []
             for col in self.columns:
                 val = html.escape(str(entry.get(col, "")))
-                cell_cls = f"dj-audit-log__td dj-audit-log__td--{conditional_escape(col)}"
+                cell_cls = f"dj-audit-log__td dj-audit-log__td--{attr_text(col)}"
                 if col == "action":
                     action_val = str(entry.get("action", ""))
                     if action_val in self.allowed_actions:

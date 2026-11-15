@@ -84,7 +84,7 @@ class Combobox(Component):
         filter_attr = "" if search_event else ' data-filter="client"'
         e_placeholder = html.escape(self.placeholder)
         label_html = f'<label class="form-label">{e_label}</label>' if self.label else ""
-        aria = field_aria_attrs(e_name, describedby=self.describedby, invalid=self.invalid)
+        aria = field_aria_attrs(str(self.name), describedby=self.describedby, invalid=self.invalid)
         options_html = ""
         for n, opt in enumerate(options):
             if isinstance(opt, dict):

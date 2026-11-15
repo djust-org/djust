@@ -32,6 +32,7 @@ from ..base import Component
 from typing import Any
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 from djust._rust import RustAlert
 
@@ -94,7 +95,7 @@ class Alert(Component):
 
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 alert"""
-        classes = f"alert alert-{conditional_escape(self.variant)}"
+        classes = f"alert alert-{attr_text(self.variant)}"
         if self.dismissable:
             classes += " alert-dismissible fade show"
 
@@ -142,7 +143,7 @@ class Alert(Component):
 
     def _render_plain(self) -> str:
         """Render plain HTML alert"""
-        parts = [f'<div class="alert alert-{conditional_escape(self.variant)}" role="alert">']
+        parts = [f'<div class="alert alert-{attr_text(self.variant)}" role="alert">']
         parts.append(f"    {conditional_escape(self.text)}")
 
         if self.dismissable:

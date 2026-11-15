@@ -38,7 +38,7 @@
                 </button>
                 <div class="tp-select-list">
                     {% for pack in packs %}
-                    <button type="button" class="tp-select-option{% if pack.name == current_pack %} active{% endif %}" data-value="{{ pack.name }}">{{ pack.display_name }}</button>
+                    <button type="button" class="tp-select-option{% if pack.name == current_pack %} active{% endif %}" data-value="{{ pack.name|force_escape }}">{{ pack.display_name }}</button>
                     {% endfor %}
                 </div>
             </div>
@@ -62,7 +62,7 @@
                         </button>
                         <div class="tp-select-list">
                             {% for preset in presets %}
-                            <button type="button" class="tp-select-option{% if preset.is_active %} active{% endif %}" data-value="{{ preset.name }}">{{ preset.display_name }}</button>
+                            <button type="button" class="tp-select-option{% if preset.is_active %} active{% endif %}" data-value="{{ preset.name|force_escape }}">{{ preset.display_name }}</button>
                             {% endfor %}
                         </div>
                     </div>
@@ -79,7 +79,7 @@
                         </button>
                         <div class="tp-select-list">
                             {% for design in designs %}
-                            <button type="button" class="tp-select-option{% if design.name == current_design %} active{% endif %}" data-value="{{ design.name }}">{{ design.display_name }}</button>
+                            <button type="button" class="tp-select-option{% if design.name == current_design %} active{% endif %}" data-value="{{ design.name|force_escape }}">{{ design.display_name }}</button>
                             {% endfor %}
                         </div>
                     </div>
@@ -96,7 +96,7 @@
                         </button>
                         <div class="tp-select-list">
                             {% for layout in layouts %}
-                            <button type="button" class="tp-select-option{% if layout.name == current_layout %} active{% endif %}" data-value="{{ layout.name }}">{{ layout.display_name }}</button>
+                            <button type="button" class="tp-select-option{% if layout.name == current_layout %} active{% endif %}" data-value="{{ layout.name|force_escape }}">{{ layout.display_name }}</button>
                             {% endfor %}
                         </div>
                     </div>

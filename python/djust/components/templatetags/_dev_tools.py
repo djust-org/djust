@@ -14,7 +14,7 @@ from django import template
 
 # ``conditional_escape`` comes from where it is DEFINED, not through ``._registry``: the safe-markup
 # guard trusts an escaper by its origin, and a re-export is a different origin (#3774, #3820).
-from django.utils.html import conditional_escape
+from django.utils.html import conditional_escape, escape
 
 from djust.components.utils import attr_text, style_attrs
 
@@ -107,7 +107,7 @@ class TerminalNode(template.Node):
         max_lines = kw.get("max_lines", 0)
         auto_scroll = kw.get("auto_scroll", True)
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-terminal"]
         if wrap:
@@ -145,7 +145,7 @@ class TerminalNode(template.Node):
 
         stream_attr = ""
         if stream_event:
-            e_stream = conditional_escape(str(stream_event))
+            e_stream = escape(str(stream_event))
             stream_attr = f' data-stream-event="{e_stream}"'
 
         # What the Terminal hook needs to render and trim streamed lines like these.
@@ -206,10 +206,10 @@ class MarkdownEditorNode(template.Node):
         event = kw.get("event", "")
         custom_class = kw.get("class", "")
 
-        e_name = conditional_escape(str(name))
+        e_name = escape(str(name))
         e_value = conditional_escape(str(value))
-        e_placeholder = conditional_escape(str(placeholder))
-        e_class = conditional_escape(str(custom_class))
+        e_placeholder = escape(str(placeholder))
+        e_class = escape(str(custom_class))
 
         try:
             rows = int(rows)
@@ -228,7 +228,7 @@ class MarkdownEditorNode(template.Node):
         disabled_attr = " disabled" if disabled else ""
         event_attr = ""
         if event:
-            e_event = conditional_escape(str(event))
+            e_event = escape(str(event))
             event_attr = f' dj-input="{e_event}"'
 
         toolbar_html = ""
@@ -237,8 +237,8 @@ class MarkdownEditorNode(template.Node):
             for btn_id, label, prefix, suffix in self.TOOLBAR_BUTTONS:
                 btns.append(
                     f'<button type="button" class="dj-md-editor__btn" '
-                    f'data-action="{btn_id}" data-prefix="{conditional_escape(prefix)}" '
-                    f'data-suffix="{conditional_escape(suffix)}" '
+                    f'data-action="{btn_id}" data-prefix="{escape(prefix)}" '
+                    f'data-suffix="{escape(suffix)}" '
                     f'aria-label="{btn_id.title()}">{label}</button>'
                 )
             toolbar_html = f'<div class="dj-md-editor__toolbar" data-markdown-ui dj-update="ignore">{"".join(btns)}</div>'
@@ -361,7 +361,7 @@ class JsonViewerNode(template.Node):
         copy_button = kw.get("copy_button", True)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         e_label = conditional_escape(str(root_label))
 
         try:
@@ -446,7 +446,7 @@ class LogViewerNode(template.Node):
         max_lines = kw.get("max_lines", 0)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-log-viewer"]
         if wrap:
@@ -487,7 +487,7 @@ class LogViewerNode(template.Node):
 
         stream_attr = ""
         if stream_event:
-            e_stream = conditional_escape(str(stream_event))
+            e_stream = escape(str(stream_event))
             stream_attr = f' data-stream-event="{e_stream}"'
 
         scroll_attr = ' data-auto-scroll="true"' if auto_scroll else ""
@@ -498,7 +498,7 @@ class LogViewerNode(template.Node):
         if max_lines and max_lines > 0:
             hook_attrs += f' data-max-lines="{int(max_lines)}"'
         if filter_level:
-            hook_attrs += f' data-filter-level="{conditional_escape(str(filter_level).lower())}"'
+            hook_attrs += f' data-filter-level="{escape(str(filter_level).lower())}"'
 
         return _safe(
             f'<div class="{class_str}" dj-hook="LogViewer"'
@@ -555,7 +555,7 @@ class FileTreeNode(template.Node):
             icon_html = f'<span class="dj-file-tree__icon" aria-hidden="true">{icon}</span>'
 
         indent_style = style_attrs(padding_left=f"{int(depth) * 1.25}rem", css="padding-left:{}")
-        e_event = conditional_escape(str(event))
+        e_event = attr_text(str(event))
 
         if node_type == "folder" and isinstance(children, list) and children:
             expand_cls = " dj-file-tree__node--expanded" if expanded else ""
@@ -596,9 +596,9 @@ class FileTreeNode(template.Node):
         custom_class = kw.get("class", "")
         toggle_event = kw.get("toggle_event", "")
 
-        e_class = conditional_escape(str(custom_class))
-        e_event = conditional_escape(str(event))
-        e_selected = conditional_escape(str(selected))
+        e_class = escape(str(custom_class))
+        e_event = escape(str(event))
+        e_selected = escape(str(selected))
 
         classes = ["dj-file-tree"]
         if e_class:
@@ -612,9 +612,7 @@ class FileTreeNode(template.Node):
         for node in nodes:
             nodes_html.append(self._render_tree_node(node, 0, event, show_icons, str(selected)))
 
-        toggle_attr = (
-            f' data-toggle-event="{conditional_escape(str(toggle_event))}"' if toggle_event else ""
-        )
+        toggle_attr = f' data-toggle-event="{escape(str(toggle_event))}"' if toggle_event else ""
         return _safe(
             f'<div class="{class_str}" dj-hook="FileTree" '
             f'data-event="{e_event}" data-selected="{e_selected}"{toggle_attr} '

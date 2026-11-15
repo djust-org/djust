@@ -80,6 +80,23 @@ class _PlainView(LiveView):
         self.ok = True
 
 
+#: The members of ``_RaisingView``'s view group when its ``mount()`` ran.
+JOINED_AT_MOUNT: list = []
+
+
+class _RaisingView(LiveView):
+    """Admitted, joins its groups (``on_view_mounted``), then ``mount()`` raises an
+    error that is not a refusal: the mount fails without a 4403 close."""
+
+    exposure_policy = "explicit"
+    login_required = False
+    template = '<div dj-view="raising" dj-id="0">never rendered</div>'
+
+    def mount(self, request, **kwargs):
+        JOINED_AT_MOUNT.append(_members(_view_group(_RaisingView)))
+        raise RuntimeError("mount failed")
+
+
 def _path(view_cls) -> str:
     return f"{__name__}.{view_cls.__name__}"
 
@@ -272,6 +289,32 @@ async def test_single_admitted_mount_receives_presence_events():
             await _presence_broadcast(_OpenPresenceView)
             frame = await _receive_type(communicator, "presence_event")
             assert frame["payload"] == {"user": "alice"}
+        finally:
+            await _close(communicator)
+
+
+@pytest.mark.asyncio
+async def test_single_mount_that_raises_leaves_the_groups_it_joined():
+    """#4155: a mount that fails after ``on_view_mounted`` joined the view group,
+    for a reason that is not a refusal, keeps the socket open (no 4403). Only the
+    transport's ``on_mount_failed`` leaves the group then; nothing else does until
+    the socket closes."""
+    JOINED_AT_MOUNT.clear()
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        communicator = await _connect()
+        try:
+            await communicator.send_json_to(
+                {"type": "mount", "view": _path(_RaisingView), "url": "/a/"}
+            )
+            await _receive_type(communicator, "error")
+            assert [len(m) for m in JOINED_AT_MOUNT] == [1], "joined before mount() runs"
+            assert _members(_view_group(_RaisingView)) == []
+            # The socket is still open: a further mount on it is answered.
+            await communicator.send_json_to(
+                {"type": "mount", "view": _path(_PlainView), "url": "/b/"}
+            )
+            await _receive_type(communicator, "mount")
+            assert _members(_view_group(_RaisingView)) == []
         finally:
             await _close(communicator)
 

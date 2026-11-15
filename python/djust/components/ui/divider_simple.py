@@ -8,7 +8,7 @@ This is a stateless Component optimized for performance.
 from typing import Any, Optional
 from ..base import Component
 
-from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 
 from djust._rust import RustDivider
@@ -184,8 +184,8 @@ class Divider(Component):
         """Render plain HTML divider"""
         from html import escape
 
-        margin_class = f"divider-{conditional_escape(self.margin)}" if self.margin != "md" else ""
-        style_class = f"divider-{conditional_escape(self.style)}" if self.style != "solid" else ""
+        margin_class = f"divider-{attr_text(self.margin)}" if self.margin != "md" else ""
+        style_class = f"divider-{attr_text(self.style)}" if self.style != "solid" else ""
 
         classes = " ".join(filter(None, [margin_class, style_class]))
         class_attr = f' class="{classes}"' if classes else ""

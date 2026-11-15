@@ -27,8 +27,8 @@
     {
       "label": "the check is never asked (the whole mechanism)",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "        where = self._html_context(before) if before is not None else None\n        if where is None:\n            return False\n        for alt, asc, origin in escapers:",
-      "new": "        where = None\n        if where is None:\n            return False\n        for alt, asc, origin in escapers:"
+      "old": "        where = self._html_context(before, quoted=True) if before is not None else None\n        if where == \"value\":",
+      "new": "        where = None\n        if where == \"value\":"
     },
     {
       "label": "an f-string field is not asked",
@@ -57,8 +57,8 @@
     {
       "label": "a URL attribute is not a position",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                    return \"url\"\n                return None",
-      "new": "                    return None\n                return None"
+      "old": "                    return \"url\"\n                return \"value\" if quoted else None",
+      "new": "                    return None\n                return \"value\" if quoted else None"
     },
     {
       "label": "only href is a URL attribute",
@@ -228,6 +228,12 @@
       "file": "scripts/lib/safe_markup_taint.py",
       "old": "                and alt.func.id == \"str\"\n                and asc.find(\"str\") is None",
       "new": "                and alt.func.id == \"str\""
+    },
+    {
+      "label": "an escaper that honours mark_safe is trusted in a quoted attribute value (#4009)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            return any(origin in MARK_HONOURING_ORIGINS for _a, _s, origin in escapers)",
+      "new": "            return False"
     }
   ]
 }

@@ -139,9 +139,9 @@ class DropdownComponent(LiveComponent):
         }
         direction_class = direction_map.get(self.direction, "dropdown")
 
-        html = f'<div class="btn-group {direction_class}" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="btn-group {direction_class}" id="{attr_text(self.component_id)}">'
 
-        button_class = f"btn btn-{conditional_escape(self.variant)} {size_class}".strip()
+        button_class = f"btn btn-{attr_text(self.variant)} {size_class}".strip()
 
         if self.split:
             # Split button dropdown
@@ -177,9 +177,7 @@ class DropdownComponent(LiveComponent):
                             continue
                         # Convert value to JSON string for complex types
                         if isinstance(value, (dict, list)):
-                            value_str = conditional_escape(
-                                json.dumps(value)
-                            )  # a plain str: always escaped
+                            value_str = attr_text(json.dumps(value))  # a plain str: always escaped
                         else:
                             value_str = attr_text(value)
                         data_attrs += f' data-{key}="{value_str}"'
@@ -207,7 +205,7 @@ class DropdownComponent(LiveComponent):
         }
         size_class = size_map.get(self.size, size_map["md"])
 
-        html = f'<div class="relative inline-block text-left" id="{conditional_escape(self.component_id)}" x-data="{{open: false}}">'
+        html = f'<div class="relative inline-block text-left" id="{attr_text(self.component_id)}" x-data="{{open: false}}">'
 
         # Button
         button_class = f"{size_class} {variant_class} font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2"
@@ -244,9 +242,7 @@ class DropdownComponent(LiveComponent):
                         if not _DATA_KEY_RE.match(str(key)):
                             continue
                         if isinstance(value, (dict, list)):
-                            value_str = conditional_escape(
-                                json.dumps(value)
-                            )  # a plain str: always escaped
+                            value_str = attr_text(json.dumps(value))  # a plain str: always escaped
                         else:
                             value_str = attr_text(value)
                         data_attrs += f' data-{key}="{value_str}"'
@@ -259,8 +255,8 @@ class DropdownComponent(LiveComponent):
 
     def _render_plain(self) -> str:
         """Render plain HTML dropdown"""
-        html = f'<div class="dropdown" id="{conditional_escape(self.component_id)}">'
-        html += f'<button type="button" class="dropdown-toggle button button-{conditional_escape(self.variant)}">{conditional_escape(self.label)} ▼</button>'
+        html = f'<div class="dropdown" id="{attr_text(self.component_id)}">'
+        html += f'<button type="button" class="dropdown-toggle button button-{attr_text(self.variant)}">{conditional_escape(self.label)} ▼</button>'
         html += '<div class="dropdown-menu">'
 
         for item in self.items:
@@ -283,9 +279,7 @@ class DropdownComponent(LiveComponent):
                         if not _DATA_KEY_RE.match(str(key)):
                             continue
                         if isinstance(value, (dict, list)):
-                            value_str = conditional_escape(
-                                json.dumps(value)
-                            )  # a plain str: always escaped
+                            value_str = attr_text(json.dumps(value))  # a plain str: always escaped
                         else:
                             value_str = attr_text(value)
                         data_attrs += f' data-{key}="{value_str}"'

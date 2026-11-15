@@ -1199,6 +1199,36 @@ _MODEL_FORM_CONFIGURATION = frozenset(
 #: ``object_recheck`` values (#3967).
 _OBJECT_RECHECK_MODES = ("every_event", "writes")
 
+#: Instance attributes of a model record that are not the record (#4153): Django's own
+#: ``_state``, and every attribute djust itself stores on a model instance. Named, not
+#: matched by prefix: ``_djust_prop_cache`` is the serializer's per-instance cache of the
+#: model's ``@property`` values (``serialization.py``, ``_add_property_values``), which the
+#: explicit render adds; a change to a field it derives from is a change to that field.
+#: Everything else in the namespace (fields, a deferred field once loaded, ``<fk>_id``, the
+#: prefetch cache) stays in the fingerprint.
+_FINGERPRINT_IGNORED_ATTRS = frozenset({"_state", "_djust_prop_cache"})
+
+
+def _tenant_identity(tenant: Any) -> Any:
+    """A request tenant's identity for ``ModelFormMixin``'s reuse stamp (#4153).
+
+    ``None`` for no tenant, the id of djust's ``TenantInfo``, the label and primary key of
+    a model tenant (a fresh instance of the same tenant matches). Any other object gets a
+    new sentinel, equal to nothing, so a record is never reused across it.
+    """
+    if tenant is None:
+        return None
+    from django.db.models import Model
+
+    from .tenants.resolvers import TenantInfo
+
+    if isinstance(tenant, TenantInfo):
+        return ("tenant", tenant.id)
+    if isinstance(tenant, Model):
+        return ("model", tenant._meta.label_lower, tenant.pk)
+    return object()
+
+
 _MANAGED_OBJECT_PROVIDER = "djust.forms.object"
 
 _RETARGET_MESSAGE = (
@@ -1280,9 +1310,10 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
     #: How an event re-checks the record (ADR-017; #3967). ``"every_event"`` (the default):
     #: resolve and authorize it again before every event. ``"writes"``: events declared
     #: read-only reuse the record authorized earlier on this connection, while it is
-    #: unchanged and the route, the lookup and the user are the same; every other event
-    #: resolves and authorizes it again. Access revoked between two read-only events is
-    #: then seen at the next event that is not one: the trade a view makes by choosing it.
+    #: unchanged and the route, the lookup, the user, the session and the tenant are the
+    #: same (#4153); every other event resolves and authorizes it again. Access revoked
+    #: between two read-only events is then seen at the next event that is not one: the
+    #: trade a view makes by choosing it.
     object_recheck: str = "every_event"
     #: Handlers (by method name) the view declares read-only, in addition to
     #: ``validate_field``: with ``object_recheck = "writes"`` they reuse the authorized
@@ -1639,8 +1670,17 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
         self._init_form_state()
 
     @staticmethod
-    def _principal(request: Any) -> Any:
-        return getattr(getattr(request, "user", None), "pk", None)
+    def _principal(request: Any) -> Tuple[Any, ...]:
+        """Who the record was authorized for: the user, the session and the tenant.
+
+        A read-only event reuses the record only for the same three (#4153). The explicit
+        event path already refuses a turn whose session, user or tenant changed since mount
+        (``request_binding``); the stamp holds them too, so the reuse rule does not depend on
+        that. A tenant of a type that has no stable identity never matches: no reuse.
+        """
+        user_pk = getattr(getattr(request, "user", None), "pk", None)
+        session_key = getattr(getattr(request, "session", None), "session_key", None)
+        return (user_pk, session_key, _tenant_identity(getattr(request, "tenant", None)))
 
     def _lookup_key(self) -> Tuple[Any, ...]:
         pk, slug = self._lookup_values()
@@ -1653,11 +1693,13 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
         A deep copy of each value, so a ``JSONField`` list or dict edited in place is a
         change too. Taken from a snapshot of the instance namespace, never by iterating it
         live (#3151: another thread may set an attribute meanwhile on a free-threaded build).
-        A value that cannot be copied is compared by identity.
+        A value that cannot be copied is compared by identity. Attributes that are not the
+        record (``_FINGERPRINT_IGNORED_ATTRS``) are left out, so a render that caches on the
+        instance does not read as a change (#4153).
         """
         snapshot: Dict[str, Any] = {}
         for name, value in namespace(obj).items():
-            if name == "_state":
+            if name in _FINGERPRINT_IGNORED_ATTRS:
                 continue
             try:
                 snapshot[name] = copy.deepcopy(value)
@@ -1680,7 +1722,7 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
         Only with ``object_recheck = "writes"``, only for a handler declared read-only, and only
         while everything the authorization was for still holds: the record unchanged since it
         was authorized (every field value, so the primary key too), the same lookup (route and
-        params), the same user.
+        params), the same user, session and tenant (``_principal``).
         Anything else, and every other event, gets the full check.
         """
         if self.object_recheck != "writes" or not self._is_read_only_event(handler):

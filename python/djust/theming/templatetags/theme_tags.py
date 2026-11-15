@@ -67,8 +67,9 @@ def _resolve_nonce(request: Any, nonce: str | None = None) -> str:
     if nonce is None:
         nonce = get_csp_nonce(request)
     # ``{% theme_head nonce=request.csp_nonce %}`` passes django-csp's
-    # SimpleLazyObject straight through: ``json.dumps`` rejects it, so make it a str.
-    return str(nonce) if nonce else ""
+    # SimpleLazyObject straight through: ``json.dumps`` rejects it, so make it a str. A PLAIN
+    # str: ``format_html`` writes a marked-safe value into ``nonce="..."`` unescaped (#4009).
+    return "".join((str(nonce),)) if nonce else ""
 
 
 def _nonce_attr(request: Any, nonce: str | None = None) -> str:

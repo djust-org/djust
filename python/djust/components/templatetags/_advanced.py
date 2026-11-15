@@ -11,7 +11,7 @@ import calendar as _calendar
 from typing import Any
 
 from django import template
-from django.utils.html import conditional_escape
+from django.utils.html import conditional_escape, escape
 from django.utils.safestring import SafeString
 
 from djust.components.utils import attr_text, data_url_attr
@@ -40,7 +40,7 @@ class TourNode(template.Node):
         show_skip = kw.get("show_skip", True)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
 
         classes = ["dj-tour"]
         if e_class:
@@ -61,7 +61,7 @@ class TourNode(template.Node):
         if not isinstance(step, dict):
             return ""
 
-        e_event = conditional_escape(str(event))
+        e_event = escape(str(event))
         e_target = attr_text(step.get("target", ""))  # only in data-target= (#3904)
         e_title = conditional_escape(str(step.get("title", "")))
         e_content = conditional_escape(str(step.get("content", "")))
@@ -150,7 +150,7 @@ class CalendarViewNode(template.Node):
         event = kw.get("event", "")
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-calendar"]
         if e_class:
             classes.append(e_class)
@@ -188,7 +188,9 @@ class CalendarViewNode(template.Node):
         except (IndexError, KeyError):
             month_name = ""
         e_month = conditional_escape(month_name)
+        a_month = escape(month_name)
         e_year = conditional_escape(str(year))
+        a_year = escape(str(year))
 
         header = (
             f'<div class="dj-calendar__header">'
@@ -206,7 +208,7 @@ class CalendarViewNode(template.Node):
         except (ValueError, OverflowError):
             weeks = []
 
-        e_event = conditional_escape(str(event)) if event else ""
+        e_event = escape(str(event)) if event else ""
 
         weeks_html = []
         for week in weeks:
@@ -247,7 +249,7 @@ class CalendarViewNode(template.Node):
 
         return mark_safe(
             f'<div class="{class_str}" role="grid" '
-            f'aria-label="{e_month} {e_year}">{header}{day_names_row}{grid}</div>'
+            f'aria-label="{a_month} {a_year}">{header}{day_names_row}{grid}</div>'
         )
 
 
@@ -288,7 +290,7 @@ class GanttChartNode(template.Node):
         width = kw.get("width", 600)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-gantt"]
         if e_class:
             classes.append(e_class)
@@ -348,7 +350,7 @@ class GanttChartNode(template.Node):
         chart_w = w - label_width
         unit_w = chart_w / total_units
 
-        e_title = conditional_escape(str(title)) if title else "Gantt chart"
+        e_title = escape(str(title)) if title else "Gantt chart"
         parts = [
             f'<svg class="dj-gantt__svg" viewBox="0 0 {w} {h}" '
             f'width="{w}" height="{h}" xmlns="http://www.w3.org/2000/svg" '
@@ -465,7 +467,7 @@ class DiffViewerNode(template.Node):
         show_line_numbers = kw.get("show_line_numbers", True)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-diff"]
         if mode == "unified":
             classes.append("dj-diff--unified")
@@ -628,7 +630,7 @@ class PivotTableNode(template.Node):
         show_totals = kw.get("show_totals", True)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-pivot"]
         if e_class:
             classes.append(e_class)
@@ -738,7 +740,7 @@ class OrgChartNode(template.Node):
         if not node:
             return ""
         # escaped HERE, where it is written, so the method is safe for any caller (#3845)
-        e_event = conditional_escape(str(event)) if event else ""
+        e_event = attr_text(str(event)) if event else ""
         name = conditional_escape(str(node.get("name", "")))
         title = conditional_escape(str(node.get("title", "")))
         avatar = node.get("avatar", "")
@@ -785,7 +787,7 @@ class OrgChartNode(template.Node):
         direction = kw.get("direction", "vertical")
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-org"]
         if direction == "horizontal":
             classes.append("dj-org--horizontal")
@@ -859,7 +861,7 @@ class ComparisonTableNode(template.Node):
         event = kw.get("event", "")
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-compare"]
         if e_class:
             classes.append(e_class)
@@ -875,7 +877,7 @@ class ComparisonTableNode(template.Node):
                 f'<div class="{class_str}"><table class="dj-compare__table"></table></div>'
             )
 
-        e_event = conditional_escape(str(event)) if event else ""
+        e_event = escape(str(event)) if event else ""
         num_plans = len(plans)
 
         header_cells = ['<th class="dj-compare__corner"></th>']
@@ -951,7 +953,7 @@ class MasonryGridNode(template.Node):
         gap = kw.get("gap", 16)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         classes = ["dj-masonry"]
         if e_class:
             classes.append(e_class)
@@ -1038,7 +1040,7 @@ class CursorsOverlayNode(template.Node):
         if not isinstance(users, list):
             users = []
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
 
         parts = []
         for i, user in enumerate(users):
@@ -1056,7 +1058,7 @@ class CursorsOverlayNode(template.Node):
             e_name = conditional_escape(str(name))
             a_name = attr_text(name)  # the data-user= attribute; e_name stays the text (#3904)
             palette = self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)]
-            e_color = conditional_escape(safe_css_color(color, palette))
+            e_color = attr_text(safe_css_color(color, palette))
 
             try:
                 px = int(x)
@@ -1123,7 +1125,7 @@ class LiveIndicatorNode(template.Node):
         active = kw.get("active", True)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
 
         if not active or not user:
             cls = "dj-live-indicator dj-live-indicator--hidden"
@@ -1140,7 +1142,7 @@ class LiveIndicatorNode(template.Node):
 
         e_name = conditional_escape(str(name))
         e_avatar = data_url_attr(avatar, image=True)
-        e_field = conditional_escape(str(field))
+        e_field = attr_text(str(field))
         e_action = conditional_escape(str(action))
 
         cls = "dj-live-indicator"
@@ -1208,7 +1210,7 @@ class CollabSelectionNode(template.Node):
         if not isinstance(users, list):
             users = []
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
 
         parts = []
         for i, user in enumerate(users):
@@ -1255,7 +1257,7 @@ class CollabSelectionNode(template.Node):
 
         total = len(users)
         label = f"{total} selection{'s' if total != 1 else ''}"
-        target_attr = f' data-target="{conditional_escape(str(target))}"' if target else ""
+        target_attr = f' data-target="{attr_text(str(target))}"' if target else ""
 
         return mark_safe(
             f'<div class="{cls}" role="group" aria-label="{label}" '
@@ -1291,8 +1293,8 @@ class ActivityFeedNode(template.Node):
         if not isinstance(events, list):
             events = []
 
-        e_class = conditional_escape(str(custom_class))
-        e_stream = conditional_escape(str(stream_event))
+        e_class = escape(str(custom_class))
+        e_stream = escape(str(stream_event))
 
         cls = "dj-activity-feed"
         if e_class:
@@ -1393,8 +1395,8 @@ class ReactionsNode(template.Node):
         if not isinstance(active, list):
             active = []
 
-        e_class = conditional_escape(str(custom_class))
-        e_event = conditional_escape(str(event))
+        e_class = attr_text(str(custom_class))
+        e_event = attr_text(str(event))
 
         cls = "dj-reactions"
         if e_class:
@@ -1476,9 +1478,9 @@ class MapPickerNode(template.Node):
         except (ValueError, TypeError):
             zoom = 13
 
-        e_class = conditional_escape(str(custom_class))
-        e_event = conditional_escape(str(pick_event))
-        e_label = conditional_escape(str(kw.get("label", "Map picker")))
+        e_class = attr_text(str(custom_class))
+        e_event = attr_text(str(pick_event))
+        e_label = attr_text(str(kw.get("label", "Map picker")))
 
         cls = "dj-map-picker"
         if e_class:
@@ -1539,9 +1541,9 @@ class PromptEditorNode(template.Node):
         except (ValueError, TypeError):
             rows = 6
 
-        e_class = conditional_escape(str(custom_class))
-        e_event = conditional_escape(str(event))
-        e_placeholder = conditional_escape(str(placeholder))
+        e_class = attr_text(str(custom_class))
+        e_event = attr_text(str(event))
+        e_placeholder = attr_text(str(placeholder))
         e_template = conditional_escape(str(tmpl))
 
         cls = "dj-prompt-editor"
@@ -1554,10 +1556,11 @@ class PromptEditorNode(template.Node):
         var_chips = []
         for v in unique_vars:
             e_v = conditional_escape(v)
+            a_v = attr_text(v)
             val = variables.get(v, "")
             e_val = conditional_escape(str(val))
             var_chips.append(
-                f'<span class="dj-prompt-editor__var" data-var="{e_v}">'
+                f'<span class="dj-prompt-editor__var" data-var="{a_v}">'
                 f"<code>{{{{{e_v}}}}}</code>"
                 f"{f' = {e_val}' if val else ''}"
                 f"</span>"
@@ -1617,9 +1620,9 @@ class VoiceInputNode(template.Node):
         continuous = kw.get("continuous", False)
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
-        e_event = conditional_escape(str(event))
-        e_lang = conditional_escape(str(lang))
+        e_class = attr_text(str(custom_class))
+        e_event = attr_text(str(event))
+        e_lang = attr_text(str(lang))
 
         cls = "dj-voice-input"
         if e_class:
@@ -1681,10 +1684,11 @@ class CronInputNode(template.Node):
         event = kw.get("event", "")
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
-        e_name = conditional_escape(str(name))
-        e_event = conditional_escape(str(event))
+        e_class = attr_text(str(custom_class))
+        e_name = attr_text(str(name))
+        e_event = attr_text(str(event))
         e_value = conditional_escape(str(value))
+        a_value = attr_text(str(value))
 
         cls = "dj-cron-input"
         if e_class:
@@ -1698,13 +1702,14 @@ class CronInputNode(template.Node):
         fields = []
         for i, (label, val) in enumerate(zip(self.FIELD_LABELS, parts)):
             e_label = conditional_escape(label)
-            e_val = conditional_escape(val)
+            a_label = attr_text(label)
+            e_val = attr_text(val)
             fields.append(
                 f'<div class="dj-cron-input__field">'
                 f'<label class="dj-cron-input__label">{e_label}</label>'
                 f'<input type="text" class="dj-cron-input__input" '
                 f'name="{e_name}_{i}" value="{e_val}" '
-                f'size="6" aria-label="{e_label}">'
+                f'size="6" aria-label="{a_label}">'
                 f"</div>"
             )
 
@@ -1714,7 +1719,7 @@ class CronInputNode(template.Node):
 
         return mark_safe(
             f'<div class="{cls}"{event_attr}>'
-            f'<input type="hidden" name="{e_name}" value="{e_value}">'
+            f'<input type="hidden" name="{e_name}" value="{a_value}">'
             f'<div class="dj-cron-input__fields">{"".join(fields)}</div>'
             f'<div class="dj-cron-input__preview">'
             f"<code>{e_value}</code></div>"
@@ -1752,7 +1757,7 @@ class ErrorPageNode(template.Node):
         except (ValueError, TypeError):
             code = 500
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
         e_title = conditional_escape(str(title))
         e_message = conditional_escape(str(message))
         e_url = safe_url(str(action_url))
@@ -1813,10 +1818,10 @@ class ImageUploadPreviewNode(template.Node):
         if not isinstance(previews, list):
             previews = []
 
-        e_class = conditional_escape(str(custom_class))
-        e_name = conditional_escape(str(name))
-        e_event = conditional_escape(str(event))
-        e_accept = conditional_escape(str(accept))
+        e_class = attr_text(str(custom_class))
+        e_name = attr_text(str(name))
+        e_event = attr_text(str(event))
+        e_accept = attr_text(str(accept))
 
         cls = "dj-img-upload"
         if e_class:
@@ -1906,10 +1911,10 @@ class AnimatedNumberNode(template.Node):
         except (ValueError, TypeError):
             decimals = 0
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
         e_prefix = conditional_escape(str(prefix))
         e_suffix = conditional_escape(str(suffix))
-        e_sep = conditional_escape(str(separator))
+        e_sep = attr_text(str(separator))
 
         cls = "dj-animated-number"
         if e_class:
@@ -1972,8 +1977,9 @@ class RibbonNode(template.Node):
         position = kw.get("position", "top-right")
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         e_text = conditional_escape(str(text))
+        a_text = escape(str(text))
 
         classes = ["dj-ribbon"]
         variant_cls = self.VARIANT_MAP.get(str(variant), "dj-ribbon--primary")
@@ -1992,7 +1998,7 @@ class RibbonNode(template.Node):
         cls = " ".join(classes)
 
         return mark_safe(
-            f'<div class="{cls}" aria-label="{e_text}">'
+            f'<div class="{cls}" aria-label="{a_text}">'
             f'<span class="dj-ribbon__text">{e_text}</span>'
             f"</div>"
         )
@@ -2029,7 +2035,7 @@ class BreadcrumbDropdownNode(template.Node):
         except (ValueError, TypeError):
             max_vis = 4
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = attr_text(str(custom_class))
         e_sep = conditional_escape(str(separator))
 
         cls = "dj-breadcrumb"
@@ -2128,8 +2134,8 @@ class DataCardGridNode(template.Node):
         except (ValueError, TypeError):
             cols = 3
 
-        e_class = conditional_escape(str(custom_class))
-        e_event = conditional_escape(str(event))
+        e_class = attr_text(str(custom_class))
+        e_event = attr_text(str(event))
 
         cls = "dj-data-card-grid"
         if e_class:
@@ -2236,7 +2242,7 @@ class AgentStepNode(template.Node):
 
         status = str(status) if str(status) in self.STATUS_ICONS else "pending"
 
-        e_class = conditional_escape(str(custom_class))
+        e_class = escape(str(custom_class))
         e_tool = conditional_escape(str(tool))
         e_duration = conditional_escape(str(duration))
         e_content = conditional_escape(content) if content else ""
@@ -2338,10 +2344,10 @@ class QRCodeNode(template.Node):
         bg_color = kw.get("bg_color", "#fff")
         custom_class = kw.get("class", "")
 
-        e_class = conditional_escape(str(custom_class))
-        e_data = conditional_escape(str(data))
-        e_fg = conditional_escape(str(fg_color))
-        e_bg = conditional_escape(str(bg_color))
+        e_class = attr_text(str(custom_class))
+        e_data = attr_text(str(data))
+        e_fg = attr_text(str(fg_color))
+        e_bg = attr_text(str(bg_color))
 
         cls = "dj-qr-code"
         if e_class:

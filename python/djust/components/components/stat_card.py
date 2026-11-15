@@ -2,6 +2,7 @@
 
 import html
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from typing import Any, Optional
 
 from djust import Component
@@ -95,7 +96,7 @@ class StatCard(Component):
         classes = ["dj-stat-card"]
 
         if self.variant != "default":
-            classes.append(f"dj-stat-card-{conditional_escape(self.variant)}")
+            classes.append(f"dj-stat-card-{attr_text(self.variant)}")
 
         if self.custom_class:
             classes.append(html.escape(self.custom_class))
@@ -113,7 +114,7 @@ class StatCard(Component):
         if self.trend:
             trend_classes = [
                 "dj-stat-card-trend",
-                f"dj-stat-card-trend-{conditional_escape(self.trend)}",
+                f"dj-stat-card-trend-{attr_text(self.trend)}",
             ]
             trend_class_str = " ".join(trend_classes)
             trend_text = html.escape(self.trend_value) if self.trend_value else ""

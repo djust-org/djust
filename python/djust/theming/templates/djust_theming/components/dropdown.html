@@ -23,28 +23,28 @@ verbatim, so it carries no `dj-click` and therefore no server event — and no
 slot-provided trigger is inert. That predates this change; fixing it means
 deciding whether the contract should be enforced on caller-supplied markup.
 {% endcomment %}
-<div class="{{ css_prefix }}dropdown {% if attrs.class %}{{ attrs.class }}{% endif %}"
-     data-theme-dropdown="{{ id }}"
+<div class="{{ css_prefix }}dropdown {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
+     data-theme-dropdown="{{ id|force_escape }}"
      {% if is_open %}data-open="true"{% endif %}
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
     {% if slot_trigger %}
     {{ slot_trigger }}
     {% else %}
     <button class="{{ css_prefix }}dropdown-trigger"
             aria-haspopup="true"
             aria-expanded="{% if is_open %}true{% else %}false{% endif %}"
-            aria-controls="{{ id }}-menu"
+            aria-controls="{{ id|force_escape }}-menu"
             dj-click="toggle_dropdown"
-            data-value="{{ id }}"
-            {% if component_id %}data-component-id="{{ component_id }}"{% endif %}>
+            data-value="{{ id|force_escape }}"
+            {% if component_id %}data-component-id="{{ component_id|force_escape }}"{% endif %}>
         {{ label }}
         <svg class="{{ css_prefix }}dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="m6 9 6 6 6-6"/>
         </svg>
     </button>
     {% endif %}
-    <div class="{{ css_prefix }}dropdown-menu {{ css_prefix }}dropdown-{{ align }}"
-         id="{{ id }}-menu"
+    <div class="{{ css_prefix }}dropdown-menu {{ css_prefix }}dropdown-{{ align|force_escape }}"
+         id="{{ id|force_escape }}-menu"
          role="menu"
          {% if is_open %}data-open="true"{% endif %}
          {% if not is_open %}hidden{% endif %}>

@@ -8,6 +8,7 @@ from typing import Any, Optional
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 from djust._rust import RustTextArea
 
@@ -135,7 +136,7 @@ class TextArea(Component):
         if self.label:
             required_mark = ' <span class="text-danger">*</span>' if self.required else ""
             parts.append(
-                f'    <label for="{conditional_escape(self.textarea_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
+                f'    <label for="{attr_text(self.textarea_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
             )
 
         # Build textarea classes
@@ -148,12 +149,12 @@ class TextArea(Component):
         # Build textarea attributes
         attrs = [
             f'class="{" ".join(textarea_classes)}"',
-            f'id="{conditional_escape(self.textarea_id)}"',
-            f'name="{conditional_escape(self.name)}"',
-            f'rows="{conditional_escape(self.rows)}"',
+            f'id="{attr_text(self.textarea_id)}"',
+            f'name="{attr_text(self.name)}"',
+            f'rows="{attr_text(self.rows)}"',
         ]
         if self.placeholder:
-            attrs.append(f'placeholder="{conditional_escape(self.placeholder)}"')
+            attrs.append(f'placeholder="{attr_text(self.placeholder)}"')
         if self.required:
             attrs.append("required")
         if self.disabled:

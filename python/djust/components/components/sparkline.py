@@ -1,7 +1,8 @@
 """Sparkline component — lightweight inline SVG chart."""
 
 import html
-from django.utils.html import conditional_escape
+
+from djust.components.utils import attr_text
 
 from djust import Component
 from typing import Any, Optional
@@ -135,7 +136,7 @@ class Sparkline(Component):
             stroke = f' stroke="{color_attr}"' if color_attr else ""
             parts.append(
                 f'<path class="dj-sparkline__line" d="{path}" '
-                f'fill="none"{stroke} stroke-width="{conditional_escape(self.stroke_width)}"/>'
+                f'fill="none"{stroke} stroke-width="{attr_text(self.stroke_width)}"/>'
             )
 
         parts.append("</svg>")

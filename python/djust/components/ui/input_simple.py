@@ -8,6 +8,7 @@ from typing import Any, Optional
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 
 class Input(Component):
@@ -134,13 +135,13 @@ class Input(Component):
         if self.label:
             required_mark = ' <span class="text-danger">*</span>' if self.required else ""
             parts.append(
-                f'    <label for="{conditional_escape(self.input_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
+                f'    <label for="{attr_text(self.input_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
             )
 
         # Build input classes
         input_classes = ["form-control"]
         if self.size != "md":
-            input_classes.append(f"form-control-{conditional_escape(self.size)}")
+            input_classes.append(f"form-control-{attr_text(self.size)}")
         if self.validation_state == "valid":
             input_classes.append("is-valid")
         elif self.validation_state == "invalid":
@@ -148,15 +149,15 @@ class Input(Component):
 
         # Build input attributes
         attrs = [
-            f'type="{conditional_escape(self.input_type)}"',
+            f'type="{attr_text(self.input_type)}"',
             f'class="{" ".join(input_classes)}"',
-            f'id="{conditional_escape(self.input_id)}"',
-            f'name="{conditional_escape(self.name)}"',
+            f'id="{attr_text(self.input_id)}"',
+            f'name="{attr_text(self.name)}"',
         ]
         if self.value:
-            attrs.append(f'value="{conditional_escape(self.value)}"')
+            attrs.append(f'value="{attr_text(self.value)}"')
         if self.placeholder:
-            attrs.append(f'placeholder="{conditional_escape(self.placeholder)}"')
+            attrs.append(f'placeholder="{attr_text(self.placeholder)}"')
         if self.required:
             attrs.append("required")
         if self.disabled:

@@ -1,6 +1,6 @@
-<div class="{{ css_prefix }}table-container {% if attrs.class %}{{ attrs.class }}{% endif %}"
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
-    <table class="{{ css_prefix }}table {{ css_prefix }}table-{{ variant }}">
+<div class="{{ css_prefix }}table-container {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
+    <table class="{{ css_prefix }}table {{ css_prefix }}table-{{ variant|force_escape }}">
         {% if slot_caption %}
         <caption>{{ slot_caption }}</caption>
         {% elif caption %}

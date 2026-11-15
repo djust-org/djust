@@ -133,13 +133,13 @@ class Select(Component):
         if self.label:
             required_mark = ' <span class="text-danger">*</span>' if self.required else ""
             parts.append(
-                f'    <label for="{conditional_escape(self.select_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
+                f'    <label for="{attr_text(self.select_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
             )
 
         # Build select classes
         select_classes = ["form-select"]
         if self.size != "md":
-            select_classes.append(f"form-select-{conditional_escape(self.size)}")
+            select_classes.append(f"form-select-{attr_text(self.size)}")
         if self.validation_state == "valid":
             select_classes.append("is-valid")
         elif self.validation_state == "invalid":
@@ -148,8 +148,8 @@ class Select(Component):
         # Build select attributes
         attrs = [
             f'class="{" ".join(select_classes)}"',
-            f'id="{conditional_escape(self.select_id)}"',
-            f'name="{conditional_escape(self.name)}"',
+            f'id="{attr_text(self.select_id)}"',
+            f'name="{attr_text(self.name)}"',
         ]
         if self.required:
             attrs.append("required")

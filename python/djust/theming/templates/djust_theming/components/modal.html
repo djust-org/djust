@@ -32,20 +32,20 @@ positioned behind the dialog, which is a markup change worth making on purpose
 rather than as a side effect of this one.
 {% endcomment %}
 <div class="{{ css_prefix }}modal-backdrop"
-     data-theme-modal="{{ id }}"
+     data-theme-modal="{{ id|force_escape }}"
      {% if is_open %}data-open="true"{% else %}hidden{% endif %}>
-    <div class="{{ css_prefix }}modal {{ css_prefix }}modal-{{ size }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
+    <div class="{{ css_prefix }}modal {{ css_prefix }}modal-{{ size|force_escape }} {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
          role="dialog"
          aria-modal="true"
-         {% if title %}aria-labelledby="{{ id }}-title"{% endif %}
-         {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+         {% if title %}aria-labelledby="{{ id|force_escape }}-title"{% endif %}
+         {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
         {% if slot_close %}
         {{ slot_close }}
         {% else %}
         <button class="{{ css_prefix }}modal-close" aria-label="Close"
                 data-theme-modal-close data-dj-close
-                dj-click="toggle_modal" data-value="{{ id }}"
-                {% if component_id %}data-component-id="{{ component_id }}"{% endif %}>
+                dj-click="toggle_modal" data-value="{{ id|force_escape }}"
+                {% if component_id %}data-component-id="{{ component_id|force_escape }}"{% endif %}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
                 <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -58,7 +58,7 @@ rather than as a side effect of this one.
         </div>
         {% elif title %}
         <div class="{{ css_prefix }}modal-header">
-            <h2 class="{{ css_prefix }}modal-title" id="{{ id }}-title">{{ title }}</h2>
+            <h2 class="{{ css_prefix }}modal-title" id="{{ id|force_escape }}-title">{{ title }}</h2>
         </div>
         {% endif %}
         <div class="{{ css_prefix }}modal-body">
