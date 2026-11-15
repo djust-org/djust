@@ -46,7 +46,7 @@ class GroupForm(forms.ModelForm):
 class _Recording(ModelFormMixin[Group], LiveView):
     """Records every lookup and permission check; ``REVOKED`` ids lose access."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root><h1>{{ object.name }}</h1><input name="name" '
         'value="{{ form_data.name }}"><i>{{ field_errors.name.0 }}</i>'
@@ -146,12 +146,22 @@ class QueueMountSelects(Queue):
         self.open_id = type(self).mount_selects
 
 
+class LegacyWrites(Writes):
+    exposure_policy = "legacy"  # gap #4082: explicit render adds _djust_prop_cache, defeating reuse
+
+
+class LegacyQueue(Queue):
+    exposure_policy = "legacy"  # gap #4082: explicit render adds _djust_prop_cache, defeating reuse
+
+
 urlpatterns = [
     path("queue-mount/", QueueMountSelects.as_view()),
     path("every/<int:pk>/", EveryEvent.as_view()),
     path("writes/<int:pk>/", Writes.as_view()),
     path("overridden/<int:pk>/", WritesOverridden.as_view()),
     path("queue/", Queue.as_view()),
+    path("legacy-writes/<int:pk>/", LegacyWrites.as_view()),
+    path("legacy-queue/", LegacyQueue.as_view()),
     path("queue-every/", QueueEveryEvent.as_view()),
     path("queue-required/", QueueRequired.as_view()),
 ]
@@ -160,6 +170,7 @@ ROUTES = {
     EveryEvent: "/every/%s/",
     Writes: "/writes/%s/",
     WritesOverridden: "/overridden/%s/",
+    LegacyWrites: "/legacy-writes/%s/",
 }
 
 
@@ -208,12 +219,14 @@ def _kinds(*kinds):
 
 async def _open(view_class, user, url, params=None):
     from channels.testing import WebsocketCommunicator
-    from djust.tests.test_exposure_runtime import make_request
+    from djust.tests._live_session import live_session
     from djust.websocket import LiveViewConsumer
 
-    request = await sync_to_async(make_request)()
+    # The user logged into the session the socket presents: an explicit view
+    # re-reads its user from there on every turn.
+    session = await sync_to_async(live_session)(user)
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    socket.scope.update(session=request.session, user=user, tenant=None)
+    socket.scope.update(session=session, user=user, tenant=None)
     assert (await socket.connect())[0]
     await socket.receive_json_from()
     await socket.send_json_to(
@@ -286,7 +299,7 @@ async def test_the_default_resolves_and_authorizes_before_every_event_including_
 @pytest.mark.django_db(transaction=True)
 async def test_validate_field_reuses_the_authorized_record_and_runs_no_query(sql):
     alice, mine, _ = await sync_to_async(_world)()
-    socket, mounted = await _open(Writes, alice, ROUTES[Writes] % mine.pk)
+    socket, mounted = await _open(LegacyWrites, alice, ROUTES[LegacyWrites] % mine.pk)
     try:
         assert mounted["type"] == "mount", mounted
         EVENTS.clear()
@@ -376,7 +389,7 @@ async def test_a_write_by_a_user_whose_access_was_revoked_is_denied_under_every_
 async def test_revocation_is_seen_by_the_next_event_that_is_not_read_only():
     """The documented trade of "writes": read-only events keep working until a write."""
     alice, mine, _ = await sync_to_async(_world)()
-    socket, _ = await _open(Writes, alice, ROUTES[Writes] % mine.pk)
+    socket, _ = await _open(LegacyWrites, alice, ROUTES[LegacyWrites] % mine.pk)
     try:
         REVOKED.add(mine.pk)
         frames = await _event(socket, 1, "validate_field", {"field": "name", "value": "x"})
@@ -396,7 +409,7 @@ async def test_revocation_is_seen_by_the_next_event_that_is_not_read_only():
 @pytest.mark.django_db(transaction=True)
 async def test_a_handler_declared_read_only_reuses_and_one_that_is_not_does_not():
     alice, mine, _ = await sync_to_async(_world)()
-    socket, _ = await _open(Writes, alice, ROUTES[Writes] % mine.pk)
+    socket, _ = await _open(LegacyWrites, alice, ROUTES[LegacyWrites] % mine.pk)
     try:
         EVENTS.clear()
         await _event(socket, 1, "peek", {})
@@ -436,7 +449,7 @@ async def test_an_overridden_validate_field_is_a_write_and_is_checked_in_full():
 )
 async def test_a_record_changed_in_memory_is_not_reused(event, params):
     alice, mine, _ = await sync_to_async(_world)()
-    socket, _ = await _open(Writes, alice, ROUTES[Writes] % mine.pk)
+    socket, _ = await _open(LegacyWrites, alice, ROUTES[LegacyWrites] % mine.pk)
     try:
         await _event(socket, 1, event, params)
         EVENTS.clear()
@@ -595,7 +608,7 @@ def test_a_bad_recheck_mode_is_a_configuration_error():
     with pytest.raises(ImproperlyConfigured, match="object_recheck"):
 
         class Bad(ModelFormMixin[Group], LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             object_recheck = "sometimes"
 
 
@@ -604,7 +617,7 @@ def test_read_only_events_must_be_a_collection_of_names(value):
     with pytest.raises(ImproperlyConfigured, match="object_read_only_events"):
 
         class Bad(ModelFormMixin[Group], LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             object_read_only_events = value
 
 
@@ -653,7 +666,9 @@ async def test_nothing_selected_mounts_with_no_object_and_no_form():
 @pytest.mark.django_db(transaction=True)
 async def test_a_record_selected_by_a_query_parameter_is_authorized_and_edited():
     alice, mine, _ = await sync_to_async(_world)()
-    socket, mounted = await _open(Queue, alice, "/queue/?open=%s" % mine.pk, {"open": str(mine.pk)})
+    socket, mounted = await _open(
+        LegacyQueue, alice, "/legacy-queue/?open=%s" % mine.pk, {"open": str(mine.pk)}
+    )
     try:
         assert mounted["type"] == "mount", mounted
         assert mine.name in json.dumps(mounted)
@@ -902,13 +917,13 @@ async def _restore(view_class, url_path, user, session, selected, typed_for):
 async def test_a_restored_view_does_not_bind_one_records_input_to_another():
     """The saved state is keyed by path, so the same session holds whichever record was open
     last. Input typed for A, then a restore with B selected: B starts from B's own values."""
-    from django.contrib.sessions.backends.db import SessionStore
+    from djust.tests._live_session import live_session
 
     alice, a, _ = await sync_to_async(_world)()
     b = await sync_to_async(Group.objects.create)(name="Bee " + uuid.uuid4().hex[:6])
     await sync_to_async(alice.groups.add)(b)
-    session = await sync_to_async(SessionStore)()
-    await sync_to_async(session.create)()
+    # Alice logged into the session the requests and the socket share.
+    session = await sync_to_async(live_session)(alice)
     socket, frame = await _restore(QueueSnapshot, "/queue-snapshot/", alice, session, b, a)
     try:
         assert frame["type"] == "mount", frame
@@ -981,7 +996,7 @@ def test_a_listed_name_that_is_not_a_method_is_a_configuration_error():
     with pytest.raises(ImproperlyConfigured, match="not a method"):
 
         class Typo(ModelFormMixin[Group], LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             object_read_only_events = frozenset({"no_such_handler"})
 
 
@@ -1000,7 +1015,7 @@ def test_the_fingerprint_sees_an_in_place_change_to_a_mutable_value():
 
 def test_a_lookup_that_raises_attribute_error_is_a_required_object():
     class Eager(ModelFormMixin[Group], LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         object_optional = True
 
         def get_object_lookup(self):
