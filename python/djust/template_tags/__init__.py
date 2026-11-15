@@ -53,10 +53,10 @@ logger = logging.getLogger(__name__)
 # ``Node::CustomTag``). A resolved value (e.g. Markdown source text) is NOT a
 # token, and re-running the kwarg-split / dotted-lookup heuristics on it
 # corrupts any value containing ``=`` (tuple-split → ``str((k, v))`` repr) or a
-# leading dotted segment that happens to match a context key (#2037). These
-# patterns gate the heuristics so a non-token value is returned verbatim.
+# leading dotted segment that happens to match a context key (#2037). The
+# kwarg split is gated on this pattern so a non-token value is returned
+# verbatim; a resolved value is never looked up in the context (#3882).
 _KWARG_TOKEN_RE = re.compile(r"^[A-Za-z_]\w*=")  # ``key=`` — identifier then '='
-_VAR_TOKEN_RE = re.compile(r"^[A-Za-z_]\w*(\.\w+)*$")  # dotted-identifier path
 
 #: The reserved context key under which the engine hands a handler that declares
 #: ``TYPED_ARGS = True`` its ``key=<expression>`` operands as resolved, typed Python values
@@ -226,9 +226,13 @@ class TagHandler:
 
         Handles:
         - String literals ('value' or "value") -> returns stripped string
-        - Integer literals (123) -> returns int
-        - Context variables (post.slug) -> returns resolved value
+        - Integer literals (123) -> returns int (only the canonical spelling:
+          a resolved ``"007"`` stays the text it is, #3883)
         - Named parameters (key=value) -> returns (key, resolved_value)
+        - Anything else -> returned as it is. The engine resolved it before
+          the handler was called; it is never looked up in the context a
+          second time (#3882): a value that happens to spell a variable's
+          name (``post.slug``) is that value, not the variable's.
 
         Parameters
         ----------
@@ -257,51 +261,52 @@ class TagHandler:
         if hasattr(arg, "__html__"):
             return arg
 
-        arg = arg.strip()
-
-        # String literals. Still reached: the block and assign channels pass a
-        # quoted literal VERBATIM (their contract is "unresolved ⇒ keep the raw
-        # token", and the quotes are its type tag), and a direct Python caller
-        # passes whatever it likes.
-        if (arg.startswith("'") and arg.endswith("'")) or (
-            arg.startswith('"') and arg.endswith('"')
-        ):
-            return arg[1:-1]
-
-        # Integer literals
-        if arg.lstrip("-").isdigit():
-            return int(arg)
-
-        # Named parameters: key=value — only when the arg is syntactically a
+        # Named parameters: key=value, only when the arg is syntactically a
         # kwarg TOKEN (bare identifier immediately followed by '='). A value
         # that merely CONTAINS '=' (e.g. Rust-resolved Markdown source text
-        # "x = y") must not be tuple-split (#2037 double-resolution).
-        if _KWARG_TOKEN_RE.match(arg):
+        # "x = y") must not be tuple-split (#2037 double-resolution). The VALUE
+        # is read once, as a value (``_literal_or_text``): it is never split
+        # again (``name=v`` with ``v = "label=x"`` is the text ``label=x``).
+        if _KWARG_TOKEN_RE.match(arg.lstrip()):
             key, value = arg.split("=", 1)
-            return (key.strip(), self._resolve_arg(value, context))
+            return (key.strip(), _literal_or_text(value))
+        return _literal_or_text(arg)
 
-        # Context variable (dot-separated like post.slug) — only when the arg
-        # is a bare dotted-identifier TOKEN. A non-token string (whitespace,
-        # markup, newlines) is a value the Rust dispatch already resolved; it
-        # is returned verbatim rather than re-resolved against the context
-        # (which would corrupt values whose first segment matches a key).
-        if not _VAR_TOKEN_RE.match(arg):
-            return arg
 
-        parts = arg.split(".")
-        result = context.get(parts[0])
+def _literal_or_text(text: str) -> Any:
+    """One operand of a ``TagHandler`` as the handler reads it.
 
-        for part in parts[1:]:
-            if result is None:
-                return arg  # Return original if lookup fails
-            if isinstance(result, dict):
-                result = result.get(part)
-            elif hasattr(result, part):
-                result = getattr(result, part)
-            else:
-                return arg  # Return original if lookup fails
+    A source token never carries whitespace (the engine splits a tag on it), so the shape is read
+    from the text exactly as it arrived and anything with padding is a resolved value, kept with
+    its padding (#3872).
 
-        return result if result is not None else arg
+    * A quoted literal loses its quotes. Still reached: the block and assign channels pass a
+      quoted literal VERBATIM (their contract is "unresolved => keep the raw token", and the
+      quotes are its type tag), a keyword literal arrives as ``key="x"``, and a direct Python
+      caller passes whatever it likes. A RESOLVED string that is itself quoted is read the same
+      way: the text cannot tell the two apart, only a typed channel could.
+    * An integer literal is an ``int``, only in the spelling ``int`` gives back: the engine
+      hands an integer literal and a resolved STRING over as the same text, and ``"007"`` read
+      as ``7`` changes the value the page shows (#3883).
+    * Anything else is a value the engine already resolved (a bare name it could not resolve
+      arrives empty) and is returned as it is. It used to be looked up in the context when it was
+      shaped like a dotted name: a resolved value that spelled a path (a user's text
+      ``api_token``, ``user.email``) printed what the path reached, walking attributes (#3882).
+      The engine is the one resolver of an operand.
+    """
+    if (text.startswith("'") and text.endswith("'") and len(text) > 1) or (
+        text.startswith('"') and text.endswith('"') and len(text) > 1
+    ):
+        return text[1:-1]
+    if _INT_TEXT.fullmatch(text) and str(int(text)) == text:
+        return int(text)
+    return text
+
+
+#: An integer literal: ASCII digits with an optional minus, bounded in length. ``str.isdigit``
+#: also accepts ``"\u00b2"`` and other non-ASCII digits that ``int`` refuses, and ``int`` refuses
+#: a string over 4,300 digits: both used to raise out of a handler instead of being text.
+_INT_TEXT = re.compile(r"-?[0-9]{1,18}")
 
 
 class AssignTagHandler(TagHandler):

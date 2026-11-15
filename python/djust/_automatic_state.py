@@ -619,7 +619,8 @@ def _component_values(component: Any) -> Tuple[Any, Dict[str, Any]]:
     state = getattr(component, "state", None)
     if isinstance(state, dict):
         # Its identity is the view's to assign, not saved state.
-        return state, {key: value for key, value in state.items() if key != "component_id"}
+        # Unbound: a field may be named ``items`` (#4134).
+        return state, {key: value for key, value in dict.items(state) if key != "component_id"}
     holder = state if state is not None and hasattr(state, "__dict__") else component
     values = {
         key: value

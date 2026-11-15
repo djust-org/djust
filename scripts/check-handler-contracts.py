@@ -27,12 +27,8 @@ _APP_LEVEL_EVENTS = {
     "copy_code",
     "dashboard_move",
     "dashboard_resize",
-    "date_next_month",
-    "date_prev_month",
     "date_select",
     "default",
-    "dismiss_alert",
-    "dismiss_toast",
     "export",
     "filter_change",
     "filter_clear",
@@ -40,7 +36,6 @@ _APP_LEVEL_EVENTS = {
     "import_data",
     "inline_edit",
     "kanban_add_card",
-    "kanban_add_column",
     "kanban_move",
     "load_more",
     "mark_notification_read",
@@ -55,11 +50,6 @@ _APP_LEVEL_EVENTS = {
     "save_signature",
     "select_model",
     "send",
-    "toggle_menu",
-    "toggle_notifications",
-    "toggle_sidebar",
-    "toggle_split_menu",
-    "tree_expand",
     "tree_select",
     "upload_file",
     "x_event",
@@ -69,6 +59,10 @@ _APP_LEVEL_EVENTS = {
     # toggle, navigate, step) are answered by descriptors since #4126.
     "accept_cookies",
     "palette_search",
+    # #4134: the remaining UI-state defaults (open a menu, collapse the sidebar,
+    # expand a tree node, dismiss an alert or a toast, step the date picker's
+    # month) are answered by descriptors too. What a menu item, a tree
+    # selection, a picked date or a notification does stays listed above.
 }
 
 #: Tag arguments whose event never reaches the view, so no handler answers it
@@ -108,18 +102,14 @@ def extract_event_defaults(path: Path) -> dict:
             continue
         if not isinstance(node, ast.FunctionDef):
             continue
-        args_with_defaults = node.args.args[-len(node.args.defaults):]
+        args_with_defaults = node.args.args[-len(node.args.defaults) :]
         for arg, default in zip(args_with_defaults, node.args.defaults):
             if arg.arg in _NOT_SENT_TO_THE_VIEW:
                 continue
             if arg.arg.endswith("_event") and isinstance(default, ast.Constant):
                 if isinstance(default.value, str) and default.value:
-                    out.setdefault(default.value, []).append(
-                        f"{path.name}:{node.lineno}"
-                    )
-        for arg, default in zip(
-            node.args.kwonlyargs, node.args.kw_defaults
-        ):
+                    out.setdefault(default.value, []).append(f"{path.name}:{node.lineno}")
+        for arg, default in zip(node.args.kwonlyargs, node.args.kw_defaults):
             if (
                 default
                 and arg.arg not in _NOT_SENT_TO_THE_VIEW
@@ -128,9 +118,7 @@ def extract_event_defaults(path: Path) -> dict:
                 and isinstance(default.value, str)
                 and default.value
             ):
-                out.setdefault(default.value, []).append(
-                    f"{path.name}:{node.lineno} (kwonly)"
-                )
+                out.setdefault(default.value, []).append(f"{path.name}:{node.lineno} (kwonly)")
     return out
 
 
@@ -140,9 +128,7 @@ def _str_constants(node) -> list:
         return [node.value]
     if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
         return [
-            e.value
-            for e in node.elts
-            if isinstance(e, ast.Constant) and isinstance(e.value, str)
+            e.value for e in node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)
         ]
     return []
 
@@ -152,11 +138,7 @@ def extract_handler_names(path: Path) -> set:
     component's ``class Meta`` answers (``event = ...`` and
     ``events = (...)``, #4037): the descriptors register those on the view."""
     tree = ast.parse(path.read_text())
-    names = {
-        n.name
-        for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef)
-    }
+    names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == "Meta":
             for stmt in node.body:
@@ -192,14 +174,10 @@ def run(tag_files, handler_files, app_level_events=None):
     ]
 
     if mismatches:
-        lines = [
-            f"Found {len(mismatches)} tag-emit defaults "
-            f"with no matching handler:"
-        ]
+        lines = [f"Found {len(mismatches)} tag-emit defaults with no matching handler:"]
         for name, sites in mismatches:
             lines.append(
-                f"  '{name}' — emitted at {', '.join(sites)}; "
-                f"no handler in mixins/ or components/"
+                f"  '{name}' — emitted at {', '.join(sites)}; no handler in mixins/ or components/"
             )
         return 1, "\n".join(lines)
 
@@ -214,7 +192,9 @@ def run(tag_files, handler_files, app_level_events=None):
 def build_arg_parser():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     p.add_argument(
-        "--tag-files", nargs="*", action="extend",
+        "--tag-files",
+        nargs="*",
+        action="extend",
         default=None,
         help="Tag/module files to scan for _event defaults",
     )
@@ -224,7 +204,9 @@ def build_arg_parser():
         help="Directory of mixin files providing handler methods",
     )
     p.add_argument(
-        "--component-files", nargs="*", action="extend",
+        "--component-files",
+        nargs="*",
+        action="extend",
         default=None,
         help="Additional component files providing handler methods",
     )
@@ -244,20 +226,18 @@ def main(argv=None):
     if args.mixin_dir:
         handler_files.extend(sorted(Path(args.mixin_dir).glob("*.py")))
     else:
-        handler_files.extend(
-            sorted((ROOT / "python/djust/components/mixins").glob("*.py"))
-        )
+        handler_files.extend(sorted((ROOT / "python/djust/components/mixins").glob("*.py")))
     if args.component_files:
         handler_files.extend(Path(p) for p in args.component_files)
     else:
-        handler_files.extend([
-            ROOT / "python/djust/components/base.py",
-            ROOT / "python/djust/components/rust_handlers.py",
-        ])
-        # The descriptors answer their tags' default events (#4037).
         handler_files.extend(
-            sorted((ROOT / "python/djust/components/descriptors").glob("*.py"))
+            [
+                ROOT / "python/djust/components/base.py",
+                ROOT / "python/djust/components/rust_handlers.py",
+            ]
         )
+        # The descriptors answer their tags' default events (#4037).
+        handler_files.extend(sorted((ROOT / "python/djust/components/descriptors").glob("*.py")))
 
     exit_code, msg = run(tag_files, handler_files)
     print(msg)

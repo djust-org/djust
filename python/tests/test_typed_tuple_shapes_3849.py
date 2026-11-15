@@ -44,7 +44,7 @@ import pytest
 from django.template import Context, Engine
 from django.utils.html import escape
 
-from djust.components import rust_handlers
+from djust.components import _operands, rust_handlers
 from djust.template_tags import TYPED_ARGS_KEY
 
 COMPONENTS = "djust.components.templatetags.djust_components"
@@ -77,7 +77,7 @@ def engines():
         {"NAME": "tuple-shapes-3849", "DIRS": [], "APP_DIRS": True, "OPTIONS": {}}
     )
     django = Engine(
-        dirs=[str(Path(rust_handlers.__file__).resolve().parent / "templates")],
+        dirs=[str(Path(_operands.__file__).resolve().parent / "templates")],
         libraries={"djust_components": COMPONENTS},
     )
     return rust, django
@@ -316,21 +316,21 @@ class TestACostIsCountedNotTimed:
 
     @pytest.mark.parametrize("size", [10, 20_000])
     def test_a_flat_tuple_is_copied_without_a_python_loop_per_element(self, size):
-        """Executed source lines of ``rust_handlers`` while converting: the same for 10 elements
+        """Executed source lines of ``_operands`` (where ``_from_typed`` lives) while converting: the same for 10 elements
         and for 20,000, because a flat tuple is one C-level copy (``list(value)``). A per-element
         Python loop would make this grow with ``size``."""
         value = tuple(range(size))
-        lines = _line_events_in(rust_handlers.__file__, lambda: rust_handlers._from_typed(value))
+        lines = _line_events_in(_operands.__file__, lambda: rust_handlers._from_typed(value))
         assert lines <= 12, f"{lines} source lines executed for {size} elements"
 
     def test_the_count_does_not_depend_on_the_size(self):
         small = _line_events_in(
-            rust_handlers.__file__, lambda: rust_handlers._from_typed(tuple(range(10)))
+            _operands.__file__, lambda: rust_handlers._from_typed(tuple(range(10)))
         )
         large = _line_events_in(
-            rust_handlers.__file__, lambda: rust_handlers._from_typed(tuple(range(20_000)))
+            _operands.__file__, lambda: rust_handlers._from_typed(tuple(range(20_000)))
         )
-        assert small == large
+        assert 0 < small == large, "no line of the module ran: the tracer watches the wrong file"
 
     def test_a_tuple_with_a_nested_tuple_is_still_converted_all_the_way_down(self):
         """The fast path must not skip a nested tuple: the slow path is for exactly this."""

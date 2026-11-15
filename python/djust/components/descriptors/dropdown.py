@@ -8,6 +8,10 @@ Usage::
 
         # self.menu.is_open → False
         # toggle_dropdown event auto-registered
+
+It also answers ``{% dropdown_menu %}``'s ``toggle_menu`` and ``{% split_button %}``'s
+``toggle_split_menu`` (#4134): ``{% dropdown_menu open=menu.is_open %}``,
+``{% split_button is_open=menu.is_open %}``.
 """
 
 from djust.decorators import event_handler
@@ -27,7 +31,9 @@ class Dropdown(LiveComponent):
 
     class Meta:
         event = "toggle_dropdown"
-        events = ("close_dropdown",)  # #4037
+        # #4037; ``toggle_menu`` / ``toggle_split_menu`` are the ``{% dropdown_menu %}`` and
+        # ``{% split_button %}`` tags' default ``toggle_event`` (#4134).
+        events = ("close_dropdown", "toggle_menu", "toggle_split_menu")
         tier = "client"
         # TODO(DEP-002 7.4): Client-tier WebSocket skip — when djust core client
         # JS supports it, client-tier components should skip the WebSocket send
@@ -42,3 +48,15 @@ class Dropdown(LiveComponent):
     def close_dropdown(self, **kwargs: Any) -> None:
         """Close the dropdown."""
         bound_state(self).is_open = False
+
+    @event_handler
+    def toggle_menu(self, **kwargs: Any) -> None:
+        """Open or close ``{% dropdown_menu %}`` (its default ``toggle_event``)."""
+        state = bound_state(self)
+        state.is_open = not state.is_open
+
+    @event_handler
+    def toggle_split_menu(self, **kwargs: Any) -> None:
+        """Open or close ``{% split_button %}``'s menu (its default ``toggle_event``)."""
+        state = bound_state(self)
+        state.is_open = not state.is_open

@@ -21,6 +21,29 @@ __all__ = ["ComponentMixin", "TypedState"]
 _TS = TypeVar("_TS", bound="TypedState")
 
 
+#: Field names TypedState cannot take: it calls these dict methods on itself. Every
+#: other dict method name (``items``, ``values``, ``keys`` ...) is a valid field: djust
+#: reads a state through the unbound ``dict`` methods, never the instance's (#4134).
+_RESERVED_FIELD_NAMES = {
+    "get": "TypedState reads every field with self.get()",
+    "update": "TypedState sets the values it is created with through self.update()",
+}
+
+
+def state_dict(state: Any) -> Dict[str, Any]:
+    """A component state as a plain ``dict``, read without its own methods (#4134).
+
+    A TypedState field may be named after a dict method (``items``, ``values``,
+    ``keys`` ...), which replaces that method on the instance, so code that saves,
+    encodes or walks a state must not call ``state.items()``. This reads it through
+    the unbound ``dict`` methods. ``json.dumps`` walks a dict subclass with the
+    instance's ``items()``, so encode ``state_dict(state)``, not the state.
+    """
+    if isinstance(state, dict):
+        return dict(dict.items(state))
+    return dict(state.items())
+
+
 class TypedState(dict):
     """Dict subclass with typed property access from class annotations.
 
@@ -50,6 +73,15 @@ class TypedState(dict):
         for name in list(cls.__annotations__):
             if name.startswith("_"):
                 continue
+            if name in _RESERVED_FIELD_NAMES:
+                # TypedState reads and writes its own fields through ``self.get``
+                # and ``self.update``; a field of that name replaces the method
+                # with a property, so the class cannot work at all (#4134).
+                raise TypeError(
+                    "%s.%s: a TypedState field cannot be named %r: %s, and the field "
+                    "would replace that method. Rename the field."
+                    % (cls.__qualname__, name, name, _RESERVED_FIELD_NAMES[name])
+                )
             default = getattr(cls, name, None)
             cls._make_property(name, default)
 

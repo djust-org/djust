@@ -534,6 +534,58 @@ def attr_text(value: Any) -> str:
     return str(escape(_exact_str(value)))
 
 
+def calendar_month(year: Any, month: Any, today: Any = None) -> "tuple[int, int]":
+    """The ``(year, month)`` a ``{% date_picker %}`` shows, each defaulted on its own (#4134).
+
+    A year that is not a whole number from 1 to 9999 is this year; a month that is
+    not one from 1 to 12 is this month. So ``year=2030`` with no month shows this
+    month of 2030, and ``0`` (or nothing) shows today's. A boolean is neither.
+    Shared by the tag and ``djust.components.descriptors.DatePicker`` so the month
+    the calendar shows is the month previous / next step from.
+    """
+    import datetime
+
+    today = today or datetime.date.today()
+
+    def whole(value: Any, low: int, high: int) -> "int | None":
+        if isinstance(value, bool) or value is None or value == "":
+            return None
+        try:
+            number = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if low <= number <= high else None
+
+    y = whole(year, datetime.MINYEAR, datetime.MAXYEAR)
+    m = whole(month, 1, 12)
+    return (today.year if y is None else y, today.month if m is None else m)
+
+
+def event_is_off(value: Any) -> bool:
+    """Whether a tag's event argument turns its control off (#4134).
+
+    ``None``, ``False`` and ``""`` all mean "no control": a tag whose control is
+    optional (a close or dismiss button) leaves it out, so nothing sends an event
+    no handler answers. Any other value is an event name. One rule for all three
+    because each of them, drawn as ``dj-click``, sends a name nothing answers.
+    """
+    return value is None or value is False or value == ""
+
+
+def component_id_attr(component_id: Any) -> str:
+    """`` data-component-id="..."`` for a control whose event a declared component
+    answers, or ``""`` when no ``component_id=`` was given (#4134).
+
+    The client sends the nearest ``data-component-id`` with the event, so with two
+    components of one type on a view (``confirm = Modal()``, ``delete = Modal()``)
+    the event reaches the one the tag names. Put it on those controls only, never
+    on an element that also holds controls sending the application's own events.
+    """
+    if event_is_off(component_id):
+        return ""
+    return f' data-component-id="{attr_text(component_id)}"'
+
+
 #: The HTML spec's "ASCII whitespace": TAB, LF, FF, CR and SPACE. Not VT, and not
 #: Unicode whitespace (``str.isspace()`` would be both): a browser does not split
 #: a ``srcset`` on U+00A0, so neither may this.

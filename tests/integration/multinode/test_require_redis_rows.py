@@ -90,6 +90,9 @@ def test_the_ci_job_requires_the_rows_and_runs_the_harness():
     assert runs, "no step of multinode-redis-rows runs tests/integration/multinode"
     for step in runs:
         assert step.get("env", {}).get(multinode.REQUIRE_REDIS_ENV) == "1", step
+    # The packaged systemd service is stopped: the harness starts its own servers.
+    install = [step for step in steps if "apt-get install" in step["run"]]
+    assert install and "systemctl stop redis-server" in install[0]["run"], install
     # Non-gating until it has been green on a runner once (#4136), then promoted.
     assert job.get("continue-on-error") is True
     summary = workflow["jobs"]["test-summary"]

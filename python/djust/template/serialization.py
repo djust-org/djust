@@ -17,6 +17,7 @@ from uuid import UUID
 from django.db.models import Model
 from django.db.models.fields.files import FieldFile
 
+from djust._mapping import mapping_items
 from djust.serialization import django_json_datetime
 
 logger = logging.getLogger(__name__)
@@ -220,7 +221,7 @@ def serialize_value(
 
     # Handle dict - recursively serialize
     if isinstance(value, dict):
-        return {k: serialize_value(v, for_render=for_render) for k, v in value.items()}
+        return {k: serialize_value(v, for_render=for_render) for k, v in mapping_items(value)}
 
     # Handle list/tuple - recursively serialize
     if isinstance(value, (list, tuple)):

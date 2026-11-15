@@ -18,6 +18,7 @@ from django.utils.decorators import classonlymethod
 from django.views import View
 
 from ._class_snapshot import namespace as _class_namespace
+from ._mapping import mapping_values
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
 from ._deprecation import class_statement_stacklevel, warn_deprecated
 from .change_detection import CHANGE_DETECTION_IGNORED, deep_fingerprint, fingerprints_by_content
@@ -170,7 +171,7 @@ def _holds_model(value: Any) -> bool:
     if isinstance(value, models.Model):
         return True
     if isinstance(value, dict):
-        return any(_holds_model(v) for v in value.values())
+        return any(_holds_model(v) for v in mapping_values(value))
     if isinstance(value, (list, tuple)):
         return any(_holds_model(v) for v in value)
     return False
@@ -1550,13 +1551,15 @@ class LiveView(
         components_state: Dict[str, Dict[str, Any]] = {}
         from .components.base import BoundComponent
         from .components._interactive import DropdownMenu
+        from .components.mixins.base import state_dict
 
         for component_id, component in registry.items():
             try:
                 comp_state: Dict[str, Any] = {}
                 # ADR-031: a bound component's public state IS its State dict.
+                # ``state_dict``: a State field may be named ``items`` (#4134).
                 items = (
-                    component.state.items()
+                    state_dict(component.state).items()
                     if isinstance(component, (BoundComponent, DropdownMenu))
                     else component.__dict__.items()
                 )

@@ -140,6 +140,7 @@ NON_EVENT_ATTRIBUTES = frozenset(
         "dj-copy-feedback",
         "dj-debounce",
         "dj-dialog",
+        "dj-dialog-no-close",
         "dj-disable-with",
         "dj-flip",
         "dj-force-value",
@@ -505,9 +506,11 @@ class _Flattener:
         Each becomes an element ``<djust-tag-event dj-click="close_modal"
         data-djust-tag="modal close_event">``, located at the tag, so a missing
         handler is reported like a ``dj-click`` written by hand (#4126). An
-        event given by a variable is written as a value (dynamic); one turned
-        off (``close_event=None`` or ``""``) or whose control the tag does not
-        draw (``requires`` false) is left out.
+        event given by a variable is written as a value (dynamic); one whose
+        control the tag does not draw (``requires`` false, or an optional
+        control turned off with ``None``, ``False`` or ``""``, #4134) is left
+        out. A control that is not optional has no off state: such a value is
+        written as an off binding, which T019 reports.
         """
         from djust.components.tag_events import TAG_EVENTS
 
@@ -526,8 +529,12 @@ class _Flattener:
                 name = event.default
             elif found is _LITERAL:
                 if value is None or value is False or value == "":
-                    # The tag has no off state: it still draws the control,
-                    # with dj-click="None" (or empty), which nothing answers.
+                    if event.optional:
+                        # The off state: the tag leaves the control out (#4134).
+                        continue
+                    # The control is what the tag is for, so it has no off
+                    # state: it still draws it, with dj-click="None" (or
+                    # empty), which nothing answers.
                     name, off = "off", ' data-djust-tag-off="%s"' % html.escape(repr(value))
                 else:
                     name = str(value)

@@ -9,6 +9,7 @@ from django.utils.datastructures import MultiValueDict
 from django.utils.safestring import SafeData
 
 from .._rust import RustLiveView
+from .._mapping import mapping_values
 from .._exposure_providers import (
     RUST_RENDER_PROVIDER,
     ExplicitRenderContext,
@@ -232,7 +233,7 @@ def _collect_sub_ids(
     visited.add(value_id)
     collected.add(value_id)
     if isinstance(value, dict):
-        for v in value.values():
+        for v in mapping_values(value):
             _collect_sub_ids(v, collected, visited, depth + 1)
     elif isinstance(value, (list, tuple)):
         for v in value:

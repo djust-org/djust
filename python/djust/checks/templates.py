@@ -167,6 +167,9 @@ _T012_EXEMPT_ATTRIBUTES = frozenset(
         "dj-copy-class",
         "dj-copy-feedback",
         "dj-dialog",
+        # Written by {% modal native=True %} when its close control is off: a
+        # marker the client reads, not an event binding (#4134).
+        "dj-dialog-no-close",
         "dj-flip",
         "dj-remove",
         "dj-remove-duration",

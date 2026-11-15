@@ -29,6 +29,7 @@ from djust.components.rust_handlers import ProgressHandler
 from djust.components.templatetags._advanced import OrgChartNode
 from djust.components.templatetags._dev_tools import FileTreeNode
 from djust.components.templatetags.djust_components import FeedbackWidgetNode
+from djust.tests.native_call import native_render
 
 from scripts.lib import safe_markup_audit as audit
 
@@ -124,8 +125,10 @@ class TestProgressHandler:
 
     @pytest.mark.parametrize("refused", ["abc", HOSTILE])
     def test_a_value_that_is_not_a_number_is_refused(self, refused):
+        # As the engine hands it (#3882): a raw ``value=v`` would give the handler the text "v",
+        # which is refused too, so the test would pass without the refused value reaching it.
         with pytest.raises(ValueError):
-            ProgressHandler().render(["value=v"], {"v": refused})
+            native_render(ProgressHandler(), ["value=v"], {"v": refused})
 
 
 class TestTheAuditEntriesAreGone:
