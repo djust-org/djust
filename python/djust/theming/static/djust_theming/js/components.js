@@ -1,7 +1,8 @@
 /**
  * djust_theming - Component behavior layer
  *
- * Thin behavior layer for interactive components (modals, dropdowns, tabs).
+ * Thin behavior layer for interactive components (modals, dropdowns, tabs,
+ * the alert's and the toast's dismiss button).
  * Uses data-attribute hooks. No dependencies. ~4KB unminified.
  *
  * Open and closed are the ``hidden`` attribute the templates render, not an
@@ -302,6 +303,26 @@
     }
 
     // =========================================================================
+    // Dismiss (alert, toast)
+    // =========================================================================
+
+    // The alert's and the toast's close button carry `data-theme-dismiss` and
+    // used to be `onclick="this.parentElement.remove()"`, which a script-src
+    // without 'unsafe-inline' refuses (#4146). This is that handler, delegated
+    // on `document`: it covers a button present at load and one a LiveView
+    // patch inserts later. Unlike the modal and dropdown bindings it does not
+    // stand down on a LiveView page, because the inline handler did not: the
+    // button carries no `dj-click`, so nothing on the server would do it.
+    function handleDismissClick(e) {
+        var target = e.target;
+        if (!target || typeof target.closest !== 'function') return;
+        var btn = target.closest('[data-theme-dismiss]');
+        if (!btn) return;
+        var parent = btn.parentElement;
+        if (parent) parent.remove();
+    }
+
+    // =========================================================================
     // Initialization
     // =========================================================================
 
@@ -344,6 +365,7 @@
     // Global event listeners (only bind once)
     document.addEventListener('keydown', handleModalEsc);
     document.addEventListener('click', handleDropdownClickOutside);
+    document.addEventListener('click', handleDismissClick);
 
     // Re-init when djust LiveView updates the DOM
     window.addEventListener('djust:dom-update', function() {

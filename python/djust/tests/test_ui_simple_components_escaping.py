@@ -381,20 +381,25 @@ def test_marked_safe_url_is_checked_and_escaped_like_any_other() -> None:
     assert "javascript:" not in html
 
 
-# --- NavBar id inside the inline onclick handlers --------------------------------
+# --- NavBar id in the menu toggle's marker (#4146; was an inline onclick) --------
 
 
 @pytest.mark.parametrize("framework", ("tailwind", "plain"))
-def test_navbar_id_in_onclick_is_js_string_escaped(framework: str) -> None:
-    html = _python_render(NavBar(items=[], id="x');alert(1);//"), framework)
-    assert "x');alert(1)" not in html
-    assert "x\\u0027)" in html
+def test_navbar_id_in_toggle_marker_is_attribute_escaped(framework: str) -> None:
+    from scripts.lib.template_library_parity import url_sweep
+
+    html = _python_render(NavBar(items=[], id='x" onclick="alert(1)'), framework)
+    names = {a.name for a in url_sweep.attributes(html)}
+    assert "onclick" not in names, html
+    assert 'data-navbar-toggle="x&quot; onclick=&quot;alert(1)-' in html
 
 
 @pytest.mark.parametrize("framework", ("tailwind", "plain"))
-def test_navbar_plain_id_in_onclick_is_unchanged(framework: str) -> None:
+def test_navbar_plain_id_in_toggle_marker_is_unchanged(framework: str) -> None:
     html = _python_render(NavBar(items=[], id="main-nav"), framework)
-    assert "getElementById('main-nav-" in html
+    suffix = "mobile" if framework == "tailwind" else "menu"
+    assert 'data-navbar-toggle="main-nav-%s"' % suffix in html
+    assert 'id="main-nav-%s"' % suffix in html
 
 
 # --- Default render() for components with no Rust implementation or template ----

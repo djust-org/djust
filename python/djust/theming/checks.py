@@ -1,5 +1,6 @@
 """Django system checks for djust-theming configuration validation."""
 
+import re
 from typing import Any, Iterator
 
 from django.conf import settings
@@ -314,5 +315,63 @@ def check_component_catalog_css(app_configs: Any, **kwargs: Any) -> list[CheckMe
                 "themselves). See the 2.0 migration guide."
             ),
             id="djust_theming.W004",
+        )
+    ]
+
+
+#: ``{% theme_head ... include_js=False %}``: the page leaves out ``theme.js`` and ``components.js``.
+_THEME_HEAD_WITHOUT_JS = re.compile(r"\{%-?\s*theme_head\b[^%]*\binclude_js\s*=\s*False\b")
+#: A dismiss button the theming templates draw: every toast, and an alert with ``dismissible``
+#: set to anything but a literal ``False``.
+_DISMISS_BUTTON_TAG = re.compile(
+    r"\{%-?\s*(?:theme_toast\b|theme_alert\b[^%]*\bdismissible\s*=\s*(?!False\b))"
+)
+
+
+@register(Tags.compatibility)
+def check_dismiss_needs_components_js(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """Report a project whose alert or toast close button may have no script behind it (#4146).
+
+    The close button of ``{% theme_alert dismissible=True %}`` and ``{% theme_toast %}`` was an
+    inline ``onclick``, which a ``script-src`` without ``'unsafe-inline'`` refuses. It is now a
+    ``data-theme-dismiss`` marker handled by ``djust_theming/js/components.js``, which
+    ``{% theme_head %}`` loads unless it is given ``include_js=False``. A project that does that,
+    renders one of the two tags and loads ``components.js`` nowhere itself has a close button that
+    does nothing. Only project templates are read (``djust.checks``' template directories).
+    """
+    from djust.checks.utils import (
+        _blank_template_comments,
+        _get_template_dirs,
+        _iter_template_files,
+    )
+
+    without_js: list[str] = []
+    dismissing: list[str] = []
+    for path in _iter_template_files(_get_template_dirs()):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                source = _blank_template_comments(handle.read())
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "djust_theming/js/components.js" in source:
+            return []
+        if _THEME_HEAD_WITHOUT_JS.search(source):
+            without_js.append(path)
+        if _DISMISS_BUTTON_TAG.search(source):
+            dismissing.append(path)
+    if not (without_js and dismissing):
+        return []
+    return [
+        Warning(
+            "A template renders {%% theme_head include_js=False %%} (%s) and another renders a "
+            "dismissible {%% theme_alert %%} or a {%% theme_toast %%} (%s). Their close button "
+            "is handled by djust_theming/js/components.js, which that page does not load, so it "
+            "does nothing there." % (without_js[0], dismissing[0]),
+            hint=(
+                "Load {% static 'djust_theming/js/components.js' %} on those pages (a <script "
+                "src> with defer), or drop include_js=False. The button used to be an inline "
+                "onclick, which a strict Content-Security-Policy refuses (#4146)."
+            ),
+            id="djust_theming.W005",
         )
     ]

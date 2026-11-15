@@ -13,26 +13,28 @@ from django.utils.html import conditional_escape
 
 from djust.components.utils import data_url_attr, attr_text
 
-# Characters rewritten when a value is placed inside a single-quoted JS string
-# in an inline handler attribute. Letters, digits, "-" and "_" are unchanged.
-_JS_STR_TRANSLATION = {
-    ord("\\"): "\\u005C",
-    ord("'"): "\\u0027",
-    ord('"'): "\\u0022",
-    ord("<"): "\\u003C",
-    ord(">"): "\\u003E",
-    ord("&"): "\\u0026",
-    ord("="): "\\u003D",
-    ord("`"): "\\u0060",
-    0x2028: "\\u2028",
-    0x2029: "\\u2029",
-}
-_JS_STR_TRANSLATION.update((c, "\\u%04X" % c) for c in range(32))
+#: The toggle module the Tailwind and plain renderers load (#4146). A menu toggle used to be an
+#: inline ``onclick``, which a ``script-src`` without ``'unsafe-inline'`` refuses; now the button
+#: carries ``data-navbar-toggle`` (the menu's id) and ``data-navbar-toggle-class`` (the class to
+#: toggle) and this module, delegated on ``document``, does the same ``classList.toggle``. The
+#: component loads it itself, as ``data_table`` loads ``data-table-row-click.js``, so a page needs no
+#: new setup: a same-origin script is allowed by ``script-src 'self'``.
+NAVBAR_TOGGLE_SCRIPT = "djust_components/navbar-toggle.js"
 
 
-def _js_str(value: Any) -> str:
-    """Return ``value`` for use inside a single-quoted JS string in an HTML attribute."""
-    return str(value).translate(_JS_STR_TRANSLATION)
+def _toggle_script_tag() -> str:
+    """The ``<script>`` that loads :data:`NAVBAR_TOGGLE_SCRIPT` (``defer``; it runs once per page)."""
+    from django.templatetags.static import static
+
+    return '<script src="%s" defer></script>' % attr_text(static(NAVBAR_TOGGLE_SCRIPT))
+
+
+def _toggle_attrs(target_id: str, css_class: str) -> str:
+    """The marker attributes of a menu toggle: which element, and which class it toggles."""
+    return 'data-navbar-toggle="%s" data-navbar-toggle-class="%s"' % (
+        attr_text(target_id),
+        attr_text(css_class),
+    )
 
 
 class NavBar(Component):
@@ -413,7 +415,7 @@ class NavBar(Component):
         # Mobile menu button
         parts.append('            <div class="md:hidden">')
         parts.append(
-            f'                <button type="button" class="{link_class} p-2 rounded-md" onclick="document.getElementById(\'{_js_str(self.id)}-mobile\').classList.toggle(\'hidden\')">'
+            f'                <button type="button" class="{link_class} p-2 rounded-md" {_toggle_attrs(f"{self.id}-mobile", "hidden")}>'
         )
         parts.append(
             '                    <svg class="h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">'
@@ -474,6 +476,8 @@ class NavBar(Component):
         parts.append("        </div>")
 
         parts.append("    </div>")
+        # Inside the <nav>, so the component keeps one root element.
+        parts.append(_toggle_script_tag())
         parts.append("</nav>")
 
         return "\n".join(parts)
@@ -501,7 +505,7 @@ class NavBar(Component):
 
         # Toggle button
         parts.append(
-            f"        <button class=\"navbar-toggler\" onclick=\"document.getElementById('{_js_str(self.id)}-menu').classList.toggle('show')\">☰</button>"
+            f'        <button class="navbar-toggler" {_toggle_attrs(f"{self.id}-menu", "show")}>☰</button>'
         )
 
         # Nav items
@@ -552,6 +556,8 @@ class NavBar(Component):
         parts.append("            </ul>")
         parts.append("        </div>")
         parts.append("    </div>")
+        # Inside the <nav>, so the component keeps one root element.
+        parts.append(_toggle_script_tag())
         parts.append("</nav>")
 
         return "\n".join(parts)

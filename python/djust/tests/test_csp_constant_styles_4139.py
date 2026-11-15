@@ -16,8 +16,8 @@ a djust class takes its place under ``csp_strict_styles``, as #3979 did for the 
   inline ``<script>`` BLOCK without the nonce, and no ``javascript:`` URL; by default only the
   validated free-form values #3979 kept and the constants listed below; every tag was rendered;
   and a planted inline style is found (gate-off). Inline event-handler attributes are reported
-  too, but converting them is #4146: the ones that exist today are named exceptions
-  (:data:`HANDLERS_4146`), and a handler anywhere else fails.
+  too: #4146 converted djust's own, so the only one excused is a caller's ``onclick=`` in the
+  call that passes it (:data:`CALLER_SUPPLIED_HANDLERS`), and a handler anywhere else fails.
 * ``TestTheFindings``: what the sweep counts as a finding (handler, ``javascript:`` URL, the
   JavaScript MIME types).
 * ``TestEverySite``: one test per converted site, in both modes, on each render path it has.
@@ -114,19 +114,17 @@ KEPT_BLOCKS = {("style-element", "@keyframes djust-skeleton-shimmer")}
 #: (``style_attrs(css="background:{}")``, ``scroll_area``'s custom property).
 _PRINTED_AS = {"background": "background-color", "--dj-scroll-area-max-height": "max-height"}
 
-#: The inline event handlers that exist today, each to be converted by #4146 (not here): what the
-#: sweep reports for each, ``(key, "<element attribute>")``. A handler anywhere else fails.
-HANDLERS_4146 = {
-    ("theme_components:theme_alert", "<button onclick>"): "#4146: the alert's dismiss button",
-    ("theme_components:theme_toast", "<button onclick>"): "#4146: the toast's close button",
-    ("djust.components.ui.navbar_simple.NavBar", "<button onclick>"): (
-        "#4146: NavBar's two menu toggles (Tailwind mobile menu, Bootstrap navbar-toggler)"
+#: The one inline event handler djust writes: a CALLER's ``onclick=`` on the button components,
+#: excused only in the sweep call that passes one (``csp_sweep.CALLER_HANDLER_VARIANTS``). #4146
+#: converted every framework-written handler (the theme alert's and toast's close button, NavBar's
+#: menu toggles) to a marker and a delegated listener, so a handler anywhere else fails, in both
+#: modes.
+CALLER_SUPPLIED_HANDLERS = {
+    ("theme_components:theme_button", "extra_0", "<button onclick>"): (
+        "a caller-supplied onclick= (button.html and the five theme packs' button.html)"
     ),
-    ("theme_components:theme_button", "<button onclick>"): (
-        "#4146: a caller-supplied onclick= (button.html and the six theme packs' button.html)"
-    ),
-    ("djust.components.components.button.Button", "<button onclick>"): (
-        "#4146: a caller-supplied onclick= on the Button component"
+    ("djust.components.components.button.Button", "caller_onclick", "<button onclick>"): (
+        "a caller-supplied onclick= on the Button component"
     ),
 }
 
@@ -173,8 +171,11 @@ def _free_form_problems(value: str) -> list[str]:
     return problems
 
 
-def _named_handler(key: str, finding: list[str]) -> bool:
-    return finding[0] == "handler" and (key, finding[1]) in HANDLERS_4146
+def _named_handler(render: dict[str, Any], finding: list[str]) -> bool:
+    return (
+        finding[0] == "handler"
+        and (render["key"], render["variant"], finding[1]) in CALLER_SUPPLIED_HANDLERS
+    )
 
 
 class TestTheSweep:
@@ -184,22 +185,33 @@ class TestTheSweep:
             for r in sweep["renders"]
             if r["mode"] == "strict"
             for f in r["findings"]
-            if not _named_handler(r["key"], f)
+            if not _named_handler(r, f)
         ]
         assert found == []
         assert sum(r["mode"] == "strict" for r in sweep["renders"]) > 1000
 
-    def test_the_handler_exceptions_are_real(self, sweep):
-        """Not vacuous: the sweep does report the handlers #4146 will convert."""
-        seen = {
-            (r["key"], f[1]) for r in sweep["renders"] for f in r["findings"] if f[0] == "handler"
+    def test_the_caller_supplied_exceptions_are_real(self, sweep):
+        """Not vacuous: each excused call does write the caller's handler, in both modes and on
+        every path it renders through (both engines for the tag, the three frameworks for the
+        class), and nothing else writes one (#4146)."""
+        seen: dict[tuple[str, str, str], set[tuple[str, str]]] = {}
+        for r in sweep["renders"]:
+            for f in r["findings"]:
+                if f[0] == "handler":
+                    seen.setdefault((r["key"], r["variant"], f[1]), set()).add(
+                        (r["mode"], r["engine"])
+                    )
+        assert set(seen) == set(CALLER_SUPPLIED_HANDLERS)
+        paths = {
+            "theme_components:theme_button": {"django", "djust"},
+            "djust.components.components.button.Button": {
+                "class:bootstrap5",
+                "class:tailwind",
+                "class:plain",
+            },
         }
-        assert {
-            ("theme_components:theme_alert", "<button onclick>"),
-            ("theme_components:theme_toast", "<button onclick>"),
-            ("djust.components.ui.navbar_simple.NavBar", "<button onclick>"),
-        } <= seen
-        assert seen <= set(HANDLERS_4146)
+        for (key, _variant, _where), where in seen.items():
+            assert where == {(m, e) for m in ("default", "strict") for e in paths[key]}, key
 
     def test_by_default_the_only_inline_styles_are_checked_free_form_values(self, sweep):
         bad = set()
@@ -207,7 +219,7 @@ class TestTheSweep:
             if r["mode"] != "default":
                 continue
             for kind, detail in r["findings"]:
-                if _named_handler(r["key"], [kind, detail]):
+                if _named_handler(r, [kind, detail]):
                     continue
                 if kind == "style-attr":
                     value = re.match(r"<\w+ style=(['\"])(.*)\1>$", detail, re.S).group(2)
