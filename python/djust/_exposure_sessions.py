@@ -391,6 +391,9 @@ def _with_stored_rows(
     try:
         return adapter.contract.project(merged, "server")
     except StateLimitError:
+        from ._component_state import warn_rows_left_out
+
+        warn_rows_left_out(view, "the saved state's size limit")
         return values
 
 

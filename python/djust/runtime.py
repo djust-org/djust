@@ -5444,6 +5444,7 @@ class ViewRuntime(RuntimeTurnPort):
         from .websocket import _compute_changed_keys, _snapshot_assigns
 
         from ._component_subscriptions import ComponentDeclaration
+        from .components._interactive import EventRefused
 
         pre_assigns = (
             _snapshot_assigns(view)
@@ -5453,6 +5454,17 @@ class ViewRuntime(RuntimeTurnPort):
         try:
             try:
                 await _call_handler(handler, call_kwargs or None, positional_args=call_args)
+            except EventRefused as refused:
+                # The component refused the event's input before changing
+                # anything (#4046): a refused event, as on the HTTP fallback.
+                _tt_error = "refused"
+                logger.warning(
+                    "Runtime: event %s refused by %s",
+                    sanitize_for_log(event_name),
+                    type(component).__name__,
+                )
+                await self.transport.send_error(_safe_error(str(refused), "Event rejected"))
+                return True
             except Exception as exc:
                 _tt_error = str(exc)[:200]
                 response = handle_exception(

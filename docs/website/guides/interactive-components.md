@@ -335,6 +335,8 @@ still need pagination or virtualization.
   - The state is per session and route, not per browser tab: two tabs on the
     same page share it, as they share every `persist="server"` field. A save
     writes the rows its page holds and keeps the stored copy of the others.
+    When two tabs hold the same row, the last one to save wins for that row's
+    `open` and `selected`, as for any shared field.
   - Callbacks and configuration (`label`, `items`, `visibility`) are never
     saved; they come from your code. Nor is membership: a collection's rows
     come only from `sync()`, so call `sync()` in `mount()` on every request,
@@ -352,7 +354,9 @@ still need pagination or virtualization.
     start from `mount()` and the event still reaches its menu. When a large
     collection's state does not fit the size limit, the view's own fields are
     saved without it (logged once) and the rows start from `mount()` on the
-    next request; paginate the rows, or opt out.
+    next request; paginate the rows, or opt out. Rows of other pages that the
+    record keeps are left out the same way when they do not fit, or beyond
+    512 of them (also logged once).
   - A view that states `exposure_policy = "legacy"` (deprecated, see
     [explicit exposure](../state/explicit-exposure.md)) keeps its menus'
     random ids and saves nothing: on the HTTP fallback their events are
@@ -388,14 +392,22 @@ still need pagination or virtualization.
     `SECRET_KEY` (and `SECRET_KEY_FALLBACKS`) bound to the session, user,
     tenant, route and tab: an id from another session, user, tenant, route or
     tab, a bare id without its tag and a malformed tag are all refused alike.
-  - A row's id also names its generation, which changes only when `sync()`
-    removes that key. An id of a row removed by `sync()` keeps reaching no row,
-    also after the key comes back; on the HTTP fallback such an id (genuine,
-    only out of date) is answered with the current page, with no action run.
-    A row that only leaves your data between requests (no `sync()` saw it go)
-    and comes back with the same key is the same row to djust: its old id
-    answers again. Key rows by something that is not reused, such as a primary
-    key, when that matters.
+  - A row's id also names its generation, which goes up when `sync()` removes
+    that key, so the removed row's old id reaches no row while the removal is
+    what is saved; on the HTTP fallback such an id (genuine, only out of date)
+    is answered with the current page, with no action run. That is not a
+    lasting guarantee: a page load saves the rows it builds at generation 0,
+    a tab that still held the row saves it back when it next saves, and a row
+    that left your data without a `sync()` removal is the same row to djust.
+    After any of these, an old id of that key answers again.
+  - What an old id can do is bounded all the same: only the menu's own
+    actions (`toggle`, `close`, `select` of an enabled item, a visibility
+    report), on whichever row has that key now, in the same session, for the
+    same user, route and tab that the page was rendered for, and every check
+    below still runs. So when a key can come back meaning another record,
+    authorize in your callback what the value means for the row's current
+    record, as any event handler must, or key rows by something that is never
+    reused, such as a primary key.
   - A menu's event passes the same checks as any event on the view: its
     `login_required` and permissions, the action's parameter contract and the
     rate limit.

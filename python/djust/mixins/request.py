@@ -2119,14 +2119,32 @@ class RequestMixin:
 
                     observation_before = _snapshot_assigns(self)
                 t0_handler = time.perf_counter()
-                if inspect.iscoroutinefunction(handler):
-                    from asgiref.sync import async_to_sync
+                from ..components._interactive import EventRefused
 
-                    async_to_sync(handler)(*call_args, **call_kwargs)
-                else:
-                    from ..sync_turn import run_sync_step
+                try:
+                    if inspect.iscoroutinefunction(handler):
+                        from asgiref.sync import async_to_sync
 
-                    run_sync_step(owner, "event", handler, *call_args, **call_kwargs)
+                        async_to_sync(handler)(*call_args, **call_kwargs)
+                    else:
+                        from ..sync_turn import run_sync_step
+
+                        run_sync_step(owner, "event", handler, *call_args, **call_kwargs)
+                except EventRefused as refused:
+                    # The component refused the event's input (an unknown or
+                    # disabled selection, ...) before changing anything: a
+                    # refused event, as on the WebSocket and SSE (#4046), not
+                    # a 500. Nothing is saved; this request's view is dropped.
+                    from ..websocket_utils import _safe_error
+
+                    logger.warning(
+                        "HTTP POST event %s refused by %s",
+                        sanitize_for_log(event_name),
+                        type(owner).__name__,
+                    )
+                    return JsonResponse(
+                        {"error": _safe_error(str(refused), "Event rejected")}, status=400
+                    )
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
                 # The handler's ``start_async`` / ``@background`` work runs here,
                 # before the render, so the one answer carries its result (#3624).

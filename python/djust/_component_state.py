@@ -61,7 +61,14 @@ Two processes                          Ids are derived and records live in the
 A row deleted from the data, then      Not a ``sync()`` removal: its generation
 re-added with the same key             is unchanged and its old id answers again
                                        (djust cannot tell it from the same row).
-=====================================  ===========================================
+A removed row's old id after a page    Answers again: the page load saves the
+load, or after a tab that still held   rows it builds at generation 0, and a
+the row saves                          holder saves its row back (last writer).
+=====================================
+
+What an old id can reach is bounded either way: only the menu's own actions
+on whichever row has that key now, for the same session, user, tenant, route
+and tab, with every check of the view still applied.  ===========================================
 """
 
 from __future__ import annotations
@@ -93,6 +100,27 @@ STALE = object()
 
 #: View classes already warned that their component records did not fit.
 _WARNED_OVER_LIMIT: set[str] = set()
+#: (view class, reason) pairs already warned that remembered rows were left out.
+_WARNED_ROWS_LEFT_OUT: set[tuple[str, str]] = set()
+
+
+def warn_rows_left_out(view: Any, reason: str) -> None:
+    """Log once per view class and reason, without values, that the record
+    leaves out rows other tabs (or removals) left in it: those rows start from
+    ``mount()`` when a tab builds them again, and a removed row forgotten this
+    way answers to its old id again."""
+    owner = "%s.%s" % (type(view).__module__, type(view).__qualname__)
+    if (owner, reason) in _WARNED_ROWS_LEFT_OUT:
+        return
+    _WARNED_ROWS_LEFT_OUT.add((owner, reason))
+    logger.warning(
+        "djust: %s: interactive collection rows this page does not show were left out "
+        "of the saved state (%s). They start from mount() when a page builds them again. "
+        "Shorter keys or fewer rows per route keep them.",
+        owner,
+        reason,
+    )
+
 
 _RAW_ID = re.compile(r"cmp_[0-9a-f]{32}", re.ASCII)
 _TAG_TEXT = re.compile(r"[0-9a-f]{%d}" % 32, re.ASCII)
@@ -318,6 +346,8 @@ def merge_stored_records(view: Any, values: dict[str, Any], stored: Any) -> None
                 members.pop(key, None)
                 members[key] = entry
         others = [key for key in members if key not in own]
+        if len(others) > MAX_REMEMBERED:
+            warn_rows_left_out(view, "more than %d remembered rows" % MAX_REMEMBERED)
         for key in others[: max(0, len(others) - MAX_REMEMBERED)]:
             del members[key]
         values[name] = {**mine, "members": members}

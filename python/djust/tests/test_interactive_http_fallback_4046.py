@@ -9,9 +9,12 @@ three.
 
 Then: the wire id cannot be forged or replayed across sessions, users,
 tenants, tabs or routes; the saved record's lifecycle (opt-out, missing,
-expired, tampered, over the limit, the restore window, retired members); and a
-component event passes the view's authorization, object permission, handler
-parameter contract and rate limit as a view event does.
+expired, tampered, over the limit, rows other tabs show, removed rows); tabs,
+pages and ids (the table in ``djust._component_state``); a refused input (an
+unknown selection) answered as a refused event on each transport; and, for a
+component event: the view's authorization, object permission, handler
+parameter contract and rate limit on the HTTP fallback, and the parameter
+contract on the WebSocket.
 """
 
 from __future__ import annotations
@@ -212,6 +215,20 @@ class Paged(LiveView):
 PAGES: Dict[str, List[str]] = {}
 
 
+class LongPaged(LiveView):
+    """40 rows a page with 128-character keys: other pages' rows fill the
+    saved state's budget before the 512-row cap."""
+
+    template = PAGE % "<ul>{% for menu in rows.values %}<li>{{ menu }}</li>{% endfor %}</ul>"
+    login_required = False
+    rows = DropdownMenu.collection()
+
+    def mount(self, request, **kwargs):
+        page = int(request.GET.get("page", "1"))
+        keys = [("p%03dr%02d" % (page, i)).ljust(128, "x") for i in range(40)]
+        self.rows.sync([(key, DropdownMenu(label="r", items=ROW_ITEMS)) for key in keys])
+
+
 class Closing(LiveView):
     """``handle_params()`` closes the menu when the URL says so."""
 
@@ -240,6 +257,7 @@ urlpatterns = [
     path("owned/", Owned.as_view()),
     path("paged/", Paged.as_view()),
     path("closing/", Closing.as_view()),
+    path("long-paged/", LongPaged.as_view()),
 ]
 
 _ID = re.compile(r'data-component-id="([^"]+)"')
@@ -392,6 +410,10 @@ async def run_websocket(script=SCRIPT, key: str | None = None) -> List[Tuple[int
     return out
 
 
+#: The error texts the ``run_sse`` calls received, in order.
+SSE_ERRORS: List[Any] = []
+
+
 async def run_sse(
     script=SCRIPT, view: str = "Menus", key: str | None = None, between: Any = None
 ) -> List[Tuple[int, str]]:
@@ -446,6 +468,7 @@ async def run_sse(
             )
             await DjustSSEMessageView().post(posted, session_id=sid)
             frames = _drain(session)
+            SSE_ERRORS.extend(f.get("error") for f in frames if f.get("type") == "error")
             status = 400 if any(f.get("type") == "error" for f in frames) else 200
             for frame in frames:
                 if frame.get("html"):
@@ -464,6 +487,7 @@ def routes():
     PAGES.clear()
     PAGES.update({"1": ["a1", "a2"], "2": ["b1", "b2"]})
     _component_state._WARNED_OVER_LIMIT.clear()
+    _component_state._WARNED_ROWS_LEFT_OUT.clear()
     with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE, ALLOWED_HOSTS=["*"]):
         yield
 
@@ -1397,3 +1421,84 @@ def test_a_row_a_handler_adds_back_in_the_same_request_adopts_its_saved_state(ro
     assert page.post("set_rows", {"keys": "42,87"}) == 200  # ... its handler does
     assert ids(page.html)[0] == old_42
     assert opened(page.html) == [True, False]
+
+
+# --------------------------------------------------------------------------- #
+# A refused input is a refused event; rows left out are logged
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("value", ["nope", "delete-everything", ""])
+def test_a_selection_that_is_not_an_item_is_a_refused_event_on_the_fallback(routes, value):
+    page = FallbackPage()
+    assert page.event("toggle", 0) == 200
+    assert page.event("select", 0, value=value) == 400
+    assert page.last == {"error": "Event rejected"}
+    # Refused before anything changed, and nothing was saved.
+    assert _envelope(page.client.session.session_key)["project_menu"][:2] == [True, ""]
+    assert page.event("select", 0, value="edit") == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_selection_that_is_not_an_item_is_a_refused_event_on_the_socket(routes):
+    key = await sync_to_async(harness.new_session_key)()
+    comm, mount = await harness.mount_view(Menus, key)
+    menu = ids(mount["html"])[0]
+    try:
+        frame = await ws_event(comm, "select", {"component_id": menu, "value": "nope"})
+        # The refusal, not the unexpected-error answer of a raising handler.
+        assert frame == {"type": "error", "error": "Event rejected"}, frame
+        frame = await ws_event(comm, "select", {"component_id": menu, "value": "edit"})
+        assert frame["type"] != "error" and picked(frame["html"]) == "edit|"
+    finally:
+        await comm.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_a_selection_that_is_not_an_item_is_a_refused_event_over_sse(routes):
+    SSE_ERRORS.clear()
+    steps = await run_sse([("select", 0, {"value": "nope"}), ("select", 0, {"value": "edit"})])
+    assert [s for s, _ in steps] == [400, 200]
+    assert SSE_ERRORS == ["Event rejected"]
+    assert picked(steps[-1][1]) == "edit|"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rows_that_do_not_fit_the_budget_are_left_out_and_logged_once(routes, caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="djust._component_state")
+    client = Client()
+    for page in range(1, 16):
+        assert FallbackPage("/long-paged/?page=%d" % page, client).event("toggle", 0) == 200
+    found = [r for r in caplog.records if "were left out" in r.getMessage()]
+    assert len(found) == 1, [r.getMessage() for r in caplog.records]
+    assert "size limit" in found[0].getMessage()
+    assert "x" * 20 not in found[0].getMessage()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_merge_keeps_at_most_the_remembered_cap_of_other_rows(routes, caplog):
+    import logging
+
+    from djust._component_state import merge_stored_records
+    from djust.components._interactive import MAX_REMEMBERED
+
+    caplog.set_level(logging.WARNING, logger="djust._component_state")
+    view = _view(_request())
+    entry = [0, False, False, "", "", 0]
+    stored = {
+        "row_menus": {"members": {"o%04d" % i: list(entry) for i in range(MAX_REMEMBERED + 88)}}
+    }
+    values = {"row_menus": view.row_menus._record()}
+    merge_stored_records(view, values, stored)
+    members = values["row_menus"]["members"]
+    others = [k for k in members if k.startswith("o")]
+    assert len(others) == MAX_REMEMBERED
+    assert others[0] == "o%04d" % 88  # the oldest went first
+    assert {"42", "87"} <= set(members)  # the view's own rows always stay
+    merge_stored_records(view, {"row_menus": view.row_menus._record()}, stored)
+    assert len([r for r in caplog.records if "were left out" in r.getMessage()]) == 1

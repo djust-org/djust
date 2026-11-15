@@ -79,6 +79,18 @@ MAX_KEY_LENGTH = 128
 MAX_REMEMBERED = 512
 
 
+class EventRefused(ValueError):
+    """A component refused an event's input: not an error of the application.
+
+    Raised by a component's own action (an unknown or disabled selection, a
+    toggle of a browser-owned menu, an invalid visibility report) before it
+    changes anything. Every transport answers it as a refused event: 400
+    ``{"error": "Event rejected"}`` on the HTTP fallback, an error frame on the
+    WebSocket and SSE (#4046). A ``ValueError``, so existing callers that catch
+    one still do.
+    """
+
+
 def _check_persist(persist: object) -> None:
     """``"server"`` (the default: saved with the view) or ``False`` (#4046)."""
     if persist is not False and (type(persist) is not str or persist != "server"):
@@ -280,16 +292,16 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         """Report a client-owned popover's visibility; emits ``toggled`` if observed."""
         self._bound_owner()
         if self.visibility != "client":
-            raise ValueError("Visibility observations require client-owned mode")
+            raise EventRefused("Visibility observations require client-owned mode")
         if not self._observes_toggle():
-            raise ValueError("Visibility observation has no declared subscription")
+            raise EventRefused("Visibility observation has no declared subscription")
         if (
             type(open) is not bool
             or type(sequence) is not int
             or not 1 <= sequence <= 2**53 - 1
             or type(lifetime) is not str
         ):
-            raise ValueError("Invalid visibility observation")
+            raise EventRefused("Invalid visibility observation")
         if lifetime != self._observation_lifetime or sequence <= self._observation_sequence:
             return
         from asgiref.sync import sync_to_async
@@ -371,6 +383,8 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
     async def toggle(self) -> None:
         """Open or close a server-owned menu; emits ``toggled``."""
         self._bound_owner()
+        if self.visibility == "client":
+            raise EventRefused("Visibility is client-owned")
         self.open = not self.open
         await self._emit(_TOGGLED, {"open": self.open})
 
@@ -378,6 +392,8 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
     async def close(self) -> None:
         """Close an open server-owned menu; emits ``toggled``."""
         self._bound_owner()
+        if self.visibility == "client":
+            raise EventRefused("Visibility is client-owned")
         if self.open:
             self.open = False
             await self._emit(_TOGGLED, {"open": False})
@@ -392,9 +408,9 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         """Choose an enabled item: validate it, record it, close; emits ``selected``."""
         self._bound_owner()
         if type(value) is not str:
-            raise TypeError("Selection must be a string")
+            raise EventRefused("Selection must be a string")
         if not self._allowed(value):
-            raise ValueError("Unknown or disabled dropdown selection")
+            raise EventRefused("Unknown or disabled dropdown selection")
         self._selected, self._open = value, False
         await self._emit(_SELECTED, {"value": value})
 
