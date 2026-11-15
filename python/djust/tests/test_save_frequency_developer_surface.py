@@ -65,6 +65,18 @@ class Surface(LiveView):
     def bg_keep(self, **kwargs):
         self.count += 10
 
+    @event_handler(save=True)
+    def keep_and_note(self, **kwargs):
+        self.count += 1
+        self.request.session["order"] = "placed"
+
+    @event_handler(save=True)
+    def start_work(self, **kwargs):
+        self.start_async(self._work)
+
+    def _work(self):
+        self.count += 10
+
     def get_context_data(self, **kwargs):
         return {"count": self.count}
 
@@ -341,8 +353,8 @@ async def test_a_flush_over_the_limit_keeps_the_last_fit_and_tells_the_page_once
 @pytest.mark.django_db(transaction=True)
 async def test_over_the_limit_a_later_immediate_turn_is_served_too(runtimes):
     """Option A whatever the turn: an immediate turn (here ``save=True``) over
-    the limit with saves deferred keeps serving, keeps the last state that
-    fit, and tells the page no second time."""
+    the limit with saves deferred keeps serving and keeps the last state that
+    fit; a save the turn asked for is told each time it cannot be made."""
     from djust.tests._ws_frames import drain_extra
 
     with _settings(DJUST_STATE_SAVE_INTERVAL=INTERVAL):
@@ -355,8 +367,9 @@ async def test_over_the_limit_a_later_immediate_turn_is_served_too(runtimes):
             assert not await rt.flush_state()
             told = await drain_extra(comm)
             assert [f.get("code") for f in told].count("state_too_large") == 1
-            reply = await harness.event(comm, "inc_and_keep")
-            assert reply["type"] in ("patch", "html_update"), reply
+            frames = await harness.event_frames(comm, "inc_and_keep")
+            assert frames[-1]["type"] in ("patch", "html_update"), frames
+            assert [f.get("code") for f in frames].count("state_too_large") == 1
             assert rt.view_instance.count == 3 and rt.state_unsaved
             assert (await _values(key))["count"] == 1
             extra = await drain_extra(comm)
@@ -374,6 +387,55 @@ async def test_save_true_over_background_saves_the_result_before_its_frame(runti
         rt = runtimes[-1]
         try:
             await comm.send_json_to({"type": "event", "event": "bg_keep", "params": {}, "ref": 3})
+            await receive_until(comm, has_frame("patch", source="async"), what="the result")
+            assert (await _values(key))["count"] == 10
+            assert not rt.state_unsaved
+        finally:
+            await comm.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_requested_save_over_the_limit_is_told_every_time_and_keeps_the_session(
+    runtimes,
+):
+    """The developer asked for these saves: each one that cannot be made is
+    told, and what the handler wrote to ``request.session`` is stored before
+    the reply all the same."""
+    from django.contrib.sessions.backends.db import SessionStore
+
+    from djust.tests._ws_frames import has_frame, receive_until
+
+    with _settings(DJUST_STATE_SAVE_INTERVAL=INTERVAL):
+        key, comm = await _socket(Small)
+        rt = runtimes[-1]
+        try:
+            await harness.event(comm, "grow")  # deferred, over the limit
+            for ref in (61, 62):
+                await comm.send_json_to(
+                    {"type": "event", "event": "keep_and_note", "params": {}, "ref": ref}
+                )
+                frames = await receive_until(comm, has_frame(ref=ref), what="the reply")
+                codes = [f.get("code") for f in frames]
+                assert codes.count("state_too_large") == 1, frames
+                assert frames[-1]["type"] in ("patch", "html_update"), frames
+                order = await sync_to_async(lambda: SessionStore(key).get("order"))()
+                assert order == "placed"
+            assert rt.state_unsaved
+        finally:
+            await comm.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_save_true_saves_the_result_of_work_the_handler_starts_itself(runtimes):
+    from djust.tests._ws_frames import has_frame, receive_until
+
+    with _settings(DJUST_STATE_SAVE_INTERVAL=INTERVAL):
+        key, comm = await _socket(Surface)
+        rt = runtimes[-1]
+        try:
+            await comm.send_json_to(
+                {"type": "event", "event": "start_work", "params": {}, "ref": 5}
+            )
             await receive_until(comm, has_frame("patch", source="async"), what="the result")
             assert (await _values(key))["count"] == 10
             assert not rt.state_unsaved

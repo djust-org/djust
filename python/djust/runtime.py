@@ -387,6 +387,11 @@ def _save_running_for(pending: "Optional[asyncio.Future[None]]") -> float:
     return asyncio.get_running_loop().time() - started
 
 
+#: Consecutive refused authorizations after which a flush forgets the change
+#: (a logout). Fewer would drop it on one ``cache``-engine blip, which reads
+#: as an empty session (design: save frequency, review finding 5).
+_REFUSALS_BEFORE_FORGET = 3
+
 #: How long the interval flush waits for a connection's turn locks before it
 #: tries again a moment later (a turn in progress holds them).
 _STATE_FLUSH_LOCK_WAIT_S = 0.1
@@ -440,6 +445,21 @@ async def flush_unsaved_states(reason: str = "shutdown", deadline: Optional[floa
             failed,
         )
     return written
+
+
+def _save_session_writes(view: Any) -> None:
+    """Store what the turn's handler wrote to ``request.session`` when the
+    view's own state could not be saved (over its limit, option A): the
+    refusal left the session dict untouched apart from those writes."""
+    from ._session_merge import is_tracked, save_merged
+
+    request = getattr(view, "_djust_event_request", None)
+    session = getattr(request, "session", None)
+    if session is None or not is_tracked(session):
+        return
+    data = session._session_cache
+    if data.has_foreign_changes():
+        save_merged(session, session.session_key)
 
 
 def _is_refusal(exc: BaseException) -> bool:
@@ -3288,6 +3308,8 @@ class ViewRuntime(RuntimeTurnPort):
         # The (field, limit) the page was last told was over its limit at a
         # flush; cleared by a save that lands.
         self._state_too_large_noticed: Any = None
+        # Consecutive flushes refused as unauthorized (``_REFUSALS_BEFORE_FORGET``).
+        self._state_flush_refusals = 0
         # #3201: vanished session key -> the replacement session this
         # connection created, so repeated mounts reuse one replacement.
         self._replacement_sessions: Dict[str, str] = {}
@@ -6508,9 +6530,13 @@ class ViewRuntime(RuntimeTurnPort):
             if deferrable(view):
                 # Option A (design: save frequency): with saves deferred the
                 # page may already show changes the store does not have, so
-                # going back to the store would undo them; the turn is served,
-                # the last state that fit stays stored, the page is told once.
-                await self._note_over_limit(view, refused, interactive=True)
+                # going back to the store would undo them; the turn is served
+                # and the last state that fit stays stored. This turn asked for
+                # its save (save=True, save_state(), a session write, a URL
+                # change), so the page is told every time it cannot be made,
+                # and what the handler wrote to the session is still stored.
+                await self._note_over_limit(view, refused, interactive=True, every_time=True)
+                await sync_to_async(_save_session_writes)(view)
                 self._mark_state_dirty(view)
                 if children:
                     return await self._persist_explicit_children_after_event(
@@ -6651,6 +6677,7 @@ class ViewRuntime(RuntimeTurnPort):
     def _state_saved(self, view: Any) -> None:
         """A save wrote ``view``'s whole current state: nothing is owed."""
         self._state_too_large_noticed = None
+        self._state_flush_refusals = 0
         if self._state_dirty_view is view:
             self._state_dirty_view = None
             self._state_flush_failures = 0
@@ -6662,6 +6689,7 @@ class ViewRuntime(RuntimeTurnPort):
         holder owns its state)."""
         self._state_dirty_view = None
         self._state_flush_failures = 0
+        self._state_flush_refusals = 0
         self._cancel_state_timer()
         _UNSAVED_RUNTIMES.discard(self)
 
@@ -6756,9 +6784,19 @@ class ViewRuntime(RuntimeTurnPort):
         except Exception as exc:  # noqa: BLE001 — no auth provider values on the wire/log
             if _is_refusal(exc):
                 # Logged out, or no longer permitted: nothing is written into
-                # a session that is no longer this user's.
-                logger.info("djust: view state not saved at %s: the turn is not authorized", reason)
-                self._forget_state_flush()
+                # a session that is no longer this user's. Not at once,
+                # though, while the connection is up: the ``cache`` session
+                # engine reads a cache error as an empty session, which looks
+                # exactly like a logout, so a refusal is final only when it
+                # repeats (or at a close, which cannot try again).
+                self._state_flush_refusals += 1
+                if not interactive or self._state_flush_refusals >= _REFUSALS_BEFORE_FORGET:
+                    logger.info(
+                        "djust: view state not saved at %s: the turn is not authorized", reason
+                    )
+                    self._forget_state_flush()
+                    return False
+                self._state_flush_failed(view, interactive, counted=False)
                 return False
             # Anything else (the session store or database failing to answer)
             # is not a refusal: the change stays owed and is tried again, and
@@ -6820,12 +6858,15 @@ class ViewRuntime(RuntimeTurnPort):
         self._state_saved(view)
         return True
 
-    async def _note_over_limit(self, view: Any, refused: Any, *, interactive: bool) -> None:
+    async def _note_over_limit(
+        self, view: Any, refused: Any, *, interactive: bool, every_time: bool = False
+    ) -> None:
         """Option A: one WARNING and one non-terminal ``state_too_large`` frame
-        per field and limit, until a save lands. ``interactive``: the frame
-        goes to a page that is still connected (not at a close)."""
+        per field and limit, until a save lands (``every_time``: a save the
+        turn asked for, told each time). ``interactive``: the frame goes to a
+        page that is still connected (not at a close)."""
         notice = (refused.field, refused.limit)
-        if notice == self._state_too_large_noticed:
+        if notice == self._state_too_large_noticed and not every_time:
             return
         self._state_too_large_noticed = notice
         logger.warning(

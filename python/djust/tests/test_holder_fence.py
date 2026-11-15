@@ -6,13 +6,15 @@ took the tab and moved on, replacing newer state with older. The fence:
 
 * every taker of a tab whose saves may be deferred (a socket mount, found
   state or not; an HTTP fallback request) writes a new holder record, a
-  random token, in the session (``_automatic_state._hold``); a page load
-  ends any holding;
-* a socket's save is written only while the stored record is its own token,
-  unexpired: in the session merge (under the row lock on ``db`` and
+  random token, in the session (``_automatic_state._hold``);
+* a socket's save is refused only when a DIFFERENT, unexpired token is
+  stored: in the session merge (under the row lock on ``db`` and
   ``cached_db``), and before the write of a state store, which is written
   before the session's index entry. Whether or not a state entry is stored:
-  evicted, deleted, expired or never written makes no difference;
+  evicted, deleted, expired or never written makes no difference. No record
+  (wiped, evicted, expired) means the writer is the holder: it writes and
+  records its own token again. The full table is in
+  ``djust._automatic_state._hold``;
 * a fallback request writes within its own request, as before: it fences
   out an older socket, not another fallback request (decision 4).
 
@@ -152,27 +154,41 @@ def test_a_late_writer_does_not_replace_what_a_newer_holder_wrote(engine):
 
 
 @pytest.mark.parametrize("engine", ENGINES)
-@pytest.mark.parametrize("record", ["another", "absent", "expired"])
-def test_a_writer_that_is_not_the_holder_is_refused_with_no_entry_stored(engine, record):
+def test_another_holders_token_refuses_with_no_entry_stored(engine):
     """Nothing stored for the tab (evicted, deleted, expired, never written):
-    the record alone decides, and only the writer's own live token passes."""
+    the record alone decides."""
     key = _session(engine).session_key
     holder_a = _session(engine, key)
     _claim(holder_a, "token-a")
-    other = _session(engine, key)
-    if record == "another":
-        _claim(other, "token-b")
-    elif record == "absent":
-        del other[HOLDER]
-        save_merged(other, key)
-    else:
-        _claim(other, "token-a", expires=1)
+    _claim(_session(engine, key), "token-b")
     assert KEY not in _stored(engine, key)
     with pytest.raises(StateSuperseded):
         _write(holder_a, "a-late", "token-a")
     stored = _stored(engine, key)
-    assert KEY not in stored
+    assert KEY not in stored and stored[HOLDER]["token"] == "token-b"
     assert KEY not in dict(holder_a._session_cache)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+@pytest.mark.parametrize("record", ["absent", "own_expired", "other_expired"])
+def test_with_no_live_record_of_another_the_writer_holds_and_re_records(engine, record):
+    """Wiped, evicted or expired: no other holder is known, so the writer is
+    the holder. It writes, and its own token is recorded again, unexpired."""
+    key = _session(engine).session_key
+    holder_a = _session(engine, key)
+    _claim(holder_a, "token-a")
+    other = _session(engine, key)
+    if record == "absent":
+        del other[HOLDER]
+        save_merged(other, key)
+    elif record == "own_expired":
+        _claim(other, "token-a", expires=1)
+    else:
+        _claim(other, "token-b", expires=1)
+    _write(holder_a, "a2", "token-a")
+    stored = _stored(engine, key)
+    assert stored[KEY] == {"value": "a2"}
+    assert stored[HOLDER] == {"token": "token-a", "expires": FAR}
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -190,13 +206,15 @@ def test_without_a_fence_the_late_write_lands_as_before(engine):
     assert _stored(engine, key)[KEY]["value"] == "a-late"
 
 
-def test_only_an_unexpired_record_of_the_same_token_lets_a_writer_through():
-    assert not holder_refuses({"token": "t", "expires": FAR}, "t")
+def test_only_another_unexpired_token_refuses():
     assert holder_refuses({"token": "u", "expires": FAR}, "t")
-    assert holder_refuses(None, "t")
-    assert holder_refuses({"token": "t"}, "t")
-    assert holder_refuses({"token": "t", "expires": 5}, "t", now=5)
-    assert not holder_refuses({"token": "t", "expires": 6}, "t", now=5)
+    assert holder_refuses({"token": "u", "expires": 6}, "t", now=5)
+    assert not holder_refuses({"token": "u", "expires": 5}, "t", now=5)  # expired
+    assert not holder_refuses({"token": "t", "expires": FAR}, "t")
+    assert not holder_refuses({"token": "t", "expires": 1}, "t")  # its own, expired
+    assert not holder_refuses(None, "t")
+    assert not holder_refuses({"token": "u"}, "t")  # unreadable
+    assert not holder_refuses({"token": 5, "expires": FAR}, "t")
 
 
 # ---------------------------------------------------------------------------
@@ -453,21 +471,6 @@ async def test_an_external_store_is_not_written_by_a_superseded_socket(settings,
 
 
 @pytest.mark.asyncio
-async def test_a_page_load_ends_an_earlier_holding(settings, claims):
-    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
-        key = await sync_to_async(_get)(DB)
-        comm = await _mount(DB, key)
-        try:
-            await sync_to_async(_get)(DB, key)  # the same tab loaded again
-            reply = await _reply_or_error(comm, "set_to", {"value": 1})
-        finally:
-            await comm.disconnect()
-        restored = await sync_to_async(_restored_count)(DB, key)
-    assert reply.get("code") == "state_error", reply
-    assert restored == 0
-
-
-@pytest.mark.asyncio
 async def test_a_superseded_socket_is_refused_even_by_a_turn_that_changes_nothing(claims):
     """Its view no longer matches the store (the newer holder's state), so no
     success frame may vouch for it, written or not."""
@@ -582,3 +585,205 @@ def test_holder_records_are_bounded(claims, settings):
     held = [n for n in stored.keys() if n.startswith(_automatic_state._HOLDER_PREFIX)]
     assert len(held) == _automatic_state.MAX_HOLDERS
     assert "%sold" % _automatic_state._HOLDER_PREFIX not in held
+
+
+# ---------------------------------------------------------------------------
+# A legitimate sole holder keeps holding (the second review)
+# ---------------------------------------------------------------------------
+
+
+def _holders(engine: str, key: str) -> dict:
+    session = import_module(engine).SessionStore(key)
+    return {
+        n: v for n, v in session.load().items() if n.startswith(_automatic_state._HOLDER_PREFIX)
+    }
+
+
+def _plain_django_request_saves_its_old_copy(engine: str, key: str, before: dict) -> None:
+    """A plain Django request that read the session before the mount saves
+    its whole dict after it (``SessionMiddleware``): the record is gone."""
+    session = import_module(engine).SessionStore(key)
+    session._session_cache = dict(before)
+    session.modified = True
+    session.save()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ENGINES)
+async def test_a_sole_holder_whose_record_was_wiped_keeps_saving(engine, claims):
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE, SESSION_ENGINE=engine):
+        key = await sync_to_async(_get)(engine)
+        before = await sync_to_async(lambda: dict(import_module(engine).SessionStore(key).load()))()
+        comm = await _mount(engine, key)
+        try:
+            await sync_to_async(_plain_django_request_saves_its_old_copy)(engine, key, before)
+            assert not await sync_to_async(_holders)(engine, key)
+            reply = await _reply_or_error(comm, "set_to", {"value": 4})
+            assert reply["type"] != "error", reply
+            assert len(await sync_to_async(_holders)(engine, key)) == 1  # re-recorded
+        finally:
+            await comm.disconnect()
+        assert await sync_to_async(_restored_count)(engine, key) == 4
+
+
+@pytest.mark.asyncio
+async def test_the_oldest_of_thirty_three_tabs_keeps_saving(claims, monkeypatch):
+    import itertools
+
+    ids = ("tab-%04d" % n for n in itertools.count())
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
+        key = await sync_to_async(_get)(DB)
+        victim = await _mount(DB, key)
+        others = []
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(_automatic_state, "new_tab_id", lambda: next(ids))
+                for _ in range(_automatic_state.MAX_HOLDERS):
+                    tab = next(ids)
+
+                    def page(tab=tab):
+                        request = _request(DB, key)
+                        assert FenceCounter().get(request).status_code == 200
+
+                    await sync_to_async(page)()
+                    other = await _mount_tab(DB, key, tab)
+                    others.append(other)
+            holders = await sync_to_async(_holders)(DB, key)
+            assert len(holders) == _automatic_state.MAX_HOLDERS  # the victim's record went
+            reply = await _reply_or_error(victim, "set_to", {"value": 6})
+            assert reply["type"] != "error", reply
+        finally:
+            for comm in [victim, *others]:
+                await comm.disconnect()
+        assert await sync_to_async(_restored_count)(DB, key) == 6
+
+
+async def _mount_tab(engine: str, key: str, tab: str) -> Any:
+    from channels.testing import WebsocketCommunicator
+
+    from djust.websocket import LiveViewConsumer
+
+    comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    comm.scope["session"] = await sync_to_async(import_module(engine).SessionStore)(key)
+    comm.scope["user"] = AnonymousUser()
+    assert (await comm.connect())[0]
+    await comm.receive_json_from()
+    await comm.send_json_to(
+        {"type": "mount", "view": f"{MODULE}.FenceCounter", "url": sf.PATH, "tab": tab}
+    )
+    assert (await comm.receive_json_from())["type"] == "mount"
+    return comm
+
+
+def _age_every_record(key: str) -> None:
+    """As if the tab had been idle past ``DJUST_SERVER_STATE_MAX_AGE``."""
+    session = import_module(DB).SessionStore(key)
+    for name in list(session.keys()):
+        if name.startswith(_automatic_state._HOLDER_PREFIX):
+            session[name] = {**session[name], "expires": 1}
+    session.save()
+
+
+@pytest.mark.asyncio
+async def test_a_holder_idle_past_the_lifetime_keeps_saving(claims):
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
+        key = await sync_to_async(_get)(DB)
+        comm = await _mount(DB, key)
+        try:
+            await sync_to_async(_age_every_record)(key)
+            reply = await _reply_or_error(comm, "set_to", {"value": 8})
+            assert reply["type"] != "error", reply
+        finally:
+            await comm.disconnect()
+        assert await sync_to_async(_restored_count)(DB, key) == 8
+
+
+@pytest.mark.asyncio
+async def test_every_save_refreshes_the_record_lifetime(claims):
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
+        key = await sync_to_async(_get)(DB)
+        comm = await _mount(DB, key)
+        try:
+            await sync_to_async(_age_every_record)(key)
+            assert (await harness.event(comm, "set_to", {"value": 2}))["type"] != "error"
+            (record,) = (await sync_to_async(_holders)(DB, key)).values()
+            assert record["expires"] > 1
+            # And the refreshed record keeps an older holder out again.
+            assert holder_refuses(record, "anything-else")
+        finally:
+            await comm.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_a_superseded_socket_stays_superseded_after_its_record_is_wiped(claims):
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
+        key = await sync_to_async(_get)(DB)
+        comm = await _mount(DB, key)
+        try:
+            assert (await sync_to_async(_post)(DB, key, "set_to", {"value": 7})).status_code == 200
+            first = await _reply_or_error(comm, "set_to", {"value": 1})
+            assert first.get("code") == "state_error", first
+            await sync_to_async(_plain_django_request_saves_its_old_copy)(DB, key, {})
+            again = await _reply_or_error(comm, "set_to", {"value": 2})
+        finally:
+            await comm.disconnect()
+    assert again.get("code") == "state_error", again
+
+
+@pytest.mark.asyncio
+async def test_a_wipe_after_a_takeover_lets_the_older_holder_through(claims):
+    """The residual the docs state: a takeover AND a session wipe inside one
+    interval. Pinned as it is, so a change to it is a decision."""
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
+        key = await sync_to_async(_get)(DB)
+        comm = await _mount(DB, key)
+        try:
+            assert (await sync_to_async(_post)(DB, key, "set_to", {"value": 7})).status_code == 200
+            await sync_to_async(_plain_django_request_saves_its_old_copy)(DB, key, {})
+            reply = await _reply_or_error(comm, "set_to", {"value": 1})
+        finally:
+            await comm.disconnect()
+    assert reply["type"] != "error", reply
+
+
+# ---------------------------------------------------------------------------
+# What the record costs (the second review, finding 8)
+# ---------------------------------------------------------------------------
+
+
+def _counting_saves(monkeypatch) -> dict:
+    from django.contrib.sessions.backends.db import SessionStore
+
+    count = {"n": 0}
+    real = SessionStore.save
+
+    def save(self, *args, **kwargs):
+        count["n"] += 1
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(SessionStore, "save", save)
+    return count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("claiming", [True, False], ids=["claims", "today"])
+async def test_session_saves_per_mount_and_fallback_request(claiming, monkeypatch):
+    """With nothing stored a socket mount saves once; a fallback request that
+    changes state saves once; claims or not. A restoring socket mount is the
+    one place the record costs a write of its own."""
+    monkeypatch.setattr(_save_policy, "holder_claims", lambda view: claiming)
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
+        key = await sync_to_async(_get)(DB)
+        await sync_to_async(_drop_tab_state)(DB, key)
+        count = _counting_saves(monkeypatch)
+        fresh = await _mount(DB, key)  # nothing stored: mount() and one save
+        await fresh.disconnect()
+        fresh_saves, count["n"] = count["n"], 0
+        restoring = await _mount(DB, key)
+        await restoring.disconnect()
+        restoring_saves, count["n"] = count["n"], 0
+        assert (await sync_to_async(_post)(DB, key, "set_to", {"value": 2})).status_code == 200
+        post_saves = count["n"]
+    assert fresh_saves == 1
+    assert post_saves == 1
+    assert restoring_saves == (1 if claiming else 0)

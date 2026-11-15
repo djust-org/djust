@@ -1783,20 +1783,49 @@ def _supersede(view: Any) -> None:
     view.__dict__["_djust_auto_superseded"] = True
 
 
-def _hold(view: Any, store: _Store, *, socket: bool) -> None:
+def _hold(view: Any, store: _Store, *, socket: bool, write: bool) -> None:
     """Take the tab, when this view's saves may be deferred (design: save
-    frequency): one session write of a new holder record (a random token).
+    frequency): a new holder record (a random token) in the session.
 
-    Every taker writes one, found state or not: a socket that restores the
+    Every taker records one, found state or not: a socket that restores the
     tab, one that starts from ``mount()`` because nothing (or nothing
-    readable) is stored, and an HTTP fallback request. From then on a socket
-    holding an older token cannot write the tab's state
-    (:mod:`djust._session_merge`), whether a state entry is stored or not.
+    readable) is stored, and an HTTP fallback request. ``write``: save it now
+    (a restoring socket mount, which makes no save of its own); otherwise it
+    rides on the save the mount or request makes anyway.
 
     Only a socket holds a token afterwards (``socket``): it keeps the view and
     may write after its last turn. A fallback request takes the tab (so an
     older socket is fenced out) but writes within its own request, as before,
     and is not fenced against another fallback request.
+
+    The rule (:func:`djust._session_merge.holder_refuses`): a socket's save
+    is refused only when a DIFFERENT, unexpired token is stored. No record
+    means the writer is the holder: it writes and records its token again.
+
+    ==============================================  ===========================
+    Case                                            Older socket A's late write
+    ==============================================  ===========================
+    B restores the tab (socket or fallback)         refused (B's token stored)
+    B starts from ``mount()``, nothing stored       refused: B records a token
+    (the finding-1 bypass)                          too
+    A's state evicted / cleared / expired, then B   refused (B's token stored)
+    takes the tab
+    A's record wiped (a plain Django request        accepted: A is the holder,
+    saved its whole old session), nobody else       re-records its token
+    A's record wiped AFTER B took the tab           accepted (residual: needs a
+                                                    takeover and a wipe inside
+                                                    one interval; the wipe
+                                                    usually removed B's state)
+    A idle past the lifetime (its record expired)   accepted, record refreshed
+    B's record expired (B idle past the lifetime)   accepted (an expired record
+                                                    only lets others through)
+    A is the oldest of 33 tabs (record dropped)     accepted, re-recorded
+    two fresh sockets A then B                      A refused (last taker holds)
+    a fallback request after A                      A refused; the fallback
+                                                    itself is never refused
+    A superseded, then its record is wiped          refused: A's in-memory
+                                                    superseded flag wins
+    ==============================================  ===========================
     """
     import secrets
 
@@ -1813,7 +1842,8 @@ def _hold(view: Any, store: _Store, *, socket: bool) -> None:
     key = holder_key(store)
     session[key] = _holder_record(token, store.max_age)
     _prune_holders(session, key)
-    save_merged(session, session.session_key)
+    if write:
+        save_merged(session, session.session_key)
     if socket:
         view.__dict__["_djust_auto_holder"] = token
 
@@ -1832,7 +1862,10 @@ def saved(view: Any, request: Any, *, socket: bool = False) -> Optional[Saved]:
         _purge_foreign_entries(view, store)
     found = _read(view, store) if store is not None else None
     if store is not None:
-        _hold(view, store, socket=socket)
+        # A restoring socket mount makes no save of its own: its record is
+        # written now. Otherwise the record rides on the save that follows
+        # (the socket mount's with nothing stored, the fallback request's).
+        _hold(view, store, socket=socket, write=socket and found is not None)
     # The query the state was saved under, for ``note_url`` to compare with.
     view.__dict__["_djust_auto_saved_url"] = found.url if found is not None else None
     if found is not None:
@@ -2334,9 +2367,11 @@ def stage(
         removed = []
     _evict_old_tabs(session, store, limits_for(view)[0], now, removed)
     # The holder fence (design: save frequency). A socket holder's save is
-    # written only while its token still holds the tab, and refreshes the
-    # record's lifetime. A page load starts the tab: it is never refused, and
-    # for a view whose saves may be deferred it ends any earlier holding.
+    # refused only when another taker's token is stored, and it records its
+    # own token again, refreshing its lifetime (whatever was stored). A page
+    # load starts a tab (its id is new) and records nothing: a record it left
+    # behind could be put back by a plain Django request's whole-session save
+    # and refuse the tab's only holder.
     token = _holder_token(view)
     holder = holder_key(store)
     if token is not None and not page_load:
@@ -2344,11 +2379,6 @@ def stage(
         _fence(session, store.key, holder, token)
     else:
         _fence(session, store.key, holder, None)
-        if page_load and token is None and holder in session:
-            from . import _save_policy
-
-            if _save_policy.holder_claims(view):
-                del session[holder]
     view.__dict__["_djust_auto_basis"] = _Basis(
         now_digest,
         now,

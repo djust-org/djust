@@ -389,12 +389,107 @@ async def test_a_flush_that_is_not_authorized_writes_nothing(runtimes, monkeypat
                 raise ExposureError("Explicit event session is no longer valid")
 
             monkeypatch.setattr(rt, "authorize_explicit_turn", refused)
-            assert not await rt.flush_state()
+            # A refusal is final when it repeats: one may be the cache engine
+            # reading a cache error as an empty session.
+            for _ in range(runtime._REFUSALS_BEFORE_FORGET - 1):
+                assert not await _fire(rt)
+                assert rt.state_unsaved and rt._state_timer is not None
+            assert await _fire(rt)  # the third: forgotten, nothing owed
             assert await _stored(key) == 0
             assert not rt.state_unsaved and rt._state_timer is None
         finally:
             monkeypatch.undo()
             await comm.disconnect()
+
+
+async def test_a_refusal_at_a_close_or_shutdown_is_final_at_once(runtimes, monkeypatch):
+    """A flush that cannot try again (a close, the shutdown flush) forgets on
+    the first refusal: nothing is written into a session that refuses the
+    turn, and the runtime does not stay registered as owing a save."""
+    with _settings(DJUST_STATE_SAVE_INTERVAL=INTERVAL):
+        key, comm, rt = await _dirty_counter(runtimes)
+        try:
+
+            async def refused(view):
+                from djust._exposure import ExposureError
+
+                raise ExposureError("Explicit event session is no longer valid")
+
+            monkeypatch.setattr(rt, "authorize_explicit_turn", refused)
+            assert rt in runtime._UNSAVED_RUNTIMES
+            assert await runtime.flush_unsaved_states("shutdown") == 0
+            assert not rt.state_unsaved and rt not in runtime._UNSAVED_RUNTIMES
+        finally:
+            monkeypatch.undo()
+            await comm.disconnect()
+    assert await _stored(key) == 0
+
+
+async def test_a_cache_session_engine_blip_does_not_drop_the_change(
+    runtimes, settings, monkeypatch
+):
+    """Django's ``cache`` session engine swallows a cache error in ``load()``
+    and reads as an empty session: to authorization, a logout. One such blip
+    must not drop the change; the close writes it once the cache answers."""
+    from importlib import import_module
+
+    cache_engine = "django.contrib.sessions.backends.cache"
+    Store = import_module(cache_engine).SessionStore
+    with _settings(DJUST_STATE_SAVE_INTERVAL=INTERVAL, SESSION_ENGINE=cache_engine):
+
+        def page() -> str:
+            from django.contrib.auth.models import AnonymousUser
+            from django.test import RequestFactory
+
+            request = RequestFactory().get(sf.PATH)
+            request.user, request.tenant = AnonymousUser(), None
+            request.session = Store(None)
+            request.session.create()
+            assert Deferred().get(request).status_code == 200
+            return request.session.session_key
+
+        key = await sync_to_async(page)()
+        from channels.testing import WebsocketCommunicator
+        from django.contrib.auth.models import AnonymousUser
+
+        from djust.websocket import LiveViewConsumer
+
+        comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        comm.scope["session"] = await sync_to_async(Store)(key)
+        comm.scope["user"] = AnonymousUser()
+        assert (await comm.connect())[0]
+        await comm.receive_json_from()
+        await comm.send_json_to(
+            {"type": "mount", "view": f"{MODULE}.Deferred", "url": sf.PATH, "tab": sf.TAB}
+        )
+        assert (await comm.receive_json_from())["type"] == "mount"
+        rt = runtimes[-1]
+        await harness.event(comm, "inc")
+        await harness.event(comm, "inc")
+        cache_cls = type(Store(key)._cache)
+        real = cache_cls.get
+        blip = {"on": True}
+
+        def get(self, *args, **kwargs):
+            if blip["on"]:
+                raise ConnectionError("the cache did not answer")
+            return real(self, *args, **kwargs)
+
+        monkeypatch.setattr(cache_cls, "get", get)
+        try:
+            assert not await _fire(rt)
+            assert rt.state_unsaved and rt._state_timer is not None
+        finally:
+            blip["on"] = False
+            monkeypatch.undo()
+        await comm.disconnect()
+
+        def stored() -> Any:
+            session = Store(key)
+            (envelope,) = [v for n, v in session.items() if n.startswith("_djust_auto_")]
+            return envelope["values"]["count"]
+
+        assert await sync_to_async(stored)() == 2
 
 
 async def test_a_failed_flush_keeps_the_change_and_retries(runtimes, monkeypatch, caplog):

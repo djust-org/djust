@@ -68,24 +68,34 @@ def _saving_before_reply(func: Callable[..., Any]) -> Callable[..., Any]:
 
     from ._save_policy import request_save
 
-    # Over @background the handler's body runs later, as background work:
-    # its result's commit is saved before its frame too.
-    background = bool(getattr(func, "_djust_decorators", {}).get("background"))
+    # Work the handler starts (@background, or its own start_async()) runs
+    # after the turn: its result's commit is saved before its frame too.
+    from .mixins.async_work import has_pending_async_work
+
+    def after(self: Any) -> None:
+        if has_pending_async_work(self):
+            request_save(self, background_result=True)
 
     if inspect.iscoroutinefunction(func):
 
         @functools.wraps(func)
         async def saving_async(self: Any, *args: Any, **kwargs: Any) -> Any:
-            request_save(self, background_result=background)
-            return await func(self, *args, **kwargs)
+            request_save(self)
+            try:
+                return await func(self, *args, **kwargs)
+            finally:
+                after(self)
 
         saving_async._djust_saves_before_reply = True  # type: ignore[attr-defined]
         return saving_async
 
     @functools.wraps(func)
     def saving(self: Any, *args: Any, **kwargs: Any) -> Any:
-        request_save(self, background_result=background)
-        return func(self, *args, **kwargs)
+        request_save(self)
+        try:
+            return func(self, *args, **kwargs)
+        finally:
+            after(self)
 
     # Not in the handler's metadata: that is rendered into every page (the
     # client's handler table), and this option is the server's alone.

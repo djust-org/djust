@@ -69,15 +69,15 @@ UPDATE`` in the same transaction as the ``UPDATE``).
 
 The holder fence (design: save frequency). A tab whose saved state may be
 written after a turn has a holder record in the session (a random token,
-``djust._automatic_state._hold``): every socket mount or fallback request
-that takes the tab writes a new one. A save of a holder's state names its
-token (:meth:`TrackedSessionData.fence`); the merge compares it with the
-record the store holds NOW and refuses the write unless they are the same
-token and the record is unexpired: whether or not a state entry is stored,
-so a holder whose state was evicted, deleted or expired, or that started
-from ``mount()``, cannot be overwritten by an older one. A refused entry is
-not written (what is stored is kept, and taken back into the live dict),
-the rest of the snapshot is, and
+``djust._automatic_state._hold``; the rule table is there). A save of a
+socket holder's state names its token (:meth:`TrackedSessionData.fence`),
+and the merge compares it with the record the store holds NOW: the write is
+refused only when a DIFFERENT, unexpired token is stored, i.e. another
+socket mount or fallback request took the tab since, whether or not a state
+entry is stored. No record (never written, wiped, evicted, expired) means
+the writer is the holder: it writes its state and records its own token
+again, in the same save. A refused entry is not written (what is stored is
+kept, and taken back into the live dict), the rest of the snapshot is, and
 :class:`~djust.state_store.StateSuperseded` is raised once the write is
 over. On ``db`` and ``cached_db`` (not SQLite) the comparison sits under
 the row lock; on ``cache``, ``file`` and SQLite it is check-then-write: a
@@ -152,17 +152,20 @@ class Snapshot(NamedTuple):
 
 def holder_refuses(record: Any, token: str, now: Optional[int] = None) -> bool:
     """Whether a writer holding ``token`` must not write, given the holder
-    record the store holds: anything but an unexpired record of this very
-    token refuses (no record: evicted, expired, deleted, or never written
-    for this holder)."""
+    record the store holds: only an unexpired record of ANOTHER token
+    refuses. No record, an unreadable one, an expired one, or its own (even
+    expired) lets it write; it then records its token again."""
     import time
 
-    if type(record) is not dict or record.get("token") != token:
-        return True
+    if type(record) is not dict:
+        return False
+    held = record.get("token")
+    if type(held) is not str or held == token:
+        return False
     expires = record.get("expires")
     if type(expires) is not int:
-        return True
-    return expires <= (int(time.time()) if now is None else now)
+        return False
+    return expires > (int(time.time()) if now is None else now)
 
 
 class TrackedSessionData(dict):

@@ -87,37 +87,58 @@ A save that runs after its turn cannot refuse that turn. When storage fails
 in the view, the save is tried again with a growing delay, and a WARNING is
 logged after three failures in a row; the page is not told. Only a refusal
 (the session logged out, the user changed, a permission revoked) drops the
-unsaved change. When the state is over its size limit
-(`DJUST_AUTOMATIC_STATE_MAX_KB`), on a deferred or an immediate turn alike,
-the turn is served, the store keeps the last state that fit, the view keeps
-its values, and the page receives one `state_too_large` error frame (with
-`source: "async"`); later saves try again, so a state that shrinks is saved
-again. A reconnect restores the last state that fit.
+unsaved change, and only when it repeats three times in a row (or at a
+close, which cannot try again): Django's `cache` session engine reads a cache
+error as an empty session, which looks exactly like a logout, so one refusal
+alone is not trusted. A real logout is retried twice, writing nothing.
+
+When the state is over its size limit (`DJUST_AUTOMATIC_STATE_MAX_KB`), on a
+deferred or an immediate turn alike, the turn is served, the store keeps the
+last state that fit and the view keeps its values. The page receives a
+`state_too_large` error frame (with `source: "async"`): once per field and
+limit for saves made after a turn, and every time for a turn that asked for
+its save (`save=True`, `save_state()`, a session write, a URL change), whose
+`request.session` writes are stored all the same. Later saves try again, so a
+state that shrinks is saved again. A reconnect restores the last state that
+fit.
 
 At the ASGI `lifespan` shutdown every unsaved view is saved at once, the
 whole under one deadline (5 seconds); a WARNING counts what did not finish,
-and those views restore their last save.
+and those views restore their last save. The deadline bounds djust's flush,
+not the store: a save that was abandoned keeps its worker thread until the
+store answers.
 
 ## Another connection for the same tab
 
 With an interval set, every socket mount of a tab (whether it restores saved
-state or starts from `mount()`) and every HTTP fallback request for it writes
-a new holder record for the tab in the session, and a page load ends the
-last holding. A socket writes the tab's state only while the record is
-still its own: a connection that holds older changes for that tab (a socket
-whose client has gone away unnoticed) can no longer write over the newer
-holder's, even when the tab's saved state was evicted, deleted or expired in
-between. When its save is refused, the page is sent the reload error at
-once, and its later turns get it too. HTTP fallback requests write within
-their own request, as before: two that overlap for one tab are not refused,
-and the later save wins.
+state or starts from `mount()`) and every HTTP fallback request for it
+records a new holder token for the tab in the session. A socket's save is
+refused only when ANOTHER, unexpired token is recorded: a connection that
+holds older changes for that tab (a socket whose client has gone away
+unnoticed) cannot write over the newer holder's, even when the tab's saved
+state was evicted, deleted or expired in between. When its save is refused,
+the page is sent the reload error at once, and its later turns get it too.
+When no other token is recorded (the record was wiped by a plain Django
+request saving an older copy of the session, dropped as the oldest of more
+than 32 in the session, or expired after the tab sat idle), the socket is
+the holder: it saves and records its token again. HTTP fallback requests
+write within their own request, as before: two that overlap for one tab are
+not refused, and the later save wins.
 
-The check is exact on `db` and `cached_db` with a database that locks rows
-(PostgreSQL, MySQL): it runs under the row lock. On `cache`, `file`, and
-`db` on SQLite there is no row lock: a writer that pauses between its read
-of the session and its write (one session read and write, usually
-milliseconds) can still land after a newer holder took the tab. That is the
-same window every session write has there.
+What it does not catch:
+
+- A takeover and a wipe of the record inside the same interval: the older
+  socket's next save is accepted. This needs another connection to take the
+  tab and a plain request to save an older copy of the whole session before
+  the older socket flushes; the wipe usually removed the newer state too.
+- On `cache`, `file`, and `db` on SQLite there is no row lock, so the check
+  and the write are two steps. A writer that pauses between its read of the
+  session and its write can land after a newer holder took the tab, and
+  can even put its own token back, so that the NEWER holder is refused next.
+  With real threads racing 300 times per engine this happened (roughly, it
+  varies by run): `cache` 0, `file` 9 to 22, `cached_db` 42 to 46, `db` on
+  SQLite 32 to 38. On `db` and `cached_db` with a database that locks rows
+  (PostgreSQL, MySQL) the check runs under the row lock.
 
 ## What it does not cover yet
 
