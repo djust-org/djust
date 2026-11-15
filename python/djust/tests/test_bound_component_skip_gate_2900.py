@@ -84,7 +84,7 @@ class Switch(LiveComponent):
 
 
 class ProbeView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-id="0"><p>{{ probe.active }}</p><i>{{ switch.on }}</i>'
         "<b>{{ label }}</b></div>"
@@ -98,6 +98,9 @@ class ProbeView(LiveView):
     @computed("probe")
     def label(self) -> str:
         return f"tab:{self.probe.active}"
+
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        return super().get_context_data(label=self.label, **kwargs)
 
 
 # ------------------------------------------------------------------ #
@@ -250,18 +253,20 @@ class MockTransport:
         yield
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestRuntimeFrame:
     @pytest.mark.asyncio
     async def test_view_level_alias_event_is_not_a_noop(self):
         """No ``component_id``: the alias runs as a VIEW event through the
         skip gate. Before #2900 the frame was ``noop``."""
+        from djust.tests._live_session import amount_on_runtime
+
         view = ProbeView()
-        view.mount(None)
-        view.render_with_diff()
         transport = MockTransport()
         runtime = ViewRuntime(transport)
-        runtime.view_instance = view
+        # Mounted for real (its render is the diff baseline): an explicit
+        # view's events are authorized against its mount binding.
+        await amount_on_runtime(runtime, view)
         await runtime.dispatch_event(
             {"type": "event", "event": "probe_set", "params": {"value": "billing"}, "ref": 1}
         )
