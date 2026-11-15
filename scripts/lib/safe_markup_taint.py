@@ -797,6 +797,12 @@ class _Module:
         self._actuals: dict[int, dict[str, object]] = {} if call_binding else _NO_BINDINGS
         self._facts: dict[int, dict[int, tuple[tuple[str, str, bool], ...]]] = {}
         self._memo_text: dict[tuple, str] = {}
+        #: (part, scope, depth, call bindings in force, literal text in front) -> ``_misplaced``
+        #: (#4145), how many of those were computed rather than remembered (a test counts it), and
+        #: every call binding installed, kept alive for the run so an id in a key is never reused
+        self._memo_misplaced: dict[tuple, bool] = {}
+        self.misplaced_computed = 0
+        self._installed_bindings: list[dict[str, object]] = []
         #: (id(callee expression), id(scope)) -> what ``_local_function`` found (it reads only
         #: what the file says); the entry holds the scope so its id cannot be reused meanwhile
         self._locals: dict[tuple[int, int], tuple] = {}
@@ -2096,6 +2102,15 @@ class _Module:
             return 2 if self._hold_level(elt, inner_scope, origins, d, visited) else 0
         return 0
 
+    def _binding_state(self) -> tuple:
+        """The call bindings in force, as a key: what ``_bindings`` (and so every answer built on it)
+        reads besides tables fixed at construction. A binding dict is never changed once installed,
+        and ``_judge_returns`` keeps each one alive, so its id is not reused within the run (#4145)."""
+        actuals = self._actuals
+        if not actuals:
+            return ()
+        return tuple(sorted((k, id(v)) for k, v in actuals.items()))
+
     def _alternatives(
         self, value: ast.expr, sc: _Scope, depth: int = 0, visited: frozenset = frozenset()
     ) -> list[tuple[ast.expr, _Scope]]:
@@ -2580,8 +2595,8 @@ class _Module:
         ``<script>var a={escape(x)}</script>`` (#3864). Seen where the output is written in place or
         held by a name (or a parameter a judged call binds to it), in the four builders whose literal
         text gives it a position; only pass B asks (it adds findings, pass A is the guard as it was).
-        ``prefix`` is the literal text in front (or a function that reads it, called only when
-        ``value`` can be such an output)."""
+        ``prefix`` is the literal text in front (or a function that reads it). It is read up front:
+        the answer for a part is remembered by the text in front of it (#4145)."""
         if not self.call_binding:
             return False
         return self._misplaced(value, sc, prefix, 0)
@@ -2594,10 +2609,25 @@ class _Module:
         or held by the name, each judged after the text in front of IT."""
         if depth > 6:
             return False
+        before = prefix() if callable(prefix) else prefix
+        if before is None:
+            return False  # every part's text in front is unknown too (``_after``): none is placed
+        # the same part after the same text gives the same answer: remembered for the run (#4145)
+        key = (value, sc, depth, self._binding_state(), before)
+        hit = self._memo_misplaced.get(key)
+        if hit is None:
+            self.misplaced_computed += 1
+            hit = self._memo_misplaced[key] = self._misplaced_after(value, sc, before, depth)
+        return hit
+
+    def _misplaced_after(
+        self, value: ast.expr, sc: _Scope, before: str | None, depth: int
+    ) -> bool:
+        """:meth:`_misplaced` once the literal text in front of ``value`` is known (``before``)."""
         d = depth + 1
 
         def text() -> str | None:
-            return prefix() if callable(prefix) else prefix
+            return before
 
         for alt, asc in self._alternatives(value, sc):
             if isinstance(alt, ast.JoinedStr):
@@ -2627,7 +2657,6 @@ class _Module:
         escapers = self._text_escapers(value, sc)
         if not escapers:
             return False
-        before = text()
         where = self._html_context(before) if before is not None else None
         if where is None:
             return False
@@ -3066,6 +3095,7 @@ class _Module:
         binding = self._binding(local, call, sc)
         if binding is None:
             return self._unbound(fscope, judge)
+        self._installed_bindings.append(binding)  # its id is part of memo keys (#4145)
         self._actuals[id(fscope)] = binding
         try:
             return judge()

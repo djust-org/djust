@@ -294,6 +294,7 @@ class AccessibilityValidator:
         .theme-header { background: #f8f8f8; padding: 1rem; font-weight: bold; }
         .theme-content { padding: 1rem; }
         .score { font-size: 1.5em; font-weight: bold; }
+        .theme-header .score { float: right; }
         .score.excellent { color: #22c55e; }
         .score.good { color: #3b82f6; }
         .score.fair { color: #f59e0b; }
@@ -351,7 +352,7 @@ class AccessibilityValidator:
     <div class="theme-report">
         <div class="theme-header">
             <span>{theme_key}</span>
-            <span class="score {score_class}" style="float: right;">{report.overall_score:.1f}%</span>
+            <span class="score {score_class}">{report.overall_score:.1f}%</span>
         </div>
         <div class="theme-content">
 """)

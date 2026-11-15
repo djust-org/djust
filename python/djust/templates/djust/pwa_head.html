@@ -18,8 +18,8 @@ PWA head tags for djust - include all PWA-related meta tags and scripts.
 <link rel="icon" type="image/png" sizes="192x192" href="{{ static_url }}icons/icon-192.png">
 <link rel="icon" type="image/png" sizes="512x512" href="{{ static_url }}icons/icon-512.png">
 
-<!-- Offline Styles -->
-<style>
+<!-- Offline Styles (the request's CSP nonce, when there is one: #4139) -->
+<style{% if csp_nonce %} nonce="{{ csp_nonce }}"{% endif %}>
 /* Offline/Online body classes */
 body.djust-offline [dj-offline-hide],
 body:not(.djust-online) [dj-offline-hide] {
@@ -50,7 +50,7 @@ body.djust-offline .djust-indicator-dot {
 </style>
 
 <!-- Service Worker Registration -->
-<script>
+<script{% if csp_nonce %} nonce="{{ csp_nonce }}"{% endif %}>
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', function() {
         navigator.serviceWorker.register('/sw.js', { scope: '/' })

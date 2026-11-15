@@ -82,7 +82,7 @@ const node = ({ name, type = 'file', depth = 0, selected = false, expanded = tru
             `<span class="dj-file-tree__toggle" role="button" tabindex="0" aria-expanded="${expanded}">${expanded ? '&#9660;' : '&#9654;'}</span>` +
             `<span class="dj-file-tree__icon" aria-hidden="true">${expanded ? '&#x1F4C2;' : '&#x1F4C1;'}</span>` +
             `<span class="dj-file-tree__name">${name}</span></div>` +
-            `<div class="dj-file-tree__children"${expanded ? '' : ' style="display:none"'}>${children.map((c) => node({ ...c, depth: depth + 1 })).join('')}</div>`;
+            `<div class="dj-file-tree__children"${expanded ? '' : ' hidden'}>${children.map((c) => node({ ...c, depth: depth + 1 })).join('')}</div>`;
     }
     return `<div class="dj-file-tree__node dj-file-tree__node--${type}${sel}" ${pad} data-name="${name}" data-type="${type}" dj-click="select_file" role="treeitem" tabindex="0">` +
         `<span class="dj-file-tree__icon" aria-hidden="true">&#x1F4C4;</span><span class="dj-file-tree__name">${name}</span></div>`;
@@ -412,8 +412,12 @@ describe('ImageLightbox', () => {
 
 const row = (env, name) => env.$(`.dj-file-tree__node[data-name="${name}"]`);
 const group = (env, name) => row(env, name).nextElementSibling;
-// What is shown: the hook writes the display inline itself, so no stylesheet is needed.
-const hidden = (g) => g.style.display === 'none';
+// What is shown: the reader's choice is an inline display the hook writes itself (no
+// stylesheet needed); without one, the server's `hidden` attribute (#4139).
+const hidden = (g) => {
+    const chosen = g.style.getPropertyValue('display');
+    return chosen ? chosen === 'none' : g.hasAttribute('hidden');
+};
 
 describe('FileTree', () => {
     it('applies tree semantics, and keeps exactly one tab stop on the selected row', () => {
@@ -585,13 +589,20 @@ describe('FileTree', () => {
         it('writes the reader\'s choice as an inline display (no stylesheet needed) and leaves the server\'s markup exactly as it was once the choice agrees with it', () => {
             const env = boot(TREE(), 'file-tree.js');
             const sub = row(env, 'sub');
-            expect(group(env, 'sub').getAttribute('style')).toBe('display:none');
+            // The server's collapsed block: the hidden attribute, no inline style (#4139).
+            expect(group(env, 'sub').hasAttribute('hidden')).toBe(true);
+            expect(group(env, 'sub').getAttribute('style')).toBe(null);
             sub.click(); // open the server-collapsed folder
-            expect(group(env, 'sub').style.display).toBe('');
+            // An important inline display beats the attribute and a stylesheet's [hidden] guard.
+            expect(group(env, 'sub').style.getPropertyValue('display')).toBe('block');
+            expect(group(env, 'sub').style.getPropertyPriority('display')).toBe('important');
+            expect(group(env, 'sub').hasAttribute('hidden')).toBe(true); // the server's, untouched
             expect(group(env, 'sub').getAttribute('data-dj-open')).toBe('true');
             expect(sub.classList.contains('dj-file-tree__node--expanded')).toBe(true);
             sub.click(); // close it again: it is the server's own state, and no marker is left
-            expect(group(env, 'sub').style.display).toBe('none');
+            expect(group(env, 'sub').style.getPropertyValue('display')).toBe('');
+            expect(group(env, 'sub').hasAttribute('hidden')).toBe(true);
+            expect(hidden(group(env, 'sub'))).toBe(true);
             expect(group(env, 'sub').hasAttribute('data-dj-open')).toBe(false);
             expect(sub.classList.contains('dj-file-tree__node--expanded')).toBe(false);
         });
@@ -1538,7 +1549,7 @@ describe('FileTree toggle_event', () => {
         const env = setup();
         row(env, 'sub').click();
         env.sent.length = 0;
-        group(env, 'docs').style.display = 'none'; // the server collapses docs
+        group(env, 'docs').setAttribute('hidden', ''); // the server collapses docs
         env.window.djust.updateHooks();
         expect(env.sent).toEqual([]);
     });
@@ -1576,7 +1587,7 @@ describe('FileTree toggle_event', () => {
         const env = setup();
         row(env, 'src').click(); // the reader closes src; the server now renders it closed too
         expect(hidden(group(env, 'src'))).toBe(true);
-        group(env, 'src').style.display = 'none';
+        group(env, 'src').setAttribute('hidden', ''); // the server renders it closed too
         env.window.djust.updateHooks();
         expect(hidden(group(env, 'src'))).toBe(true);
         row(env, 'src').click(); // and the reader opens it again: sent again

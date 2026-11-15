@@ -336,6 +336,9 @@ def _create_project_files(project_dir: Path, app_name: str, ctx: Dict[str, Any])
 
     # Decide views/templates based on --bare / --from-schema / feature flags
     schema = ctx.get("schema")
+    # The pages' own stylesheet, linked from base.html: no inline <style> or style="",
+    # which a strict Content-Security-Policy refuses (#4139). Plain CSS, not %-formatted.
+    _write(pkg_dir / "static" / app_name / "app.css", T.BARE_APP_CSS if ctx["bare"] else T.APP_CSS)
     if ctx["bare"]:
         _write(tpl_dir / "base.html", T.BARE_BASE_HTML % ctx)
         _write(pkg_dir / "views.py", T.BARE_VIEWS_PY % ctx)
@@ -624,18 +627,22 @@ def _create_schema_files(
             ftype = f.get("type", "string").lower()
             if ftype in ("string", "text", "email", "url"):
                 input_type = "email" if ftype == "email" else "url" if ftype == "url" else "text"
-                form_fields_html += '        <div style="margin-bottom: .75rem">\n'
+                # Classes of the app's stylesheet (app.css), not inline styles a strict
+                # Content-Security-Policy refuses (#4139).
+                form_fields_html += '        <div class="app-form-field">\n'
                 form_fields_html += (
-                    '            <label class="muted"'
-                    ' style="display: block; margin-bottom: .25rem; font-size: .875rem"'
-                    ' for="id_%s">%s</label>\n' % (f["name"], f["name"].replace("_", " ").title())
+                    '            <label class="muted app-label" for="id_%s">%s</label>\n'
+                    % (
+                        f["name"],
+                        f["name"].replace("_", " ").title(),
+                    )
                 )
                 form_fields_html += '            <input type="%s" name="%s" id="id_%s"\n' % (
                     input_type,
                     f["name"],
                     f["name"],
                 )
-                form_fields_html += '                   style="width: 100%%">\n'
+                form_fields_html += '                   class="app-input-full">\n'
 
         list_item_fields = ""
         for f in fields[:4]:  # Show first 4 fields

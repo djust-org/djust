@@ -526,7 +526,8 @@ class Component(TemplateMutatorGuard, ABC):
             # Get current properties by inspecting instance attributes
             current_props = {}
             for key, value in self.__dict__.items():
-                if not key.startswith("_"):
+                # A key that is not a ``str`` is not an attribute name (#4143).
+                if type(key) is str and not key.startswith("_"):
                     current_props[key] = value
 
             # CRITICAL: Include the 'id' property value (it's a property, not in __dict__)

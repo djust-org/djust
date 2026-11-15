@@ -292,7 +292,7 @@ class TestThemeSwitcherChunk:
         presets = [dict(p) for p in self.PRESETS]
         presets[1][field] = BREAKOUTS[label]
         html = self._render(presets)
-        # The switcher prints its own constant ``onclick`` handlers; a breakout adds to them.
+        # The golden is the switcher itself (no inline handler since #4139); a breakout adds to it.
         golden = json.loads((FIXTURES / "theme_switcher_inline_golden_3766.json").read_text())[
             "html"
         ]

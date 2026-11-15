@@ -7,7 +7,7 @@ Similar to shadcn/ui components - framework-agnostic with customizable styles.
 
 from typing import Dict, Any, Optional
 from ..base import LiveComponent
-from ..utils import data_url_attr, attr_text, style_attrs
+from ..utils import data_url_attr, attr_text, strict_styles, style_attrs
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 from ...config import config
@@ -155,14 +155,21 @@ class NavbarComponent(LiveComponent):
             if item.badge is not None and item.badge > 0:
                 badge_html = f' <span class="badge bg-{attr_text(item.badge_variant)} rounded-pill">{conditional_escape(item.badge)}</span>'
 
-            # External link styling
+            # External link styling. Bootstrap has no utility for this colour: the inline style
+            # by default (a Bootstrap page may load no djust stylesheet), the
+            # `dj-navbar-link--external` class of the components stylesheets under a strict CSP,
+            # which refuses the inline style (#4139).
             link_style = ""
+            link_class = ""
             if item.external:
-                link_style = ' style="color: #667eea !important; font-weight: 600;"'
+                if strict_styles():
+                    link_class = " dj-navbar-link--external"
+                else:
+                    link_style = ' style="color: #667eea !important; font-weight: 600;"'
 
             nav_items_html += f"""
                 <li class="nav-item">
-                    <a class="nav-link {active_class}" href="{data_url_attr(item.href)}"{target_attr}{link_style}>{icon_html}{conditional_escape(item.label)}{badge_html}</a>
+                    <a class="nav-link {active_class}{link_class}" href="{data_url_attr(item.href)}"{target_attr}{link_style}>{icon_html}{conditional_escape(item.label)}{badge_html}</a>
                 </li>
             """
 
@@ -178,7 +185,7 @@ class NavbarComponent(LiveComponent):
                     {logo_html}
                     {brand_name_html}
                 </a>
-                <div class="navbar-collapse" style="display: flex !important;">
+                <div class="navbar-collapse d-flex">
                     <ul class="navbar-nav ms-auto">
                         {nav_items_html}
                     </ul>

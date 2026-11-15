@@ -102,7 +102,7 @@ def _tag_source_and_context(tag_name: str, kwargs: Dict[str, str]) -> Tuple[str,
     return " ".join(parts), values
 
 
-def _render_django_tag(tag_name: str, kwargs: Dict[str, str]) -> str:
+def _render_django_tag(tag_name: str, kwargs: Dict[str, str], request: Any = None) -> str:
     """
     Render a Django PWA template tag and return the HTML output.
 
@@ -112,6 +112,10 @@ def _render_django_tag(tag_name: str, kwargs: Dict[str, str]) -> str:
         The Django template tag name.
     kwargs : dict
         Keyword arguments to pass to the tag.
+    request : HttpRequest, optional
+        The page's request, so a tag's inline ``<script>`` / ``<style>`` carries its CSP
+        nonce on this engine as on Django's (#655, #4139). It travels in the context, never
+        in the template source.
 
     Returns
     -------
@@ -122,9 +126,12 @@ def _render_django_tag(tag_name: str, kwargs: Dict[str, str]) -> str:
 
     try:
         tpl_str, values = _tag_source_and_context(tag_name, kwargs)
+        render_values: Dict[str, Any] = dict(values)
+        if request is not None:
+            render_values["request"] = request
         # Django is untyped under the lenient global config; Template.render
         # returns ``Any`` to mypy but a real ``SafeString`` (str) at runtime.
-        return str(Template(tpl_str).render(DjangoContext(values)))
+        return str(Template(tpl_str).render(DjangoContext(render_values)))
     except Exception:
         logger.exception("Error rendering {%% %s %%}", tag_name)
         # MARKED, so the diagnostic stays an invisible HTML comment (#2434).
@@ -194,7 +201,7 @@ class PwaHeadHandler(TagHandler):
 
     def render(self, args: List[str], context: Dict[str, Any]) -> str:
         kwargs = _extract_kwargs(args, context, self)
-        return _render_django_tag("djust_pwa_head", kwargs)
+        return _render_django_tag("djust_pwa_head", kwargs, (context or {}).get("request"))
 
 
 @register("djust_pwa_manifest")
@@ -208,7 +215,7 @@ class PwaManifestHandler(TagHandler):
 
     def render(self, args: List[str], context: Dict[str, Any]) -> str:
         kwargs = _extract_kwargs(args, context, self)
-        return _render_django_tag("djust_pwa_manifest", kwargs)
+        return _render_django_tag("djust_pwa_manifest", kwargs, (context or {}).get("request"))
 
 
 @register("djust_sw_register")
@@ -221,7 +228,7 @@ class SwRegisterHandler(TagHandler):
 
     def render(self, args: List[str], context: Dict[str, Any]) -> str:
         kwargs = _extract_kwargs(args, context, self)
-        return _render_django_tag("djust_sw_register", kwargs)
+        return _render_django_tag("djust_sw_register", kwargs, (context or {}).get("request"))
 
 
 @register("djust_offline_indicator")
@@ -234,4 +241,4 @@ class OfflineIndicatorHandler(TagHandler):
 
     def render(self, args: List[str], context: Dict[str, Any]) -> str:
         kwargs = _extract_kwargs(args, context, self)
-        return _render_django_tag("djust_offline_indicator", kwargs)
+        return _render_django_tag("djust_offline_indicator", kwargs, (context or {}).get("request"))

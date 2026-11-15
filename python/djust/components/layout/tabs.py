@@ -277,7 +277,8 @@ class TabsComponent(LiveComponent):
         for tab in self.tabs:
             tab_id = tab["id"]
             content = tab.get("content", "")
-            display = "" if tab_id == self.active else ' style="display:none"'
+            # An inactive pane is `hidden`, not an inline style a strict CSP refuses (#4139).
+            display = "" if tab_id == self.active else " hidden"
 
             html += f'<div class="tab-pane" id="tab-{attr_text(tab_id)}"{display}>{conditional_escape(content)}</div>'
 

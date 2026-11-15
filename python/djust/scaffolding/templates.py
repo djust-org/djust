@@ -604,10 +604,10 @@ BARE_BASE_HTML = """\
     {# Emits djust's client config; client.js itself is injected automatically. #}
     {%% djust_client_config %%}
     <title>{%% block title %%}%(display_name)s{%% endblock %%}</title>
-    <style>
-        body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1.25rem; line-height: 1.55; }
-        button { font: inherit; padding: .5rem 1rem; cursor: pointer; }
-    </style>
+    {# The page's own stylesheet, not an inline <style>: a strict Content-Security-Policy #}
+    {# refuses inline styles, and a stylesheet works in every mode (#4139).               #}
+    {%% load static %%}
+    <link rel="stylesheet" href="{%% static '%(app_name)s/app.css' %%}">
 </head>
 <body>
     {%% block content %%}{%% endblock %%}
@@ -656,33 +656,11 @@ BASE_HTML = """\
     {# .input, .badge ...), the anti-flash script and theme.js.               #}
     {%% theme_head %%}
     <title>{%% block title %%}%(display_name)s{%% endblock %%}</title>
-    <style>
-        /* Layout only. Colors, type, radii and shadows all come from the
-           theme pack, so every pack restyles this page completely. */
-        .wrap { max-width: 64rem; margin: 0 auto; padding: 0 1.25rem; }
-        .site-header { border-bottom: 1px solid hsl(var(--border)); padding: .75rem 0; margin-bottom: 2rem; }
-        .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-        .brand { font-weight: var(--font-bold, 700); font-size: 1.1rem; }
-        .topbar-links { display: flex; align-items: center; gap: 1rem; }
-        .stack > * + * { margin-top: 2rem; }
-        .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; }
-        .row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
-        .muted { color: hsl(var(--muted-foreground)); }
-        .pack-chips { display: flex; flex-wrap: wrap; gap: .5rem; }
-        .pack-chips .tp-select-list { display: contents; }
-        /* components.css styles .tp-select-option as a dropdown row; these
-           two-class rules win and draw the chips as secondary buttons. */
-        .pack-chips .tp-select-option {
-            display: inline-flex; width: auto; cursor: pointer;
-            padding: .4rem .85rem; font: inherit; font-size: .85rem;
-            border: 1px solid hsl(var(--border)); border-radius: var(--radius, .5rem);
-            background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground));
-        }
-        .pack-chips .tp-select-option:hover { filter: brightness(1.05); }
-        .pack-chips .tp-select-option.active { outline: 2px solid hsl(var(--ring)); outline-offset: 1px; }
-        .site-footer { border-top: 1px solid hsl(var(--border)); padding: 1.25rem 0; font-size: .85rem; }
-    </style>
+    {# Layout only, in the app's own stylesheet (%(app_name)s/static/%(app_name)s/app.css): #}
+    {# no inline <style> or style="", which a strict Content-Security-Policy refuses      #}
+    {# (#4139). Colors, type, radii and shadows all come from the theme pack.            #}
     {%% load static %%}
+    <link rel="stylesheet" href="{%% static '%(app_name)s/app.css' %%}">
 </head>
 <body>
     {# Plain markup on the theme pack's tokens. For an app layout with a      #}
@@ -709,6 +687,106 @@ BASE_HTML = """\
     {# djust injects the client.js <script> automatically (see <head> note). #}
 </body>
 </html>
+"""
+
+# ---------------------------------------------------------------------------
+# static/<app>/app.css — the page's own stylesheet (#4139)
+# ---------------------------------------------------------------------------
+#
+# The scaffolded pages write no inline ``<style>`` and no ``style=""``: a strict
+# Content-Security-Policy (``style-src 'self'``, no 'unsafe-inline') refuses both,
+# and a linked stylesheet works under every policy, with JavaScript off and at
+# first paint. Every rule a page used to carry inline is a class here. Plain CSS,
+# not a template: no ``%`` formatting.
+
+BARE_APP_CSS = """\
+body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1.25rem; line-height: 1.55; }
+button { font: inherit; padding: .5rem 1rem; cursor: pointer; }
+"""
+
+APP_CSS = """\
+/* Layout only. Colors, type, radii and shadows all come from the
+   theme pack, so every pack restyles this page completely. */
+.wrap { max-width: 64rem; margin: 0 auto; padding: 0 1.25rem; }
+.site-header { border-bottom: 1px solid hsl(var(--border)); padding: .75rem 0; margin-bottom: 2rem; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.brand { font-weight: var(--font-bold, 700); font-size: 1.1rem; }
+.topbar-links { display: flex; align-items: center; gap: 1rem; }
+.stack > * + * { margin-top: 2rem; }
+.grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; }
+.row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
+.muted { color: hsl(var(--muted-foreground)); }
+.pack-chips { display: flex; flex-wrap: wrap; gap: .5rem; }
+.pack-chips .tp-select-list { display: contents; }
+/* components.css styles .tp-select-option as a dropdown row; these
+   two-class rules win and draw the chips as secondary buttons. */
+.pack-chips .tp-select-option {
+    display: inline-flex; width: auto; cursor: pointer;
+    padding: .4rem .85rem; font: inherit; font-size: .85rem;
+    border: 1px solid hsl(var(--border)); border-radius: var(--radius, .5rem);
+    background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground));
+}
+.pack-chips .tp-select-option:hover { filter: brightness(1.05); }
+.pack-chips .tp-select-option.active { outline: 2px solid hsl(var(--ring)); outline-offset: 1px; }
+.site-footer { border-top: 1px solid hsl(var(--border)); padding: 1.25rem 0; font-size: .85rem; }
+
+/* index.html */
+.app-hint { margin: .75rem 0 0; font-size: .9rem; }
+.app-row-between { justify-content: space-between; }
+.app-row-stretch { align-items: stretch; }
+.app-grow { flex: 1 1 14rem; }
+.app-inline-form { margin: 0; flex: 0 0 auto; flex-wrap: nowrap; }
+.app-input-sm { width: 12rem; }
+.app-list { list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: .5rem; }
+.app-item { padding: .5rem .75rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius, .5rem); }
+.app-item-name { flex: 1; }
+.app-item-name--done { text-decoration: line-through; opacity: .6; }
+.app-empty { text-align: center; padding: 2rem 0; }
+.app-empty--lg { padding: 3rem 0; }
+.app-links { margin: 0; padding-left: 1.2rem; display: grid; gap: .35rem; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); }
+
+/* login.html (--with-auth) */
+.app-auth { max-width: 24rem; margin: 3rem auto 0; }
+.app-auth-title { margin: 0 0 1.5rem; font-size: 1.35rem; text-align: center; }
+.app-auth-error { margin: 0 0 1rem; color: hsl(var(--destructive-text, var(--destructive))); }
+.app-auth-field { margin-bottom: 1rem; }
+.app-auth-field--last { margin-bottom: 1.5rem; }
+.app-label { display: block; margin-bottom: .25rem; font-size: .875rem; }
+.app-btn-block { width: 100%; }
+
+/* presence (--with-presence) */
+.app-presence { margin-top: 2.5rem; border-top: 1px solid hsl(var(--border)); padding-top: 1rem; }
+.app-presence-count { display: flex; align-items: center; gap: .5rem; font-size: .875rem; }
+.app-presence-dot { width: .5rem; height: .5rem; border-radius: 999px; background: hsl(142 71% 45%); }
+.app-presence-list { display: flex; gap: .25rem; margin-top: .5rem; }
+.app-presence-avatar {
+    width: 2rem; height: 2rem; border-radius: 999px; display: inline-flex;
+    align-items: center; justify-content: center; font-size: .75rem;
+    background: hsl(var(--primary)); color: hsl(var(--primary-foreground));
+}
+
+/* live feed (--with-streaming) */
+.app-feed { margin-top: 2.5rem; }
+.app-feed-title { margin: 0 0 .5rem; font-size: .875rem; font-weight: 500; }
+.app-feed-log {
+    border: 1px solid hsl(var(--border)); border-radius: var(--radius, .5rem);
+    background: hsl(var(--card)); color: hsl(var(--card-foreground));
+    padding: 1rem; max-height: 16rem; overflow-y: auto;
+    display: grid; gap: .25rem; align-content: start;
+    font-family: var(--font-mono, ui-monospace, monospace); font-size: .8125rem;
+}
+.app-feed-form { display: flex; gap: .5rem; margin-top: .5rem; }
+
+/* <model>_list.html (--from-schema) */
+.app-page-title { font-size: 2rem; margin: 0 0 1.5rem; }
+.app-search { margin-bottom: 1.5rem; }
+.app-create-form { margin-bottom: 1.5rem; display: grid; gap: .75rem; justify-content: start; }
+.app-form-field { margin-bottom: .75rem; }
+.app-input-full { width: 100%; }
+.app-records { display: grid; gap: .5rem; }
+.app-record { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 1rem; }
+.app-record-fields { display: flex; align-items: center; gap: 1rem; }
+.app-danger { color: hsl(var(--destructive-text, var(--destructive))); }
 """
 
 # ---------------------------------------------------------------------------
@@ -749,7 +827,7 @@ INDEX_HTML = """\
                     {%% endfor %%}
                 </div>
             </div>
-            <p class="muted" style="margin: .75rem 0 0; font-size: .9rem">
+            <p class="muted app-hint">
                 A pack sets colors, type, spacing and shadows together. The whole
                 page, including this card and the buttons, is drawn from it. The
                 gear menu in the top bar lists all {{ theme_pack_count }} packs, plus
@@ -761,32 +839,32 @@ INDEX_HTML = """\
     </section>
 
     <section class="card">
-        <div class="card-header row" style="justify-content: space-between">
+        <div class="card-header row app-row-between">
             <h3 class="card-title">Try it: a live list</h3>
             <span class="badge badge-secondary">{{ total_count }} items &middot; {{ done_count }} done</span>
         </div>
         <div class="card-body">
-            <div class="row" style="align-items: stretch">
-                <input type="text" class="input" style="flex: 1 1 14rem"
+            <div class="row app-row-stretch">
+                <input type="text" class="input app-grow"
                        dj-input="search" name="value" value="{{ search_query }}"
                        placeholder="Search items..." aria-label="Search items">
-                <form dj-submit="add_item" class="row" style="margin: 0; flex: 0 0 auto; flex-wrap: nowrap">
-                    <input type="text" class="input" name="name" style="width: 12rem"
+                <form dj-submit="add_item" class="row app-inline-form">
+                    <input type="text" class="input app-input-sm" name="name"
                            placeholder="New item..." aria-label="New item name">
                     <button type="submit" class="btn btn-primary" dj-loading.disable>Add</button>
                 </form>
             </div>
-            <ul style="list-style: none; margin: 1rem 0 0; padding: 0; display: grid; gap: .5rem">
+            <ul class="app-list">
                 {%% for item in items %%}
-                <li class="row" style="padding: .5rem .75rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius, .5rem)">
+                <li class="row app-item">
                     <input type="checkbox" dj-click="toggle_item" dj-value-item_id="{{ item.id }}"
                            aria-label="Toggle done" {%% if item.done %%}checked{%% endif %%}>
-                    <span style="flex: 1; {%% if item.done %%}text-decoration: line-through; opacity: .6{%% endif %%}">{{ item.name }}</span>
+                    <span class="app-item-name{%% if item.done %%} app-item-name--done{%% endif %%}">{{ item.name }}</span>
                     <button class="btn btn-ghost btn-sm" dj-click="delete_item" dj-value-item_id="{{ item.id }}"
                             dj-confirm="Delete this item?" aria-label="Delete item">Delete</button>
                 </li>
                 {%% empty %%}
-                <li class="muted" style="text-align: center; padding: 2rem 0">
+                <li class="muted app-empty">
                     {%% if search_query %%}No items match "{{ search_query }}".{%% else %%}No items yet. Add one above.{%% endif %%}
                 </li>
                 {%% endfor %%}
@@ -821,7 +899,7 @@ INDEX_HTML = """\
     <section class="card">
         <div class="card-header"><h3 class="card-title">Next steps</h3></div>
         <div class="card-body">
-            <ul style="margin: 0; padding-left: 1.2rem; display: grid; gap: .35rem; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr))">
+            <ul class="app-links">
                 <li><a href="https://docs.djust.org/getting-started/first-liveview/">Your First LiveView</a><span class="muted">&nbsp;— build a counter from scratch</span></li>
                 <li><a href="https://docs.djust.org/theming/overview/">Theming</a><span class="muted">&nbsp;— the packs and presets used on this page</span></li>
                 <li><a href="https://docs.djust.org/forms/">Forms</a><span class="muted">&nbsp;— real-time validation with Django forms</span></li>
@@ -946,28 +1024,26 @@ LOGIN_HTML = """\
 {%% block title %%}Login - %(display_name)s{%% endblock %%}
 
 {%% block content %%}
-<div style="max-width: 24rem; margin: 3rem auto 0">
+<div class="app-auth">
     <div class="card">
-        <h2 style="margin: 0 0 1.5rem; font-size: 1.35rem; text-align: center">Sign In</h2>
+        <h2 class="app-auth-title">Sign In</h2>
         <form method="post" action="{%% url 'login' %%}">
             {%% csrf_token %%}
             <input type="hidden" name="next" value="{{ next }}">
             {%% if form.errors %%}
-            <p class="muted" style="margin: 0 0 1rem; color: hsl(var(--destructive-text, var(--destructive)))">
+            <p class="muted app-auth-error">
                 Invalid username or password.
             </p>
             {%% endif %%}
-            <div style="margin-bottom: 1rem">
-                <label class="muted" for="id_username"
-                       style="display: block; margin-bottom: .25rem; font-size: .875rem">Username</label>
+            <div class="app-auth-field">
+                <label class="muted app-label" for="id_username">Username</label>
                 <input type="text" name="username" id="id_username" autofocus>
             </div>
-            <div style="margin-bottom: 1.5rem">
-                <label class="muted" for="id_password"
-                       style="display: block; margin-bottom: .25rem; font-size: .875rem">Password</label>
+            <div class="app-auth-field app-auth-field--last">
+                <label class="muted app-label" for="id_password">Password</label>
                 <input type="password" name="password" id="id_password">
             </div>
-            <button type="submit" class="btn btn-primary" style="width: 100%%">Sign In</button>
+            <button type="submit" class="btn btn-primary app-btn-block">Sign In</button>
         </form>
     </div>
 </div>
@@ -1131,17 +1207,14 @@ DB_VIEWS_DELETE_OVERRIDE = """\
 PRESENCE_TEMPLATE_EXTRA = """\
 
     <!-- Presence indicators -->
-    <div style="margin-top: 2.5rem; border-top: 1px solid hsl(var(--border)); padding-top: 1rem">
-        <div class="muted" style="display: flex; align-items: center; gap: .5rem; font-size: .875rem">
-            <span style="width: .5rem; height: .5rem; border-radius: 999px; background: hsl(142 71% 45%)"></span>
+    <div class="app-presence">
+        <div class="muted app-presence-count">
+            <span class="app-presence-dot"></span>
             <span>{{ presence_count }} user{{ presence_count|pluralize }} online</span>
         </div>
-        <div style="display: flex; gap: .25rem; margin-top: .5rem">
+        <div class="app-presence-list">
             {% for user in presence_list %}
-            <span title="{{ user.meta.name }}"
-                  style="width: 2rem; height: 2rem; border-radius: 999px; display: inline-flex;
-                         align-items: center; justify-content: center; font-size: .75rem;
-                         background: hsl(var(--primary)); color: hsl(var(--primary-foreground))">{{ user.meta.name|first|upper }}</span>
+            <span class="app-presence-avatar" title="{{ user.meta.name }}">{{ user.meta.name|first|upper }}</span>
             {% endfor %}
         </div>
     </div>
@@ -1154,20 +1227,15 @@ PRESENCE_TEMPLATE_EXTRA = """\
 STREAMING_TEMPLATE_EXTRA = """\
 
     <!-- Live feed (streams) -->
-    <div style="margin-top: 2.5rem">
-        <h3 class="muted" style="margin: 0 0 .5rem; font-size: .875rem; font-weight: 500">Live Feed</h3>
-        <div dj-stream="feed"
-             style="border: 1px solid hsl(var(--border)); border-radius: var(--radius, .5rem);
-                    background: hsl(var(--card)); color: hsl(var(--card-foreground));
-                    padding: 1rem; max-height: 16rem; overflow-y: auto;
-                    display: grid; gap: .25rem; align-content: start;
-                    font-family: var(--font-mono, ui-monospace, monospace); font-size: .8125rem">
+    <div class="app-feed">
+        <h3 class="muted app-feed-title">Live Feed</h3>
+        <div dj-stream="feed" class="app-feed-log">
             {% for entry in streams.feed %}
             <div>{{ entry }}</div>
             {% endfor %}
         </div>
-        <form dj-submit="send_message" style="display: flex; gap: .5rem; margin-top: .5rem">
-            <input type="text" name="message" placeholder="Say something..." aria-label="Feed message" style="width: 12rem">
+        <form dj-submit="send_message" class="app-feed-form">
+            <input type="text" name="message" placeholder="Say something..." aria-label="Feed message" class="app-input-sm">
             <button type="submit" class="btn btn-primary" dj-loading.disable>Send</button>
         </form>
     </div>
@@ -1246,10 +1314,10 @@ SCHEMA_LIST_HTML = """\
 {%% csrf_token %%}
 <div dj-root dj-view="%(app_name)s.views.%(view_class)s">
 
-    <h1 style="font-size: 2rem; margin: 0 0 1.5rem">%(model_display)s</h1>
+    <h1 class="app-page-title">%(model_display)s</h1>
 
     <!-- Search -->
-    <div style="margin-bottom: 1.5rem">
+    <div class="app-search">
         <input type="text"
                dj-input="search"
                name="value"
@@ -1259,8 +1327,7 @@ SCHEMA_LIST_HTML = """\
     </div>
 
     <!-- Add form -->
-    <form dj-submit="create" class="card"
-          style="margin-bottom: 1.5rem; display: grid; gap: .75rem; justify-content: start">
+    <form dj-submit="create" class="card app-create-form">
 %(form_fields_html)s\
         <div>
             <button type="submit" class="btn btn-primary"
@@ -1271,23 +1338,21 @@ SCHEMA_LIST_HTML = """\
     </form>
 
     <!-- List -->
-    <div style="display: grid; gap: .5rem">
+    <div class="app-records">
         {%% for item in items %%}
-        <div class="card"
-             style="display: flex; align-items: center; justify-content: space-between;
-                    gap: 1rem; padding: .75rem 1rem">
-            <div style="display: flex; align-items: center; gap: 1rem">
+        <div class="card app-record">
+            <div class="app-record-fields">
 %(list_item_fields)s\
             </div>
             <button dj-click="delete"
                     data-item_id:int="{{ item.id }}"
                     dj-confirm="Delete this %(model_display_singular_lower)s?"
-                    class="btn btn-ghost" style="color: hsl(var(--destructive-text, var(--destructive)))">
+                    class="btn btn-ghost app-danger">
                 Delete
             </button>
         </div>
         {%% empty %%}
-        <div class="muted" style="text-align: center; padding: 3rem 0">No %(model_display_lower)s yet.</div>
+        <div class="muted app-empty app-empty--lg">No %(model_display_lower)s yet.</div>
         {%% endfor %%}
     </div>
 

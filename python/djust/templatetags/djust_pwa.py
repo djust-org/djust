@@ -516,6 +516,9 @@ def djust_pwa_head(
         "name": name or getattr(settings, "DJUST_PWA_NAME", "djust App"),
         "theme_color": theme_color or getattr(settings, "DJUST_PWA_THEME_COLOR", "#007bff"),
         "static_url": getattr(settings, "STATIC_URL", "/static/"),
+        # The request's CSP nonce for the inline <style> and <script>, as the other PWA tags
+        # carry it (#655), so a strict CSP runs them (#4139). Escaped by the template.
+        "csp_nonce": get_csp_nonce(context.get("request")) or "",
     }
 
 
