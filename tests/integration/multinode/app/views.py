@@ -18,6 +18,7 @@ from django.http import HttpResponse, JsonResponse
 
 from djust import LiveView
 from djust.components.base import LiveComponent
+from djust._component_state import wire_id
 from djust.components.interactive import DropdownMenu
 from djust.components.mixins.base import TypedState
 from djust.decorators import event_handler, state
@@ -308,7 +309,8 @@ class ComponentView(_Probed, LiveView):
             "n": self.bumper.state.n,
             "bump_id": self.bumper.component_id,
             "menu_open": self.menu.open,
-            "menu_id": self.menu.component_id,
+            # The id the page carries (#4046): derived, with its session tag.
+            "menu_id": wire_id(self.menu),
         }
 
 

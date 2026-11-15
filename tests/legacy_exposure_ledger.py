@@ -218,6 +218,7 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_hvr_cross_module.py",
         "python/djust/tests/test_if_branch_crossing_element_4122.py",
         "python/djust/tests/test_interactive_bindings.py",
+        "python/djust/tests/test_interactive_http_fallback_4046.py",
         "python/djust/tests/test_interactive_collections_c3.py",
         "python/djust/tests/test_interactive_observations.py",
         "python/djust/tests/test_interactive_public_api_c1.py",

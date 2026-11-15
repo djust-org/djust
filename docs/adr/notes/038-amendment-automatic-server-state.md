@@ -110,7 +110,9 @@ gate-offs, without a browser.
   then makes there is not a change.
 - **Component state** is saved with the view's state and put back onto the
   components the view holds (1.3's `<key>_components`). ADR-034 interactive
-  components are left out: their identity is rebuilt per mount (#4046).
+  components are left out here: their state is a small record saved with the
+  view's declared `persist="server"` state, and their id is derived from the
+  declaration (#4046, `djust/_component_state.py`).
 - **Per-tab state (#4106).** The page GET mints a tab id
   (`secrets.token_urlsafe(12)`), carried in `<meta name="djust-tab">`; the
   client sends it on the socket mount frame (`tab`), the SSE stream URL

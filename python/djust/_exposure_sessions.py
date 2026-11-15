@@ -262,10 +262,17 @@ def server_state_adapter(
     if type(policy) is not str or policy != "explicit":
         raise ExposureError("Explicit server persistence requires the explicit policy")
     contract = ExposureContract.from_view_class(type(view))
-    if not any(field.persist == "server" for field in contract.fields.values()):
+    declares_fields = any(field.persist == "server" for field in contract.fields.values())
+    if not declares_fields and not contract.components:
         return None
     session = getattr(request, "session", None)
     if session is None or not session_store_supported(type(session)):
+        if not declares_fields:
+            # Only interactive components' records (#4046), saved by default:
+            # without a server-side session they are not saved, and each
+            # fallback request starts the components from mount(). Never an
+            # error the author did not ask for by declaring server state.
+            return None
         raise UnsupportedSessionEngine(unsupported_session_message(session))
     if not session.session_key:
         if not create:
@@ -317,10 +324,18 @@ def _limit_culprit(contract: ExposureContract, view: Any) -> str:
     fields together are over) the one with the largest encoded size.
     """
     largest, largest_size = "", -1
-    for name, policy in contract.fields.items():
-        if not policy.permits("server"):
-            continue
-        value = getattr(view, name, None)
+    from ._component_state import component_record
+
+    candidates = [name for name, policy in contract.fields.items() if policy.permits("server")]
+    for name in [*candidates, *contract.components]:
+        if name in contract.components:
+            # An interactive component's record (#4046): named like a field.
+            try:
+                value = component_record(view, name)
+            except Exception:  # noqa: BLE001 — a culprit search must not fail the refusal
+                continue
+        else:
+            value = getattr(view, name, None)
         try:
             clone_json_state({name: value}, limits=contract.limits)
         except StateLimitError:
@@ -338,10 +353,48 @@ def _limit_culprit(contract: ExposureContract, view: Any) -> str:
 
 def _project_for_save(adapter: "ServerStateSession", view: Any) -> dict[str, Any]:
     try:
-        return adapter.contract.project_view(view, "server")
+        values = adapter.contract.project_view(view, "server")
+        if adapter.contract.components:
+            return _with_stored_rows(adapter, view, values)
+        return values
     except StateLimitError as error:
+        if adapter.contract.components:
+            # Interactive components' records are saved by default (#4046):
+            # when they are what does not fit, the view's own state is saved
+            # without them rather than refused on every turn.
+            from ._component_state import project_without_records
+
+            fitted = project_without_records(adapter.contract, view)
+            if fitted is not None:
+                return fitted
         field = _limit_culprit(adapter.contract, view)
         raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
+
+
+def _with_stored_rows(
+    adapter: "ServerStateSession", view: Any, values: dict[str, Any]
+) -> dict[str, Any]:
+    """``values`` with the stored copy of the collection rows this view does
+    not hold (``_component_state.merge_stored_records``, #4046). A stored
+    envelope that cannot be read, or a merge that does not fit, leaves
+    ``values`` as projected."""
+    from ._component_state import merge_stored_records
+
+    try:
+        stored = adapter.load()
+    except ExposureError:
+        return values
+    if not stored:
+        return values
+    merged = dict(values)
+    merge_stored_records(view, merged, stored)
+    try:
+        return adapter.contract.project(merged, "server")
+    except StateLimitError:
+        from ._component_state import warn_rows_left_out
+
+        warn_rows_left_out(view, "the saved state's size limit")
+        return values
 
 
 def _declared_adapter(
@@ -525,7 +578,11 @@ def load_server_state(view: Any, request: Any) -> dict[str, Any] | None:
     declared_restored = restored is not None
     # Assigned again after handle_params() when the URL is the one they were
     # saved under (``finish_mount``): one rule for declared and undeclared state.
-    view.__dict__["_djust_auto_reapply_declared"] = dict(restored) if restored else None
+    # Interactive components' records are restored once, not re-assigned (#4046).
+    from ._component_state import split_component_records
+
+    plain = split_component_records(view, restored)[0] if restored else None
+    view.__dict__["_djust_auto_reapply_declared"] = dict(plain) if plain else None
     # Also puts the saved private attributes back on the view.
     automatic = _automatic_state.load(view, request)
     if automatic is not None:

@@ -593,6 +593,10 @@ class ExposureContract:
     version: int = 1
     limits: StateLimits = field(default_factory=StateLimits)
     providers: tuple[ProviderContract, ...] = ()
+    #: Interactive component declarations whose state is saved with the
+    #: view's declared server state (#4046): attribute name -> record kind
+    #: (``djust._component_state.record_specs``). Server destination only.
+    components: Mapping[str, str] = field(default_factory=dict)
     schema: str = field(init=False)
 
     @classmethod
@@ -649,11 +653,14 @@ class ExposureContract:
                 exposures.append((descriptor, policy))
         if version is None:
             version = declared_schema_version(view_class)
+        from ._component_state import record_specs
+
         contract = cls(
             f"{view_class.__module__}.{view_class.__qualname__}",
             fields,
             version=version,
             providers=provider_contracts_for(view_class),
+            components=record_specs(view_class),
         )
         return contract, tuple(exposures)
 
@@ -687,6 +694,18 @@ class ExposureContract:
             raise ExposureError("State contract providers require ProviderContract entries")
         if len({provider.name for provider in providers}) != len(providers):
             raise ExposureError("Explicit context provider collision")
+        components = dict(self.components)
+        for name, kind in components.items():
+            if (
+                type(name) is not str
+                or len(name) > 128
+                or not _NAME.fullmatch(name)
+                or name in reserved
+                or name in copied
+                or type(kind) is not str
+            ):
+                raise ExposureError("Invalid or reserved interactive component name")
+        object.__setattr__(self, "components", MappingProxyType(components))
         specification: dict[str, Any] = {
             "owner": self.owner,
             "version": self.version,
@@ -699,6 +718,9 @@ class ExposureContract:
             specification["providers"] = {
                 provider.name: provider.specification() for provider in providers
             }
+        # Likewise only a contract with saved components adds this key.
+        if components:
+            specification["components"] = components
         encoded = json.dumps(specification, sort_keys=True, separators=(",", ":")).encode()
         object.__setattr__(self, "schema", hashlib.sha256(encoded).hexdigest())
 
@@ -720,6 +742,11 @@ class ExposureContract:
                 selected[name] = values[name]
             elif destination == "debug":
                 selected[name] = "[redacted]"
+        if destination == "server":
+            for name in self.components:
+                if name not in values:
+                    raise ExposureError("Declared state value is missing")
+                selected[name] = values[name]
         return cast(dict[str, Any], clone_json_state(selected, limits=self.limits))
 
     def project_view(self, view: Any, destination: Destination) -> dict[str, Any]:
@@ -738,6 +765,10 @@ class ExposureContract:
             for name, policy in self.fields.items()
             if policy.permits(destination)
         }
+        if destination == "server" and self.components:
+            from ._component_state import component_record
+
+            values.update({name: component_record(view, name) for name in self.components})
         return self.project(values, destination)
 
     def capture(self, values: dict[str, Any], destination: Destination) -> dict[str, Any]:
@@ -777,6 +808,8 @@ class ExposureContract:
             raise ExposureError("State restore schema or destination mismatch")
         values = envelope["values"]
         expected = {name for name, policy in self.fields.items() if policy.permits(destination)}
+        if destination == "server":
+            expected |= set(self.components)
         if (
             type(values) is not dict
             or len(values) != len(expected)
@@ -784,4 +817,10 @@ class ExposureContract:
             or set(values) != expected
         ):
             raise ExposureError("State restore fields do not match the declared contract")
-        return self.project(values, destination)
+        restored = self.project(values, destination)
+        if destination == "server" and self.components:
+            # Every record's exact shape, before anything is applied (#4046).
+            from ._component_state import validate_records
+
+            validate_records(dict(self.components), restored)
+        return restored

@@ -652,7 +652,8 @@ def _held_components(view: Any) -> Dict[str, Any]:
     """The components a view holds, by attribute name: public instance
     attributes, and the class-level descriptors this view has materialized.
     ADR-034 interactive components (a ``DropdownMenu``, a keyed collection) are
-    left out: their identity is rebuilt per mount (#4046)."""
+    left out: their state is saved with the view's declared server state, and
+    their identity derives from the declaration (#4046, ``_component_state``)."""
     from .components._interactive import DropdownMenu
     from .components.base import BoundComponent, Component, LiveComponent
 
@@ -806,6 +807,12 @@ def project(view: Any, names: Optional[_Names] = None) -> Projection:
         if encoded is not _MISSING:
             private[name] = encoded
     components = _project_components(view, enums)
+    from ._component_state import declares_interactive
+
+    if declares_interactive(type(view)):
+        # An interactive collection's members come from mount()'s sync(), and
+        # its saved record only goes back over members mount() built (#4046).
+        remount = True
     if vars(view).get("_async_tasks"):
         # Work mount() queued has not run (the GET never runs it): the next
         # request runs mount() again so the work exists (1.3's ``__mount_work``).

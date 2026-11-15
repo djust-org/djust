@@ -3064,8 +3064,6 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     # Whether this child's declared state was put back on top of its mount() (#3989).
     explicit_child_restored = False
     if explicit_adapter is not None:
-        from ..security import safe_setattr
-
         assert sticky_id_value is not None
         current_adapter = child_state_adapter(
             child, parent, request, sticky_id_value, explicit_mount_inputs
@@ -3083,8 +3081,9 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             # Configuration/storage failures propagate, with no legacy fallback.
             explicit_values = None
         if explicit_values is not None:
-            for name, value in explicit_values.items():
-                safe_setattr(child, name, value, allow_private=False, raise_on_blocked=True)
+            from .._component_state import apply_declared_state
+
+            apply_declared_state(child, explicit_values)
         # Read after the block, not set inside it: the block above is pinned to exactly
         # this shape by test_decimal_state_tag_2252.py (the child's JSON-only restore).
         explicit_child_restored = explicit_values is not None

@@ -851,6 +851,16 @@ class RequestMixin:
         if not request.session.session_key:
             request.session.create()
 
+        # A page load is a fresh mount() and a new tab (#4106): its state is
+        # saved as mount() left it, under an id the page carries and its client
+        # sends back. Another tab on this route keeps its own state. Assigned
+        # before the render: an interactive component's rendered id is bound to
+        # the session, route and tab (#4046).
+        from .. import _automatic_state as _saved_state
+
+        self.request = request
+        self.__dict__["_djust_tab"] = _saved_state.new_tab_id()
+
         # Get context for rendering and cache it so _sync_state_to_rust()
         # and render_with_diff() don't re-evaluate QuerySets.
         # Note: cached BEFORE _apply_context_processors, so downstream callers
@@ -881,12 +891,6 @@ class RequestMixin:
         t_json = (time.perf_counter() - t0) * 1000
 
         t0_sc = time.perf_counter()
-        # A page load is a fresh mount() and a new tab (#4106): its state is
-        # saved as mount() left it, under an id the page carries and its client
-        # sends back. Another tab on this route keeps its own state.
-        from .. import _automatic_state as _saved_state
-
-        self.__dict__["_djust_tab"] = _saved_state.new_tab_id()
         from django.contrib.sessions.backends.base import UpdateError
 
         from .._exposure_sessions import save_server_state
@@ -1802,7 +1806,11 @@ class RequestMixin:
                 )
 
             # The saved state goes on first, so handle_params() can read it.
-            _assign(saved_view.declared)
+            # Interactive components' records go back once, here, through the
+            # restore every transport shares (#4046).
+            from .._component_state import apply_declared_state, split_component_records
+
+            apply_declared_state(self, saved_view.declared)
             _put_saved_state_back()
             # handle_params() runs on every request: the URL THIS request
             # carries wins over a declared persist="server" field (#3624).
@@ -1815,7 +1823,7 @@ class RequestMixin:
             if _automatic_state.url_unchanged(self):
                 # Only when the saved URL is known: without it (no tab id, so
                 # no saved view state) the URL this request carries wins (#3624).
-                _assign(saved_view.declared)
+                _assign(split_component_records(self, saved_view.declared)[0])
             if not _automatic_state.url_changed(self):
                 _put_saved_state_back()
             # The view is as the next handler finds it: a save records as
@@ -1937,16 +1945,33 @@ class RequestMixin:
                 else None
             )
             if component_id:
-                registry = getattr(self, "_components", None) or {}
-                owner = registry.get(component_id)
-                if owner is None:
+                # The lookup every transport shares (#4046): it binds the
+                # declared components first (nothing has rendered yet).
+                from .._component_state import PASS_THROUGH, STALE, resolve_component_target
+
+                target = resolve_component_target(self, component_id)
+                if target is STALE:
+                    # A row removed since this tab's page rendered (#4046): no
+                    # handler runs; the answer is the current page, as for a
+                    # resync, so the client replaces the menu that is gone.
+                    logger.info(
+                        "HTTP POST for a component no longer on %s: answering with the page",
+                        type(self).__name__,
+                    )
+                    render_only = True
+                    params = {k: v for k, v in params.items() if k != "component_id"}
+                elif target is None:
                     logger.warning(
                         "HTTP POST component not found: %s on %s",
-                        component_id,
+                        sanitize_for_log(str(component_id)),
                         type(self).__name__,
                     )
                     return JsonResponse({"error": "Component not found"}, status=400)
-                params = {k: v for k, v in params.items() if k != "component_id"}
+                elif target is not PASS_THROUGH:
+                    # An unmaterialized ADR-031 descriptor keeps component_id:
+                    # the view's own alias resolves it, as on the socket.
+                    owner = target
+                    params = {k: v for k, v in params.items() if k != "component_id"}
             handler = None if render_only else getattr(owner, event_name, None)
             if render_only:
                 # The page's own reads (``assign_async`` / ``start_async`` in
@@ -2094,14 +2119,32 @@ class RequestMixin:
 
                     observation_before = _snapshot_assigns(self)
                 t0_handler = time.perf_counter()
-                if inspect.iscoroutinefunction(handler):
-                    from asgiref.sync import async_to_sync
+                from ..components._interactive import EventRefused
 
-                    async_to_sync(handler)(*call_args, **call_kwargs)
-                else:
-                    from ..sync_turn import run_sync_step
+                try:
+                    if inspect.iscoroutinefunction(handler):
+                        from asgiref.sync import async_to_sync
 
-                    run_sync_step(owner, "event", handler, *call_args, **call_kwargs)
+                        async_to_sync(handler)(*call_args, **call_kwargs)
+                    else:
+                        from ..sync_turn import run_sync_step
+
+                        run_sync_step(owner, "event", handler, *call_args, **call_kwargs)
+                except EventRefused as refused:
+                    # The component refused the event's input (an unknown or
+                    # disabled selection, ...) before changing anything: a
+                    # refused event, as on the WebSocket and SSE (#4046), not
+                    # a 500. Nothing is saved; this request's view is dropped.
+                    from ..websocket_utils import _safe_error
+
+                    logger.warning(
+                        "HTTP POST event %s refused by %s",
+                        sanitize_for_log(event_name),
+                        type(owner).__name__,
+                    )
+                    return JsonResponse(
+                        {"error": _safe_error(str(refused), "Event rejected")}, status=400
+                    )
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
                 # The handler's ``start_async`` / ``@background`` work runs here,
                 # before the render, so the one answer carries its result (#3624).

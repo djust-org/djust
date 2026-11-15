@@ -280,6 +280,11 @@ class Page:
         response = view_class().get(self.initial)
         assert response.status_code == 200, response.content
         self.html = response.content.decode()
+        # The page load's tab id, which the client sends with every fallback
+        # POST: it selects the tab's saved state (#4107), and an interactive
+        # component's rendered id is bound to it (#4046).
+        tab = re.search(r'<meta name="djust-tab" content="([^"]+)">', self.html)
+        self.tab = tab.group(1) if tab else ""
         self.view = None
 
     def ids(self) -> List[str]:
@@ -293,6 +298,7 @@ class Page:
             data=json.dumps(params),
             content_type="application/json",
             HTTP_X_DJUST_EVENT=name,
+            HTTP_X_DJUST_TAB=self.tab,
         )
         request.user, request.session, request.tenant = (
             self.initial.user,
@@ -310,10 +316,9 @@ class Page:
 class LivePage:
     """A mount, then events on the same connection, as over a WebSocket.
 
-    For examples whose events need the view that rendered the page: under the
-    default exposure policy an interactive component lives with its view, so a
-    request that builds a fresh view (:class:`Page`, the HTTP fallback) cannot
-    reach it. ``event`` answers 200, or 400 when the turn sent an error frame.
+    The connection twin of :class:`Page`: a scenario that runs on both shows
+    the example behaves the same with and without a connection (#4046).
+    ``event`` answers 200, or 400 when the turn sent an error frame.
     """
 
     def __init__(self, view_class: type) -> None:

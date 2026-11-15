@@ -861,8 +861,10 @@ no longer has between requests and reconnects:
   so a "load more" offset, a form draft or an open dropdown set on `self` is
   back at its `mount()` value. An event addressed to an interactive component
   (`DropdownMenu`) the previous answer rendered is refused with 400
-  `"Component not found"`, because the new mount gives it a new identity, as
-  it already did on an explicit view. For the same reason a client-owned
+  `"Component not found"`, because the new mount gives it a new identity. (On
+  an explicit view it is reached and its state carries: its id is derived
+  from its declaration and its state is saved with the view's declared state,
+  #4046.) For the same reason a client-owned
   component's visibility report (`observe_toggle`) sent over the fallback no
   longer reaches the view: each POST mounts the component with a new identity
   and a new observation lifetime, so the report is refused or dropped and an
@@ -953,4 +955,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: efa3a1b5c7b6 -->
+<!-- generated-doc prose-sha256: 8c87cee5d3b0 -->
